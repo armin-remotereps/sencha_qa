@@ -9,14 +9,10 @@ from accounts.models import CustomUser
 def authenticate_user(
     request: HttpRequest, email: str, password: str
 ) -> CustomUser | None:
-    try:
-        user = CustomUser.objects.get(email=email)
-    except CustomUser.DoesNotExist:
+    user = authenticate(request, email=email, password=password)
+    if not isinstance(user, CustomUser):
         return None
-    authenticated = authenticate(request, username=user.username, password=password)
-    if not isinstance(authenticated, CustomUser):
-        return None
-    return authenticated
+    return user
 
 
 def login_user(request: HttpRequest, user: CustomUser) -> None:

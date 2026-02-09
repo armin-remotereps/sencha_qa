@@ -7,7 +7,6 @@ from accounts.models import CustomUser
 class DashboardAccessTests(TestCase):
     def setUp(self) -> None:
         self.user = CustomUser.objects.create_user(
-            username="testuser",
             email="test@example.com",
             password="testpassword123",
             first_name="John",

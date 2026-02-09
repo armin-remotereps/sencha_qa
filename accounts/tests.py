@@ -1,4 +1,4 @@
-from django.test import Client, RequestFactory, TestCase
+from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
 from accounts.models import CustomUser
@@ -21,7 +21,6 @@ class LoginPageTests(TestCase):
 class LoginAuthTests(TestCase):
     def setUp(self) -> None:
         self.user = CustomUser.objects.create_user(
-            username="testuser",
             email="test@example.com",
             password="correctpassword123",
             first_name="John",
@@ -67,7 +66,6 @@ class LoginAuthTests(TestCase):
 class LogoutTests(TestCase):
     def setUp(self) -> None:
         self.user = CustomUser.objects.create_user(
-            username="testuser",
             email="test@example.com",
             password="testpassword123",
         )
@@ -88,7 +86,6 @@ class LogoutTests(TestCase):
 class AuthenticateUserServiceTests(TestCase):
     def setUp(self) -> None:
         self.user = CustomUser.objects.create_user(
-            username="testuser",
             email="test@example.com",
             password="correctpassword123",
         )
