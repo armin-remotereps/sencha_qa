@@ -50,3 +50,7 @@ celerybeat.pid
 
 # Plan file
 plan.md
+
+# Playwright artifacts
+*.png
+.playwright-mcp/

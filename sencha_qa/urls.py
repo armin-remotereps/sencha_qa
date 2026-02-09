@@ -1,9 +1,11 @@
 from django.conf import settings
 from django.conf.urls.static import static
 from django.contrib import admin
-from django.urls import URLPattern, URLResolver, path
+from django.urls import URLPattern, URLResolver, include, path
 
 urlpatterns: list[URLResolver | URLPattern] = [
+    path("accounts/", include("accounts.urls")),
+    path("dashboard/", include("dashboard.urls")),
     path("admin/", admin.site.urls),
 ]
 

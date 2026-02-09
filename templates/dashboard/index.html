@@ -1,0 +1,14 @@
+{% extends "dashboard/base_dashboard.html" %}
+
+{% block title %}Dashboard — Sencha QA{% endblock %}
+
+{% block dashboard_content %}
+<div>
+  <h1 class="text-2xl font-bold text-zinc-100">
+    Welcome, {{ request.user.first_name }}!
+  </h1>
+  <p class="mt-2 text-zinc-400">
+    Select an option from the sidebar to get started.
+  </p>
+</div>
+{% endblock %}

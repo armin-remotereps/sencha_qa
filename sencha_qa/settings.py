@@ -26,6 +26,7 @@ INSTALLED_APPS: list[str] = [
     "django_celery_results",
     # Local
     "accounts",
+    "dashboard",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -72,6 +73,9 @@ DATABASES = {
 
 # Auth
 AUTH_USER_MODEL = "accounts.CustomUser"
+LOGIN_URL = "/accounts/login/"
+LOGIN_REDIRECT_URL = "/dashboard/"
+LOGOUT_REDIRECT_URL = "/accounts/login/"
 
 AUTH_PASSWORD_VALIDATORS = [
     {

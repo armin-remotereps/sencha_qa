@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="flex min-h-screen bg-zinc-950" x-data="{ sidebarOpen: true }">
+  {# Sidebar #}
+  <aside
+    class="flex w-64 flex-col border-r border-zinc-800 bg-zinc-900"
+    :class="sidebarOpen ? '' : 'hidden'"
+  >
+    {# User Info Section #}
+    <div class="border-b border-zinc-800 p-4">
+      <p class="text-sm font-semibold text-zinc-100">
+        {{ request.user.first_name }} {{ request.user.last_name }}
+      </p>
+      <p class="text-xs text-zinc-400">{{ request.user.email }}</p>
+    </div>
+
+    {# Navigation Section #}
+    <nav class="flex-1 space-y-1 p-3">
+      <a
+        href="{% url 'dashboard:index' %}"
+        class="flex items-center rounded-md px-3 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+      >
+        Dashboard
+      </a>
+      <a
+        href="#"
+        class="flex items-center rounded-md px-3 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+      >
+        Test Suites
+      </a>
+      <a
+        href="#"
+        class="flex items-center rounded-md px-3 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+      >
+        Test Runs
+      </a>
+      <a
+        href="#"
+        class="flex items-center rounded-md px-3 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+      >
+        Environments
+      </a>
+      <a
+        href="#"
+        class="flex items-center rounded-md px-3 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+      >
+        Settings
+      </a>
+    </nav>
+
+    {# Logout Section #}
+    <div class="border-t border-zinc-800 p-3">
+      <form method="post" action="{% url 'accounts:logout' %}">
+        {% csrf_token %}
+        <button
+          type="submit"
+          class="flex w-full items-center rounded-md px-3 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-800 hover:text-red-400"
+        >
+          Logout
+        </button>
+      </form>
+    </div>
+  </aside>
+
+  {# Main Content #}
+  <main class="flex-1 p-6">
+    {% block dashboard_content %}{% endblock %}
+  </main>
+</div>
+{% endblock %}
