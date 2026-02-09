@@ -1,0 +1,144 @@
+from pathlib import Path
+
+from decouple import Csv, config
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Security
+SECRET_KEY: str = config("SECRET_KEY", cast=str)
+DEBUG: bool = config("DEBUG", default=False, cast=bool)
+ALLOWED_HOSTS: list[str] = config(
+    "ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv()
+)
+
+# Application definition
+INSTALLED_APPS: list[str] = [
+    "daphne",
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    # Third-party
+    "channels",
+    "django_celery_beat",
+    "django_celery_results",
+    # Local
+    "accounts",
+]
+
+MIDDLEWARE: list[str] = [
+    "django.middleware.security.SecurityMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+]
+
+ROOT_URLCONF = "sencha_qa.urls"
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [BASE_DIR / "templates"],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+            ],
+        },
+    },
+]
+
+WSGI_APPLICATION = "sencha_qa.wsgi.application"
+ASGI_APPLICATION = "sencha_qa.asgi.application"
+
+# Database
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": config("DB_NAME", cast=str),
+        "USER": config("DB_USER", cast=str),
+        "PASSWORD": config("DB_PASSWORD", cast=str),
+        "HOST": config("DB_HOST", cast=str),
+        "PORT": config("DB_PORT", default="5432", cast=str),
+    }
+}
+
+# Auth
+AUTH_USER_MODEL = "accounts.CustomUser"
+
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"
+    },
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
+
+# Internationalization
+LANGUAGE_CODE = "en-us"
+TIME_ZONE = "UTC"
+USE_I18N = True
+USE_TZ = True
+
+# Static files
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_DIRS: list[Path] = [BASE_DIR / "static"]
+
+# Media files
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+# Default primary key field type
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# Redis
+REDIS_URL: str = config("REDIS_URL", cast=str)
+
+# Cache
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": REDIS_URL,
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        },
+    }
+}
+
+# Celery
+CELERY_BROKER_URL: str = REDIS_URL
+CELERY_RESULT_BACKEND = "django-db"
+CELERY_CACHE_BACKEND = "default"
+CELERY_ACCEPT_CONTENT: list[str] = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+
+# Channels
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [REDIS_URL],
+        },
+    },
+}
+
+# Docker Model Runner
+DMR_HOST: str = config("DMR_HOST", default="localhost", cast=str)
+DMR_PORT: str = config("DMR_PORT", default="12434", cast=str)
+
+# Docker
+DOCKER_HOST: str = config(
+    "DOCKER_HOST", default="unix:///var/run/docker.sock", cast=str
+)
