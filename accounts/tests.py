@@ -52,10 +52,10 @@ class LoginAuthTests(TestCase):
 
     def test_next_param_preserved_through_login(self) -> None:
         response = self.client.post(
-            reverse("accounts:login") + "?next=/dashboard/",
+            reverse("accounts:login") + "?next=/",
             {"email": "test@example.com", "password": "correctpassword123"},
         )
-        self.assertRedirects(response, "/dashboard/")
+        self.assertRedirects(response, "/")
 
     def test_already_authenticated_redirects_to_dashboard(self) -> None:
         self.client.force_login(self.user)

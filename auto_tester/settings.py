@@ -40,7 +40,7 @@ MIDDLEWARE: list[str] = [
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-ROOT_URLCONF = "sencha_qa.urls"
+ROOT_URLCONF = "auto_tester.urls"
 
 TEMPLATES = [
     {
@@ -57,8 +57,8 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = "sencha_qa.wsgi.application"
-ASGI_APPLICATION = "sencha_qa.asgi.application"
+WSGI_APPLICATION = "auto_tester.wsgi.application"
+ASGI_APPLICATION = "auto_tester.asgi.application"
 
 # Database
 DATABASES = {
@@ -75,7 +75,7 @@ DATABASES = {
 # Auth
 AUTH_USER_MODEL = "accounts.CustomUser"
 LOGIN_URL = "/accounts/login/"
-LOGIN_REDIRECT_URL = "/dashboard/"
+LOGIN_REDIRECT_URL = "/"
 LOGOUT_REDIRECT_URL = "/accounts/login/"
 
 AUTHENTICATION_BACKENDS: list[str] = ["accounts.backends.EmailBackend"]

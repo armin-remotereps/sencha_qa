@@ -1,5 +1,5 @@
 """
-WSGI config for sencha_qa project.
+WSGI config for auto_tester project.
 
 It exposes the WSGI callable as a module-level variable named ``application``.
 
@@ -11,6 +11,6 @@ import os
 
 from django.core.wsgi import get_wsgi_application
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "sencha_qa.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "auto_tester.settings")
 
 application = get_wsgi_application()
