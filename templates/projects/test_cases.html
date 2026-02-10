@@ -42,18 +42,26 @@
     <span class="text-zinc-200">Test Cases</span>
   </nav>
 
-  {# HEADER: Title + New Test Case button #}
+  {# HEADER: Title + action buttons #}
   <div class="mb-6 flex items-center justify-between">
     <h1 class="text-2xl font-bold text-zinc-100">Test Cases</h1>
-    <button
-      @click="showCreateModal = true"
-      class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-    >
-      New Test Case
-    </button>
+    <div class="flex gap-3">
+      <a
+        href="{% url 'projects:upload_list' project_id=project.id %}"
+        class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
+      >
+        Upload XML
+      </a>
+      <button
+        @click="showCreateModal = true"
+        class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+      >
+        New Test Case
+      </button>
+    </div>
   </div>
 
-  {# SEARCH #}
+  {# SEARCH + UPLOAD FILTER #}
   <form method="get" action="{% url 'projects:test_case_list' project_id=project.id %}" class="mb-6 flex gap-3">
     <input
       type="text"
@@ -62,6 +70,21 @@
       placeholder="Search test cases..."
       class="flex h-10 w-full max-w-xs rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
     >
+    <select
+      name="upload"
+      class="h-10 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+      onchange="this.form.submit()"
+    >
+      <option value="">All Uploads</option>
+      {% for upload in uploads %}
+      <option
+        value="{{ upload.id }}"
+        {% if current_upload|stringformat:"s" == upload.id|stringformat:"s" %}selected{% endif %}
+      >
+        {{ upload.original_filename }}
+      </option>
+      {% endfor %}
+    </select>
     <button
       type="submit"
       class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
@@ -142,7 +165,7 @@
   <div class="mt-6 flex items-center justify-center gap-2">
     {% if test_cases.has_previous %}
     <a
-      href="?page={{ test_cases.previous_page_number }}{% if search %}&search={{ search }}{% endif %}"
+      href="?page={{ test_cases.previous_page_number }}{% if search %}&search={{ search }}{% endif %}{% if current_upload %}&upload={{ current_upload }}{% endif %}"
       class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
     >
       Previous
@@ -153,7 +176,7 @@
     </span>
     {% if test_cases.has_next %}
     <a
-      href="?page={{ test_cases.next_page_number }}{% if search %}&search={{ search }}{% endif %}"
+      href="?page={{ test_cases.next_page_number }}{% if search %}&search={{ search }}{% endif %}{% if current_upload %}&upload={{ current_upload }}{% endif %}"
       class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
     >
       Next

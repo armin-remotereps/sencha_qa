@@ -31,4 +31,24 @@ urlpatterns: list[URLPattern] = [
         views.test_case_delete,
         name="test_case_delete",
     ),
+    path(
+        "<int:project_id>/uploads/",
+        views.upload_list,
+        name="upload_list",
+    ),
+    path(
+        "<int:project_id>/uploads/create/",
+        views.upload_create,
+        name="upload_create",
+    ),
+    path(
+        "<int:project_id>/uploads/<int:upload_id>/cancel/",
+        views.upload_cancel,
+        name="upload_cancel",
+    ),
+    path(
+        "<int:project_id>/uploads/<int:upload_id>/delete/",
+        views.upload_delete,
+        name="upload_delete",
+    ),
 ]

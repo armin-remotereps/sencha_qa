@@ -1,0 +1,43 @@
+{# Reusable drag-and-drop upload component #}
+{# Parent must define: isDragging, fileError, handleDrop(), handleFileInput() #}
+<div
+  class="relative"
+>
+  <div
+    @dragover.prevent="isDragging = true"
+    @dragleave.prevent="isDragging = false"
+    @drop.prevent="handleDrop($event)"
+    :class="isDragging ? 'border-emerald-500 bg-emerald-950/20' : 'border-zinc-700 bg-zinc-900'"
+    class="flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors"
+  >
+    <svg
+      class="mb-3 h-10 w-10 text-zinc-500"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+    >
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        stroke-width="1.5"
+        d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+      />
+    </svg>
+
+    <p class="mb-1 text-sm text-zinc-300">
+      <span class="font-semibold">Click to upload</span> or drag and drop
+    </p>
+    <p class="text-xs text-zinc-500">TestRails XML file only</p>
+
+    <input
+      type="file"
+      accept=".xml"
+      @change="handleFileInput($event)"
+      class="absolute inset-0 cursor-pointer opacity-0"
+    >
+  </div>
+</div>
+
+<template x-if="fileError">
+  <p class="mt-2 text-sm text-red-400" x-text="fileError"></p>
+</template>

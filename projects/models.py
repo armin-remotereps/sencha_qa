@@ -29,6 +29,14 @@ class TestCasePriority(models.TextChoices):
     MUST_TEST_HIGH = "5 - Must Test", "5 - Must Test"
 
 
+class UploadStatus(models.TextChoices):
+    PENDING = "pending", "Pending"
+    PROCESSING = "processing", "Processing"
+    COMPLETED = "completed", "Completed"
+    FAILED = "failed", "Failed"
+    CANCELLED = "cancelled", "Cancelled"
+
+
 class Tag(models.Model):
     name = models.CharField(max_length=50, unique=True, db_index=True)
 
@@ -50,6 +58,47 @@ class Project(models.Model):
         return self.name
 
 
+class TestCaseUpload(models.Model):
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="uploads"
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="uploads"
+    )
+    original_filename = models.CharField(max_length=255)
+    file = models.FileField(upload_to="uploads/testrail_xml/")
+    status = models.CharField(
+        max_length=20,
+        choices=UploadStatus.choices,
+        default=UploadStatus.PENDING,
+        db_index=True,
+    )
+    celery_task_id = models.CharField(max_length=255, blank=True, default="")
+    total_cases = models.PositiveIntegerField(default=0)
+    processed_cases = models.PositiveIntegerField(default=0)
+    error_message = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return self.original_filename
+
+
+@dataclass
+class ParsedTestCase:
+    title: str
+    testrail_id: str = ""
+    template: str = "Test Case"
+    type: str = ""
+    priority: str = ""
+    estimate: str = ""
+    references: str = ""
+    preconditions: str = ""
+    steps: str = ""
+    expected: str = ""
+    is_converted: bool = False
+
+
 @dataclass
 class TestCaseData:
     title: str
@@ -67,6 +116,13 @@ class TestCaseData:
 class TestCase(models.Model):
     project = models.ForeignKey(
         Project, on_delete=models.CASCADE, related_name="test_cases"
+    )
+    upload = models.ForeignKey(
+        TestCaseUpload,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="test_cases",
     )
     testrail_id = models.CharField(max_length=50, blank=True, default="")
     title = models.CharField(max_length=500)

@@ -149,3 +149,7 @@ DMR_PORT: str = config("DMR_PORT", default="12434", cast=str)
 DOCKER_HOST: str = config(
     "DOCKER_HOST", default="unix:///var/run/docker.sock", cast=str
 )
+
+# Upload size limits
+FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
+DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB

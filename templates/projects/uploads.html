@@ -1,0 +1,312 @@
+{% extends "dashboard/base_dashboard.html" %}
+
+{% block dashboard_content %}
+<div x-data="uploadManager">
+
+  <nav class="mb-4 text-sm text-zinc-400">
+    <a href="{% url 'projects:list' %}" class="hover:text-zinc-200">Projects</a>
+    <span class="mx-1">/</span>
+    <a
+      href="{% url 'projects:test_case_list' project_id=project.id %}"
+      class="hover:text-zinc-200"
+    >
+      {{ project.name }}
+    </a>
+    <span class="mx-1">/</span>
+    <span class="text-zinc-200">Uploads</span>
+  </nav>
+
+  <div class="mb-6 flex items-center justify-between">
+    <h1 class="text-2xl font-bold text-zinc-100">Uploads</h1>
+    <a
+      href="{% url 'projects:test_case_list' project_id=project.id %}"
+      class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
+    >
+      Back to Test Cases
+    </a>
+  </div>
+
+  <div class="mb-8">
+    {% include "components/drag_drop_upload.html" %}
+  </div>
+
+  {% if uploads %}
+  <div class="overflow-x-auto rounded-lg border border-zinc-800">
+    <table class="w-full text-left text-sm">
+      <thead class="border-b border-zinc-800 bg-zinc-900 text-xs uppercase text-zinc-400">
+        <tr>
+          <th class="px-4 py-3">Filename</th>
+          <th class="px-4 py-3">Status</th>
+          <th class="px-4 py-3">Progress</th>
+          <th class="px-4 py-3">Actions</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-zinc-800">
+        {% for upload in uploads %}
+        <tr class="bg-zinc-950 hover:bg-zinc-900" data-upload-id="{{ upload.id }}">
+
+          <td class="px-4 py-3 font-medium text-zinc-100">
+            {{ upload.original_filename }}
+          </td>
+
+          <td class="px-4 py-3">
+            <span
+              data-status="{{ upload.status }}"
+              :class="getStatusBadgeClass('{{ upload.status }}')"
+            >
+              {{ upload.get_status_display }}
+            </span>
+          </td>
+
+          <td class="px-4 py-3">
+            <div class="flex items-center gap-3">
+              <div class="h-2 w-24 overflow-hidden rounded-full bg-zinc-800">
+                <div
+                  data-progress-bar
+                  class="h-full rounded-full bg-emerald-500 transition-all"
+                  style="width: {% if upload.total_cases %}{% widthratio upload.processed_cases upload.total_cases 100 %}%{% else %}0%{% endif %}"
+                ></div>
+              </div>
+              <span data-progress class="text-xs text-zinc-400">
+                {{ upload.processed_cases }} / {{ upload.total_cases }}
+              </span>
+            </div>
+          </td>
+
+          <td class="px-4 py-3">
+            <div class="flex gap-2">
+
+              {% if upload.status == "processing" or upload.status == "pending" %}
+              <form
+                method="post"
+                action="{% url 'projects:upload_cancel' project_id=project.id upload_id=upload.id %}"
+              >
+                {% csrf_token %}
+                <button
+                  type="submit"
+                  class="rounded-md bg-yellow-900/50 px-3 py-1.5 text-xs font-medium text-yellow-400 hover:bg-yellow-900"
+                >
+                  Cancel
+                </button>
+              </form>
+              {% endif %}
+
+              {% if upload.status == "completed" %}
+              <a
+                href="{% url 'projects:test_case_list' project_id=project.id %}?upload={{ upload.id }}"
+                class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
+              >
+                View Test Cases
+              </a>
+              {% endif %}
+
+              <button
+                @click="openDeleteModal({{ upload.id }}, '{{ upload.original_filename|escapejs }}')"
+                class="rounded-md bg-red-900/50 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-900"
+              >
+                Delete
+              </button>
+            </div>
+          </td>
+
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-8 text-center">
+    <p class="text-zinc-400">No uploads yet. Drag and drop an XML file above to get started.</p>
+  </div>
+  {% endif %}
+
+  {% if uploads.has_other_pages %}
+  <div class="mt-6 flex items-center justify-center gap-2">
+    {% if uploads.has_previous %}
+    <a
+      href="?page={{ uploads.previous_page_number }}"
+      class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+    >
+      Previous
+    </a>
+    {% endif %}
+    <span class="text-sm text-zinc-400">
+      Page {{ uploads.number }} of {{ uploads.paginator.num_pages }}
+    </span>
+    {% if uploads.has_next %}
+    <a
+      href="?page={{ uploads.next_page_number }}"
+      class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+    >
+      Next
+    </a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <div
+    x-show="showDeleteModal"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+    @click.self="showDeleteModal = false"
+  >
+    <div
+      class="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-6"
+      @click.stop
+    >
+      <h2 class="mb-2 text-lg font-semibold text-zinc-100">Delete Upload</h2>
+      <p class="mb-6 text-sm text-zinc-400">
+        Are you sure you want to delete
+        "<span class="text-zinc-200" x-text="deleteUploadName"></span>"?
+        All associated test cases will be permanently deleted.
+      </p>
+      <form
+        method="post"
+        :action="'/projects/{{ project.id }}/uploads/' + deleteUploadId + '/delete/'"
+      >
+        {% csrf_token %}
+        <div class="flex justify-end gap-3">
+          <button
+            type="button"
+            @click="showDeleteModal = false"
+            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500"
+          >
+            Delete
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('uploadManager', () => ({
+    isDragging: false,
+    fileError: '',
+    showDeleteModal: false,
+    deleteUploadId: 0,
+    deleteUploadName: '',
+
+    handleDrop(event) {
+      this.isDragging = false;
+      const file = event.dataTransfer.files[0];
+      this.validateAndSubmit(file);
+    },
+
+    handleFileInput(event) {
+      const file = event.target.files[0];
+      this.validateAndSubmit(file);
+    },
+
+    validateAndSubmit(file) {
+      this.fileError = '';
+      if (!file) return;
+      if (!file.name.endsWith('.xml')) {
+        this.fileError = 'Only .xml files are accepted';
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = e.target.result;
+        if (!content.includes('<suite>') || !content.includes('<cases>')) {
+          this.fileError = 'Invalid TestRails XML: missing <suite> or <cases> tags';
+          return;
+        }
+
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = '{{ upload_create_url }}';
+        form.enctype = 'multipart/form-data';
+
+        const csrfInput = document.createElement('input');
+        csrfInput.type = 'hidden';
+        csrfInput.name = 'csrfmiddlewaretoken';
+        csrfInput.value = '{{ csrf_token }}';
+        form.appendChild(csrfInput);
+
+        const fileInput = document.createElement('input');
+        fileInput.type = 'file';
+        fileInput.name = 'file';
+        fileInput.style.display = 'none';
+
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(file);
+        fileInput.files = dataTransfer.files;
+        form.appendChild(fileInput);
+
+        document.body.appendChild(form);
+        form.submit();
+      };
+      reader.readAsText(file);
+    },
+
+    openDeleteModal(uploadId, uploadName) {
+      this.deleteUploadId = uploadId;
+      this.deleteUploadName = uploadName;
+      this.showDeleteModal = true;
+    },
+
+    getStatusBadgeClass(status) {
+      const base = 'rounded-full px-2 py-0.5 text-xs font-medium';
+      switch(status) {
+        case 'pending': return base + ' bg-zinc-800 text-zinc-400';
+        case 'processing': return base + ' bg-blue-900/50 text-blue-400';
+        case 'completed': return base + ' bg-emerald-900/50 text-emerald-400';
+        case 'failed': return base + ' bg-red-900/50 text-red-400';
+        case 'cancelled': return base + ' bg-yellow-900/50 text-yellow-400';
+        default: return base + ' bg-zinc-800 text-zinc-400';
+      }
+    },
+
+    init() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(
+        protocol + '//' + window.location.host + '/ws/projects/{{ project.id }}/uploads/'
+      );
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        const row = document.querySelector('[data-upload-id="' + data.upload_id + '"]');
+        if (!row) return;
+
+        const statusBadge = row.querySelector('[data-status]');
+        const previousStatus = statusBadge ? statusBadge.dataset.status : '';
+
+        if (statusBadge) {
+          statusBadge.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+          statusBadge.dataset.status = data.status;
+          statusBadge.className = this.getStatusBadgeClass(data.status);
+        }
+
+        const progressText = row.querySelector('[data-progress]');
+        if (progressText) {
+          progressText.textContent = data.processed_cases + ' / ' + data.total_cases;
+        }
+
+        const progressBar = row.querySelector('[data-progress-bar]');
+        if (progressBar && data.total_cases > 0) {
+          const pct = Math.round((data.processed_cases / data.total_cases) * 100);
+          progressBar.style.width = pct + '%';
+        }
+
+        const isTerminal = data.status === 'completed' || data.status === 'failed';
+        const statusChanged = previousStatus !== data.status;
+        if (isTerminal && statusChanged) {
+          setTimeout(() => window.location.reload(), 1000);
+        }
+      };
+    }
+  }));
+});
+</script>
+{% endblock %}
