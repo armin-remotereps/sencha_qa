@@ -4,7 +4,7 @@ from django.contrib import admin
 from django.db.models import QuerySet
 from django.http import HttpRequest
 
-from projects.models import Project, Tag
+from projects.models import Project, Tag, TestCase
 
 
 @admin.register(Tag)
@@ -31,3 +31,17 @@ class ProjectAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
         self, request: HttpRequest | None, queryset: QuerySet[Project]
     ) -> None:
         queryset.update(archived=False)
+
+
+@admin.register(TestCase)
+class TestCaseAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
+    list_display = (
+        "title",
+        "project",
+        "type",
+        "priority",
+        "is_converted",
+        "created_at",
+    )
+    list_filter = ("type", "priority", "is_converted", "project")
+    search_fields = ("title", "testrail_id")

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from django.core.paginator import Page, Paginator
 from django.db import transaction
 from django.db.models import QuerySet
 
 from accounts.models import CustomUser
-from projects.models import Project, Tag
+from projects.models import Project, Tag, TestCase, TestCaseData
 
 
 @transaction.atomic
@@ -94,3 +96,48 @@ def _sync_tags(project: Project, tag_names: list[str]) -> None:
     normalized = _normalize_tag_names(tag_names)
     tags = _get_or_create_tags(normalized)
     project.tags.set(tags)
+
+
+# ============================================================================
+# TEST CASE SERVICES
+# ============================================================================
+
+
+def create_test_case(*, project: Project, data: TestCaseData) -> TestCase:
+    return TestCase.objects.create(project=project, **asdict(data))
+
+
+def update_test_case(*, test_case: TestCase, data: TestCaseData) -> TestCase:
+    for field, value in asdict(data).items():
+        setattr(test_case, field, value)
+    test_case.save()
+    return test_case
+
+
+def delete_test_case(test_case: TestCase) -> None:
+    test_case.delete()
+
+
+def get_test_case_for_project(test_case_id: int, project: Project) -> TestCase | None:
+    try:
+        return TestCase.objects.filter(id=test_case_id, project=project).get()
+    except TestCase.DoesNotExist:
+        return None
+
+
+def list_test_cases_for_project(
+    *,
+    project: Project,
+    search: str | None,
+    page: int,
+    per_page: int,
+) -> Page[TestCase]:
+    qs: QuerySet[TestCase] = TestCase.objects.filter(project=project).order_by(
+        "-created_at"
+    )
+
+    if search:
+        qs = qs.filter(title__icontains=search)
+
+    paginator: Paginator[TestCase] = Paginator(qs, per_page)
+    return paginator.get_page(page)

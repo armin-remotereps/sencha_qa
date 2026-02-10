@@ -74,6 +74,12 @@
 
       {# Action buttons #}
       <div class="mt-4 flex gap-2">
+        <a
+          href="{% url 'projects:test_case_list' project_id=project.id %}"
+          class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
+        >
+          Test Cases
+        </a>
         <button
           @click="openEditModal({{ project.id }}, '{{ project.name }}', '{% for tag in project.tags.all %}{{ tag.name }}{% if not forloop.last %}, {% endif %}{% endfor %}')"
           class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"

@@ -4,18 +4,25 @@ from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
 from accounts.models import CustomUser
-from projects.admin import ProjectAdmin, TagAdmin
-from projects.forms import ProjectForm
+from projects.admin import ProjectAdmin, TagAdmin, TestCaseAdmin
+from projects.forms import ProjectForm, TestCaseForm
 from projects.models import Project, Tag
+from projects.models import TestCase as TestCaseModel
+from projects.models import TestCaseData, TestCasePriority, TestCaseType
 from projects.services import (
     archive_project,
     create_project,
+    create_test_case,
+    delete_test_case,
     get_all_tags_for_user,
     get_project_by_id,
     get_project_for_user,
+    get_test_case_for_project,
     list_projects_for_user,
+    list_test_cases_for_project,
     unarchive_project,
     update_project,
+    update_test_case,
 )
 
 # ============================================================================
@@ -874,3 +881,757 @@ class ProjectAdminActionTests(TestCase):
         self.project2.refresh_from_db()
         self.assertFalse(self.project1.archived)
         self.assertFalse(self.project2.archived)
+
+
+# ============================================================================
+# TEST CASE MODEL TESTS
+# ============================================================================
+
+
+class TestCaseModelTests(TestCase):
+    """Tests for TestCase model basic functionality."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="testuser@example.com",
+            password="testpass123",
+        )
+        self.project = create_project(user=self.user, name="Test Project", tag_names=[])
+
+    def test_should_create_test_case_with_all_fields(self) -> None:
+        """Verify test case can be created with all fields populated."""
+        test_case = TestCaseModel.objects.create(
+            project=self.project,
+            testrail_id="C12345",
+            title="Login with valid credentials",
+            template="Test Case Template",
+            type=TestCaseType.FUNCTIONAL,
+            priority=TestCasePriority.MUST_TEST_HIGH,
+            estimate="30m",
+            references="JIRA-123",
+            preconditions="User is on login page",
+            steps="1. Enter email\n2. Enter password\n3. Click login",
+            expected="User is logged in successfully",
+        )
+        self.assertEqual(test_case.project, self.project)
+        self.assertEqual(test_case.testrail_id, "C12345")
+        self.assertEqual(test_case.title, "Login with valid credentials")
+        self.assertEqual(test_case.template, "Test Case Template")
+        self.assertEqual(test_case.type, TestCaseType.FUNCTIONAL)
+        self.assertEqual(test_case.priority, TestCasePriority.MUST_TEST_HIGH)
+        self.assertEqual(test_case.estimate, "30m")
+        self.assertEqual(test_case.references, "JIRA-123")
+        self.assertEqual(test_case.preconditions, "User is on login page")
+        self.assertEqual(
+            test_case.steps, "1. Enter email\n2. Enter password\n3. Click login"
+        )
+        self.assertEqual(test_case.expected, "User is logged in successfully")
+
+    def test_should_use_default_values_for_optional_fields(self) -> None:
+        """Verify defaults: type=Functional, priority=5-Must Test, is_converted=False, template='Test Case'."""
+        test_case = TestCaseModel.objects.create(
+            project=self.project,
+            title="Test with defaults",
+        )
+        self.assertEqual(test_case.type, TestCaseType.FUNCTIONAL)
+        self.assertEqual(test_case.priority, TestCasePriority.MUST_TEST_HIGH)
+        self.assertFalse(test_case.is_converted)
+        self.assertEqual(test_case.template, "Test Case")
+        self.assertEqual(test_case.testrail_id, "")
+        self.assertEqual(test_case.estimate, "")
+        self.assertEqual(test_case.references, "")
+        self.assertEqual(test_case.preconditions, "")
+        self.assertEqual(test_case.steps, "")
+        self.assertEqual(test_case.expected, "")
+
+    def test_should_return_title_in_str_representation(self) -> None:
+        """Verify __str__ returns the test case title."""
+        test_case = TestCaseModel.objects.create(
+            project=self.project,
+            title="My Test Case Title",
+        )
+        self.assertEqual(str(test_case), "My Test Case Title")
+
+    def test_should_cascade_delete_when_project_deleted(self) -> None:
+        """Verify test cases are deleted when parent project is deleted."""
+        test_case1 = TestCaseModel.objects.create(
+            project=self.project,
+            title="Test Case 1",
+        )
+        test_case2 = TestCaseModel.objects.create(
+            project=self.project,
+            title="Test Case 2",
+        )
+        test_case1_id = test_case1.id
+        test_case2_id = test_case2.id
+
+        self.project.delete()
+
+        self.assertFalse(TestCaseModel.objects.filter(id=test_case1_id).exists())
+        self.assertFalse(TestCaseModel.objects.filter(id=test_case2_id).exists())
+
+
+# ============================================================================
+# TEST CASE SERVICE TESTS
+# ============================================================================
+
+
+class TestCaseServiceTests(TestCase):
+    """Tests for TestCase service layer - business logic."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="testuser@example.com",
+            password="testpass123",
+        )
+        self.other_user = CustomUser.objects.create_user(
+            email="otheruser@example.com",
+            password="testpass123",
+        )
+        self.project = create_project(user=self.user, name="Test Project", tag_names=[])
+        self.other_project = create_project(
+            user=self.other_user, name="Other Project", tag_names=[]
+        )
+
+    def test_should_create_test_case_with_minimal_fields(self) -> None:
+        """Verify create_test_case works with only required fields."""
+        test_case = create_test_case(
+            project=self.project,
+            data=TestCaseData(title="Minimal Test Case"),
+        )
+        self.assertEqual(test_case.project, self.project)
+        self.assertEqual(test_case.title, "Minimal Test Case")
+        self.assertIsNotNone(test_case.id)
+
+    def test_should_create_test_case_with_all_fields(self) -> None:
+        """Verify create_test_case properly saves all provided fields."""
+        test_case = create_test_case(
+            project=self.project,
+            data=TestCaseData(
+                title="Comprehensive Test",
+                testrail_id="C99999",
+                template="Custom Template",
+                type=TestCaseType.SECURITY,
+                priority=TestCasePriority.MUST_TEST,
+                estimate="2h",
+                references="JIRA-999",
+                preconditions="System is configured",
+                steps="Step 1\nStep 2\nStep 3",
+                expected="Expected outcome here",
+            ),
+        )
+        self.assertEqual(test_case.testrail_id, "C99999")
+        self.assertEqual(test_case.title, "Comprehensive Test")
+        self.assertEqual(test_case.template, "Custom Template")
+        self.assertEqual(test_case.type, TestCaseType.SECURITY)
+        self.assertEqual(test_case.priority, TestCasePriority.MUST_TEST)
+        self.assertEqual(test_case.estimate, "2h")
+        self.assertEqual(test_case.references, "JIRA-999")
+        self.assertEqual(test_case.preconditions, "System is configured")
+        self.assertEqual(test_case.steps, "Step 1\nStep 2\nStep 3")
+        self.assertEqual(test_case.expected, "Expected outcome here")
+
+    def test_should_use_default_values_when_creating(self) -> None:
+        """Verify defaults are applied when optional parameters omitted."""
+        test_case = create_test_case(
+            project=self.project,
+            data=TestCaseData(title="Test with defaults"),
+        )
+        self.assertEqual(test_case.testrail_id, "")
+        self.assertEqual(test_case.template, "Test Case")
+        self.assertEqual(test_case.type, "")
+        self.assertEqual(test_case.priority, "")
+        self.assertEqual(test_case.estimate, "")
+        self.assertEqual(test_case.references, "")
+        self.assertEqual(test_case.preconditions, "")
+        self.assertEqual(test_case.steps, "")
+        self.assertEqual(test_case.expected, "")
+
+    def test_should_update_test_case_with_all_fields(self) -> None:
+        """Verify update_test_case modifies all fields correctly."""
+        test_case = create_test_case(
+            project=self.project,
+            data=TestCaseData(title="Original Title"),
+        )
+        updated = update_test_case(
+            test_case=test_case,
+            data=TestCaseData(
+                title="Updated Title",
+                testrail_id="C00001",
+                template="Updated Template",
+                type=TestCaseType.PERFORMANCE,
+                priority=TestCasePriority.TEST_IF_TIME_LOW,
+                estimate="1h",
+                references="JIRA-111",
+                preconditions="Updated preconditions",
+                steps="Updated steps",
+                expected="Updated expected",
+            ),
+        )
+        self.assertEqual(updated.title, "Updated Title")
+        self.assertEqual(updated.testrail_id, "C00001")
+        self.assertEqual(updated.template, "Updated Template")
+        self.assertEqual(updated.type, TestCaseType.PERFORMANCE)
+        self.assertEqual(updated.priority, TestCasePriority.TEST_IF_TIME_LOW)
+        self.assertEqual(updated.estimate, "1h")
+        self.assertEqual(updated.references, "JIRA-111")
+        self.assertEqual(updated.preconditions, "Updated preconditions")
+        self.assertEqual(updated.steps, "Updated steps")
+        self.assertEqual(updated.expected, "Updated expected")
+
+        # Verify it was actually saved to DB
+        test_case.refresh_from_db()
+        self.assertEqual(test_case.title, "Updated Title")
+
+    def test_should_delete_test_case(self) -> None:
+        """Verify delete_test_case removes test case from database."""
+        test_case = create_test_case(
+            project=self.project,
+            data=TestCaseData(title="To be deleted"),
+        )
+        test_case_id = test_case.id
+
+        delete_test_case(test_case)
+
+        self.assertFalse(TestCaseModel.objects.filter(id=test_case_id).exists())
+
+    def test_should_get_test_case_for_project_when_valid(self) -> None:
+        """Verify get_test_case_for_project returns correct test case."""
+        test_case = create_test_case(
+            project=self.project,
+            data=TestCaseData(title="Valid Test Case"),
+        )
+        retrieved = get_test_case_for_project(test_case.id, self.project)
+        self.assertIsNotNone(retrieved)
+        self.assertEqual(retrieved.id, test_case.id)  # type: ignore[union-attr]
+        self.assertEqual(retrieved.title, "Valid Test Case")  # type: ignore[union-attr]
+
+    def test_should_return_none_when_test_case_in_different_project(self) -> None:
+        """Verify service enforces project boundaries - cannot access other project's test cases."""
+        test_case = create_test_case(
+            project=self.project,
+            data=TestCaseData(title="Project 1 Test Case"),
+        )
+        # Try to get test case using wrong project
+        retrieved = get_test_case_for_project(test_case.id, self.other_project)
+        self.assertIsNone(retrieved)
+
+    def test_should_return_none_when_test_case_does_not_exist(self) -> None:
+        """Verify get_test_case_for_project handles non-existent IDs gracefully."""
+        retrieved = get_test_case_for_project(99999, self.project)
+        self.assertIsNone(retrieved)
+
+    def test_should_list_test_cases_for_project(self) -> None:
+        """Verify list_test_cases_for_project returns paginated results."""
+        create_test_case(project=self.project, data=TestCaseData(title="Test Case 1"))
+        create_test_case(project=self.project, data=TestCaseData(title="Test Case 2"))
+        create_test_case(project=self.project, data=TestCaseData(title="Test Case 3"))
+
+        page = list_test_cases_for_project(
+            project=self.project,
+            search=None,
+            page=1,
+            per_page=10,
+        )
+        self.assertEqual(len(page.object_list), 3)
+
+    def test_should_filter_test_cases_by_search(self) -> None:
+        """Verify list_test_cases_for_project filters by title search."""
+        create_test_case(project=self.project, data=TestCaseData(title="Login Test"))
+        create_test_case(project=self.project, data=TestCaseData(title="Logout Test"))
+        create_test_case(
+            project=self.project, data=TestCaseData(title="Profile Update")
+        )
+
+        page = list_test_cases_for_project(
+            project=self.project,
+            search="login",
+            page=1,
+            per_page=10,
+        )
+        self.assertEqual(len(page.object_list), 1)
+        self.assertEqual(page.object_list[0].title, "Login Test")
+
+    def test_should_return_empty_page_when_no_test_cases(self) -> None:
+        """Verify list returns empty page when no test cases exist."""
+        page = list_test_cases_for_project(
+            project=self.project,
+            search=None,
+            page=1,
+            per_page=10,
+        )
+        self.assertEqual(len(page.object_list), 0)
+
+    def test_should_paginate_test_cases_correctly(self) -> None:
+        """Verify pagination works correctly with boundary values."""
+        # Create 25 test cases
+        for i in range(25):
+            create_test_case(
+                project=self.project, data=TestCaseData(title=f"Test Case {i}")
+            )
+
+        # Get first page (10 items)
+        page1 = list_test_cases_for_project(
+            project=self.project,
+            search=None,
+            page=1,
+            per_page=10,
+        )
+        self.assertEqual(len(page1.object_list), 10)
+        self.assertTrue(page1.has_next())
+        self.assertFalse(page1.has_previous())
+
+        # Get last page
+        page3 = list_test_cases_for_project(
+            project=self.project,
+            search=None,
+            page=3,
+            per_page=10,
+        )
+        self.assertEqual(len(page3.object_list), 5)
+        self.assertFalse(page3.has_next())
+        self.assertTrue(page3.has_previous())
+
+
+# ============================================================================
+# TEST CASE FORM TESTS
+# ============================================================================
+
+
+class TestCaseFormTests(TestCase):
+    """Tests for TestCaseForm validation and behavior."""
+
+    def test_should_be_valid_with_required_fields(self) -> None:
+        """Verify form is valid with only title provided."""
+        form = TestCaseForm(
+            data={
+                "title": "Valid Test Case",
+                "type": TestCaseType.FUNCTIONAL,
+                "priority": TestCasePriority.MUST_TEST_HIGH,
+            }
+        )
+        self.assertTrue(form.is_valid())
+
+    def test_should_be_valid_with_all_fields(self) -> None:
+        """Verify form accepts all fields when provided."""
+        form = TestCaseForm(
+            data={
+                "title": "Complete Test Case",
+                "testrail_id": "C12345",
+                "template": "Custom Template",
+                "type": TestCaseType.SECURITY,
+                "priority": TestCasePriority.MUST_TEST,
+                "estimate": "1h",
+                "references": "JIRA-123",
+                "preconditions": "User is logged in",
+                "steps": "Step 1\nStep 2",
+                "expected": "Success",
+            }
+        )
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data["title"], "Complete Test Case")
+        self.assertEqual(form.cleaned_data["testrail_id"], "C12345")
+        self.assertEqual(form.cleaned_data["template"], "Custom Template")
+
+    def test_should_require_title(self) -> None:
+        """Verify title field is required."""
+        form = TestCaseForm(
+            data={
+                "title": "",
+                "type": TestCaseType.FUNCTIONAL,
+                "priority": TestCasePriority.MUST_TEST_HIGH,
+            }
+        )
+        self.assertFalse(form.is_valid())
+        self.assertIn("title", form.errors)
+
+    def test_should_allow_blank_optional_fields(self) -> None:
+        """Verify optional fields can be left blank."""
+        form = TestCaseForm(
+            data={
+                "title": "Test with minimal data",
+                "testrail_id": "",
+                "template": "",
+                "type": TestCaseType.FUNCTIONAL,
+                "priority": TestCasePriority.MUST_TEST_HIGH,
+                "estimate": "",
+                "references": "",
+                "preconditions": "",
+                "steps": "",
+                "expected": "",
+            }
+        )
+        self.assertTrue(form.is_valid())
+
+    def test_should_have_correct_type_choices(self) -> None:
+        """Verify type field has all TestCaseType choices."""
+        form = TestCaseForm()
+        type_choices = dict(form.fields["type"].choices)  # type: ignore[attr-defined]
+        self.assertIn(TestCaseType.FUNCTIONAL, type_choices)
+        self.assertIn(TestCaseType.SECURITY, type_choices)
+        self.assertIn(TestCaseType.PERFORMANCE, type_choices)
+        self.assertIn(TestCaseType.REGRESSION, type_choices)
+        self.assertIn(TestCaseType.ACCEPTANCE, type_choices)
+
+    def test_should_have_correct_priority_choices(self) -> None:
+        """Verify priority field has all TestCasePriority choices."""
+        form = TestCaseForm()
+        priority_choices = dict(form.fields["priority"].choices)  # type: ignore[attr-defined]
+        self.assertIn(TestCasePriority.DONT_TEST, priority_choices)
+        self.assertIn(TestCasePriority.TEST_IF_TIME_LOW, priority_choices)
+        self.assertIn(TestCasePriority.TEST_IF_TIME_MID, priority_choices)
+        self.assertIn(TestCasePriority.MUST_TEST, priority_choices)
+        self.assertIn(TestCasePriority.MUST_TEST_HIGH, priority_choices)
+
+    def test_should_use_default_values(self) -> None:
+        """Verify form has correct initial values for type and priority."""
+        form = TestCaseForm()
+        self.assertEqual(form.fields["type"].initial, TestCaseType.FUNCTIONAL)
+        self.assertEqual(
+            form.fields["priority"].initial, TestCasePriority.MUST_TEST_HIGH
+        )
+        self.assertEqual(form.fields["template"].initial, "Test Case")
+
+
+# ============================================================================
+# TEST CASE VIEW TESTS
+# ============================================================================
+
+
+class TestCaseViewTests(TestCase):
+    """Tests for TestCase views - authentication, authorization, and behavior."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="member@example.com",
+            password="testpass123",
+        )
+        self.non_member = CustomUser.objects.create_user(
+            email="nonmember@example.com",
+            password="testpass123",
+        )
+        self.project = create_project(user=self.user, name="Test Project", tag_names=[])
+
+    def test_should_require_login_for_test_case_list(self) -> None:
+        """Verify test_case_list redirects to login when not authenticated."""
+        url = reverse("projects:test_case_list", args=[self.project.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+
+    def test_should_return_404_when_user_not_project_member(self) -> None:
+        """Verify non-members cannot access project's test cases."""
+        self.client.force_login(self.non_member)
+        url = reverse("projects:test_case_list", args=[self.project.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_return_200_and_correct_template_for_test_case_list(self) -> None:
+        """Verify test_case_list returns success with correct template."""
+        self.client.force_login(self.user)
+        url = reverse("projects:test_case_list", args=[self.project.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "projects/test_cases.html")
+
+    def test_should_pass_search_query_to_test_case_list(self) -> None:
+        """Verify search parameter is passed to template context."""
+        self.client.force_login(self.user)
+        create_test_case(project=self.project, data=TestCaseData(title="Login Test"))
+        create_test_case(project=self.project, data=TestCaseData(title="Logout Test"))
+
+        url = reverse("projects:test_case_list", args=[self.project.id])
+        response = self.client.get(url, {"search": "login"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["search"], "login")
+
+    def test_should_include_pagination_context_in_test_case_list(self) -> None:
+        """Verify test_case_list includes pagination context variables."""
+        self.client.force_login(self.user)
+        for i in range(25):
+            create_test_case(project=self.project, data=TestCaseData(title=f"Test {i}"))
+
+        url = reverse("projects:test_case_list", args=[self.project.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("test_cases", response.context)
+        page = response.context["test_cases"]
+        self.assertTrue(page.has_next())
+
+    def test_should_require_login_for_test_case_create(self) -> None:
+        """Verify test_case_create redirects to login when not authenticated."""
+        url = reverse("projects:test_case_create", args=[self.project.id])
+        response = self.client.post(url, {"title": "New Test"})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+
+    def test_should_require_membership_for_test_case_create(self) -> None:
+        """Verify non-members cannot create test cases."""
+        self.client.force_login(self.non_member)
+        url = reverse("projects:test_case_create", args=[self.project.id])
+        response = self.client.post(
+            url,
+            {
+                "title": "Unauthorized Test",
+                "type": TestCaseType.FUNCTIONAL,
+                "priority": TestCasePriority.MUST_TEST_HIGH,
+            },
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_create_test_case_and_redirect(self) -> None:
+        """Verify POST to test_case_create creates test case and redirects."""
+        self.client.force_login(self.user)
+        url = reverse("projects:test_case_create", args=[self.project.id])
+        response = self.client.post(
+            url,
+            {
+                "title": "New Test Case",
+                "testrail_id": "C123",
+                "template": "Test Case",
+                "type": TestCaseType.FUNCTIONAL,
+                "priority": TestCasePriority.MUST_TEST_HIGH,
+                "estimate": "30m",
+                "references": "JIRA-1",
+                "preconditions": "Setup done",
+                "steps": "Step 1",
+                "expected": "Success",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.url,  # type: ignore[attr-defined]
+            reverse("projects:test_case_list", args=[self.project.id]),
+        )
+
+        # Verify test case was created
+        test_case = TestCaseModel.objects.get(title="New Test Case")
+        self.assertEqual(test_case.project, self.project)
+        self.assertEqual(test_case.testrail_id, "C123")
+
+    def test_should_return_405_for_get_request_to_test_case_create(self) -> None:
+        """Verify test_case_create only accepts POST requests."""
+        self.client.force_login(self.user)
+        url = reverse("projects:test_case_create", args=[self.project.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 405)
+
+    def test_should_require_login_for_test_case_edit(self) -> None:
+        """Verify test_case_edit redirects to login when not authenticated."""
+        test_case = create_test_case(
+            project=self.project, data=TestCaseData(title="Original")
+        )
+        url = reverse("projects:test_case_edit", args=[self.project.id, test_case.id])
+        response = self.client.post(url, {"title": "Updated"})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+
+    def test_should_require_membership_for_test_case_edit(self) -> None:
+        """Verify non-members cannot edit test cases."""
+        test_case = create_test_case(
+            project=self.project, data=TestCaseData(title="Original")
+        )
+        self.client.force_login(self.non_member)
+        url = reverse("projects:test_case_edit", args=[self.project.id, test_case.id])
+        response = self.client.post(
+            url,
+            {
+                "title": "Unauthorized Edit",
+                "type": TestCaseType.FUNCTIONAL,
+                "priority": TestCasePriority.MUST_TEST_HIGH,
+            },
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_update_test_case_and_redirect(self) -> None:
+        """Verify POST to test_case_edit updates test case and redirects."""
+        test_case = create_test_case(
+            project=self.project, data=TestCaseData(title="Original Title")
+        )
+        self.client.force_login(self.user)
+        url = reverse("projects:test_case_edit", args=[self.project.id, test_case.id])
+        response = self.client.post(
+            url,
+            {
+                "title": "Updated Title",
+                "testrail_id": "C999",
+                "template": "Test Case",
+                "type": TestCaseType.SECURITY,
+                "priority": TestCasePriority.MUST_TEST,
+                "estimate": "1h",
+                "references": "JIRA-999",
+                "preconditions": "Updated preconditions",
+                "steps": "Updated steps",
+                "expected": "Updated expected",
+            },
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.url,  # type: ignore[attr-defined]
+            reverse("projects:test_case_list", args=[self.project.id]),
+        )
+
+        test_case.refresh_from_db()
+        self.assertEqual(test_case.title, "Updated Title")
+        self.assertEqual(test_case.testrail_id, "C999")
+
+    def test_should_return_404_when_editing_test_case_from_different_project(
+        self,
+    ) -> None:
+        """Verify cross-project test case access is prevented."""
+        other_user = CustomUser.objects.create_user(
+            email="other@example.com", password="testpass123"
+        )
+        other_project = create_project(
+            user=other_user, name="Other Project", tag_names=[]
+        )
+        other_test_case = create_test_case(
+            project=other_project, data=TestCaseData(title="Other Test")
+        )
+
+        self.client.force_login(self.user)
+        # Try to edit other_test_case using self.project
+        url = reverse(
+            "projects:test_case_edit", args=[self.project.id, other_test_case.id]
+        )
+        response = self.client.post(
+            url,
+            {
+                "title": "Sneaky Edit",
+                "type": TestCaseType.FUNCTIONAL,
+                "priority": TestCasePriority.MUST_TEST_HIGH,
+            },
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_return_404_when_editing_nonexistent_test_case(self) -> None:
+        """Verify editing non-existent test case returns 404."""
+        self.client.force_login(self.user)
+        url = reverse("projects:test_case_edit", args=[self.project.id, 99999])
+        response = self.client.post(
+            url,
+            {
+                "title": "Ghost Test",
+                "type": TestCaseType.FUNCTIONAL,
+                "priority": TestCasePriority.MUST_TEST_HIGH,
+            },
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_require_login_for_test_case_delete(self) -> None:
+        """Verify test_case_delete redirects to login when not authenticated."""
+        test_case = create_test_case(
+            project=self.project, data=TestCaseData(title="To Delete")
+        )
+        url = reverse("projects:test_case_delete", args=[self.project.id, test_case.id])
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+
+    def test_should_require_membership_for_test_case_delete(self) -> None:
+        """Verify non-members cannot delete test cases."""
+        test_case = create_test_case(
+            project=self.project, data=TestCaseData(title="Protected")
+        )
+        self.client.force_login(self.non_member)
+        url = reverse("projects:test_case_delete", args=[self.project.id, test_case.id])
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_delete_test_case_and_redirect(self) -> None:
+        """Verify POST to test_case_delete removes test case and redirects."""
+        test_case = create_test_case(
+            project=self.project, data=TestCaseData(title="To Delete")
+        )
+        test_case_id = test_case.id
+
+        self.client.force_login(self.user)
+        url = reverse("projects:test_case_delete", args=[self.project.id, test_case.id])
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.url,  # type: ignore[attr-defined]
+            reverse("projects:test_case_list", args=[self.project.id]),
+        )
+
+        self.assertFalse(TestCaseModel.objects.filter(id=test_case_id).exists())
+
+    def test_should_return_404_when_deleting_test_case_from_different_project(
+        self,
+    ) -> None:
+        """Verify cross-project test case deletion is prevented."""
+        other_user = CustomUser.objects.create_user(
+            email="other@example.com", password="testpass123"
+        )
+        other_project = create_project(
+            user=other_user, name="Other Project", tag_names=[]
+        )
+        other_test_case = create_test_case(
+            project=other_project, data=TestCaseData(title="Other Test")
+        )
+
+        self.client.force_login(self.user)
+        url = reverse(
+            "projects:test_case_delete", args=[self.project.id, other_test_case.id]
+        )
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 404)
+
+        # Verify test case still exists
+        self.assertTrue(TestCaseModel.objects.filter(id=other_test_case.id).exists())
+
+    def test_should_return_404_when_accessing_archived_project_test_cases(
+        self,
+    ) -> None:
+        """Verify decorator blocks access to archived project's test cases."""
+        archive_project(self.project)
+        self.client.force_login(self.user)
+        url = reverse("projects:test_case_list", args=[self.project.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+
+# ============================================================================
+# TEST CASE ADMIN TESTS
+# ============================================================================
+
+
+class TestCaseAdminTests(TestCase):
+    """Tests for TestCase admin configuration."""
+
+    def setUp(self) -> None:
+        self.site = AdminSite()
+        self.admin = TestCaseAdmin(TestCaseModel, self.site)
+        self.user = CustomUser.objects.create_user(
+            email="admin@example.com",
+            password="testpass123",
+        )
+        self.project = create_project(user=self.user, name="Test Project", tag_names=[])
+
+    def test_should_be_registered_in_admin(self) -> None:
+        """Verify TestCase model is registered in admin site."""
+        from django.contrib import admin
+
+        self.assertIn(TestCaseModel, admin.site._registry)
+
+    def test_should_have_correct_list_display(self) -> None:
+        """Verify list_display shows correct fields."""
+        expected_fields = (
+            "title",
+            "project",
+            "type",
+            "priority",
+            "is_converted",
+            "created_at",
+        )
+        self.assertEqual(self.admin.list_display, expected_fields)
+
+    def test_should_have_correct_list_filters(self) -> None:
+        """Verify list_filter has correct filter options."""
+        expected_filters = ("type", "priority", "is_converted", "project")
+        self.assertEqual(self.admin.list_filter, expected_filters)
+
+    def test_should_have_correct_search_fields(self) -> None:
+        """Verify search_fields includes title and testrail_id."""
+        expected_search = ("title", "testrail_id")
+        self.assertEqual(self.admin.search_fields, expected_search)

@@ -1,0 +1,384 @@
+{% extends "dashboard/base_dashboard.html" %}
+
+{% block dashboard_content %}
+<div
+  x-data="{
+    showCreateModal: false,
+    showEditModal: false,
+    editId: 0,
+    editTitle: '',
+    editTestrailId: '',
+    editTemplate: '',
+    editType: '',
+    editPriority: '',
+    editEstimate: '',
+    editReferences: '',
+    editPreconditions: '',
+    editSteps: '',
+    editExpected: '',
+    openEditModal(el) {
+      this.editId = el.dataset.id;
+      this.editTitle = el.dataset.title;
+      this.editTestrailId = el.dataset.testrailId;
+      this.editTemplate = el.dataset.template;
+      this.editType = el.dataset.type;
+      this.editPriority = el.dataset.priority;
+      this.editEstimate = el.dataset.estimate;
+      this.editReferences = el.dataset.references;
+      this.editPreconditions = el.dataset.preconditions;
+      this.editSteps = el.dataset.steps;
+      this.editExpected = el.dataset.expected;
+      this.showEditModal = true;
+    }
+  }"
+>
+
+  {# BREADCRUMB #}
+  <nav class="mb-4 text-sm text-zinc-400">
+    <a href="{% url 'projects:list' %}" class="hover:text-zinc-200">Projects</a>
+    <span class="mx-1">/</span>
+    <span class="text-zinc-200">{{ project.name }}</span>
+    <span class="mx-1">/</span>
+    <span class="text-zinc-200">Test Cases</span>
+  </nav>
+
+  {# HEADER: Title + New Test Case button #}
+  <div class="mb-6 flex items-center justify-between">
+    <h1 class="text-2xl font-bold text-zinc-100">Test Cases</h1>
+    <button
+      @click="showCreateModal = true"
+      class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+    >
+      New Test Case
+    </button>
+  </div>
+
+  {# SEARCH #}
+  <form method="get" action="{% url 'projects:test_case_list' project_id=project.id %}" class="mb-6 flex gap-3">
+    <input
+      type="text"
+      name="search"
+      value="{{ search }}"
+      placeholder="Search test cases..."
+      class="flex h-10 w-full max-w-xs rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+    >
+    <button
+      type="submit"
+      class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
+    >
+      Search
+    </button>
+  </form>
+
+  {# TEST CASES TABLE #}
+  {% if test_cases %}
+  <div class="overflow-x-auto rounded-lg border border-zinc-800">
+    <table class="w-full text-left text-sm">
+      <thead class="border-b border-zinc-800 bg-zinc-900 text-xs uppercase text-zinc-400">
+        <tr>
+          <th class="px-4 py-3">Title</th>
+          <th class="px-4 py-3">Type</th>
+          <th class="px-4 py-3">Priority</th>
+          <th class="px-4 py-3">Converted</th>
+          <th class="px-4 py-3">Actions</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-zinc-800">
+        {% for tc in test_cases %}
+        <tr class="bg-zinc-950 hover:bg-zinc-900">
+          <td class="px-4 py-3 font-medium text-zinc-100">{{ tc.title }}</td>
+          <td class="px-4 py-3 text-zinc-400">{{ tc.type }}</td>
+          <td class="px-4 py-3 text-zinc-400">{{ tc.priority }}</td>
+          <td class="px-4 py-3">
+            {% if tc.is_converted %}
+            <span class="rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-400">Yes</span>
+            {% else %}
+            <span class="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">No</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3">
+            <div class="flex gap-2">
+              <button
+                @click="openEditModal($el)"
+                data-id="{{ tc.id }}"
+                data-title="{{ tc.title|escape }}"
+                data-testrail-id="{{ tc.testrail_id|escape }}"
+                data-template="{{ tc.template|escape }}"
+                data-type="{{ tc.type|escape }}"
+                data-priority="{{ tc.priority|escape }}"
+                data-estimate="{{ tc.estimate|escape }}"
+                data-references="{{ tc.references|escape }}"
+                data-preconditions="{{ tc.preconditions|escape }}"
+                data-steps="{{ tc.steps|escape }}"
+                data-expected="{{ tc.expected|escape }}"
+                class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
+              >
+                Edit
+              </button>
+              <form method="post" action="{% url 'projects:test_case_delete' project_id=project.id test_case_id=tc.id %}">
+                {% csrf_token %}
+                <button
+                  type="submit"
+                  class="rounded-md bg-red-900/50 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-900"
+                >
+                  Delete
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-8 text-center">
+    <p class="text-zinc-400">No test cases found.</p>
+  </div>
+  {% endif %}
+
+  {# PAGINATION #}
+  {% if test_cases.has_other_pages %}
+  <div class="mt-6 flex items-center justify-center gap-2">
+    {% if test_cases.has_previous %}
+    <a
+      href="?page={{ test_cases.previous_page_number }}{% if search %}&search={{ search }}{% endif %}"
+      class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+    >
+      Previous
+    </a>
+    {% endif %}
+    <span class="text-sm text-zinc-400">
+      Page {{ test_cases.number }} of {{ test_cases.paginator.num_pages }}
+    </span>
+    {% if test_cases.has_next %}
+    <a
+      href="?page={{ test_cases.next_page_number }}{% if search %}&search={{ search }}{% endif %}"
+      class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+    >
+      Next
+    </a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# CREATE MODAL #}
+  <div
+    x-show="showCreateModal"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+    @click.self="showCreateModal = false"
+  >
+    <div
+      class="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900 p-6"
+      @click.stop
+    >
+      <h2 class="mb-4 text-lg font-semibold text-zinc-100">New Test Case</h2>
+      <form method="post" action="{% url 'projects:test_case_create' project_id=project.id %}">
+        {% csrf_token %}
+        <div class="space-y-4">
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Title</label>
+            {{ form.title }}
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">Type</label>
+              {{ form.type }}
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">Priority</label>
+              {{ form.priority }}
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">TestRail ID</label>
+              {{ form.testrail_id }}
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">Template</label>
+              {{ form.template }}
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">Estimate</label>
+              {{ form.estimate }}
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">References</label>
+              {{ form.references }}
+            </div>
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Preconditions</label>
+            {{ form.preconditions }}
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Steps</label>
+            {{ form.steps }}
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Expected Result</label>
+            {{ form.expected }}
+          </div>
+        </div>
+        <div class="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            @click="showCreateModal = false"
+            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+          >
+            Create
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {# EDIT MODAL #}
+  <div
+    x-show="showEditModal"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+    @click.self="showEditModal = false"
+  >
+    <div
+      class="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900 p-6"
+      @click.stop
+    >
+      <h2 class="mb-4 text-lg font-semibold text-zinc-100">Edit Test Case</h2>
+      <form method="post" :action="'{% url 'projects:test_case_edit' project_id=project.id test_case_id=0 %}'.replace('/0/', '/' + editId + '/')">
+        {% csrf_token %}
+        <div class="space-y-4">
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Title</label>
+            <input
+              type="text"
+              name="title"
+              x-model="editTitle"
+              class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+            >
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">Type</label>
+              <select
+                name="type"
+                x-model="editType"
+                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+              >
+                {% for value, label in form.fields.type.choices %}
+                <option value="{{ value }}">{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">Priority</label>
+              <select
+                name="priority"
+                x-model="editPriority"
+                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+              >
+                {% for value, label in form.fields.priority.choices %}
+                <option value="{{ value }}">{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">TestRail ID</label>
+              <input
+                type="text"
+                name="testrail_id"
+                x-model="editTestrailId"
+                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+              >
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">Template</label>
+              <input
+                type="text"
+                name="template"
+                x-model="editTemplate"
+                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+              >
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">Estimate</label>
+              <input
+                type="text"
+                name="estimate"
+                x-model="editEstimate"
+                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+              >
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">References</label>
+              <input
+                type="text"
+                name="references"
+                x-model="editReferences"
+                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+              >
+            </div>
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Preconditions</label>
+            <textarea
+              name="preconditions"
+              x-model="editPreconditions"
+              rows="3"
+              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+            ></textarea>
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Steps</label>
+            <textarea
+              name="steps"
+              x-model="editSteps"
+              rows="3"
+              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+            ></textarea>
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Expected Result</label>
+            <textarea
+              name="expected"
+              x-model="editExpected"
+              rows="3"
+              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+            ></textarea>
+          </div>
+        </div>
+        <div class="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            @click="showEditModal = false"
+            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+          >
+            Save
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+</div>
+{% endblock %}
