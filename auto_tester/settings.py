@@ -28,6 +28,7 @@ INSTALLED_APPS: list[str] = [
     "accounts",
     "dashboard",
     "projects",
+    "environments",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -153,3 +154,17 @@ DOCKER_HOST: str = config(
 # Upload size limits
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
+
+# Testing Environment
+ENV_IMAGE_NAME: str = config("ENV_IMAGE_NAME", default="auto-tester-env", cast=str)
+ENV_IMAGE_TAG: str = config("ENV_IMAGE_TAG", default="latest", cast=str)
+ENV_SSH_USER: str = config("ENV_SSH_USER", default="root", cast=str)
+ENV_SSH_PASSWORD: str = config("ENV_SSH_PASSWORD", default="testpass123", cast=str)
+ENV_VNC_PASSWORD: str = config("ENV_VNC_PASSWORD", default="testpass123", cast=str)
+ENV_CONTAINER_PREFIX: str = config(
+    "ENV_CONTAINER_PREFIX", default="auto-tester-env", cast=str
+)
+ENV_HEALTH_CHECK_TIMEOUT: int = config("ENV_HEALTH_CHECK_TIMEOUT", default=60, cast=int)
+ENV_HEALTH_CHECK_INTERVAL: int = config(
+    "ENV_HEALTH_CHECK_INTERVAL", default=2, cast=int
+)
