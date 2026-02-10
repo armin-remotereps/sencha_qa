@@ -22,6 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     socat \
     ca-certificates \
+    xdotool \
+    wmctrl \
+    scrot \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir --break-system-packages playwright~=1.58.0 && \

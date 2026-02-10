@@ -24,7 +24,7 @@ from environments.types import (
 
 logger = logging.getLogger(__name__)
 
-ENV_SSH_TIMEOUT = 10
+ENV_SSH_TIMEOUT: int = getattr(settings, "ENV_SSH_TIMEOUT", 10)
 ENV_PORT_CHECK_TIMEOUT = 2
 
 # ============================================================================

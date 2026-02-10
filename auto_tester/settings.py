@@ -29,6 +29,7 @@ INSTALLED_APPS: list[str] = [
     "dashboard",
     "projects",
     "environments",
+    "agents",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -145,6 +146,15 @@ CHANNEL_LAYERS = {
 # Docker Model Runner
 DMR_HOST: str = config("DMR_HOST", default="localhost", cast=str)
 DMR_PORT: str = config("DMR_PORT", default="12434", cast=str)
+DMR_MODEL: str = config("DMR_MODEL", default="ai/mistral", cast=str)
+DMR_VISION_MODEL: str = config("DMR_VISION_MODEL", default="ai/qwen3-vl", cast=str)
+DMR_TEMPERATURE: float = config("DMR_TEMPERATURE", default=0.1, cast=float)
+DMR_MAX_TOKENS: int = config("DMR_MAX_TOKENS", default=4096, cast=int)
+DMR_REQUEST_TIMEOUT: int = config("DMR_REQUEST_TIMEOUT", default=600, cast=int)
+
+# Agent
+AGENT_MAX_ITERATIONS: int = config("AGENT_MAX_ITERATIONS", default=30, cast=int)
+AGENT_TIMEOUT_SECONDS: int = config("AGENT_TIMEOUT_SECONDS", default=300, cast=int)
 
 # Docker
 DOCKER_HOST: str = config(
@@ -167,4 +177,17 @@ ENV_CONTAINER_PREFIX: str = config(
 ENV_HEALTH_CHECK_TIMEOUT: int = config("ENV_HEALTH_CHECK_TIMEOUT", default=60, cast=int)
 ENV_HEALTH_CHECK_INTERVAL: int = config(
     "ENV_HEALTH_CHECK_INTERVAL", default=2, cast=int
+)
+ENV_SSH_TIMEOUT: int = config("ENV_SSH_TIMEOUT", default=10, cast=int)
+
+# SSH Session
+SSH_COMMAND_TIMEOUT: int = config("SSH_COMMAND_TIMEOUT", default=120, cast=int)
+SSH_KEEPALIVE_INTERVAL: int = config("SSH_KEEPALIVE_INTERVAL", default=15, cast=int)
+
+# Output Summarizer
+DMR_SUMMARIZER_MODEL: str = config(
+    "DMR_SUMMARIZER_MODEL", default="ai/mistral", cast=str
+)
+OUTPUT_SUMMARIZE_THRESHOLD: int = config(
+    "OUTPUT_SUMMARIZE_THRESHOLD", default=2000, cast=int
 )
