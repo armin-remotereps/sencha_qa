@@ -55,7 +55,7 @@ A user will upload testrails xml file which contains multiple test cases, and we
 4. You will create test cases using `django-test-king` agent to fail at beginning, we are doing TDD here (Again for test cases, you need my confirmation)
 5. You will spawn parallel agents to implement the logics, frontend, views, tasks, ... . Don't forget to use `frontend-craftsmand`, `django-view-architect`, and `celery-architect` agents for them!
 6. After implementation is done, you'll check if tests are passing or not, if not, resolve the issue, wether the test has problem or the logic
-7. After that, you'll use playwright to test the implemented task using `nightmare-tester` agent!
+7. After that, you'll use playwright to test the implemented task using `nightmare-tester` agent! (Also don't forget to delete screenshots and test user after testing is done)
 8. If playwright testing passed as well, You'll run mypy to make sure no typing issues is there
 9. After all these, you ask the `uncle bob` agent for any feedback about your code
 10. If uncle confirmed your code, time to ask me for final testing

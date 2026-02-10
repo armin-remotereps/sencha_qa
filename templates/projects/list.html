@@ -1,0 +1,226 @@
+{% extends "dashboard/base_dashboard.html" %}
+
+{% block dashboard_content %}
+<div
+  x-data="{
+    showCreateModal: false,
+    showEditModal: false,
+    editProjectId: 0,
+    editProjectName: '',
+    editProjectTags: '',
+    openEditModal(id, name, tags) {
+      this.editProjectId = id;
+      this.editProjectName = name;
+      this.editProjectTags = tags;
+      this.showEditModal = true;
+    }
+  }"
+>
+
+  {# HEADER: Title + New Project button #}
+  <div class="mb-6 flex items-center justify-between">
+    <h1 class="text-2xl font-bold text-zinc-100">Projects</h1>
+    <button
+      @click="showCreateModal = true"
+      class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+    >
+      New Project
+    </button>
+  </div>
+
+  {# SEARCH + TAG FILTER #}
+  <form method="get" action="{% url 'projects:list' %}" class="mb-6 flex gap-3">
+    <input
+      type="text"
+      name="search"
+      value="{{ search }}"
+      placeholder="Search projects..."
+      class="flex h-10 w-full max-w-xs rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+    >
+    <select
+      name="tag"
+      class="h-10 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+    >
+      <option value="">All Tags</option>
+      {% for tag in tags %}
+        <option value="{{ tag.name }}" {% if current_tag == tag.name %}selected{% endif %}>
+          {{ tag.name }}
+        </option>
+      {% endfor %}
+    </select>
+    <button
+      type="submit"
+      class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
+    >
+      Filter
+    </button>
+  </form>
+
+  {# PROJECT CARDS GRID #}
+  {% if projects %}
+  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    {% for project in projects %}
+    <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-5">
+      <h3 class="text-lg font-semibold text-zinc-100">{{ project.name }}</h3>
+
+      {# Tag badges #}
+      <div class="mt-2 flex flex-wrap gap-1">
+        {% for tag in project.tags.all %}
+        <span class="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
+          {{ tag.name }}
+        </span>
+        {% endfor %}
+      </div>
+
+      {# Action buttons #}
+      <div class="mt-4 flex gap-2">
+        <button
+          @click="openEditModal({{ project.id }}, '{{ project.name }}', '{% for tag in project.tags.all %}{{ tag.name }}{% if not forloop.last %}, {% endif %}{% endfor %}')"
+          class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
+        >
+          Edit
+        </button>
+        <form method="post" action="{% url 'projects:archive' project.id %}">
+          {% csrf_token %}
+          <button
+            type="submit"
+            class="rounded-md bg-red-900/50 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-900"
+          >
+            Archive
+          </button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-8 text-center">
+    <p class="text-zinc-400">No projects found.</p>
+  </div>
+  {% endif %}
+
+  {# PAGINATION #}
+  {% if projects.has_other_pages %}
+  <div class="mt-6 flex items-center justify-center gap-2">
+    {% if projects.has_previous %}
+    <a
+      href="?page={{ projects.previous_page_number }}{% if search %}&search={{ search }}{% endif %}{% if current_tag %}&tag={{ current_tag }}{% endif %}"
+      class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+    >
+      Previous
+    </a>
+    {% endif %}
+    <span class="text-sm text-zinc-400">
+      Page {{ projects.number }} of {{ projects.paginator.num_pages }}
+    </span>
+    {% if projects.has_next %}
+    <a
+      href="?page={{ projects.next_page_number }}{% if search %}&search={{ search }}{% endif %}{% if current_tag %}&tag={{ current_tag }}{% endif %}"
+      class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+    >
+      Next
+    </a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# CREATE MODAL #}
+  <div
+    x-show="showCreateModal"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+    @click.self="showCreateModal = false"
+  >
+    <div
+      class="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-6"
+      @click.stop
+    >
+      <h2 class="mb-4 text-lg font-semibold text-zinc-100">New Project</h2>
+      <form method="post" action="{% url 'projects:create' %}">
+        {% csrf_token %}
+        <div class="space-y-4">
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Name</label>
+            {{ form.name }}
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Tags</label>
+            {{ form.tags }}
+            <p class="mt-1 text-xs text-zinc-500">Comma-separated (e.g. python, django)</p>
+          </div>
+        </div>
+        <div class="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            @click="showCreateModal = false"
+            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+          >
+            Create
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {# EDIT MODAL #}
+  <div
+    x-show="showEditModal"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+    @click.self="showEditModal = false"
+  >
+    <div
+      class="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-6"
+      @click.stop
+    >
+      <h2 class="mb-4 text-lg font-semibold text-zinc-100">Edit Project</h2>
+      <form method="post" :action="'/projects/' + editProjectId + '/edit/'">
+        {% csrf_token %}
+        <div class="space-y-4">
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Name</label>
+            <input
+              type="text"
+              name="name"
+              x-model="editProjectName"
+              class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+            >
+          </div>
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Tags</label>
+            <input
+              type="text"
+              name="tags"
+              x-model="editProjectTags"
+              class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+            >
+            <p class="mt-1 text-xs text-zinc-500">Comma-separated (e.g. python, django)</p>
+          </div>
+        </div>
+        <div class="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            @click="showEditModal = false"
+            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+          >
+            Save
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

@@ -27,6 +27,7 @@ INSTALLED_APPS: list[str] = [
     # Local
     "accounts",
     "dashboard",
+    "projects",
 ]
 
 MIDDLEWARE: list[str] = [
