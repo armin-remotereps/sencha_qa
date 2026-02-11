@@ -30,6 +30,7 @@ INSTALLED_APPS: list[str] = [
     "projects",
     "environments",
     "agents",
+    "omniparser",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -190,4 +191,21 @@ DMR_SUMMARIZER_MODEL: str = config(
 )
 OUTPUT_SUMMARIZE_THRESHOLD: int = config(
     "OUTPUT_SUMMARIZE_THRESHOLD", default=2000, cast=int
+)
+
+# OmniParser
+OMNIPARSER_API_KEY: str = config("OMNIPARSER_API_KEY", default="", cast=str)
+OMNIPARSER_WEIGHTS_DIR: str = config(
+    "OMNIPARSER_WEIGHTS_DIR",
+    default=str(BASE_DIR / "OmniParser" / "weights"),
+    cast=str,
+)
+OMNIPARSER_BOX_THRESHOLD: float = config(
+    "OMNIPARSER_BOX_THRESHOLD", default=0.05, cast=float
+)
+OMNIPARSER_IOU_THRESHOLD: float = config(
+    "OMNIPARSER_IOU_THRESHOLD", default=0.7, cast=float
+)
+OMNIPARSER_CAPTION_BATCH_SIZE: int = config(
+    "OMNIPARSER_CAPTION_BATCH_SIZE", default=64, cast=int
 )

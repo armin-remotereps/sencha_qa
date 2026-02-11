@@ -54,3 +54,6 @@ plan.md
 # Playwright artifacts
 *.png
 .playwright-mcp/
+
+# OmniParser weights
+OmniParser/weights/

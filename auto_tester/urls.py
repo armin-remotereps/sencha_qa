@@ -8,6 +8,7 @@ urlpatterns: list[URLResolver | URLPattern] = [
     path("", include("dashboard.urls")),
     path("projects/", include("projects.urls")),
     path("admin/", admin.site.urls),
+    path("omniparser/", include("omniparser.urls")),
 ]
 
 if settings.DEBUG:
