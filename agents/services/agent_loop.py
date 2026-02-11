@@ -5,15 +5,16 @@ import time
 
 from django.conf import settings
 
+from agents.services.agent_resource_manager import AgentResourceManager
 from agents.services.dmr_client import (
     build_dmr_config,
     build_summarizer_config,
     build_vision_dmr_config,
     ensure_model_available,
     send_chat_completion,
+    warm_up_model,
 )
 from agents.services.output_summarizer import summarize_output
-from agents.services.ssh_session import SSHSessionManager
 from agents.services.tool_registry import dispatch_tool_call, get_all_tool_definitions
 from agents.types import (
     AgentConfig,
@@ -21,8 +22,6 @@ from agents.types import (
     AgentStopReason,
     ChatMessage,
     DMRConfig,
-    ImageContent,
-    TextContent,
     ToolContext,
     ToolResult,
 )
@@ -39,15 +38,27 @@ def build_system_prompt(task_description: str) -> str:
         "1. SHELL: Execute commands via SSH (apt-get, bash scripts, etc.)\n"
         "2. SCREEN: Interact with the desktop (screenshots, mouse clicks, keyboard input)\n"
         "3. BROWSER: Control the Chromium browser (navigate, click elements, type text)\n\n"
+        "ENVIRONMENT:\n"
+        "- The desktop (XFCE4) is already running on display :0\n"
+        "- Chromium browser is ALREADY RUNNING on the desktop. Do NOT try to install or launch it.\n"
+        '- To start browsing, use browser_navigate(url="...") directly.\n\n'
+        "BROWSER TOOLS use natural-language descriptions, NOT CSS selectors:\n"
+        '- browser_navigate(url="https://google.com") - go to a URL (use this FIRST for web tasks)\n'
+        '- browser_click(description="the Login button") - describe what to click\n'
+        '- browser_type(description="the username input field", text="admin") - describe the field\n'
+        '- browser_hover(description="the Settings menu") - describe what to hover\n\n'
+        "SCREENSHOT TOOLS require a question:\n"
+        '- take_screenshot(question="What windows are open?") - asks about the desktop\n'
+        '- browser_take_screenshot(question="Is the login form visible?") - asks about the browser\n\n'
         "When you have completed the task, respond with a text message summarizing what you did. "
         "Do NOT call any tools when you are done - just provide your final text response.\n\n"
         "IMPORTANT:\n"
+        "- For web tasks, start with browser_navigate — the browser is already running\n"
         "- Use 'execute_command' for shell operations\n"
-        "- Use 'take_screenshot' to observe the desktop\n"
-        "- Use 'screen_click', 'screen_type_text', 'screen_key_press' for desktop interaction\n"
-        "- Use browser tools for web testing\n"
-        "- Always check command output after executing a command\n"
-        "- If a command fails, try to diagnose and fix the issue\n\n"
+        "- Use screenshot tools with specific questions to observe the environment\n"
+        "- Use browser tools with descriptive element names for web testing\n"
+        "- Always check tool output and use screenshots to verify results\n"
+        "- If a tool fails, try to diagnose and fix the issue\n\n"
         f"YOUR TASK:\n{task_description}"
     )
 
@@ -66,34 +77,6 @@ def build_agent_config(
         max_iterations=settings.AGENT_MAX_ITERATIONS,
         timeout_seconds=settings.AGENT_TIMEOUT_SECONDS,
     )
-
-
-def describe_screenshot(
-    vision_config: DMRConfig,
-    image_base64: str,
-) -> str:
-    """Send screenshot to vision model and return text description."""
-    messages = (
-        ChatMessage(
-            role="system",
-            content=(
-                "Describe what you see in this screenshot in detail. "
-                "Focus on UI elements, text, windows, dialogs, buttons, "
-                "and anything relevant to understanding the current state "
-                "of the desktop or application."
-            ),
-        ),
-        ChatMessage(
-            role="user",
-            content=(
-                TextContent(text="Describe this screenshot:"),
-                ImageContent(base64_data=image_base64),
-            ),
-        ),
-    )
-    response = send_chat_completion(vision_config, messages)
-    content = response.message.content
-    return content if isinstance(content, str) else "Unable to describe screenshot."
 
 
 def run_agent(
@@ -118,13 +101,20 @@ def run_agent(
     if config.vision_dmr is not None:
         ensure_model_available(config.vision_dmr)
 
+    # Warm up models so first real request doesn't hit cold-start timeout
+    warm_up_model(config.dmr)
+    if config.vision_dmr is not None:
+        warm_up_model(config.vision_dmr)
+
     summarizer_config = build_summarizer_config(model=config.dmr.model)
 
-    with SSHSessionManager(ports) as ssh_session:
+    with AgentResourceManager(ports) as resources:
         context = ToolContext(
             ports=ports,
-            ssh_session=ssh_session,
+            ssh_session=resources.ssh,
+            playwright_session=resources.playwright,
             summarizer_config=summarizer_config,
+            vision_config=config.vision_dmr,
         )
         return _run_agent_loop(task_description, context, config=config)
 
@@ -200,37 +190,12 @@ def _run_agent_loop(
             logger.info("[Tool Call] %s(%s)", tool_call.tool_name, tool_call.arguments)
             tool_result = dispatch_tool_call(tool_call, context)
 
-            # Build the tool result message (may summarize large outputs)
             tool_message = _build_tool_result_message(
                 tool_result,
                 summarizer_config=context.summarizer_config,
             )
             logger.info("[Tool Result] %s", tool_message.content)
             messages.append(tool_message)
-
-            # If the tool returned an image, add a description or raw image
-            if tool_result.image_base64 is not None:
-                if config.vision_dmr is not None:
-                    description = describe_screenshot(
-                        config.vision_dmr, tool_result.image_base64
-                    )
-                    logger.info("[Vision] %s", description)
-                    messages.append(
-                        ChatMessage(
-                            role="user",
-                            content=f"[Screenshot description]: {description}",
-                        )
-                    )
-                else:
-                    messages.append(
-                        ChatMessage(
-                            role="user",
-                            content=(
-                                TextContent(text="Here is the screenshot:"),
-                                ImageContent(base64_data=tool_result.image_base64),
-                            ),
-                        )
-                    )
 
     logger.warning("Agent hit max iterations: %d", config.max_iterations)
     return AgentResult(

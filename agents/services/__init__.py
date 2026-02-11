@@ -3,6 +3,7 @@ from agents.services.agent_loop import (
     build_system_prompt,
     run_agent,
 )
+from agents.services.agent_resource_manager import AgentResourceManager
 from agents.services.dmr_client import (
     build_dmr_config,
     build_vision_dmr_config,
@@ -12,11 +13,18 @@ from agents.services.dmr_client import (
     pull_model,
     send_chat_completion,
 )
+from agents.services.element_finder import (
+    AmbiguousElementError,
+    ElementNotFoundError,
+    find_element_by_description,
+)
+from agents.services.playwright_session import PlaywrightSessionManager
 from agents.services.tool_registry import dispatch_tool_call, get_all_tool_definitions
 from agents.services.tools_browser import (
     browser_click,
     browser_get_page_content,
     browser_get_url,
+    browser_hover,
     browser_navigate,
     browser_take_screenshot,
     browser_type,
@@ -30,11 +38,18 @@ from agents.services.tools_screen import (
     take_screenshot,
 )
 from agents.services.tools_shell import execute_command
+from agents.services.vision_qa import answer_screenshot_question
 
 __all__ = [
+    "AgentResourceManager",
+    "AmbiguousElementError",
+    "ElementNotFoundError",
+    "PlaywrightSessionManager",
+    "answer_screenshot_question",
     "browser_click",
     "browser_get_page_content",
     "browser_get_url",
+    "browser_hover",
     "browser_navigate",
     "browser_take_screenshot",
     "browser_type",
@@ -42,9 +57,10 @@ __all__ = [
     "build_dmr_config",
     "build_system_prompt",
     "build_vision_dmr_config",
-    "ensure_model_available",
     "dispatch_tool_call",
+    "ensure_model_available",
     "execute_command",
+    "find_element_by_description",
     "get_all_tool_definitions",
     "is_model_available",
     "list_models",

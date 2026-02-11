@@ -30,7 +30,6 @@ def test_execute_command_successful(mock_ssh_session: MagicMock) -> None:
     assert "hello world" in result.content
     assert "Exit code: 0" in result.content
     assert result.tool_call_id == ""
-    assert result.image_base64 is None
 
 
 def test_execute_command_failed(mock_ssh_session: MagicMock) -> None:

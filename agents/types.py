@@ -5,6 +5,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agents.services.playwright_session import PlaywrightSessionManager
     from agents.services.ssh_session import SSHSessionManager
     from environments.types import ContainerPorts
 
@@ -51,7 +52,6 @@ class ToolResult:
     tool_call_id: str
     content: str
     is_error: bool
-    image_base64: str | None = None
 
 
 # Multimodal content
@@ -115,4 +115,6 @@ class AgentResult:
 class ToolContext:
     ports: ContainerPorts
     ssh_session: SSHSessionManager
+    playwright_session: PlaywrightSessionManager
     summarizer_config: DMRConfig | None = None
+    vision_config: DMRConfig | None = None

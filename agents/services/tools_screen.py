@@ -3,15 +3,21 @@ from __future__ import annotations
 import logging
 
 from agents.services.ssh_session import SSHSessionManager
-from agents.types import ToolResult
+from agents.services.vision_qa import answer_screenshot_question
+from agents.types import DMRConfig, ToolResult
 
 logger = logging.getLogger(__name__)
 
 DISPLAY_ENV = "DISPLAY=:0"
 
 
-def take_screenshot(ssh_session: SSHSessionManager) -> ToolResult:
-    """Capture desktop screenshot via scrot and return as base64 PNG."""
+def take_screenshot(
+    ssh_session: SSHSessionManager,
+    *,
+    question: str,
+    vision_config: DMRConfig,
+) -> ToolResult:
+    """Capture desktop screenshot and answer a question about it."""
     try:
         capture_cmd = f"{DISPLAY_ENV} scrot -o /tmp/screenshot.png"
         capture_result = ssh_session.execute(capture_cmd)
@@ -31,11 +37,12 @@ def take_screenshot(ssh_session: SSHSessionManager) -> ToolResult:
                 is_error=True,
             )
 
+        image_base64 = read_result.stdout.strip()
+        answer = answer_screenshot_question(vision_config, image_base64, question)
         return ToolResult(
             tool_call_id="",
-            content="Screenshot captured successfully.",
+            content=answer,
             is_error=False,
-            image_base64=read_result.stdout.strip(),
         )
     except Exception as e:
         logger.error("Screenshot failed: %s", e)

@@ -177,19 +177,18 @@ def test_tool_result_with_error() -> None:
         is_error=True,
     )
     assert result.is_error is True
-    assert result.image_base64 is None
 
 
-def test_tool_result_with_image() -> None:
-    """Test ToolResult with screenshot data."""
+def test_tool_result_fields() -> None:
+    """Test ToolResult has correct fields."""
     result = ToolResult(
         tool_call_id="call_789",
         content="Screenshot captured",
         is_error=False,
-        image_base64="base64encodedimage",
     )
     assert result.is_error is False
-    assert result.image_base64 == "base64encodedimage"
+    assert result.content == "Screenshot captured"
+    assert result.tool_call_id == "call_789"
 
 
 def test_image_content_default_media_type() -> None:

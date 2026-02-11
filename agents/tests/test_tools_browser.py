@@ -4,180 +4,348 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from agents.services.element_finder import (
+    AmbiguousElementError,
+    ElementNotFoundError,
+)
+from agents.services.playwright_session import PlaywrightSessionManager
 from agents.services.tools_browser import (
     browser_click,
     browser_get_page_content,
     browser_get_url,
+    browser_hover,
     browser_navigate,
     browser_take_screenshot,
     browser_type,
 )
-from environments.types import ContainerPorts
+from agents.types import DMRConfig
 
 
 @pytest.fixture
-def test_ports() -> ContainerPorts:
-    """Fixture for test container ports."""
-    return ContainerPorts(ssh=2222, vnc=5901, playwright_cdp=9223)
+def pw_session() -> MagicMock:
+    """Fixture providing a mocked PlaywrightSessionManager."""
+    return MagicMock(spec=PlaywrightSessionManager)
 
 
-def _create_mock_playwright(
-    has_context: bool = True, has_page: bool = True
-) -> MagicMock:
-    """Create a mock Playwright instance with the full CDP connection chain.
-
-    Args:
-        has_context: Whether to include a browser context
-        has_page: Whether to include a page in the context
-
-    Returns:
-        Mock sync_playwright context manager
-    """
-    mock_page = MagicMock()
-    mock_page.title.return_value = "Test Page"
-    mock_page.url = "https://example.com"
-    mock_page.inner_text.return_value = "Test content"
-    mock_page.screenshot.return_value = b"fake_screenshot_data"
-
-    mock_context = MagicMock()
-    mock_context.pages = [mock_page] if has_page else []
-
-    mock_browser = MagicMock()
-    mock_browser.contexts = [mock_context] if has_context else []
-    mock_browser.new_page.return_value = mock_page
-
-    mock_pw = MagicMock()
-    mock_pw.chromium.connect_over_cdp.return_value = mock_browser
-
-    mock_sync_pw = MagicMock()
-    mock_sync_pw.__enter__ = MagicMock(return_value=mock_pw)
-    mock_sync_pw.__exit__ = MagicMock(return_value=False)
-
-    return mock_sync_pw
+@pytest.fixture
+def mock_page(pw_session: MagicMock) -> MagicMock:
+    """Fixture providing a mock page returned by pw_session.get_page()."""
+    page = MagicMock()
+    page.title.return_value = "Test Page"
+    page.url = "https://example.com"
+    page.inner_text.return_value = "Test content"
+    page.screenshot.return_value = b"fake_screenshot_data"
+    pw_session.get_page.return_value = page
+    return page
 
 
-def test_browser_navigate_success(test_ports: ContainerPorts) -> None:
-    """Test browser_navigate successfully navigates to a URL."""
-    mock_sync_pw = _create_mock_playwright()
+@pytest.fixture
+def dmr_config() -> DMRConfig:
+    """Fixture providing a DMRConfig for element finding."""
+    return DMRConfig(host="localhost", port="8080", model="test-model")
 
-    with patch(
-        "agents.services.tools_browser.sync_playwright", return_value=mock_sync_pw
-    ):
-        result = browser_navigate(test_ports, url="https://example.com")
+
+# ============================================================================
+# browser_navigate tests
+# ============================================================================
+
+
+def test_browser_navigate_success(pw_session: MagicMock, mock_page: MagicMock) -> None:
+    """Test browser_navigate without vision_config returns title only."""
+    result = browser_navigate(pw_session, url="https://example.com", vision_config=None)
+
+    pw_session.get_page.assert_called_once()
+    mock_page.goto.assert_called_once_with("https://example.com", timeout=30000)
+    assert result.is_error is False
+    assert "Navigated to https://example.com" in result.content
+    assert "Test Page" in result.content
+    assert "Page description" not in result.content
+
+
+@patch("agents.services.tools_browser.answer_screenshot_question")
+def test_browser_navigate_with_vision(
+    mock_answer: MagicMock,
+    pw_session: MagicMock,
+    mock_page: MagicMock,
+    dmr_config: DMRConfig,
+) -> None:
+    """Test browser_navigate with vision_config includes page description."""
+    mock_answer.return_value = "A login page with username and password fields."
+
+    result = browser_navigate(
+        pw_session, url="https://example.com", vision_config=dmr_config
+    )
+
+    pw_session.get_page.assert_called_once()
+    mock_page.goto.assert_called_once_with("https://example.com", timeout=30000)
+    mock_page.screenshot.assert_called_once()
+    mock_answer.assert_called_once()
+    assert result.is_error is False
+    assert "Navigated to https://example.com" in result.content
+    assert "Test Page" in result.content
+    assert (
+        "Page description: A login page with username and password fields."
+        in result.content
+    )
+
+
+@patch("agents.services.tools_browser.answer_screenshot_question")
+def test_browser_navigate_vision_failure_falls_back(
+    mock_answer: MagicMock,
+    pw_session: MagicMock,
+    mock_page: MagicMock,
+    dmr_config: DMRConfig,
+) -> None:
+    """Test browser_navigate falls back to title-only when vision fails."""
+    mock_answer.side_effect = Exception("Vision model unavailable")
+
+    result = browser_navigate(
+        pw_session, url="https://example.com", vision_config=dmr_config
+    )
 
     assert result.is_error is False
     assert "Navigated to https://example.com" in result.content
     assert "Test Page" in result.content
+    assert "Page description" not in result.content
 
 
-def test_browser_navigate_exception(test_ports: ContainerPorts) -> None:
+def test_browser_navigate_exception(pw_session: MagicMock) -> None:
     """Test browser_navigate handles exceptions gracefully."""
-    mock_sync_pw = MagicMock()
-    mock_sync_pw.__enter__ = MagicMock(side_effect=Exception("Connection failed"))
+    pw_session.get_page.side_effect = Exception("Connection failed")
 
-    with patch(
-        "agents.services.tools_browser.sync_playwright", return_value=mock_sync_pw
-    ):
-        result = browser_navigate(test_ports, url="https://example.com")
+    result = browser_navigate(pw_session, url="https://example.com")
 
     assert result.is_error is True
-    assert "Navigation error" in result.content
+    assert "navigate error" in result.content
+    assert "Connection failed" in result.content
 
 
-def test_browser_click_success(test_ports: ContainerPorts) -> None:
-    """Test browser_click successfully clicks an element."""
-    mock_sync_pw = _create_mock_playwright()
+# ============================================================================
+# browser_click tests
+# ============================================================================
 
-    with patch(
-        "agents.services.tools_browser.sync_playwright", return_value=mock_sync_pw
-    ):
-        result = browser_click(test_ports, selector="#submit-button")
 
+@patch("agents.services.tools_browser.find_element_by_description")
+def test_browser_click_success(
+    mock_find: MagicMock,
+    pw_session: MagicMock,
+    mock_page: MagicMock,
+    dmr_config: DMRConfig,
+) -> None:
+    """Test browser_click finds element and clicks it."""
+    mock_find.return_value = "#submit-button"
+
+    result = browser_click(
+        pw_session, description="the submit button", dmr_config=dmr_config
+    )
+
+    mock_find.assert_called_once_with(mock_page, "the submit button", dmr_config)
+    mock_page.click.assert_called_once_with("#submit-button", timeout=30000)
     assert result.is_error is False
-    assert "Clicked element: #submit-button" in result.content
+    assert "Clicked element: the submit button" in result.content
 
 
-def test_browser_click_no_context_creates_page(test_ports: ContainerPorts) -> None:
-    """Test browser_click creates a new page when no context exists."""
-    mock_sync_pw = _create_mock_playwright(has_context=False)
+@patch("agents.services.tools_browser.find_element_by_description")
+def test_browser_click_element_not_found(
+    mock_find: MagicMock,
+    pw_session: MagicMock,
+    mock_page: MagicMock,
+    dmr_config: DMRConfig,
+) -> None:
+    """Test browser_click when element is not found."""
+    mock_find.side_effect = ElementNotFoundError(
+        "No element matches 'the submit button'"
+    )
 
-    with patch(
-        "agents.services.tools_browser.sync_playwright", return_value=mock_sync_pw
-    ):
-        result = browser_click(test_ports, selector="#submit-button")
+    result = browser_click(
+        pw_session, description="the submit button", dmr_config=dmr_config
+    )
 
+    assert result.is_error is True
+    assert "click error" in result.content
+    assert "No element matches" in result.content
+
+
+@patch("agents.services.tools_browser.find_element_by_description")
+def test_browser_click_ambiguous(
+    mock_find: MagicMock,
+    pw_session: MagicMock,
+    mock_page: MagicMock,
+    dmr_config: DMRConfig,
+) -> None:
+    """Test browser_click when multiple elements match."""
+    mock_find.side_effect = AmbiguousElementError("Multiple elements match")
+
+    result = browser_click(pw_session, description="a button", dmr_config=dmr_config)
+
+    assert result.is_error is True
+    assert "click error" in result.content
+    assert "Multiple elements match" in result.content
+
+
+# ============================================================================
+# browser_type tests
+# ============================================================================
+
+
+@patch("agents.services.tools_browser.find_element_by_description")
+def test_browser_type_success(
+    mock_find: MagicMock,
+    pw_session: MagicMock,
+    mock_page: MagicMock,
+    dmr_config: DMRConfig,
+) -> None:
+    """Test browser_type finds element and types text into it."""
+    mock_find.return_value = "#username"
+
+    result = browser_type(
+        pw_session,
+        description="the username field",
+        text="testuser",
+        dmr_config=dmr_config,
+    )
+
+    mock_find.assert_called_once_with(mock_page, "the username field", dmr_config)
+    mock_page.fill.assert_called_once_with("#username", "testuser", timeout=30000)
     assert result.is_error is False
-    assert "Clicked element: #submit-button" in result.content
+    assert "Typed 'testuser' into element: the username field" in result.content
 
 
-def test_browser_type_success(test_ports: ContainerPorts) -> None:
-    """Test browser_type successfully types text into an element."""
-    mock_sync_pw = _create_mock_playwright()
+@patch("agents.services.tools_browser.find_element_by_description")
+def test_browser_type_element_not_found(
+    mock_find: MagicMock,
+    pw_session: MagicMock,
+    mock_page: MagicMock,
+    dmr_config: DMRConfig,
+) -> None:
+    """Test browser_type when element is not found."""
+    mock_find.side_effect = ElementNotFoundError(
+        "No element matches 'the username field'"
+    )
 
-    with patch(
-        "agents.services.tools_browser.sync_playwright", return_value=mock_sync_pw
-    ):
-        result = browser_type(test_ports, selector="#username", text="testuser")
+    result = browser_type(
+        pw_session,
+        description="the username field",
+        text="testuser",
+        dmr_config=dmr_config,
+    )
 
+    assert result.is_error is True
+    assert "type error" in result.content
+    assert "No element matches" in result.content
+
+
+# ============================================================================
+# browser_hover tests
+# ============================================================================
+
+
+@patch("agents.services.tools_browser.find_element_by_description")
+def test_browser_hover_success(
+    mock_find: MagicMock,
+    pw_session: MagicMock,
+    mock_page: MagicMock,
+    dmr_config: DMRConfig,
+) -> None:
+    """Test browser_hover finds element and hovers over it."""
+    mock_find.return_value = "#menu-item"
+
+    result = browser_hover(
+        pw_session, description="the menu item", dmr_config=dmr_config
+    )
+
+    mock_find.assert_called_once_with(mock_page, "the menu item", dmr_config)
+    mock_page.hover.assert_called_once_with("#menu-item", timeout=30000)
     assert result.is_error is False
-    assert "Typed 'testuser' into #username" in result.content
+    assert "Hovered over element: the menu item" in result.content
 
 
-def test_browser_get_page_content_success(test_ports: ContainerPorts) -> None:
+@patch("agents.services.tools_browser.find_element_by_description")
+def test_browser_hover_element_not_found(
+    mock_find: MagicMock,
+    pw_session: MagicMock,
+    mock_page: MagicMock,
+    dmr_config: DMRConfig,
+) -> None:
+    """Test browser_hover when element is not found."""
+    mock_find.side_effect = ElementNotFoundError("No element matches 'the menu item'")
+
+    result = browser_hover(
+        pw_session, description="the menu item", dmr_config=dmr_config
+    )
+
+    assert result.is_error is True
+    assert "hover error" in result.content
+    assert "No element matches" in result.content
+
+
+# ============================================================================
+# browser_get_page_content tests
+# ============================================================================
+
+
+def test_browser_get_page_content_success(
+    pw_session: MagicMock, mock_page: MagicMock
+) -> None:
     """Test browser_get_page_content returns page text content."""
-    mock_sync_pw = _create_mock_playwright()
+    result = browser_get_page_content(pw_session, max_length=1000)
 
-    with patch(
-        "agents.services.tools_browser.sync_playwright", return_value=mock_sync_pw
-    ):
-        result = browser_get_page_content(test_ports, max_length=1000)
-
+    pw_session.get_page.assert_called_once()
+    mock_page.inner_text.assert_called_once_with("body", timeout=30000)
     assert result.is_error is False
     assert "Test content" in result.content
 
 
-def test_browser_get_page_content_truncation(test_ports: ContainerPorts) -> None:
+def test_browser_get_page_content_truncation(
+    pw_session: MagicMock, mock_page: MagicMock
+) -> None:
     """Test browser_get_page_content truncates long content."""
-    mock_sync_pw = _create_mock_playwright()
-    mock_page = (
-        mock_sync_pw.__enter__().chromium.connect_over_cdp().contexts[0].pages[0]
-    )
     mock_page.inner_text.return_value = "x" * 10000
 
-    with patch(
-        "agents.services.tools_browser.sync_playwright", return_value=mock_sync_pw
-    ):
-        result = browser_get_page_content(test_ports, max_length=100)
+    result = browser_get_page_content(pw_session, max_length=100)
 
     assert result.is_error is False
-    assert len(result.content) <= 120  # 100 + "... (truncated)"
+    assert len(result.content) <= 120  # 100 + "\n... (truncated)"
     assert "... (truncated)" in result.content
 
 
-def test_browser_get_url_success(test_ports: ContainerPorts) -> None:
+# ============================================================================
+# browser_get_url tests
+# ============================================================================
+
+
+def test_browser_get_url_success(pw_session: MagicMock, mock_page: MagicMock) -> None:
     """Test browser_get_url returns the current URL."""
-    mock_sync_pw = _create_mock_playwright()
+    result = browser_get_url(pw_session)
 
-    with patch(
-        "agents.services.tools_browser.sync_playwright", return_value=mock_sync_pw
-    ):
-        result = browser_get_url(test_ports)
-
+    pw_session.get_page.assert_called_once()
     assert result.is_error is False
     assert result.content == "https://example.com"
 
 
-def test_browser_take_screenshot_success(test_ports: ContainerPorts) -> None:
-    """Test browser_take_screenshot returns base64 encoded screenshot."""
-    mock_sync_pw = _create_mock_playwright()
+# ============================================================================
+# browser_take_screenshot tests
+# ============================================================================
 
-    with patch(
-        "agents.services.tools_browser.sync_playwright", return_value=mock_sync_pw
-    ):
-        result = browser_take_screenshot(test_ports)
 
+@patch("agents.services.tools_browser.answer_screenshot_question")
+def test_browser_take_screenshot_success(
+    mock_answer: MagicMock,
+    pw_session: MagicMock,
+    mock_page: MagicMock,
+    dmr_config: DMRConfig,
+) -> None:
+    """Test browser_take_screenshot captures screenshot and answers question."""
+    mock_answer.return_value = "I can see a login page with a form."
+
+    result = browser_take_screenshot(
+        pw_session,
+        question="What is on the page?",
+        vision_config=dmr_config,
+    )
+
+    pw_session.get_page.assert_called_once()
+    mock_page.screenshot.assert_called_once()
+    mock_answer.assert_called_once()
     assert result.is_error is False
-    assert "Browser screenshot captured" in result.content
-    assert result.image_base64 is not None
-    # Verify it's valid base64 encoded data
-    assert len(result.image_base64) > 0
+    assert result.content == "I can see a login page with a form."

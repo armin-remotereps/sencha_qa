@@ -4,9 +4,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from agents.services.playwright_session import PlaywrightSessionManager
 from agents.services.ssh_session import SSHSessionManager
 from agents.services.tool_registry import dispatch_tool_call, get_all_tool_definitions
-from agents.types import ToolCall, ToolCategory, ToolContext
+from agents.types import DMRConfig, ToolCall, ToolCategory, ToolContext, ToolResult
 from environments.types import ContainerPorts
 
 
@@ -18,18 +19,24 @@ def test_ports() -> ContainerPorts:
 
 @pytest.fixture
 def test_context(test_ports: ContainerPorts) -> ToolContext:
-    """Fixture for test ToolContext with a mocked SSH session."""
-    mock_session = MagicMock(spec=SSHSessionManager)
+    """Fixture for test ToolContext with mocked sessions."""
+    mock_ssh = MagicMock(spec=SSHSessionManager)
+    mock_pw = MagicMock(spec=PlaywrightSessionManager)
+    mock_vision = DMRConfig(
+        host="test", port="8080", model="test-vision", temperature=0.0, max_tokens=1000
+    )
     return ToolContext(
         ports=test_ports,
-        ssh_session=mock_session,
+        ssh_session=mock_ssh,
+        playwright_session=mock_pw,
+        vision_config=mock_vision,
     )
 
 
 def test_get_all_tool_definitions_count() -> None:
-    """Test that get_all_tool_definitions returns all 13 tools."""
+    """Test that get_all_tool_definitions returns all 14 tools."""
     tools = get_all_tool_definitions()
-    assert len(tools) == 13
+    assert len(tools) == 14
 
 
 def test_get_all_tool_definitions_categories() -> None:
@@ -42,7 +49,7 @@ def test_get_all_tool_definitions_categories() -> None:
 
     assert len(shell_tools) == 1
     assert len(screen_tools) == 6
-    assert len(browser_tools) == 6
+    assert len(browser_tools) == 7
 
 
 def test_get_all_tool_definitions_valid_structure() -> None:
@@ -67,8 +74,6 @@ def test_dispatch_tool_call_execute_command(test_context: ToolContext) -> None:
     with patch(
         "agents.services.tool_registry.tools_shell.execute_command"
     ) as mock_execute:
-        from agents.types import ToolResult
-
         mock_execute.return_value = ToolResult(
             tool_call_id="",
             content="hello\nExit code: 0",
@@ -94,8 +99,6 @@ def test_dispatch_tool_call_browser_navigate(test_context: ToolContext) -> None:
     with patch(
         "agents.services.tool_registry.tools_browser.browser_navigate"
     ) as mock_navigate:
-        from agents.types import ToolResult
-
         mock_navigate.return_value = ToolResult(
             tool_call_id="",
             content="Navigated to https://example.com. Page title: Example",
@@ -119,8 +122,6 @@ def test_dispatch_tool_call_screen_click(test_context: ToolContext) -> None:
     )
 
     with patch("agents.services.tool_registry.tools_screen.screen_click") as mock_click:
-        from agents.types import ToolResult
-
         mock_click.return_value = ToolResult(
             tool_call_id="",
             content="Clicked at (100, 200) with button 1.",
@@ -162,8 +163,6 @@ def test_dispatch_tool_call_preserves_tool_call_id(test_context: ToolContext) ->
     with patch(
         "agents.services.tool_registry.tools_browser.browser_get_url"
     ) as mock_get_url:
-        from agents.types import ToolResult
-
         mock_get_url.return_value = ToolResult(
             tool_call_id="",  # Handler returns empty tool_call_id
             content="https://example.com",
@@ -176,31 +175,27 @@ def test_dispatch_tool_call_preserves_tool_call_id(test_context: ToolContext) ->
     assert result.tool_call_id == "unique_id_12345"
 
 
-def test_dispatch_tool_call_with_image_base64(test_context: ToolContext) -> None:
-    """Test that dispatch_tool_call preserves image_base64 from handler result."""
+def test_dispatch_browser_hover(test_context: ToolContext) -> None:
+    """Test dispatch_tool_call correctly dispatches browser_hover."""
     tool_call = ToolCall(
-        tool_call_id="call_screenshot",
-        tool_name="browser_take_screenshot",
-        arguments={},
+        tool_call_id="call_hover",
+        tool_name="browser_hover",
+        arguments={"description": "the settings menu"},
     )
 
     with patch(
-        "agents.services.tool_registry.tools_browser.browser_take_screenshot"
-    ) as mock_screenshot:
-        from agents.types import ToolResult
-
-        mock_screenshot.return_value = ToolResult(
+        "agents.services.tool_registry.tools_browser.browser_hover"
+    ) as mock_hover:
+        mock_hover.return_value = ToolResult(
             tool_call_id="",
-            content="Screenshot captured.",
+            content="Hovered over element: the settings menu",
             is_error=False,
-            image_base64="base64encodeddata",
         )
-
         result = dispatch_tool_call(tool_call, test_context)
 
-    assert result.tool_call_id == "call_screenshot"
+    assert result.tool_call_id == "call_hover"
     assert result.is_error is False
-    assert result.image_base64 == "base64encodeddata"
+    assert "Hovered over" in result.content
 
 
 def test_dispatch_shell_passes_ssh_session(test_context: ToolContext) -> None:
@@ -214,8 +209,6 @@ def test_dispatch_shell_passes_ssh_session(test_context: ToolContext) -> None:
     with patch(
         "agents.services.tool_registry.tools_shell.execute_command"
     ) as mock_execute:
-        from agents.types import ToolResult
-
         mock_execute.return_value = ToolResult(
             tool_call_id="",
             content="root\nExit code: 0",
@@ -228,8 +221,8 @@ def test_dispatch_shell_passes_ssh_session(test_context: ToolContext) -> None:
     mock_execute.assert_called_once_with(test_context.ssh_session, command="whoami")
 
 
-def test_dispatch_browser_passes_ports(test_context: ToolContext) -> None:
-    """Test that browser tool handlers pass ports from context."""
+def test_dispatch_browser_passes_playwright_session(test_context: ToolContext) -> None:
+    """Test that browser tool handlers pass playwright_session from context."""
     tool_call = ToolCall(
         tool_call_id="call_nav",
         tool_name="browser_navigate",
@@ -239,15 +232,15 @@ def test_dispatch_browser_passes_ports(test_context: ToolContext) -> None:
     with patch(
         "agents.services.tool_registry.tools_browser.browser_navigate"
     ) as mock_navigate:
-        from agents.types import ToolResult
-
         mock_navigate.return_value = ToolResult(
             tool_call_id="",
             content="Navigated",
             is_error=False,
         )
-
         dispatch_tool_call(tool_call, test_context)
 
-    # Verify ports from context were passed
-    mock_navigate.assert_called_once_with(test_context.ports, url="https://example.com")
+    mock_navigate.assert_called_once_with(
+        test_context.playwright_session,
+        url="https://example.com",
+        vision_config=test_context.vision_config,
+    )

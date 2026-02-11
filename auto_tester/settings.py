@@ -184,6 +184,9 @@ ENV_SSH_TIMEOUT: int = config("ENV_SSH_TIMEOUT", default=10, cast=int)
 SSH_COMMAND_TIMEOUT: int = config("SSH_COMMAND_TIMEOUT", default=120, cast=int)
 SSH_KEEPALIVE_INTERVAL: int = config("SSH_KEEPALIVE_INTERVAL", default=15, cast=int)
 
+# DMR Context Size
+DMR_CONTEXT_SIZE: int = config("DMR_CONTEXT_SIZE", default=16384, cast=int)
+
 # Output Summarizer
 DMR_SUMMARIZER_MODEL: str = config(
     "DMR_SUMMARIZER_MODEL", default="ai/mistral", cast=str

@@ -2,103 +2,152 @@ from __future__ import annotations
 
 import base64
 import logging
-from collections.abc import Generator
-from contextlib import contextmanager
+from collections.abc import Callable
+from typing import ParamSpec, TypeVar
 
-from playwright.sync_api import Page, sync_playwright
-
-from agents.types import ToolResult
-from environments.services import get_playwright_cdp_url
-from environments.types import ContainerPorts
+from agents.services.element_finder import (
+    AmbiguousElementError,
+    ElementNotFoundError,
+    find_element_by_description,
+)
+from agents.services.playwright_session import BROWSER_TIMEOUT, PlaywrightSessionManager
+from agents.services.vision_qa import answer_screenshot_question
+from agents.types import DMRConfig, ToolResult
 
 logger = logging.getLogger(__name__)
 
-BROWSER_TIMEOUT = 30000  # 30 seconds
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
 
 
-@contextmanager
-def _browser_page(ports: ContainerPorts) -> Generator[Page, None, None]:
-    """Connect to the container's browser via CDP and yield a page."""
-    cdp_url = get_playwright_cdp_url(ports)
-    with sync_playwright() as p:
-        browser = p.chromium.connect_over_cdp(cdp_url)
-        try:
-            contexts = browser.contexts
-            if not contexts:
-                page = browser.new_page()
-            else:
-                pages = contexts[0].pages
-                page = pages[0] if pages else contexts[0].new_page()
-            yield page
-        finally:
-            browser.close()
+def _safe_browser_call(
+    operation: str,
+    fn: Callable[[], ToolResult],
+) -> ToolResult:
+    """Execute *fn* and catch element-finder or generic errors."""
+    try:
+        return fn()
+    except (ElementNotFoundError, AmbiguousElementError) as e:
+        return ToolResult(
+            tool_call_id="",
+            content=f"{operation} error: {e}",
+            is_error=True,
+        )
+    except Exception as e:
+        logger.error("Browser %s failed: %s", operation, e)
+        return ToolResult(
+            tool_call_id="",
+            content=f"{operation} error: {e}",
+            is_error=True,
+        )
 
 
-def browser_navigate(ports: ContainerPorts, *, url: str) -> ToolResult:
+def browser_navigate(
+    pw_session: PlaywrightSessionManager,
+    *,
+    url: str,
+    vision_config: DMRConfig | None = None,
+) -> ToolResult:
     """Navigate to a URL in the browser."""
-    try:
-        with _browser_page(ports) as page:
-            page.goto(url, timeout=BROWSER_TIMEOUT)
-            title = page.title()
+
+    def _do() -> ToolResult:
+        page = pw_session.get_page()
+        page.goto(url, timeout=BROWSER_TIMEOUT)
+        title = page.title()
+        content = f"Navigated to {url}. Page title: {title}"
+
+        if vision_config is not None:
+            try:
+                screenshot_bytes = page.screenshot()
+                image_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+                description = answer_screenshot_question(
+                    vision_config, image_base64, "Describe what this page is showing."
+                )
+                content += f"\n\nPage description: {description}"
+            except Exception as e:
+                logger.warning("Vision description failed after navigate: %s", e)
+
         return ToolResult(
             tool_call_id="",
-            content=f"Navigated to {url}. Page title: {title}",
+            content=content,
             is_error=False,
         )
-    except Exception as e:
-        logger.error("Browser navigate failed: %s", e)
-        return ToolResult(
-            tool_call_id="",
-            content=f"Navigation error: {e}",
-            is_error=True,
-        )
+
+    return _safe_browser_call("navigate", _do)
 
 
-def browser_click(ports: ContainerPorts, *, selector: str) -> ToolResult:
-    """Click an element in the browser by CSS selector."""
-    try:
-        with _browser_page(ports) as page:
-            page.click(selector, timeout=BROWSER_TIMEOUT)
+def browser_click(
+    pw_session: PlaywrightSessionManager,
+    *,
+    description: str,
+    dmr_config: DMRConfig,
+) -> ToolResult:
+    """Click an element by natural-language description."""
+
+    def _do() -> ToolResult:
+        page = pw_session.get_page()
+        selector = find_element_by_description(page, description, dmr_config)
+        page.click(selector, timeout=BROWSER_TIMEOUT)
         return ToolResult(
             tool_call_id="",
-            content=f"Clicked element: {selector}",
+            content=f"Clicked element: {description}",
             is_error=False,
         )
-    except Exception as e:
-        logger.error("Browser click failed: %s", e)
-        return ToolResult(
-            tool_call_id="",
-            content=f"Click error: {e}",
-            is_error=True,
-        )
+
+    return _safe_browser_call("click", _do)
 
 
-def browser_type(ports: ContainerPorts, *, selector: str, text: str) -> ToolResult:
-    """Type text into an element in the browser."""
-    try:
-        with _browser_page(ports) as page:
-            page.fill(selector, text, timeout=BROWSER_TIMEOUT)
+def browser_type(
+    pw_session: PlaywrightSessionManager,
+    *,
+    description: str,
+    text: str,
+    dmr_config: DMRConfig,
+) -> ToolResult:
+    """Type text into an element found by natural-language description."""
+
+    def _do() -> ToolResult:
+        page = pw_session.get_page()
+        selector = find_element_by_description(page, description, dmr_config)
+        page.fill(selector, text, timeout=BROWSER_TIMEOUT)
         return ToolResult(
             tool_call_id="",
-            content=f"Typed '{text}' into {selector}",
+            content=f"Typed '{text}' into element: {description}",
             is_error=False,
         )
-    except Exception as e:
-        logger.error("Browser type failed: %s", e)
+
+    return _safe_browser_call("type", _do)
+
+
+def browser_hover(
+    pw_session: PlaywrightSessionManager,
+    *,
+    description: str,
+    dmr_config: DMRConfig,
+) -> ToolResult:
+    """Hover over an element found by natural-language description."""
+
+    def _do() -> ToolResult:
+        page = pw_session.get_page()
+        selector = find_element_by_description(page, description, dmr_config)
+        page.hover(selector, timeout=BROWSER_TIMEOUT)
         return ToolResult(
             tool_call_id="",
-            content=f"Type error: {e}",
-            is_error=True,
+            content=f"Hovered over element: {description}",
+            is_error=False,
         )
+
+    return _safe_browser_call("hover", _do)
 
 
 def browser_get_page_content(
-    ports: ContainerPorts, *, max_length: int = 5000
+    pw_session: PlaywrightSessionManager, *, max_length: int = 5000
 ) -> ToolResult:
     """Get the text content of the current page."""
-    try:
-        with _browser_page(ports) as page:
-            content = page.inner_text("body", timeout=BROWSER_TIMEOUT)
+
+    def _do() -> ToolResult:
+        page = pw_session.get_page()
+        content = page.inner_text("body", timeout=BROWSER_TIMEOUT)
         if len(content) > max_length:
             content = content[:max_length] + "\n... (truncated)"
         return ToolResult(
@@ -106,50 +155,41 @@ def browser_get_page_content(
             content=content,
             is_error=False,
         )
-    except Exception as e:
-        logger.error("Browser get content failed: %s", e)
-        return ToolResult(
-            tool_call_id="",
-            content=f"Get content error: {e}",
-            is_error=True,
-        )
+
+    return _safe_browser_call("get_page_content", _do)
 
 
-def browser_get_url(ports: ContainerPorts) -> ToolResult:
+def browser_get_url(pw_session: PlaywrightSessionManager) -> ToolResult:
     """Get the current URL of the browser."""
-    try:
-        with _browser_page(ports) as page:
-            url = page.url
+
+    def _do() -> ToolResult:
+        page = pw_session.get_page()
         return ToolResult(
             tool_call_id="",
-            content=url,
+            content=page.url,
             is_error=False,
         )
-    except Exception as e:
-        logger.error("Browser get URL failed: %s", e)
-        return ToolResult(
-            tool_call_id="",
-            content=f"Get URL error: {e}",
-            is_error=True,
-        )
+
+    return _safe_browser_call("get_url", _do)
 
 
-def browser_take_screenshot(ports: ContainerPorts) -> ToolResult:
-    """Take a screenshot of the browser viewport and return as base64."""
-    try:
-        with _browser_page(ports) as page:
-            screenshot_bytes = page.screenshot()
+def browser_take_screenshot(
+    pw_session: PlaywrightSessionManager,
+    *,
+    question: str,
+    vision_config: DMRConfig,
+) -> ToolResult:
+    """Take a browser screenshot and answer a question about it."""
+
+    def _do() -> ToolResult:
+        page = pw_session.get_page()
+        screenshot_bytes = page.screenshot()
         image_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+        answer = answer_screenshot_question(vision_config, image_base64, question)
         return ToolResult(
             tool_call_id="",
-            content="Browser screenshot captured.",
+            content=answer,
             is_error=False,
-            image_base64=image_base64,
         )
-    except Exception as e:
-        logger.error("Browser screenshot failed: %s", e)
-        return ToolResult(
-            tool_call_id="",
-            content=f"Screenshot error: {e}",
-            is_error=True,
-        )
+
+    return _safe_browser_call("screenshot", _do)

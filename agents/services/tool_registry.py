@@ -40,9 +40,16 @@ def get_all_tool_definitions() -> tuple[ToolDefinition, ...]:
         # Screen tools
         ToolDefinition(
             name="take_screenshot",
-            description="Take a screenshot of the desktop. Returns the screenshot as an image.",
+            description="Take a screenshot of the desktop and answer a question about it.",
             category=ToolCategory.SCREEN,
-            parameters=(),
+            parameters=(
+                ToolParameter(
+                    name="question",
+                    type="string",
+                    description="Question to answer about the screenshot.",
+                    required=True,
+                ),
+            ),
         ),
         ToolDefinition(
             name="screen_click",
@@ -110,7 +117,7 @@ def get_all_tool_definitions() -> tuple[ToolDefinition, ...]:
         # Browser tools
         ToolDefinition(
             name="browser_navigate",
-            description="Navigate to a URL in the browser.",
+            description="Navigate to a URL in the browser. Returns the page title and a visual description of the page.",
             category=ToolCategory.BROWSER,
             parameters=(
                 ToolParameter(
@@ -123,32 +130,45 @@ def get_all_tool_definitions() -> tuple[ToolDefinition, ...]:
         ),
         ToolDefinition(
             name="browser_click",
-            description="Click an element in the browser by CSS selector.",
+            description="Click an element in the browser by natural-language description.",
             category=ToolCategory.BROWSER,
             parameters=(
                 ToolParameter(
-                    name="selector",
+                    name="description",
                     type="string",
-                    description="CSS selector of the element to click.",
+                    description="Natural language description of the element to click.",
                     required=True,
                 ),
             ),
         ),
         ToolDefinition(
             name="browser_type",
-            description="Type text into a form element in the browser.",
+            description="Type text into a form element found by natural-language description.",
             category=ToolCategory.BROWSER,
             parameters=(
                 ToolParameter(
-                    name="selector",
+                    name="description",
                     type="string",
-                    description="CSS selector of the element.",
+                    description="Natural language description of the element to type into.",
                     required=True,
                 ),
                 ToolParameter(
                     name="text",
                     type="string",
                     description="Text to type.",
+                    required=True,
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="browser_hover",
+            description="Hover over an element found by natural-language description.",
+            category=ToolCategory.BROWSER,
+            parameters=(
+                ToolParameter(
+                    name="description",
+                    type="string",
+                    description="Natural language description of the element to hover over.",
                     required=True,
                 ),
             ),
@@ -174,9 +194,16 @@ def get_all_tool_definitions() -> tuple[ToolDefinition, ...]:
         ),
         ToolDefinition(
             name="browser_take_screenshot",
-            description="Take a screenshot of the browser viewport. Returns the screenshot as an image.",
+            description="Take a screenshot of the browser and answer a question about it.",
             category=ToolCategory.BROWSER,
-            parameters=(),
+            parameters=(
+                ToolParameter(
+                    name="question",
+                    type="string",
+                    description="Question to answer about the browser screenshot.",
+                    required=True,
+                ),
+            ),
         ),
     )
 
@@ -205,7 +232,6 @@ def dispatch_tool_call(tool_call: ToolCall, context: ToolContext) -> ToolResult:
         tool_call_id=tool_call.tool_call_id,
         content=result.content,
         is_error=result.is_error,
-        image_base64=result.image_base64,
     )
 
 
@@ -225,7 +251,14 @@ def _handle_execute_command(
 def _handle_take_screenshot(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
-    return tools_screen.take_screenshot(context.ssh_session)
+    question = str(arguments.get("question", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_screen.take_screenshot(
+        context.ssh_session, question=question, vision_config=context.vision_config
+    )
 
 
 def _handle_screen_click(
@@ -267,41 +300,86 @@ def _handle_browser_navigate(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
     url = str(arguments.get("url", ""))
-    return tools_browser.browser_navigate(context.ports, url=url)
+    return tools_browser.browser_navigate(
+        context.playwright_session, url=url, vision_config=context.vision_config
+    )
 
 
 def _handle_browser_click(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
-    selector = str(arguments.get("selector", ""))
-    return tools_browser.browser_click(context.ports, selector=selector)
+    description = str(arguments.get("description", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_browser.browser_click(
+        context.playwright_session,
+        description=description,
+        dmr_config=context.vision_config,
+    )
 
 
 def _handle_browser_type(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
-    selector = str(arguments.get("selector", ""))
+    description = str(arguments.get("description", ""))
     text = str(arguments.get("text", ""))
-    return tools_browser.browser_type(context.ports, selector=selector, text=text)
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_browser.browser_type(
+        context.playwright_session,
+        description=description,
+        text=text,
+        dmr_config=context.vision_config,
+    )
+
+
+def _handle_browser_hover(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    description = str(arguments.get("description", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_browser.browser_hover(
+        context.playwright_session,
+        description=description,
+        dmr_config=context.vision_config,
+    )
 
 
 def _handle_browser_get_page_content(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
     max_length = cast(int, arguments.get("max_length", 5000))
-    return tools_browser.browser_get_page_content(context.ports, max_length=max_length)
+    return tools_browser.browser_get_page_content(
+        context.playwright_session, max_length=max_length
+    )
 
 
 def _handle_browser_get_url(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
-    return tools_browser.browser_get_url(context.ports)
+    return tools_browser.browser_get_url(context.playwright_session)
 
 
 def _handle_browser_take_screenshot(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
-    return tools_browser.browser_take_screenshot(context.ports)
+    question = str(arguments.get("question", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_browser.browser_take_screenshot(
+        context.playwright_session,
+        question=question,
+        vision_config=context.vision_config,
+    )
 
 
 # Handler type alias
@@ -318,6 +396,7 @@ _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "browser_navigate": _handle_browser_navigate,
     "browser_click": _handle_browser_click,
     "browser_type": _handle_browser_type,
+    "browser_hover": _handle_browser_hover,
     "browser_get_page_content": _handle_browser_get_page_content,
     "browser_get_url": _handle_browser_get_url,
     "browser_take_screenshot": _handle_browser_take_screenshot,

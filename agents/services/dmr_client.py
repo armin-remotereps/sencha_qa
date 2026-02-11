@@ -113,13 +113,31 @@ def _is_remote_host(host: str) -> bool:
     return host not in ("localhost", "127.0.0.1", "::1")
 
 
+def configure_model_context(model: str, context_size: int) -> None:
+    """Configure context size for a model via Docker CLI."""
+    logger.info("Configuring context size %d for model: %s", context_size, model)
+    result = subprocess.run(
+        ["docker", "model", "configure", f"--context-size={context_size}", model],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        error_msg = result.stderr.strip() or result.stdout.strip()
+        logger.warning("Failed to configure context size for %s: %s", model, error_msg)
+
+
 def ensure_model_available(config: DMRConfig) -> None:
     """Check if model is available, pull it if not.
 
     For remote DMR hosts, logs a warning instead of attempting a local pull.
+    For local hosts, also configures the model context size.
     """
     if is_model_available(config):
         logger.debug("Model already available: %s", config.model)
+        if not _is_remote_host(config.host):
+            context_size: int = int(settings.DMR_CONTEXT_SIZE)
+            configure_model_context(config.model, context_size)
         return
     if _is_remote_host(config.host):
         logger.warning(
@@ -132,6 +150,19 @@ def ensure_model_available(config: DMRConfig) -> None:
         return
     logger.info("Model not available: %s. Pulling...", config.model)
     pull_model(config.model)
+    context_size = int(settings.DMR_CONTEXT_SIZE)
+    configure_model_context(config.model, context_size)
+
+
+def warm_up_model(config: DMRConfig) -> None:
+    """Send a tiny request to force the model to load into memory."""
+    logger.info("Warming up model: %s", config.model)
+    try:
+        messages = (ChatMessage(role="user", content="hi"),)
+        send_chat_completion(config, messages)
+        logger.info("Model warm-up complete: %s", config.model)
+    except Exception as e:
+        logger.warning("Model warm-up failed for %s: %s", config.model, e)
 
 
 def send_chat_completion(

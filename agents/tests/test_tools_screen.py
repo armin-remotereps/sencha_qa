@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -13,6 +13,7 @@ from agents.services.tools_screen import (
     screen_type_text,
     take_screenshot,
 )
+from agents.types import DMRConfig
 from environments.types import SSHResult
 
 
@@ -22,38 +23,56 @@ def mock_ssh_session() -> MagicMock:
     return MagicMock(spec=SSHSessionManager)
 
 
+@pytest.fixture
+def vision_config() -> DMRConfig:
+    """Fixture providing a DMRConfig for vision questions."""
+    return DMRConfig(host="localhost", port="8080", model="vision-model")
+
+
 # ============================================================================
 # take_screenshot tests
 # ============================================================================
 
 
-def test_take_screenshot_happy_path(mock_ssh_session: MagicMock) -> None:
-    """Test take_screenshot successfully captures and encodes screenshot."""
+@patch("agents.services.tools_screen.answer_screenshot_question")
+def test_take_screenshot_happy_path(
+    mock_answer: MagicMock,
+    mock_ssh_session: MagicMock,
+    vision_config: DMRConfig,
+) -> None:
+    """Test take_screenshot captures screenshot and answers question."""
     capture_result = SSHResult(exit_code=0, stdout="", stderr="")
     base64_result = SSHResult(
         exit_code=0,
-        stdout="iVBORw0KGgoAAAANSUhEUgAAAAUA\nAAAFCAYAAACNbyblAAAAHElEQVQI12P4\n",
+        stdout="iVBORw0KGgoAAAANSUhEUgAAAAUA",
         stderr="",
     )
     mock_ssh_session.execute.side_effect = [capture_result, base64_result]
+    mock_answer.return_value = "I can see the desktop."
 
-    result = take_screenshot(mock_ssh_session)
+    result = take_screenshot(
+        mock_ssh_session,
+        question="What is on the desktop?",
+        vision_config=vision_config,
+    )
 
     assert mock_ssh_session.execute.call_count == 2
     first_call = mock_ssh_session.execute.call_args_list[0]
     assert "scrot -o /tmp/screenshot.png" in first_call[0][0]
     second_call = mock_ssh_session.execute.call_args_list[1]
     assert "base64 -w 0 /tmp/screenshot.png" in second_call[0][0]
-
-    assert result.is_error is False
-    assert result.content == "Screenshot captured successfully."
-    assert (
-        result.image_base64
-        == "iVBORw0KGgoAAAANSUhEUgAAAAUA\nAAAFCAYAAACNbyblAAAAHElEQVQI12P4".strip()
+    mock_answer.assert_called_once_with(
+        vision_config, "iVBORw0KGgoAAAANSUhEUgAAAAUA", "What is on the desktop?"
     )
 
+    assert result.is_error is False
+    assert result.content == "I can see the desktop."
+    assert not hasattr(result, "image_base64")
 
-def test_take_screenshot_capture_fails(mock_ssh_session: MagicMock) -> None:
+
+def test_take_screenshot_capture_fails(
+    mock_ssh_session: MagicMock, vision_config: DMRConfig
+) -> None:
     """Test take_screenshot when scrot capture command fails."""
     mock_ssh_session.execute.return_value = SSHResult(
         exit_code=1,
@@ -61,16 +80,21 @@ def test_take_screenshot_capture_fails(mock_ssh_session: MagicMock) -> None:
         stderr="scrot: Can't open X display",
     )
 
-    result = take_screenshot(mock_ssh_session)
+    result = take_screenshot(
+        mock_ssh_session,
+        question="What is on the desktop?",
+        vision_config=vision_config,
+    )
 
     mock_ssh_session.execute.assert_called_once()
     assert result.is_error is True
     assert "Screenshot capture failed:" in result.content
     assert "Can't open X display" in result.content
-    assert result.image_base64 is None
 
 
-def test_take_screenshot_base64_read_fails(mock_ssh_session: MagicMock) -> None:
+def test_take_screenshot_base64_read_fails(
+    mock_ssh_session: MagicMock, vision_config: DMRConfig
+) -> None:
     """Test take_screenshot when base64 read command fails."""
     capture_result = SSHResult(exit_code=0, stdout="", stderr="")
     base64_result = SSHResult(
@@ -80,24 +104,32 @@ def test_take_screenshot_base64_read_fails(mock_ssh_session: MagicMock) -> None:
     )
     mock_ssh_session.execute.side_effect = [capture_result, base64_result]
 
-    result = take_screenshot(mock_ssh_session)
+    result = take_screenshot(
+        mock_ssh_session,
+        question="What is on the desktop?",
+        vision_config=vision_config,
+    )
 
     assert result.is_error is True
     assert "Screenshot read failed:" in result.content
     assert "No such file or directory" in result.content
-    assert result.image_base64 is None
 
 
-def test_take_screenshot_ssh_exception(mock_ssh_session: MagicMock) -> None:
+def test_take_screenshot_ssh_exception(
+    mock_ssh_session: MagicMock, vision_config: DMRConfig
+) -> None:
     """Test take_screenshot when SSH session raises exception."""
     mock_ssh_session.execute.side_effect = Exception("Connection failed")
 
-    result = take_screenshot(mock_ssh_session)
+    result = take_screenshot(
+        mock_ssh_session,
+        question="What is on the desktop?",
+        vision_config=vision_config,
+    )
 
     assert result.is_error is True
     assert "Screenshot error:" in result.content
     assert "Connection failed" in result.content
-    assert result.image_base64 is None
 
 
 # ============================================================================

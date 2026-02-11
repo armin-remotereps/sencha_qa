@@ -17,11 +17,13 @@ from agents.services.dmr_client import (
     _serialize_tools,
     build_dmr_config,
     build_vision_dmr_config,
+    configure_model_context,
     ensure_model_available,
     is_model_available,
     list_models,
     pull_model,
     send_chat_completion,
+    warm_up_model,
 )
 from agents.types import (
     ChatMessage,
@@ -660,3 +662,112 @@ def test_normalize_model_id_strips_docker_io_prefix_with_tag() -> None:
 def test_normalize_model_id_no_prefix() -> None:
     """Test _normalize_model_id passes through IDs without prefix."""
     assert _normalize_model_id("ai/mistral") == "ai/mistral"
+
+
+# ============================================================================
+# CONFIGURE MODEL CONTEXT TESTS
+# ============================================================================
+
+
+@patch("agents.services.dmr_client.subprocess.run")
+def test_configure_model_context_success(mock_run: MagicMock) -> None:
+    """Test configure_model_context calls docker model configure."""
+    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+    configure_model_context("ai/mistral", 16384)
+
+    mock_run.assert_called_once_with(
+        ["docker", "model", "configure", "--context-size=16384", "ai/mistral"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+@patch("agents.services.dmr_client.subprocess.run")
+def test_configure_model_context_failure_logs_warning(mock_run: MagicMock) -> None:
+    """Test configure_model_context logs warning on failure instead of raising."""
+    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="model not found")
+
+    # Should not raise
+    configure_model_context("ai/nonexistent", 8192)
+
+    mock_run.assert_called_once()
+
+
+@override_settings(DMR_CONTEXT_SIZE=16384)
+@patch("agents.services.dmr_client.configure_model_context")
+@patch("agents.services.dmr_client.is_model_available")
+def test_ensure_model_available_configures_context_for_local(
+    mock_check: MagicMock, mock_configure: MagicMock
+) -> None:
+    """Test ensure_model_available configures context size for local hosts."""
+    mock_check.return_value = True
+    config = DMRConfig(host="localhost", port="12434", model="ai/mistral")
+
+    ensure_model_available(config)
+
+    mock_configure.assert_called_once_with("ai/mistral", 16384)
+
+
+@override_settings(DMR_CONTEXT_SIZE=16384)
+@patch("agents.services.dmr_client.configure_model_context")
+@patch("agents.services.dmr_client.is_model_available")
+def test_ensure_model_available_skips_context_for_remote(
+    mock_check: MagicMock, mock_configure: MagicMock
+) -> None:
+    """Test ensure_model_available does not configure context for remote hosts."""
+    mock_check.return_value = True
+    config = DMRConfig(host="192.168.1.100", port="12434", model="ai/mistral")
+
+    ensure_model_available(config)
+
+    mock_configure.assert_not_called()
+
+
+@override_settings(DMR_CONTEXT_SIZE=8192)
+@patch("agents.services.dmr_client.configure_model_context")
+@patch("agents.services.dmr_client.pull_model")
+@patch("agents.services.dmr_client.is_model_available")
+def test_ensure_model_available_configures_context_after_pull(
+    mock_check: MagicMock, mock_pull: MagicMock, mock_configure: MagicMock
+) -> None:
+    """Test ensure_model_available configures context after pulling a model."""
+    mock_check.return_value = False
+    config = DMRConfig(host="localhost", port="12434", model="ai/mistral")
+
+    ensure_model_available(config)
+
+    mock_pull.assert_called_once_with("ai/mistral")
+    mock_configure.assert_called_once_with("ai/mistral", 8192)
+
+
+# ============================================================================
+# WARM UP MODEL TESTS
+# ============================================================================
+
+
+@patch("agents.services.dmr_client.send_chat_completion")
+def test_warm_up_model_sends_chat_completion(mock_send: MagicMock) -> None:
+    """Test warm_up_model sends a trivial chat completion to load the model."""
+    config = DMRConfig(host="localhost", port="12434", model="ai/mistral")
+
+    warm_up_model(config)
+
+    mock_send.assert_called_once()
+    call_args = mock_send.call_args
+    assert call_args[0][0] is config
+    messages = call_args[0][1]
+    assert len(messages) == 1
+    assert messages[0].role == "user"
+    assert messages[0].content == "hi"
+
+
+@patch("agents.services.dmr_client.send_chat_completion")
+def test_warm_up_model_handles_failure_gracefully(mock_send: MagicMock) -> None:
+    """Test warm_up_model catches exceptions and does not propagate them."""
+    mock_send.side_effect = ConnectionError("DMR unavailable")
+    config = DMRConfig(host="localhost", port="12434", model="ai/mistral")
+
+    # Should not raise
+    warm_up_model(config)

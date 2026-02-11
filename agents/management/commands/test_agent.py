@@ -7,7 +7,7 @@ import docker
 from django.core.management.base import BaseCommand
 
 from agents.services.agent_loop import build_agent_config, run_agent
-from agents.services.dmr_client import ensure_model_available
+from agents.services.dmr_client import ensure_model_available, warm_up_model
 from agents.types import AgentStopReason
 from environments.services import (
     close_docker_client,
@@ -17,9 +17,7 @@ from environments.services import (
 )
 from environments.types import ContainerInfo
 
-DEFAULT_TASK = (
-    "Upgrade all packages on the environment using apt update and apt upgrade"
-)
+DEFAULT_TASK = "Go to Google, search for weather in LA, find tomorrow's weather result"
 
 
 class Command(BaseCommand):
@@ -159,6 +157,19 @@ class Command(BaseCommand):
                     self.style.ERROR(f"Model not available: {model_error!s}")
                 )
                 raise
+
+            self.stdout.write("\nWarming up models...")
+            warm_up_model(config.dmr)
+            self.stdout.write(
+                self.style.SUCCESS(f"Action model warmed up: {config.dmr.model}")
+            )
+            if config.vision_dmr is not None:
+                warm_up_model(config.vision_dmr)
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"Vision model warmed up: {config.vision_dmr.model}"
+                    )
+                )
 
             self.stdout.write(f"\nTask: {task_str[:100]}...")
             self.stdout.write("\nStarting agent...\n")
