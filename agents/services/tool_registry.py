@@ -3,221 +3,22 @@ from __future__ import annotations
 import logging
 from typing import Callable, cast
 
-from agents.services import tools_browser, tools_screen, tools_shell
+from agents.services import tools_browser, tools_screen, tools_shell, tools_vnc
+from agents.services.tool_definitions import (
+    get_all_tool_definitions as get_all_tool_definitions,
+)
 from agents.types import (
     ToolCall,
-    ToolCategory,
     ToolContext,
-    ToolDefinition,
-    ToolParameter,
     ToolResult,
 )
 
 logger = logging.getLogger(__name__)
 
-
-def get_all_tool_definitions() -> tuple[ToolDefinition, ...]:
-    """Return all available tool definitions.
-
-    Returns:
-        Tuple of all tool definitions for shell, screen, and browser categories
-    """
-    return (
-        # Shell tools
-        ToolDefinition(
-            name="execute_command",
-            description="Execute a shell command in the container via SSH. Returns stdout, stderr, and exit code.",
-            category=ToolCategory.SHELL,
-            parameters=(
-                ToolParameter(
-                    name="command",
-                    type="string",
-                    description="The shell command to execute.",
-                    required=True,
-                ),
-            ),
-        ),
-        # Screen tools
-        ToolDefinition(
-            name="take_screenshot",
-            description="Take a screenshot of the desktop and answer a question about it.",
-            category=ToolCategory.SCREEN,
-            parameters=(
-                ToolParameter(
-                    name="question",
-                    type="string",
-                    description="Question to answer about the screenshot.",
-                    required=True,
-                ),
-            ),
-        ),
-        ToolDefinition(
-            name="screen_click",
-            description="Click at a specific position on the desktop.",
-            category=ToolCategory.SCREEN,
-            parameters=(
-                ToolParameter(
-                    name="x",
-                    type="integer",
-                    description="X coordinate to click.",
-                    required=True,
-                ),
-                ToolParameter(
-                    name="y",
-                    type="integer",
-                    description="Y coordinate to click.",
-                    required=True,
-                ),
-                ToolParameter(
-                    name="button",
-                    type="integer",
-                    description="Mouse button (1=left, 2=middle, 3=right).",
-                    required=False,
-                ),
-            ),
-        ),
-        ToolDefinition(
-            name="screen_type_text",
-            description="Type text on the desktop using the keyboard.",
-            category=ToolCategory.SCREEN,
-            parameters=(
-                ToolParameter(
-                    name="text",
-                    type="string",
-                    description="Text to type.",
-                    required=True,
-                ),
-            ),
-        ),
-        ToolDefinition(
-            name="screen_key_press",
-            description="Press a key or key combination (e.g., 'Return', 'ctrl+c', 'alt+F4').",
-            category=ToolCategory.SCREEN,
-            parameters=(
-                ToolParameter(
-                    name="keys",
-                    type="string",
-                    description="Key or key combination to press.",
-                    required=True,
-                ),
-            ),
-        ),
-        ToolDefinition(
-            name="screen_list_windows",
-            description="List all open windows on the desktop.",
-            category=ToolCategory.SCREEN,
-            parameters=(),
-        ),
-        ToolDefinition(
-            name="screen_get_active_window",
-            description="Get the name of the currently active window.",
-            category=ToolCategory.SCREEN,
-            parameters=(),
-        ),
-        # Browser tools
-        ToolDefinition(
-            name="browser_navigate",
-            description="Navigate to a URL in the browser. Returns the page title and a visual description of the page.",
-            category=ToolCategory.BROWSER,
-            parameters=(
-                ToolParameter(
-                    name="url",
-                    type="string",
-                    description="URL to navigate to.",
-                    required=True,
-                ),
-            ),
-        ),
-        ToolDefinition(
-            name="browser_click",
-            description="Click an element in the browser by natural-language description.",
-            category=ToolCategory.BROWSER,
-            parameters=(
-                ToolParameter(
-                    name="description",
-                    type="string",
-                    description="Natural language description of the element to click.",
-                    required=True,
-                ),
-            ),
-        ),
-        ToolDefinition(
-            name="browser_type",
-            description="Type text into a form element found by natural-language description.",
-            category=ToolCategory.BROWSER,
-            parameters=(
-                ToolParameter(
-                    name="description",
-                    type="string",
-                    description="Natural language description of the element to type into.",
-                    required=True,
-                ),
-                ToolParameter(
-                    name="text",
-                    type="string",
-                    description="Text to type.",
-                    required=True,
-                ),
-            ),
-        ),
-        ToolDefinition(
-            name="browser_hover",
-            description="Hover over an element found by natural-language description.",
-            category=ToolCategory.BROWSER,
-            parameters=(
-                ToolParameter(
-                    name="description",
-                    type="string",
-                    description="Natural language description of the element to hover over.",
-                    required=True,
-                ),
-            ),
-        ),
-        ToolDefinition(
-            name="browser_get_page_content",
-            description="Get the text content of the current browser page.",
-            category=ToolCategory.BROWSER,
-            parameters=(
-                ToolParameter(
-                    name="max_length",
-                    type="integer",
-                    description="Maximum length of content to return.",
-                    required=False,
-                ),
-            ),
-        ),
-        ToolDefinition(
-            name="browser_get_url",
-            description="Get the current URL of the browser.",
-            category=ToolCategory.BROWSER,
-            parameters=(),
-        ),
-        ToolDefinition(
-            name="browser_take_screenshot",
-            description="Take a screenshot of the browser and answer a question about it.",
-            category=ToolCategory.BROWSER,
-            parameters=(
-                ToolParameter(
-                    name="question",
-                    type="string",
-                    description="Question to answer about the browser screenshot.",
-                    required=True,
-                ),
-            ),
-        ),
-    )
+_HandlerFunc = Callable[[ToolContext, dict[str, object]], ToolResult]
 
 
 def dispatch_tool_call(tool_call: ToolCall, context: ToolContext) -> ToolResult:
-    """Dispatch a tool call to the appropriate handler function.
-
-    Args:
-        tool_call: The tool call with name and arguments
-        context: Tool execution context with ports, SSH session, etc.
-
-    Returns:
-        ToolResult with the result of the tool execution
-    """
     handler = _TOOL_HANDLERS.get(tool_call.tool_name)
     if handler is None:
         return ToolResult(
@@ -227,18 +28,11 @@ def dispatch_tool_call(tool_call: ToolCall, context: ToolContext) -> ToolResult:
         )
 
     result = handler(context, tool_call.arguments)
-    # Set the correct tool_call_id on the result
     return ToolResult(
         tool_call_id=tool_call.tool_call_id,
         content=result.content,
         is_error=result.is_error,
     )
-
-
-# ============================================================================
-# PRIVATE HANDLER WRAPPERS
-# ============================================================================
-# These extract typed arguments from the dict and call the actual tool functions
 
 
 def _handle_execute_command(
@@ -382,8 +176,68 @@ def _handle_browser_take_screenshot(
     )
 
 
-# Handler type alias
-_HandlerFunc = Callable[[ToolContext, dict[str, object]], ToolResult]
+def _handle_vnc_take_screenshot(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    question = str(arguments.get("question", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_vnc.vnc_take_screenshot(
+        context.vnc_session,
+        question=question,
+        vision_config=context.vision_config,
+    )
+
+
+def _handle_vnc_click(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    description = str(arguments.get("description", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_vnc.vnc_click(
+        context.vnc_session,
+        description=description,
+        vision_config=context.vision_config,
+    )
+
+
+def _handle_vnc_type(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    description = str(arguments.get("description", ""))
+    text = str(arguments.get("text", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_vnc.vnc_type(
+        context.vnc_session,
+        description=description,
+        text=text,
+        vision_config=context.vision_config,
+    )
+
+
+def _handle_vnc_hover(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    description = str(arguments.get("description", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_vnc.vnc_hover(
+        context.vnc_session,
+        description=description,
+        vision_config=context.vision_config,
+    )
+
+
+def _handle_vnc_key_press(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    keys = str(arguments.get("keys", ""))
+    return tools_vnc.vnc_key_press(context.vnc_session, keys=keys)
+
 
 _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "execute_command": _handle_execute_command,
@@ -400,4 +254,9 @@ _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "browser_get_page_content": _handle_browser_get_page_content,
     "browser_get_url": _handle_browser_get_url,
     "browser_take_screenshot": _handle_browser_take_screenshot,
+    "vnc_take_screenshot": _handle_vnc_take_screenshot,
+    "vnc_click": _handle_vnc_click,
+    "vnc_type": _handle_vnc_type,
+    "vnc_hover": _handle_vnc_hover,
+    "vnc_key_press": _handle_vnc_key_press,
 }

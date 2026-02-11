@@ -17,5 +17,6 @@ playwright~=1.58.0
 docker~=7.1.0
 paramiko~=4.0.0
 httpx~=0.28.1
+vncdotool~=1.2.0
 pytest~=9.0.2
 pytest-django~=4.11.1

@@ -1,17 +1,22 @@
 from __future__ import annotations
 
-import logging
-
 from agents.services.ssh_session import SSHSessionManager
+from agents.services.tool_utils import safe_tool_call
 from agents.types import ToolResult
 
-logger = logging.getLogger(__name__)
+
+def _wrap_background_command(command: str) -> str:
+    """Wrap a backgrounded command with nohup and output redirection."""
+    core = command.rstrip()[:-1].rstrip()
+    return f"nohup {core} > /dev/null 2>&1 & echo 'Background PID:' $!"
 
 
 def execute_command(ssh_session: SSHSessionManager, *, command: str) -> ToolResult:
-    """Execute a shell command via the persistent SSH session."""
-    try:
-        result = ssh_session.execute(command)
+    def _do() -> ToolResult:
+        actual_command = command
+        if command.rstrip().endswith("&"):
+            actual_command = _wrap_background_command(command)
+        result = ssh_session.execute(actual_command)
         output_parts: list[str] = []
         if result.stdout:
             output_parts.append(result.stdout)
@@ -24,10 +29,5 @@ def execute_command(ssh_session: SSHSessionManager, *, command: str) -> ToolResu
             content=content,
             is_error=result.exit_code != 0,
         )
-    except Exception as e:
-        logger.error("SSH command execution failed: %s", e)
-        return ToolResult(
-            tool_call_id="",
-            content=f"SSH error: {e}",
-            is_error=True,
-        )
+
+    return safe_tool_call("SSH command execution", _do)

@@ -6,24 +6,22 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.test import override_settings
 
-from agents.services.dmr_client import (
-    _is_remote_host,
+from agents.services.dmr_client import send_chat_completion
+from agents.services.dmr_config import build_dmr_config, build_vision_dmr_config
+from agents.services.dmr_model_manager import (
     _normalize_model_id,
+    ensure_model_available,
+    is_model_available,
+    list_models,
+    warm_up_model,
+)
+from agents.services.dmr_serializer import (
     _parse_response,
     _parse_tool_calls,
     _serialize_content,
     _serialize_messages,
     _serialize_single_message,
     _serialize_tools,
-    build_dmr_config,
-    build_vision_dmr_config,
-    configure_model_context,
-    ensure_model_available,
-    is_model_available,
-    list_models,
-    pull_model,
-    send_chat_completion,
-    warm_up_model,
 )
 from agents.types import (
     ChatMessage,
@@ -440,7 +438,7 @@ def test_send_chat_completion_with_tools(mock_client_class: MagicMock) -> None:
 # ============================================================================
 
 
-@patch("agents.services.dmr_client.httpx.Client")
+@patch("agents.services.dmr_model_manager.httpx.Client")
 def test_list_models_returns_model_ids(mock_client_class: MagicMock) -> None:
     """Test list_models parses and normalizes the models endpoint response."""
     mock_response = MagicMock()
@@ -465,7 +463,7 @@ def test_list_models_returns_model_ids(mock_client_class: MagicMock) -> None:
     )
 
 
-@patch("agents.services.dmr_client.httpx.Client")
+@patch("agents.services.dmr_model_manager.httpx.Client")
 def test_list_models_handles_empty_response(mock_client_class: MagicMock) -> None:
     """Test list_models returns empty list for empty data."""
     mock_response = MagicMock()
@@ -482,7 +480,7 @@ def test_list_models_handles_empty_response(mock_client_class: MagicMock) -> Non
     assert models == []
 
 
-@patch("agents.services.dmr_client.list_models")
+@patch("agents.services.dmr_model_manager.list_models")
 def test_is_model_available_true(mock_list: MagicMock) -> None:
     """Test is_model_available returns True when model exists."""
     mock_list.return_value = ["ai/mistral", "ai/qwen3-vl"]
@@ -491,7 +489,7 @@ def test_is_model_available_true(mock_list: MagicMock) -> None:
     assert is_model_available(config) is True
 
 
-@patch("agents.services.dmr_client.list_models")
+@patch("agents.services.dmr_model_manager.list_models")
 def test_is_model_available_false(mock_list: MagicMock) -> None:
     """Test is_model_available returns False when model is missing."""
     mock_list.return_value = ["ai/qwen3-vl"]
@@ -500,7 +498,7 @@ def test_is_model_available_false(mock_list: MagicMock) -> None:
     assert is_model_available(config) is False
 
 
-@patch("agents.services.dmr_client.list_models")
+@patch("agents.services.dmr_model_manager.list_models")
 def test_is_model_available_handles_connection_error(mock_list: MagicMock) -> None:
     """Test is_model_available returns False on connection error."""
     mock_list.side_effect = Exception("Connection refused")
@@ -509,98 +507,26 @@ def test_is_model_available_handles_connection_error(mock_list: MagicMock) -> No
     assert is_model_available(config) is False
 
 
-@patch("agents.services.dmr_client.subprocess.run")
-def test_pull_model_success(mock_run: MagicMock) -> None:
-    """Test pull_model calls docker model pull."""
-    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-
-    pull_model("ai/mistral")
-
-    mock_run.assert_called_once_with(
-        ["docker", "model", "pull", "ai/mistral"],
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-
-
-@patch("agents.services.dmr_client.subprocess.run")
-def test_pull_model_failure_raises(mock_run: MagicMock) -> None:
-    """Test pull_model raises RuntimeError on failure."""
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="model not found")
-
-    with pytest.raises(RuntimeError, match="Failed to pull model"):
-        pull_model("ai/nonexistent:model")
-
-
-@patch("agents.services.dmr_client.pull_model")
-@patch("agents.services.dmr_client.is_model_available")
-def test_ensure_model_available_already_present(
-    mock_check: MagicMock, mock_pull: MagicMock
-) -> None:
-    """Test ensure_model_available skips pull when model exists."""
+@patch("agents.services.dmr_model_manager.is_model_available")
+def test_ensure_model_available_already_present(mock_check: MagicMock) -> None:
+    """Test ensure_model_available returns early when model exists."""
     mock_check.return_value = True
     config = DMRConfig(host="localhost", port="12434", model="ai/mistral")
 
     ensure_model_available(config)
 
     mock_check.assert_called_once_with(config)
-    mock_pull.assert_not_called()
 
 
-@patch("agents.services.dmr_client.pull_model")
-@patch("agents.services.dmr_client.is_model_available")
-def test_ensure_model_available_pulls_when_missing(
-    mock_check: MagicMock, mock_pull: MagicMock
-) -> None:
-    """Test ensure_model_available pulls when model is missing."""
-    mock_check.return_value = False
-    config = DMRConfig(host="localhost", port="12434", model="ai/mistral")
-
-    ensure_model_available(config)
-
-    mock_check.assert_called_once_with(config)
-    mock_pull.assert_called_once_with("ai/mistral")
-
-
-@patch("agents.services.dmr_client.pull_model")
-@patch("agents.services.dmr_client.is_model_available")
-def test_ensure_model_available_skips_pull_for_remote_host(
-    mock_check: MagicMock, mock_pull: MagicMock
-) -> None:
-    """Test ensure_model_available warns instead of pulling for remote hosts."""
+@patch("agents.services.dmr_model_manager.is_model_available")
+def test_ensure_model_available_warns_when_missing(mock_check: MagicMock) -> None:
+    """Test ensure_model_available warns when model is not found."""
     mock_check.return_value = False
     config = DMRConfig(host="192.168.1.100", port="12434", model="ai/mistral")
 
     ensure_model_available(config)
 
     mock_check.assert_called_once_with(config)
-    mock_pull.assert_not_called()
-
-
-def test_is_remote_host_localhost() -> None:
-    """Test _is_remote_host returns False for localhost."""
-    assert _is_remote_host("localhost") is False
-
-
-def test_is_remote_host_loopback_ipv4() -> None:
-    """Test _is_remote_host returns False for 127.0.0.1."""
-    assert _is_remote_host("127.0.0.1") is False
-
-
-def test_is_remote_host_loopback_ipv6() -> None:
-    """Test _is_remote_host returns False for ::1."""
-    assert _is_remote_host("::1") is False
-
-
-def test_is_remote_host_remote_ip() -> None:
-    """Test _is_remote_host returns True for remote IPs."""
-    assert _is_remote_host("192.168.1.50") is True
-
-
-def test_is_remote_host_remote_hostname() -> None:
-    """Test _is_remote_host returns True for remote hostnames."""
-    assert _is_remote_host("dmr.example.com") is True
 
 
 # ============================================================================
@@ -662,84 +588,6 @@ def test_normalize_model_id_strips_docker_io_prefix_with_tag() -> None:
 def test_normalize_model_id_no_prefix() -> None:
     """Test _normalize_model_id passes through IDs without prefix."""
     assert _normalize_model_id("ai/mistral") == "ai/mistral"
-
-
-# ============================================================================
-# CONFIGURE MODEL CONTEXT TESTS
-# ============================================================================
-
-
-@patch("agents.services.dmr_client.subprocess.run")
-def test_configure_model_context_success(mock_run: MagicMock) -> None:
-    """Test configure_model_context calls docker model configure."""
-    mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
-
-    configure_model_context("ai/mistral", 16384)
-
-    mock_run.assert_called_once_with(
-        ["docker", "model", "configure", "--context-size=16384", "ai/mistral"],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-
-
-@patch("agents.services.dmr_client.subprocess.run")
-def test_configure_model_context_failure_logs_warning(mock_run: MagicMock) -> None:
-    """Test configure_model_context logs warning on failure instead of raising."""
-    mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="model not found")
-
-    # Should not raise
-    configure_model_context("ai/nonexistent", 8192)
-
-    mock_run.assert_called_once()
-
-
-@override_settings(DMR_CONTEXT_SIZE=16384)
-@patch("agents.services.dmr_client.configure_model_context")
-@patch("agents.services.dmr_client.is_model_available")
-def test_ensure_model_available_configures_context_for_local(
-    mock_check: MagicMock, mock_configure: MagicMock
-) -> None:
-    """Test ensure_model_available configures context size for local hosts."""
-    mock_check.return_value = True
-    config = DMRConfig(host="localhost", port="12434", model="ai/mistral")
-
-    ensure_model_available(config)
-
-    mock_configure.assert_called_once_with("ai/mistral", 16384)
-
-
-@override_settings(DMR_CONTEXT_SIZE=16384)
-@patch("agents.services.dmr_client.configure_model_context")
-@patch("agents.services.dmr_client.is_model_available")
-def test_ensure_model_available_skips_context_for_remote(
-    mock_check: MagicMock, mock_configure: MagicMock
-) -> None:
-    """Test ensure_model_available does not configure context for remote hosts."""
-    mock_check.return_value = True
-    config = DMRConfig(host="192.168.1.100", port="12434", model="ai/mistral")
-
-    ensure_model_available(config)
-
-    mock_configure.assert_not_called()
-
-
-@override_settings(DMR_CONTEXT_SIZE=8192)
-@patch("agents.services.dmr_client.configure_model_context")
-@patch("agents.services.dmr_client.pull_model")
-@patch("agents.services.dmr_client.is_model_available")
-def test_ensure_model_available_configures_context_after_pull(
-    mock_check: MagicMock, mock_pull: MagicMock, mock_configure: MagicMock
-) -> None:
-    """Test ensure_model_available configures context after pulling a model."""
-    mock_check.return_value = False
-    config = DMRConfig(host="localhost", port="12434", model="ai/mistral")
-
-    ensure_model_available(config)
-
-    mock_pull.assert_called_once_with("ai/mistral")
-    mock_configure.assert_called_once_with("ai/mistral", 8192)
 
 
 # ============================================================================

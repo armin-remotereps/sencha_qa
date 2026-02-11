@@ -6,6 +6,9 @@ import pytest
 from django.test import override_settings
 
 from agents.services.agent_loop import (
+    _build_role_description,
+    _build_task_section,
+    _build_tool_guidelines,
     _build_tool_result_message,
     build_agent_config,
     build_system_prompt,
@@ -65,6 +68,7 @@ def test_build_system_prompt() -> None:
     assert "SHELL" in prompt
     assert "SCREEN" in prompt
     assert "BROWSER" in prompt
+    assert "VNC" in prompt
     assert "Ubuntu 24.04 with XFCE4" in prompt
     assert "natural-language descriptions" in prompt
     assert "browser_hover" in prompt
@@ -72,6 +76,20 @@ def test_build_system_prompt() -> None:
     assert "ALREADY RUNNING" in prompt
     assert "browser_navigate" in prompt
     assert "Do NOT try to install or launch" in prompt
+    assert "root" in prompt
+    assert "sudo" in prompt
+
+
+def test_build_system_prompt_vnc_tools() -> None:
+    """Test that build_system_prompt includes VNC tool examples."""
+    prompt = build_system_prompt("test task")
+
+    assert "vnc_take_screenshot" in prompt
+    assert "vnc_click" in prompt
+    assert "vnc_type" in prompt
+    assert "vnc_hover" in prompt
+    assert "vnc_key_press" in prompt
+    assert "vision-based" in prompt.lower() or "vision AI" in prompt
 
 
 @override_settings(
@@ -120,6 +138,15 @@ def test_build_agent_config_with_model_override() -> None:
     assert config.timeout_seconds == 300
 
 
+def _make_mock_resources() -> MagicMock:
+    """Helper to create mock resources with ssh, playwright, and vnc."""
+    mock_resources = MagicMock()
+    mock_resources.ssh = MagicMock()
+    mock_resources.playwright = MagicMock()
+    mock_resources.vnc = MagicMock()
+    return mock_resources
+
+
 @patch("agents.services.agent_loop.AgentResourceManager")
 @patch("agents.services.agent_loop.build_summarizer_config")
 @patch("agents.services.agent_loop.warm_up_model")
@@ -141,9 +168,7 @@ def test_run_agent_task_complete(
     """Test that run_agent completes when DMR returns text (no tool calls)."""
     mock_get_tools.return_value = mock_tool_definitions
     mock_build_summarizer.return_value = None
-    mock_resources = MagicMock()
-    mock_resources.ssh = MagicMock()
-    mock_resources.playwright = MagicMock()
+    mock_resources = _make_mock_resources()
     mock_resource_cls.return_value.__enter__ = MagicMock(return_value=mock_resources)
     mock_resource_cls.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -213,9 +238,7 @@ def test_run_agent_with_tool_calls(
     """Test that run_agent executes tool calls, then completes."""
     mock_get_tools.return_value = mock_tool_definitions
     mock_build_summarizer.return_value = None
-    mock_resources = MagicMock()
-    mock_resources.ssh = MagicMock()
-    mock_resources.playwright = MagicMock()
+    mock_resources = _make_mock_resources()
     mock_resource_cls.return_value.__enter__ = MagicMock(return_value=mock_resources)
     mock_resource_cls.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -314,9 +337,7 @@ def test_run_agent_max_iterations(
     """Test that run_agent stops at max_iterations."""
     mock_get_tools.return_value = mock_tool_definitions
     mock_build_summarizer.return_value = None
-    mock_resources = MagicMock()
-    mock_resources.ssh = MagicMock()
-    mock_resources.playwright = MagicMock()
+    mock_resources = _make_mock_resources()
     mock_resource_cls.return_value.__enter__ = MagicMock(return_value=mock_resources)
     mock_resource_cls.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -393,9 +414,7 @@ def test_run_agent_timeout(
     """Test that run_agent stops on timeout."""
     mock_get_tools.return_value = mock_tool_definitions
     mock_build_summarizer.return_value = None
-    mock_resources = MagicMock()
-    mock_resources.ssh = MagicMock()
-    mock_resources.playwright = MagicMock()
+    mock_resources = _make_mock_resources()
     mock_resource_cls.return_value.__enter__ = MagicMock(return_value=mock_resources)
     mock_resource_cls.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -464,9 +483,7 @@ def test_run_agent_dmr_error(
     """Test that run_agent handles DMR errors gracefully."""
     mock_get_tools.return_value = mock_tool_definitions
     mock_build_summarizer.return_value = None
-    mock_resources = MagicMock()
-    mock_resources.ssh = MagicMock()
-    mock_resources.playwright = MagicMock()
+    mock_resources = _make_mock_resources()
     mock_resource_cls.return_value.__enter__ = MagicMock(return_value=mock_resources)
     mock_resource_cls.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -535,9 +552,7 @@ def test_run_agent_creates_resource_manager(
     """Test that run_agent creates an AgentResourceManager as context manager."""
     mock_get_tools.return_value = mock_tool_definitions
     mock_build_summarizer.return_value = None
-    mock_resources = MagicMock()
-    mock_resources.ssh = MagicMock()
-    mock_resources.playwright = MagicMock()
+    mock_resources = _make_mock_resources()
     mock_resource_cls.return_value.__enter__ = MagicMock(return_value=mock_resources)
     mock_resource_cls.return_value.__exit__ = MagicMock(return_value=False)
 

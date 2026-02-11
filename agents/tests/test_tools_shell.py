@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from agents.services.ssh_session import SSHSessionManager
-from agents.services.tools_shell import execute_command
+from agents.services.tools_shell import _wrap_background_command, execute_command
 from environments.types import ContainerPorts, SSHResult
 
 
@@ -73,7 +73,7 @@ def test_execute_command_ssh_error(mock_ssh_session: MagicMock) -> None:
     result = execute_command(mock_ssh_session, command="ls")
 
     assert result.is_error is True
-    assert "SSH error:" in result.content
+    assert "SSH command execution error:" in result.content
     assert "Connection refused" in result.content
 
 
@@ -105,3 +105,51 @@ def test_execute_command_with_empty_output(mock_ssh_session: MagicMock) -> None:
 
     assert result.is_error is False
     assert result.content == "Exit code: 0"
+
+
+def test_wrap_background_command_basic() -> None:
+    """Test _wrap_background_command with a simple backgrounded command."""
+    result = _wrap_background_command("gnome-calculator &")
+    assert (
+        result == "nohup gnome-calculator > /dev/null 2>&1 & echo 'Background PID:' $!"
+    )
+
+
+def test_wrap_background_command_with_extra_whitespace() -> None:
+    """Test _wrap_background_command with trailing whitespace after &."""
+    result = _wrap_background_command("gnome-calculator &  ")
+    assert (
+        result == "nohup gnome-calculator > /dev/null 2>&1 & echo 'Background PID:' $!"
+    )
+
+
+def test_execute_command_background_wraps_with_nohup(
+    mock_ssh_session: MagicMock,
+) -> None:
+    """Test that backgrounded commands are wrapped with nohup."""
+    mock_ssh_session.execute.return_value = SSHResult(
+        exit_code=0,
+        stdout="Background PID: 1234",
+        stderr="",
+    )
+
+    execute_command(mock_ssh_session, command="gnome-calculator &")
+
+    mock_ssh_session.execute.assert_called_once_with(
+        "nohup gnome-calculator > /dev/null 2>&1 & echo 'Background PID:' $!"
+    )
+
+
+def test_execute_command_non_background_unchanged(
+    mock_ssh_session: MagicMock,
+) -> None:
+    """Test that non-backgrounded commands are passed through unchanged."""
+    mock_ssh_session.execute.return_value = SSHResult(
+        exit_code=0,
+        stdout="hello",
+        stderr="",
+    )
+
+    execute_command(mock_ssh_session, command="echo hello")
+
+    mock_ssh_session.execute.assert_called_once_with("echo hello")

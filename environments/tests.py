@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, Mock, call, patch
+from unittest.mock import MagicMock, Mock, patch
 
+import docker.errors
 from django.test import TestCase
 
 from environments.services import (
@@ -12,6 +13,7 @@ from environments.services import (
     close_ssh_connection,
     create_container,
     create_ssh_connection,
+    ensure_container_running,
     ensure_environment_image,
     execute_ssh_command,
     full_verification,
@@ -34,18 +36,13 @@ from environments.types import (
     ContainerPorts,
     HealthCheckResult,
     SSHResult,
-    VerificationResult,
 )
-
-# ============================================================================
-# DOCKER CLIENT TESTS
-# ============================================================================
 
 
 class DockerClientTests(TestCase):
 
-    @patch("environments.services.docker.DockerClient")
-    def test_should_create_docker_client_with_host_from_settings(
+    @patch("environments.services.docker_client.docker.DockerClient")
+    def test_creates_docker_client_with_host_from_settings(
         self, mock_docker_client: Mock
     ) -> None:
         mock_client = Mock()
@@ -58,20 +55,15 @@ class DockerClientTests(TestCase):
             base_url="unix:///var/run/docker.sock"
         )
 
-    def test_should_close_docker_client_connection(self) -> None:
+    def test_closes_docker_client_connection(self) -> None:
         mock_client = Mock()
         close_docker_client(mock_client)
         mock_client.close.assert_called_once()
 
 
-# ============================================================================
-# IMAGE MANAGEMENT TESTS
-# ============================================================================
-
-
 class ImageManagementTests(TestCase):
 
-    def test_should_return_true_when_image_exists(self) -> None:
+    def test_returns_true_when_image_exists(self) -> None:
         mock_client = Mock()
         mock_client.images.get.return_value = Mock()
 
@@ -80,24 +72,22 @@ class ImageManagementTests(TestCase):
         self.assertTrue(result)
         mock_client.images.get.assert_called_once_with("auto-tester-env:latest")
 
-    def test_should_return_false_when_image_not_found(self) -> None:
+    def test_returns_false_when_image_not_found(self) -> None:
         mock_client = Mock()
-        import docker.errors
-
         mock_client.images.get.side_effect = docker.errors.ImageNotFound("not found")
 
         result = image_exists(mock_client)
 
         self.assertFalse(result)
 
-    @patch("environments.services.Path")
-    def test_should_build_environment_image_with_correct_parameters(
+    @patch("environments.services.image.Path")
+    def test_builds_environment_image_with_correct_parameters(
         self, mock_path: Mock
     ) -> None:
         mock_client = Mock()
         mock_dockerfile_path = Mock()
-        mock_path.return_value.resolve.return_value.parent = Mock()
-        mock_path.return_value.resolve.return_value.parent.__truediv__ = Mock(
+        mock_path.return_value.resolve.return_value.parent.parent = Mock()
+        mock_path.return_value.resolve.return_value.parent.parent.__truediv__ = Mock(
             return_value=mock_dockerfile_path
         )
         mock_client.api.build.return_value = iter(
@@ -117,38 +107,31 @@ class ImageManagementTests(TestCase):
         self.assertTrue(call_kwargs["nocache"])
         self.assertTrue(call_kwargs["rm"])
 
-    def test_should_build_image_when_not_exists(self) -> None:
+    def test_builds_image_when_not_exists(self) -> None:
         mock_client = Mock()
-        import docker.errors
-
         mock_client.images.get.side_effect = docker.errors.ImageNotFound("not found")
 
-        with patch("environments.services.build_environment_image") as mock_build:
+        with patch("environments.services.image.build_environment_image") as mock_build:
             mock_build.return_value = "auto-tester-env:latest"
             result = ensure_environment_image(mock_client)
 
         self.assertEqual(result, "auto-tester-env:latest")
         mock_build.assert_called_once_with(mock_client)
 
-    def test_should_not_build_image_when_exists(self) -> None:
+    def test_does_not_build_image_when_exists(self) -> None:
         mock_client = Mock()
         mock_client.images.get.return_value = Mock()
 
-        with patch("environments.services.build_environment_image") as mock_build:
+        with patch("environments.services.image.build_environment_image") as mock_build:
             result = ensure_environment_image(mock_client)
 
         self.assertEqual(result, "auto-tester-env:latest")
         mock_build.assert_not_called()
 
 
-# ============================================================================
-# CONTAINER LIFECYCLE TESTS
-# ============================================================================
-
-
 class ContainerLifecycleTests(TestCase):
 
-    def test_should_create_container_with_auto_generated_suffix(self) -> None:
+    def test_creates_container_with_auto_generated_suffix(self) -> None:
         mock_client = Mock()
         mock_container = Mock()
         mock_container.id = "container123"
@@ -173,7 +156,7 @@ class ContainerLifecycleTests(TestCase):
         mock_container.start.assert_called_once()
         mock_container.reload.assert_called_once()
 
-    def test_should_create_container_with_custom_suffix(self) -> None:
+    def test_creates_container_with_custom_suffix(self) -> None:
         mock_client = Mock()
         mock_container = Mock()
         mock_container.id = "container456"
@@ -194,7 +177,7 @@ class ContainerLifecycleTests(TestCase):
         call_kwargs = mock_client.containers.create.call_args[1]
         self.assertEqual(call_kwargs["name"], "auto-tester-env-custom")
 
-    def test_should_get_container_info_with_fresh_state(self) -> None:
+    def test_gets_container_info_with_fresh_state(self) -> None:
         mock_client = Mock()
         mock_container = Mock()
         mock_container.id = "container789"
@@ -214,7 +197,7 @@ class ContainerLifecycleTests(TestCase):
         self.assertEqual(result.ports.ssh, 50000)
         mock_container.reload.assert_called_once()
 
-    def test_should_remove_container_with_force(self) -> None:
+    def test_removes_container_with_force(self) -> None:
         mock_client = Mock()
         mock_container = Mock()
         mock_client.containers.get.return_value = mock_container
@@ -223,15 +206,80 @@ class ContainerLifecycleTests(TestCase):
 
         mock_container.remove.assert_called_once_with(force=True)
 
-    def test_should_ignore_not_found_error_when_removing_container(self) -> None:
+    def test_ignores_not_found_error_when_removing_container(self) -> None:
         mock_client = Mock()
-        import docker.errors
-
         mock_client.containers.get.side_effect = docker.errors.NotFound("not found")
 
         remove_container(mock_client, "nonexistent")
 
-    def test_should_list_all_environment_containers(self) -> None:
+    def test_returns_existing_container_when_name_matches_and_running(
+        self,
+    ) -> None:
+        mock_client = Mock()
+        mock_existing = Mock()
+        mock_existing.id = "existing123"
+        mock_existing.name = "auto-tester-env-reuse"
+        mock_existing.status = "running"
+        mock_existing.ports = {
+            "22/tcp": [{"HostIp": "0.0.0.0", "HostPort": "55000"}],
+            "5900/tcp": [{"HostIp": "0.0.0.0", "HostPort": "55001"}],
+            "9223/tcp": [{"HostIp": "0.0.0.0", "HostPort": "55002"}],
+        }
+
+        mock_client.containers.get.return_value = mock_existing
+
+        result = ensure_container_running(mock_client, name_suffix="reuse")
+
+        self.assertEqual(result.container_id, "existing123")
+        self.assertEqual(result.ports.ssh, 55000)
+        mock_existing.start.assert_not_called()
+        mock_existing.reload.assert_called_once()
+        mock_client.containers.create.assert_not_called()
+
+    def test_starts_and_returns_existing_container_when_stopped(self) -> None:
+        mock_client = Mock()
+        mock_existing = Mock()
+        mock_existing.id = "stopped456"
+        mock_existing.name = "auto-tester-env-stopped"
+        mock_existing.status = "exited"
+        mock_existing.ports = {
+            "22/tcp": [{"HostIp": "0.0.0.0", "HostPort": "56000"}],
+            "5900/tcp": [{"HostIp": "0.0.0.0", "HostPort": "56001"}],
+            "9223/tcp": [{"HostIp": "0.0.0.0", "HostPort": "56002"}],
+        }
+
+        mock_client.containers.get.return_value = mock_existing
+
+        result = ensure_container_running(mock_client, name_suffix="stopped")
+
+        self.assertEqual(result.container_id, "stopped456")
+        mock_existing.start.assert_called_once()
+        mock_existing.reload.assert_called_once()
+        mock_client.containers.create.assert_not_called()
+
+    def test_creates_container_when_none_exists_with_name(self) -> None:
+        mock_client = Mock()
+        mock_client.containers.get.side_effect = docker.errors.NotFound("not found")
+
+        mock_container = Mock()
+        mock_container.id = "new789"
+        mock_container.name = "auto-tester-env-fresh"
+        mock_container.status = "running"
+        mock_container.ports = {
+            "22/tcp": [{"HostIp": "0.0.0.0", "HostPort": "57000"}],
+            "5900/tcp": [{"HostIp": "0.0.0.0", "HostPort": "57001"}],
+            "9223/tcp": [{"HostIp": "0.0.0.0", "HostPort": "57002"}],
+        }
+        mock_client.containers.create.return_value = mock_container
+
+        result = ensure_container_running(mock_client, name_suffix="fresh")
+
+        self.assertEqual(result.container_id, "new789")
+        mock_client.containers.create.assert_called_once()
+        mock_container.start.assert_called_once()
+        mock_container.reload.assert_called_once()
+
+    def test_lists_all_environment_containers(self) -> None:
         mock_client = Mock()
         mock_container1 = Mock()
         mock_container1.id = "container1"
@@ -269,45 +317,36 @@ class ContainerLifecycleTests(TestCase):
         self.assertEqual(result[1].name, "auto-tester-env-two")
 
 
-# ============================================================================
-# HEALTH CHECK TESTS
-# ============================================================================
-
-
 class HealthCheckTests(TestCase):
 
-    @patch("environments.services._check_port")
-    def test_should_return_all_ports_ok_when_healthy(
-        self, mock_check_port: Mock
-    ) -> None:
+    @patch("environments.services.health_check._check_port")
+    def test_returns_all_ports_ok_when_healthy(self, mock_check_port: Mock) -> None:
         mock_check_port.return_value = True
         ports = ContainerPorts(ssh=22, vnc=5900, playwright_cdp=9222)
 
         result = check_container_health(ports)
 
-        self.assertTrue(result.ssh_ok)
-        self.assertTrue(result.vnc_ok)
-        self.assertTrue(result.playwright_ok)
+        self.assertTrue(result.ssh)
+        self.assertTrue(result.vnc)
+        self.assertTrue(result.playwright)
         self.assertTrue(result.all_ok)
         self.assertEqual(mock_check_port.call_count, 3)
 
-    @patch("environments.services._check_port")
-    def test_should_return_failed_ports_when_not_healthy(
-        self, mock_check_port: Mock
-    ) -> None:
+    @patch("environments.services.health_check._check_port")
+    def test_returns_failed_ports_when_not_healthy(self, mock_check_port: Mock) -> None:
         mock_check_port.side_effect = [True, False, True]
         ports = ContainerPorts(ssh=22, vnc=5900, playwright_cdp=9222)
 
         result = check_container_health(ports)
 
-        self.assertTrue(result.ssh_ok)
-        self.assertFalse(result.vnc_ok)
-        self.assertTrue(result.playwright_ok)
+        self.assertTrue(result.ssh)
+        self.assertFalse(result.vnc)
+        self.assertTrue(result.playwright)
         self.assertFalse(result.all_ok)
 
-    @patch("environments.services.check_container_health")
-    @patch("environments.services.time")
-    def test_should_return_when_container_becomes_ready(
+    @patch("environments.services.health_check.check_container_health")
+    @patch("environments.services.health_check.time")
+    def test_returns_when_container_becomes_ready(
         self, mock_time: Mock, mock_check_health: Mock
     ) -> None:
         ports = ContainerPorts(ssh=22, vnc=5900, playwright_cdp=9222)
@@ -315,8 +354,8 @@ class HealthCheckTests(TestCase):
         mock_time.monotonic.side_effect = [0.0, 1.0, 2.0]
         mock_time.sleep = Mock()
 
-        unhealthy = HealthCheckResult(ssh_ok=False, vnc_ok=False, playwright_ok=False)
-        healthy = HealthCheckResult(ssh_ok=True, vnc_ok=True, playwright_ok=True)
+        unhealthy = HealthCheckResult(ssh=False, vnc=False, playwright=False)
+        healthy = HealthCheckResult(ssh=True, vnc=True, playwright=True)
         mock_check_health.side_effect = [unhealthy, healthy]
 
         result = wait_for_container_ready(ports, timeout=10, interval=1)
@@ -324,9 +363,9 @@ class HealthCheckTests(TestCase):
         self.assertTrue(result.all_ok)
         self.assertEqual(mock_check_health.call_count, 2)
 
-    @patch("environments.services.check_container_health")
-    @patch("environments.services.time")
-    def test_should_raise_timeout_error_when_not_ready(
+    @patch("environments.services.health_check.check_container_health")
+    @patch("environments.services.health_check.time")
+    def test_raises_timeout_error_when_not_ready(
         self, mock_time: Mock, mock_check_health: Mock
     ) -> None:
         ports = ContainerPorts(ssh=22, vnc=5900, playwright_cdp=9222)
@@ -334,7 +373,7 @@ class HealthCheckTests(TestCase):
         mock_time.monotonic.side_effect = [0.0, 1.0, 2.0, 3.0]
         mock_time.sleep = Mock()
 
-        unhealthy = HealthCheckResult(ssh_ok=False, vnc_ok=False, playwright_ok=False)
+        unhealthy = HealthCheckResult(ssh=False, vnc=False, playwright=False)
         mock_check_health.return_value = unhealthy
 
         with self.assertRaises(TimeoutError) as context:
@@ -343,15 +382,10 @@ class HealthCheckTests(TestCase):
         self.assertIn("not ready after 2 seconds", str(context.exception))
 
 
-# ============================================================================
-# SSH TESTS
-# ============================================================================
-
-
 class SSHTests(TestCase):
 
-    @patch("environments.services.paramiko.SSHClient")
-    def test_should_create_ssh_connection_with_correct_parameters(
+    @patch("environments.services.ssh.paramiko.SSHClient")
+    def test_creates_ssh_connection_with_correct_parameters(
         self, mock_ssh_client_class: Mock
     ) -> None:
         mock_ssh_client = Mock()
@@ -370,7 +404,7 @@ class SSHTests(TestCase):
             timeout=10,
         )
 
-    def test_should_execute_ssh_command_and_return_result(self) -> None:
+    def test_executes_ssh_command_and_returns_result(self) -> None:
         mock_ssh_client = Mock()
         mock_stdin = Mock()
         mock_stdout = Mock()
@@ -393,21 +427,16 @@ class SSHTests(TestCase):
         self.assertEqual(result.stdout, "hello world\n")
         self.assertEqual(result.stderr, "")
 
-    def test_should_close_ssh_connection(self) -> None:
+    def test_closes_ssh_connection(self) -> None:
         mock_ssh_client = Mock()
         close_ssh_connection(mock_ssh_client)
         mock_ssh_client.close.assert_called_once()
 
 
-# ============================================================================
-# VNC TESTS
-# ============================================================================
-
-
 class VNCTests(TestCase):
 
-    @patch("environments.services.socket.create_connection")
-    def test_should_return_true_when_rfb_protocol_detected(
+    @patch("environments.services.vnc.socket.create_connection")
+    def test_returns_true_when_rfb_protocol_detected(
         self, mock_create_connection: Mock
     ) -> None:
         mock_socket = MagicMock()
@@ -421,8 +450,8 @@ class VNCTests(TestCase):
 
         self.assertTrue(result)
 
-    @patch("environments.services.socket.create_connection")
-    def test_should_return_false_when_connection_fails(
+    @patch("environments.services.vnc.socket.create_connection")
+    def test_returns_false_when_connection_fails(
         self, mock_create_connection: Mock
     ) -> None:
         import socket
@@ -435,20 +464,15 @@ class VNCTests(TestCase):
         self.assertFalse(result)
 
 
-# ============================================================================
-# PLAYWRIGHT TESTS
-# ============================================================================
-
-
 class PlaywrightTests(TestCase):
 
-    def test_should_return_correct_cdp_url(self) -> None:
+    def test_returns_correct_cdp_url(self) -> None:
         ports = ContainerPorts(ssh=22, vnc=5900, playwright_cdp=9222)
         result = get_playwright_cdp_url(ports)
         self.assertEqual(result, "http://localhost:9222")
 
-    @patch("environments.services.sync_playwright")
-    def test_should_return_true_when_playwright_connection_succeeds(
+    @patch("environments.services.playwright.sync_playwright")
+    def test_returns_true_when_playwright_connection_succeeds(
         self, mock_sync_playwright: Mock
     ) -> None:
         mock_playwright = Mock()
@@ -468,11 +492,11 @@ class PlaywrightTests(TestCase):
         mock_page.close.assert_called_once()
         mock_browser.close.assert_called_once()
 
-    @patch("environments.services.sync_playwright")
-    def test_should_return_false_when_playwright_connection_fails(
+    @patch("environments.services.playwright.sync_playwright")
+    def test_returns_false_when_playwright_connection_fails(
         self, mock_sync_playwright: Mock
     ) -> None:
-        mock_sync_playwright.return_value.__enter__.side_effect = Exception(
+        mock_sync_playwright.return_value.__enter__.side_effect = OSError(
             "Connection failed"
         )
 
@@ -482,20 +506,15 @@ class PlaywrightTests(TestCase):
         self.assertFalse(result)
 
 
-# ============================================================================
-# ORCHESTRATION TESTS
-# ============================================================================
-
-
 class OrchestrationTests(TestCase):
 
-    @patch("environments.services.wait_for_container_ready")
-    @patch("environments.services.create_container")
-    @patch("environments.services.ensure_environment_image")
-    def test_should_provision_environment_with_all_steps(
+    @patch("environments.services.orchestration.wait_for_container_ready")
+    @patch("environments.services.orchestration.ensure_container_running")
+    @patch("environments.services.orchestration.ensure_environment_image")
+    def test_provisions_environment_with_all_steps(
         self,
         mock_ensure_image: Mock,
-        mock_create_container: Mock,
+        mock_ensure_container: Mock,
         mock_wait_ready: Mock,
     ) -> None:
         mock_client = Mock()
@@ -507,38 +526,38 @@ class OrchestrationTests(TestCase):
             ports=ContainerPorts(ssh=22, vnc=5900, playwright_cdp=9222),
             status="running",
         )
-        mock_create_container.return_value = mock_container_info
+        mock_ensure_container.return_value = mock_container_info
 
-        mock_health = HealthCheckResult(ssh_ok=True, vnc_ok=True, playwright_ok=True)
+        mock_health = HealthCheckResult(ssh=True, vnc=True, playwright=True)
         mock_wait_ready.return_value = mock_health
 
         result = provision_environment(mock_client, name_suffix="test")
 
         self.assertEqual(result, mock_container_info)
         mock_ensure_image.assert_called_once_with(mock_client)
-        mock_create_container.assert_called_once_with(mock_client, name_suffix="test")
+        mock_ensure_container.assert_called_once_with(mock_client, name_suffix="test")
         mock_wait_ready.assert_called_once_with(mock_container_info.ports)
 
-    @patch("environments.services.remove_container")
-    def test_should_teardown_environment_by_removing_container(
+    @patch("environments.services.orchestration.remove_container")
+    def test_tears_down_environment_by_removing_container(
         self, mock_remove: Mock
     ) -> None:
         mock_client = Mock()
         teardown_environment(mock_client, "container123")
         mock_remove.assert_called_once_with(mock_client, "container123", force=True)
 
-    @patch("environments.services.remove_container")
-    def test_should_teardown_environment_idempotently(self, mock_remove: Mock) -> None:
+    @patch("environments.services.orchestration.remove_container")
+    def test_tears_down_environment_idempotently(self, mock_remove: Mock) -> None:
         mock_client = Mock()
 
         teardown_environment(mock_client, "nonexistent")
 
         mock_remove.assert_called_once_with(mock_client, "nonexistent", force=True)
 
-    @patch("environments.services.close_ssh_connection")
-    @patch("environments.services.execute_ssh_command")
-    @patch("environments.services.create_ssh_connection")
-    def test_should_verify_ssh_service_successfully(
+    @patch("environments.services.orchestration.close_ssh_connection")
+    @patch("environments.services.orchestration.execute_ssh_command")
+    @patch("environments.services.orchestration.create_ssh_connection")
+    def test_verifies_ssh_service_successfully(
         self,
         mock_create_ssh: Mock,
         mock_execute_ssh: Mock,
@@ -558,19 +577,17 @@ class OrchestrationTests(TestCase):
         mock_execute_ssh.assert_called_once_with(mock_ssh_client, "echo hello")
         mock_close_ssh.assert_called_once_with(mock_ssh_client)
 
-    @patch("environments.services.create_ssh_connection")
-    def test_should_return_false_when_ssh_service_fails(
-        self, mock_create_ssh: Mock
-    ) -> None:
-        mock_create_ssh.side_effect = Exception("Connection failed")
+    @patch("environments.services.orchestration.create_ssh_connection")
+    def test_returns_false_when_ssh_service_fails(self, mock_create_ssh: Mock) -> None:
+        mock_create_ssh.side_effect = OSError("Connection failed")
 
         ports = ContainerPorts(ssh=22, vnc=5900, playwright_cdp=9222)
         result = verify_ssh_service(ports)
 
         self.assertFalse(result)
 
-    @patch("environments.services.check_vnc_connection")
-    def test_should_verify_vnc_service_successfully(self, mock_check_vnc: Mock) -> None:
+    @patch("environments.services.orchestration.check_vnc_connection")
+    def test_verifies_vnc_service_successfully(self, mock_check_vnc: Mock) -> None:
         mock_check_vnc.return_value = True
 
         ports = ContainerPorts(ssh=22, vnc=5900, playwright_cdp=9222)
@@ -579,8 +596,8 @@ class OrchestrationTests(TestCase):
         self.assertTrue(result)
         mock_check_vnc.assert_called_once_with(ports)
 
-    @patch("environments.services.verify_playwright_connection")
-    def test_should_verify_playwright_service_successfully(
+    @patch("environments.services.orchestration.verify_playwright_connection")
+    def test_verifies_playwright_service_successfully(
         self, mock_verify_playwright: Mock
     ) -> None:
         mock_verify_playwright.return_value = True
@@ -591,10 +608,10 @@ class OrchestrationTests(TestCase):
         self.assertTrue(result)
         mock_verify_playwright.assert_called_once_with(ports)
 
-    @patch("environments.services.verify_playwright_service")
-    @patch("environments.services.verify_vnc_service")
-    @patch("environments.services.verify_ssh_service")
-    def test_should_run_full_verification_successfully(
+    @patch("environments.services.orchestration.verify_playwright_service")
+    @patch("environments.services.orchestration.verify_vnc_service")
+    @patch("environments.services.orchestration.verify_ssh_service")
+    def test_runs_full_verification_successfully(
         self,
         mock_verify_ssh: Mock,
         mock_verify_vnc: Mock,
@@ -613,30 +630,25 @@ class OrchestrationTests(TestCase):
 
         result = full_verification(container_info)
 
-        self.assertIsInstance(result, VerificationResult)
+        self.assertIsInstance(result, HealthCheckResult)
         self.assertTrue(result.ssh)
         self.assertTrue(result.vnc)
         self.assertTrue(result.playwright)
-        self.assertTrue(result.all_passed)
+        self.assertTrue(result.all_ok)
         mock_verify_ssh.assert_called_once_with(container_info.ports)
         mock_verify_vnc.assert_called_once_with(container_info.ports)
         mock_verify_playwright.assert_called_once_with(container_info.ports)
 
 
-# ============================================================================
-# TYPE TESTS
-# ============================================================================
-
-
 class TypeTests(TestCase):
 
-    def test_should_create_container_ports_with_all_fields(self) -> None:
+    def test_creates_container_ports_with_all_fields(self) -> None:
         ports = ContainerPorts(ssh=22, vnc=5900, playwright_cdp=9222)
         self.assertEqual(ports.ssh, 22)
         self.assertEqual(ports.vnc, 5900)
         self.assertEqual(ports.playwright_cdp, 9222)
 
-    def test_should_create_container_info_with_all_fields(self) -> None:
+    def test_creates_container_info_with_all_fields(self) -> None:
         ports = ContainerPorts(ssh=22, vnc=5900, playwright_cdp=9222)
         info = ContainerInfo(
             container_id="abc123",
@@ -649,44 +661,21 @@ class TypeTests(TestCase):
         self.assertEqual(info.ports, ports)
         self.assertEqual(info.status, "running")
 
-    def test_should_return_true_for_all_ok_when_all_checks_pass(self) -> None:
-        result = HealthCheckResult(ssh_ok=True, vnc_ok=True, playwright_ok=True)
+    def test_returns_true_for_all_ok_when_all_checks_pass(self) -> None:
+        result = HealthCheckResult(ssh=True, vnc=True, playwright=True)
         self.assertTrue(result.all_ok)
 
-    def test_should_return_false_for_all_ok_when_any_check_fails(self) -> None:
-        result1 = HealthCheckResult(ssh_ok=False, vnc_ok=True, playwright_ok=True)
-        result2 = HealthCheckResult(ssh_ok=True, vnc_ok=False, playwright_ok=True)
-        result3 = HealthCheckResult(ssh_ok=True, vnc_ok=True, playwright_ok=False)
+    def test_returns_false_for_all_ok_when_any_check_fails(self) -> None:
+        result1 = HealthCheckResult(ssh=False, vnc=True, playwright=True)
+        result2 = HealthCheckResult(ssh=True, vnc=False, playwright=True)
+        result3 = HealthCheckResult(ssh=True, vnc=True, playwright=False)
 
         self.assertFalse(result1.all_ok)
         self.assertFalse(result2.all_ok)
         self.assertFalse(result3.all_ok)
 
-    def test_should_create_ssh_result_with_all_fields(self) -> None:
+    def test_creates_ssh_result_with_all_fields(self) -> None:
         result = SSHResult(exit_code=0, stdout="output", stderr="error")
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(result.stdout, "output")
         self.assertEqual(result.stderr, "error")
-
-    def test_should_create_verification_result_with_all_fields(self) -> None:
-        result = VerificationResult(ssh=True, vnc=True, playwright=True)
-        self.assertTrue(result.ssh)
-        self.assertTrue(result.vnc)
-        self.assertTrue(result.playwright)
-
-    def test_should_return_true_for_all_passed_when_all_verifications_pass(
-        self,
-    ) -> None:
-        result = VerificationResult(ssh=True, vnc=True, playwright=True)
-        self.assertTrue(result.all_passed)
-
-    def test_should_return_false_for_all_passed_when_any_verification_fails(
-        self,
-    ) -> None:
-        result1 = VerificationResult(ssh=False, vnc=True, playwright=True)
-        result2 = VerificationResult(ssh=True, vnc=False, playwright=True)
-        result3 = VerificationResult(ssh=True, vnc=True, playwright=False)
-
-        self.assertFalse(result1.all_passed)
-        self.assertFalse(result2.all_passed)
-        self.assertFalse(result3.all_passed)

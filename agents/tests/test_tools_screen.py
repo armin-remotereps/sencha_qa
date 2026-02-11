@@ -145,8 +145,7 @@ def test_screen_click_happy_path(mock_ssh_session: MagicMock) -> None:
 
     mock_ssh_session.execute.assert_called_once()
     cmd_arg = mock_ssh_session.execute.call_args[0][0]
-    assert "xdotool mousemove 100 200 click 1" in cmd_arg
-    assert "DISPLAY=:0" in cmd_arg
+    assert cmd_arg == "xdotool mousemove 100 200 click 1"
 
     assert result.is_error is False
     assert result.content == "Clicked at (100, 200) with button 1."
@@ -202,8 +201,7 @@ def test_screen_type_text_happy_path(mock_ssh_session: MagicMock) -> None:
 
     mock_ssh_session.execute.assert_called_once()
     cmd_arg = mock_ssh_session.execute.call_args[0][0]
-    assert "xdotool type -- 'Hello World'" in cmd_arg
-    assert "DISPLAY=:0" in cmd_arg
+    assert cmd_arg == "xdotool type -- 'Hello World'"
 
     assert result.is_error is False
     assert result.content == "Typed text: Hello World"
@@ -248,8 +246,7 @@ def test_screen_key_press_happy_path(mock_ssh_session: MagicMock) -> None:
 
     mock_ssh_session.execute.assert_called_once()
     cmd_arg = mock_ssh_session.execute.call_args[0][0]
-    assert "xdotool key Return" in cmd_arg
-    assert "DISPLAY=:0" in cmd_arg
+    assert cmd_arg == "xdotool key Return"
 
     assert result.is_error is False
     assert result.content == "Pressed keys: Return"
@@ -298,8 +295,7 @@ def test_screen_list_windows_happy_path(mock_ssh_session: MagicMock) -> None:
 
     mock_ssh_session.execute.assert_called_once()
     cmd_arg = mock_ssh_session.execute.call_args[0][0]
-    assert "wmctrl -l" in cmd_arg
-    assert "DISPLAY=:0" in cmd_arg
+    assert cmd_arg == "wmctrl -l"
 
     assert result.is_error is False
     assert "Terminal" in result.content
@@ -348,8 +344,7 @@ def test_screen_get_active_window_happy_path(mock_ssh_session: MagicMock) -> Non
 
     mock_ssh_session.execute.assert_called_once()
     cmd_arg = mock_ssh_session.execute.call_args[0][0]
-    assert "xdotool getactivewindow getwindowname" in cmd_arg
-    assert "DISPLAY=:0" in cmd_arg
+    assert cmd_arg == "xdotool getactivewindow getwindowname"
 
     assert result.is_error is False
     assert result.content == "Mozilla Firefox"

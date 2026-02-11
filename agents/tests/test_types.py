@@ -25,7 +25,8 @@ def test_tool_category_enum_members() -> None:
     assert ToolCategory.SHELL.value == "shell"
     assert ToolCategory.SCREEN.value == "screen"
     assert ToolCategory.BROWSER.value == "browser"
-    assert len(list(ToolCategory)) == 3
+    assert ToolCategory.VNC.value == "vnc"
+    assert len(list(ToolCategory)) == 4
 
 
 def test_agent_stop_reason_enum_members() -> None:

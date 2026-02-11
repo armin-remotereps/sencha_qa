@@ -1,8 +1,28 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypedDict
 
-DockerPortMapping = dict[str, list[dict[str, str]] | None]
+
+class DockerHostPortDict(TypedDict):
+    HostIp: str
+    HostPort: str
+
+
+DockerPortMapping = dict[str, list[DockerHostPortDict] | None]
+
+
+@dataclass(frozen=True)
+class PortConfiguration:
+    ssh: str = "22/tcp"
+    vnc: str = "5900/tcp"
+    playwright_cdp: str = "9223/tcp"
+
+    def to_docker_port_mapping(self) -> dict[str, None]:
+        return {self.ssh: None, self.vnc: None, self.playwright_cdp: None}
+
+
+PORT_CONFIG = PortConfiguration()
 
 
 @dataclass(frozen=True)
@@ -22,13 +42,13 @@ class ContainerInfo:
 
 @dataclass(frozen=True)
 class HealthCheckResult:
-    ssh_ok: bool
-    vnc_ok: bool
-    playwright_ok: bool
+    ssh: bool
+    vnc: bool
+    playwright: bool
 
     @property
     def all_ok(self) -> bool:
-        return self.ssh_ok and self.vnc_ok and self.playwright_ok
+        return self.ssh and self.vnc and self.playwright
 
 
 @dataclass(frozen=True)
@@ -36,14 +56,3 @@ class SSHResult:
     exit_code: int
     stdout: str
     stderr: str
-
-
-@dataclass(frozen=True)
-class VerificationResult:
-    ssh: bool
-    vnc: bool
-    playwright: bool
-
-    @property
-    def all_passed(self) -> bool:
-        return self.ssh and self.vnc and self.playwright

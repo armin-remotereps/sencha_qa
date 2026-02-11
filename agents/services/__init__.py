@@ -4,14 +4,15 @@ from agents.services.agent_loop import (
     run_agent,
 )
 from agents.services.agent_resource_manager import AgentResourceManager
-from agents.services.dmr_client import (
+from agents.services.dmr_client import send_chat_completion
+from agents.services.dmr_config import (
     build_dmr_config,
     build_vision_dmr_config,
+)
+from agents.services.dmr_model_manager import (
     ensure_model_available,
     is_model_available,
     list_models,
-    pull_model,
-    send_chat_completion,
 )
 from agents.services.element_finder import (
     AmbiguousElementError,
@@ -64,7 +65,6 @@ __all__ = [
     "get_all_tool_definitions",
     "is_model_available",
     "list_models",
-    "pull_model",
     "run_agent",
     "screen_click",
     "screen_get_active_window",

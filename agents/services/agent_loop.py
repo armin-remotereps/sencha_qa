@@ -6,14 +6,13 @@ import time
 from django.conf import settings
 
 from agents.services.agent_resource_manager import AgentResourceManager
-from agents.services.dmr_client import (
+from agents.services.dmr_client import send_chat_completion
+from agents.services.dmr_config import (
     build_dmr_config,
     build_summarizer_config,
     build_vision_dmr_config,
-    ensure_model_available,
-    send_chat_completion,
-    warm_up_model,
 )
+from agents.services.dmr_model_manager import ensure_model_available, warm_up_model
 from agents.services.output_summarizer import summarize_output
 from agents.services.tool_registry import dispatch_tool_call, get_all_tool_definitions
 from agents.types import (
@@ -32,31 +31,66 @@ logger = logging.getLogger(__name__)
 
 def build_system_prompt(task_description: str) -> str:
     """Build the system prompt for the agent."""
+    return "\n\n".join(
+        [
+            _build_role_description(),
+            _build_tool_guidelines(),
+            _build_task_section(task_description),
+        ]
+    )
+
+
+def _build_role_description() -> str:
     return (
         "You are an AI test automation agent operating inside a Linux desktop environment "
-        "(Ubuntu 24.04 with XFCE4). You have three categories of tools:\n\n"
+        "(Ubuntu 24.04 with XFCE4). You have four categories of tools:\n\n"
         "1. SHELL: Execute commands via SSH (apt-get, bash scripts, etc.)\n"
-        "2. SCREEN: Interact with the desktop (screenshots, mouse clicks, keyboard input)\n"
-        "3. BROWSER: Control the Chromium browser (navigate, click elements, type text)\n\n"
+        "2. SCREEN: Interact with the desktop via SSH+xdotool (coordinate-based screenshots, mouse, keyboard)\n"
+        "3. BROWSER: Control the Chromium browser via Playwright CDP (DOM-based element finding)\n"
+        "4. VNC: Interact with the desktop via VNC protocol (vision-based element finding)\n\n"
         "ENVIRONMENT:\n"
         "- The desktop (XFCE4) is already running on display :0\n"
         "- Chromium browser is ALREADY RUNNING on the desktop. Do NOT try to install or launch it.\n"
-        '- To start browsing, use browser_navigate(url="...") directly.\n\n'
+        '- To start browsing, use browser_navigate(url="...") directly.\n'
+        "- You are running as root. Do NOT use sudo — it is not installed."
+    )
+
+
+def _build_tool_guidelines() -> str:
+    return (
         "BROWSER TOOLS use natural-language descriptions, NOT CSS selectors:\n"
         '- browser_navigate(url="https://google.com") - go to a URL (use this FIRST for web tasks)\n'
         '- browser_click(description="the Login button") - describe what to click\n'
         '- browser_type(description="the username input field", text="admin") - describe the field\n'
         '- browser_hover(description="the Settings menu") - describe what to hover\n\n'
+        "VNC TOOLS use vision-based element finding (no DOM access):\n"
+        '- vnc_take_screenshot(question="What is on screen?") - capture VNC framebuffer and ask about it\n'
+        '- vnc_click(description="the OK button") - vision AI finds and clicks the element\n'
+        '- vnc_type(description="the search box", text="hello") - vision AI finds input, clicks, types\n'
+        '- vnc_hover(description="the File menu") - vision AI finds and hovers over element\n'
+        '- vnc_key_press(keys="Return") - send key via VNC (X11 keysym names)\n\n'
         "SCREENSHOT TOOLS require a question:\n"
-        '- take_screenshot(question="What windows are open?") - asks about the desktop\n'
-        '- browser_take_screenshot(question="Is the login form visible?") - asks about the browser\n\n'
+        '- take_screenshot(question="What windows are open?") - asks about the desktop (via SSH)\n'
+        '- browser_take_screenshot(question="Is the login form visible?") - asks about the browser\n'
+        '- vnc_take_screenshot(question="What dialog is showing?") - asks about VNC framebuffer\n\n'
+        "SHELL RULES:\n"
+        "- If you launch a GUI application or long-running process (e.g. gnome-calculator, "
+        "firefox, flask run, node server.js, vim), append ' &' so it runs in the "
+        "background. Otherwise the command will block for 120s and time out.\n"
+        "- Example: 'gnome-calculator &' instead of 'gnome-calculator'\n\n"
         "When you have completed the task, respond with a text message summarizing what you did. "
-        "Do NOT call any tools when you are done - just provide your final text response.\n\n"
+        "Do NOT call any tools when you are done - just provide your final text response."
+    )
+
+
+def _build_task_section(task_description: str) -> str:
+    return (
         "IMPORTANT:\n"
         "- For web tasks, start with browser_navigate — the browser is already running\n"
         "- Use 'execute_command' for shell operations\n"
         "- Use screenshot tools with specific questions to observe the environment\n"
         "- Use browser tools with descriptive element names for web testing\n"
+        "- Use VNC tools for desktop GUI interactions that need vision-based element finding\n"
         "- Always check tool output and use screenshots to verify results\n"
         "- If a tool fails, try to diagnose and fix the issue\n\n"
         f"YOUR TASK:\n{task_description}"
@@ -85,14 +119,10 @@ def run_agent(
     *,
     config: AgentConfig | None = None,
 ) -> AgentResult:
-    """Run the agent loop to complete a task.
+    """Execute an AI agent to complete a task in a containerized environment.
 
-    The loop:
-    1. Build system prompt + user message
-    2. Call DMR with messages + tool definitions
-    3. If response has tool_calls: execute each, append results
-    4. If response has no tool_calls (text only): task complete
-    5. Repeat until done, max_iterations, or timeout
+    The agent operates autonomously using provided tools until task completion,
+    timeout, or iteration limit.
     """
     if config is None:
         config = build_agent_config()
@@ -113,6 +143,7 @@ def run_agent(
             ports=ports,
             ssh_session=resources.ssh,
             playwright_session=resources.playwright,
+            vnc_session=resources.vnc,
             summarizer_config=summarizer_config,
             vision_config=config.vision_dmr,
         )

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import paramiko
 import pytest
 
-from agents.services.ssh_session import SSHSessionManager
+from agents.services.ssh_session import _DEFAULT_COMMAND_PREFIX, SSHSessionManager
 from environments.types import ContainerPorts, SSHResult
 
 
@@ -294,3 +294,59 @@ def test_execute_propagates_error_after_reconnect_fails(
 
     with pytest.raises(paramiko.SSHException, match="broken"):
         mgr.execute("echo fail")
+
+
+# ============================================================================
+# Display environment prefix
+# ============================================================================
+
+
+@patch("agents.services.ssh_session.paramiko.SSHClient")
+def test_run_command_prepends_display_env(
+    mock_ssh_cls: MagicMock, test_ports: ContainerPorts
+) -> None:
+    """_run_command wraps every command with DISPLAY and DBUS env setup."""
+    mock_client = _mock_ssh_client()
+    mock_transport = mock_client.get_transport.return_value
+
+    mock_channel = MagicMock()
+    mock_channel.recv_exit_status.return_value = 0
+    mock_channel.recv.side_effect = [b""]
+    mock_channel.recv_stderr.side_effect = [b""]
+    mock_transport.open_session.return_value = mock_channel
+    mock_ssh_cls.return_value = mock_client
+
+    mgr = _make_manager(test_ports)
+    mgr.execute("echo hello")
+
+    actual_cmd = mock_channel.exec_command.call_args[0][0]
+    assert actual_cmd.startswith(_DEFAULT_COMMAND_PREFIX)
+    assert actual_cmd == f"{_DEFAULT_COMMAND_PREFIX}echo hello"
+
+
+@patch("agents.services.ssh_session.paramiko.SSHClient")
+def test_run_command_uses_custom_prefix(
+    mock_ssh_cls: MagicMock, test_ports: ContainerPorts
+) -> None:
+    """A custom command_prefix replaces the default DISPLAY env setup."""
+    mock_client = _mock_ssh_client()
+    mock_transport = mock_client.get_transport.return_value
+
+    mock_channel = MagicMock()
+    mock_channel.recv_exit_status.return_value = 0
+    mock_channel.recv.side_effect = [b""]
+    mock_channel.recv_stderr.side_effect = [b""]
+    mock_transport.open_session.return_value = mock_channel
+    mock_ssh_cls.return_value = mock_client
+
+    custom_prefix = "export DISPLAY=:1; "
+    mgr = SSHSessionManager(
+        test_ports,
+        command_timeout=120,
+        keepalive_interval=15,
+        command_prefix=custom_prefix,
+    )
+    mgr.execute("echo hello")
+
+    actual_cmd = mock_channel.exec_command.call_args[0][0]
+    assert actual_cmd == f"{custom_prefix}echo hello"

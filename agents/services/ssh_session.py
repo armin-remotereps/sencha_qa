@@ -11,6 +11,10 @@ from environments.types import ContainerPorts, SSHResult
 
 logger = logging.getLogger(__name__)
 
+_DEFAULT_COMMAND_PREFIX = (
+    "export DISPLAY=:0; " "[ -f /tmp/.dbus_env ] && . /tmp/.dbus_env; "
+)
+
 
 class SSHSessionManager:
     """Persistent SSH connection manager for an agent run.
@@ -31,8 +35,10 @@ class SSHSessionManager:
         *,
         command_timeout: int | None = None,
         keepalive_interval: int | None = None,
+        command_prefix: str = _DEFAULT_COMMAND_PREFIX,
     ) -> None:
         self._ports = ports
+        self._command_prefix = command_prefix
         self._command_timeout: int = (
             command_timeout
             if command_timeout is not None
@@ -153,7 +159,7 @@ class SSHSessionManager:
 
         ssh_channel = channel.open_session()
         ssh_channel.settimeout(float(self._command_timeout))
-        ssh_channel.exec_command(command)
+        ssh_channel.exec_command(f"{self._command_prefix}{command}")
 
         exit_code = ssh_channel.recv_exit_status()
         stdout = self._read_channel_output(ssh_channel, stderr=False)

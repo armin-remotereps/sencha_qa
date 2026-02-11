@@ -7,7 +7,7 @@ import docker
 from django.core.management.base import BaseCommand
 
 from agents.services.agent_loop import build_agent_config, run_agent
-from agents.services.dmr_client import ensure_model_available, warm_up_model
+from agents.services.dmr_model_manager import ensure_model_available, warm_up_model
 from agents.types import AgentStopReason
 from environments.services import (
     close_docker_client,
@@ -17,7 +17,12 @@ from environments.services import (
 )
 from environments.types import ContainerInfo
 
-DEFAULT_TASK = "Go to Google, search for weather in LA, find tomorrow's weather result"
+DEFAULT_TASK = """
+1. Install gnome calculator
+2. Launch it
+3. Do 2 + 2 on it
+4. Make sure the result it's showing is 4
+"""
 
 
 class Command(BaseCommand):

@@ -7,6 +7,7 @@ import pytest
 from agents.services.playwright_session import PlaywrightSessionManager
 from agents.services.ssh_session import SSHSessionManager
 from agents.services.tool_registry import dispatch_tool_call, get_all_tool_definitions
+from agents.services.vnc_session import VncSessionManager
 from agents.types import DMRConfig, ToolCall, ToolCategory, ToolContext, ToolResult
 from environments.types import ContainerPorts
 
@@ -22,6 +23,7 @@ def test_context(test_ports: ContainerPorts) -> ToolContext:
     """Fixture for test ToolContext with mocked sessions."""
     mock_ssh = MagicMock(spec=SSHSessionManager)
     mock_pw = MagicMock(spec=PlaywrightSessionManager)
+    mock_vnc = MagicMock(spec=VncSessionManager)
     mock_vision = DMRConfig(
         host="test", port="8080", model="test-vision", temperature=0.0, max_tokens=1000
     )
@@ -29,14 +31,15 @@ def test_context(test_ports: ContainerPorts) -> ToolContext:
         ports=test_ports,
         ssh_session=mock_ssh,
         playwright_session=mock_pw,
+        vnc_session=mock_vnc,
         vision_config=mock_vision,
     )
 
 
 def test_get_all_tool_definitions_count() -> None:
-    """Test that get_all_tool_definitions returns all 14 tools."""
+    """Test that get_all_tool_definitions returns all 19 tools."""
     tools = get_all_tool_definitions()
-    assert len(tools) == 14
+    assert len(tools) == 19
 
 
 def test_get_all_tool_definitions_categories() -> None:
@@ -46,10 +49,12 @@ def test_get_all_tool_definitions_categories() -> None:
     shell_tools = [t for t in tools if t.category == ToolCategory.SHELL]
     screen_tools = [t for t in tools if t.category == ToolCategory.SCREEN]
     browser_tools = [t for t in tools if t.category == ToolCategory.BROWSER]
+    vnc_tools = [t for t in tools if t.category == ToolCategory.VNC]
 
     assert len(shell_tools) == 1
     assert len(screen_tools) == 6
     assert len(browser_tools) == 7
+    assert len(vnc_tools) == 5
 
 
 def test_get_all_tool_definitions_valid_structure() -> None:
@@ -61,6 +66,20 @@ def test_get_all_tool_definitions_valid_structure() -> None:
         assert tool.description, "Tool must have a description"
         assert isinstance(tool.category, ToolCategory), "Tool must have valid category"
         assert isinstance(tool.parameters, tuple), "Tool parameters must be a tuple"
+
+
+def test_get_all_tool_definitions_vnc_tool_names() -> None:
+    """Test that VNC tool names are correct."""
+    tools = get_all_tool_definitions()
+    vnc_names = {t.name for t in tools if t.category == ToolCategory.VNC}
+    expected = {
+        "vnc_take_screenshot",
+        "vnc_click",
+        "vnc_type",
+        "vnc_hover",
+        "vnc_key_press",
+    }
+    assert vnc_names == expected
 
 
 def test_dispatch_tool_call_execute_command(test_context: ToolContext) -> None:
@@ -244,3 +263,105 @@ def test_dispatch_browser_passes_playwright_session(test_context: ToolContext) -
         url="https://example.com",
         vision_config=test_context.vision_config,
     )
+
+
+# ============================================================================
+# VNC dispatch tests
+# ============================================================================
+
+
+def test_dispatch_vnc_click(test_context: ToolContext) -> None:
+    """Test dispatch_tool_call correctly dispatches vnc_click."""
+    tool_call = ToolCall(
+        tool_call_id="call_vnc_click",
+        tool_name="vnc_click",
+        arguments={"description": "the OK button"},
+    )
+
+    with patch("agents.services.tool_registry.tools_vnc.vnc_click") as mock_click:
+        mock_click.return_value = ToolResult(
+            tool_call_id="",
+            content="Clicked element at (250, 180): the OK button",
+            is_error=False,
+        )
+        result = dispatch_tool_call(tool_call, test_context)
+
+    assert result.tool_call_id == "call_vnc_click"
+    assert result.is_error is False
+    assert "OK button" in result.content
+    mock_click.assert_called_once_with(
+        test_context.vnc_session,
+        description="the OK button",
+        vision_config=test_context.vision_config,
+    )
+
+
+def test_dispatch_vnc_type(test_context: ToolContext) -> None:
+    """Test dispatch_tool_call correctly dispatches vnc_type."""
+    tool_call = ToolCall(
+        tool_call_id="call_vnc_type",
+        tool_name="vnc_type",
+        arguments={"description": "search box", "text": "hello"},
+    )
+
+    with patch("agents.services.tool_registry.tools_vnc.vnc_type") as mock_type:
+        mock_type.return_value = ToolResult(
+            tool_call_id="",
+            content="Typed 'hello' into element",
+            is_error=False,
+        )
+        result = dispatch_tool_call(tool_call, test_context)
+
+    assert result.tool_call_id == "call_vnc_type"
+    assert result.is_error is False
+    mock_type.assert_called_once_with(
+        test_context.vnc_session,
+        description="search box",
+        text="hello",
+        vision_config=test_context.vision_config,
+    )
+
+
+def test_dispatch_vnc_key_press(test_context: ToolContext) -> None:
+    """Test dispatch_tool_call correctly dispatches vnc_key_press."""
+    tool_call = ToolCall(
+        tool_call_id="call_vnc_key",
+        tool_name="vnc_key_press",
+        arguments={"keys": "Return"},
+    )
+
+    with patch("agents.services.tool_registry.tools_vnc.vnc_key_press") as mock_key:
+        mock_key.return_value = ToolResult(
+            tool_call_id="",
+            content="Pressed keys via VNC: Return",
+            is_error=False,
+        )
+        result = dispatch_tool_call(tool_call, test_context)
+
+    assert result.tool_call_id == "call_vnc_key"
+    assert result.is_error is False
+    mock_key.assert_called_once_with(
+        test_context.vnc_session,
+        keys="Return",
+    )
+
+
+def test_dispatch_vnc_click_no_vision_config(test_ports: ContainerPorts) -> None:
+    """VNC click returns error when vision config is None."""
+    context = ToolContext(
+        ports=test_ports,
+        ssh_session=MagicMock(spec=SSHSessionManager),
+        playwright_session=MagicMock(spec=PlaywrightSessionManager),
+        vnc_session=MagicMock(spec=VncSessionManager),
+        vision_config=None,
+    )
+    tool_call = ToolCall(
+        tool_call_id="call_no_vision",
+        tool_name="vnc_click",
+        arguments={"description": "button"},
+    )
+
+    result = dispatch_tool_call(tool_call, context)
+
+    assert result.is_error is True
+    assert "Vision model not configured" in result.content

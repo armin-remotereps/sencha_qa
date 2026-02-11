@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from agents.services.playwright_session import PlaywrightSessionManager
     from agents.services.ssh_session import SSHSessionManager
+    from agents.services.vnc_session import VncSessionManager
     from environments.types import ContainerPorts
 
 
@@ -14,6 +15,7 @@ class ToolCategory(Enum):
     SHELL = "shell"
     SCREEN = "screen"
     BROWSER = "browser"
+    VNC = "vnc"
 
 
 class AgentStopReason(Enum):
@@ -68,6 +70,9 @@ class ImageContent:
 
 ContentPart = TextContent | ImageContent
 
+MessageDict = dict[str, object]
+ToolSchema = dict[str, object]
+
 
 @dataclass(frozen=True)
 class ChatMessage:
@@ -82,7 +87,7 @@ class DMRConfig:
     host: str
     port: str
     model: str
-    temperature: float = 0.1
+    temperature: float = 0.9
     max_tokens: int = 4096
 
 
@@ -116,5 +121,6 @@ class ToolContext:
     ports: ContainerPorts
     ssh_session: SSHSessionManager
     playwright_session: PlaywrightSessionManager
+    vnc_session: VncSessionManager
     summarizer_config: DMRConfig | None = None
     vision_config: DMRConfig | None = None

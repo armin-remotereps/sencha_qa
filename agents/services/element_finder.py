@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from playwright.sync_api import Page
 
@@ -11,11 +12,20 @@ from agents.types import ChatMessage, DMRConfig
 
 logger = logging.getLogger(__name__)
 
-_AI_RESPONSE_AMBIGUOUS = "AMBIGUOUS"
-_AI_RESPONSE_NOT_FOUND = "NOT_FOUND"
 
-_ELEMENT_LIST_CHAR_BUDGET = 3000
-_CHUNK_SIZE = 25
+@dataclass(frozen=True)
+class _ElementFinderConfig:
+    char_budget: int = 3000
+    chunk_size: int = 25
+    response_ambiguous: str = "AMBIGUOUS"
+    response_not_found: str = "NOT_FOUND"
+
+
+_CONFIG = _ElementFinderConfig()
+
+# Backward-compatible aliases (used by tests)
+_CHUNK_SIZE = _CONFIG.chunk_size
+_ELEMENT_LIST_CHAR_BUDGET = _CONFIG.char_budget
 
 
 class ElementNotFoundError(Exception):
@@ -83,7 +93,7 @@ def find_element_by_description(
     raw_elements = _collect_page_elements(page)
     element_list = _build_element_list(raw_elements)
 
-    if len(element_list) <= _ELEMENT_LIST_CHAR_BUDGET:
+    if len(element_list) <= _CONFIG.char_budget:
         answer = _ask_ai_for_element(description, element_list, dmr_config)
         idx = _parse_ai_response(answer, description, max_idx=len(raw_elements) - 1)
         return f'[data-at-idx="{idx}"]'
@@ -97,7 +107,7 @@ def _find_element_chunked(
     dmr_config: DMRConfig,
 ) -> str:
     """Find element by processing chunks and aggregating candidates."""
-    chunks = _split_into_chunks(raw_elements, _CHUNK_SIZE)
+    chunks = _split_into_chunks(raw_elements, _CONFIG.chunk_size)
     candidates: list[int] = []
 
     for chunk in chunks:
@@ -165,8 +175,8 @@ def _ask_ai_for_element(
         f"Available elements:\n{element_list}\n\n"
         "Reply with ONLY the index number of the matching element.\n"
         "If the description is ambiguous (multiple possible matches), "
-        f"reply with '{_AI_RESPONSE_AMBIGUOUS}: <explanation>'.\n"
-        f"If no element matches, reply with '{_AI_RESPONSE_NOT_FOUND}'."
+        f"reply with '{_CONFIG.response_ambiguous}: <explanation>'.\n"
+        f"If no element matches, reply with '{_CONFIG.response_not_found}'."
     )
 
     messages = (
@@ -175,8 +185,8 @@ def _ask_ai_for_element(
             content=(
                 "You are a UI element finder. Given a list of page elements "
                 "and a description, identify which element matches. "
-                f"Reply with ONLY the index number, '{_AI_RESPONSE_AMBIGUOUS}: ...', "
-                f"or '{_AI_RESPONSE_NOT_FOUND}'."
+                f"Reply with ONLY the index number, '{_CONFIG.response_ambiguous}: ...', "
+                f"or '{_CONFIG.response_not_found}'."
             ),
         ),
         ChatMessage(role="user", content=prompt),
@@ -192,10 +202,10 @@ def _ask_ai_for_element(
 
 def _parse_ai_response(answer: str, description: str, *, max_idx: int) -> int:
     """Parse the AI response into a validated element index."""
-    if answer.startswith(_AI_RESPONSE_AMBIGUOUS):
+    if answer.startswith(_CONFIG.response_ambiguous):
         raise AmbiguousElementError(answer)
 
-    if answer == _AI_RESPONSE_NOT_FOUND:
+    if answer == _CONFIG.response_not_found:
         msg = f"No element found matching: {description}"
         raise ElementNotFoundError(msg)
 
