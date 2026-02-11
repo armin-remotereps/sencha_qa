@@ -105,7 +105,7 @@ class AgentConfig:
     dmr: DMRConfig
     vision_dmr: DMRConfig | None = None
     max_iterations: int = 30
-    timeout_seconds: int = 300
+    timeout_seconds: int = 900
 
 
 @dataclass(frozen=True)

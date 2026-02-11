@@ -22,6 +22,7 @@ DEFAULT_TASK = """
 2. Launch it
 3. Do 2 + 2 on it
 4. Make sure the result it's showing is 4
+Note: use vnc click instead of key press
 """
 
 
