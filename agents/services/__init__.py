@@ -7,6 +7,8 @@ from agents.services.agent_resource_manager import AgentResourceManager
 from agents.services.dmr_client import send_chat_completion
 from agents.services.dmr_config import (
     build_dmr_config,
+    build_openai_vision_config,
+    build_vision_config,
     build_vision_dmr_config,
 )
 from agents.services.dmr_model_manager import (
@@ -56,7 +58,9 @@ __all__ = [
     "browser_type",
     "build_agent_config",
     "build_dmr_config",
+    "build_openai_vision_config",
     "build_system_prompt",
+    "build_vision_config",
     "build_vision_dmr_config",
     "dispatch_tool_call",
     "ensure_model_available",

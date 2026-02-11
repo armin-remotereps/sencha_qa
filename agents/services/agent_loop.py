@@ -10,7 +10,7 @@ from agents.services.dmr_client import send_chat_completion
 from agents.services.dmr_config import (
     build_dmr_config,
     build_summarizer_config,
-    build_vision_dmr_config,
+    build_vision_config,
 )
 from agents.services.dmr_model_manager import ensure_model_available, warm_up_model
 from agents.services.output_summarizer import summarize_output
@@ -104,7 +104,7 @@ def build_agent_config(
 ) -> AgentConfig:
     """Build AgentConfig from Django settings."""
     dmr_config = build_dmr_config(model=model)
-    vision_config = build_vision_dmr_config(model=vision_model)
+    vision_config = build_vision_config(model=vision_model)
     return AgentConfig(
         dmr=dmr_config,
         vision_dmr=vision_config,
@@ -128,12 +128,12 @@ def run_agent(
         config = build_agent_config()
 
     ensure_model_available(config.dmr)
-    if config.vision_dmr is not None:
+    if config.vision_dmr is not None and config.vision_dmr.api_key is None:
         ensure_model_available(config.vision_dmr)
 
     # Warm up models so first real request doesn't hit cold-start timeout
     warm_up_model(config.dmr)
-    if config.vision_dmr is not None:
+    if config.vision_dmr is not None and config.vision_dmr.api_key is None:
         warm_up_model(config.vision_dmr)
 
     summarizer_config = build_summarizer_config(model=config.dmr.model)

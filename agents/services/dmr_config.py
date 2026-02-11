@@ -33,3 +33,21 @@ def build_vision_dmr_config(*, model: str | None = None) -> DMRConfig:
         temperature=settings.DMR_TEMPERATURE,
         max_tokens=settings.DMR_MAX_TOKENS,
     )
+
+
+def build_openai_vision_config(*, model: str | None = None) -> DMRConfig:
+    return DMRConfig(
+        host="",
+        port="",
+        model=model or settings.OPENAI_VISION_MODEL,
+        temperature=settings.OPENAI_TEMPERATURE,
+        max_tokens=settings.OPENAI_MAX_TOKENS,
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+    )
+
+
+def build_vision_config(*, model: str | None = None) -> DMRConfig:
+    if settings.VISION_BACKEND == "openai":
+        return build_openai_vision_config(model=model)
+    return build_vision_dmr_config(model=model)

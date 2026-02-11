@@ -153,6 +153,21 @@ DMR_TEMPERATURE: float = config("DMR_TEMPERATURE", default=0.1, cast=float)
 DMR_MAX_TOKENS: int = config("DMR_MAX_TOKENS", default=4096, cast=int)
 DMR_REQUEST_TIMEOUT: int = config("DMR_REQUEST_TIMEOUT", default=600, cast=int)
 
+# OpenAI API (for vision model)
+OPENAI_API_KEY: str = config("OPENAI_API_KEY", default="", cast=str)
+OPENAI_BASE_URL: str = config(
+    "OPENAI_BASE_URL",
+    default="https://api.openai.com/v1/chat/completions",
+    cast=str,
+)
+OPENAI_VISION_MODEL: str = config("OPENAI_VISION_MODEL", default="gpt-4o", cast=str)
+OPENAI_TEMPERATURE: float = config("OPENAI_TEMPERATURE", default=0.1, cast=float)
+OPENAI_MAX_TOKENS: int = config("OPENAI_MAX_TOKENS", default=4096, cast=int)
+OPENAI_REQUEST_TIMEOUT: int = config("OPENAI_REQUEST_TIMEOUT", default=120, cast=int)
+
+# Vision Backend: "dmr" or "openai"
+VISION_BACKEND: str = config("VISION_BACKEND", default="dmr", cast=str)
+
 # Agent
 AGENT_MAX_ITERATIONS: int = config("AGENT_MAX_ITERATIONS", default=30, cast=int)
 AGENT_TIMEOUT_SECONDS: int = config("AGENT_TIMEOUT_SECONDS", default=300, cast=int)

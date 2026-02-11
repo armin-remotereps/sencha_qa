@@ -20,6 +20,24 @@ from agents.types import (
 logger = logging.getLogger(__name__)
 
 
+def _build_url(config: DMRConfig) -> str:
+    if config.base_url is not None:
+        return config.base_url
+    return f"http://{config.host}:{config.port}/engines/llama.cpp/v1/chat/completions"
+
+
+def _build_headers(config: DMRConfig) -> dict[str, str]:
+    if config.api_key is not None:
+        return {"Authorization": f"Bearer {config.api_key}"}
+    return {}
+
+
+def _get_timeout(config: DMRConfig) -> float:
+    if config.api_key is not None:
+        return float(settings.OPENAI_REQUEST_TIMEOUT)
+    return float(settings.DMR_REQUEST_TIMEOUT)
+
+
 def send_chat_completion(
     config: DMRConfig,
     messages: tuple[ChatMessage, ...],
@@ -27,7 +45,9 @@ def send_chat_completion(
     *,
     keep_alive: int | None = None,
 ) -> DMRResponse:
-    url = f"http://{config.host}:{config.port}/engines/llama.cpp/v1/chat/completions"
+    url = _build_url(config)
+    headers = _build_headers(config)
+    timeout = _get_timeout(config)
 
     payload: dict[str, object] = {
         "model": config.model,
@@ -40,13 +60,13 @@ def send_chat_completion(
         payload["tools"] = _serialize_tools(tools)
         payload["tool_choice"] = "auto"
 
-    if keep_alive is not None:
+    if keep_alive is not None and config.api_key is None:
         payload["keep_alive"] = keep_alive
 
     logger.debug("DMR request to %s with %d messages", url, len(messages))
 
-    with httpx.Client(timeout=float(settings.DMR_REQUEST_TIMEOUT)) as client:
-        response = client.post(url, json=payload)
+    with httpx.Client(timeout=timeout) as client:
+        response = client.post(url, json=payload, headers=headers)
         if response.status_code >= 400:
             logger.error("DMR error %d: %s", response.status_code, response.text)
         response.raise_for_status()

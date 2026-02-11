@@ -89,6 +89,8 @@ class DMRConfig:
     model: str
     temperature: float = 0.9
     max_tokens: int = 4096
+    api_key: str | None = None
+    base_url: str | None = None
 
 
 @dataclass(frozen=True)
