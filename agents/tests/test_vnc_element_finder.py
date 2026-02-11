@@ -30,11 +30,6 @@ def vision_config() -> DMRConfig:
     )
 
 
-# ============================================================================
-# _parse_coordinates
-# ============================================================================
-
-
 def test_parse_coordinates_comma_separated_integers() -> None:
     result = _parse_coordinates("450,320", "button")
     assert result == (450, 320)
@@ -67,14 +62,59 @@ def test_parse_coordinates_raises_on_unparseable() -> None:
         _parse_coordinates("I don't know", "button")
 
 
-# ============================================================================
-# find_element_coordinates
-# ============================================================================
+@patch("agents.services.vnc_element_finder.is_omniparser_configured", return_value=True)
+@patch(
+    "agents.services.vnc_element_finder.find_element_coordinates_omniparser",
+    return_value=(100, 200),
+)
+def test_find_element_delegates_to_omniparser_when_configured(
+    mock_omniparser_find: MagicMock,
+    mock_is_configured: MagicMock,
+    mock_vnc_session: MagicMock,
+    vision_config: DMRConfig,
+) -> None:
+    x, y = find_element_coordinates(mock_vnc_session, "OK button", vision_config)
+
+    assert (x, y) == (100, 200)
+    mock_is_configured.assert_called_once()
+    mock_omniparser_find.assert_called_once_with(
+        mock_vnc_session, "OK button", vision_config
+    )
+    mock_vnc_session.capture_screen.assert_not_called()
 
 
 @patch("agents.services.vnc_element_finder.send_chat_completion")
+@patch(
+    "agents.services.vnc_element_finder.is_omniparser_configured", return_value=False
+)
+def test_find_element_falls_back_to_vision_when_not_configured(
+    mock_is_configured: MagicMock,
+    mock_send: MagicMock,
+    mock_vnc_session: MagicMock,
+    vision_config: DMRConfig,
+) -> None:
+    mock_send.return_value = DMRResponse(
+        message=ChatMessage(role="assistant", content="300,400"),
+        finish_reason="stop",
+        usage_prompt_tokens=100,
+        usage_completion_tokens=10,
+    )
+
+    x, y = find_element_coordinates(mock_vnc_session, "button", vision_config)
+
+    assert (x, y) == (300, 400)
+    mock_is_configured.assert_called_once()
+    mock_vnc_session.capture_screen.assert_called_once()
+    mock_send.assert_called_once()
+
+
+@patch(
+    "agents.services.vnc_element_finder.is_omniparser_configured", return_value=False
+)
+@patch("agents.services.vnc_element_finder.send_chat_completion")
 def test_find_element_coordinates_returns_parsed_coordinates(
     mock_send: MagicMock,
+    _mock_is_configured: MagicMock,
     mock_vnc_session: MagicMock,
     vision_config: DMRConfig,
 ) -> None:
@@ -93,9 +133,13 @@ def test_find_element_coordinates_returns_parsed_coordinates(
     mock_send.assert_called_once()
 
 
+@patch(
+    "agents.services.vnc_element_finder.is_omniparser_configured", return_value=False
+)
 @patch("agents.services.vnc_element_finder.send_chat_completion")
 def test_find_element_coordinates_raises_on_not_found(
     mock_send: MagicMock,
+    _mock_is_configured: MagicMock,
     mock_vnc_session: MagicMock,
     vision_config: DMRConfig,
 ) -> None:
@@ -110,9 +154,13 @@ def test_find_element_coordinates_raises_on_not_found(
         find_element_coordinates(mock_vnc_session, "invisible button", vision_config)
 
 
+@patch(
+    "agents.services.vnc_element_finder.is_omniparser_configured", return_value=False
+)
 @patch("agents.services.vnc_element_finder.send_chat_completion")
 def test_find_element_coordinates_raises_on_non_string_response(
     mock_send: MagicMock,
+    _mock_is_configured: MagicMock,
     mock_vnc_session: MagicMock,
     vision_config: DMRConfig,
 ) -> None:
@@ -127,9 +175,13 @@ def test_find_element_coordinates_raises_on_non_string_response(
         find_element_coordinates(mock_vnc_session, "some element", vision_config)
 
 
+@patch(
+    "agents.services.vnc_element_finder.is_omniparser_configured", return_value=False
+)
 @patch("agents.services.vnc_element_finder.send_chat_completion")
 def test_find_element_coordinates_sends_image_to_vision(
     mock_send: MagicMock,
+    _mock_is_configured: MagicMock,
     mock_vnc_session: MagicMock,
     vision_config: DMRConfig,
 ) -> None:

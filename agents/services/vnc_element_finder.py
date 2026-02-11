@@ -5,14 +5,17 @@ import logging
 import re
 
 from agents.services.dmr_client import send_chat_completion
+from agents.services.omniparser_client import is_omniparser_configured
+from agents.services.vnc_omniparser_element_finder import (
+    find_element_coordinates_omniparser,
+)
 from agents.services.vnc_session import VncSessionManager
 from agents.types import ChatMessage, DMRConfig, ImageContent, TextContent
 
 logger = logging.getLogger(__name__)
 
 
-class VncElementNotFoundError(Exception):
-    """Raised when vision AI cannot locate the described element."""
+from agents.exceptions import VncElementNotFoundError as VncElementNotFoundError
 
 
 def find_element_coordinates(
@@ -20,15 +23,11 @@ def find_element_coordinates(
     description: str,
     vision_config: DMRConfig,
 ) -> tuple[int, int]:
-    """Find screen coordinates of an element via vision AI.
+    if is_omniparser_configured():
+        return find_element_coordinates_omniparser(
+            vnc_session, description, vision_config
+        )
 
-    Captures a VNC screenshot, sends it to the vision model with a structured
-    prompt, and parses the returned x,y coordinates.
-
-    Raises:
-        VncElementNotFoundError: If the element cannot be found or the AI
-            response cannot be parsed.
-    """
     screenshot_bytes = vnc_session.capture_screen()
     image_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
     return _query_vision_model(image_base64, description, vision_config)
