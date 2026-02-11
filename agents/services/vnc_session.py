@@ -16,6 +16,7 @@ from environments.types import ContainerPorts
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
+_DISCONNECT_TIMEOUT_SECONDS: int = 5
 
 
 class VncSessionManager:
@@ -116,16 +117,28 @@ class VncSessionManager:
         self._close_locked()
         server = f"localhost::{self._ports.vnc}"
         password: str = settings.ENV_VNC_PASSWORD
-        self._client = api.connect(server, password=password)
+        self._client = api.connect(server, password=password, timeout=30)
         logger.debug("VNC session connected to port %d", self._ports.vnc)
 
     def _close_locked(self) -> None:
         if self._client is not None:
+            client = self._client
+            self._client = None
             try:
-                self._client.disconnect()
+                t = threading.Thread(target=client.disconnect, daemon=True)
+                t.start()
+                t.join(timeout=_DISCONNECT_TIMEOUT_SECONDS)
+                if t.is_alive():
+                    logger.warning(
+                        "VNC disconnect timed out after %ds",
+                        _DISCONNECT_TIMEOUT_SECONDS,
+                    )
             except Exception:
                 logger.debug("Error closing VNC client", exc_info=True)
-            self._client = None
+            try:
+                api.shutdown()
+            except Exception:
+                logger.debug("Error shutting down VNC reactor", exc_info=True)
 
     def _do_capture_screen(self) -> bytes:
         if self._client is None:

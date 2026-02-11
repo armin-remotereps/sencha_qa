@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -41,6 +42,7 @@ def test_exit_disconnects_client(
     mgr.__exit__(None, None, None)
 
     mock_client.disconnect.assert_called_once()
+    mock_api.shutdown.assert_called_once()
 
 
 @patch("agents.services.vnc_session.api")
@@ -70,7 +72,7 @@ def test_connect_calls_api_with_correct_server(
     mgr.connect()
 
     mock_api.connect.assert_called_once_with(
-        "localhost::5900", password=TEST_VNC_PASSWORD
+        "localhost::5900", password=TEST_VNC_PASSWORD, timeout=30
     )
 
 
@@ -310,3 +312,68 @@ def test_key_press_reconnects_on_failure(
 
     assert mock_api.connect.call_count == 2
     mock_client2.keyPress.assert_called_once_with("ctrl-a")
+
+
+# ============================================================================
+# Close / shutdown behaviour
+# ============================================================================
+
+
+@patch("agents.services.vnc_session.api")
+@patch("agents.services.vnc_session.settings")
+def test_close_calls_api_shutdown(
+    mock_settings: MagicMock,
+    mock_api: MagicMock,
+    test_ports: ContainerPorts,
+) -> None:
+    mock_settings.ENV_VNC_PASSWORD = TEST_VNC_PASSWORD
+    mock_api.connect.return_value = MagicMock()
+
+    mgr = VncSessionManager(test_ports)
+    mgr.connect()
+    mgr.close()
+
+    mock_api.shutdown.assert_called_once()
+
+
+@patch("agents.services.vnc_session._DISCONNECT_TIMEOUT_SECONDS", 1)
+@patch("agents.services.vnc_session.api")
+@patch("agents.services.vnc_session.settings")
+def test_close_handles_disconnect_timeout(
+    mock_settings: MagicMock,
+    mock_api: MagicMock,
+    test_ports: ContainerPorts,
+) -> None:
+    mock_settings.ENV_VNC_PASSWORD = TEST_VNC_PASSWORD
+    mock_client = MagicMock()
+    mock_client.disconnect.side_effect = lambda: time.sleep(10)
+    mock_api.connect.return_value = mock_client
+
+    mgr = VncSessionManager(test_ports)
+    mgr.connect()
+
+    start = time.monotonic()
+    mgr.close()
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 5
+    assert mgr.is_connected is False
+    mock_api.shutdown.assert_called_once()
+
+
+@patch("agents.services.vnc_session.api")
+@patch("agents.services.vnc_session.settings")
+def test_connect_passes_timeout(
+    mock_settings: MagicMock,
+    mock_api: MagicMock,
+    test_ports: ContainerPorts,
+) -> None:
+    mock_settings.ENV_VNC_PASSWORD = TEST_VNC_PASSWORD
+    mock_api.connect.return_value = MagicMock()
+
+    mgr = VncSessionManager(test_ports)
+    mgr.connect()
+
+    mock_api.connect.assert_called_once_with(
+        "localhost::5900", password=TEST_VNC_PASSWORD, timeout=30
+    )
