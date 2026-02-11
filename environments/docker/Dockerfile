@@ -8,6 +8,8 @@ ENV SSH_PASSWORD=${SSH_PASSWORD}
 ENV VNC_PASSWORD=${VNC_PASSWORD}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    dbus \
+    dbus-x11 \
     xfce4 \
     xfce4-terminal \
     tigervnc-standalone-server \
@@ -43,9 +45,12 @@ RUN mkdir -p /root/.vnc && \
     echo "${VNC_PASSWORD}" | vncpasswd -f > /root/.vnc/passwd && \
     chmod 600 /root/.vnc/passwd
 
+RUN mkdir -p /var/run/dbus && dbus-uuidgen > /var/lib/dbus/machine-id
+
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY healthcheck.sh /usr/local/bin/healthcheck.sh
-RUN chmod +x /usr/local/bin/healthcheck.sh
+COPY xfce4-startup.sh /usr/local/bin/xfce4-startup.sh
+RUN chmod +x /usr/local/bin/healthcheck.sh /usr/local/bin/xfce4-startup.sh
 
 EXPOSE 22 5900 9223
 
