@@ -136,7 +136,7 @@ def run_agent(
     if config.vision_dmr is not None and config.vision_dmr.api_key is None:
         warm_up_model(config.vision_dmr)
 
-    summarizer_config = build_summarizer_config(model=config.dmr.model)
+    summarizer_config = build_summarizer_config()
 
     with AgentResourceManager(ports) as resources:
         context = ToolContext(

@@ -207,6 +207,9 @@ DMR_SUMMARIZER_MODEL: str = config(
 OUTPUT_SUMMARIZE_THRESHOLD: int = config(
     "OUTPUT_SUMMARIZE_THRESHOLD", default=2000, cast=int
 )
+OUTPUT_SUMMARIZE_CHUNK_SIZE: int = config(
+    "OUTPUT_SUMMARIZE_CHUNK_SIZE", default=6000, cast=int
+)
 
 # OmniParser
 OMNIPARSER_URL: str = config("OMNIPARSER_URL", default="", cast=str)

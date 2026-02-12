@@ -49,11 +49,14 @@ def send_chat_completion(
     headers = _build_headers(config)
     timeout = _get_timeout(config)
 
+    token_limit_key = (
+        "max_completion_tokens" if config.api_key is not None else "max_tokens"
+    )
     payload: dict[str, object] = {
         "model": config.model,
         "messages": _serialize_messages(messages),
         "temperature": config.temperature,
-        "max_tokens": config.max_tokens,
+        token_limit_key: config.max_tokens,
     }
 
     if tools:

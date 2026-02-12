@@ -357,6 +357,7 @@ def test_send_chat_completion_makes_correct_http_call(
     assert payload["model"] == "llama-3"
     assert payload["temperature"] == 0.1
     assert payload["max_tokens"] == 4096
+    assert "max_completion_tokens" not in payload
     assert len(payload["messages"]) == 1
     assert payload["messages"][0]["role"] == "user"
     assert payload["messages"][0]["content"] == "Hello"
@@ -431,6 +432,46 @@ def test_send_chat_completion_with_tools(mock_client_class: MagicMock) -> None:
     assert response.message.tool_calls is not None
     assert len(response.message.tool_calls) == 1
     assert response.message.tool_calls[0].tool_name == "shell"
+
+
+@override_settings(OPENAI_REQUEST_TIMEOUT=120)
+@patch("agents.services.dmr_client.httpx.Client")
+def test_send_chat_completion_openai_uses_max_completion_tokens(
+    mock_client_class: MagicMock,
+) -> None:
+    """OpenAI models use max_completion_tokens instead of max_tokens."""
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 3},
+    }
+    mock_client = MagicMock()
+    mock_client.post.return_value = mock_response
+    mock_client.__enter__.return_value = mock_client
+    mock_client.__exit__.return_value = None
+    mock_client_class.return_value = mock_client
+
+    config = DMRConfig(
+        host="",
+        port="",
+        model="gpt-5.2-2025-12-11",
+        temperature=0.1,
+        max_tokens=4096,
+        api_key="sk-test-key",
+        base_url="https://api.openai.com/v1/chat/completions",
+    )
+    messages = (ChatMessage(role="user", content="Hello"),)
+    send_chat_completion(config, messages)
+
+    payload = mock_client.post.call_args[1]["json"]
+    assert payload["max_completion_tokens"] == 4096
+    assert "max_tokens" not in payload
 
 
 # ============================================================================

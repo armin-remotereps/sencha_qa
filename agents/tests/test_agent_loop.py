@@ -101,6 +101,7 @@ def test_build_system_prompt_vnc_tools() -> None:
     DMR_VISION_MODEL="test-vision-model",
     DMR_TEMPERATURE=0.7,
     DMR_MAX_TOKENS=4096,
+    VISION_BACKEND="dmr",
 )
 def test_build_agent_config_from_settings() -> None:
     """Test that build_agent_config reads from Django settings."""
