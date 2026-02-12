@@ -58,15 +58,6 @@ def _handle_take_screenshot(
     )
 
 
-def _handle_screen_click(
-    context: ToolContext, arguments: dict[str, object]
-) -> ToolResult:
-    x = cast(int, arguments.get("x", 0))
-    y = cast(int, arguments.get("y", 0))
-    button = cast(int, arguments.get("button", 1))
-    return tools_screen.screen_click(context.ssh_session, x=x, y=y, button=button)
-
-
 def _handle_screen_type_text(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
@@ -253,7 +244,6 @@ def _handle_vnc_key_press(
 _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "execute_command": _handle_execute_command,
     "take_screenshot": _handle_take_screenshot,
-    "screen_click": _handle_screen_click,
     "screen_type_text": _handle_screen_type_text,
     "screen_key_press": _handle_screen_key_press,
     "screen_list_windows": _handle_screen_list_windows,

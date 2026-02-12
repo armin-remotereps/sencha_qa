@@ -6,7 +6,6 @@ import pytest
 
 from agents.services.ssh_session import SSHSessionManager
 from agents.services.tools_screen import (
-    screen_click,
     screen_get_active_window,
     screen_key_press,
     screen_list_windows,
@@ -130,62 +129,6 @@ def test_take_screenshot_ssh_exception(
     assert result.is_error is True
     assert "Screenshot error:" in result.content
     assert "Connection failed" in result.content
-
-
-# ============================================================================
-# screen_click tests
-# ============================================================================
-
-
-def test_screen_click_happy_path(mock_ssh_session: MagicMock) -> None:
-    """Test screen_click successfully clicks at coordinates."""
-    mock_ssh_session.execute.return_value = SSHResult(exit_code=0, stdout="", stderr="")
-
-    result = screen_click(mock_ssh_session, x=100, y=200, button=1)
-
-    mock_ssh_session.execute.assert_called_once()
-    cmd_arg = mock_ssh_session.execute.call_args[0][0]
-    assert cmd_arg == "xdotool mousemove 100 200 click 1"
-
-    assert result.is_error is False
-    assert result.content == "Clicked at (100, 200) with button 1."
-
-
-def test_screen_click_default_button(mock_ssh_session: MagicMock) -> None:
-    """Test screen_click uses default button=1 when not specified."""
-    mock_ssh_session.execute.return_value = SSHResult(exit_code=0, stdout="", stderr="")
-
-    result = screen_click(mock_ssh_session, x=50, y=75)
-
-    cmd_arg = mock_ssh_session.execute.call_args[0][0]
-    assert "click 1" in cmd_arg
-    assert result.content == "Clicked at (50, 75) with button 1."
-
-
-def test_screen_click_failure(mock_ssh_session: MagicMock) -> None:
-    """Test screen_click when xdotool command fails."""
-    mock_ssh_session.execute.return_value = SSHResult(
-        exit_code=1,
-        stdout="",
-        stderr="Error: Can't open display",
-    )
-
-    result = screen_click(mock_ssh_session, x=10, y=20)
-
-    assert result.is_error is True
-    assert "Click failed:" in result.content
-    assert "Can't open display" in result.content
-
-
-def test_screen_click_ssh_exception(mock_ssh_session: MagicMock) -> None:
-    """Test screen_click when SSH raises exception."""
-    mock_ssh_session.execute.side_effect = Exception("SSH timeout")
-
-    result = screen_click(mock_ssh_session, x=10, y=20)
-
-    assert result.is_error is True
-    assert "Click error:" in result.content
-    assert "SSH timeout" in result.content
 
 
 # ============================================================================

@@ -34,7 +34,6 @@ from agents.services.tools_browser import (
     browser_type,
 )
 from agents.services.tools_screen import (
-    screen_click,
     screen_get_active_window,
     screen_key_press,
     screen_list_windows,
@@ -71,7 +70,6 @@ __all__ = [
     "is_model_available",
     "list_models",
     "run_agent",
-    "screen_click",
     "screen_get_active_window",
     "screen_key_press",
     "screen_list_windows",

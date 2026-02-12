@@ -37,9 +37,9 @@ def test_context(test_ports: ContainerPorts) -> ToolContext:
 
 
 def test_get_all_tool_definitions_count() -> None:
-    """Test that get_all_tool_definitions returns all 19 tools."""
+    """Test that get_all_tool_definitions returns all 18 tools."""
     tools = get_all_tool_definitions()
-    assert len(tools) == 19
+    assert len(tools) == 18
 
 
 def test_get_all_tool_definitions_categories() -> None:
@@ -52,7 +52,7 @@ def test_get_all_tool_definitions_categories() -> None:
     vnc_tools = [t for t in tools if t.category == ToolCategory.VNC]
 
     assert len(shell_tools) == 1
-    assert len(screen_tools) == 6
+    assert len(screen_tools) == 5
     assert len(browser_tools) == 7
     assert len(vnc_tools) == 5
 
@@ -130,29 +130,6 @@ def test_dispatch_tool_call_browser_navigate(test_context: ToolContext) -> None:
     assert result.is_error is False
     assert "Navigated to" in result.content
     mock_navigate.assert_called_once()
-
-
-def test_dispatch_tool_call_screen_click(test_context: ToolContext) -> None:
-    """Test dispatch_tool_call correctly dispatches screen_click."""
-    tool_call = ToolCall(
-        tool_call_id="call_789",
-        tool_name="screen_click",
-        arguments={"x": 100, "y": 200, "button": 1},
-    )
-
-    with patch("agents.services.tool_registry.tools_screen.screen_click") as mock_click:
-        mock_click.return_value = ToolResult(
-            tool_call_id="",
-            content="Clicked at (100, 200) with button 1.",
-            is_error=False,
-        )
-
-        result = dispatch_tool_call(tool_call, test_context)
-
-    assert result.tool_call_id == "call_789"
-    assert result.is_error is False
-    assert "Clicked at" in result.content
-    mock_click.assert_called_once()
 
 
 def test_dispatch_tool_call_unknown_tool(test_context: ToolContext) -> None:

@@ -37,31 +37,6 @@ def get_screen_tool_definitions() -> tuple[ToolDefinition, ...]:
             ),
         ),
         ToolDefinition(
-            name="screen_click",
-            description="Click at a specific position on the desktop.",
-            category=ToolCategory.SCREEN,
-            parameters=(
-                ToolParameter(
-                    name="x",
-                    type="integer",
-                    description="X coordinate to click.",
-                    required=True,
-                ),
-                ToolParameter(
-                    name="y",
-                    type="integer",
-                    description="Y coordinate to click.",
-                    required=True,
-                ),
-                ToolParameter(
-                    name="button",
-                    type="integer",
-                    description="Mouse button (1=left, 2=middle, 3=right).",
-                    required=False,
-                ),
-            ),
-        ),
-        ToolDefinition(
             name="screen_type_text",
             description="Type text on the desktop using the keyboard.",
             category=ToolCategory.SCREEN,

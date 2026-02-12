@@ -47,27 +47,6 @@ def take_screenshot(
     return safe_tool_call("Screenshot", _do)
 
 
-def screen_click(
-    ssh_session: SSHSessionManager, *, x: int, y: int, button: int = 1
-) -> ToolResult:
-    def _do() -> ToolResult:
-        cmd = f"xdotool mousemove {x} {y} click {button}"
-        result = ssh_session.execute(cmd)
-        if result.exit_code != 0:
-            return ToolResult(
-                tool_call_id="",
-                content=f"Click failed: {result.stderr}",
-                is_error=True,
-            )
-        return ToolResult(
-            tool_call_id="",
-            content=f"Clicked at ({x}, {y}) with button {button}.",
-            is_error=False,
-        )
-
-    return safe_tool_call("Click", _do)
-
-
 def screen_type_text(ssh_session: SSHSessionManager, *, text: str) -> ToolResult:
     def _do() -> ToolResult:
         escaped_text = text.replace("'", "'\\''")
