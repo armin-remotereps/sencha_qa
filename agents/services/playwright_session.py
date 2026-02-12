@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from types import TracebackType
 
 from playwright.sync_api import Browser, Page, Playwright, sync_playwright
@@ -20,15 +21,25 @@ class PlaywrightSessionManager:
     Lazily connects on first ``get_page()`` call.  Auto-reconnects once if
     the browser connection is dead.
 
+    An optional *browser_launcher* callback is invoked before each CDP
+    connection attempt.  This allows the caller to start Chromium inside the
+    container on-demand instead of running it from boot.
+
     Usage::
 
-        with PlaywrightSessionManager(ports) as pw:
+        with PlaywrightSessionManager(ports, browser_launcher=start_fn) as pw:
             page = pw.get_page()
             page.goto("https://example.com")
     """
 
-    def __init__(self, ports: ContainerPorts) -> None:
+    def __init__(
+        self,
+        ports: ContainerPorts,
+        *,
+        browser_launcher: Callable[[], None] | None = None,
+    ) -> None:
         self._ports = ports
+        self._browser_launcher = browser_launcher
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._page: Page | None = None
@@ -84,6 +95,8 @@ class PlaywrightSessionManager:
 
     def _connect_locked(self) -> None:
         self._close_locked()
+        if self._browser_launcher is not None:
+            self._browser_launcher()
         pw = sync_playwright().start()
         cdp_url = get_playwright_cdp_url(self._ports)
         browser = pw.chromium.connect_over_cdp(cdp_url)

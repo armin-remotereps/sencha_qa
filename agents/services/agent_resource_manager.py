@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from types import TracebackType
 
 from agents.services.playwright_session import PlaywrightSessionManager
@@ -9,6 +10,9 @@ from agents.services.vnc_session import VncSessionManager
 from environments.types import ContainerPorts
 
 logger = logging.getLogger(__name__)
+
+_BROWSER_STARTUP_TIMEOUT = 30  # seconds
+_BROWSER_POLL_INTERVAL = 1.0  # seconds
 
 
 class AgentResourceManager:
@@ -24,7 +28,10 @@ class AgentResourceManager:
 
     def __init__(self, ports: ContainerPorts) -> None:
         self._ssh = SSHSessionManager(ports)
-        self._playwright = PlaywrightSessionManager(ports)
+        self._playwright = PlaywrightSessionManager(
+            ports,
+            browser_launcher=self._ensure_browser_running,
+        )
         self._vnc = VncSessionManager(ports)
 
     # ------------------------------------------------------------------
@@ -73,3 +80,35 @@ class AgentResourceManager:
     @property
     def vnc(self) -> VncSessionManager:
         return self._vnc
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _ensure_browser_running(self) -> None:
+        """Start Chromium and CDP forwarder inside the container if not running."""
+        status = self._ssh.execute("supervisorctl status chromium")
+        if "RUNNING" in status.stdout:
+            logger.debug("Chromium already running")
+            return
+
+        logger.info("Starting Chromium browser on-demand")
+        start_result = self._ssh.execute("supervisorctl start chromium cdp-forwarder")
+        logger.debug(
+            "supervisorctl start result: stdout=%s stderr=%s",
+            start_result.stdout.strip(),
+            start_result.stderr.strip(),
+        )
+
+        deadline = time.monotonic() + _BROWSER_STARTUP_TIMEOUT
+        while time.monotonic() < deadline:
+            check = self._ssh.execute(
+                "curl -sf --max-time 2 http://localhost:9222/json/version"
+            )
+            if check.exit_code == 0 and check.stdout.strip():
+                logger.info("Chromium CDP is ready")
+                return
+            time.sleep(_BROWSER_POLL_INTERVAL)
+
+        msg = "Chromium CDP did not become available within timeout"
+        raise TimeoutError(msg)

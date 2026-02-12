@@ -1,6 +1,7 @@
 #!/bin/bash
 # Health check script for testing environment container
-# Verifies that SSH, VNC, and CDP services are listening
+# Verifies that SSH and VNC services are listening
+# Note: Chromium/CDP is started on-demand by browser tools, not at boot
 
 set -e
 
@@ -13,12 +14,6 @@ fi
 # Check if VNC server is listening on port 5900
 if ! timeout 1 bash -c "echo > /dev/tcp/localhost/5900" 2>/dev/null; then
     echo "ERROR: VNC server (port 5900) is not responding"
-    exit 1
-fi
-
-# Check if Chromium CDP is listening on port 9222
-if ! timeout 1 bash -c "echo > /dev/tcp/localhost/9223" 2>/dev/null; then
-    echo "ERROR: Chromium CDP (port 9223) is not responding"
     exit 1
 fi
 

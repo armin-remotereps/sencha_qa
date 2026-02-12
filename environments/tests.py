@@ -328,20 +328,19 @@ class HealthCheckTests(TestCase):
 
         self.assertTrue(result.ssh)
         self.assertTrue(result.vnc)
-        self.assertTrue(result.playwright)
         self.assertTrue(result.all_ok)
-        self.assertEqual(mock_check_port.call_count, 3)
+        # Only SSH and VNC are checked; Chromium/CDP starts on-demand
+        self.assertEqual(mock_check_port.call_count, 2)
 
     @patch("environments.services.health_check._check_port")
     def test_returns_failed_ports_when_not_healthy(self, mock_check_port: Mock) -> None:
-        mock_check_port.side_effect = [True, False, True]
+        mock_check_port.side_effect = [True, False]
         ports = ContainerPorts(ssh=22, vnc=5900, playwright_cdp=9222)
 
         result = check_container_health(ports)
 
         self.assertTrue(result.ssh)
         self.assertFalse(result.vnc)
-        self.assertTrue(result.playwright)
         self.assertFalse(result.all_ok)
 
     @patch("environments.services.health_check.check_container_health")
@@ -354,8 +353,8 @@ class HealthCheckTests(TestCase):
         mock_time.monotonic.side_effect = [0.0, 1.0, 2.0]
         mock_time.sleep = Mock()
 
-        unhealthy = HealthCheckResult(ssh=False, vnc=False, playwright=False)
-        healthy = HealthCheckResult(ssh=True, vnc=True, playwright=True)
+        unhealthy = HealthCheckResult(ssh=False, vnc=False)
+        healthy = HealthCheckResult(ssh=True, vnc=True)
         mock_check_health.side_effect = [unhealthy, healthy]
 
         result = wait_for_container_ready(ports, timeout=10, interval=1)
@@ -373,7 +372,7 @@ class HealthCheckTests(TestCase):
         mock_time.monotonic.side_effect = [0.0, 1.0, 2.0, 3.0]
         mock_time.sleep = Mock()
 
-        unhealthy = HealthCheckResult(ssh=False, vnc=False, playwright=False)
+        unhealthy = HealthCheckResult(ssh=False, vnc=False)
         mock_check_health.return_value = unhealthy
 
         with self.assertRaises(TimeoutError) as context:
@@ -608,18 +607,15 @@ class OrchestrationTests(TestCase):
         self.assertTrue(result)
         mock_verify_playwright.assert_called_once_with(ports)
 
-    @patch("environments.services.orchestration.verify_playwright_service")
     @patch("environments.services.orchestration.verify_vnc_service")
     @patch("environments.services.orchestration.verify_ssh_service")
     def test_runs_full_verification_successfully(
         self,
         mock_verify_ssh: Mock,
         mock_verify_vnc: Mock,
-        mock_verify_playwright: Mock,
     ) -> None:
         mock_verify_ssh.return_value = True
         mock_verify_vnc.return_value = True
-        mock_verify_playwright.return_value = True
 
         container_info = ContainerInfo(
             container_id="container123",
@@ -633,11 +629,9 @@ class OrchestrationTests(TestCase):
         self.assertIsInstance(result, HealthCheckResult)
         self.assertTrue(result.ssh)
         self.assertTrue(result.vnc)
-        self.assertTrue(result.playwright)
         self.assertTrue(result.all_ok)
         mock_verify_ssh.assert_called_once_with(container_info.ports)
         mock_verify_vnc.assert_called_once_with(container_info.ports)
-        mock_verify_playwright.assert_called_once_with(container_info.ports)
 
 
 class TypeTests(TestCase):
@@ -666,13 +660,16 @@ class TypeTests(TestCase):
         self.assertTrue(result.all_ok)
 
     def test_returns_false_for_all_ok_when_any_check_fails(self) -> None:
-        result1 = HealthCheckResult(ssh=False, vnc=True, playwright=True)
-        result2 = HealthCheckResult(ssh=True, vnc=False, playwright=True)
-        result3 = HealthCheckResult(ssh=True, vnc=True, playwright=False)
+        result1 = HealthCheckResult(ssh=False, vnc=True)
+        result2 = HealthCheckResult(ssh=True, vnc=False)
 
         self.assertFalse(result1.all_ok)
         self.assertFalse(result2.all_ok)
-        self.assertFalse(result3.all_ok)
+
+    def test_all_ok_ignores_playwright_field(self) -> None:
+        # Playwright is started on-demand, so all_ok only checks ssh+vnc
+        result = HealthCheckResult(ssh=True, vnc=True, playwright=False)
+        self.assertTrue(result.all_ok)
 
     def test_creates_ssh_result_with_all_fields(self) -> None:
         result = SSHResult(exit_code=0, stdout="output", stderr="error")

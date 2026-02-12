@@ -74,7 +74,7 @@ def test_build_system_prompt() -> None:
     assert "natural-language descriptions" in prompt
     assert "browser_hover" in prompt
     assert "question" in prompt.lower()
-    assert "ALREADY RUNNING" in prompt
+    assert "starts automatically" in prompt
     assert "browser_navigate" in prompt
     assert "Do NOT try to install or launch" in prompt
     assert "root" in prompt

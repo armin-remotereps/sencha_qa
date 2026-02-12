@@ -13,12 +13,12 @@ ENV_PORT_CHECK_TIMEOUT: int = getattr(settings, "ENV_PORT_CHECK_TIMEOUT", 2)
 def check_container_health(ports: ContainerPorts) -> HealthCheckResult:
     ssh = _check_port("localhost", ports.ssh)
     vnc = _check_port("localhost", ports.vnc)
-    playwright = _check_port("localhost", ports.playwright_cdp)
 
+    # Chromium/CDP is started on-demand by browser tools, not at boot.
+    # Skip checking the CDP port during container health checks.
     return HealthCheckResult(
         ssh=ssh,
         vnc=vnc,
-        playwright=playwright,
     )
 
 

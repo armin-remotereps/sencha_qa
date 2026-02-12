@@ -71,7 +71,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS("All services are ready"))
         self.stdout.write(f"  SSH:        {health.ssh}")
         self.stdout.write(f"  VNC:        {health.vnc}")
-        self.stdout.write(f"  Playwright: {health.playwright}")
+        self.stdout.write("  Playwright: on-demand (starts with browser tools)")
 
         return container_info, health
 
@@ -87,11 +87,7 @@ class Command(BaseCommand):
             if result.vnc
             else self.style.ERROR("  vnc: FAILED")
         )
-        self.stdout.write(
-            self.style.SUCCESS("  playwright: passed")
-            if result.playwright
-            else self.style.ERROR("  playwright: FAILED")
-        )
+        self.stdout.write("  playwright: on-demand (starts with browser tools)")
 
         self.stdout.write("")
         if result.all_ok:

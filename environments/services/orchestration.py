@@ -57,8 +57,9 @@ def verify_playwright_service(ports: ContainerPorts) -> bool:
 
 
 def full_verification(container_info: ContainerInfo) -> HealthCheckResult:
+    # Chromium/CDP is started on-demand by browser tools, not at boot.
+    # Only verify SSH and VNC at provisioning time.
     return HealthCheckResult(
         ssh=verify_ssh_service(container_info.ports),
         vnc=verify_vnc_service(container_info.ports),
-        playwright=verify_playwright_service(container_info.ports),
     )

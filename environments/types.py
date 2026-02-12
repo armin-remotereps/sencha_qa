@@ -44,11 +44,11 @@ class ContainerInfo:
 class HealthCheckResult:
     ssh: bool
     vnc: bool
-    playwright: bool
+    playwright: bool = True
 
     @property
     def all_ok(self) -> bool:
-        return self.ssh and self.vnc and self.playwright
+        return self.ssh and self.vnc
 
 
 @dataclass(frozen=True)
