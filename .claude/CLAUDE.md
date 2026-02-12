@@ -46,6 +46,7 @@ A user will upload testrails xml file which contains multiple test cases, and we
 10. example.env should always be up to date
 11. `SUPER IMPORTANT` when installing a package, don't use `pip install x` then `pip freeze > requirements.txt`. Instead, find the package on pypi, and put it on the requirements.txt like this: `x~=1.0.1` then do `pip install -r requirements.txt`
 12. Always put your plan on the project root, then after the feature is done, move it to docs
+13. DO NOT use lazy imports as much as possible, put all imports at top of the file
 
 ## Task implementation flow:
 

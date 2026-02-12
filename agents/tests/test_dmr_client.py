@@ -6,7 +6,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.test import override_settings
 
-from agents.services.dmr_client import send_chat_completion
+from agents.services.dmr_client import (
+    _build_payload,
+    _is_openai_api,
+    send_chat_completion,
+)
 from agents.services.dmr_config import build_dmr_config, build_vision_dmr_config
 from agents.services.dmr_model_manager import (
     _normalize_model_id,

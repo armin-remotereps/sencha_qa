@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -26,23 +26,32 @@ def summarizer_config() -> DMRConfig:
 
 
 def _mock_dmr_response(content: str) -> MagicMock:
-    """Build a mock httpx response returning *content*."""
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"choices": [{"message": {"content": content}}]}
     return mock_response
 
 
-def _mock_client(side_effect: object = None, return_value: object = None) -> MagicMock:
-    """Build a mock httpx.Client context manager."""
-    mock_client = MagicMock()
-    mock_client.__enter__ = MagicMock(return_value=mock_client)
-    mock_client.__exit__ = MagicMock(return_value=False)
+def _mock_chunk_summary(content: str) -> MagicMock:
+    return _mock_dmr_response(content)
+
+
+def _mock_final_summary(content: str) -> MagicMock:
+    return _mock_dmr_response(content)
+
+
+def _mock_client(
+    side_effect: Exception | list[MagicMock] | None = None,
+    return_value: MagicMock | None = None,
+) -> MagicMock:
+    mock = MagicMock()
+    mock.__enter__ = MagicMock(return_value=mock)
+    mock.__exit__ = MagicMock(return_value=False)
     if side_effect is not None:
-        mock_client.post.side_effect = side_effect
+        mock.post.side_effect = side_effect
     else:
-        mock_client.post.return_value = return_value
-    return mock_client
+        mock.post.return_value = return_value
+    return mock
 
 
 # ============================================================================
@@ -52,7 +61,6 @@ def _mock_client(side_effect: object = None, return_value: object = None) -> Mag
 
 @override_settings(OUTPUT_SUMMARIZE_THRESHOLD=2000)
 def test_short_output_returned_unchanged(summarizer_config: DMRConfig) -> None:
-    """Output under the threshold is returned as-is."""
     output = "hello world"
     result = summarize_output(
         output,
@@ -64,7 +72,6 @@ def test_short_output_returned_unchanged(summarizer_config: DMRConfig) -> None:
 
 @override_settings(OUTPUT_SUMMARIZE_THRESHOLD=2000)
 def test_exactly_threshold_returned_unchanged(summarizer_config: DMRConfig) -> None:
-    """Output exactly at the threshold is returned as-is."""
     output = "x" * 2000
     result = summarize_output(
         output,
@@ -85,7 +92,6 @@ def test_ai_summarization_called_for_long_output(
     mock_client_cls: MagicMock,
     summarizer_config: DMRConfig,
 ) -> None:
-    """Outputs exceeding threshold but fitting one chunk are summarized directly."""
     mock_client_cls.return_value = _mock_client(
         return_value=_mock_dmr_response("status: SUCCESS, reason: installed packages"),
     )
@@ -110,7 +116,6 @@ def test_ai_summary_includes_error_context(
     mock_client_cls: MagicMock,
     summarizer_config: DMRConfig,
 ) -> None:
-    """The AI prompt includes tool name and error status."""
     mock_client_cls.return_value = _mock_client(
         return_value=_mock_dmr_response("status: FAILED"),
     )
@@ -141,12 +146,11 @@ def test_map_reduce_splits_large_output(
     mock_client_cls: MagicMock,
     summarizer_config: DMRConfig,
 ) -> None:
-    """Output exceeding chunk size triggers map-reduce with multiple DMR calls."""
     responses = [
-        _mock_dmr_response("chunk 1 summary"),
-        _mock_dmr_response("chunk 2 summary"),
-        _mock_dmr_response("chunk 3 summary"),
-        _mock_dmr_response("final merged summary"),
+        _mock_chunk_summary("chunk 1 summary"),
+        _mock_chunk_summary("chunk 2 summary"),
+        _mock_chunk_summary("chunk 3 summary"),
+        _mock_final_summary("final merged summary"),
     ]
     mock_client_cls.return_value = _mock_client(side_effect=responses)
 
@@ -169,11 +173,10 @@ def test_reduce_prompt_contains_all_chunk_summaries(
     mock_client_cls: MagicMock,
     summarizer_config: DMRConfig,
 ) -> None:
-    """The reduce step receives all chunk summaries in its prompt."""
     responses = [
-        _mock_dmr_response("summary-alpha"),
-        _mock_dmr_response("summary-beta"),
-        _mock_dmr_response("merged result"),
+        _mock_chunk_summary("summary-alpha"),
+        _mock_chunk_summary("summary-beta"),
+        _mock_final_summary("merged result"),
     ]
     mock_client_cls.return_value = _mock_client(side_effect=responses)
 
@@ -200,11 +203,10 @@ def test_two_chunks_exact_boundary(
     mock_client_cls: MagicMock,
     summarizer_config: DMRConfig,
 ) -> None:
-    """Output exactly twice the chunk size produces 2 map calls + 1 reduce."""
     responses = [
-        _mock_dmr_response("first half"),
-        _mock_dmr_response("second half"),
-        _mock_dmr_response("combined"),
+        _mock_chunk_summary("first half"),
+        _mock_chunk_summary("second half"),
+        _mock_final_summary("combined"),
     ]
     mock_client_cls.return_value = _mock_client(side_effect=responses)
 
@@ -231,7 +233,6 @@ def test_fallback_to_truncation_on_dmr_error(
     mock_client_cls: MagicMock,
     summarizer_config: DMRConfig,
 ) -> None:
-    """When the DMR call fails, output is truncated instead."""
     mock_client_cls.return_value = _mock_client(
         side_effect=httpx.ConnectError("connection refused"),
     )
@@ -249,7 +250,6 @@ def test_fallback_to_truncation_on_dmr_error(
 
 @override_settings(OUTPUT_SUMMARIZE_THRESHOLD=100, OUTPUT_SUMMARIZE_CHUNK_SIZE=6000)
 def test_fallback_when_no_summarizer_config() -> None:
-    """Without a summarizer config, long output is truncated."""
     output = "x" * 200
     result = summarize_output(
         output,
@@ -266,19 +266,16 @@ def test_fallback_when_no_summarizer_config() -> None:
 
 
 def test_split_into_chunks_single() -> None:
-    """Text shorter than chunk size returns a single chunk."""
     result = _split_into_chunks("hello", 100)
     assert result == ["hello"]
 
 
 def test_split_into_chunks_exact() -> None:
-    """Text exactly at chunk size returns a single chunk."""
     result = _split_into_chunks("A" * 100, 100)
     assert result == ["A" * 100]
 
 
 def test_split_into_chunks_multiple() -> None:
-    """Text larger than chunk size is split into multiple chunks."""
     result = _split_into_chunks("A" * 250, 100)
     assert len(result) == 3
     assert result[0] == "A" * 100
@@ -292,18 +289,15 @@ def test_split_into_chunks_multiple() -> None:
 
 
 def test_truncate_output_75_25_split() -> None:
-    """_truncate_output uses a 75/25 head/tail split."""
     output = "H" * 750 + "T" * 250
     result = _truncate_output(output, max_length=100)
 
-    # Head portion = 75 chars, tail portion = 25 chars
     assert result.startswith("H" * 75)
     assert result.endswith("T" * 25)
     assert "[output truncated]" in result
 
 
 def test_truncate_output_preserves_content() -> None:
-    """Truncated output preserves head and tail sections."""
     head = "HEAD-CONTENT-" * 20
     tail = "-TAIL-CONTENT" * 20
     output = head + tail

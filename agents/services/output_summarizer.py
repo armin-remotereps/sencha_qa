@@ -10,6 +10,17 @@ from agents.types import DMRConfig
 logger = logging.getLogger(__name__)
 
 OUTPUT_HEAD_RATIO = 0.75
+_SUMMARIZER_MAX_RESPONSE_TOKENS = 512
+
+_BASE_SUMMARY_INSTRUCTIONS = (
+    "You are a concise output summarizer for an automated test agent. "
+    "Your summary MUST include:\n"
+    "1. status: SUCCESS or FAILED\n"
+    "2. reason: one-line explanation of what happened\n"
+    "3. key_info: preserve any critical error messages, file paths, "
+    "version numbers, or actionable details\n\n"
+    "Keep the summary under 800 characters.\n\n"
+)
 
 
 def summarize_output(
@@ -19,12 +30,6 @@ def summarize_output(
     is_error: bool = False,
     summarizer_config: DMRConfig | None = None,
 ) -> str:
-    """Summarize *output* if it exceeds the configured threshold.
-
-    When a DMR summarizer config is provided the output is sent to the AI
-    model for an intelligent summary.  If the DMR call fails (or no config
-    is given) the function falls back to a 75/25 head/tail truncation.
-    """
     threshold: int = int(settings.OUTPUT_SUMMARIZE_THRESHOLD)
     if len(output) <= threshold:
         return output
@@ -34,10 +39,26 @@ def summarize_output(
         len(output),
         threshold,
     )
+    return _summarize_with_fallback(
+        output,
+        tool_name=tool_name,
+        is_error=is_error,
+        summarizer_config=summarizer_config,
+        threshold=threshold,
+    )
 
+
+def _summarize_with_fallback(
+    output: str,
+    *,
+    tool_name: str,
+    is_error: bool,
+    summarizer_config: DMRConfig | None,
+    threshold: int,
+) -> str:
     if summarizer_config is not None:
         try:
-            result = _ai_summarize(
+            result = _route_summarization(
                 output,
                 config=summarizer_config,
                 tool_name=tool_name,
@@ -55,39 +76,44 @@ def summarize_output(
     return _truncate_output(output, max_length=threshold)
 
 
-def _ai_summarize(
+def _route_summarization(
     output: str,
     *,
     config: DMRConfig,
     tool_name: str,
     is_error: bool,
 ) -> str:
-    """Summarize *output* using map-reduce when it exceeds chunk size."""
-    chunk_size: int = int(settings.OUTPUT_SUMMARIZE_CHUNK_SIZE)
-    status_hint = "FAILED" if is_error else "SUCCESS"
-    context_line = f"Tool: {tool_name} | Status: {status_hint}" if tool_name else ""
-
-    chunks = _split_into_chunks(output, chunk_size)
+    chunks = _split_into_chunks(output, _get_chunk_size())
+    tool_context = _build_tool_context(tool_name, is_error)
 
     if len(chunks) == 1:
-        return _summarize_single(chunks[0], config=config, context_line=context_line)
+        return _summarize_single(chunks[0], config=config, tool_context=tool_context)
 
     logger.info("[Summarizer] Map-reduce: %d chunks", len(chunks))
-    chunk_summaries = _map_summarize(chunks, config=config, context_line=context_line)
-    return _reduce_summaries(chunk_summaries, config=config, context_line=context_line)
+    chunk_summaries = _map_summarize(chunks, config=config, tool_context=tool_context)
+    return _reduce_summaries(chunk_summaries, config=config, tool_context=tool_context)
+
+
+def _build_tool_context(tool_name: str, is_error: bool) -> str:
+    if not tool_name:
+        return ""
+    status = "FAILED" if is_error else "SUCCESS"
+    return f"Tool: {tool_name} | Status: {status}"
+
+
+def _get_chunk_size() -> int:
+    return int(settings.OUTPUT_SUMMARIZE_CHUNK_SIZE)
 
 
 def _split_into_chunks(text: str, chunk_size: int) -> list[str]:
-    """Split *text* into chunks of at most *chunk_size* characters."""
     chunks: list[str] = []
     for i in range(0, len(text), chunk_size):
         chunks.append(text[i : i + chunk_size])
     return chunks
 
 
-def _summarize_single(text: str, *, config: DMRConfig, context_line: str) -> str:
-    """Summarize a single chunk directly."""
-    prompt = _build_chunk_prompt(text, context_line=context_line)
+def _summarize_single(text: str, *, config: DMRConfig, tool_context: str) -> str:
+    prompt = _build_chunk_prompt(text, tool_context=tool_context)
     timeout = float(settings.DMR_REQUEST_TIMEOUT)
     with httpx.Client(timeout=timeout) as client:
         content = _call_dmr(prompt, config=config, client=client)
@@ -95,9 +121,8 @@ def _summarize_single(text: str, *, config: DMRConfig, context_line: str) -> str
 
 
 def _map_summarize(
-    chunks: list[str], *, config: DMRConfig, context_line: str
+    chunks: list[str], *, config: DMRConfig, tool_context: str
 ) -> list[str]:
-    """Map step: summarize each chunk independently."""
     summaries: list[str] = []
     timeout = float(settings.DMR_REQUEST_TIMEOUT)
     with httpx.Client(timeout=timeout) as client:
@@ -105,7 +130,7 @@ def _map_summarize(
             logger.info("[Summarizer] Summarizing chunk %d/%d", idx + 1, len(chunks))
             prompt = _build_chunk_prompt(
                 chunk,
-                context_line=context_line,
+                tool_context=tool_context,
                 chunk_label=f"Chunk {idx + 1}/{len(chunks)}",
             )
             summary = _call_dmr(prompt, config=config, client=client)
@@ -114,51 +139,46 @@ def _map_summarize(
 
 
 def _reduce_summaries(
-    summaries: list[str], *, config: DMRConfig, context_line: str
+    summaries: list[str], *, config: DMRConfig, tool_context: str
 ) -> str:
-    """Reduce step: merge chunk summaries into a final summary."""
-    numbered = "\n".join(f"[Chunk {i + 1}] {s}" for i, s in enumerate(summaries))
-    prompt = (
-        "You are a concise output summarizer for an automated test agent. "
-        "Below are summaries of consecutive chunks of a single command output. "
-        "Merge them into ONE final summary. Your summary MUST include:\n"
-        "1. status: SUCCESS or FAILED\n"
-        "2. reason: one-line explanation of what happened\n"
-        "3. key_info: preserve any critical error messages, file paths, "
-        "version numbers, or actionable details\n\n"
-        "Keep the final summary under 800 characters.\n\n"
-    )
-    if context_line:
-        prompt += f"Context: {context_line}\n\n"
-    prompt += f"Chunk summaries:\n{numbered}"
-
+    prompt = _build_reduce_prompt(summaries, tool_context=tool_context)
     timeout = float(settings.DMR_REQUEST_TIMEOUT)
     with httpx.Client(timeout=timeout) as client:
         content = _call_dmr(prompt, config=config, client=client)
     return f"[AI Summary] {content}"
 
 
-def _build_chunk_prompt(text: str, *, context_line: str, chunk_label: str = "") -> str:
-    """Build the prompt for summarizing a single chunk."""
-    prompt = (
-        "You are a concise output summarizer for an automated test agent. "
-        "Summarize the following command output. Your summary MUST include:\n"
-        "1. status: SUCCESS or FAILED\n"
-        "2. reason: one-line explanation of what happened\n"
-        "3. key_info: preserve any critical error messages, file paths, "
-        "version numbers, or actionable details\n\n"
-        "Keep the summary under 800 characters.\n\n"
-    )
+# -- Prompt builders ---------------------------------------------------------
+
+
+def _build_chunk_prompt(text: str, *, tool_context: str, chunk_label: str = "") -> str:
+    prompt = _BASE_SUMMARY_INSTRUCTIONS
+    prompt += "Summarize the following command output.\n\n"
     if chunk_label:
         prompt += f"Note: This is {chunk_label} of a larger output.\n\n"
-    if context_line:
-        prompt += f"Context: {context_line}\n\n"
+    if tool_context:
+        prompt += f"Context: {tool_context}\n\n"
     prompt += f"Output:\n{text}"
     return prompt
 
 
+def _build_reduce_prompt(summaries: list[str], *, tool_context: str) -> str:
+    numbered = "\n".join(f"[Chunk {i + 1}] {s}" for i, s in enumerate(summaries))
+    prompt = _BASE_SUMMARY_INSTRUCTIONS
+    prompt += (
+        "Below are summaries of consecutive chunks of a single command output. "
+        "Merge them into ONE final summary.\n\n"
+    )
+    if tool_context:
+        prompt += f"Context: {tool_context}\n\n"
+    prompt += f"Chunk summaries:\n{numbered}"
+    return prompt
+
+
+# -- DMR transport -----------------------------------------------------------
+
+
 def _call_dmr(prompt: str, *, config: DMRConfig, client: httpx.Client) -> str:
-    """Send a prompt to the DMR summarizer and return the content string."""
     url = f"http://{config.host}:{config.port}/engines/llama.cpp/v1/chat/completions"
     payload: dict[str, object] = {
         "model": config.model,
@@ -167,13 +187,15 @@ def _call_dmr(prompt: str, *, config: DMRConfig, client: httpx.Client) -> str:
             {"role": "user", "content": prompt},
         ],
         "temperature": 0.0,
-        "max_tokens": 512,
+        "max_tokens": _SUMMARIZER_MAX_RESPONSE_TOKENS,
     }
 
     response = client.post(url, json=payload)
     response.raise_for_status()
+    return _extract_content(response.json())
 
-    data: object = response.json()
+
+def _extract_content(data: object) -> str:
     if not isinstance(data, dict):
         msg = "Unexpected response format"
         raise ValueError(msg)
@@ -201,8 +223,10 @@ def _call_dmr(prompt: str, *, config: DMRConfig, client: httpx.Client) -> str:
     return content.strip()
 
 
+# -- Truncation fallback -----------------------------------------------------
+
+
 def _truncate_output(output: str, *, max_length: int) -> str:
-    """Truncate with a 75/25 head/tail split."""
     head_size = int(max_length * OUTPUT_HEAD_RATIO)
     tail_size = max_length - head_size
     return (

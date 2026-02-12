@@ -20,6 +20,10 @@ from agents.types import (
 logger = logging.getLogger(__name__)
 
 
+def _is_openai_api(config: DMRConfig) -> bool:
+    return config.api_key is not None
+
+
 def _build_url(config: DMRConfig) -> str:
     if config.base_url is not None:
         return config.base_url
@@ -33,9 +37,33 @@ def _build_headers(config: DMRConfig) -> dict[str, str]:
 
 
 def _get_timeout(config: DMRConfig) -> float:
-    if config.api_key is not None:
+    if _is_openai_api(config):
         return float(settings.OPENAI_REQUEST_TIMEOUT)
     return float(settings.DMR_REQUEST_TIMEOUT)
+
+
+def _build_payload(
+    config: DMRConfig,
+    messages: tuple[ChatMessage, ...],
+    tools: tuple[ToolDefinition, ...],
+    keep_alive: int | None,
+) -> dict[str, object]:
+    token_key = "max_completion_tokens" if _is_openai_api(config) else "max_tokens"
+    payload: dict[str, object] = {
+        "model": config.model,
+        "messages": _serialize_messages(messages),
+        "temperature": config.temperature,
+        token_key: config.max_tokens,
+    }
+
+    if tools:
+        payload["tools"] = _serialize_tools(tools)
+        payload["tool_choice"] = "auto"
+
+    if keep_alive is not None and not _is_openai_api(config):
+        payload["keep_alive"] = keep_alive
+
+    return payload
 
 
 def send_chat_completion(
@@ -48,23 +76,7 @@ def send_chat_completion(
     url = _build_url(config)
     headers = _build_headers(config)
     timeout = _get_timeout(config)
-
-    token_limit_key = (
-        "max_completion_tokens" if config.api_key is not None else "max_tokens"
-    )
-    payload: dict[str, object] = {
-        "model": config.model,
-        "messages": _serialize_messages(messages),
-        "temperature": config.temperature,
-        token_limit_key: config.max_tokens,
-    }
-
-    if tools:
-        payload["tools"] = _serialize_tools(tools)
-        payload["tool_choice"] = "auto"
-
-    if keep_alive is not None and config.api_key is None:
-        payload["keep_alive"] = keep_alive
+    payload = _build_payload(config, messages, tools, keep_alive)
 
     logger.debug("DMR request to %s with %d messages", url, len(messages))
 
