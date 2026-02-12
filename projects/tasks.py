@@ -91,6 +91,7 @@ def _handle_failure(upload: TestCaseUpload) -> None:
 @shared_task(  # type: ignore[untyped-decorator]
     bind=True,
     name="projects.tasks.process_xml_upload",
+    queue="upload",
     max_retries=0,
     acks_late=True,
     reject_on_worker_lost=True,
@@ -131,3 +132,29 @@ def process_xml_upload(self: Task[None, None], upload_id: int) -> None:
             upload_id,
         )
         _handle_failure(upload)
+
+
+@shared_task(  # type: ignore[untyped-decorator]
+    bind=True,
+    name="projects.tasks.execute_test_run_case",
+    queue="execution",
+    max_retries=0,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=1800,
+    time_limit=1860,
+)
+def execute_test_run_case(self: Task[None, None], pivot_id: int) -> None:
+    from projects.services import execute_test_run_test_case
+
+    logger.info(
+        "execute_test_run_case started: task_id=%s pivot_id=%s",
+        self.request.id,
+        pivot_id,
+    )
+    execute_test_run_test_case(pivot_id)
+    logger.info(
+        "execute_test_run_case finished: task_id=%s pivot_id=%s",
+        self.request.id,
+        pivot_id,
+    )

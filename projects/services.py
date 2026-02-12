@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import asdict
 
+from celery import group
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
 from django.core.paginator import Page, Paginator
@@ -500,6 +501,21 @@ def list_waiting_test_runs_for_project(project: Project) -> QuerySet[TestRun]:
     ).order_by("-created_at")
 
 
+def start_test_run(test_run: TestRun) -> None:
+    from projects.tasks import execute_test_run_case
+
+    pivot_ids = list(test_run.pivot_entries.values_list("id", flat=True))
+    if not pivot_ids:
+        raise ValueError("Cannot start a test run with no test cases.")
+    if test_run.status != TestRunStatus.WAITING:
+        raise ValueError("Test run is not in WAITING status.")
+
+    test_run.status = TestRunStatus.STARTED
+    test_run.save(update_fields=["status", "updated_at"])
+
+    group([execute_test_run_case.s(pid) for pid in pivot_ids]).apply_async()
+
+
 def get_test_run_summary(test_run: TestRun) -> dict[str, int]:
     pivots = test_run.pivot_entries.all()
     return {
@@ -538,6 +554,14 @@ def execute_test_run_test_case(pivot_id: int) -> None:
     except Exception as exc:
         logger.exception("execute_test_run_test_case failed for pivot %d", pivot_id)
         _mark_pivot_failed(pivot, str(exc))
+    except BaseException as exc:
+        logger.critical(
+            "execute_test_run_test_case hit BaseException for pivot %d: %s",
+            pivot_id,
+            exc,
+        )
+        _mark_pivot_failed(pivot, str(exc))
+        raise
     finally:
         if container_id:
             teardown_environment(client, container_id)

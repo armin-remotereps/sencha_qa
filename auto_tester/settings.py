@@ -133,6 +133,13 @@ CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
+    "projects.tasks.process_xml_upload": {"queue": "upload"},
+    "projects.tasks.execute_test_run_case": {"queue": "execution"},
+}
 
 # Channels
 CHANNEL_LAYERS = {

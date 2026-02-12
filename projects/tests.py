@@ -1,5 +1,5 @@
 import base64
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from django.contrib.admin.sites import AdminSite
 from django.db import IntegrityError
@@ -62,6 +62,7 @@ from projects.services import (
     list_test_run_cases,
     list_test_runs_for_project,
     list_waiting_test_runs_for_project,
+    start_test_run,
     unarchive_project,
     update_project,
     update_test_case,
@@ -4263,3 +4264,275 @@ class TestRunCaseDetailViewTests(TestCase):
         screenshots = list(response.context["screenshots"])
         self.assertEqual(len(screenshots), 1)
         self.assertEqual(screenshots[0].id, self.screenshot.id)
+
+
+# ============================================================================
+# START TEST RUN SERVICE TESTS
+# ============================================================================
+
+
+class StartTestRunTests(TestCase):
+    """Tests for start_test_run service function."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Start Run Project")
+        self.tc1 = TestCaseModel.objects.create(project=self.project, title="TC1")
+        self.tc2 = TestCaseModel.objects.create(project=self.project, title="TC2")
+        self.test_run = TestRun.objects.create(project=self.project)
+        self.p1 = TestRunTestCase.objects.create(
+            test_run=self.test_run, test_case=self.tc1
+        )
+        self.p2 = TestRunTestCase.objects.create(
+            test_run=self.test_run, test_case=self.tc2
+        )
+
+    @patch("projects.tasks.execute_test_run_case")
+    def test_should_dispatch_group_for_all_pivots(self, mock_task: MagicMock) -> None:
+        """Verify start_test_run dispatches a Celery group with all pivot ids."""
+        mock_signature = MagicMock()
+        mock_task.s = MagicMock(return_value=mock_signature)
+
+        mock_group_result = MagicMock()
+        with patch("projects.services.group") as mock_group:
+            mock_group.return_value.apply_async = MagicMock(
+                return_value=mock_group_result
+            )
+            start_test_run(self.test_run)
+
+        pivot_ids = sorted([self.p1.id, self.p2.id])
+        actual_calls = sorted([c.args[0] for c in mock_task.s.call_args_list])
+        self.assertEqual(actual_calls, pivot_ids)
+
+    @patch("projects.tasks.execute_test_run_case")
+    def test_should_set_status_to_started(self, mock_task: MagicMock) -> None:
+        """Verify test run status changes to STARTED."""
+        mock_task.s = MagicMock(return_value=MagicMock())
+        with patch("projects.services.group") as mock_group:
+            mock_group.return_value.apply_async = MagicMock()
+            start_test_run(self.test_run)
+
+        self.test_run.refresh_from_db()
+        self.assertEqual(self.test_run.status, TestRunStatus.STARTED)
+
+    def test_should_raise_for_empty_test_run(self) -> None:
+        """Verify ValueError is raised for test run with no pivots."""
+        empty_run = TestRun.objects.create(project=self.project)
+        with self.assertRaises(ValueError):
+            start_test_run(empty_run)
+
+    def test_should_raise_for_non_waiting_status(self) -> None:
+        """Verify ValueError is raised when test run is not WAITING."""
+        self.test_run.status = TestRunStatus.STARTED
+        self.test_run.save()
+        with self.assertRaises(ValueError):
+            start_test_run(self.test_run)
+
+
+# ============================================================================
+# EXECUTE TEST RUN CASE TASK TESTS
+# ============================================================================
+
+
+class ExecuteTestRunCaseTaskTests(TestCase):
+    """Tests for execute_test_run_case Celery task."""
+
+    def test_should_have_correct_task_name(self) -> None:
+        """Verify task has the expected name."""
+        from projects.tasks import execute_test_run_case
+
+        self.assertEqual(
+            execute_test_run_case.name, "projects.tasks.execute_test_run_case"
+        )
+
+    def test_should_have_correct_queue(self) -> None:
+        """Verify task is routed to execution queue."""
+        from projects.tasks import execute_test_run_case
+
+        self.assertEqual(execute_test_run_case.queue, "execution")
+
+    def test_should_have_zero_max_retries(self) -> None:
+        """Verify task does not retry."""
+        from projects.tasks import execute_test_run_case
+
+        self.assertEqual(execute_test_run_case.max_retries, 0)
+
+    def test_should_have_acks_late(self) -> None:
+        """Verify task acknowledges late."""
+        from projects.tasks import execute_test_run_case
+
+        self.assertTrue(execute_test_run_case.acks_late)
+
+    def test_should_have_reject_on_worker_lost(self) -> None:
+        """Verify task rejects on worker lost."""
+        from projects.tasks import execute_test_run_case
+
+        self.assertTrue(execute_test_run_case.reject_on_worker_lost)
+
+    def test_should_have_correct_time_limits(self) -> None:
+        """Verify soft and hard time limits."""
+        from projects.tasks import execute_test_run_case
+
+        self.assertEqual(execute_test_run_case.soft_time_limit, 1800)
+        self.assertEqual(execute_test_run_case.time_limit, 1860)
+
+    @patch("projects.services.execute_test_run_test_case")
+    def test_should_call_service_with_pivot_id(self, mock_service: MagicMock) -> None:
+        """Verify task delegates to execute_test_run_test_case service."""
+        from projects.tasks import execute_test_run_case
+
+        execute_test_run_case(42)
+        mock_service.assert_called_once_with(42)
+
+
+# ============================================================================
+# TEST RUN START VIEW TESTS
+# ============================================================================
+
+
+class TestRunStartViewTests(TestCase):
+    """Tests for test_run_start view."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="member@example.com", password="testpass123"
+        )
+        self.non_member = CustomUser.objects.create_user(
+            email="nonmember@example.com", password="testpass123"
+        )
+        self.project = create_project(user=self.user, name="Test Project", tag_names=[])
+        self.tc = TestCaseModel.objects.create(project=self.project, title="TC1")
+        self.test_run = TestRun.objects.create(project=self.project)
+        TestRunTestCase.objects.create(test_run=self.test_run, test_case=self.tc)
+
+    def test_should_require_login(self) -> None:
+        """Verify test_run_start redirects to login when not authenticated."""
+        url = reverse(
+            "projects:test_run_start", args=[self.project.id, self.test_run.id]
+        )
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+
+    def test_should_require_membership(self) -> None:
+        """Verify non-members cannot start a test run."""
+        self.client.force_login(self.non_member)
+        url = reverse(
+            "projects:test_run_start", args=[self.project.id, self.test_run.id]
+        )
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_reject_get_request(self) -> None:
+        """Verify GET requests are not allowed."""
+        self.client.force_login(self.user)
+        url = reverse(
+            "projects:test_run_start", args=[self.project.id, self.test_run.id]
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 405)
+
+    @patch("projects.views.start_test_run")
+    def test_should_start_run_and_redirect(self, mock_start: MagicMock) -> None:
+        """Verify happy path: calls service and redirects to detail."""
+        self.client.force_login(self.user)
+        url = reverse(
+            "projects:test_run_start", args=[self.project.id, self.test_run.id]
+        )
+        response = self.client.post(url)
+        mock_start.assert_called_once_with(self.test_run)
+        self.assertEqual(response.status_code, 302)
+        expected_url = reverse(
+            "projects:test_run_detail",
+            args=[self.project.id, self.test_run.id],
+        )
+        self.assertEqual(response.url, expected_url)  # type: ignore[attr-defined]
+
+    @patch("projects.views.start_test_run", side_effect=ValueError("not waiting"))
+    def test_should_handle_value_error_gracefully(self, mock_start: MagicMock) -> None:
+        """Verify ValueError results in redirect with error message."""
+        self.client.force_login(self.user)
+        url = reverse(
+            "projects:test_run_start", args=[self.project.id, self.test_run.id]
+        )
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 302)
+
+    def test_should_return_404_for_nonexistent_test_run(self) -> None:
+        """Verify 404 is returned for nonexistent test run."""
+        self.client.force_login(self.user)
+        url = reverse("projects:test_run_start", args=[self.project.id, 999999])
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 404)
+
+
+# ============================================================================
+# EXECUTE TEST RUN TEST CASE BASE EXCEPTION TESTS
+# ============================================================================
+
+
+class ExecuteTestRunTestCaseBaseExceptionTests(TestCase):
+    """Tests for BaseException handling in execute_test_run_test_case."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="BaseExc Project")
+        self.tc = TestCaseModel.objects.create(project=self.project, title="TC")
+        self.test_run = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(
+            test_run=self.test_run, test_case=self.tc
+        )
+
+    @patch("projects.services.close_docker_client")
+    @patch("projects.services.teardown_environment")
+    @patch("projects.services.provision_environment", side_effect=SystemExit(1))
+    @patch("projects.services.get_docker_client")
+    def test_should_mark_pivot_failed_on_system_exit(
+        self,
+        mock_get_client: MagicMock,
+        mock_provision: MagicMock,
+        mock_teardown: MagicMock,
+        mock_close: MagicMock,
+    ) -> None:
+        """Verify pivot is marked FAILED when SystemExit is raised."""
+        with self.assertRaises(SystemExit):
+            execute_test_run_test_case(self.pivot.id)
+
+        self.pivot.refresh_from_db()
+        self.assertEqual(self.pivot.status, TestRunTestCaseStatus.FAILED)
+
+    @patch("projects.services.close_docker_client")
+    @patch("projects.services.teardown_environment")
+    @patch(
+        "projects.services.provision_environment",
+        side_effect=KeyboardInterrupt(),
+    )
+    @patch("projects.services.get_docker_client")
+    def test_should_mark_pivot_failed_on_keyboard_interrupt(
+        self,
+        mock_get_client: MagicMock,
+        mock_provision: MagicMock,
+        mock_teardown: MagicMock,
+        mock_close: MagicMock,
+    ) -> None:
+        """Verify pivot is marked FAILED when KeyboardInterrupt is raised."""
+        with self.assertRaises(KeyboardInterrupt):
+            execute_test_run_test_case(self.pivot.id)
+
+        self.pivot.refresh_from_db()
+        self.assertEqual(self.pivot.status, TestRunTestCaseStatus.FAILED)
+
+    @patch("projects.services.close_docker_client")
+    @patch("projects.services.teardown_environment")
+    @patch("projects.services.provision_environment", side_effect=SystemExit(1))
+    @patch("projects.services.get_docker_client")
+    def test_should_still_run_finally_block(
+        self,
+        mock_get_client: MagicMock,
+        mock_provision: MagicMock,
+        mock_teardown: MagicMock,
+        mock_close: MagicMock,
+    ) -> None:
+        """Verify finally block runs cleanup even on BaseException."""
+        with self.assertRaises(SystemExit):
+            execute_test_run_test_case(self.pivot.id)
+
+        mock_close.assert_called_once()

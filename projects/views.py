@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
@@ -34,6 +35,7 @@ from projects.services import (
     list_test_runs_for_project,
     list_uploads_for_project,
     list_waiting_test_runs_for_project,
+    start_test_run,
     start_upload_processing,
     update_project,
     update_test_case,
@@ -322,6 +324,23 @@ def test_run_add_cases(
         raise Http404
     test_case_ids = _parse_test_case_ids(request)
     add_cases_to_test_run(test_run=test_run, test_case_ids=test_case_ids)
+    return redirect(
+        "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
+    )
+
+
+@project_membership_required
+@require_POST
+def test_run_start(
+    request: HttpRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    try:
+        start_test_run(test_run)
+    except ValueError as exc:
+        messages.error(request, str(exc))
     return redirect(
         "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
     )
