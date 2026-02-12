@@ -4,6 +4,7 @@ from agents.services.agent_loop import (
     run_agent,
 )
 from agents.services.agent_resource_manager import AgentResourceManager
+from agents.services.context_summarizer import summarize_context_if_needed
 from agents.services.dmr_client import send_chat_completion
 from agents.services.dmr_config import (
     build_dmr_config,
@@ -76,5 +77,6 @@ __all__ = [
     "screen_list_windows",
     "screen_type_text",
     "send_chat_completion",
+    "summarize_context_if_needed",
     "take_screenshot",
 ]

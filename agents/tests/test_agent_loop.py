@@ -10,6 +10,7 @@ from agents.services.agent_loop import (
     _build_task_section,
     _build_tool_guidelines,
     _build_tool_result_message,
+    _run_agent_loop,
     build_agent_config,
     build_system_prompt,
     run_agent,
@@ -574,3 +575,115 @@ def test_run_agent_creates_resource_manager(
     mock_resource_cls.assert_called_once_with(mock_ports)
     mock_resource_cls.return_value.__enter__.assert_called_once()
     mock_resource_cls.return_value.__exit__.assert_called_once()
+
+
+@override_settings(
+    OUTPUT_SUMMARIZE_THRESHOLD=50000,
+    CONTEXT_SUMMARIZE_THRESHOLD=50000,
+    CONTEXT_PRESERVE_LAST_MESSAGES=6,
+    CONTEXT_SUMMARIZE_CHUNK_SIZE=8000,
+)
+@patch("agents.services.agent_loop.summarize_context_if_needed")
+@patch("agents.services.agent_loop.get_all_tool_definitions")
+@patch("agents.services.agent_loop.dispatch_tool_call")
+@patch("agents.services.agent_loop.send_chat_completion")
+def test_run_agent_calls_context_summarizer(
+    mock_send: MagicMock,
+    mock_dispatch: MagicMock,
+    mock_get_tools: MagicMock,
+    mock_summarize_ctx: MagicMock,
+    mock_tool_definitions: tuple[ToolDefinition, ...],
+) -> None:
+    """Verify summarize_context_if_needed is called each iteration."""
+    mock_get_tools.return_value = mock_tool_definitions
+    # Pass through unchanged
+    mock_summarize_ctx.side_effect = lambda msgs, **kw: msgs
+
+    tool_call = ToolCall(
+        tool_call_id="tc1",
+        tool_name="test_tool",
+        arguments={"arg1": "val"},
+    )
+    mock_send.side_effect = [
+        DMRResponse(
+            message=ChatMessage(
+                role="assistant",
+                content="step 1",
+                tool_calls=(tool_call,),
+            ),
+            finish_reason="tool_calls",
+            usage_prompt_tokens=50,
+            usage_completion_tokens=10,
+        ),
+        DMRResponse(
+            message=ChatMessage(role="assistant", content="Done."),
+            finish_reason="stop",
+            usage_prompt_tokens=50,
+            usage_completion_tokens=10,
+        ),
+    ]
+    mock_dispatch.return_value = ToolResult(
+        tool_call_id="tc1", content="ok", is_error=False
+    )
+
+    mock_context = MagicMock(spec=ToolContext)
+    mock_context.summarizer_config = None
+
+    dmr_config = DMRConfig(
+        host="test", port="8080", model="m", temperature=0.0, max_tokens=100
+    )
+    agent_config = AgentConfig(dmr=dmr_config, max_iterations=5, timeout_seconds=60)
+
+    _run_agent_loop("test", mock_context, config=agent_config)
+
+    # Should be called once per iteration (2 iterations)
+    assert mock_summarize_ctx.call_count == 2
+
+
+@override_settings(
+    OUTPUT_SUMMARIZE_THRESHOLD=50000,
+    CONTEXT_SUMMARIZE_THRESHOLD=50000,
+    CONTEXT_PRESERVE_LAST_MESSAGES=6,
+    CONTEXT_SUMMARIZE_CHUNK_SIZE=8000,
+)
+@patch("agents.services.agent_loop.summarize_context_if_needed")
+@patch("agents.services.agent_loop.get_all_tool_definitions")
+@patch("agents.services.agent_loop.send_chat_completion")
+def test_run_agent_uses_summarized_messages(
+    mock_send: MagicMock,
+    mock_get_tools: MagicMock,
+    mock_summarize_ctx: MagicMock,
+    mock_tool_definitions: tuple[ToolDefinition, ...],
+) -> None:
+    """Verify DMR receives the summarized message list."""
+    mock_get_tools.return_value = mock_tool_definitions
+
+    # Summarizer replaces messages with a shorter list
+    short_messages = [
+        ChatMessage(role="system", content="sys"),
+        ChatMessage(role="user", content="summary"),
+    ]
+    mock_summarize_ctx.return_value = short_messages
+
+    mock_send.return_value = DMRResponse(
+        message=ChatMessage(role="assistant", content="Done."),
+        finish_reason="stop",
+        usage_prompt_tokens=50,
+        usage_completion_tokens=10,
+    )
+
+    mock_context = MagicMock(spec=ToolContext)
+    mock_context.summarizer_config = None
+
+    dmr_config = DMRConfig(
+        host="test", port="8080", model="m", temperature=0.0, max_tokens=100
+    )
+    agent_config = AgentConfig(dmr=dmr_config, max_iterations=5, timeout_seconds=60)
+
+    _run_agent_loop("test", mock_context, config=agent_config)
+
+    # DMR should receive the short list (as tuple)
+    call_args = mock_send.call_args
+    sent_messages = call_args[0][1]
+    assert len(sent_messages) == 2
+    assert sent_messages[1].content == "summary"

@@ -211,6 +211,17 @@ OUTPUT_SUMMARIZE_CHUNK_SIZE: int = config(
     "OUTPUT_SUMMARIZE_CHUNK_SIZE", default=6000, cast=int
 )
 
+# Context Summarizer
+CONTEXT_SUMMARIZE_THRESHOLD: int = config(
+    "CONTEXT_SUMMARIZE_THRESHOLD", default=20000, cast=int
+)
+CONTEXT_PRESERVE_LAST_MESSAGES: int = config(
+    "CONTEXT_PRESERVE_LAST_MESSAGES", default=6, cast=int
+)
+CONTEXT_SUMMARIZE_CHUNK_SIZE: int = config(
+    "CONTEXT_SUMMARIZE_CHUNK_SIZE", default=8000, cast=int
+)
+
 # OmniParser
 OMNIPARSER_URL: str = config("OMNIPARSER_URL", default="", cast=str)
 OMNIPARSER_API_KEY: str = config("OMNIPARSER_API_KEY", default="", cast=str)

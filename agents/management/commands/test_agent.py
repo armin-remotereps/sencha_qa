@@ -25,6 +25,18 @@ DEFAULT_TASK = """
 Note: use vnc click instead of key press
 """
 
+HEAVY_CONTEXT_TASK = """
+Perform the following multi-step task to exercise context management:
+1. Create a directory /tmp/context-test
+2. Create 3 text files in it: notes.txt, config.txt, report.txt with unique content in each
+3. Verify all 3 files exist using ls -la
+4. Install the 'tree' package using apt-get
+5. Run 'tree /tmp/context-test' and verify the output shows all 3 files
+6. Append a new line to each of the 3 files
+7. Use cat to verify the appended content in each file
+8. Create a summary file /tmp/context-test/summary.txt listing all actions performed
+"""
+
 
 class Command(BaseCommand):
     help = "Test the AI agent by provisioning a container and running a task"
@@ -58,6 +70,11 @@ class Command(BaseCommand):
             type=int,
             default=None,
             help="Override max iterations for the agent",
+        )
+        parser.add_argument(
+            "--heavy-context",
+            action="store_true",
+            help="Use a heavy multi-step task to exercise context summarization",
         )
 
     def _cleanup_resources(
@@ -104,9 +121,17 @@ class Command(BaseCommand):
         vision_model_str: str | None = (
             str(vision_model) if vision_model is not None else None
         )
+        heavy_context = bool(options.get("heavy_context", False))
         task = options.get("task")
-        task_str: str = str(task) if task is not None else DEFAULT_TASK
+        if task is not None:
+            task_str: str = str(task)
+        elif heavy_context:
+            task_str = HEAVY_CONTEXT_TASK
+        else:
+            task_str = DEFAULT_TASK
         max_iterations = options.get("max_iterations")
+        if heavy_context and max_iterations is None:
+            max_iterations = 50
 
         client = None
         container_info: ContainerInfo | None = None
@@ -128,15 +153,21 @@ class Command(BaseCommand):
             )
 
             config = build_agent_config(model=model_str, vision_model=vision_model_str)
-            if max_iterations is not None:
+            if max_iterations is not None or heavy_context:
                 from dataclasses import replace
 
                 max_iter_int = (
                     int(max_iterations)
-                    if isinstance(max_iterations, (int, str))
-                    else 30
+                    if max_iterations is not None
+                    and isinstance(max_iterations, (int, str))
+                    else config.max_iterations
                 )
-                config = replace(config, max_iterations=max_iter_int)
+                timeout = 900 if heavy_context else config.timeout_seconds
+                config = replace(
+                    config,
+                    max_iterations=max_iter_int,
+                    timeout_seconds=timeout,
+                )
 
             self.stdout.write(f"\nAgent config:")
             self.stdout.write(f"  Model:          {config.dmr.model}")

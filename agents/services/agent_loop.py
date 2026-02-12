@@ -6,6 +6,7 @@ import time
 from django.conf import settings
 
 from agents.services.agent_resource_manager import AgentResourceManager
+from agents.services.context_summarizer import summarize_context_if_needed
 from agents.services.dmr_client import send_chat_completion
 from agents.services.dmr_config import (
     build_dmr_config,
@@ -182,6 +183,11 @@ def _run_agent_loop(
 
         iterations += 1
         logger.info("Agent iteration %d/%d", iterations, config.max_iterations)
+
+        messages = summarize_context_if_needed(
+            messages,
+            summarizer_config=context.summarizer_config,
+        )
 
         try:
             response = send_chat_completion(
