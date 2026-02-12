@@ -30,7 +30,7 @@ INSTALLED_APPS: list[str] = [
     "projects",
     "environments",
     "agents",
-    "omniparser",
+    "omniparser_wrapper",
 ]
 
 MIDDLEWARE: list[str] = [

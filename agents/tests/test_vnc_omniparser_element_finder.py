@@ -11,7 +11,7 @@ from agents.services.vnc_omniparser_element_finder import (
     find_element_coordinates_omniparser,
 )
 from agents.types import ChatMessage, DMRConfig, DMRResponse, ImageContent, TextContent
-from omniparser.types import PixelBBox, PixelParseResult, PixelUIElement
+from omniparser_wrapper.types import PixelBBox, PixelParseResult, PixelUIElement
 
 
 @pytest.fixture

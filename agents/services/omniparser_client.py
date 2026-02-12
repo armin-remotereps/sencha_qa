@@ -5,7 +5,7 @@ import logging
 import httpx
 from django.conf import settings
 
-from omniparser.types import PixelBBox, PixelParseResult, PixelUIElement
+from omniparser_wrapper.types import PixelBBox, PixelParseResult, PixelUIElement
 
 logger = logging.getLogger(__name__)
 

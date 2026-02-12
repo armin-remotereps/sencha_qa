@@ -9,7 +9,7 @@ from agents.services.dmr_client import send_chat_completion
 from agents.services.omniparser_client import parse_screenshot_remote
 from agents.services.vnc_session import VncSessionManager
 from agents.types import ChatMessage, DMRConfig, ImageContent, TextContent
-from omniparser.types import PixelUIElement
+from omniparser_wrapper.types import PixelUIElement
 
 logger = logging.getLogger(__name__)
 

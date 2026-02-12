@@ -11,7 +11,7 @@ from agents.services.omniparser_client import (
     is_omniparser_configured,
     parse_screenshot_remote,
 )
-from omniparser.types import PixelBBox, PixelParseResult
+from omniparser_wrapper.types import PixelBBox, PixelParseResult
 
 
 @patch("agents.services.omniparser_client.settings")
