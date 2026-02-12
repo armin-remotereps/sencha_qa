@@ -687,3 +687,145 @@ def test_run_agent_uses_summarized_messages(
     sent_messages = call_args[0][1]
     assert len(sent_messages) == 2
     assert sent_messages[1].content == "summary"
+
+
+@patch("agents.services.agent_loop.summarize_context_if_needed")
+@patch("agents.services.agent_loop.get_all_tool_definitions")
+@patch("agents.services.agent_loop.send_chat_completion")
+def test_on_log_callback_fires_on_task_complete(
+    mock_send: MagicMock,
+    mock_tools: MagicMock,
+    mock_summarize_ctx: MagicMock,
+    mock_ports: ContainerPorts,
+) -> None:
+    """Test that on_log callback is called during agent loop."""
+    mock_tools.return_value = ()
+    mock_summarize_ctx.side_effect = lambda msgs, **kw: msgs
+    mock_send.return_value = DMRResponse(
+        message=ChatMessage(role="assistant", content="Done"),
+        finish_reason="stop",
+        usage_prompt_tokens=10,
+        usage_completion_tokens=5,
+    )
+
+    log_messages: list[str] = []
+    config = AgentConfig(
+        dmr=DMRConfig(host="localhost", port="12434", model="test"),
+        max_iterations=5,
+        on_log=log_messages.append,
+    )
+
+    context = ToolContext(
+        ports=mock_ports,
+        ssh_session=MagicMock(),
+        playwright_session=MagicMock(),
+        vnc_session=MagicMock(),
+    )
+
+    result = _run_agent_loop("Test task", context, config=config)
+
+    assert result.stop_reason == AgentStopReason.TASK_COMPLETE
+    assert len(log_messages) >= 2  # At least iteration + completion messages
+    assert any("Agent iteration" in msg for msg in log_messages)
+    assert any("Agent completed" in msg for msg in log_messages)
+
+
+@patch("agents.services.agent_loop.summarize_context_if_needed")
+@patch("agents.services.agent_loop.get_all_tool_definitions")
+@patch("agents.services.agent_loop.send_chat_completion")
+def test_on_log_callback_not_called_when_none(
+    mock_send: MagicMock,
+    mock_tools: MagicMock,
+    mock_summarize_ctx: MagicMock,
+    mock_ports: ContainerPorts,
+) -> None:
+    """Test that no error when on_log is None."""
+    mock_tools.return_value = ()
+    mock_summarize_ctx.side_effect = lambda msgs, **kw: msgs
+    mock_send.return_value = DMRResponse(
+        message=ChatMessage(role="assistant", content="Done"),
+        finish_reason="stop",
+        usage_prompt_tokens=10,
+        usage_completion_tokens=5,
+    )
+
+    config = AgentConfig(
+        dmr=DMRConfig(host="localhost", port="12434", model="test"),
+        max_iterations=5,
+    )
+
+    context = ToolContext(
+        ports=mock_ports,
+        ssh_session=MagicMock(),
+        playwright_session=MagicMock(),
+        vnc_session=MagicMock(),
+    )
+
+    result = _run_agent_loop("Test task", context, config=config)
+    assert result.stop_reason == AgentStopReason.TASK_COMPLETE
+
+
+@patch("agents.services.agent_loop.summarize_context_if_needed")
+@patch("agents.services.agent_loop.get_all_tool_definitions")
+@patch("agents.services.agent_loop.send_chat_completion")
+@patch("agents.services.agent_loop.dispatch_tool_call")
+def test_on_log_callback_fires_on_tool_calls(
+    mock_dispatch: MagicMock,
+    mock_send: MagicMock,
+    mock_tools: MagicMock,
+    mock_summarize_ctx: MagicMock,
+    mock_ports: ContainerPorts,
+) -> None:
+    """Test that on_log fires for tool call and tool result messages."""
+    mock_tools.return_value = ()
+    mock_summarize_ctx.side_effect = lambda msgs, **kw: msgs
+    mock_dispatch.return_value = ToolResult(
+        tool_call_id="call_1", content="tool output", is_error=False
+    )
+
+    # First call: tool call, Second call: task complete
+    mock_send.side_effect = [
+        DMRResponse(
+            message=ChatMessage(
+                role="assistant",
+                content="Let me use a tool",
+                tool_calls=(
+                    ToolCall(
+                        tool_call_id="call_1",
+                        tool_name="test_tool",
+                        arguments={"arg": "val"},
+                    ),
+                ),
+            ),
+            finish_reason="tool_calls",
+            usage_prompt_tokens=10,
+            usage_completion_tokens=5,
+        ),
+        DMRResponse(
+            message=ChatMessage(role="assistant", content="All done"),
+            finish_reason="stop",
+            usage_prompt_tokens=10,
+            usage_completion_tokens=5,
+        ),
+    ]
+
+    log_messages: list[str] = []
+    config = AgentConfig(
+        dmr=DMRConfig(host="localhost", port="12434", model="test"),
+        max_iterations=5,
+        on_log=log_messages.append,
+    )
+
+    context = ToolContext(
+        ports=mock_ports,
+        ssh_session=MagicMock(),
+        playwright_session=MagicMock(),
+        vnc_session=MagicMock(),
+    )
+
+    result = _run_agent_loop("Test task", context, config=config)
+
+    assert result.stop_reason == AgentStopReason.TASK_COMPLETE
+    assert any("[Tool Call]" in msg for msg in log_messages)
+    assert any("[Tool Result]" in msg for msg in log_messages)
+    assert any("[Agent]" in msg for msg in log_messages)

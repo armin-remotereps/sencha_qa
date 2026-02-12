@@ -78,7 +78,7 @@ def test_find_element_delegates_to_omniparser_when_configured(
     assert (x, y) == (100, 200)
     mock_is_configured.assert_called_once()
     mock_omniparser_find.assert_called_once_with(
-        mock_vnc_session, "OK button", vision_config
+        mock_vnc_session, "OK button", vision_config, on_screenshot=None
     )
     mock_vnc_session.capture_screen.assert_not_called()
 

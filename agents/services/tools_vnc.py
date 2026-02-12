@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Callable
 
 from agents.services.tool_utils import safe_tool_call
 from agents.services.vision_qa import answer_screenshot_question
@@ -14,10 +15,13 @@ def vnc_take_screenshot(
     *,
     question: str,
     vision_config: DMRConfig,
+    on_screenshot: Callable[[str, str], None] | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
         screenshot_bytes = vnc_session.capture_screen()
         image_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+        if on_screenshot is not None:
+            on_screenshot(image_base64, "vnc_take_screenshot")
         answer = answer_screenshot_question(vision_config, image_base64, question)
         return ToolResult(
             tool_call_id="",
@@ -33,9 +37,12 @@ def vnc_click(
     *,
     description: str,
     vision_config: DMRConfig,
+    on_screenshot: Callable[[str, str], None] | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        x, y = find_element_coordinates(vnc_session, description, vision_config)
+        x, y = find_element_coordinates(
+            vnc_session, description, vision_config, on_screenshot=on_screenshot
+        )
         vnc_session.mouse_click(x, y)
         return ToolResult(
             tool_call_id="",
@@ -52,9 +59,12 @@ def vnc_type(
     description: str,
     text: str,
     vision_config: DMRConfig,
+    on_screenshot: Callable[[str, str], None] | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        x, y = find_element_coordinates(vnc_session, description, vision_config)
+        x, y = find_element_coordinates(
+            vnc_session, description, vision_config, on_screenshot=on_screenshot
+        )
         vnc_session.mouse_click(x, y)
         vnc_session.type_text(text)
         return ToolResult(
@@ -71,9 +81,12 @@ def vnc_hover(
     *,
     description: str,
     vision_config: DMRConfig,
+    on_screenshot: Callable[[str, str], None] | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        x, y = find_element_coordinates(vnc_session, description, vision_config)
+        x, y = find_element_coordinates(
+            vnc_session, description, vision_config, on_screenshot=on_screenshot
+        )
         vnc_session.mouse_move(x, y)
         return ToolResult(
             tool_call_id="",

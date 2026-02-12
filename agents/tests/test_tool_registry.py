@@ -262,6 +262,7 @@ def test_dispatch_browser_passes_playwright_session(test_context: ToolContext) -
         test_context.playwright_session,
         url="https://example.com",
         vision_config=test_context.vision_config,
+        on_screenshot=test_context.on_screenshot,
     )
 
 
@@ -293,6 +294,7 @@ def test_dispatch_vnc_click(test_context: ToolContext) -> None:
         test_context.vnc_session,
         description="the OK button",
         vision_config=test_context.vision_config,
+        on_screenshot=test_context.on_screenshot,
     )
 
 
@@ -319,6 +321,7 @@ def test_dispatch_vnc_type(test_context: ToolContext) -> None:
         description="search box",
         text="hello",
         vision_config=test_context.vision_config,
+        on_screenshot=test_context.on_screenshot,
     )
 
 

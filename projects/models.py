@@ -37,6 +37,19 @@ class UploadStatus(models.TextChoices):
     CANCELLED = "cancelled", "Cancelled"
 
 
+class TestRunStatus(models.TextChoices):
+    WAITING = "waiting", "Waiting"
+    STARTED = "started", "Started"
+    DONE = "done", "Done"
+
+
+class TestRunTestCaseStatus(models.TextChoices):
+    CREATED = "created", "Created"
+    IN_PROGRESS = "in_progress", "In Progress"
+    SUCCESS = "success", "Success"
+    FAILED = "failed", "Failed"
+
+
 class Tag(models.Model):
     name = models.CharField(max_length=50, unique=True, db_index=True)
 
@@ -148,3 +161,69 @@ class TestCase(models.Model):
 
     def __str__(self) -> str:
         return self.title
+
+
+class TestRun(models.Model):
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="test_runs"
+    )
+    test_cases: models.ManyToManyField[TestCase, "TestRunTestCase"] = (
+        models.ManyToManyField(
+            TestCase, through="TestRunTestCase", related_name="test_runs"
+        )
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=TestRunStatus.choices,
+        default=TestRunStatus.WAITING,
+        db_index=True,
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"TestRun #{self.pk} — {self.project.name}"
+
+
+class TestRunTestCase(models.Model):
+    test_run = models.ForeignKey(
+        TestRun, on_delete=models.CASCADE, related_name="pivot_entries"
+    )
+    test_case = models.ForeignKey(
+        TestCase, on_delete=models.CASCADE, related_name="run_entries"
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=TestRunTestCaseStatus.choices,
+        default=TestRunTestCaseStatus.CREATED,
+        db_index=True,
+    )
+    result = models.TextField(blank=True, default="")
+    logs = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("test_run", "test_case")
+
+    def __str__(self) -> str:
+        return f"TRTC #{self.pk} — {self.test_case.title[:50]}"
+
+
+def _screenshot_upload_path(instance: "TestRunScreenshot", filename: str) -> str:
+    return f"screenshots/trtc_{instance.test_run_test_case_id}/{filename}"
+
+
+class TestRunScreenshot(models.Model):
+    test_run_test_case = models.ForeignKey(
+        TestRunTestCase, on_delete=models.CASCADE, related_name="screenshots"
+    )
+    image = models.ImageField(upload_to=_screenshot_upload_path)
+    tool_name = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self) -> str:
+        return f"Screenshot #{self.pk} — {self.tool_name}"

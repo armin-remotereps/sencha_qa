@@ -1,16 +1,37 @@
 from __future__ import annotations
 
+import base64
+import dataclasses
 import html
+import logging
+import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import asdict
 
+from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
 from django.core.paginator import Page, Paginator
 from django.db import transaction
 from django.db.models import QuerySet
 
 from accounts.models import CustomUser
+from agents.services.agent_loop import build_agent_config, run_agent
+from agents.types import (
+    AgentConfig,
+    AgentResult,
+    AgentStopReason,
+    ChatMessage,
+    ScreenshotCallback,
+)
+from environments.services.docker_client import (
+    close_docker_client,
+    get_docker_client,
+)
+from environments.services.orchestration import (
+    provision_environment,
+    teardown_environment,
+)
 from projects.models import (
     ParsedTestCase,
     Project,
@@ -18,8 +39,15 @@ from projects.models import (
     TestCase,
     TestCaseData,
     TestCaseUpload,
+    TestRun,
+    TestRunScreenshot,
+    TestRunStatus,
+    TestRunTestCase,
+    TestRunTestCaseStatus,
     UploadStatus,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @transaction.atomic
@@ -393,3 +421,150 @@ def _split_into_batches(
     items: list[ParsedTestCase], batch_size: int
 ) -> list[list[ParsedTestCase]]:
     return [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
+
+
+# ============================================================================
+# TEST RUN EXECUTION SERVICES
+# ============================================================================
+
+
+def execute_test_run_test_case(pivot_id: int) -> None:
+    pivot = _fetch_pivot(pivot_id)
+    _mark_pivot_in_progress(pivot)
+
+    client = get_docker_client()
+    container_id = ""
+    try:
+        container_info = provision_environment(client, name_suffix=f"trtc-{pivot_id}")
+        container_id = container_info.container_id
+
+        on_log = _build_log_callback(pivot)
+        on_screenshot = _build_screenshot_callback(pivot)
+        config = _build_config_with_callbacks(
+            build_agent_config(), on_log, on_screenshot
+        )
+        task_description = _build_task_description(pivot.test_case)
+
+        result = run_agent(task_description, container_info.ports, config=config)
+        _finalize_pivot(pivot, result)
+    except Exception as exc:
+        logger.exception("execute_test_run_test_case failed for pivot %d", pivot_id)
+        _mark_pivot_failed(pivot, str(exc))
+    finally:
+        if container_id:
+            teardown_environment(client, container_id)
+        close_docker_client(client)
+        _update_test_run_status_if_needed(pivot.test_run)
+
+
+def _fetch_pivot(pivot_id: int) -> TestRunTestCase:
+    return TestRunTestCase.objects.select_related("test_run", "test_case").get(
+        pk=pivot_id
+    )
+
+
+def _mark_pivot_in_progress(pivot: TestRunTestCase) -> None:
+    pivot.status = TestRunTestCaseStatus.IN_PROGRESS
+    pivot.save(update_fields=["status", "updated_at"])
+
+    test_run = pivot.test_run
+    if test_run.status == TestRunStatus.WAITING:
+        test_run.status = TestRunStatus.STARTED
+        test_run.save(update_fields=["status", "updated_at"])
+
+
+def _build_log_callback(pivot: TestRunTestCase) -> Callable[[str], None]:
+    def _append_log(message: str) -> None:
+        pivot.logs += message + "\n"
+        pivot.save(update_fields=["logs", "updated_at"])
+
+    return _append_log
+
+
+def _build_screenshot_callback(pivot: TestRunTestCase) -> ScreenshotCallback:
+    def _save_screenshot(base64_data: str, tool_name: str) -> None:
+        image_bytes = _decode_base64_image(base64_data)
+        filename = _generate_screenshot_filename(tool_name)
+        _persist_screenshot(pivot, image_bytes, filename, tool_name)
+
+    return _save_screenshot
+
+
+def _decode_base64_image(base64_data: str) -> bytes:
+    return base64.b64decode(base64_data)
+
+
+def _generate_screenshot_filename(tool_name: str) -> str:
+    timestamp_ms = int(time.time() * 1000)
+    return f"{timestamp_ms}_{tool_name}.png"
+
+
+def _persist_screenshot(
+    pivot: TestRunTestCase,
+    image_bytes: bytes,
+    filename: str,
+    tool_name: str,
+) -> None:
+    TestRunScreenshot.objects.create(
+        test_run_test_case=pivot,
+        image=ContentFile(image_bytes, name=filename),
+        tool_name=tool_name,
+    )
+
+
+def _build_config_with_callbacks(
+    config: AgentConfig,
+    on_log: Callable[[str], None],
+    on_screenshot: ScreenshotCallback,
+) -> AgentConfig:
+    return dataclasses.replace(config, on_log=on_log, on_screenshot=on_screenshot)
+
+
+def _build_task_description(test_case: TestCase) -> str:
+    parts: list[str] = [f"Test Case: {test_case.title}"]
+    if test_case.preconditions:
+        parts.append(f"\nPreconditions:\n{test_case.preconditions}")
+    if test_case.steps:
+        parts.append(f"\nSteps:\n{test_case.steps}")
+    if test_case.expected:
+        parts.append(f"\nExpected Result:\n{test_case.expected}")
+    return "\n".join(parts)
+
+
+def _finalize_pivot(pivot: TestRunTestCase, result: AgentResult) -> None:
+    if result.stop_reason == AgentStopReason.TASK_COMPLETE:
+        pivot.status = TestRunTestCaseStatus.SUCCESS
+    else:
+        pivot.status = TestRunTestCaseStatus.FAILED
+
+    pivot.result = _extract_agent_summary(result)
+    pivot.save(update_fields=["status", "result", "updated_at"])
+
+
+def _extract_agent_summary(result: AgentResult) -> str:
+    for message in reversed(result.messages):
+        if message.role == "assistant" and isinstance(message.content, str):
+            return message.content
+    return result.error or ""
+
+
+def _mark_pivot_failed(pivot: TestRunTestCase, error: str) -> None:
+    pivot.status = TestRunTestCaseStatus.FAILED
+    pivot.result = error
+    pivot.save(update_fields=["status", "result", "updated_at"])
+
+
+def _update_test_run_status_if_needed(test_run: TestRun) -> None:
+    test_run.refresh_from_db()
+    all_pivots = test_run.pivot_entries.all()
+
+    if not all_pivots.exists():
+        return
+
+    all_done = not all_pivots.filter(
+        status__in=[TestRunTestCaseStatus.CREATED, TestRunTestCaseStatus.IN_PROGRESS]
+    ).exists()
+
+    if all_done:
+        test_run.status = TestRunStatus.DONE
+        test_run.save(update_fields=["status", "updated_at"])

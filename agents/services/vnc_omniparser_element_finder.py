@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
+from collections.abc import Callable
 
 from agents.exceptions import VncElementNotFoundError
 from agents.services.dmr_client import send_chat_completion
@@ -29,11 +30,16 @@ def find_element_coordinates_omniparser(
     vnc_session: VncSessionManager,
     description: str,
     vision_config: DMRConfig,
+    *,
+    on_screenshot: Callable[[str, str], None] | None = None,
 ) -> tuple[int, int]:
     screenshot_bytes = vnc_session.capture_screen()
     image_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
 
     parse_result = parse_screenshot_remote(image_base64)
+
+    if on_screenshot is not None:
+        on_screenshot(parse_result.annotated_image, "vnc_omniparser")
 
     if not parse_result.elements:
         msg = f"OmniParser found no UI elements on screen for: {description}"

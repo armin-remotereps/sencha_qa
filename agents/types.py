@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from agents.services.playwright_session import PlaywrightSessionManager
@@ -56,7 +57,6 @@ class ToolResult:
     is_error: bool
 
 
-# Multimodal content
 @dataclass(frozen=True)
 class TextContent:
     text: str
@@ -102,12 +102,18 @@ class DMRResponse:
     reasoning_content: str | None = None
 
 
+class ScreenshotCallback(Protocol):
+    def __call__(self, base64_data: str, tool_name: str) -> None: ...
+
+
 @dataclass(frozen=True)
 class AgentConfig:
     dmr: DMRConfig
     vision_dmr: DMRConfig | None = None
     max_iterations: int = 30
     timeout_seconds: int = 900
+    on_log: Callable[[str], None] | None = None
+    on_screenshot: ScreenshotCallback | None = None
 
 
 @dataclass(frozen=True)
@@ -126,3 +132,4 @@ class ToolContext:
     vnc_session: VncSessionManager
     summarizer_config: DMRConfig | None = None
     vision_config: DMRConfig | None = None
+    on_screenshot: ScreenshotCallback | None = None

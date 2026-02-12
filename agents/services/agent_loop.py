@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 
 from django.conf import settings
 
@@ -28,6 +29,12 @@ from agents.types import (
 from environments.types import ContainerPorts
 
 logger = logging.getLogger(__name__)
+
+
+def _debug_log(message: str, on_log: Callable[[str], None] | None) -> None:
+    logger.debug(message)
+    if on_log is not None:
+        on_log(message)
 
 
 def build_system_prompt(task_description: str) -> str:
@@ -147,6 +154,7 @@ def run_agent(
             vnc_session=resources.vnc,
             summarizer_config=summarizer_config,
             vision_config=config.vision_dmr,
+            on_screenshot=config.on_screenshot,
         )
         return _run_agent_loop(task_description, context, config=config)
 
@@ -168,6 +176,7 @@ def _run_agent_loop(
 
     start_time = time.monotonic()
     iterations = 0
+    on_log = config.on_log
 
     while iterations < config.max_iterations:
         # Check timeout
@@ -182,7 +191,7 @@ def _run_agent_loop(
             )
 
         iterations += 1
-        logger.info("Agent iteration %d/%d", iterations, config.max_iterations)
+        _debug_log(f"Agent iteration {iterations}/{config.max_iterations}", on_log)
 
         messages = summarize_context_if_needed(
             messages,
@@ -206,16 +215,16 @@ def _run_agent_loop(
 
         # Log agent thinking and response
         if response.reasoning_content:
-            logger.info("[Thinking] %s", response.reasoning_content)
+            _debug_log(f"[Thinking] {response.reasoning_content}", on_log)
         if isinstance(response.message.content, str) and response.message.content:
-            logger.info("[Agent] %s", response.message.content)
+            _debug_log(f"[Agent] {response.message.content}", on_log)
 
         # Add assistant message to history
         messages.append(response.message)
 
         # If no tool calls, the agent is done
         if response.message.tool_calls is None:
-            logger.info("Agent completed task after %d iterations", iterations)
+            _debug_log(f"Agent completed task after {iterations} iterations", on_log)
             return AgentResult(
                 stop_reason=AgentStopReason.TASK_COMPLETE,
                 iterations=iterations,
@@ -224,14 +233,16 @@ def _run_agent_loop(
 
         # Execute tool calls
         for tool_call in response.message.tool_calls:
-            logger.info("[Tool Call] %s(%s)", tool_call.tool_name, tool_call.arguments)
+            _debug_log(
+                f"[Tool Call] {tool_call.tool_name}({tool_call.arguments})", on_log
+            )
             tool_result = dispatch_tool_call(tool_call, context)
 
             tool_message = _build_tool_result_message(
                 tool_result,
                 summarizer_config=context.summarizer_config,
             )
-            logger.info("[Tool Result] %s", tool_message.content)
+            _debug_log(f"[Tool Result] {tool_message.content}", on_log)
             messages.append(tool_message)
 
     logger.warning("Agent hit max iterations: %d", config.max_iterations)

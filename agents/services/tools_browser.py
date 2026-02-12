@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+from collections.abc import Callable
 
 from agents.services.element_finder import find_element_by_description
 from agents.services.playwright_session import BROWSER_TIMEOUT, PlaywrightSessionManager
@@ -17,6 +18,7 @@ def browser_navigate(
     *,
     url: str,
     vision_config: DMRConfig | None = None,
+    on_screenshot: Callable[[str, str], None] | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
         page = pw_session.get_page()
@@ -28,6 +30,8 @@ def browser_navigate(
             try:
                 screenshot_bytes = page.screenshot()
                 image_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+                if on_screenshot is not None:
+                    on_screenshot(image_base64, "browser_navigate")
                 description = answer_screenshot_question(
                     vision_config, image_base64, "Describe what this page is showing."
                 )
@@ -136,11 +140,14 @@ def browser_take_screenshot(
     *,
     question: str,
     vision_config: DMRConfig,
+    on_screenshot: Callable[[str, str], None] | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
         page = pw_session.get_page()
         screenshot_bytes = page.screenshot()
         image_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+        if on_screenshot is not None:
+            on_screenshot(image_base64, "browser_take_screenshot")
         answer = answer_screenshot_question(vision_config, image_base64, question)
         return ToolResult(
             tool_call_id="",

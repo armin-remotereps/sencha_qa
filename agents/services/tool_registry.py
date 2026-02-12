@@ -51,7 +51,10 @@ def _handle_take_screenshot(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_screen.take_screenshot(
-        context.ssh_session, question=question, vision_config=context.vision_config
+        context.ssh_session,
+        question=question,
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
     )
 
 
@@ -95,7 +98,10 @@ def _handle_browser_navigate(
 ) -> ToolResult:
     url = str(arguments.get("url", ""))
     return tools_browser.browser_navigate(
-        context.playwright_session, url=url, vision_config=context.vision_config
+        context.playwright_session,
+        url=url,
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
     )
 
 
@@ -173,6 +179,7 @@ def _handle_browser_take_screenshot(
         context.playwright_session,
         question=question,
         vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
     )
 
 
@@ -188,6 +195,7 @@ def _handle_vnc_take_screenshot(
         context.vnc_session,
         question=question,
         vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
     )
 
 
@@ -201,6 +209,7 @@ def _handle_vnc_click(context: ToolContext, arguments: dict[str, object]) -> Too
         context.vnc_session,
         description=description,
         vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
     )
 
 
@@ -216,6 +225,7 @@ def _handle_vnc_type(context: ToolContext, arguments: dict[str, object]) -> Tool
         description=description,
         text=text,
         vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
     )
 
 
@@ -229,6 +239,7 @@ def _handle_vnc_hover(context: ToolContext, arguments: dict[str, object]) -> Too
         context.vnc_session,
         description=description,
         vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
     )
 
 

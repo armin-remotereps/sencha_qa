@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
+from collections.abc import Callable
 
 from agents.services.dmr_client import send_chat_completion
 from agents.services.omniparser_client import is_omniparser_configured
@@ -22,14 +23,18 @@ def find_element_coordinates(
     vnc_session: VncSessionManager,
     description: str,
     vision_config: DMRConfig,
+    *,
+    on_screenshot: Callable[[str, str], None] | None = None,
 ) -> tuple[int, int]:
     if is_omniparser_configured():
         return find_element_coordinates_omniparser(
-            vnc_session, description, vision_config
+            vnc_session, description, vision_config, on_screenshot=on_screenshot
         )
 
     screenshot_bytes = vnc_session.capture_screen()
     image_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+    if on_screenshot is not None:
+        on_screenshot(image_base64, "vnc_element_finder")
     return _query_vision_model(image_base64, description, vision_config)
 
 

@@ -4,7 +4,17 @@ from django.contrib import admin
 from django.db.models import QuerySet
 from django.http import HttpRequest
 
-from projects.models import Project, Tag, TestCase, TestCaseUpload
+from projects.models import (
+    Project,
+    Tag,
+    TestCase,
+    TestCaseUpload,
+    TestRun,
+    TestRunScreenshot,
+    TestRunStatus,
+    TestRunTestCase,
+    TestRunTestCaseStatus,
+)
 
 
 @admin.register(Tag)
@@ -60,3 +70,38 @@ class TestCaseUploadAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
     )
     list_filter = ("status", "project")
     search_fields = ("original_filename",)
+
+
+class TestRunTestCaseInline(admin.TabularInline):  # type: ignore[type-arg]
+    model = TestRunTestCase
+    extra = 1
+    readonly_fields = ("status", "result", "logs")
+
+
+@admin.register(TestRun)
+class TestRunAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
+    list_display = ("id", "project", "status", "created_at")
+    list_filter = ("status", "project")
+    readonly_fields = ("status",)
+    inlines = [TestRunTestCaseInline]
+
+
+class TestRunScreenshotInline(admin.TabularInline):  # type: ignore[type-arg]
+    model = TestRunScreenshot
+    extra = 0
+    readonly_fields = ("image", "tool_name", "created_at")
+
+
+@admin.register(TestRunTestCase)
+class TestRunTestCaseAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
+    list_display = ("id", "test_run", "test_case", "status", "created_at")
+    list_filter = ("status",)
+    readonly_fields = ("status", "result", "logs")
+    inlines = [TestRunScreenshotInline]
+
+
+@admin.register(TestRunScreenshot)
+class TestRunScreenshotAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
+    list_display = ("id", "test_run_test_case", "tool_name", "created_at")
+    list_filter = ("tool_name",)
+    readonly_fields = ("image", "tool_name", "created_at")

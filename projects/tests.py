@@ -1,10 +1,20 @@
+import base64
+from unittest.mock import MagicMock, patch
+
 from django.contrib.admin.sites import AdminSite
 from django.db import IntegrityError
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
 from accounts.models import CustomUser
-from projects.admin import ProjectAdmin, TagAdmin, TestCaseAdmin
+from projects.admin import (
+    ProjectAdmin,
+    TagAdmin,
+    TestCaseAdmin,
+    TestRunAdmin,
+    TestRunScreenshotAdmin,
+    TestRunTestCaseAdmin,
+)
 from projects.forms import ProjectForm, TestCaseForm
 from projects.models import (
     Project,
@@ -16,13 +26,28 @@ from projects.models import (
     TestCasePriority,
     TestCaseType,
     TestCaseUpload,
+    TestRun,
+    TestRunScreenshot,
+    TestRunStatus,
+    TestRunTestCase,
+    TestRunTestCaseStatus,
     UploadStatus,
 )
 from projects.services import (
+    _build_log_callback,
+    _build_screenshot_callback,
+    _build_task_description,
+    _extract_agent_summary,
+    _fetch_pivot,
+    _finalize_pivot,
+    _mark_pivot_failed,
+    _mark_pivot_in_progress,
+    _update_test_run_status_if_needed,
     archive_project,
     create_project,
     create_test_case,
     delete_test_case,
+    execute_test_run_test_case,
     get_all_tags_for_user,
     get_project_by_id,
     get_project_for_user,
@@ -3054,3 +3079,520 @@ class TestCaseUploadAdminTests(TestCase):
         upload_admin = TestCaseUploadAdmin(TestCaseUpload, site)
         expected_search = ("original_filename",)
         self.assertEqual(upload_admin.search_fields, expected_search)
+
+
+# ============================================================================
+# TEST RUN MODEL TESTS
+# ============================================================================
+
+
+class TestRunModelTests(TestCase):
+    """Tests for TestRun model."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="testrunuser@example.com", password="pass123"
+        )
+        self.project = Project.objects.create(name="TestRun Project")
+
+    def test_should_create_test_run_with_defaults(self) -> None:
+        run = TestRun.objects.create(project=self.project)
+        self.assertEqual(run.status, TestRunStatus.WAITING)
+        self.assertIsNotNone(run.created_at)
+        self.assertIsNotNone(run.updated_at)
+
+    def test_should_return_str_with_id_and_project(self) -> None:
+        run = TestRun.objects.create(project=self.project)
+        self.assertIn("TestRun Project", str(run))
+        self.assertIn(str(run.pk), str(run))
+
+    def test_should_cascade_delete_with_project(self) -> None:
+        TestRun.objects.create(project=self.project)
+        self.project.delete()
+        self.assertEqual(TestRun.objects.count(), 0)
+
+
+class TestRunTestCaseModelTests(TestCase):
+    """Tests for TestRunTestCase pivot model."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Pivot Project")
+        self.test_case = TestCaseModel.objects.create(project=self.project, title="TC1")
+        self.tr = TestRun.objects.create(project=self.project)
+
+    def test_should_create_pivot_with_defaults(self) -> None:
+        pivot = TestRunTestCase.objects.create(
+            test_run=self.tr, test_case=self.test_case
+        )
+        self.assertEqual(pivot.status, TestRunTestCaseStatus.CREATED)
+        self.assertEqual(pivot.result, "")
+        self.assertEqual(pivot.logs, "")
+
+    def test_should_enforce_unique_together(self) -> None:
+        TestRunTestCase.objects.create(test_run=self.tr, test_case=self.test_case)
+        with self.assertRaises(IntegrityError):
+            TestRunTestCase.objects.create(test_run=self.tr, test_case=self.test_case)
+
+    def test_should_access_test_cases_through_m2m(self) -> None:
+        TestRunTestCase.objects.create(test_run=self.tr, test_case=self.test_case)
+        self.assertIn(self.test_case, self.tr.test_cases.all())
+
+    def test_should_return_str_with_id_and_title(self) -> None:
+        pivot = TestRunTestCase.objects.create(
+            test_run=self.tr, test_case=self.test_case
+        )
+        self.assertIn(str(pivot.pk), str(pivot))
+        self.assertIn("TC1", str(pivot))
+
+    def test_should_cascade_delete_with_test_run(self) -> None:
+        TestRunTestCase.objects.create(test_run=self.tr, test_case=self.test_case)
+        self.tr.delete()
+        self.assertEqual(TestRunTestCase.objects.count(), 0)
+
+
+class TestRunAdminTests(TestCase):
+    """Tests for TestRun and TestRunTestCase admin registration."""
+
+    def setUp(self) -> None:
+        self.site = AdminSite()
+        self.user = CustomUser.objects.create_superuser(
+            email="admin@example.com", password="pass123"
+        )
+        self.client.login(email="admin@example.com", password="pass123")
+
+    def test_should_register_test_run_admin(self) -> None:
+        admin_instance = TestRunAdmin(TestRun, self.site)
+        self.assertIn("id", admin_instance.list_display)
+        self.assertIn("status", admin_instance.list_display)
+
+    def test_should_register_test_run_test_case_admin(self) -> None:
+        admin_instance = TestRunTestCaseAdmin(TestRunTestCase, self.site)
+        self.assertIn("id", admin_instance.list_display)
+        self.assertIn("status", admin_instance.list_display)
+
+    def test_should_have_inline_on_test_run(self) -> None:
+        admin_instance = TestRunAdmin(TestRun, self.site)
+        request = RequestFactory().get("/admin/")
+        request.user = self.user
+        inline_classes = [type(i) for i in admin_instance.get_inline_instances(request)]
+        from projects.admin import TestRunTestCaseInline
+
+        self.assertIn(TestRunTestCaseInline, inline_classes)
+
+
+# ============================================================================
+# TEST RUN EXECUTION SERVICE TESTS
+# ============================================================================
+
+
+class FetchPivotTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Fetch Pivot Proj")
+        self.tc = TestCaseModel.objects.create(project=self.project, title="TC fetch")
+        self.tr = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(test_run=self.tr, test_case=self.tc)
+
+    def test_should_fetch_pivot_with_relations(self) -> None:
+        fetched = _fetch_pivot(self.pivot.pk)
+        self.assertEqual(fetched.pk, self.pivot.pk)
+        self.assertEqual(fetched.test_case.title, "TC fetch")
+        self.assertEqual(fetched.test_run.project.name, "Fetch Pivot Proj")
+
+    def test_should_raise_on_missing_pivot(self) -> None:
+        with self.assertRaises(TestRunTestCase.DoesNotExist):
+            _fetch_pivot(99999)
+
+
+class MarkPivotInProgressTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Mark Proj")
+        self.tc = TestCaseModel.objects.create(project=self.project, title="TC mark")
+        self.tr = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(test_run=self.tr, test_case=self.tc)
+
+    def test_should_set_pivot_to_in_progress(self) -> None:
+        _mark_pivot_in_progress(self.pivot)
+        self.pivot.refresh_from_db()
+        self.assertEqual(self.pivot.status, TestRunTestCaseStatus.IN_PROGRESS)
+
+    def test_should_set_test_run_to_started(self) -> None:
+        _mark_pivot_in_progress(self.pivot)
+        self.tr.refresh_from_db()
+        self.assertEqual(self.tr.status, TestRunStatus.STARTED)
+
+    def test_should_not_revert_started_status(self) -> None:
+        self.tr.status = TestRunStatus.STARTED
+        self.tr.save()
+        _mark_pivot_in_progress(self.pivot)
+        self.tr.refresh_from_db()
+        self.assertEqual(self.tr.status, TestRunStatus.STARTED)
+
+
+class BuildLogCallbackTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Log Proj")
+        self.tc = TestCaseModel.objects.create(project=self.project, title="TC log")
+        self.tr = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(test_run=self.tr, test_case=self.tc)
+
+    def test_should_append_log_to_pivot(self) -> None:
+        callback = _build_log_callback(self.pivot)
+        callback("line one")
+        callback("line two")
+        self.pivot.refresh_from_db()
+        self.assertIn("line one", self.pivot.logs)
+        self.assertIn("line two", self.pivot.logs)
+
+
+class BuildTaskDescriptionTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Desc Proj")
+
+    def test_should_include_title(self) -> None:
+        tc = TestCaseModel.objects.create(project=self.project, title="Login Test")
+        desc = _build_task_description(tc)
+        self.assertIn("Login Test", desc)
+
+    def test_should_include_all_fields(self) -> None:
+        tc = TestCaseModel.objects.create(
+            project=self.project,
+            title="Full Test",
+            preconditions="User logged in",
+            steps="1. Click button",
+            expected="Page loads",
+        )
+        desc = _build_task_description(tc)
+        self.assertIn("Preconditions:", desc)
+        self.assertIn("User logged in", desc)
+        self.assertIn("Steps:", desc)
+        self.assertIn("1. Click button", desc)
+        self.assertIn("Expected Result:", desc)
+        self.assertIn("Page loads", desc)
+
+
+class FinalizePivotTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Final Proj")
+        self.tc = TestCaseModel.objects.create(project=self.project, title="TC final")
+        self.tr = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(test_run=self.tr, test_case=self.tc)
+
+    def test_should_mark_success_on_task_complete(self) -> None:
+        from agents.types import AgentResult, AgentStopReason, ChatMessage
+
+        result = AgentResult(
+            stop_reason=AgentStopReason.TASK_COMPLETE,
+            iterations=2,
+            messages=(ChatMessage(role="assistant", content="All done"),),
+        )
+        _finalize_pivot(self.pivot, result)
+        self.pivot.refresh_from_db()
+        self.assertEqual(self.pivot.status, TestRunTestCaseStatus.SUCCESS)
+        self.assertEqual(self.pivot.result, "All done")
+
+    def test_should_mark_failed_on_error(self) -> None:
+        from agents.types import AgentResult, AgentStopReason
+
+        result = AgentResult(
+            stop_reason=AgentStopReason.ERROR,
+            iterations=1,
+            messages=(),
+            error="Something broke",
+        )
+        _finalize_pivot(self.pivot, result)
+        self.pivot.refresh_from_db()
+        self.assertEqual(self.pivot.status, TestRunTestCaseStatus.FAILED)
+        self.assertEqual(self.pivot.result, "Something broke")
+
+
+class ExtractAgentSummaryTests(TestCase):
+    def test_should_extract_last_assistant_message(self) -> None:
+        from agents.types import AgentResult, AgentStopReason, ChatMessage
+
+        result = AgentResult(
+            stop_reason=AgentStopReason.TASK_COMPLETE,
+            iterations=2,
+            messages=(
+                ChatMessage(role="assistant", content="First"),
+                ChatMessage(role="tool", content="tool output", tool_call_id="t1"),
+                ChatMessage(role="assistant", content="Final answer"),
+            ),
+        )
+        self.assertEqual(_extract_agent_summary(result), "Final answer")
+
+    def test_should_return_error_when_no_assistant(self) -> None:
+        from agents.types import AgentResult, AgentStopReason
+
+        result = AgentResult(
+            stop_reason=AgentStopReason.ERROR,
+            iterations=0,
+            messages=(),
+            error="broke",
+        )
+        self.assertEqual(_extract_agent_summary(result), "broke")
+
+
+class MarkPivotFailedTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Fail Proj")
+        self.tc = TestCaseModel.objects.create(project=self.project, title="TC fail")
+        self.tr = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(test_run=self.tr, test_case=self.tc)
+
+    def test_should_mark_failed_with_error(self) -> None:
+        _mark_pivot_failed(self.pivot, "oops")
+        self.pivot.refresh_from_db()
+        self.assertEqual(self.pivot.status, TestRunTestCaseStatus.FAILED)
+        self.assertEqual(self.pivot.result, "oops")
+
+
+class UpdateTestRunStatusTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Status Proj")
+        self.tc1 = TestCaseModel.objects.create(project=self.project, title="TC1")
+        self.tc2 = TestCaseModel.objects.create(project=self.project, title="TC2")
+        self.tr = TestRun.objects.create(
+            project=self.project, status=TestRunStatus.STARTED
+        )
+
+    def test_should_mark_done_when_all_complete(self) -> None:
+        TestRunTestCase.objects.create(
+            test_run=self.tr,
+            test_case=self.tc1,
+            status=TestRunTestCaseStatus.SUCCESS,
+        )
+        TestRunTestCase.objects.create(
+            test_run=self.tr,
+            test_case=self.tc2,
+            status=TestRunTestCaseStatus.FAILED,
+        )
+        _update_test_run_status_if_needed(self.tr)
+        self.tr.refresh_from_db()
+        self.assertEqual(self.tr.status, TestRunStatus.DONE)
+
+    def test_should_not_mark_done_when_pending(self) -> None:
+        TestRunTestCase.objects.create(
+            test_run=self.tr,
+            test_case=self.tc1,
+            status=TestRunTestCaseStatus.SUCCESS,
+        )
+        TestRunTestCase.objects.create(
+            test_run=self.tr,
+            test_case=self.tc2,
+            status=TestRunTestCaseStatus.CREATED,
+        )
+        _update_test_run_status_if_needed(self.tr)
+        self.tr.refresh_from_db()
+        self.assertEqual(self.tr.status, TestRunStatus.STARTED)
+
+
+class ExecuteTestRunTestCaseIntegrationTests(TestCase):
+    """Integration test for the full execute_test_run_test_case flow."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Integration Proj")
+        self.tc = TestCaseModel.objects.create(
+            project=self.project,
+            title="Integration TC",
+            preconditions="None",
+            steps="1. Open app",
+            expected="App opens",
+        )
+        self.tr = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(test_run=self.tr, test_case=self.tc)
+
+    @patch("projects.services.run_agent")
+    @patch("projects.services.build_agent_config")
+    @patch("projects.services.teardown_environment")
+    @patch("projects.services.provision_environment")
+    @patch("projects.services.close_docker_client")
+    @patch("projects.services.get_docker_client")
+    def test_should_execute_full_flow_successfully(
+        self,
+        mock_get_client: MagicMock,
+        mock_close_client: MagicMock,
+        mock_provision: MagicMock,
+        mock_teardown: MagicMock,
+        mock_build_config: MagicMock,
+        mock_run_agent: MagicMock,
+    ) -> None:
+        from agents.types import (
+            AgentConfig,
+            AgentResult,
+            AgentStopReason,
+            ChatMessage,
+            DMRConfig,
+        )
+        from environments.types import ContainerInfo, ContainerPorts
+
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_provision.return_value = ContainerInfo(
+            container_id="abc123",
+            name="test-container",
+            ports=ContainerPorts(ssh=2222, vnc=5900, playwright_cdp=9222),
+            status="running",
+        )
+        mock_build_config.return_value = AgentConfig(
+            dmr=DMRConfig(host="localhost", port="12434", model="test"),
+        )
+        mock_run_agent.return_value = AgentResult(
+            stop_reason=AgentStopReason.TASK_COMPLETE,
+            iterations=3,
+            messages=(ChatMessage(role="assistant", content="Test passed!"),),
+        )
+
+        execute_test_run_test_case(self.pivot.pk)
+
+        self.pivot.refresh_from_db()
+        self.assertEqual(self.pivot.status, TestRunTestCaseStatus.SUCCESS)
+        self.assertEqual(self.pivot.result, "Test passed!")
+
+        self.tr.refresh_from_db()
+        self.assertEqual(self.tr.status, TestRunStatus.DONE)
+
+        mock_teardown.assert_called_once_with(mock_client, "abc123")
+        mock_close_client.assert_called_once_with(mock_client)
+
+    @patch("projects.services.run_agent")
+    @patch("projects.services.build_agent_config")
+    @patch("projects.services.teardown_environment")
+    @patch("projects.services.provision_environment")
+    @patch("projects.services.close_docker_client")
+    @patch("projects.services.get_docker_client")
+    def test_should_handle_exception_gracefully(
+        self,
+        mock_get_client: MagicMock,
+        mock_close_client: MagicMock,
+        mock_provision: MagicMock,
+        mock_teardown: MagicMock,
+        mock_build_config: MagicMock,
+        mock_run_agent: MagicMock,
+    ) -> None:
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+        mock_provision.side_effect = Exception("Docker failed")
+
+        execute_test_run_test_case(self.pivot.pk)
+
+        self.pivot.refresh_from_db()
+        self.assertEqual(self.pivot.status, TestRunTestCaseStatus.FAILED)
+        self.assertIn("Docker failed", self.pivot.result)
+        mock_close_client.assert_called_once_with(mock_client)
+
+
+# ============================================================================
+# TEST RUN SCREENSHOT MODEL TESTS
+# ============================================================================
+
+
+class TestRunScreenshotModelTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Screenshot Proj")
+        self.tc = TestCaseModel.objects.create(project=self.project, title="TC ss")
+        self.tr = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(test_run=self.tr, test_case=self.tc)
+
+    def test_should_create_screenshot(self) -> None:
+        from django.core.files.base import ContentFile
+
+        image_bytes = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4"
+            "2mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        )
+        ss = TestRunScreenshot.objects.create(
+            test_run_test_case=self.pivot,
+            image=ContentFile(image_bytes, name="test.png"),
+            tool_name="vnc_take_screenshot",
+        )
+        self.assertIsNotNone(ss.pk)
+        self.assertEqual(ss.tool_name, "vnc_take_screenshot")
+        self.assertIsNotNone(ss.created_at)
+
+    def test_should_return_str_representation(self) -> None:
+        from django.core.files.base import ContentFile
+
+        ss = TestRunScreenshot.objects.create(
+            test_run_test_case=self.pivot,
+            image=ContentFile(b"fake", name="test.png"),
+            tool_name="browser_navigate",
+        )
+        self.assertIn("browser_navigate", str(ss))
+
+    def test_should_cascade_delete_with_pivot(self) -> None:
+        from django.core.files.base import ContentFile
+
+        TestRunScreenshot.objects.create(
+            test_run_test_case=self.pivot,
+            image=ContentFile(b"fake", name="test.png"),
+            tool_name="take_screenshot",
+        )
+        self.assertEqual(TestRunScreenshot.objects.count(), 1)
+        self.pivot.delete()
+        self.assertEqual(TestRunScreenshot.objects.count(), 0)
+
+    def test_should_order_by_created_at(self) -> None:
+        from django.core.files.base import ContentFile
+
+        ss1 = TestRunScreenshot.objects.create(
+            test_run_test_case=self.pivot,
+            image=ContentFile(b"a", name="a.png"),
+            tool_name="first",
+        )
+        ss2 = TestRunScreenshot.objects.create(
+            test_run_test_case=self.pivot,
+            image=ContentFile(b"b", name="b.png"),
+            tool_name="second",
+        )
+        screenshots = list(self.pivot.screenshots.all())
+        self.assertEqual(screenshots[0].pk, ss1.pk)
+        self.assertEqual(screenshots[1].pk, ss2.pk)
+
+    def test_upload_path_contains_pivot_id(self) -> None:
+        from projects.models import _screenshot_upload_path
+
+        ss = TestRunScreenshot(test_run_test_case=self.pivot)
+        path = _screenshot_upload_path(ss, "1234_vnc.png")
+        self.assertIn(f"trtc_{self.pivot.pk}", path)
+        self.assertIn("1234_vnc.png", path)
+
+
+# ============================================================================
+# BUILD SCREENSHOT CALLBACK TESTS
+# ============================================================================
+
+
+class BuildScreenshotCallbackTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="SS Callback Proj")
+        self.tc = TestCaseModel.objects.create(
+            project=self.project, title="TC ss callback"
+        )
+        self.tr = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(test_run=self.tr, test_case=self.tc)
+
+    def test_should_create_screenshot_record(self) -> None:
+        callback = _build_screenshot_callback(self.pivot)
+        # 1x1 transparent PNG
+        b64 = (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4"
+            "2mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        )
+        callback(b64, "vnc_take_screenshot")
+        self.assertEqual(TestRunScreenshot.objects.count(), 1)
+        ss = TestRunScreenshot.objects.first()
+        assert ss is not None
+        self.assertEqual(ss.tool_name, "vnc_take_screenshot")
+        self.assertEqual(ss.test_run_test_case, self.pivot)
+
+    def test_should_create_multiple_screenshots(self) -> None:
+        callback = _build_screenshot_callback(self.pivot)
+        b64 = base64.b64encode(b"fake-image-data").decode()
+        callback(b64, "tool_a")
+        callback(b64, "tool_b")
+        callback(b64, "tool_c")
+        self.assertEqual(TestRunScreenshot.objects.count(), 3)
+        tool_names = list(TestRunScreenshot.objects.values_list("tool_name", flat=True))
+        self.assertIn("tool_a", tool_names)
+        self.assertIn("tool_b", tool_names)
+        self.assertIn("tool_c", tool_names)

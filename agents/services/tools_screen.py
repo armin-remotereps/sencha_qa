@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from agents.services.ssh_session import SSHSessionManager
 from agents.services.tool_utils import safe_tool_call
 from agents.services.vision_qa import answer_screenshot_question
@@ -11,6 +13,7 @@ def take_screenshot(
     *,
     question: str,
     vision_config: DMRConfig,
+    on_screenshot: Callable[[str, str], None] | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
         capture_cmd = "scrot -o /tmp/screenshot.png"
@@ -32,6 +35,8 @@ def take_screenshot(
             )
 
         image_base64 = read_result.stdout.strip()
+        if on_screenshot is not None:
+            on_screenshot(image_base64, "take_screenshot")
         answer = answer_screenshot_question(vision_config, image_base64, question)
         return ToolResult(
             tool_call_id="",

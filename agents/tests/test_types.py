@@ -132,7 +132,7 @@ def test_chat_message_as_tool_result() -> None:
 def test_dmr_config_defaults() -> None:
     """Test DMRConfig default values."""
     config = DMRConfig(host="localhost", port="8080", model="llama-3")
-    assert config.temperature == 0.1
+    assert config.temperature == 0.9
     assert config.max_tokens == 4096
 
 
@@ -155,7 +155,8 @@ def test_agent_config_defaults() -> None:
     dmr = DMRConfig(host="localhost", port="8080", model="llama-3")
     config = AgentConfig(dmr=dmr)
     assert config.max_iterations == 30
-    assert config.timeout_seconds == 300
+    assert config.timeout_seconds == 900
+    assert config.on_screenshot is None
 
 
 def test_agent_result_is_frozen() -> None:
