@@ -1,0 +1,132 @@
+{% extends "dashboard/base_dashboard.html" %}
+
+{% block dashboard_content %}
+<div>
+  {# BREADCRUMB #}
+  <nav class="mb-4 text-sm text-zinc-400">
+    <a href="{% url 'projects:list' %}" class="hover:text-zinc-200">Projects</a>
+    <span class="mx-1">/</span>
+    <a href="{% url 'projects:test_case_list' project_id=project.id %}" class="hover:text-zinc-200">{{ project.name }}</a>
+    <span class="mx-1">/</span>
+    <a href="{% url 'projects:test_run_list' project_id=project.id %}" class="hover:text-zinc-200">Test Runs</a>
+    <span class="mx-1">/</span>
+    <span class="text-zinc-200">#{{ test_run.id }}</span>
+  </nav>
+
+  {# HEADER #}
+  <div class="mb-6 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <h1 class="text-2xl font-bold text-zinc-100">Test Run #{{ test_run.id }}</h1>
+      {% if test_run.status == "waiting" %}
+      <span class="rounded-full bg-yellow-900/50 px-3 py-1 text-sm text-yellow-400">Waiting</span>
+      {% elif test_run.status == "started" %}
+      <span class="rounded-full bg-blue-900/50 px-3 py-1 text-sm text-blue-400">Started</span>
+      {% elif test_run.status == "done" %}
+      <span class="rounded-full bg-emerald-900/50 px-3 py-1 text-sm text-emerald-400">Done</span>
+      {% endif %}
+    </div>
+    <a
+      href="{% url 'projects:test_run_list' project_id=project.id %}"
+      class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
+    >
+      Back to Test Runs
+    </a>
+  </div>
+
+  {# SUMMARY CARDS #}
+  <div class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+    <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
+      <p class="text-sm text-zinc-400">Total</p>
+      <p class="mt-1 text-2xl font-bold text-zinc-100">{{ summary.total }}</p>
+    </div>
+    <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
+      <p class="text-sm text-zinc-400">Created</p>
+      <p class="mt-1 text-2xl font-bold text-zinc-300">{{ summary.created }}</p>
+    </div>
+    <div class="rounded-lg border border-blue-900 bg-blue-950/30 p-4">
+      <p class="text-sm text-blue-400">In Progress</p>
+      <p class="mt-1 text-2xl font-bold text-blue-300">{{ summary.in_progress }}</p>
+    </div>
+    <div class="rounded-lg border border-emerald-900 bg-emerald-950/30 p-4">
+      <p class="text-sm text-emerald-400">Success</p>
+      <p class="mt-1 text-2xl font-bold text-emerald-300">{{ summary.success }}</p>
+    </div>
+    <div class="rounded-lg border border-red-900 bg-red-950/30 p-4">
+      <p class="text-sm text-red-400">Failed</p>
+      <p class="mt-1 text-2xl font-bold text-red-300">{{ summary.failed }}</p>
+    </div>
+  </div>
+
+  {# TEST CASES TABLE #}
+  {% if cases %}
+  <div class="overflow-x-auto rounded-lg border border-zinc-800">
+    <table class="w-full text-left text-sm">
+      <thead class="border-b border-zinc-800 bg-zinc-900 text-xs uppercase text-zinc-400">
+        <tr>
+          <th class="px-4 py-3">Test Case</th>
+          <th class="px-4 py-3">Status</th>
+          <th class="px-4 py-3">Created</th>
+          <th class="px-4 py-3">Actions</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y divide-zinc-800">
+        {% for pivot in cases %}
+        <tr class="bg-zinc-950 hover:bg-zinc-900">
+          <td class="px-4 py-3 font-medium text-zinc-100">{{ pivot.test_case.title }}</td>
+          <td class="px-4 py-3">
+            {% if pivot.status == "created" %}
+            <span class="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">Created</span>
+            {% elif pivot.status == "in_progress" %}
+            <span class="rounded-full bg-blue-900/50 px-2 py-0.5 text-xs text-blue-400">In Progress</span>
+            {% elif pivot.status == "success" %}
+            <span class="rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-400">Success</span>
+            {% elif pivot.status == "failed" %}
+            <span class="rounded-full bg-red-900/50 px-2 py-0.5 text-xs text-red-400">Failed</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3 text-zinc-400">{{ pivot.created_at|date:"M d, Y H:i" }}</td>
+          <td class="px-4 py-3">
+            <a
+              href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=test_run.id pivot_id=pivot.id %}"
+              class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
+            >
+              View
+            </a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-8 text-center">
+    <p class="text-zinc-400">No test cases in this run.</p>
+  </div>
+  {% endif %}
+
+  {# PAGINATION #}
+  {% if cases.has_other_pages %}
+  <div class="mt-6 flex items-center justify-center gap-2">
+    {% if cases.has_previous %}
+    <a
+      href="?page={{ cases.previous_page_number }}"
+      class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+    >
+      Previous
+    </a>
+    {% endif %}
+    <span class="text-sm text-zinc-400">
+      Page {{ cases.number }} of {{ cases.paginator.num_pages }}
+    </span>
+    {% if cases.has_next %}
+    <a
+      href="?page={{ cases.next_page_number }}"
+      class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+    >
+      Next
+    </a>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

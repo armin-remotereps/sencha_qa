@@ -13,7 +13,7 @@ from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
 from django.core.paginator import Page, Paginator
 from django.db import transaction
-from django.db.models import QuerySet
+from django.db.models import Count, QuerySet
 
 from accounts.models import CustomUser
 from agents.services.agent_loop import build_agent_config, run_agent
@@ -421,6 +421,94 @@ def _split_into_batches(
     items: list[ParsedTestCase], batch_size: int
 ) -> list[list[ParsedTestCase]]:
     return [items[i : i + batch_size] for i in range(0, len(items), batch_size)]
+
+
+# ============================================================================
+# TEST RUN UI SERVICES
+# ============================================================================
+
+
+@transaction.atomic
+def create_test_run_with_cases(
+    *, project: Project, test_case_ids: list[int]
+) -> TestRun:
+    test_run = TestRun.objects.create(project=project)
+    valid_cases = TestCase.objects.filter(id__in=test_case_ids, project=project)
+    pivots = [TestRunTestCase(test_run=test_run, test_case=tc) for tc in valid_cases]
+    TestRunTestCase.objects.bulk_create(pivots)
+    return test_run
+
+
+@transaction.atomic
+def add_cases_to_test_run(*, test_run: TestRun, test_case_ids: list[int]) -> int:
+    valid_cases = TestCase.objects.filter(
+        id__in=test_case_ids, project=test_run.project
+    )
+    existing_case_ids = set(
+        test_run.pivot_entries.values_list("test_case_id", flat=True)
+    )
+    new_pivots = [
+        TestRunTestCase(test_run=test_run, test_case=tc)
+        for tc in valid_cases
+        if tc.id not in existing_case_ids
+    ]
+    TestRunTestCase.objects.bulk_create(new_pivots)
+    return len(new_pivots)
+
+
+def list_test_runs_for_project(
+    *, project: Project, page: int, per_page: int
+) -> Page[TestRun]:
+    qs = (
+        TestRun.objects.filter(project=project)
+        .annotate(case_count=Count("pivot_entries"))
+        .order_by("-created_at")
+    )
+    paginator: Paginator[TestRun] = Paginator(qs, per_page)
+    return paginator.get_page(page)
+
+
+def get_test_run_for_project(test_run_id: int, project: Project) -> TestRun | None:
+    try:
+        return TestRun.objects.filter(id=test_run_id, project=project).get()
+    except TestRun.DoesNotExist:
+        return None
+
+
+def get_test_run_case_detail(pivot_id: int, project: Project) -> TestRunTestCase | None:
+    try:
+        return (
+            TestRunTestCase.objects.select_related("test_run", "test_case")
+            .filter(id=pivot_id, test_run__project=project)
+            .get()
+        )
+    except TestRunTestCase.DoesNotExist:
+        return None
+
+
+def list_test_run_cases(
+    *, test_run: TestRun, page: int, per_page: int
+) -> Page[TestRunTestCase]:
+    qs = test_run.pivot_entries.select_related("test_case").order_by("-created_at")
+    paginator: Paginator[TestRunTestCase] = Paginator(qs, per_page)
+    return paginator.get_page(page)
+
+
+def list_waiting_test_runs_for_project(project: Project) -> QuerySet[TestRun]:
+    return TestRun.objects.filter(
+        project=project, status=TestRunStatus.WAITING
+    ).order_by("-created_at")
+
+
+def get_test_run_summary(test_run: TestRun) -> dict[str, int]:
+    pivots = test_run.pivot_entries.all()
+    return {
+        "total": pivots.count(),
+        "created": pivots.filter(status=TestRunTestCaseStatus.CREATED).count(),
+        "in_progress": pivots.filter(status=TestRunTestCaseStatus.IN_PROGRESS).count(),
+        "success": pivots.filter(status=TestRunTestCaseStatus.SUCCESS).count(),
+        "failed": pivots.filter(status=TestRunTestCaseStatus.FAILED).count(),
+    }
 
 
 # ============================================================================

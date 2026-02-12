@@ -43,17 +43,25 @@ from projects.services import (
     _mark_pivot_failed,
     _mark_pivot_in_progress,
     _update_test_run_status_if_needed,
+    add_cases_to_test_run,
     archive_project,
     create_project,
     create_test_case,
+    create_test_run_with_cases,
     delete_test_case,
     execute_test_run_test_case,
     get_all_tags_for_user,
     get_project_by_id,
     get_project_for_user,
     get_test_case_for_project,
+    get_test_run_case_detail,
+    get_test_run_for_project,
+    get_test_run_summary,
     list_projects_for_user,
     list_test_cases_for_project,
+    list_test_run_cases,
+    list_test_runs_for_project,
+    list_waiting_test_runs_for_project,
     unarchive_project,
     update_project,
     update_test_case,
@@ -3596,3 +3604,662 @@ class BuildScreenshotCallbackTests(TestCase):
         self.assertIn("tool_a", tool_names)
         self.assertIn("tool_b", tool_names)
         self.assertIn("tool_c", tool_names)
+
+
+# ============================================================================
+# TEST RUN UI SERVICE TESTS
+# ============================================================================
+
+
+class CreateTestRunWithCasesTests(TestCase):
+    """Tests for create_test_run_with_cases service function."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Test Run Proj")
+        self.other_project = Project.objects.create(name="Other Proj")
+        self.tc1 = TestCaseModel.objects.create(project=self.project, title="TC1")
+        self.tc2 = TestCaseModel.objects.create(project=self.project, title="TC2")
+        self.tc3 = TestCaseModel.objects.create(project=self.other_project, title="TC3")
+
+    def test_should_create_test_run_and_pivots(self) -> None:
+        """Verify test run is created with pivots for valid test cases."""
+        test_run = create_test_run_with_cases(
+            project=self.project, test_case_ids=[self.tc1.id, self.tc2.id]
+        )
+        self.assertIsNotNone(test_run.id)
+        self.assertEqual(test_run.project, self.project)
+        self.assertEqual(TestRunTestCase.objects.filter(test_run=test_run).count(), 2)
+
+    def test_should_filter_by_project(self) -> None:
+        """Verify only test cases belonging to the project are added."""
+        test_run = create_test_run_with_cases(
+            project=self.project, test_case_ids=[self.tc1.id, self.tc3.id]
+        )
+        pivot_count = TestRunTestCase.objects.filter(test_run=test_run).count()
+        self.assertEqual(pivot_count, 1)
+        pivot = TestRunTestCase.objects.get(test_run=test_run)
+        self.assertEqual(pivot.test_case, self.tc1)
+
+    def test_should_handle_empty_ids(self) -> None:
+        """Verify test run is created even when no valid IDs are provided."""
+        test_run = create_test_run_with_cases(project=self.project, test_case_ids=[])
+        self.assertIsNotNone(test_run.id)
+        self.assertEqual(TestRunTestCase.objects.filter(test_run=test_run).count(), 0)
+
+    def test_should_handle_invalid_ids(self) -> None:
+        """Verify test run is created ignoring non-existent IDs."""
+        test_run = create_test_run_with_cases(
+            project=self.project, test_case_ids=[999999, 888888]
+        )
+        self.assertIsNotNone(test_run.id)
+        self.assertEqual(TestRunTestCase.objects.filter(test_run=test_run).count(), 0)
+
+
+class AddCasesToTestRunTests(TestCase):
+    """Tests for add_cases_to_test_run service function."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Add Cases Proj")
+        self.other_project = Project.objects.create(name="Other Proj")
+        self.tc1 = TestCaseModel.objects.create(project=self.project, title="TC1")
+        self.tc2 = TestCaseModel.objects.create(project=self.project, title="TC2")
+        self.tc3 = TestCaseModel.objects.create(project=self.project, title="TC3")
+        self.tc_other = TestCaseModel.objects.create(
+            project=self.other_project, title="TC Other"
+        )
+        self.test_run = TestRun.objects.create(project=self.project)
+        TestRunTestCase.objects.create(test_run=self.test_run, test_case=self.tc1)
+
+    def test_should_add_new_cases(self) -> None:
+        """Verify new test cases are added to the test run."""
+        count = add_cases_to_test_run(
+            test_run=self.test_run, test_case_ids=[self.tc2.id, self.tc3.id]
+        )
+        self.assertEqual(count, 2)
+        self.assertEqual(
+            TestRunTestCase.objects.filter(test_run=self.test_run).count(), 3
+        )
+
+    def test_should_skip_duplicates(self) -> None:
+        """Verify duplicate test cases are skipped."""
+        count = add_cases_to_test_run(
+            test_run=self.test_run, test_case_ids=[self.tc1.id, self.tc2.id]
+        )
+        self.assertEqual(count, 1)
+        self.assertEqual(
+            TestRunTestCase.objects.filter(test_run=self.test_run).count(), 2
+        )
+
+    def test_should_filter_by_project(self) -> None:
+        """Verify only test cases from the same project are added."""
+        count = add_cases_to_test_run(
+            test_run=self.test_run, test_case_ids=[self.tc2.id, self.tc_other.id]
+        )
+        self.assertEqual(count, 1)
+        self.assertEqual(
+            TestRunTestCase.objects.filter(test_run=self.test_run).count(), 2
+        )
+
+    def test_should_return_zero_for_empty_ids(self) -> None:
+        """Verify zero is returned when no IDs are provided."""
+        count = add_cases_to_test_run(test_run=self.test_run, test_case_ids=[])
+        self.assertEqual(count, 0)
+
+
+class ListTestRunsForProjectTests(TestCase):
+    """Tests for list_test_runs_for_project service function."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="List Runs Proj")
+        self.other_project = Project.objects.create(name="Other Proj")
+        self.tc1 = TestCaseModel.objects.create(project=self.project, title="TC1")
+        self.tc2 = TestCaseModel.objects.create(project=self.project, title="TC2")
+
+    def test_should_return_paginated_test_runs(self) -> None:
+        """Verify test runs are returned paginated."""
+        for i in range(5):
+            TestRun.objects.create(project=self.project)
+        page = list_test_runs_for_project(project=self.project, page=1, per_page=3)
+        self.assertEqual(len(page.object_list), 3)
+        self.assertTrue(page.has_next())
+
+    def test_should_annotate_with_case_count(self) -> None:
+        """Verify test runs are annotated with case_count."""
+        tr1 = TestRun.objects.create(project=self.project)
+        TestRunTestCase.objects.create(test_run=tr1, test_case=self.tc1)
+        TestRunTestCase.objects.create(test_run=tr1, test_case=self.tc2)
+        tr2 = TestRun.objects.create(project=self.project)
+        TestRunTestCase.objects.create(test_run=tr2, test_case=self.tc1)
+
+        page = list_test_runs_for_project(project=self.project, page=1, per_page=10)
+        runs = list(page.object_list)
+        self.assertEqual(runs[0].case_count, 1)
+        self.assertEqual(runs[1].case_count, 2)
+
+    def test_should_order_by_created_at_desc(self) -> None:
+        """Verify test runs are ordered by newest first."""
+        tr1 = TestRun.objects.create(project=self.project)
+        tr2 = TestRun.objects.create(project=self.project)
+        tr3 = TestRun.objects.create(project=self.project)
+
+        page = list_test_runs_for_project(project=self.project, page=1, per_page=10)
+        runs = list(page.object_list)
+        self.assertEqual(runs[0].id, tr3.id)
+        self.assertEqual(runs[1].id, tr2.id)
+        self.assertEqual(runs[2].id, tr1.id)
+
+    def test_should_filter_by_project(self) -> None:
+        """Verify only test runs for the specified project are returned."""
+        TestRun.objects.create(project=self.project)
+        TestRun.objects.create(project=self.other_project)
+
+        page = list_test_runs_for_project(project=self.project, page=1, per_page=10)
+        self.assertEqual(len(page.object_list), 1)
+
+
+class GetTestRunForProjectTests(TestCase):
+    """Tests for get_test_run_for_project service function."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Get Run Proj")
+        self.other_project = Project.objects.create(name="Other Proj")
+        self.test_run = TestRun.objects.create(project=self.project)
+
+    def test_should_return_test_run(self) -> None:
+        """Verify test run is returned when it exists for the project."""
+        result = get_test_run_for_project(self.test_run.id, self.project)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.id, self.test_run.id)  # type: ignore[union-attr]
+
+    def test_should_return_none_for_nonexistent_id(self) -> None:
+        """Verify None is returned when test run ID does not exist."""
+        result = get_test_run_for_project(999999, self.project)
+        self.assertIsNone(result)
+
+    def test_should_return_none_for_different_project(self) -> None:
+        """Verify None is returned when test run belongs to different project."""
+        result = get_test_run_for_project(self.test_run.id, self.other_project)
+        self.assertIsNone(result)
+
+
+class GetTestRunCaseDetailTests(TestCase):
+    """Tests for get_test_run_case_detail service function."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Get Case Detail Proj")
+        self.other_project = Project.objects.create(name="Other Proj")
+        self.tc = TestCaseModel.objects.create(project=self.project, title="TC")
+        self.test_run = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(
+            test_run=self.test_run, test_case=self.tc
+        )
+
+    def test_should_return_pivot(self) -> None:
+        """Verify pivot is returned when it exists for the project."""
+        result = get_test_run_case_detail(self.pivot.id, self.project)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.id, self.pivot.id)  # type: ignore[union-attr]
+
+    def test_should_return_none_for_nonexistent_pivot(self) -> None:
+        """Verify None is returned when pivot ID does not exist."""
+        result = get_test_run_case_detail(999999, self.project)
+        self.assertIsNone(result)
+
+    def test_should_return_none_for_wrong_project(self) -> None:
+        """Verify None is returned when pivot belongs to different project."""
+        result = get_test_run_case_detail(self.pivot.id, self.other_project)
+        self.assertIsNone(result)
+
+    def test_should_select_related(self) -> None:
+        """Verify pivot is returned with test_run and test_case pre-fetched."""
+        result = get_test_run_case_detail(self.pivot.id, self.project)
+        assert result is not None
+        with self.assertNumQueries(0):
+            _ = result.test_run.id
+            _ = result.test_case.title
+
+
+class ListTestRunCasesTests(TestCase):
+    """Tests for list_test_run_cases service function."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="List Cases Proj")
+        self.test_run = TestRun.objects.create(project=self.project)
+        self.tc1 = TestCaseModel.objects.create(project=self.project, title="TC1")
+        self.tc2 = TestCaseModel.objects.create(project=self.project, title="TC2")
+
+    def test_should_return_paginated_cases(self) -> None:
+        """Verify test run cases are returned paginated."""
+        for i in range(5):
+            tc = TestCaseModel.objects.create(project=self.project, title=f"TC{i}")
+            TestRunTestCase.objects.create(test_run=self.test_run, test_case=tc)
+
+        page = list_test_run_cases(test_run=self.test_run, page=1, per_page=3)
+        self.assertEqual(len(page.object_list), 3)
+        self.assertTrue(page.has_next())
+
+    def test_should_select_related_test_case(self) -> None:
+        """Verify pivots are returned with test_case pre-fetched."""
+        TestRunTestCase.objects.create(test_run=self.test_run, test_case=self.tc1)
+        page = list_test_run_cases(test_run=self.test_run, page=1, per_page=10)
+        pivot = page.object_list[0]
+        with self.assertNumQueries(0):
+            _ = pivot.test_case.title
+
+    def test_should_order_by_created_at_desc(self) -> None:
+        """Verify cases are ordered by newest first."""
+        p1 = TestRunTestCase.objects.create(test_run=self.test_run, test_case=self.tc1)
+        p2 = TestRunTestCase.objects.create(test_run=self.test_run, test_case=self.tc2)
+
+        page = list_test_run_cases(test_run=self.test_run, page=1, per_page=10)
+        pivots = list(page.object_list)
+        self.assertEqual(pivots[0].id, p2.id)
+        self.assertEqual(pivots[1].id, p1.id)
+
+
+class ListWaitingTestRunsForProjectTests(TestCase):
+    """Tests for list_waiting_test_runs_for_project service function."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Waiting Runs Proj")
+        self.other_project = Project.objects.create(name="Other Proj")
+
+    def test_should_return_only_waiting_runs(self) -> None:
+        """Verify only test runs with WAITING status are returned."""
+        tr1 = TestRun.objects.create(project=self.project, status=TestRunStatus.WAITING)
+        TestRun.objects.create(project=self.project, status=TestRunStatus.STARTED)
+        TestRun.objects.create(project=self.project, status=TestRunStatus.DONE)
+
+        result = list_waiting_test_runs_for_project(self.project)
+        self.assertEqual(result.count(), 1)
+        self.assertEqual(result.first().id, tr1.id)  # type: ignore[union-attr]
+
+    def test_should_filter_by_project(self) -> None:
+        """Verify only test runs for the specified project are returned."""
+        TestRun.objects.create(project=self.project, status=TestRunStatus.WAITING)
+        TestRun.objects.create(project=self.other_project, status=TestRunStatus.WAITING)
+
+        result = list_waiting_test_runs_for_project(self.project)
+        self.assertEqual(result.count(), 1)
+
+    def test_should_order_by_created_at_desc(self) -> None:
+        """Verify waiting runs are ordered by newest first."""
+        tr1 = TestRun.objects.create(project=self.project, status=TestRunStatus.WAITING)
+        tr2 = TestRun.objects.create(project=self.project, status=TestRunStatus.WAITING)
+        tr3 = TestRun.objects.create(project=self.project, status=TestRunStatus.WAITING)
+
+        result = list(list_waiting_test_runs_for_project(self.project))
+        self.assertEqual(result[0].id, tr3.id)
+        self.assertEqual(result[1].id, tr2.id)
+        self.assertEqual(result[2].id, tr1.id)
+
+
+class GetTestRunSummaryTests(TestCase):
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Summary Proj")
+        self.test_run = TestRun.objects.create(project=self.project)
+        tc1 = TestCaseModel.objects.create(project=self.project, title="TC1")
+        tc2 = TestCaseModel.objects.create(project=self.project, title="TC2")
+        tc3 = TestCaseModel.objects.create(project=self.project, title="TC3")
+        TestRunTestCase.objects.create(
+            test_run=self.test_run, test_case=tc1, status=TestRunTestCaseStatus.CREATED
+        )
+        TestRunTestCase.objects.create(
+            test_run=self.test_run, test_case=tc2, status=TestRunTestCaseStatus.SUCCESS
+        )
+        TestRunTestCase.objects.create(
+            test_run=self.test_run, test_case=tc3, status=TestRunTestCaseStatus.FAILED
+        )
+
+    def test_should_return_correct_counts(self) -> None:
+        summary = get_test_run_summary(self.test_run)
+        self.assertEqual(summary["total"], 3)
+        self.assertEqual(summary["created"], 1)
+        self.assertEqual(summary["in_progress"], 0)
+        self.assertEqual(summary["success"], 1)
+        self.assertEqual(summary["failed"], 1)
+
+    def test_should_return_all_zeros_for_empty_run(self) -> None:
+        empty_run = TestRun.objects.create(project=self.project)
+        summary = get_test_run_summary(empty_run)
+        self.assertEqual(summary["total"], 0)
+        self.assertEqual(summary["created"], 0)
+        self.assertEqual(summary["in_progress"], 0)
+        self.assertEqual(summary["success"], 0)
+        self.assertEqual(summary["failed"], 0)
+
+
+# ============================================================================
+# TEST RUN VIEW TESTS
+# ============================================================================
+
+
+class TestRunListViewTests(TestCase):
+    """Tests for test_run_list view."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="member@example.com", password="testpass123"
+        )
+        self.non_member = CustomUser.objects.create_user(
+            email="nonmember@example.com", password="testpass123"
+        )
+        self.project = create_project(user=self.user, name="Test Project", tag_names=[])
+
+    def test_should_require_login(self) -> None:
+        """Verify test_run_list redirects to login when not authenticated."""
+        url = reverse("projects:test_run_list", args=[self.project.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+
+    def test_should_require_membership(self) -> None:
+        """Verify non-members cannot access project's test runs."""
+        self.client.force_login(self.non_member)
+        url = reverse("projects:test_run_list", args=[self.project.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_return_200_and_correct_template(self) -> None:
+        """Verify test_run_list returns success with correct template."""
+        self.client.force_login(self.user)
+        url = reverse("projects:test_run_list", args=[self.project.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "projects/test_runs.html")
+
+    def test_should_include_test_runs_in_context(self) -> None:
+        """Verify test runs are included in context."""
+        self.client.force_login(self.user)
+        TestRun.objects.create(project=self.project)
+        url = reverse("projects:test_run_list", args=[self.project.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("test_runs", response.context)
+
+
+class TestRunCreateViewTests(TestCase):
+    """Tests for test_run_create view."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="member@example.com", password="testpass123"
+        )
+        self.non_member = CustomUser.objects.create_user(
+            email="nonmember@example.com", password="testpass123"
+        )
+        self.project = create_project(user=self.user, name="Test Project", tag_names=[])
+        self.tc1 = TestCaseModel.objects.create(project=self.project, title="TC1")
+        self.tc2 = TestCaseModel.objects.create(project=self.project, title="TC2")
+
+    def test_should_require_login(self) -> None:
+        """Verify test_run_create redirects to login when not authenticated."""
+        url = reverse("projects:test_run_create", args=[self.project.id])
+        response = self.client.post(url, {"test_case_ids": [self.tc1.id]})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+
+    def test_should_require_membership(self) -> None:
+        """Verify non-members cannot create test runs."""
+        self.client.force_login(self.non_member)
+        url = reverse("projects:test_run_create", args=[self.project.id])
+        response = self.client.post(url, {"test_case_ids": [self.tc1.id]})
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_create_test_run_and_redirect(self) -> None:
+        """Verify POST creates test run and redirects to detail."""
+        self.client.force_login(self.user)
+        url = reverse("projects:test_run_create", args=[self.project.id])
+        response = self.client.post(url, {"test_case_ids": [self.tc1.id, self.tc2.id]})
+        self.assertEqual(response.status_code, 302)
+
+        test_run = TestRun.objects.get(project=self.project)
+        self.assertEqual(TestRunTestCase.objects.filter(test_run=test_run).count(), 2)
+        self.assertIn(
+            reverse("projects:test_run_detail", args=[self.project.id, test_run.id]),
+            response.url,  # type: ignore[attr-defined]
+        )
+
+    def test_should_redirect_to_test_case_list_when_empty(self) -> None:
+        """Verify redirect to test_case_list when no IDs provided."""
+        self.client.force_login(self.user)
+        url = reverse("projects:test_run_create", args=[self.project.id])
+        response = self.client.post(url, {"test_case_ids": []})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response.url,  # type: ignore[attr-defined]
+            reverse("projects:test_case_list", args=[self.project.id]),
+        )
+
+    def test_should_return_405_for_get_request(self) -> None:
+        """Verify test_run_create only accepts POST requests."""
+        self.client.force_login(self.user)
+        url = reverse("projects:test_run_create", args=[self.project.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 405)
+
+
+class TestRunAddCasesViewTests(TestCase):
+    """Tests for test_run_add_cases view."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="member@example.com", password="testpass123"
+        )
+        self.non_member = CustomUser.objects.create_user(
+            email="nonmember@example.com", password="testpass123"
+        )
+        self.project = create_project(user=self.user, name="Test Project", tag_names=[])
+        self.tc1 = TestCaseModel.objects.create(project=self.project, title="TC1")
+        self.tc2 = TestCaseModel.objects.create(project=self.project, title="TC2")
+        self.test_run = TestRun.objects.create(project=self.project)
+
+    def test_should_require_login(self) -> None:
+        """Verify test_run_add_cases redirects to login when not authenticated."""
+        url = reverse(
+            "projects:test_run_add_cases", args=[self.project.id, self.test_run.id]
+        )
+        response = self.client.post(url, {"test_case_ids": [self.tc1.id]})
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+
+    def test_should_require_membership(self) -> None:
+        """Verify non-members cannot add cases to test runs."""
+        self.client.force_login(self.non_member)
+        url = reverse(
+            "projects:test_run_add_cases", args=[self.project.id, self.test_run.id]
+        )
+        response = self.client.post(url, {"test_case_ids": [self.tc1.id]})
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_add_cases_and_redirect(self) -> None:
+        """Verify POST adds cases to test run and redirects."""
+        self.client.force_login(self.user)
+        url = reverse(
+            "projects:test_run_add_cases", args=[self.project.id, self.test_run.id]
+        )
+        response = self.client.post(url, {"test_case_ids": [self.tc1.id, self.tc2.id]})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            TestRunTestCase.objects.filter(test_run=self.test_run).count(), 2
+        )
+        self.assertIn(
+            reverse(
+                "projects:test_run_detail", args=[self.project.id, self.test_run.id]
+            ),
+            response.url,  # type: ignore[attr-defined]
+        )
+
+    def test_should_return_404_for_nonexistent_test_run(self) -> None:
+        """Verify 404 is returned when test run does not exist."""
+        self.client.force_login(self.user)
+        url = reverse("projects:test_run_add_cases", args=[self.project.id, 999999])
+        response = self.client.post(url, {"test_case_ids": [self.tc1.id]})
+        self.assertEqual(response.status_code, 404)
+
+
+class TestRunDetailViewTests(TestCase):
+    """Tests for test_run_detail view."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="member@example.com", password="testpass123"
+        )
+        self.non_member = CustomUser.objects.create_user(
+            email="nonmember@example.com", password="testpass123"
+        )
+        self.project = create_project(user=self.user, name="Test Project", tag_names=[])
+        self.tc1 = TestCaseModel.objects.create(project=self.project, title="TC1")
+        self.tc2 = TestCaseModel.objects.create(project=self.project, title="TC2")
+        self.test_run = TestRun.objects.create(project=self.project)
+        TestRunTestCase.objects.create(
+            test_run=self.test_run,
+            test_case=self.tc1,
+            status=TestRunTestCaseStatus.SUCCESS,
+        )
+        TestRunTestCase.objects.create(
+            test_run=self.test_run,
+            test_case=self.tc2,
+            status=TestRunTestCaseStatus.FAILED,
+        )
+
+    def test_should_require_login(self) -> None:
+        """Verify test_run_detail redirects to login when not authenticated."""
+        url = reverse(
+            "projects:test_run_detail", args=[self.project.id, self.test_run.id]
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+
+    def test_should_require_membership(self) -> None:
+        """Verify non-members cannot access test run details."""
+        self.client.force_login(self.non_member)
+        url = reverse(
+            "projects:test_run_detail", args=[self.project.id, self.test_run.id]
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_return_200_and_correct_template(self) -> None:
+        """Verify test_run_detail returns success with correct template."""
+        self.client.force_login(self.user)
+        url = reverse(
+            "projects:test_run_detail", args=[self.project.id, self.test_run.id]
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "projects/test_run_detail.html")
+
+    def test_should_return_404_for_nonexistent_test_run(self) -> None:
+        """Verify 404 is returned when test run does not exist."""
+        self.client.force_login(self.user)
+        url = reverse("projects:test_run_detail", args=[self.project.id, 999999])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_include_summary_in_context(self) -> None:
+        """Verify context includes summary counts."""
+        self.client.force_login(self.user)
+        url = reverse(
+            "projects:test_run_detail", args=[self.project.id, self.test_run.id]
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("summary", response.context)
+        summary = response.context["summary"]
+        self.assertEqual(summary["total"], 2)
+        self.assertEqual(summary["success"], 1)
+        self.assertEqual(summary["failed"], 1)
+
+
+class TestRunCaseDetailViewTests(TestCase):
+    """Tests for test_run_case_detail view."""
+
+    def setUp(self) -> None:
+        from django.core.files.base import ContentFile
+
+        self.user = CustomUser.objects.create_user(
+            email="member@example.com", password="testpass123"
+        )
+        self.non_member = CustomUser.objects.create_user(
+            email="nonmember@example.com", password="testpass123"
+        )
+        self.project = create_project(user=self.user, name="Test Project", tag_names=[])
+        self.tc = TestCaseModel.objects.create(project=self.project, title="TC")
+        self.test_run = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(
+            test_run=self.test_run, test_case=self.tc
+        )
+        self.screenshot = TestRunScreenshot.objects.create(
+            test_run_test_case=self.pivot,
+            image=ContentFile(b"fake", name="test.png"),
+            tool_name="vnc_take_screenshot",
+        )
+
+    def test_should_require_login(self) -> None:
+        """Verify test_run_case_detail redirects to login when not authenticated."""
+        url = reverse(
+            "projects:test_run_case_detail",
+            args=[self.project.id, self.test_run.id, self.pivot.id],
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+
+    def test_should_require_membership(self) -> None:
+        """Verify non-members cannot access test run case details."""
+        self.client.force_login(self.non_member)
+        url = reverse(
+            "projects:test_run_case_detail",
+            args=[self.project.id, self.test_run.id, self.pivot.id],
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_return_200_and_correct_template(self) -> None:
+        """Verify test_run_case_detail returns success with correct template."""
+        self.client.force_login(self.user)
+        url = reverse(
+            "projects:test_run_case_detail",
+            args=[self.project.id, self.test_run.id, self.pivot.id],
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "projects/test_run_case_detail.html")
+
+    def test_should_return_404_for_wrong_pivot(self) -> None:
+        """Verify 404 is returned when pivot does not exist."""
+        self.client.force_login(self.user)
+        url = reverse(
+            "projects:test_run_case_detail",
+            args=[self.project.id, self.test_run.id, 999999],
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_return_404_for_mismatched_test_run(self) -> None:
+        """Verify 404 is returned when pivot does not belong to test run."""
+        other_test_run = TestRun.objects.create(project=self.project)
+        self.client.force_login(self.user)
+        url = reverse(
+            "projects:test_run_case_detail",
+            args=[self.project.id, other_test_run.id, self.pivot.id],
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_include_screenshots_in_context(self) -> None:
+        """Verify screenshots are included in context."""
+        self.client.force_login(self.user)
+        url = reverse(
+            "projects:test_run_case_detail",
+            args=[self.project.id, self.test_run.id, self.pivot.id],
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("screenshots", response.context)
+        screenshots = list(response.context["screenshots"])
+        self.assertEqual(len(screenshots), 1)
+        self.assertEqual(screenshots[0].id, self.screenshot.id)

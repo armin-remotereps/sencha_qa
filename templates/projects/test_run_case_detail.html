@@ -1,0 +1,123 @@
+{% extends "dashboard/base_dashboard.html" %}
+
+{% block dashboard_content %}
+<div>
+  {# BREADCRUMB #}
+  <nav class="mb-4 text-sm text-zinc-400">
+    <a href="{% url 'projects:list' %}" class="hover:text-zinc-200">Projects</a>
+    <span class="mx-1">/</span>
+    <a href="{% url 'projects:test_case_list' project_id=project.id %}" class="hover:text-zinc-200">{{ project.name }}</a>
+    <span class="mx-1">/</span>
+    <a href="{% url 'projects:test_run_list' project_id=project.id %}" class="hover:text-zinc-200">Test Runs</a>
+    <span class="mx-1">/</span>
+    <a href="{% url 'projects:test_run_detail' project_id=project.id test_run_id=test_run.id %}" class="hover:text-zinc-200">#{{ test_run.id }}</a>
+    <span class="mx-1">/</span>
+    <span class="text-zinc-200">{{ pivot.test_case.title }}</span>
+  </nav>
+
+  {# HEADER #}
+  <div class="mb-6 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <h1 class="text-2xl font-bold text-zinc-100">{{ pivot.test_case.title }}</h1>
+      {% if pivot.status == "created" %}
+      <span class="rounded-full bg-zinc-800 px-3 py-1 text-sm text-zinc-400">Created</span>
+      {% elif pivot.status == "in_progress" %}
+      <span class="rounded-full bg-blue-900/50 px-3 py-1 text-sm text-blue-400">In Progress</span>
+      {% elif pivot.status == "success" %}
+      <span class="rounded-full bg-emerald-900/50 px-3 py-1 text-sm text-emerald-400">Success</span>
+      {% elif pivot.status == "failed" %}
+      <span class="rounded-full bg-red-900/50 px-3 py-1 text-sm text-red-400">Failed</span>
+      {% endif %}
+    </div>
+    <a
+      href="{% url 'projects:test_run_detail' project_id=project.id test_run_id=test_run.id %}"
+      class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
+    >
+      Back to Test Run
+    </a>
+  </div>
+
+  {# TEST CASE INFO SECTION #}
+  <div class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
+    <h2 class="mb-4 text-lg font-semibold text-zinc-100">Test Case Information</h2>
+    <div class="space-y-4">
+      <div>
+        <p class="text-sm font-medium text-zinc-400">Title</p>
+        <p class="mt-1 text-sm text-zinc-200">{{ pivot.test_case.title }}</p>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <p class="text-sm font-medium text-zinc-400">Type</p>
+          <p class="mt-1 text-sm text-zinc-200">{{ pivot.test_case.type }}</p>
+        </div>
+        <div>
+          <p class="text-sm font-medium text-zinc-400">Priority</p>
+          <p class="mt-1 text-sm text-zinc-200">{{ pivot.test_case.priority }}</p>
+        </div>
+      </div>
+      {% if pivot.test_case.preconditions %}
+      <div>
+        <p class="text-sm font-medium text-zinc-400">Preconditions</p>
+        <p class="mt-1 text-sm text-zinc-200">{{ pivot.test_case.preconditions }}</p>
+      </div>
+      {% endif %}
+      {% if pivot.test_case.steps %}
+      <div>
+        <p class="text-sm font-medium text-zinc-400">Steps</p>
+        <p class="mt-1 text-sm text-zinc-200">{{ pivot.test_case.steps }}</p>
+      </div>
+      {% endif %}
+      {% if pivot.test_case.expected %}
+      <div>
+        <p class="text-sm font-medium text-zinc-400">Expected Result</p>
+        <p class="mt-1 text-sm text-zinc-200">{{ pivot.test_case.expected }}</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {# RESULT SECTION #}
+  {% if pivot.result %}
+  <div class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
+    <h2 class="mb-4 text-lg font-semibold text-zinc-100">Result</h2>
+    <p class="text-sm text-zinc-200">{{ pivot.result }}</p>
+  </div>
+  {% endif %}
+
+  {# LOGS SECTION #}
+  {% if pivot.logs %}
+  <div class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
+    <h2 class="mb-4 text-lg font-semibold text-zinc-100">Logs</h2>
+    <pre class="max-h-96 overflow-auto rounded-lg bg-zinc-950 p-4 text-sm text-zinc-300">{{ pivot.logs }}</pre>
+  </div>
+  {% endif %}
+
+  {# SCREENSHOTS SECTION #}
+  {% if screenshots %}
+  <div class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
+    <h2 class="mb-4 text-lg font-semibold text-zinc-100">Screenshots</h2>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {% for screenshot in screenshots %}
+      <div class="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+        <a
+          href="{{ screenshot.image.url }}"
+          target="_blank"
+          class="block overflow-hidden rounded-md"
+        >
+          <img
+            src="{{ screenshot.image.url }}"
+            alt="Screenshot"
+            class="h-48 w-full object-cover transition-transform hover:scale-105"
+          >
+        </a>
+        <div class="mt-2 flex items-center justify-between">
+          <p class="text-xs text-zinc-400">{{ screenshot.tool_name }}</p>
+          <p class="text-xs text-zinc-500">{{ screenshot.created_at|date:"M d, H:i" }}</p>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

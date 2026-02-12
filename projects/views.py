@@ -11,21 +11,29 @@ from projects.decorators import project_membership_required
 from projects.forms import ProjectForm, TestCaseForm
 from projects.models import Project, TestCaseUpload, UploadStatus
 from projects.services import (
+    add_cases_to_test_run,
     archive_project,
     cancel_upload_processing,
     create_project,
     create_test_case,
+    create_test_run_with_cases,
     create_upload,
     delete_test_case,
     delete_upload,
     get_all_tags_for_user,
     get_project_for_user,
     get_test_case_for_project,
+    get_test_run_case_detail,
+    get_test_run_for_project,
+    get_test_run_summary,
     get_upload_for_project,
     is_valid_xml_filename,
     list_projects_for_user,
     list_test_cases_for_project,
+    list_test_run_cases,
+    list_test_runs_for_project,
     list_uploads_for_project,
+    list_waiting_test_runs_for_project,
     start_upload_processing,
     update_project,
     update_test_case,
@@ -35,6 +43,13 @@ from projects.services import (
 PROJECTS_PER_PAGE = 9
 TEST_CASES_PER_PAGE = 20
 UPLOADS_PER_PAGE = 20
+TEST_RUNS_PER_PAGE = 20
+TEST_RUN_CASES_PER_PAGE = 20
+
+
+def _parse_test_case_ids(request: HttpRequest) -> list[int]:
+    raw_ids = request.POST.getlist("test_case_ids")
+    return [int(x) for x in raw_ids if x.isdigit()]
 
 
 @login_required
@@ -135,6 +150,7 @@ def test_case_list(request: HttpRequest, project: Project) -> HttpResponse:
     completed_uploads = TestCaseUpload.objects.filter(
         project=project, status=UploadStatus.COMPLETED
     ).order_by("-created_at")
+    waiting_test_runs = list_waiting_test_runs_for_project(project)
 
     return render(
         request,
@@ -146,6 +162,7 @@ def test_case_list(request: HttpRequest, project: Project) -> HttpResponse:
             "search": search or "",
             "uploads": completed_uploads,
             "current_upload": upload_id or "",
+            "waiting_test_runs": waiting_test_runs,
         },
     )
 
@@ -260,3 +277,95 @@ def upload_delete(
 
     delete_upload(upload)
     return redirect("projects:upload_list", project_id=project.id)
+
+
+# ============================================================================
+# TEST RUN VIEWS
+# ============================================================================
+
+
+@project_membership_required
+def test_run_list(request: HttpRequest, project: Project) -> HttpResponse:
+    page = request.GET.get("page", "1")
+    test_runs = list_test_runs_for_project(
+        project=project, page=int(page), per_page=TEST_RUNS_PER_PAGE
+    )
+    return render(
+        request,
+        "projects/test_runs.html",
+        {
+            "project": project,
+            "test_runs": test_runs,
+        },
+    )
+
+
+@project_membership_required
+@require_POST
+def test_run_create(request: HttpRequest, project: Project) -> HttpResponse:
+    test_case_ids = _parse_test_case_ids(request)
+    if not test_case_ids:
+        return redirect("projects:test_case_list", project_id=project.id)
+    test_run = create_test_run_with_cases(project=project, test_case_ids=test_case_ids)
+    return redirect(
+        "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
+    )
+
+
+@project_membership_required
+@require_POST
+def test_run_add_cases(
+    request: HttpRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    test_case_ids = _parse_test_case_ids(request)
+    add_cases_to_test_run(test_run=test_run, test_case_ids=test_case_ids)
+    return redirect(
+        "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
+    )
+
+
+@project_membership_required
+def test_run_detail(
+    request: HttpRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    page = request.GET.get("page", "1")
+    cases = list_test_run_cases(
+        test_run=test_run, page=int(page), per_page=TEST_RUN_CASES_PER_PAGE
+    )
+    summary = get_test_run_summary(test_run)
+    return render(
+        request,
+        "projects/test_run_detail.html",
+        {
+            "project": project,
+            "test_run": test_run,
+            "cases": cases,
+            "summary": summary,
+        },
+    )
+
+
+@project_membership_required
+def test_run_case_detail(
+    request: HttpRequest, project: Project, test_run_id: int, pivot_id: int
+) -> HttpResponse:
+    pivot = get_test_run_case_detail(pivot_id, project)
+    if pivot is None or pivot.test_run_id != test_run_id:
+        raise Http404
+    screenshots = pivot.screenshots.all()
+    return render(
+        request,
+        "projects/test_run_case_detail.html",
+        {
+            "project": project,
+            "test_run": pivot.test_run,
+            "pivot": pivot,
+            "screenshots": screenshots,
+        },
+    )
