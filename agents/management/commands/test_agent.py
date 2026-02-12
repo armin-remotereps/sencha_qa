@@ -7,4 +7,4 @@ from projects.services import execute_test_run_test_case
 
 class Command(BaseCommand):
     def handle(self, *args: Any, **options: Any) -> None:
-        execute_test_run_test_case(2)
+        execute_test_run_test_case(5)
