@@ -46,7 +46,6 @@ services:
         volumes:
             - "STATIC:/src/static"
             - "MEDIA:/src/media"
-            - /var/run/docker.sock:/var/run/docker.sock
         entrypoint: "daphne -b 0.0.0.0 -p 8000 auto_tester.asgi:application"
 
     upload-celery:
@@ -61,7 +60,6 @@ services:
         volumes:
             - "STATIC:/src/static"
             - "MEDIA:/src/media"
-            - /var/run/docker.sock:/var/run/docker.sock
         entrypoint: "python -m celery -A auto_tester worker -l INFO -Q upload --concurrency=5"
 
     execution-celery:
@@ -73,6 +71,8 @@ services:
         depends_on:
             - "db"
             - "redis"
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
         volumes:
             - "STATIC:/src/static"
             - "MEDIA:/src/media"
