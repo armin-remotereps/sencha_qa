@@ -13,16 +13,6 @@ from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any, TypedDict
 
-from asgiref.sync import async_to_sync
-from celery import group
-from channels.layers import get_channel_layer
-from django.core.files.base import ContentFile
-from django.core.files.uploadedfile import UploadedFile
-from django.core.paginator import Page, Paginator
-from django.db import transaction
-from django.db.models import Count, QuerySet
-from django.utils import timezone
-
 from accounts.models import CustomUser
 from agents.services.agent_loop import build_agent_config, run_agent
 from agents.types import (
@@ -32,6 +22,15 @@ from agents.types import (
     ChatMessage,
     ScreenshotCallback,
 )
+from asgiref.sync import async_to_sync
+from celery import group
+from channels.layers import get_channel_layer
+from django.core.files.base import ContentFile
+from django.core.files.uploadedfile import UploadedFile
+from django.core.paginator import Page, Paginator
+from django.db import transaction
+from django.db.models import Count, QuerySet
+from django.utils import timezone
 from environments.services.docker_client import (
     close_docker_client,
     get_docker_client,
@@ -239,6 +238,14 @@ class ScreenshotResult(TypedDict):
     width: int
     height: int
     format: str
+
+
+class CommandResult(TypedDict):
+    success: bool
+    stdout: str
+    stderr: str
+    return_code: int
+    duration_ms: float
 
 
 def _controller_group(project_id: int) -> str:
@@ -455,6 +462,35 @@ def controller_screenshot(
         width=reply.get("width", 0),
         height=reply.get("height", 0),
         format=reply.get("format", "png"),
+    )
+
+
+def controller_run_command(
+    project_id: int,
+    command: str,
+    timeout: float = 30.0,
+) -> CommandResult:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        raise ControllerActionError("Channel layer is not configured")
+
+    reply_channel: str = async_to_sync(layer.new_channel)()
+    request_id = str(uuid.uuid4())
+    _send_controller_action(
+        project_id,
+        "controller.run_command",
+        request_id,
+        reply_channel,
+        command=command,
+        timeout=timeout,
+    )
+    reply = _wait_for_reply(reply_channel, timeout + 5.0)
+    return CommandResult(
+        success=reply.get("success", False),
+        stdout=reply.get("stdout", ""),
+        stderr=reply.get("stderr", ""),
+        return_code=reply.get("return_code", -1),
+        duration_ms=reply.get("duration_ms", 0.0),
     )
 
 

@@ -1,5 +1,6 @@
 import base64
 import io
+import subprocess
 import time
 
 import pyautogui
@@ -9,9 +10,11 @@ from controller_client.exceptions import ExecutionError
 from controller_client.protocol import (
     ActionResultPayload,
     ClickPayload,
+    CommandResultPayload,
     DragPayload,
     HoverPayload,
     KeyPressPayload,
+    RunCommandPayload,
     ScreenshotResponsePayload,
     TypeTextPayload,
 )
@@ -98,6 +101,37 @@ def execute_key_press(payload: KeyPressPayload) -> ActionResultPayload:
     return ActionResultPayload(
         success=True,
         message=f"Pressed key(s): {payload.keys}",
+        duration_ms=duration_ms,
+    )
+
+
+def execute_command(payload: RunCommandPayload) -> CommandResultPayload:
+    start = time.monotonic()
+    try:
+        completed = subprocess.run(
+            payload.command,
+            shell=True,  # noqa: S602
+            capture_output=True,
+            text=True,
+            timeout=payload.timeout,
+        )
+    except subprocess.TimeoutExpired:
+        duration_ms = (time.monotonic() - start) * 1000
+        return CommandResultPayload(
+            success=False,
+            stdout="",
+            stderr=f"Command timed out after {payload.timeout}s",
+            return_code=-1,
+            duration_ms=duration_ms,
+        )
+    except Exception as e:
+        raise ExecutionError(f"Command execution failed: {e}") from e
+    duration_ms = (time.monotonic() - start) * 1000
+    return CommandResultPayload(
+        success=completed.returncode == 0,
+        stdout=completed.stdout,
+        stderr=completed.stderr,
+        return_code=completed.returncode,
         duration_ms=duration_ms,
     )
 

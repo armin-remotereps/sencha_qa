@@ -10,6 +10,7 @@ from controller_client.config import ClientConfig
 from controller_client.exceptions import AuthenticationError, ExecutionError
 from controller_client.executor import (
     execute_click,
+    execute_command,
     execute_drag,
     execute_hover,
     execute_key_press,
@@ -18,6 +19,7 @@ from controller_client.executor import (
 )
 from controller_client.protocol import (
     ActionResultPayload,
+    CommandResultPayload,
     ErrorCode,
     MessageType,
     ScreenshotResponsePayload,
@@ -27,6 +29,7 @@ from controller_client.protocol import (
     parse_handshake_ack_payload,
     parse_hover_payload,
     parse_key_press_payload,
+    parse_run_command_payload,
     parse_type_text_payload,
     serialize_message,
 )
@@ -56,6 +59,7 @@ class ControllerClient:
             MessageType.TYPE_TEXT: self._handle_type_text,
             MessageType.KEY_PRESS: self._handle_key_press,
             MessageType.SCREENSHOT_REQUEST: self._handle_screenshot,
+            MessageType.RUN_COMMAND: self._handle_run_command,
             MessageType.PING: self._handle_ping,
         }
         self._handshake_event = asyncio.Event()
@@ -242,6 +246,30 @@ class ControllerClient:
             await self._send_screenshot_response(request_id, result)
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.SCREENSHOT_FAILED, str(e))
+
+    async def _handle_run_command(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_run_command_payload(data)
+        try:
+            result = await asyncio.to_thread(execute_command, payload)
+            await self._send_command_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _send_command_result(
+        self, request_id: str, result: CommandResultPayload
+    ) -> None:
+        message = serialize_message(
+            MessageType.COMMAND_RESULT,
+            request_id=request_id,
+            success=result.success,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            return_code=result.return_code,
+            duration_ms=result.duration_ms,
+        )
+        await self._send_message(message)
 
     async def _handle_ping(self, request_id: str, data: dict[str, object]) -> None:
         message = serialize_message(MessageType.PONG, request_id=request_id)
