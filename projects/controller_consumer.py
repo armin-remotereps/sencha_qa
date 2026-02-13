@@ -41,12 +41,15 @@ class ControllerConsumer(AsyncWebsocketConsumer):  # type: ignore[misc]
             return
 
         msg_type: str = data.get("type", "")
+        request_id: str = data.get("request_id", "")
 
         if not self._authenticated:
             if msg_type == "handshake":
-                await self._handle_handshake(data)
+                await self._handle_handshake(data, request_id)
             else:
-                await self._send_error("Not authenticated. Send handshake first.")
+                await self._send_error(
+                    "Not authenticated. Send handshake first.", request_id
+                )
                 await self.close()
             return
 
@@ -60,25 +63,25 @@ class ControllerConsumer(AsyncWebsocketConsumer):  # type: ignore[misc]
             await sync_to_async(mark_agent_disconnected)(self._project)
             await sync_to_async(broadcast_agent_status)(self._project)
 
-    async def _handle_handshake(self, data: dict[str, Any]) -> None:
+    async def _handle_handshake(self, data: dict[str, Any], request_id: str) -> None:
         api_key: str = data.get("api_key", "")
         system_info: dict[str, Any] = data.get("system_info", {})
 
         if not api_key:
-            await self._send_handshake_ack("error", "Missing api_key")
+            await self._send_handshake_ack("error", "Missing api_key", request_id)
             await self.close()
             return
 
         project = await sync_to_async(get_project_by_api_key)(api_key)
         if project is None:
-            await self._send_handshake_ack("error", "Invalid API key")
+            await self._send_handshake_ack("error", "Invalid API key", request_id)
             await self.close()
             return
 
         connected = await sync_to_async(mark_agent_connected)(project, system_info)
         if not connected:
             await self._send_handshake_ack(
-                "already_connected", "Agent already connected"
+                "already_connected", "Agent already connected", request_id
             )
             await self.close()
             return
@@ -89,6 +92,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):  # type: ignore[misc]
         await self._send_handshake_ack(
             status="ok",
             message="Connected",
+            request_id=request_id,
             project_id=str(project.id),
             project_name=project.name,
         )
@@ -97,6 +101,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):  # type: ignore[misc]
         self,
         status: str,
         message: str,
+        request_id: str = "",
         project_id: str = "",
         project_name: str = "",
     ) -> None:
@@ -104,6 +109,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):  # type: ignore[misc]
             text_data=json.dumps(
                 {
                     "type": "handshake_ack",
+                    "request_id": request_id,
                     "status": status,
                     "message": message,
                     "project_id": project_id,
@@ -112,11 +118,12 @@ class ControllerConsumer(AsyncWebsocketConsumer):  # type: ignore[misc]
             )
         )
 
-    async def _send_error(self, message: str) -> None:
+    async def _send_error(self, message: str, request_id: str = "") -> None:
         await self.send(
             text_data=json.dumps(
                 {
                     "type": "error",
+                    "request_id": request_id,
                     "message": message,
                 }
             )

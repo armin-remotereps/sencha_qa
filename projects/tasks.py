@@ -88,7 +88,7 @@ def _handle_failure(upload: TestCaseUpload) -> None:
     _send_upload_progress(upload)
 
 
-@shared_task(  # type: ignore[untyped-decorator]
+@shared_task(  # type: ignore[misc]
     bind=True,
     name="projects.tasks.process_xml_upload",
     queue="upload",
@@ -134,7 +134,7 @@ def process_xml_upload(self: Task[None, None], upload_id: int) -> None:
         _handle_failure(upload)
 
 
-@shared_task(  # type: ignore[untyped-decorator]
+@shared_task(  # type: ignore[misc]
     bind=True,
     name="projects.tasks.execute_test_run_case",
     queue="execution",
