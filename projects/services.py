@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import dataclasses
 import html
 import logging
 import secrets
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import asdict
@@ -214,6 +216,246 @@ def broadcast_agent_status(project: Project) -> None:
 
     event = _build_agent_status_event(project)
     async_to_sync(layer.group_send)(_agent_status_group(project.id), event)
+
+
+# ============================================================================
+# CONTROLLER ACTION SERVICES
+# ============================================================================
+
+
+class ControllerActionError(Exception):
+    pass
+
+
+class ActionResult(TypedDict):
+    success: bool
+    message: str
+    duration_ms: float
+
+
+class ScreenshotResult(TypedDict):
+    success: bool
+    image_base64: str
+    width: int
+    height: int
+    format: str
+
+
+def _controller_group(project_id: int) -> str:
+    return f"controller_{project_id}"
+
+
+def _send_controller_action(
+    project_id: int,
+    event_type: str,
+    request_id: str,
+    reply_channel: str,
+    **payload: Any,
+) -> None:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        raise ControllerActionError("Channel layer is not configured")
+
+    event: dict[str, Any] = {
+        "type": event_type,
+        "request_id": request_id,
+        "reply_channel": reply_channel,
+        **payload,
+    }
+    async_to_sync(layer.group_send)(_controller_group(project_id), event)
+
+
+def _wait_for_reply(reply_channel: str, timeout: float) -> dict[str, Any]:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        raise ControllerActionError("Channel layer is not configured")
+
+    async def _receive_with_timeout() -> dict[str, Any]:
+        result: dict[str, Any] = await asyncio.wait_for(
+            layer.receive(reply_channel), timeout=timeout
+        )
+        return result
+
+    try:
+        return async_to_sync(_receive_with_timeout)()
+    except asyncio.TimeoutError as exc:
+        raise ControllerActionError(
+            f"Timed out waiting for reply after {timeout}s"
+        ) from exc
+
+
+def controller_click(
+    project_id: int,
+    x: int,
+    y: int,
+    button: str = "left",
+    timeout: float = 30.0,
+) -> ActionResult:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        raise ControllerActionError("Channel layer is not configured")
+
+    reply_channel: str = async_to_sync(layer.new_channel)()
+    request_id = str(uuid.uuid4())
+    _send_controller_action(
+        project_id,
+        "controller.click",
+        request_id,
+        reply_channel,
+        x=x,
+        y=y,
+        button=button,
+    )
+    reply = _wait_for_reply(reply_channel, timeout)
+    return ActionResult(
+        success=reply.get("success", False),
+        message=reply.get("message", ""),
+        duration_ms=reply.get("duration_ms", 0.0),
+    )
+
+
+def controller_hover(
+    project_id: int,
+    x: int,
+    y: int,
+    timeout: float = 30.0,
+) -> ActionResult:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        raise ControllerActionError("Channel layer is not configured")
+
+    reply_channel: str = async_to_sync(layer.new_channel)()
+    request_id = str(uuid.uuid4())
+    _send_controller_action(
+        project_id,
+        "controller.hover",
+        request_id,
+        reply_channel,
+        x=x,
+        y=y,
+    )
+    reply = _wait_for_reply(reply_channel, timeout)
+    return ActionResult(
+        success=reply.get("success", False),
+        message=reply.get("message", ""),
+        duration_ms=reply.get("duration_ms", 0.0),
+    )
+
+
+def controller_drag(
+    project_id: int,
+    start_x: int,
+    start_y: int,
+    end_x: int,
+    end_y: int,
+    button: str = "left",
+    duration: float = 0.5,
+    timeout: float = 30.0,
+) -> ActionResult:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        raise ControllerActionError("Channel layer is not configured")
+
+    reply_channel: str = async_to_sync(layer.new_channel)()
+    request_id = str(uuid.uuid4())
+    _send_controller_action(
+        project_id,
+        "controller.drag",
+        request_id,
+        reply_channel,
+        start_x=start_x,
+        start_y=start_y,
+        end_x=end_x,
+        end_y=end_y,
+        button=button,
+        duration=duration,
+    )
+    reply = _wait_for_reply(reply_channel, timeout)
+    return ActionResult(
+        success=reply.get("success", False),
+        message=reply.get("message", ""),
+        duration_ms=reply.get("duration_ms", 0.0),
+    )
+
+
+def controller_type_text(
+    project_id: int,
+    text: str,
+    interval: float = 0.0,
+    timeout: float = 30.0,
+) -> ActionResult:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        raise ControllerActionError("Channel layer is not configured")
+
+    reply_channel: str = async_to_sync(layer.new_channel)()
+    request_id = str(uuid.uuid4())
+    _send_controller_action(
+        project_id,
+        "controller.type_text",
+        request_id,
+        reply_channel,
+        text=text,
+        interval=interval,
+    )
+    reply = _wait_for_reply(reply_channel, timeout)
+    return ActionResult(
+        success=reply.get("success", False),
+        message=reply.get("message", ""),
+        duration_ms=reply.get("duration_ms", 0.0),
+    )
+
+
+def controller_key_press(
+    project_id: int,
+    keys: str,
+    timeout: float = 30.0,
+) -> ActionResult:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        raise ControllerActionError("Channel layer is not configured")
+
+    reply_channel: str = async_to_sync(layer.new_channel)()
+    request_id = str(uuid.uuid4())
+    _send_controller_action(
+        project_id,
+        "controller.key_press",
+        request_id,
+        reply_channel,
+        keys=keys,
+    )
+    reply = _wait_for_reply(reply_channel, timeout)
+    return ActionResult(
+        success=reply.get("success", False),
+        message=reply.get("message", ""),
+        duration_ms=reply.get("duration_ms", 0.0),
+    )
+
+
+def controller_screenshot(
+    project_id: int,
+    timeout: float = 30.0,
+) -> ScreenshotResult:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        raise ControllerActionError("Channel layer is not configured")
+
+    reply_channel: str = async_to_sync(layer.new_channel)()
+    request_id = str(uuid.uuid4())
+    _send_controller_action(
+        project_id,
+        "controller.screenshot",
+        request_id,
+        reply_channel,
+    )
+    reply = _wait_for_reply(reply_channel, timeout)
+    return ScreenshotResult(
+        success=reply.get("success", False),
+        image_base64=reply.get("image_base64", ""),
+        width=reply.get("width", 0),
+        height=reply.get("height", 0),
+        format=reply.get("format", "png"),
+    )
 
 
 # ============================================================================

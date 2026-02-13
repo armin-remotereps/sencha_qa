@@ -1,4 +1,5 @@
 import base64
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from asgiref.sync import sync_to_async
@@ -5110,3 +5111,476 @@ class ControllerConsumerTests(TransactionTestCase):
 
         project = await sync_to_async(Project.objects.get)(pk=project.id)
         self.assertFalse(project.agent_connected)
+
+
+# ============================================================================
+# CONTROLLER ACTION CONSUMER TESTS
+# ============================================================================
+
+
+class ControllerActionConsumerTests(TransactionTestCase):
+    """Test channel_layer action forwarding and result routing in ControllerConsumer."""
+
+    async def _create_authenticated_communicator(
+        self,
+    ) -> tuple[Any, "Project"]:
+        from channels.testing import WebsocketCommunicator
+
+        from projects.controller_consumer import ControllerConsumer
+
+        project = await sync_to_async(Project.objects.create)(
+            name="Action Test Project"
+        )
+        communicator = WebsocketCommunicator(
+            ControllerConsumer.as_asgi(), "/ws/controller/"
+        )
+        connected, _ = await communicator.connect()
+        assert connected
+
+        await communicator.send_json_to(
+            {
+                "type": "handshake",
+                "api_key": project.api_key,
+                "system_info": {"os": "linux"},
+            }
+        )
+        await communicator.receive_json_from(timeout=2)
+        return communicator, project
+
+    async def test_consumer_joins_group_after_handshake(self) -> None:
+        """After handshake, consumer should be in controller_{project_id} group."""
+        from channels.layers import get_channel_layer
+
+        communicator, project = await self._create_authenticated_communicator()
+        layer = get_channel_layer()
+        assert layer is not None
+
+        group_name = f"controller_{project.id}"
+        await layer.group_send(
+            group_name,
+            {
+                "type": "controller.click",
+                "request_id": "test-group-membership",
+                "reply_channel": "",
+                "x": 10,
+                "y": 20,
+                "button": "left",
+            },
+        )
+
+        response = await communicator.receive_json_from(timeout=2)
+        self.assertEqual(response["type"], "click")
+        self.assertEqual(response["request_id"], "test-group-membership")
+
+        await communicator.disconnect()
+
+    async def test_controller_click_forwarded_to_ws(self) -> None:
+        """Click event from channel_layer should be forwarded to WS client."""
+        from channels.layers import get_channel_layer
+
+        communicator, project = await self._create_authenticated_communicator()
+        layer = get_channel_layer()
+        assert layer is not None
+
+        await layer.group_send(
+            f"controller_{project.id}",
+            {
+                "type": "controller.click",
+                "request_id": "req-click",
+                "reply_channel": "",
+                "x": 42,
+                "y": 84,
+                "button": "right",
+            },
+        )
+
+        response = await communicator.receive_json_from(timeout=2)
+        self.assertEqual(response["type"], "click")
+        self.assertEqual(response["x"], 42)
+        self.assertEqual(response["y"], 84)
+        self.assertEqual(response["button"], "right")
+
+        await communicator.disconnect()
+
+    async def test_controller_hover_forwarded_to_ws(self) -> None:
+        """Hover event from channel_layer should be forwarded to WS client."""
+        from channels.layers import get_channel_layer
+
+        communicator, project = await self._create_authenticated_communicator()
+        layer = get_channel_layer()
+        assert layer is not None
+
+        await layer.group_send(
+            f"controller_{project.id}",
+            {
+                "type": "controller.hover",
+                "request_id": "req-hover",
+                "reply_channel": "",
+                "x": 55,
+                "y": 66,
+            },
+        )
+
+        response = await communicator.receive_json_from(timeout=2)
+        self.assertEqual(response["type"], "hover")
+        self.assertEqual(response["x"], 55)
+        self.assertEqual(response["y"], 66)
+
+        await communicator.disconnect()
+
+    async def test_controller_drag_forwarded_to_ws(self) -> None:
+        """Drag event from channel_layer should be forwarded to WS client."""
+        from channels.layers import get_channel_layer
+
+        communicator, project = await self._create_authenticated_communicator()
+        layer = get_channel_layer()
+        assert layer is not None
+
+        await layer.group_send(
+            f"controller_{project.id}",
+            {
+                "type": "controller.drag",
+                "request_id": "req-drag",
+                "reply_channel": "",
+                "start_x": 10,
+                "start_y": 20,
+                "end_x": 30,
+                "end_y": 40,
+                "button": "left",
+                "duration": 0.5,
+            },
+        )
+
+        response = await communicator.receive_json_from(timeout=2)
+        self.assertEqual(response["type"], "drag")
+        self.assertEqual(response["start_x"], 10)
+        self.assertEqual(response["end_x"], 30)
+
+        await communicator.disconnect()
+
+    async def test_controller_type_text_forwarded_to_ws(self) -> None:
+        """Type text event from channel_layer should be forwarded to WS client."""
+        from channels.layers import get_channel_layer
+
+        communicator, project = await self._create_authenticated_communicator()
+        layer = get_channel_layer()
+        assert layer is not None
+
+        await layer.group_send(
+            f"controller_{project.id}",
+            {
+                "type": "controller.type_text",
+                "request_id": "req-type",
+                "reply_channel": "",
+                "text": "hello",
+                "interval": 0.05,
+            },
+        )
+
+        response = await communicator.receive_json_from(timeout=2)
+        self.assertEqual(response["type"], "type_text")
+        self.assertEqual(response["text"], "hello")
+        self.assertEqual(response["interval"], 0.05)
+
+        await communicator.disconnect()
+
+    async def test_controller_key_press_forwarded_to_ws(self) -> None:
+        """Key press event from channel_layer should be forwarded to WS client."""
+        from channels.layers import get_channel_layer
+
+        communicator, project = await self._create_authenticated_communicator()
+        layer = get_channel_layer()
+        assert layer is not None
+
+        await layer.group_send(
+            f"controller_{project.id}",
+            {
+                "type": "controller.key_press",
+                "request_id": "req-key",
+                "reply_channel": "",
+                "keys": "enter",
+            },
+        )
+
+        response = await communicator.receive_json_from(timeout=2)
+        self.assertEqual(response["type"], "key_press")
+        self.assertEqual(response["keys"], "enter")
+
+        await communicator.disconnect()
+
+    async def test_controller_screenshot_forwarded_to_ws(self) -> None:
+        """Screenshot event from channel_layer should be forwarded to WS client."""
+        from channels.layers import get_channel_layer
+
+        communicator, project = await self._create_authenticated_communicator()
+        layer = get_channel_layer()
+        assert layer is not None
+
+        await layer.group_send(
+            f"controller_{project.id}",
+            {
+                "type": "controller.screenshot",
+                "request_id": "req-screenshot",
+                "reply_channel": "",
+            },
+        )
+
+        response = await communicator.receive_json_from(timeout=2)
+        self.assertEqual(response["type"], "screenshot_request")
+        self.assertEqual(response["request_id"], "req-screenshot")
+
+        await communicator.disconnect()
+
+    async def test_action_result_routed_to_reply_channel(self) -> None:
+        """Client action_result should be sent to the reply_channel."""
+        from channels.layers import get_channel_layer
+
+        communicator, project = await self._create_authenticated_communicator()
+        layer = get_channel_layer()
+        assert layer is not None
+
+        reply_channel = await layer.new_channel()
+
+        await layer.group_send(
+            f"controller_{project.id}",
+            {
+                "type": "controller.click",
+                "request_id": "req-reply-test",
+                "reply_channel": reply_channel,
+                "x": 1,
+                "y": 2,
+                "button": "left",
+            },
+        )
+
+        ws_msg = await communicator.receive_json_from(timeout=2)
+        self.assertEqual(ws_msg["request_id"], "req-reply-test")
+
+        await communicator.send_json_to(
+            {
+                "type": "action_result",
+                "request_id": "req-reply-test",
+                "success": True,
+                "message": "Clicked",
+                "duration_ms": 42.5,
+            }
+        )
+
+        import asyncio
+
+        reply = await asyncio.wait_for(layer.receive(reply_channel), timeout=2)
+        self.assertEqual(reply["request_id"], "req-reply-test")
+        self.assertTrue(reply["success"])
+        self.assertEqual(reply["message"], "Clicked")
+        self.assertAlmostEqual(reply["duration_ms"], 42.5)
+
+        await communicator.disconnect()
+
+    async def test_screenshot_response_routed_to_reply_channel(self) -> None:
+        """Client screenshot_response should be sent to the reply_channel."""
+        from channels.layers import get_channel_layer
+
+        communicator, project = await self._create_authenticated_communicator()
+        layer = get_channel_layer()
+        assert layer is not None
+
+        reply_channel = await layer.new_channel()
+
+        await layer.group_send(
+            f"controller_{project.id}",
+            {
+                "type": "controller.screenshot",
+                "request_id": "req-ss-reply",
+                "reply_channel": reply_channel,
+            },
+        )
+
+        await communicator.receive_json_from(timeout=2)
+
+        await communicator.send_json_to(
+            {
+                "type": "screenshot_response",
+                "request_id": "req-ss-reply",
+                "success": True,
+                "image_base64": "aW1hZ2U=",
+                "width": 1920,
+                "height": 1080,
+                "format": "png",
+            }
+        )
+
+        import asyncio
+
+        reply = await asyncio.wait_for(layer.receive(reply_channel), timeout=2)
+        self.assertEqual(reply["request_id"], "req-ss-reply")
+        self.assertTrue(reply["success"])
+        self.assertEqual(reply["image_base64"], "aW1hZ2U=")
+        self.assertEqual(reply["width"], 1920)
+        self.assertEqual(reply["height"], 1080)
+
+        await communicator.disconnect()
+
+    async def test_action_result_unknown_request_id_no_crash(self) -> None:
+        """Unknown request_id in action_result should not crash the consumer."""
+        communicator, project = await self._create_authenticated_communicator()
+
+        await communicator.send_json_to(
+            {
+                "type": "action_result",
+                "request_id": "nonexistent-id",
+                "success": True,
+                "message": "Done",
+                "duration_ms": 10.0,
+            }
+        )
+
+        # Consumer should still be alive. Send pong to verify.
+        await communicator.send_json_to({"type": "pong", "request_id": "p1"})
+        # No crash = pass
+
+        await communicator.disconnect()
+
+    async def test_consumer_leaves_group_on_disconnect(self) -> None:
+        """After disconnect, consumer should no longer receive group messages."""
+        import asyncio
+
+        from channels.layers import get_channel_layer
+
+        communicator, project = await self._create_authenticated_communicator()
+        layer = get_channel_layer()
+        assert layer is not None
+
+        await communicator.disconnect()
+
+        reply_channel = await layer.new_channel()
+        await layer.group_send(
+            f"controller_{project.id}",
+            {
+                "type": "controller.click",
+                "request_id": "after-disconnect",
+                "reply_channel": reply_channel,
+                "x": 0,
+                "y": 0,
+                "button": "left",
+            },
+        )
+
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(layer.receive(reply_channel), timeout=0.5)
+
+
+# ============================================================================
+# CONTROLLER ACTION SERVICE TESTS
+# ============================================================================
+
+
+class ControllerActionServiceTests(TestCase):
+    """Test controller action service functions with mocked channel layer."""
+
+    def setUp(self) -> None:
+        self.mock_layer = MagicMock()
+        self.mock_layer.new_channel = AsyncMock(return_value="test.reply.channel")
+        self.mock_layer.group_send = AsyncMock()
+        self.mock_layer.receive = AsyncMock()
+
+    @patch("projects.services.get_channel_layer")
+    def test_controller_click_sends_correct_event(
+        self, mock_get_layer: MagicMock
+    ) -> None:
+        """controller_click should send a controller.click event via group_send."""
+        mock_get_layer.return_value = self.mock_layer
+        self.mock_layer.receive.return_value = {
+            "type": "action.result",
+            "request_id": "any",
+            "success": True,
+            "message": "OK",
+            "duration_ms": 5.0,
+        }
+
+        from projects.services import controller_click
+
+        controller_click(project_id=1, x=100, y=200, button="left", timeout=5.0)
+
+        self.mock_layer.group_send.assert_called_once()
+        call_args = self.mock_layer.group_send.call_args
+        self.assertEqual(call_args[0][0], "controller_1")
+        event = call_args[0][1]
+        self.assertEqual(event["type"], "controller.click")
+        self.assertEqual(event["x"], 100)
+        self.assertEqual(event["y"], 200)
+        self.assertEqual(event["button"], "left")
+        self.assertIn("request_id", event)
+        self.assertEqual(event["reply_channel"], "test.reply.channel")
+
+    @patch("projects.services.get_channel_layer")
+    def test_controller_click_returns_result(self, mock_get_layer: MagicMock) -> None:
+        """controller_click should return ActionResult from the reply channel."""
+        mock_get_layer.return_value = self.mock_layer
+        self.mock_layer.receive.return_value = {
+            "type": "action.result",
+            "request_id": "r1",
+            "success": True,
+            "message": "Clicked at 100,200",
+            "duration_ms": 15.3,
+        }
+
+        from projects.services import controller_click
+
+        result = controller_click(project_id=1, x=100, y=200)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["message"], "Clicked at 100,200")
+        self.assertAlmostEqual(result["duration_ms"], 15.3)
+
+    @patch("projects.services.get_channel_layer")
+    def test_controller_action_raises_on_timeout(
+        self, mock_get_layer: MagicMock
+    ) -> None:
+        """Service function should raise ControllerActionError on timeout."""
+        import asyncio
+
+        mock_get_layer.return_value = self.mock_layer
+        self.mock_layer.receive = AsyncMock(side_effect=asyncio.TimeoutError())
+
+        from projects.services import ControllerActionError, controller_click
+
+        with self.assertRaises(ControllerActionError) as ctx:
+            controller_click(project_id=1, x=0, y=0, timeout=0.1)
+        self.assertIn("Timed out", str(ctx.exception))
+
+    @patch("projects.services.get_channel_layer")
+    def test_controller_action_raises_when_no_layer(
+        self, mock_get_layer: MagicMock
+    ) -> None:
+        """Service function should raise ControllerActionError when layer is None."""
+        mock_get_layer.return_value = None
+
+        from projects.services import ControllerActionError, controller_click
+
+        with self.assertRaises(ControllerActionError) as ctx:
+            controller_click(project_id=1, x=0, y=0)
+        self.assertIn("not configured", str(ctx.exception))
+
+    @patch("projects.services.get_channel_layer")
+    def test_controller_screenshot_returns_result(
+        self, mock_get_layer: MagicMock
+    ) -> None:
+        """controller_screenshot should return ScreenshotResult."""
+        mock_get_layer.return_value = self.mock_layer
+        self.mock_layer.receive.return_value = {
+            "type": "screenshot.result",
+            "request_id": "r2",
+            "success": True,
+            "image_base64": "abc123==",
+            "width": 1920,
+            "height": 1080,
+            "format": "png",
+        }
+
+        from projects.services import controller_screenshot
+
+        result = controller_screenshot(project_id=1, timeout=5.0)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["image_base64"], "abc123==")
+        self.assertEqual(result["width"], 1920)
+        self.assertEqual(result["height"], 1080)
+        self.assertEqual(result["format"], "png")
