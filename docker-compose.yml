@@ -49,6 +49,7 @@ services:
         entrypoint: "daphne -b 0.0.0.0 -p 8000 auto_tester.asgi:application"
 
     upload-celery:
+        hostname: upload
         image: local/auto_tester:latest
         build: .
         env_file:
@@ -63,6 +64,7 @@ services:
         entrypoint: "python -m celery -A auto_tester worker -l INFO -Q upload --concurrency=5"
 
     execution-celery:
+        hostname: execute
         image: local/auto_tester:latest
         build: .
         env_file:
