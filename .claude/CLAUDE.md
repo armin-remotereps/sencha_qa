@@ -50,7 +50,7 @@ A user will upload testrails xml file which contains multiple test cases, and we
 
 ## Task implementation flow:
 
-1. I will provide you a task, feature, or a bug. It is on a file on directory docs/specs
+1. I will provide you a task, feature, or a bug. It is on a file (or directory for big features) on directory docs/specs
 2. You will plan it using plan mode, will ask any technical or business questions from me (I'm a staff engineer so I can answer all your questions)
 3. After my confirmation, you will create plan
 4. You will spawn parallel agents to implement logics, frontend, views, tasks, ... . Don't forget to use `dmr-agent-architect`, `frontend-craftsmand`, `django-view-architect`, and `celery-architect` agents for them! (note: each agent should write its own test cases before starting main implementation, so they should create their function and classes structure first, then test cases (they should fail) then the main logic which passes the test cases)
