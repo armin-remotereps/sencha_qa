@@ -49,11 +49,55 @@ services:
             - /var/run/docker.sock:/var/run/docker.sock
         entrypoint: "daphne -b 0.0.0.0 -p 8000 auto_tester.asgi:application"
 
+    upload-celery:
+        image: local/auto_tester:latest
+        build: .
+        env_file:
+            - "./.env"
+        restart: always
+        depends_on:
+            - "db"
+            - "redis"
+        volumes:
+            - "STATIC:/src/static"
+            - "MEDIA:/src/media"
+            - /var/run/docker.sock:/var/run/docker.sock
+        entrypoint: "python -m celery -A auto_tester worker -l INFO -Q upload --concurrency=5"
+
+    execution-celery:
+        image: local/auto_tester:latest
+        build: .
+        env_file:
+            - "./.env"
+        restart: always
+        depends_on:
+            - "db"
+            - "redis"
+        volumes:
+            - "STATIC:/src/static"
+            - "MEDIA:/src/media"
+            - /var/run/docker.sock:/var/run/docker.sock
+        entrypoint: "python -m celery -A auto_tester worker -l INFO -Q execution --concurrency=2"
+
+    flower:
+        image: local/auto_tester:latest
+        build: .
+        env_file:
+            - "./.env"
+        restart: always
+        depends_on:
+            - "upload-celery"
+            - "execution-celery"
+        ports:
+            - "127.0.0.1:5555:5555"
+        entrypoint: "python -m celery -A auto_tester flower --basic-auth=sencha:1qaz2wsx --url-prefix=flower"
+
     nginx:
         image: nginx:1.29-alpine
         restart: always
         depends_on:
             - "api"
+            - "flower"
         ports:
             - "80:80"
             - "443:443"
@@ -93,8 +137,8 @@ services:
             - "--expand"
 
 volumes:
-  DB_DATA:
-  STATIC:
-  MEDIA:
-  CERTBOT:
-  LETSENCRYPT:
+    DB_DATA:
+    STATIC:
+    MEDIA:
+    CERTBOT:
+    LETSENCRYPT:
