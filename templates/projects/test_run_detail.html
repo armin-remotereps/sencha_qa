@@ -37,6 +37,28 @@
         </button>
       </form>
       {% endif %}
+      {% if test_run.status == "done" %}
+      <form method="post" action="{% url 'projects:test_run_redo' project_id=project.id test_run_id=test_run.id %}" onsubmit="return confirm('Reset this test run? All results, logs, and screenshots will be cleared.')">
+        {% csrf_token %}
+        <button
+          type="submit"
+          class="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500"
+        >
+          Redo Run
+        </button>
+      </form>
+      {% endif %}
+      {% if test_run.status == "waiting" %}
+      <form method="post" action="{% url 'projects:test_run_delete' project_id=project.id test_run_id=test_run.id %}" onsubmit="return confirm('Delete this test run and all its cases?')">
+        {% csrf_token %}
+        <button
+          type="submit"
+          class="rounded-md bg-red-900/50 px-4 py-2 text-sm font-medium text-red-400 hover:bg-red-900"
+        >
+          Delete Run
+        </button>
+      </form>
+      {% endif %}
       <a
         href="{% url 'projects:test_run_list' project_id=project.id %}"
         class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
@@ -98,13 +120,21 @@
             {% endif %}
           </td>
           <td class="px-4 py-3 text-zinc-400">{{ pivot.created_at|date:"M d, Y H:i" }}</td>
-          <td class="px-4 py-3">
+          <td class="px-4 py-3 flex items-center gap-2">
             <a
               href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=test_run.id pivot_id=pivot.id %}"
               class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
             >
               View
             </a>
+            {% if test_run.status == "waiting" %}
+            <form method="post" action="{% url 'projects:test_run_remove_case' project_id=project.id test_run_id=test_run.id pivot_id=pivot.id %}" onsubmit="return confirm('Remove this case from the run?')">
+              {% csrf_token %}
+              <button type="submit" class="rounded-md bg-red-900/50 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-900">
+                Remove
+              </button>
+            </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}

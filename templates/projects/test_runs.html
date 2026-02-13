@@ -50,13 +50,21 @@
           </td>
           <td class="px-4 py-3 text-zinc-400">{{ run.case_count }}</td>
           <td class="px-4 py-3 text-zinc-400">{{ run.created_at|date:"M d, Y H:i" }}</td>
-          <td class="px-4 py-3">
+          <td class="px-4 py-3 flex items-center gap-2">
             <a
               href="{% url 'projects:test_run_detail' project_id=project.id test_run_id=run.id %}"
               class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
             >
               View
             </a>
+            {% if run.status == "waiting" %}
+            <form method="post" action="{% url 'projects:test_run_delete' project_id=project.id test_run_id=run.id %}" onsubmit="return confirm('Delete this test run?')">
+              {% csrf_token %}
+              <button type="submit" class="rounded-md bg-red-900/50 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-900">
+                Delete
+              </button>
+            </form>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}

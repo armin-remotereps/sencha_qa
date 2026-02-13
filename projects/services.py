@@ -501,6 +501,38 @@ def list_waiting_test_runs_for_project(project: Project) -> QuerySet[TestRun]:
     ).order_by("-created_at")
 
 
+def _can_modify_test_run(test_run: TestRun) -> bool:
+    return test_run.status == TestRunStatus.WAITING
+
+
+def delete_test_run(test_run: TestRun) -> None:
+    if not _can_modify_test_run(test_run):
+        raise ValueError("Only waiting test runs can be deleted.")
+    test_run.delete()
+
+
+def remove_case_from_test_run(test_run: TestRun, pivot_id: int) -> None:
+    if not _can_modify_test_run(test_run):
+        raise ValueError("Cannot remove cases from a non-waiting test run.")
+    test_run.pivot_entries.filter(id=pivot_id).delete()
+
+
+@transaction.atomic
+def redo_test_run(test_run: TestRun) -> None:
+    if test_run.status != TestRunStatus.DONE:
+        raise ValueError("Only completed test runs can be redone.")
+    for pivot in test_run.pivot_entries.all():
+        for screenshot in pivot.screenshots.all():
+            screenshot.image.delete(save=False)
+        pivot.screenshots.all().delete()
+        pivot.status = TestRunTestCaseStatus.CREATED
+        pivot.result = ""
+        pivot.logs = ""
+        pivot.save(update_fields=["status", "result", "logs", "updated_at"])
+    test_run.status = TestRunStatus.WAITING
+    test_run.save(update_fields=["status", "updated_at"])
+
+
 def start_test_run(test_run: TestRun) -> None:
     from projects.tasks import execute_test_run_case
 

@@ -49,13 +49,50 @@ def build_system_prompt(task_description: str) -> str:
 
 
 def _build_role_description() -> str:
+    return "\n\n".join(
+        [
+            _build_agent_persona(),
+            _build_qa_rules(),
+            _build_tool_taxonomy(),
+            _build_environment_context(),
+        ]
+    )
+
+
+def _build_agent_persona() -> str:
     return (
-        "You are an AI test automation agent operating inside a Linux desktop environment "
-        "(Ubuntu 24.04 with XFCE4). You have four categories of tools:\n\n"
+        "You are a strict QA tester operating inside a Linux desktop environment "
+        "(Ubuntu 24.04 with XFCE4). Your job is to execute test cases exactly as written "
+        "and report honest results."
+    )
+
+
+def _build_qa_rules() -> str:
+    return (
+        "CRITICAL RULES:\n"
+        "- You MUST follow each test step literally. If a step is ambiguous, incomplete, "
+        "or impossible to execute, you MUST FAIL the test — do NOT guess, simulate, or skip.\n"
+        "- If you cannot access a resource, find a UI element, or perform an action described "
+        "in the test steps, FAIL the test immediately with a clear explanation of what went wrong.\n"
+        "- NEVER pretend a step succeeded. NEVER fabricate results. If something does not work "
+        "as described, the test FAILS.\n"
+        "- Verify every expected result. If the actual result does not match the expected result, "
+        "FAIL the test."
+    )
+
+
+def _build_tool_taxonomy() -> str:
+    return (
+        "You have four categories of tools:\n\n"
         "1. SHELL: Execute commands via SSH (apt-get, bash scripts, etc.)\n"
         "2. SCREEN: Observe the desktop and use keyboard via SSH+xdotool (screenshots, typing, key presses)\n"
         "3. BROWSER: Control the Chromium browser via Playwright CDP (DOM-based element finding)\n"
-        "4. VNC: Interact with the desktop via VNC protocol (vision-based clicking, hovering, element finding)\n\n"
+        "4. VNC: Interact with the desktop via VNC protocol (vision-based clicking, hovering, element finding)"
+    )
+
+
+def _build_environment_context() -> str:
+    return (
         "ENVIRONMENT:\n"
         "- The desktop (XFCE4) is already running on display :0\n"
         "- Chromium browser is installed but NOT running yet. It starts automatically "

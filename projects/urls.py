@@ -63,6 +63,16 @@ urlpatterns: list[URLPattern] = [
         name="test_run_detail",
     ),
     path(
+        "<int:project_id>/test-runs/<int:test_run_id>/delete/",
+        views.test_run_delete,
+        name="test_run_delete",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/redo/",
+        views.test_run_redo,
+        name="test_run_redo",
+    ),
+    path(
         "<int:project_id>/test-runs/<int:test_run_id>/start/",
         views.test_run_start,
         name="test_run_start",
@@ -71,6 +81,11 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-runs/<int:test_run_id>/add-cases/",
         views.test_run_add_cases,
         name="test_run_add_cases",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/remove-case/<int:pivot_id>/",
+        views.test_run_remove_case,
+        name="test_run_remove_case",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/",

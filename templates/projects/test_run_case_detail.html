@@ -58,19 +58,19 @@
       {% if pivot.test_case.preconditions %}
       <div>
         <p class="text-sm font-medium text-zinc-400">Preconditions</p>
-        <p class="mt-1 text-sm text-zinc-200">{{ pivot.test_case.preconditions }}</p>
+        <p class="mt-1 whitespace-pre-wrap break-words text-sm text-zinc-200">{{ pivot.test_case.preconditions }}</p>
       </div>
       {% endif %}
       {% if pivot.test_case.steps %}
       <div>
         <p class="text-sm font-medium text-zinc-400">Steps</p>
-        <p class="mt-1 text-sm text-zinc-200">{{ pivot.test_case.steps }}</p>
+        <p class="mt-1 whitespace-pre-wrap break-words text-sm text-zinc-200">{{ pivot.test_case.steps }}</p>
       </div>
       {% endif %}
       {% if pivot.test_case.expected %}
       <div>
         <p class="text-sm font-medium text-zinc-400">Expected Result</p>
-        <p class="mt-1 text-sm text-zinc-200">{{ pivot.test_case.expected }}</p>
+        <p class="mt-1 whitespace-pre-wrap break-words text-sm text-zinc-200">{{ pivot.test_case.expected }}</p>
       </div>
       {% endif %}
     </div>
@@ -80,7 +80,7 @@
   {% if pivot.result %}
   <div class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
     <h2 class="mb-4 text-lg font-semibold text-zinc-100">Result</h2>
-    <p class="text-sm text-zinc-200">{{ pivot.result }}</p>
+    <p class="whitespace-pre-wrap break-words text-sm text-zinc-200">{{ pivot.result }}</p>
   </div>
   {% endif %}
 
