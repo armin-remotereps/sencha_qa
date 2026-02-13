@@ -1,5 +1,5 @@
 import base64
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from django.contrib.admin.sites import AdminSite
 from django.db import IntegrityError
@@ -34,6 +34,11 @@ from projects.models import (
     UploadStatus,
 )
 from projects.services import (
+    _broadcast_log,
+    _broadcast_pivot_status_to_case,
+    _broadcast_pivot_status_to_run,
+    _broadcast_screenshot,
+    _broadcast_test_run_status,
     _build_log_callback,
     _build_screenshot_callback,
     _build_task_description,
@@ -42,6 +47,7 @@ from projects.services import (
     _finalize_pivot,
     _mark_pivot_failed,
     _mark_pivot_in_progress,
+    _persist_screenshot,
     _update_test_run_status_if_needed,
     add_cases_to_test_run,
     archive_project,
@@ -4536,3 +4542,305 @@ class ExecuteTestRunTestCaseBaseExceptionTests(TestCase):
             execute_test_run_test_case(self.pivot.id)
 
         mock_close.assert_called_once()
+
+
+# ============================================================================
+# BROADCAST HELPER TESTS
+# ============================================================================
+
+
+class BroadcastPivotStatusToRunTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Broadcast Pivot Run Proj")
+        self.tc = TestCaseModel.objects.create(
+            project=self.project, title="BC Pivot Run TC"
+        )
+        self.tr = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(
+            test_run=self.tr,
+            test_case=self.tc,
+            status=TestRunTestCaseStatus.IN_PROGRESS,
+        )
+
+    @patch("projects.services.get_channel_layer")
+    def test_should_send_to_test_run_group(self, mock_get_layer: MagicMock) -> None:
+        mock_layer = MagicMock()
+        mock_layer.group_send = AsyncMock()
+        mock_get_layer.return_value = mock_layer
+
+        _broadcast_pivot_status_to_run(self.pivot)
+
+        mock_layer.group_send.assert_called_once()
+        group_name = mock_layer.group_send.call_args.args[0]
+        self.assertEqual(group_name, f"test_run_{self.tr.id}")
+
+    @patch("projects.services.get_channel_layer", return_value=None)
+    def test_should_handle_none_channel_layer(self, mock_get_layer: MagicMock) -> None:
+        _broadcast_pivot_status_to_run(self.pivot)
+
+    @patch("projects.services.get_channel_layer")
+    def test_should_include_summary_and_pivot_data(
+        self, mock_get_layer: MagicMock
+    ) -> None:
+        mock_layer = MagicMock()
+        mock_layer.group_send = AsyncMock()
+        mock_get_layer.return_value = mock_layer
+
+        _broadcast_pivot_status_to_run(self.pivot)
+
+        event = mock_layer.group_send.call_args.args[1]
+        self.assertEqual(event["type"], "test_run.pivot_status")
+        self.assertEqual(event["pivot_id"], self.pivot.id)
+        self.assertIn("summary", event)
+
+
+class BroadcastPivotStatusToCaseTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Broadcast Pivot Case Proj")
+        self.tc = TestCaseModel.objects.create(
+            project=self.project, title="BC Pivot Case TC"
+        )
+        self.tr = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(
+            test_run=self.tr,
+            test_case=self.tc,
+            status=TestRunTestCaseStatus.IN_PROGRESS,
+        )
+
+    @patch("projects.services.get_channel_layer")
+    def test_should_send_to_case_group(self, mock_get_layer: MagicMock) -> None:
+        mock_layer = MagicMock()
+        mock_layer.group_send = AsyncMock()
+        mock_get_layer.return_value = mock_layer
+
+        _broadcast_pivot_status_to_case(self.pivot)
+
+        mock_layer.group_send.assert_called_once()
+        group_name = mock_layer.group_send.call_args.args[0]
+        self.assertEqual(group_name, f"test_run_case_{self.pivot.id}")
+
+    @patch("projects.services.get_channel_layer", return_value=None)
+    def test_should_handle_none_channel_layer(self, mock_get_layer: MagicMock) -> None:
+        _broadcast_pivot_status_to_case(self.pivot)
+
+    @patch("projects.services.get_channel_layer")
+    def test_should_include_status_and_result(self, mock_get_layer: MagicMock) -> None:
+        mock_layer = MagicMock()
+        mock_layer.group_send = AsyncMock()
+        mock_get_layer.return_value = mock_layer
+
+        _broadcast_pivot_status_to_case(self.pivot)
+
+        event = mock_layer.group_send.call_args.args[1]
+        self.assertEqual(event["type"], "test_run_case.status")
+        self.assertEqual(event["status"], TestRunTestCaseStatus.IN_PROGRESS)
+
+
+class BroadcastTestRunStatusTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Broadcast TR Proj")
+        self.tr = TestRun.objects.create(
+            project=self.project, status=TestRunStatus.STARTED
+        )
+
+    @patch("projects.services.get_channel_layer")
+    def test_should_send_to_test_run_group(self, mock_get_layer: MagicMock) -> None:
+        mock_layer = MagicMock()
+        mock_layer.group_send = AsyncMock()
+        mock_get_layer.return_value = mock_layer
+
+        _broadcast_test_run_status(self.tr)
+
+        mock_layer.group_send.assert_called_once()
+        group_name = mock_layer.group_send.call_args.args[0]
+        self.assertEqual(group_name, f"test_run_{self.tr.id}")
+        event = mock_layer.group_send.call_args.args[1]
+        self.assertEqual(event["type"], "test_run.status")
+        self.assertEqual(event["test_run_status"], TestRunStatus.STARTED)
+        self.assertIn("summary", event)
+
+    @patch("projects.services.get_channel_layer", return_value=None)
+    def test_should_handle_none_channel_layer(self, mock_get_layer: MagicMock) -> None:
+        _broadcast_test_run_status(self.tr)
+
+
+class BroadcastLogTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Broadcast Log Proj")
+        self.tc = TestCaseModel.objects.create(project=self.project, title="BC Log TC")
+        self.tr = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(test_run=self.tr, test_case=self.tc)
+
+    @patch("projects.services.get_channel_layer")
+    def test_should_send_log_to_case_group(self, mock_get_layer: MagicMock) -> None:
+        mock_layer = MagicMock()
+        mock_layer.group_send = AsyncMock()
+        mock_get_layer.return_value = mock_layer
+
+        _broadcast_log(self.pivot, "Test log line")
+
+        mock_layer.group_send.assert_called_once()
+        group_name = mock_layer.group_send.call_args.args[0]
+        self.assertEqual(group_name, f"test_run_case_{self.pivot.id}")
+        event = mock_layer.group_send.call_args.args[1]
+        self.assertEqual(event["type"], "test_run_case.log")
+        self.assertEqual(event["message"], "Test log line")
+
+    @patch("projects.services.get_channel_layer", return_value=None)
+    def test_should_handle_none_channel_layer(self, mock_get_layer: MagicMock) -> None:
+        _broadcast_log(self.pivot, "ignored")
+
+
+class BroadcastScreenshotTests(TestCase):
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Broadcast SS Proj")
+        self.tc = TestCaseModel.objects.create(project=self.project, title="BC SS TC")
+        self.tr = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(test_run=self.tr, test_case=self.tc)
+
+    @patch("projects.services.get_channel_layer")
+    def test_should_send_screenshot_to_case_group(
+        self, mock_get_layer: MagicMock
+    ) -> None:
+        mock_layer = MagicMock()
+        mock_layer.group_send = AsyncMock()
+        mock_get_layer.return_value = mock_layer
+
+        screenshot = TestRunScreenshot.objects.create(
+            test_run_test_case=self.pivot,
+            image="screenshots/test.png",
+            tool_name="screenshot",
+        )
+
+        _broadcast_screenshot(self.pivot, screenshot)
+
+        mock_layer.group_send.assert_called_once()
+        group_name = mock_layer.group_send.call_args.args[0]
+        self.assertEqual(group_name, f"test_run_case_{self.pivot.id}")
+        event = mock_layer.group_send.call_args.args[1]
+        self.assertEqual(event["type"], "test_run_case.screenshot")
+        self.assertEqual(event["screenshot_id"], screenshot.id)
+        self.assertEqual(event["tool_name"], "screenshot")
+
+    @patch("projects.services.get_channel_layer", return_value=None)
+    def test_should_handle_none_channel_layer(self, mock_get_layer: MagicMock) -> None:
+        screenshot = TestRunScreenshot.objects.create(
+            test_run_test_case=self.pivot,
+            image="screenshots/test.png",
+            tool_name="screenshot",
+        )
+        _broadcast_screenshot(self.pivot, screenshot)
+
+
+# ============================================================================
+# BROADCAST INTEGRATION TESTS
+# ============================================================================
+
+
+class BroadcastIntegrationTests(TestCase):
+    """Verify existing service functions trigger the correct broadcasts."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="BC Integration Proj")
+        self.tc = TestCaseModel.objects.create(project=self.project, title="BC Int TC")
+        self.tr = TestRun.objects.create(project=self.project)
+        self.pivot = TestRunTestCase.objects.create(test_run=self.tr, test_case=self.tc)
+
+    @patch("projects.services._broadcast_test_run_status")
+    @patch("projects.services._broadcast_pivot_status_to_case")
+    @patch("projects.services._broadcast_pivot_status_to_run")
+    def test_mark_pivot_in_progress_should_broadcast(
+        self,
+        mock_run_bc: MagicMock,
+        mock_case_bc: MagicMock,
+        mock_tr_bc: MagicMock,
+    ) -> None:
+        _mark_pivot_in_progress(self.pivot)
+        mock_run_bc.assert_called_once_with(self.pivot)
+        mock_case_bc.assert_called_once_with(self.pivot)
+        mock_tr_bc.assert_called_once_with(self.pivot.test_run)
+
+    @patch("projects.services._broadcast_test_run_status")
+    @patch("projects.services._broadcast_pivot_status_to_case")
+    @patch("projects.services._broadcast_pivot_status_to_run")
+    def test_mark_pivot_in_progress_should_not_broadcast_test_run_when_already_started(
+        self,
+        mock_run_bc: MagicMock,
+        mock_case_bc: MagicMock,
+        mock_tr_bc: MagicMock,
+    ) -> None:
+        self.tr.status = TestRunStatus.STARTED
+        self.tr.save()
+        _mark_pivot_in_progress(self.pivot)
+        mock_run_bc.assert_called_once_with(self.pivot)
+        mock_case_bc.assert_called_once_with(self.pivot)
+        mock_tr_bc.assert_not_called()
+
+    @patch("projects.services._broadcast_pivot_status_to_case")
+    @patch("projects.services._broadcast_pivot_status_to_run")
+    def test_finalize_pivot_should_broadcast(
+        self, mock_run_bc: MagicMock, mock_case_bc: MagicMock
+    ) -> None:
+        from agents.types import AgentResult, AgentStopReason, ChatMessage
+
+        result = AgentResult(
+            stop_reason=AgentStopReason.TASK_COMPLETE,
+            iterations=1,
+            messages=(ChatMessage(role="assistant", content="Done"),),
+        )
+        _finalize_pivot(self.pivot, result)
+        mock_run_bc.assert_called_once_with(self.pivot)
+        mock_case_bc.assert_called_once_with(self.pivot)
+
+    @patch("projects.services._broadcast_pivot_status_to_case")
+    @patch("projects.services._broadcast_pivot_status_to_run")
+    def test_mark_pivot_failed_should_broadcast(
+        self, mock_run_bc: MagicMock, mock_case_bc: MagicMock
+    ) -> None:
+        _mark_pivot_failed(self.pivot, "error")
+        mock_run_bc.assert_called_once_with(self.pivot)
+        mock_case_bc.assert_called_once_with(self.pivot)
+
+    @patch("projects.services._broadcast_log")
+    def test_log_callback_should_broadcast(self, mock_log_bc: MagicMock) -> None:
+        callback = _build_log_callback(self.pivot)
+        callback("hello")
+        mock_log_bc.assert_called_once_with(self.pivot, "hello")
+
+    @patch("projects.services._broadcast_screenshot")
+    def test_screenshot_persist_should_broadcast(self, mock_ss_bc: MagicMock) -> None:
+        _persist_screenshot(self.pivot, b"\x89PNG", "test.png", "screenshot")
+        mock_ss_bc.assert_called_once()
+        args = mock_ss_bc.call_args.args
+        self.assertEqual(args[0], self.pivot)
+        self.assertEqual(args[1].tool_name, "screenshot")
+
+    @patch("projects.services._broadcast_test_run_status")
+    def test_update_test_run_status_should_broadcast_when_done(
+        self, mock_tr_bc: MagicMock
+    ) -> None:
+        self.tr.status = TestRunStatus.STARTED
+        self.tr.save()
+        self.pivot.status = TestRunTestCaseStatus.SUCCESS
+        self.pivot.save()
+        _update_test_run_status_if_needed(self.tr)
+        mock_tr_bc.assert_called_once()
+
+    @patch("projects.services._broadcast_test_run_status")
+    def test_update_test_run_status_should_not_broadcast_when_not_done(
+        self, mock_tr_bc: MagicMock
+    ) -> None:
+        self.tr.status = TestRunStatus.STARTED
+        self.tr.save()
+        _update_test_run_status_if_needed(self.tr)
+        mock_tr_bc.assert_not_called()
+
+    @patch("projects.tasks.execute_test_run_case.delay")
+    @patch("projects.services._broadcast_test_run_status")
+    def test_start_test_run_should_broadcast(
+        self,
+        mock_tr_bc: MagicMock,
+        mock_task: MagicMock,
+    ) -> None:
+        start_test_run(self.tr)
+        mock_tr_bc.assert_called_once_with(self.tr)

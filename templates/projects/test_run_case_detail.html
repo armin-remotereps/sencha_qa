@@ -1,7 +1,7 @@
 {% extends "dashboard/base_dashboard.html" %}
 
 {% block dashboard_content %}
-<div>
+<div x-data="testRunCaseLive">
   {# BREADCRUMB #}
   <nav class="mb-4 text-sm text-zinc-400">
     <a href="{% url 'projects:list' %}" class="hover:text-zinc-200">Projects</a>
@@ -19,15 +19,10 @@
   <div class="mb-6 flex items-center justify-between">
     <div class="flex items-center gap-3">
       <h1 class="text-2xl font-bold text-zinc-100">{{ pivot.test_case.title }}</h1>
-      {% if pivot.status == "created" %}
-      <span class="rounded-full bg-zinc-800 px-3 py-1 text-sm text-zinc-400">Created</span>
-      {% elif pivot.status == "in_progress" %}
-      <span class="rounded-full bg-blue-900/50 px-3 py-1 text-sm text-blue-400">In Progress</span>
-      {% elif pivot.status == "success" %}
-      <span class="rounded-full bg-emerald-900/50 px-3 py-1 text-sm text-emerald-400">Success</span>
-      {% elif pivot.status == "failed" %}
-      <span class="rounded-full bg-red-900/50 px-3 py-1 text-sm text-red-400">Failed</span>
-      {% endif %}
+      <span x-show="status === 'created'" class="rounded-full bg-zinc-800 px-3 py-1 text-sm text-zinc-400">Created</span>
+      <span x-show="status === 'in_progress'" class="rounded-full bg-blue-900/50 px-3 py-1 text-sm text-blue-400">In Progress</span>
+      <span x-show="status === 'success'" class="rounded-full bg-emerald-900/50 px-3 py-1 text-sm text-emerald-400">Success</span>
+      <span x-show="status === 'failed'" class="rounded-full bg-red-900/50 px-3 py-1 text-sm text-red-400">Failed</span>
     </div>
     <a
       href="{% url 'projects:test_run_detail' project_id=project.id test_run_id=test_run.id %}"
@@ -77,47 +72,110 @@
   </div>
 
   {# RESULT SECTION #}
-  {% if pivot.result %}
-  <div class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
+  <div x-show="result" x-cloak class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
     <h2 class="mb-4 text-lg font-semibold text-zinc-100">Result</h2>
-    <p class="whitespace-pre-wrap break-words text-sm text-zinc-200">{{ pivot.result }}</p>
+    <p class="whitespace-pre-wrap break-words text-sm text-zinc-200" x-text="result"></p>
   </div>
-  {% endif %}
 
   {# LOGS SECTION #}
-  {% if pivot.logs %}
-  <div class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
+  <div x-show="logs" x-cloak class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
     <h2 class="mb-4 text-lg font-semibold text-zinc-100">Logs</h2>
-    <pre class="max-h-96 overflow-auto rounded-lg bg-zinc-950 p-4 text-sm text-zinc-300">{{ pivot.logs }}</pre>
+    <pre x-ref="logsContainer" class="max-h-96 overflow-auto rounded-lg bg-zinc-950 p-4 text-sm text-zinc-300" x-text="logs"></pre>
   </div>
-  {% endif %}
 
   {# SCREENSHOTS SECTION #}
-  {% if screenshots %}
-  <div class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
+  <div x-show="screenshots.length > 0" x-cloak class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
     <h2 class="mb-4 text-lg font-semibold text-zinc-100">Screenshots</h2>
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {% for screenshot in screenshots %}
-      <div class="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-        <a
-          href="{{ screenshot.image.url }}"
-          target="_blank"
-          class="block overflow-hidden rounded-md"
-        >
-          <img
-            src="{{ screenshot.image.url }}"
-            alt="Screenshot"
-            class="h-48 w-full object-cover transition-transform hover:scale-105"
+      <template x-for="screenshot in screenshots" :key="screenshot.screenshot_id">
+        <div class="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+          <a
+            :href="screenshot.image_url"
+            target="_blank"
+            class="block overflow-hidden rounded-md"
           >
-        </a>
-        <div class="mt-2 flex items-center justify-between">
-          <p class="text-xs text-zinc-400">{{ screenshot.tool_name }}</p>
-          <p class="text-xs text-zinc-500">{{ screenshot.created_at|date:"M d, H:i" }}</p>
+            <img
+              :src="screenshot.image_url"
+              alt="Screenshot"
+              class="h-48 w-full object-cover transition-transform hover:scale-105"
+            >
+          </a>
+          <div class="mt-2 flex items-center justify-between">
+            <p class="text-xs text-zinc-400" x-text="screenshot.tool_name"></p>
+            <p class="text-xs text-zinc-500" x-text="screenshot.created_at"></p>
+          </div>
         </div>
-      </div>
-      {% endfor %}
+      </template>
     </div>
   </div>
-  {% endif %}
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+{{ pivot.result|json_script:"initial-result" }}
+{{ pivot.logs|json_script:"initial-logs" }}
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('testRunCaseLive', () => ({
+    status: '{{ pivot.status }}',
+    result: JSON.parse(document.getElementById('initial-result').textContent),
+    logs: JSON.parse(document.getElementById('initial-logs').textContent),
+    screenshots: [
+      {% for screenshot in screenshots %}
+      {
+        screenshot_id: {{ screenshot.id }},
+        image_url: '{{ screenshot.image.url }}',
+        tool_name: '{{ screenshot.tool_name|escapejs }}',
+        created_at: '{{ screenshot.created_at|date:"M d, H:i" }}'
+      }{% if not forloop.last %},{% endif %}
+      {% endfor %}
+    ],
+
+    init() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(
+        protocol + '//' + window.location.host + '/ws/projects/{{ project.id }}/test-runs/cases/{{ pivot.id }}/'
+      );
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.type === 'current_state') {
+          this.status = data.status;
+          this.result = data.result;
+          this.logs = data.logs;
+          this.screenshots = data.screenshots;
+          return;
+        }
+
+        if (data.type === 'log') {
+          this.logs += data.message + '\n';
+          this.$nextTick(() => {
+            if (this.$refs.logsContainer) {
+              this.$refs.logsContainer.scrollTop = this.$refs.logsContainer.scrollHeight;
+            }
+          });
+          return;
+        }
+
+        if (data.type === 'screenshot') {
+          this.screenshots.push({
+            screenshot_id: data.screenshot_id,
+            image_url: data.image_url,
+            tool_name: data.tool_name,
+            created_at: data.created_at
+          });
+          return;
+        }
+
+        if (data.type === 'status') {
+          this.status = data.status;
+          this.result = data.result;
+          return;
+        }
+      };
+    }
+  }));
+});
+</script>
 {% endblock %}

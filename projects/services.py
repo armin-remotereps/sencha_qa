@@ -8,8 +8,11 @@ import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import asdict
+from typing import Any, TypedDict
 
+from asgiref.sync import async_to_sync
 from celery import group
+from channels.layers import get_channel_layer
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
 from django.core.paginator import Page, Paginator
@@ -544,6 +547,7 @@ def start_test_run(test_run: TestRun) -> None:
 
     test_run.status = TestRunStatus.STARTED
     test_run.save(update_fields=["status", "updated_at"])
+    _broadcast_test_run_status(test_run)
 
     group([execute_test_run_case.s(pid) for pid in pivot_ids]).apply_async()
 
@@ -557,6 +561,141 @@ def get_test_run_summary(test_run: TestRun) -> dict[str, int]:
         "success": pivots.filter(status=TestRunTestCaseStatus.SUCCESS).count(),
         "failed": pivots.filter(status=TestRunTestCaseStatus.FAILED).count(),
     }
+
+
+# ============================================================================
+# BROADCAST HELPERS
+# ============================================================================
+
+
+def _test_run_group(test_run_id: int) -> str:
+    return f"test_run_{test_run_id}"
+
+
+def _test_run_case_group(pivot_id: int) -> str:
+    return f"test_run_case_{pivot_id}"
+
+
+class PivotStatusEvent(TypedDict):
+    type: str
+    pivot_id: int
+    status: str
+    summary: dict[str, int]
+
+
+class CaseStatusEvent(TypedDict):
+    type: str
+    status: str
+    result: str
+
+
+class TestRunStatusEvent(TypedDict):
+    type: str
+    test_run_status: str
+    summary: dict[str, int]
+
+
+class CaseLogEvent(TypedDict):
+    type: str
+    message: str
+
+
+class CaseScreenshotEvent(TypedDict):
+    type: str
+    screenshot_id: int
+    image_url: str
+    tool_name: str
+    created_at: str
+
+
+def _broadcast_pivot_status_to_run(pivot: TestRunTestCase) -> None:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        return
+
+    event: PivotStatusEvent = {
+        "type": "test_run.pivot_status",
+        "pivot_id": pivot.id,
+        "status": pivot.status,
+        "summary": get_test_run_summary(pivot.test_run),
+    }
+    async_to_sync(layer.group_send)(_test_run_group(pivot.test_run.id), event)
+
+
+def _broadcast_pivot_status_to_case(pivot: TestRunTestCase) -> None:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        return
+
+    event: CaseStatusEvent = {
+        "type": "test_run_case.status",
+        "status": pivot.status,
+        "result": pivot.result,
+    }
+    async_to_sync(layer.group_send)(_test_run_case_group(pivot.id), event)
+
+
+def _broadcast_test_run_status(test_run: TestRun) -> None:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        return
+
+    event: TestRunStatusEvent = {
+        "type": "test_run.status",
+        "test_run_status": test_run.status,
+        "summary": get_test_run_summary(test_run),
+    }
+    async_to_sync(layer.group_send)(_test_run_group(test_run.id), event)
+
+
+def _broadcast_log(pivot: TestRunTestCase, message: str) -> None:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        return
+
+    event: CaseLogEvent = {
+        "type": "test_run_case.log",
+        "message": message,
+    }
+    async_to_sync(layer.group_send)(_test_run_case_group(pivot.id), event)
+
+
+def _broadcast_screenshot(
+    pivot: TestRunTestCase, screenshot: TestRunScreenshot
+) -> None:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        return
+
+    event: CaseScreenshotEvent = {
+        "type": "test_run_case.screenshot",
+        "screenshot_id": screenshot.id,
+        "image_url": screenshot.image.url,
+        "tool_name": screenshot.tool_name,
+        "created_at": screenshot.created_at.isoformat(),
+    }
+    async_to_sync(layer.group_send)(_test_run_case_group(pivot.id), event)
+
+
+def fetch_test_run_state(
+    test_run_id: int,
+) -> tuple[TestRun, dict[str, int], list[tuple[int, str]]]:
+    test_run = TestRun.objects.get(pk=test_run_id)
+    summary = get_test_run_summary(test_run)
+    pivot_data: list[tuple[int, str]] = list(
+        test_run.pivot_entries.values_list("id", "status")
+    )
+    return test_run, summary, pivot_data
+
+
+def fetch_test_case_state(
+    pivot_id: int,
+) -> tuple[TestRunTestCase, list[TestRunScreenshot]]:
+    pivot = TestRunTestCase.objects.select_related("test_case").get(pk=pivot_id)
+    screenshots: list[TestRunScreenshot] = list(
+        pivot.screenshots.all().order_by("created_at")
+    )
+    return pivot, screenshots
 
 
 # ============================================================================
@@ -612,15 +751,23 @@ def _mark_pivot_in_progress(pivot: TestRunTestCase) -> None:
     pivot.save(update_fields=["status", "updated_at"])
 
     test_run = pivot.test_run
+    status_changed = False
     if test_run.status == TestRunStatus.WAITING:
         test_run.status = TestRunStatus.STARTED
         test_run.save(update_fields=["status", "updated_at"])
+        status_changed = True
+
+    _broadcast_pivot_status_to_run(pivot)
+    _broadcast_pivot_status_to_case(pivot)
+    if status_changed:
+        _broadcast_test_run_status(test_run)
 
 
 def _build_log_callback(pivot: TestRunTestCase) -> Callable[[str], None]:
     def _append_log(message: str) -> None:
         pivot.logs += message + "\n"
         pivot.save(update_fields=["logs", "updated_at"])
+        _broadcast_log(pivot, message)
 
     return _append_log
 
@@ -649,11 +796,12 @@ def _persist_screenshot(
     filename: str,
     tool_name: str,
 ) -> None:
-    TestRunScreenshot.objects.create(
+    screenshot = TestRunScreenshot.objects.create(
         test_run_test_case=pivot,
         image=ContentFile(image_bytes, name=filename),
         tool_name=tool_name,
     )
+    _broadcast_screenshot(pivot, screenshot)
 
 
 def _build_config_with_callbacks(
@@ -683,6 +831,8 @@ def _finalize_pivot(pivot: TestRunTestCase, result: AgentResult) -> None:
 
     pivot.result = _extract_agent_summary(result)
     pivot.save(update_fields=["status", "result", "updated_at"])
+    _broadcast_pivot_status_to_run(pivot)
+    _broadcast_pivot_status_to_case(pivot)
 
 
 def _extract_agent_summary(result: AgentResult) -> str:
@@ -696,6 +846,8 @@ def _mark_pivot_failed(pivot: TestRunTestCase, error: str) -> None:
     pivot.status = TestRunTestCaseStatus.FAILED
     pivot.result = error
     pivot.save(update_fields=["status", "result", "updated_at"])
+    _broadcast_pivot_status_to_run(pivot)
+    _broadcast_pivot_status_to_case(pivot)
 
 
 def _update_test_run_status_if_needed(test_run: TestRun) -> None:
@@ -712,3 +864,4 @@ def _update_test_run_status_if_needed(test_run: TestRun) -> None:
     if all_done:
         test_run.status = TestRunStatus.DONE
         test_run.save(update_fields=["status", "updated_at"])
+        _broadcast_test_run_status(test_run)

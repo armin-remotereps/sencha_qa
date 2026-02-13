@@ -1,7 +1,7 @@
 {% extends "dashboard/base_dashboard.html" %}
 
 {% block dashboard_content %}
-<div>
+<div x-data="testRunLive">
   {# BREADCRUMB #}
   <nav class="mb-4 text-sm text-zinc-400">
     <a href="{% url 'projects:list' %}" class="hover:text-zinc-200">Projects</a>
@@ -17,13 +17,9 @@
   <div class="mb-6 flex items-center justify-between">
     <div class="flex items-center gap-3">
       <h1 class="text-2xl font-bold text-zinc-100">Test Run #{{ test_run.id }}</h1>
-      {% if test_run.status == "waiting" %}
-      <span class="rounded-full bg-yellow-900/50 px-3 py-1 text-sm text-yellow-400">Waiting</span>
-      {% elif test_run.status == "started" %}
-      <span class="rounded-full bg-blue-900/50 px-3 py-1 text-sm text-blue-400">Started</span>
-      {% elif test_run.status == "done" %}
-      <span class="rounded-full bg-emerald-900/50 px-3 py-1 text-sm text-emerald-400">Done</span>
-      {% endif %}
+      <span x-show="testRunStatus === 'waiting'" class="rounded-full bg-yellow-900/50 px-3 py-1 text-sm text-yellow-400">Waiting</span>
+      <span x-show="testRunStatus === 'started'" class="rounded-full bg-blue-900/50 px-3 py-1 text-sm text-blue-400">Started</span>
+      <span x-show="testRunStatus === 'done'" class="rounded-full bg-emerald-900/50 px-3 py-1 text-sm text-emerald-400">Done</span>
     </div>
     <div class="flex items-center gap-3">
       {% if test_run.status == "waiting" and summary.total > 0 %}
@@ -72,23 +68,23 @@
   <div class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
     <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
       <p class="text-sm text-zinc-400">Total</p>
-      <p class="mt-1 text-2xl font-bold text-zinc-100">{{ summary.total }}</p>
+      <p class="mt-1 text-2xl font-bold text-zinc-100" x-text="summary.total">{{ summary.total }}</p>
     </div>
     <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
       <p class="text-sm text-zinc-400">Created</p>
-      <p class="mt-1 text-2xl font-bold text-zinc-300">{{ summary.created }}</p>
+      <p class="mt-1 text-2xl font-bold text-zinc-300" x-text="summary.created">{{ summary.created }}</p>
     </div>
     <div class="rounded-lg border border-blue-900 bg-blue-950/30 p-4">
       <p class="text-sm text-blue-400">In Progress</p>
-      <p class="mt-1 text-2xl font-bold text-blue-300">{{ summary.in_progress }}</p>
+      <p class="mt-1 text-2xl font-bold text-blue-300" x-text="summary.in_progress">{{ summary.in_progress }}</p>
     </div>
     <div class="rounded-lg border border-emerald-900 bg-emerald-950/30 p-4">
       <p class="text-sm text-emerald-400">Success</p>
-      <p class="mt-1 text-2xl font-bold text-emerald-300">{{ summary.success }}</p>
+      <p class="mt-1 text-2xl font-bold text-emerald-300" x-text="summary.success">{{ summary.success }}</p>
     </div>
     <div class="rounded-lg border border-red-900 bg-red-950/30 p-4">
       <p class="text-sm text-red-400">Failed</p>
-      <p class="mt-1 text-2xl font-bold text-red-300">{{ summary.failed }}</p>
+      <p class="mt-1 text-2xl font-bold text-red-300" x-text="summary.failed">{{ summary.failed }}</p>
     </div>
   </div>
 
@@ -106,18 +102,13 @@
       </thead>
       <tbody class="divide-y divide-zinc-800">
         {% for pivot in cases %}
-        <tr class="bg-zinc-950 hover:bg-zinc-900">
+        <tr class="bg-zinc-950 hover:bg-zinc-900" data-pivot-id="{{ pivot.id }}">
           <td class="px-4 py-3 font-medium text-zinc-100">{{ pivot.test_case.title }}</td>
           <td class="px-4 py-3">
-            {% if pivot.status == "created" %}
-            <span class="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">Created</span>
-            {% elif pivot.status == "in_progress" %}
-            <span class="rounded-full bg-blue-900/50 px-2 py-0.5 text-xs text-blue-400">In Progress</span>
-            {% elif pivot.status == "success" %}
-            <span class="rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-400">Success</span>
-            {% elif pivot.status == "failed" %}
-            <span class="rounded-full bg-red-900/50 px-2 py-0.5 text-xs text-red-400">Failed</span>
-            {% endif %}
+            <span
+              :class="getPivotBadgeClass(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
+              x-text="getPivotLabel(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
+            >{{ pivot.get_status_display }}</span>
           </td>
           <td class="px-4 py-3 text-zinc-400">{{ pivot.created_at|date:"M d, Y H:i" }}</td>
           <td class="px-4 py-3 flex items-center gap-2">
@@ -172,4 +163,83 @@
   </div>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('testRunLive', () => ({
+    testRunStatus: '{{ test_run.status }}',
+    summary: {
+      total: {{ summary.total }},
+      created: {{ summary.created }},
+      in_progress: {{ summary.in_progress }},
+      success: {{ summary.success }},
+      failed: {{ summary.failed }}
+    },
+    pivotStatuses: {
+      {% for pivot in cases %}
+      {{ pivot.id }}: '{{ pivot.status }}'{% if not forloop.last %},{% endif %}
+      {% endfor %}
+    },
+
+    getPivotBadgeClass(status) {
+      const base = 'rounded-full px-2 py-0.5 text-xs';
+      switch(status) {
+        case 'created': return base + ' bg-zinc-800 text-zinc-400';
+        case 'in_progress': return base + ' bg-blue-900/50 text-blue-400';
+        case 'success': return base + ' bg-emerald-900/50 text-emerald-400';
+        case 'failed': return base + ' bg-red-900/50 text-red-400';
+        default: return base + ' bg-zinc-800 text-zinc-400';
+      }
+    },
+
+    getPivotLabel(status) {
+      switch(status) {
+        case 'created': return 'Created';
+        case 'in_progress': return 'In Progress';
+        case 'success': return 'Success';
+        case 'failed': return 'Failed';
+        default: return status;
+      }
+    },
+
+    init() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(
+        protocol + '//' + window.location.host + '/ws/projects/{{ project.id }}/test-runs/{{ test_run.id }}/'
+      );
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.type === 'current_state') {
+          this.testRunStatus = data.test_run_status;
+          this.summary = data.summary;
+          this.pivotStatuses = Object.fromEntries(
+            data.pivots.map(p => [p.pivot_id, p.status])
+          );
+          return;
+        }
+
+        if (data.type === 'pivot_status') {
+          this.pivotStatuses[data.pivot_id] = data.status;
+          this.summary = data.summary;
+          return;
+        }
+
+        if (data.type === 'test_run_status') {
+          const prev = this.testRunStatus;
+          this.testRunStatus = data.test_run_status;
+          this.summary = data.summary;
+          if (data.test_run_status === 'done' && prev !== 'done') {
+            setTimeout(() => window.location.reload(), 1500);
+          }
+          return;
+        }
+      };
+    }
+  }));
+});
+</script>
 {% endblock %}
