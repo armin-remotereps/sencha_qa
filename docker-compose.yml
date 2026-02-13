@@ -46,6 +46,7 @@ services:
         volumes:
             - "STATIC:/src/static"
             - "MEDIA:/src/media"
+            - /var/run/docker.sock:/var/run/docker.sock
         entrypoint: "daphne -b 0.0.0.0 -p 8000 auto_tester.asgi:application"
 
     nginx:
@@ -90,3 +91,10 @@ services:
             - "-m"
             - armin@remotereps.com
             - "--expand"
+
+volumes:
+  DB_DATA:
+  STATIC:
+  MEDIA:
+  CERTBOT:
+  LETSENCRYPT:
