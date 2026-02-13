@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import secrets
 from dataclasses import dataclass
 
 from django.conf import settings
 from django.db import models
+
+
+def _default_api_key() -> str:
+    return secrets.token_urlsafe(32)
 
 
 class TestCaseType(models.TextChoices):
@@ -66,6 +71,12 @@ class Project(models.Model):
     archived = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    api_key = models.CharField(
+        max_length=64, unique=True, db_index=True, default=_default_api_key
+    )
+    agent_connected = models.BooleanField(default=False, db_index=True)
+    agent_system_info = models.JSONField(default=dict, blank=True)
+    last_connected_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self) -> str:
         return self.name

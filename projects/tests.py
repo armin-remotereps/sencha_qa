@@ -1,9 +1,10 @@
 import base64
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
+from asgiref.sync import sync_to_async
 from django.contrib.admin.sites import AdminSite
 from django.db import IntegrityError
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, TransactionTestCase
 from django.urls import reverse
 
 from accounts.models import CustomUser
@@ -51,12 +52,15 @@ from projects.services import (
     _update_test_run_status_if_needed,
     add_cases_to_test_run,
     archive_project,
+    broadcast_agent_status,
     create_project,
     create_test_case,
     create_test_run_with_cases,
     delete_test_case,
     execute_test_run_test_case,
+    generate_api_key,
     get_all_tags_for_user,
+    get_project_by_api_key,
     get_project_by_id,
     get_project_for_user,
     get_test_case_for_project,
@@ -68,6 +72,9 @@ from projects.services import (
     list_test_run_cases,
     list_test_runs_for_project,
     list_waiting_test_runs_for_project,
+    mark_agent_connected,
+    mark_agent_disconnected,
+    regenerate_api_key,
     start_test_run,
     unarchive_project,
     update_project,
@@ -4844,3 +4851,262 @@ class BroadcastIntegrationTests(TestCase):
     ) -> None:
         start_test_run(self.tr)
         mock_tr_bc.assert_called_once_with(self.tr)
+
+
+# ============================================================================
+# CONTROLLER AGENT SERVICE TESTS
+# ============================================================================
+
+
+class ControllerAgentServiceTests(TestCase):
+    """Tests for controller agent services."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="testuser@example.com", password="testpass123"
+        )
+        self.project = Project.objects.create(name="Test Project")
+        self.project.members.add(self.user)
+
+    def test_generate_api_key_returns_url_safe_string(self) -> None:
+        api_key = generate_api_key()
+        self.assertIsInstance(api_key, str)
+        self.assertGreater(len(api_key), 0)
+
+    def test_generate_api_key_produces_unique_values(self) -> None:
+        key1 = generate_api_key()
+        key2 = generate_api_key()
+        self.assertNotEqual(key1, key2)
+
+    def test_get_project_by_api_key_valid(self) -> None:
+        known_key = "test_known_api_key_12345"
+        self.project.api_key = known_key
+        self.project.save()
+
+        result = get_project_by_api_key(known_key)
+        self.assertIsNotNone(result)
+        self.assertEqual(result.id, self.project.id)  # type: ignore[union-attr]
+
+    def test_get_project_by_api_key_invalid(self) -> None:
+        result = get_project_by_api_key("invalid_bogus_key")
+        self.assertIsNone(result)
+
+    def test_get_project_by_api_key_archived(self) -> None:
+        known_key = "archived_project_key"
+        self.project.api_key = known_key
+        self.project.archived = True
+        self.project.save()
+
+        result = get_project_by_api_key(known_key)
+        self.assertIsNone(result)
+
+    def test_mark_agent_connected_success(self) -> None:
+        system_info = {"os": "Linux", "python": "3.13"}
+        result = mark_agent_connected(self.project, system_info)
+
+        self.assertTrue(result)
+        self.project.refresh_from_db()
+        self.assertTrue(self.project.agent_connected)
+        self.assertEqual(self.project.agent_system_info, system_info)
+
+    def test_mark_agent_connected_duplicate(self) -> None:
+        system_info = {"os": "Linux", "python": "3.13"}
+        first_result = mark_agent_connected(self.project, system_info)
+        self.assertTrue(first_result)
+
+        second_result = mark_agent_connected(self.project, system_info)
+        self.assertFalse(second_result)
+
+    def test_mark_agent_disconnected(self) -> None:
+        self.project.agent_connected = True
+        self.project.agent_system_info = {"os": "Linux"}
+        self.project.save()
+
+        mark_agent_disconnected(self.project)
+
+        self.project.refresh_from_db()
+        self.assertFalse(self.project.agent_connected)
+        self.assertEqual(self.project.agent_system_info, {})
+        self.assertIsNotNone(self.project.last_connected_at)
+
+    def test_regenerate_api_key_changes_key(self) -> None:
+        old_key = self.project.api_key
+        new_key = regenerate_api_key(self.project)
+
+        self.assertNotEqual(old_key, new_key)
+        self.project.refresh_from_db()
+        self.assertEqual(self.project.api_key, new_key)
+
+
+# ============================================================================
+# PROJECT DETAIL VIEW TESTS
+# ============================================================================
+
+
+class ProjectDetailViewTests(TestCase):
+    """Tests for project detail view."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="testuser@example.com", password="testpass123"
+        )
+        self.project = Project.objects.create(name="Test Project")
+        self.project.members.add(self.user)
+        self.client.login(email="testuser@example.com", password="testpass123")
+
+    def test_detail_page_renders(self) -> None:
+        url = reverse("projects:detail", args=[self.project.id])
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+
+    def test_detail_page_shows_api_key(self) -> None:
+        url = reverse("projects:detail", args=[self.project.id])
+        response = self.client.get(url)
+        self.assertContains(response, self.project.api_key)
+
+    def test_regenerate_api_key_changes_key(self) -> None:
+        old_key = self.project.api_key
+        url = reverse("projects:regenerate_api_key", args=[self.project.id])
+        response = self.client.post(url)
+
+        self.assertEqual(response.status_code, 302)
+        self.project.refresh_from_db()
+        self.assertNotEqual(old_key, self.project.api_key)
+
+
+# ============================================================================
+# CONTROLLER CONSUMER TESTS
+# ============================================================================
+
+
+class ControllerConsumerTests(TransactionTestCase):
+    """Test ControllerConsumer WebSocket authentication and behavior."""
+
+    async def test_handshake_with_valid_api_key(self) -> None:
+        """Valid API key should authenticate and connect successfully."""
+        from channels.testing import WebsocketCommunicator
+
+        from projects.controller_consumer import ControllerConsumer
+
+        project = await sync_to_async(Project.objects.create)(
+            name="Test Controller Project"
+        )
+        api_key = project.api_key
+
+        communicator = WebsocketCommunicator(
+            ControllerConsumer.as_asgi(), "/ws/controller/"
+        )
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        await communicator.send_json_to(
+            {
+                "type": "handshake",
+                "api_key": api_key,
+                "system_info": {"os": "linux", "arch": "x64"},
+            }
+        )
+
+        response = await communicator.receive_json_from(timeout=2)
+        self.assertEqual(response["type"], "handshake_ack")
+        self.assertEqual(response["status"], "ok")
+        self.assertEqual(response["message"], "Connected")
+
+        project = await sync_to_async(Project.objects.get)(pk=project.id)
+        self.assertTrue(project.agent_connected)
+
+        await communicator.disconnect()
+
+    async def test_handshake_with_invalid_api_key(self) -> None:
+        """Invalid API key should reject connection."""
+        from channels.testing import WebsocketCommunicator
+
+        from projects.controller_consumer import ControllerConsumer
+
+        communicator = WebsocketCommunicator(
+            ControllerConsumer.as_asgi(), "/ws/controller/"
+        )
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        await communicator.send_json_to(
+            {
+                "type": "handshake",
+                "api_key": "invalid-key-123",
+                "system_info": {},
+            }
+        )
+
+        response = await communicator.receive_json_from(timeout=2)
+        self.assertEqual(response["type"], "handshake_ack")
+        self.assertEqual(response["status"], "error")
+        self.assertEqual(response["message"], "Invalid API key")
+
+    async def test_handshake_duplicate_connection(self) -> None:
+        """Second connection with same API key should be rejected."""
+        from channels.testing import WebsocketCommunicator
+
+        from projects.controller_consumer import ControllerConsumer
+        from projects.services import mark_agent_connected
+
+        project = await sync_to_async(Project.objects.create)(
+            name="Test Duplicate Project"
+        )
+        api_key = project.api_key
+
+        await sync_to_async(mark_agent_connected)(project, {"os": "linux"})
+
+        communicator = WebsocketCommunicator(
+            ControllerConsumer.as_asgi(), "/ws/controller/"
+        )
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        await communicator.send_json_to(
+            {
+                "type": "handshake",
+                "api_key": api_key,
+                "system_info": {"os": "windows"},
+            }
+        )
+
+        response = await communicator.receive_json_from(timeout=2)
+        self.assertEqual(response["type"], "handshake_ack")
+        self.assertEqual(response["status"], "already_connected")
+        self.assertEqual(response["message"], "Agent already connected")
+
+        await communicator.disconnect()
+
+    async def test_disconnect_updates_db(self) -> None:
+        """Disconnecting should update agent_connected to False."""
+        from channels.testing import WebsocketCommunicator
+
+        from projects.controller_consumer import ControllerConsumer
+
+        project = await sync_to_async(Project.objects.create)(
+            name="Test Disconnect Project"
+        )
+        api_key = project.api_key
+
+        communicator = WebsocketCommunicator(
+            ControllerConsumer.as_asgi(), "/ws/controller/"
+        )
+        connected, _ = await communicator.connect()
+        self.assertTrue(connected)
+
+        await communicator.send_json_to(
+            {
+                "type": "handshake",
+                "api_key": api_key,
+                "system_info": {"os": "linux"},
+            }
+        )
+        await communicator.receive_json_from(timeout=2)
+
+        project = await sync_to_async(Project.objects.get)(pk=project.id)
+        self.assertTrue(project.agent_connected)
+
+        await communicator.disconnect()
+
+        project = await sync_to_async(Project.objects.get)(pk=project.id)
+        self.assertFalse(project.agent_connected)

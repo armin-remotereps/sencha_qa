@@ -19,4 +19,8 @@ websocket_urlpatterns: list[URLPattern | Any] = [
         "ws/projects/<int:project_id>/test-runs/cases/<int:pivot_id>/",
         consumers.TestRunCaseConsumer.as_asgi(),
     ),
+    path(
+        "ws/projects/<int:project_id>/agent-status/",
+        consumers.AgentStatusConsumer.as_asgi(),
+    ),
 ]

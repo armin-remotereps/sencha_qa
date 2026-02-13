@@ -11,6 +11,12 @@ urlpatterns: list[URLPattern] = [
     path("create/", views.project_create, name="create"),
     path("<int:project_id>/edit/", views.project_edit, name="edit"),
     path("<int:project_id>/archive/", views.project_archive, name="archive"),
+    path("<int:project_id>/", views.project_detail, name="detail"),
+    path(
+        "<int:project_id>/regenerate-api-key/",
+        views.project_regenerate_api_key,
+        name="regenerate_api_key",
+    ),
     path(
         "<int:project_id>/test-cases/",
         views.test_case_list,

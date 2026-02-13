@@ -15,6 +15,7 @@ from projects.models import (
     TestRunTestCase,
 )
 from projects.services import (
+    _agent_status_group,
     fetch_test_case_state,
     fetch_test_run_state,
     get_project_for_user,
@@ -233,6 +234,55 @@ class TestRunCaseConsumer(AuthenticatedConsumer):
                     "type": "status",
                     "status": event["status"],
                     "result": event["result"],
+                }
+            )
+        )
+
+
+class AgentStatusConsumer(AuthenticatedConsumer):
+
+    _project_id: int
+
+    async def _authorize(self) -> bool:
+        project = await self._get_project()
+        if project is None:
+            return False
+
+        self._project_id = project.id
+        self.group_name = f"agent_status_{project.id}"
+        return True
+
+    async def _send_initial_state(self) -> None:
+        project_id = self._project_id
+
+        def _fetch_project() -> dict[str, Any]:
+            p = Project.objects.get(pk=project_id)
+            return {
+                "agent_connected": p.agent_connected,
+                "agent_system_info": p.agent_system_info,
+                "last_connected_at": (
+                    p.last_connected_at.isoformat() if p.last_connected_at else None
+                ),
+            }
+
+        state = await sync_to_async(_fetch_project)()
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "agent_status",
+                    **state,
+                }
+            )
+        )
+
+    async def agent_status(self, event: dict[str, Any]) -> None:
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "agent_status",
+                    "agent_connected": event["agent_connected"],
+                    "agent_system_info": event["agent_system_info"],
+                    "last_connected_at": event["last_connected_at"],
                 }
             )
         )

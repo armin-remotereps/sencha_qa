@@ -4,6 +4,7 @@ import base64
 import dataclasses
 import html
 import logging
+import secrets
 import time
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
@@ -18,6 +19,7 @@ from django.core.files.uploadedfile import UploadedFile
 from django.core.paginator import Page, Paginator
 from django.db import transaction
 from django.db.models import Count, QuerySet
+from django.utils import timezone
 
 from accounts.models import CustomUser
 from agents.services.agent_loop import build_agent_config, run_agent
@@ -140,6 +142,78 @@ def _sync_tags(project: Project, tag_names: list[str]) -> None:
     normalized = _normalize_tag_names(tag_names)
     tags = _get_or_create_tags(normalized)
     project.tags.set(tags)
+
+
+# ============================================================================
+# CONTROLLER AGENT SERVICES
+# ============================================================================
+
+
+def generate_api_key() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def get_project_by_api_key(api_key: str) -> Project | None:
+    try:
+        return Project.objects.filter(api_key=api_key, archived=False).get()
+    except Project.DoesNotExist:
+        return None
+
+
+def regenerate_api_key(project: Project) -> str:
+    project.api_key = generate_api_key()
+    project.save()
+    return project.api_key
+
+
+def mark_agent_connected(project: Project, system_info: dict[str, Any]) -> bool:
+    """Returns True if connection established, False if already connected."""
+    rows_updated = Project.objects.filter(id=project.id, agent_connected=False).update(
+        agent_connected=True,
+        agent_system_info=system_info,
+    )
+    if rows_updated > 0:
+        project.refresh_from_db()
+        return True
+    return False
+
+
+def mark_agent_disconnected(project: Project) -> None:
+    project.agent_connected = False
+    project.agent_system_info = {}
+    project.last_connected_at = timezone.now()
+    project.save()
+
+
+class AgentStatusEvent(TypedDict):
+    type: str
+    agent_connected: bool
+    agent_system_info: dict[str, Any]
+    last_connected_at: str | None
+
+
+def _agent_status_group(project_id: int) -> str:
+    return f"agent_status_{project_id}"
+
+
+def _build_agent_status_event(project: Project) -> AgentStatusEvent:
+    return {
+        "type": "agent.status",
+        "agent_connected": project.agent_connected,
+        "agent_system_info": project.agent_system_info,
+        "last_connected_at": (
+            project.last_connected_at.isoformat() if project.last_connected_at else None
+        ),
+    }
+
+
+def broadcast_agent_status(project: Project) -> None:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        return
+
+    event = _build_agent_status_event(project)
+    async_to_sync(layer.group_send)(_agent_status_group(project.id), event)
 
 
 # ============================================================================

@@ -37,6 +37,7 @@ from projects.services import (
     list_uploads_for_project,
     list_waiting_test_runs_for_project,
     redo_test_run,
+    regenerate_api_key,
     remove_case_from_test_run,
     start_test_run,
     start_upload_processing,
@@ -129,6 +130,19 @@ def project_archive(request: HttpRequest, project_id: int) -> HttpResponse:
 
     archive_project(project)
     return redirect("projects:list")
+
+
+@project_membership_required
+def project_detail(request: HttpRequest, project: Project) -> HttpResponse:
+    return render(request, "projects/detail.html", {"project": project})
+
+
+@project_membership_required
+@require_POST
+def project_regenerate_api_key(request: HttpRequest, project: Project) -> HttpResponse:
+    regenerate_api_key(project)
+    messages.success(request, "API key regenerated successfully.")
+    return redirect("projects:detail", project_id=project.id)
 
 
 # ============================================================================
