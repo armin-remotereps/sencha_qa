@@ -1,0 +1,92 @@
+services:
+    db:
+        image: postgres:17-alpine
+        restart: always
+        environment:
+            - "POSTGRES_PASSWORD=root"
+        volumes:
+            - "DB_DATA:/var/lib/postgresql/data"
+        ports:
+            - "127.0.0.1:5432:5432"
+
+    redis:
+        image: redis:8-alpine
+        restart: always
+        ports:
+            - "127.0.0.1:6379:6379"
+
+    migrate:
+        image: local/auto_tester:latest
+        build: .
+        env_file:
+            - "./.env"
+        entrypoint: "python manage.py migrate"
+
+    collect_static:
+        image: local/auto_tester:latest
+        build: .
+        env_file:
+            - "./.env"
+        volumes:
+            - "STATIC:/src/static"
+            - "MEDIA:/src/media"
+        entrypoint: "python manage.py collectstatic --noinput"
+
+    api:
+        image: local/auto_tester:latest
+        build: .
+        env_file:
+            - "./.env"
+        restart: always
+        depends_on:
+            - "db"
+            - "redis"
+        ports:
+            - "127.0.0.1:8000:8000"
+        volumes:
+            - "STATIC:/src/static"
+            - "MEDIA:/src/media"
+        entrypoint: "daphne -b 0.0.0.0 -p 8000 auto_tester.asgi:application"
+
+    nginx:
+        image: nginx:1.29-alpine
+        restart: always
+        depends_on:
+            - "api"
+        ports:
+            - "80:80"
+            - "443:443"
+        volumes:
+            - "STATIC:/src/static"
+            - "MEDIA:/src/media"
+            - "./nginx/server.conf:/etc/nginx/conf.d/server.conf:ro"
+            - "LETSENCRYPT:/etc/letsencrypt"
+
+    certbot-nginx:
+        image: nginx:1.29-alpine
+        ports:
+            - "80:80"
+            - "443:443"
+        volumes:
+            - "./nginx/certbot-server.conf:/etc/nginx/conf.d/server.conf:ro"
+            - "CERTBOT:/var/www/certbot"
+
+    certbot:
+        image: certbot/certbot:latest
+        depends_on:
+            - "certbot-nginx"
+        volumes:
+            - "CERTBOT:/var/www/certbot"
+            - "LETSENCRYPT:/etc/letsencrypt"
+        command:
+            - "certonly"
+            - "--webroot"
+            - "--webroot-path"
+            - /var/www/certbot
+            - "-d"
+            - sench.remotereps.com
+            - "--non-interactive"
+            - "--agree-tos"
+            - "-m"
+            - armin@remotereps.com
+            - "--expand"

@@ -1,0 +1,13 @@
+FROM python:3.13-slim
+
+WORKDIR /src
+
+RUN python3.13 -m venv /opt/venv
+
+ENV PATH="/opt/venv/bin$PATH"
+
+COPY ./requirements.txt ./
+
+RUN pip install -r requirements.txt
+
+COPY . .
