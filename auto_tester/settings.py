@@ -11,6 +11,14 @@ ALLOWED_HOSTS: list[str] = config(
     "ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv()
 )
 
+# Reverse proxy / HTTPS
+SECURE_PROXY_SSL_HEADER: tuple[str, str] = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = True
+USE_X_FORWARDED_PORT = True
+CSRF_TRUSTED_ORIGINS: list[str] = config(
+    "CSRF_TRUSTED_ORIGINS", default="https://sench.remotereps.com", cast=Csv()
+)
+
 # Application definition
 INSTALLED_APPS: list[str] = [
     "daphne",
