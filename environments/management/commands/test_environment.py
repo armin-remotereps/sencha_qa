@@ -47,7 +47,7 @@ class Command(BaseCommand):
     def _ensure_image(self, client: docker.DockerClient, rebuild: bool) -> str:
         if rebuild:
             self.stdout.write("Building image (no cache)...")
-            image_tag = build_environment_image(client, nocache=True)
+            image_tag = build_environment_image(client, nocache=False)
         else:
             self.stdout.write("Ensuring image exists...")
             image_tag = ensure_environment_image(client)
@@ -58,39 +58,31 @@ class Command(BaseCommand):
         self, client: docker.DockerClient
     ) -> tuple[ContainerInfo, HealthCheckResult]:
         self.stdout.write("Creating container...")
-        container_info = ensure_container_running(client, name_suffix="test")
+        container_info = ensure_container_running(
+            client, name_suffix="test", api_key="test-api-key"
+        )
         self.stdout.write(
             self.style.SUCCESS(f"Container created: {container_info.name}")
         )
-        self.stdout.write(f"  SSH port:        {container_info.ports.ssh}")
         self.stdout.write(f"  VNC port:        {container_info.ports.vnc}")
-        self.stdout.write(f"  Playwright port: {container_info.ports.playwright_cdp}")
 
         self.stdout.write("Waiting for services to be ready...")
         health = wait_for_container_ready(container_info.ports)
         self.stdout.write(self.style.SUCCESS("All services are ready"))
-        self.stdout.write(f"  SSH:        {health.ssh}")
         self.stdout.write(f"  VNC:        {health.vnc}")
-        self.stdout.write("  Playwright: on-demand (starts with browser tools)")
 
         return container_info, health
 
     def _display_verification_results(self, result: HealthCheckResult) -> None:
         self.stdout.write("\nVerification Results:")
         self.stdout.write(
-            self.style.SUCCESS("  ssh: passed")
-            if result.ssh
-            else self.style.ERROR("  ssh: FAILED")
-        )
-        self.stdout.write(
             self.style.SUCCESS("  vnc: passed")
             if result.vnc
             else self.style.ERROR("  vnc: FAILED")
         )
-        self.stdout.write("  playwright: on-demand (starts with browser tools)")
 
         self.stdout.write("")
-        if result.all_ok:
+        if result.is_healthy:
             self.stdout.write(self.style.SUCCESS("All verification tests passed!"))
         else:
             self.stdout.write(self.style.ERROR("Some verification tests failed"))

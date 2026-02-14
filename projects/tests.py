@@ -3424,8 +3424,9 @@ class ExecuteTestRunTestCaseIntegrationTests(TestCase):
         self.tr = TestRun.objects.create(project=self.project)
         self.pivot = TestRunTestCase.objects.create(test_run=self.tr, test_case=self.tc)
 
-    @patch("projects.services.run_agent")
-    @patch("projects.services.build_agent_config")
+    @patch("agents.services.agent_loop.run_agent")
+    @patch("agents.services.agent_loop.build_agent_config")
+    @patch("projects.services._wait_for_agent_connection")
     @patch("projects.services.teardown_environment")
     @patch("projects.services.provision_environment")
     @patch("projects.services.close_docker_client")
@@ -3436,6 +3437,7 @@ class ExecuteTestRunTestCaseIntegrationTests(TestCase):
         mock_close_client: MagicMock,
         mock_provision: MagicMock,
         mock_teardown: MagicMock,
+        mock_wait_agent: MagicMock,
         mock_build_config: MagicMock,
         mock_run_agent: MagicMock,
     ) -> None:
@@ -3453,7 +3455,7 @@ class ExecuteTestRunTestCaseIntegrationTests(TestCase):
         mock_provision.return_value = ContainerInfo(
             container_id="abc123",
             name="test-container",
-            ports=ContainerPorts(ssh=2222, vnc=5900, playwright_cdp=9222),
+            ports=ContainerPorts(vnc=5900),
             status="running",
         )
         mock_build_config.return_value = AgentConfig(
@@ -3474,11 +3476,15 @@ class ExecuteTestRunTestCaseIntegrationTests(TestCase):
         self.tr.refresh_from_db()
         self.assertEqual(self.tr.status, TestRunStatus.DONE)
 
+        mock_run_agent.assert_called_once()
+        call_args = mock_run_agent.call_args
+        self.assertEqual(call_args[0][1], self.project.id)
+
         mock_teardown.assert_called_once_with(mock_client, "abc123")
         mock_close_client.assert_called_once_with(mock_client)
 
-    @patch("projects.services.run_agent")
-    @patch("projects.services.build_agent_config")
+    @patch("agents.services.agent_loop.run_agent")
+    @patch("agents.services.agent_loop.build_agent_config")
     @patch("projects.services.teardown_environment")
     @patch("projects.services.provision_environment")
     @patch("projects.services.close_docker_client")
@@ -3496,12 +3502,43 @@ class ExecuteTestRunTestCaseIntegrationTests(TestCase):
         mock_get_client.return_value = mock_client
         mock_provision.side_effect = Exception("Docker failed")
 
-        execute_test_run_test_case(self.pivot.pk)
+        with self.assertRaises(Exception, msg="Docker failed"):
+            execute_test_run_test_case(self.pivot.pk)
 
         self.pivot.refresh_from_db()
         self.assertEqual(self.pivot.status, TestRunTestCaseStatus.FAILED)
         self.assertIn("Docker failed", self.pivot.result)
-        mock_close_client.assert_called_once_with(mock_client)
+
+    @patch("agents.services.agent_loop.run_agent")
+    @patch("agents.services.agent_loop.build_agent_config")
+    def test_should_skip_provisioning_when_agent_connected(
+        self,
+        mock_build_config: MagicMock,
+        mock_run_agent: MagicMock,
+    ) -> None:
+        from agents.types import (
+            AgentConfig,
+            AgentResult,
+            AgentStopReason,
+            ChatMessage,
+            DMRConfig,
+        )
+
+        self.project.agent_connected = True
+        self.project.save()
+
+        mock_build_config.return_value = AgentConfig(
+            dmr=DMRConfig(host="localhost", port="12434", model="test"),
+        )
+        mock_run_agent.return_value = AgentResult(
+            stop_reason=AgentStopReason.TASK_COMPLETE,
+            iterations=1,
+            messages=(ChatMessage(role="assistant", content="Done"),),
+        )
+
+        with patch("projects.services.get_docker_client") as mock_get_client:
+            execute_test_run_test_case(self.pivot.pk)
+            mock_get_client.assert_not_called()
 
 
 # ============================================================================

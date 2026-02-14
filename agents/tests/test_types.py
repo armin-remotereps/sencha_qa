@@ -22,11 +22,9 @@ from agents.types import (
 
 def test_tool_category_enum_members() -> None:
     """Test ToolCategory enum has all expected members."""
-    assert ToolCategory.SHELL.value == "shell"
-    assert ToolCategory.SCREEN.value == "screen"
+    assert ToolCategory.CONTROLLER.value == "controller"
     assert ToolCategory.BROWSER.value == "browser"
-    assert ToolCategory.VNC.value == "vnc"
-    assert len(list(ToolCategory)) == 4
+    assert len(list(ToolCategory)) == 2
 
 
 def test_agent_stop_reason_enum_members() -> None:
@@ -55,7 +53,7 @@ def test_tool_definition_is_frozen() -> None:
     tool = ToolDefinition(
         name="shell",
         description="Run shell command",
-        category=ToolCategory.SHELL,
+        category=ToolCategory.CONTROLLER,
         parameters=(param,),
     )
     with pytest.raises(Exception):  # FrozenInstanceError

@@ -16,7 +16,10 @@ from environments.types import (
 
 
 def create_container(
-    client: docker.DockerClient, *, name_suffix: str | None = None
+    client: docker.DockerClient,
+    *,
+    name_suffix: str | None = None,
+    api_key: str,
 ) -> ContainerInfo:
     from environments.services.image import _get_image_tag
 
@@ -27,6 +30,12 @@ def create_container(
         image=image_tag,
         name=container_name,
         ports=PORT_CONFIG.to_docker_port_mapping(),
+        environment={
+            "CONTROLLER_HOST": settings.CONTROLLER_SERVER_HOST,
+            "CONTROLLER_PORT": str(settings.CONTROLLER_SERVER_PORT),
+            "CONTROLLER_API_KEY": api_key,
+        },
+        extra_hosts={"host.docker.internal": "host-gateway"},
         detach=True,
     )
 
@@ -36,7 +45,10 @@ def create_container(
 
 
 def ensure_container_running(
-    client: docker.DockerClient, *, name_suffix: str | None = None
+    client: docker.DockerClient,
+    *,
+    name_suffix: str | None = None,
+    api_key: str,
 ) -> ContainerInfo:
     container_name = _build_container_name(name_suffix)
 
@@ -47,7 +59,7 @@ def ensure_container_running(
         existing.reload()
         return _build_container_info(existing)
 
-    return create_container(client, name_suffix=name_suffix)
+    return create_container(client, name_suffix=name_suffix, api_key=api_key)
 
 
 def get_container_info(client: docker.DockerClient, container_id: str) -> ContainerInfo:
@@ -103,14 +115,10 @@ def _build_container_info(container: DockerContainer) -> ContainerInfo:
 
 
 def _extract_ports(container_ports: DockerPortMapping) -> ContainerPorts:
-    ssh_port = _get_host_port(container_ports, PORT_CONFIG.ssh)
     vnc_port = _get_host_port(container_ports, PORT_CONFIG.vnc)
-    cdp_port = _get_host_port(container_ports, PORT_CONFIG.playwright_cdp)
 
     return ContainerPorts(
-        ssh=ssh_port,
         vnc=vnc_port,
-        playwright_cdp=cdp_port,
     )
 
 

@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-import base64
 import logging
 import re
 from collections.abc import Callable
 
-from agents.exceptions import VncElementNotFoundError
+from agents.exceptions import ElementNotFoundError
 from agents.services.dmr_client import send_chat_completion
 from agents.services.omniparser_client import parse_screenshot_remote
-from agents.services.vnc_session import VncSessionManager
 from agents.types import ChatMessage, DMRConfig, ImageContent, TextContent
 from omniparser_wrapper.types import PixelUIElement
+from projects.services import controller_screenshot
 
 logger = logging.getLogger(__name__)
 
@@ -27,23 +26,23 @@ _ELEMENT_MATCHER_SYSTEM_PROMPT = (
 
 
 def find_element_coordinates_omniparser(
-    vnc_session: VncSessionManager,
+    project_id: int,
     description: str,
     vision_config: DMRConfig,
     *,
     on_screenshot: Callable[[str, str], None] | None = None,
 ) -> tuple[int, int]:
-    screenshot_bytes = vnc_session.capture_screen()
-    image_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+    result = controller_screenshot(project_id)
+    image_base64 = result["image_base64"]
 
     parse_result = parse_screenshot_remote(image_base64)
 
     if on_screenshot is not None:
-        on_screenshot(parse_result.annotated_image, "vnc_omniparser")
+        on_screenshot(parse_result.annotated_image, "controller_omniparser")
 
     if not parse_result.elements:
         msg = f"OmniParser found no UI elements on screen for: {description}"
-        raise VncElementNotFoundError(msg)
+        raise ElementNotFoundError(msg)
 
     matched = _match_element_by_description(
         parse_result.elements,
@@ -78,7 +77,7 @@ def _match_element_by_description(
 
     if not isinstance(answer, str):
         msg = f"DMR returned empty content when matching element: {description}"
-        raise VncElementNotFoundError(msg)
+        raise ElementNotFoundError(msg)
 
     return _parse_match_response(answer.strip(), description, elements)
 
@@ -123,12 +122,12 @@ def _parse_match_response(
 ) -> PixelUIElement:
     if "NOT_FOUND" in answer:
         msg = f"No OmniParser element matches description: {description}"
-        raise VncElementNotFoundError(msg)
+        raise ElementNotFoundError(msg)
 
     match = re.search(r"(\d+)", answer)
     if match is None:
         msg = f"Could not parse element index from DMR response: {answer}"
-        raise VncElementNotFoundError(msg)
+        raise ElementNotFoundError(msg)
 
     index = int(match.group(1))
 
@@ -140,4 +139,4 @@ def _parse_match_response(
         f"DMR returned index {index} which does not match any detected "
         f"element (valid: {[e.index for e in elements]})"
     )
-    raise VncElementNotFoundError(msg)
+    raise ElementNotFoundError(msg)

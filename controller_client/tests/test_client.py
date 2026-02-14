@@ -42,6 +42,14 @@ class TestControllerClientInit:
             MessageType.SCREENSHOT_REQUEST,
             MessageType.RUN_COMMAND,
             MessageType.PING,
+            MessageType.BROWSER_NAVIGATE,
+            MessageType.BROWSER_CLICK,
+            MessageType.BROWSER_TYPE,
+            MessageType.BROWSER_HOVER,
+            MessageType.BROWSER_GET_ELEMENTS,
+            MessageType.BROWSER_GET_PAGE_CONTENT,
+            MessageType.BROWSER_GET_URL,
+            MessageType.BROWSER_TAKE_SCREENSHOT,
         }
         assert set(client._handlers.keys()) == expected
 

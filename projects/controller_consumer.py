@@ -7,6 +7,7 @@ from typing import Any
 
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+
 from projects.controller_authenticator import (
     ControllerAuthenticator,
     HandshakeMessageBuilder,
@@ -14,6 +15,14 @@ from projects.controller_authenticator import (
 from projects.controller_protocol import (
     ActionTypeRegistry,
     BaseActionEvent,
+    BrowserClickActionEvent,
+    BrowserGetElementsActionEvent,
+    BrowserGetPageContentActionEvent,
+    BrowserGetUrlActionEvent,
+    BrowserHoverActionEvent,
+    BrowserNavigateActionEvent,
+    BrowserTakeScreenshotActionEvent,
+    BrowserTypeActionEvent,
     ClickActionEvent,
     ControllerMessageBuilder,
     DragActionEvent,
@@ -94,6 +103,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):  # type: ignore[misc]
             "action_result": self._reply_tracker.send_action_result,
             "screenshot_response": self._reply_tracker.send_screenshot_result,
             "command_result": self._reply_tracker.send_command_result,
+            "browser_content_result": self._reply_tracker.send_browser_content_result,
         }
 
         handler = handlers.get(msg_type)
@@ -171,6 +181,38 @@ class ControllerConsumer(AsyncWebsocketConsumer):  # type: ignore[misc]
         await self._forward_action(event)
 
     async def controller_run_command(self, event: RunCommandActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_browser_navigate(
+        self, event: BrowserNavigateActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_browser_click(self, event: BrowserClickActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_browser_type(self, event: BrowserTypeActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_browser_hover(self, event: BrowserHoverActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_browser_get_elements(
+        self, event: BrowserGetElementsActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_browser_get_page_content(
+        self, event: BrowserGetPageContentActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_browser_get_url(self, event: BrowserGetUrlActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_browser_take_screenshot(
+        self, event: BrowserTakeScreenshotActionEvent
+    ) -> None:
         await self._forward_action(event)
 
     async def _send_handshake_ack(

@@ -1,26 +1,23 @@
 from __future__ import annotations
 
-import base64
 import logging
 import re
 from collections.abc import Callable
 
-from agents.services.dmr_client import send_chat_completion
-from agents.services.omniparser_client import is_omniparser_configured
-from agents.services.vnc_omniparser_element_finder import (
+from agents.exceptions import ElementNotFoundError
+from agents.services.controller_omniparser_element_finder import (
     find_element_coordinates_omniparser,
 )
-from agents.services.vnc_session import VncSessionManager
+from agents.services.dmr_client import send_chat_completion
+from agents.services.omniparser_client import is_omniparser_configured
 from agents.types import ChatMessage, DMRConfig, ImageContent, TextContent
+from projects.services import controller_screenshot
 
 logger = logging.getLogger(__name__)
 
 
-from agents.exceptions import VncElementNotFoundError as VncElementNotFoundError
-
-
 def find_element_coordinates(
-    vnc_session: VncSessionManager,
+    project_id: int,
     description: str,
     vision_config: DMRConfig,
     *,
@@ -28,13 +25,13 @@ def find_element_coordinates(
 ) -> tuple[int, int]:
     if is_omniparser_configured():
         return find_element_coordinates_omniparser(
-            vnc_session, description, vision_config, on_screenshot=on_screenshot
+            project_id, description, vision_config, on_screenshot=on_screenshot
         )
 
-    screenshot_bytes = vnc_session.capture_screen()
-    image_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
+    result = controller_screenshot(project_id)
+    image_base64 = result["image_base64"]
     if on_screenshot is not None:
-        on_screenshot(image_base64, "vnc_element_finder")
+        on_screenshot(image_base64, "controller_element_finder")
     return _query_vision_model(image_base64, description, vision_config)
 
 
@@ -43,7 +40,16 @@ def _query_vision_model(
     description: str,
     vision_config: DMRConfig,
 ) -> tuple[int, int]:
-    messages = (
+    messages = _build_locator_messages(image_base64, description)
+    answer = _send_locator_query(vision_config, messages, description)
+    return _parse_coordinates(answer, description)
+
+
+def _build_locator_messages(
+    image_base64: str,
+    description: str,
+) -> tuple[ChatMessage, ...]:
+    return (
         ChatMessage(
             role="system",
             content=(
@@ -64,13 +70,18 @@ def _query_vision_model(
         ),
     )
 
+
+def _send_locator_query(
+    vision_config: DMRConfig,
+    messages: tuple[ChatMessage, ...],
+    description: str,
+) -> str:
     response = send_chat_completion(vision_config, messages)
     answer = response.message.content
     if not isinstance(answer, str):
         msg = f"Vision model returned no response for element: {description}"
-        raise VncElementNotFoundError(msg)
-
-    return _parse_coordinates(answer.strip(), description)
+        raise ElementNotFoundError(msg)
+    return answer.strip()
 
 
 def _parse_coordinates(
@@ -79,16 +90,16 @@ def _parse_coordinates(
 ) -> tuple[int, int]:
     if answer.startswith("NOT_FOUND"):
         msg = f"Element not found on screen: {description}"
-        raise VncElementNotFoundError(msg)
+        raise ElementNotFoundError(msg)
 
     if answer.startswith("AMBIGUOUS"):
         msg = f"Ambiguous element on screen: {description} — {answer}"
-        raise VncElementNotFoundError(msg)
+        raise ElementNotFoundError(msg)
 
     match = re.search(r"(\d+)\s*,\s*(\d+)", answer)
     if match is None:
         msg = f"Could not parse coordinates from vision response: {answer}"
-        raise VncElementNotFoundError(msg)
+        raise ElementNotFoundError(msg)
 
     x = int(match.group(1))
     y = int(match.group(2))

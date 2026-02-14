@@ -23,13 +23,13 @@ def build_environment_image(
     client: docker.DockerClient, *, nocache: bool = False
 ) -> str:
     image_tag = _get_image_tag()
-    dockerfile_path = Path(__file__).resolve().parent.parent / "docker"
+    dockerfile_path = Path(__file__).resolve().parent.parent.parent
 
     stream = client.api.build(
         path=str(dockerfile_path),
+        dockerfile="environments/docker/Dockerfile",
         tag=image_tag,
         buildargs={
-            "SSH_PASSWORD": settings.ENV_SSH_PASSWORD,
             "VNC_PASSWORD": settings.ENV_VNC_PASSWORD,
         },
         nocache=nocache,

@@ -15,8 +15,6 @@ from agents.services.agent_loop import (
     build_system_prompt,
     run_agent,
 )
-from agents.services.agent_resource_manager import AgentResourceManager
-from agents.services.playwright_session import PlaywrightSessionManager
 from agents.types import (
     AgentConfig,
     AgentStopReason,
@@ -30,13 +28,6 @@ from agents.types import (
     ToolParameter,
     ToolResult,
 )
-from environments.types import ContainerPorts
-
-
-@pytest.fixture
-def mock_ports() -> ContainerPorts:
-    """Fixture for test ports."""
-    return ContainerPorts(ssh=2222, vnc=5900, playwright_cdp=9222)
 
 
 @pytest.fixture
@@ -46,7 +37,7 @@ def mock_tool_definitions() -> tuple[ToolDefinition, ...]:
         ToolDefinition(
             name="test_tool",
             description="A test tool",
-            category=ToolCategory.SHELL,
+            category=ToolCategory.CONTROLLER,
             parameters=(
                 ToolParameter(
                     name="arg1",
@@ -65,32 +56,32 @@ def test_build_system_prompt() -> None:
     prompt = build_system_prompt(task)
 
     assert "Install Firefox and open Google" in prompt
-    assert "AI test automation agent" in prompt
-    assert "SHELL" in prompt
-    assert "SCREEN" in prompt
-    assert "BROWSER" in prompt
-    assert "VNC" in prompt
+    assert "strict QA tester" in prompt
+    assert "Linux desktop environment" in prompt
     assert "Ubuntu 24.04 with XFCE4" in prompt
-    assert "natural-language descriptions" in prompt
-    assert "browser_hover" in prompt
-    assert "question" in prompt.lower()
-    assert "starts automatically" in prompt
+    assert "execute_command" in prompt
+    assert "take_screenshot" in prompt
+    assert "click" in prompt
+    assert "type_text" in prompt
+    assert "key_press" in prompt
+    assert "hover" in prompt
+    assert "drag" in prompt
+    assert "vision-based" in prompt or "AI-based" in prompt
     assert "browser_navigate" in prompt
-    assert "Do NOT try to install or launch" in prompt
-    assert "root" in prompt
-    assert "sudo" in prompt
+    assert "Chromium" in prompt
+    assert "whoami" in prompt
 
 
-def test_build_system_prompt_vnc_tools() -> None:
-    """Test that build_system_prompt includes VNC tool examples."""
+def test_build_system_prompt_vision_tools() -> None:
+    """Test that build_system_prompt includes vision-based tool examples."""
     prompt = build_system_prompt("test task")
 
-    assert "vnc_take_screenshot" in prompt
-    assert "vnc_click" in prompt
-    assert "vnc_type" in prompt
-    assert "vnc_hover" in prompt
-    assert "vnc_key_press" in prompt
-    assert "vision-based" in prompt.lower() or "vision AI" in prompt
+    assert "vision" in prompt.lower()
+    assert "click" in prompt
+    assert "hover" in prompt
+    assert "drag" in prompt
+    assert "take_screenshot" in prompt
+    assert "description" in prompt
 
 
 @override_settings(
@@ -140,16 +131,6 @@ def test_build_agent_config_with_model_override() -> None:
     assert config.timeout_seconds == 300
 
 
-def _make_mock_resources() -> MagicMock:
-    """Helper to create mock resources with ssh, playwright, and vnc."""
-    mock_resources = MagicMock()
-    mock_resources.ssh = MagicMock()
-    mock_resources.playwright = MagicMock()
-    mock_resources.vnc = MagicMock()
-    return mock_resources
-
-
-@patch("agents.services.agent_loop.AgentResourceManager")
 @patch("agents.services.agent_loop.build_summarizer_config")
 @patch("agents.services.agent_loop.warm_up_model")
 @patch("agents.services.agent_loop.ensure_model_available")
@@ -163,16 +144,11 @@ def test_run_agent_task_complete(
     mock_ensure_model: MagicMock,
     mock_warm_up: MagicMock,
     mock_build_summarizer: MagicMock,
-    mock_resource_cls: MagicMock,
-    mock_ports: ContainerPorts,
     mock_tool_definitions: tuple[ToolDefinition, ...],
 ) -> None:
     """Test that run_agent completes when DMR returns text (no tool calls)."""
     mock_get_tools.return_value = mock_tool_definitions
     mock_build_summarizer.return_value = None
-    mock_resources = _make_mock_resources()
-    mock_resource_cls.return_value.__enter__ = MagicMock(return_value=mock_resources)
-    mock_resource_cls.return_value.__exit__ = MagicMock(return_value=False)
 
     # DMR returns a text response with no tool calls
     mock_send.return_value = DMRResponse(
@@ -200,7 +176,7 @@ def test_run_agent_task_complete(
 
     result = run_agent(
         "Install software",
-        mock_ports,
+        project_id=1,
         config=agent_config,
     )
 
@@ -219,7 +195,6 @@ def test_run_agent_task_complete(
 
 
 @override_settings(OUTPUT_SUMMARIZE_THRESHOLD=50000)
-@patch("agents.services.agent_loop.AgentResourceManager")
 @patch("agents.services.agent_loop.build_summarizer_config")
 @patch("agents.services.agent_loop.warm_up_model")
 @patch("agents.services.agent_loop.ensure_model_available")
@@ -233,16 +208,11 @@ def test_run_agent_with_tool_calls(
     mock_ensure_model: MagicMock,
     mock_warm_up: MagicMock,
     mock_build_summarizer: MagicMock,
-    mock_resource_cls: MagicMock,
-    mock_ports: ContainerPorts,
     mock_tool_definitions: tuple[ToolDefinition, ...],
 ) -> None:
     """Test that run_agent executes tool calls, then completes."""
     mock_get_tools.return_value = mock_tool_definitions
     mock_build_summarizer.return_value = None
-    mock_resources = _make_mock_resources()
-    mock_resource_cls.return_value.__enter__ = MagicMock(return_value=mock_resources)
-    mock_resource_cls.return_value.__exit__ = MagicMock(return_value=False)
 
     # First call: DMR returns a tool call
     tool_call = ToolCall(
@@ -295,7 +265,7 @@ def test_run_agent_with_tool_calls(
 
     result = run_agent(
         "Install Firefox",
-        mock_ports,
+        project_id=1,
         config=agent_config,
     )
 
@@ -307,6 +277,7 @@ def test_run_agent_with_tool_calls(
     mock_dispatch.assert_called_once()
     call_args = mock_dispatch.call_args
     assert isinstance(call_args[0][1], ToolContext)
+    assert call_args[0][1].project_id == 1
 
     # Verify message history
     # system, user, assistant (with tool call), tool result, assistant (completion)
@@ -318,7 +289,6 @@ def test_run_agent_with_tool_calls(
     assert result.messages[4].content == "Firefox installed successfully."
 
 
-@patch("agents.services.agent_loop.AgentResourceManager")
 @patch("agents.services.agent_loop.build_summarizer_config")
 @patch("agents.services.agent_loop.warm_up_model")
 @patch("agents.services.agent_loop.ensure_model_available")
@@ -332,16 +302,11 @@ def test_run_agent_max_iterations(
     mock_ensure_model: MagicMock,
     mock_warm_up: MagicMock,
     mock_build_summarizer: MagicMock,
-    mock_resource_cls: MagicMock,
-    mock_ports: ContainerPorts,
     mock_tool_definitions: tuple[ToolDefinition, ...],
 ) -> None:
     """Test that run_agent stops at max_iterations."""
     mock_get_tools.return_value = mock_tool_definitions
     mock_build_summarizer.return_value = None
-    mock_resources = _make_mock_resources()
-    mock_resource_cls.return_value.__enter__ = MagicMock(return_value=mock_resources)
-    mock_resource_cls.return_value.__exit__ = MagicMock(return_value=False)
 
     # Always return a tool call (never completes)
     tool_call = ToolCall(
@@ -381,7 +346,7 @@ def test_run_agent_max_iterations(
 
     result = run_agent(
         "Do something",
-        mock_ports,
+        project_id=1,
         config=agent_config,
     )
 
@@ -395,7 +360,6 @@ def test_run_agent_max_iterations(
     assert mock_dispatch.call_count == 3
 
 
-@patch("agents.services.agent_loop.AgentResourceManager")
 @patch("agents.services.agent_loop.build_summarizer_config")
 @patch("agents.services.agent_loop.warm_up_model")
 @patch("agents.services.agent_loop.ensure_model_available")
@@ -409,16 +373,11 @@ def test_run_agent_timeout(
     mock_ensure_model: MagicMock,
     mock_warm_up: MagicMock,
     mock_build_summarizer: MagicMock,
-    mock_resource_cls: MagicMock,
-    mock_ports: ContainerPorts,
     mock_tool_definitions: tuple[ToolDefinition, ...],
 ) -> None:
     """Test that run_agent stops on timeout."""
     mock_get_tools.return_value = mock_tool_definitions
     mock_build_summarizer.return_value = None
-    mock_resources = _make_mock_resources()
-    mock_resource_cls.return_value.__enter__ = MagicMock(return_value=mock_resources)
-    mock_resource_cls.return_value.__exit__ = MagicMock(return_value=False)
 
     # Simulate time progression: start=0, first check=150, second check=400 (timeout)
     mock_time.monotonic.side_effect = [0, 150, 400]
@@ -455,7 +414,7 @@ def test_run_agent_timeout(
 
     result = run_agent(
         "Long task",
-        mock_ports,
+        project_id=1,
         config=agent_config,
     )
 
@@ -466,7 +425,6 @@ def test_run_agent_timeout(
     assert "400" in result.error  # Should show elapsed time
 
 
-@patch("agents.services.agent_loop.AgentResourceManager")
 @patch("agents.services.agent_loop.build_summarizer_config")
 @patch("agents.services.agent_loop.warm_up_model")
 @patch("agents.services.agent_loop.ensure_model_available")
@@ -478,16 +436,11 @@ def test_run_agent_dmr_error(
     mock_ensure_model: MagicMock,
     mock_warm_up: MagicMock,
     mock_build_summarizer: MagicMock,
-    mock_resource_cls: MagicMock,
-    mock_ports: ContainerPorts,
     mock_tool_definitions: tuple[ToolDefinition, ...],
 ) -> None:
     """Test that run_agent handles DMR errors gracefully."""
     mock_get_tools.return_value = mock_tool_definitions
     mock_build_summarizer.return_value = None
-    mock_resources = _make_mock_resources()
-    mock_resource_cls.return_value.__enter__ = MagicMock(return_value=mock_resources)
-    mock_resource_cls.return_value.__exit__ = MagicMock(return_value=False)
 
     # DMR raises an exception
     mock_send.side_effect = ConnectionError("DMR service unavailable")
@@ -507,7 +460,7 @@ def test_run_agent_dmr_error(
 
     result = run_agent(
         "Test task",
-        mock_ports,
+        project_id=1,
         config=agent_config,
     )
 
@@ -533,48 +486,6 @@ def test_build_tool_result_message() -> None:
     assert message.content == "Command executed successfully"
     assert message.tool_call_id == "tc123"
     assert message.tool_calls is None
-
-
-@patch("agents.services.agent_loop.AgentResourceManager")
-@patch("agents.services.agent_loop.build_summarizer_config")
-@patch("agents.services.agent_loop.warm_up_model")
-@patch("agents.services.agent_loop.ensure_model_available")
-@patch("agents.services.agent_loop.get_all_tool_definitions")
-@patch("agents.services.agent_loop.send_chat_completion")
-def test_run_agent_creates_resource_manager(
-    mock_send: MagicMock,
-    mock_get_tools: MagicMock,
-    mock_ensure_model: MagicMock,
-    mock_warm_up: MagicMock,
-    mock_build_summarizer: MagicMock,
-    mock_resource_cls: MagicMock,
-    mock_ports: ContainerPorts,
-    mock_tool_definitions: tuple[ToolDefinition, ...],
-) -> None:
-    """Test that run_agent creates an AgentResourceManager as context manager."""
-    mock_get_tools.return_value = mock_tool_definitions
-    mock_build_summarizer.return_value = None
-    mock_resources = _make_mock_resources()
-    mock_resource_cls.return_value.__enter__ = MagicMock(return_value=mock_resources)
-    mock_resource_cls.return_value.__exit__ = MagicMock(return_value=False)
-
-    mock_send.return_value = DMRResponse(
-        message=ChatMessage(role="assistant", content="Done."),
-        finish_reason="stop",
-        usage_prompt_tokens=50,
-        usage_completion_tokens=10,
-    )
-
-    dmr_config = DMRConfig(
-        host="test", port="8080", model="m", temperature=0.0, max_tokens=100
-    )
-    agent_config = AgentConfig(dmr=dmr_config, max_iterations=5, timeout_seconds=60)
-
-    run_agent("test", mock_ports, config=agent_config)
-
-    mock_resource_cls.assert_called_once_with(mock_ports)
-    mock_resource_cls.return_value.__enter__.assert_called_once()
-    mock_resource_cls.return_value.__exit__.assert_called_once()
 
 
 @override_settings(
@@ -696,7 +607,6 @@ def test_on_log_callback_fires_on_task_complete(
     mock_send: MagicMock,
     mock_tools: MagicMock,
     mock_summarize_ctx: MagicMock,
-    mock_ports: ContainerPorts,
 ) -> None:
     """Test that on_log callback is called during agent loop."""
     mock_tools.return_value = ()
@@ -716,10 +626,7 @@ def test_on_log_callback_fires_on_task_complete(
     )
 
     context = ToolContext(
-        ports=mock_ports,
-        ssh_session=MagicMock(),
-        playwright_session=MagicMock(),
-        vnc_session=MagicMock(),
+        project_id=1,
     )
 
     result = _run_agent_loop("Test task", context, config=config)
@@ -737,7 +644,6 @@ def test_on_log_callback_not_called_when_none(
     mock_send: MagicMock,
     mock_tools: MagicMock,
     mock_summarize_ctx: MagicMock,
-    mock_ports: ContainerPorts,
 ) -> None:
     """Test that no error when on_log is None."""
     mock_tools.return_value = ()
@@ -755,10 +661,7 @@ def test_on_log_callback_not_called_when_none(
     )
 
     context = ToolContext(
-        ports=mock_ports,
-        ssh_session=MagicMock(),
-        playwright_session=MagicMock(),
-        vnc_session=MagicMock(),
+        project_id=1,
     )
 
     result = _run_agent_loop("Test task", context, config=config)
@@ -774,7 +677,6 @@ def test_on_log_callback_fires_on_tool_calls(
     mock_send: MagicMock,
     mock_tools: MagicMock,
     mock_summarize_ctx: MagicMock,
-    mock_ports: ContainerPorts,
 ) -> None:
     """Test that on_log fires for tool call and tool result messages."""
     mock_tools.return_value = ()
@@ -817,10 +719,7 @@ def test_on_log_callback_fires_on_tool_calls(
     )
 
     context = ToolContext(
-        ports=mock_ports,
-        ssh_session=MagicMock(),
-        playwright_session=MagicMock(),
-        vnc_session=MagicMock(),
+        project_id=1,
     )
 
     result = _run_agent_loop("Test task", context, config=config)
