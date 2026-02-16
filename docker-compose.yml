@@ -78,7 +78,6 @@ services:
         volumes:
             - "STATIC:/src/staticfiles"
             - "MEDIA:/src/media"
-            - /var/run/docker.sock:/var/run/docker.sock
         entrypoint: "python -m celery -A auto_tester worker -l INFO -Q execution --concurrency=2"
 
     beat-celery:
