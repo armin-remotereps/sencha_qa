@@ -175,6 +175,16 @@ def _handle_browser_get_url(
     return tools_controller.browser_get_url(context.project_id)
 
 
+def _handle_browser_download(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    url = str(arguments.get("url", ""))
+    save_path = str(arguments.get("save_path", ""))
+    return tools_controller.browser_download(
+        context.project_id, url=url, save_path=save_path
+    )
+
+
 def _handle_browser_take_screenshot(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
@@ -206,4 +216,5 @@ _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "browser_get_page_content": _handle_browser_get_page_content,
     "browser_get_url": _handle_browser_get_url,
     "browser_take_screenshot": _handle_browser_take_screenshot,
+    "browser_download": _handle_browser_download,
 }

@@ -190,6 +190,25 @@ def get_browser_tool_definitions() -> tuple[ToolDefinition, ...]:
                 ),
             ),
         ),
+        ToolDefinition(
+            name="browser_download",
+            description="Download a file from a URL via the browser. Handles cookie-gated and auth-gated downloads.",
+            category=ToolCategory.BROWSER,
+            parameters=(
+                ToolParameter(
+                    name="url",
+                    type="string",
+                    description="The direct download URL.",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="save_path",
+                    type="string",
+                    description="Absolute path to save the file. Defaults to ~/Downloads/<suggested_filename>.",
+                    required=False,
+                ),
+            ),
+        ),
     )
 
 

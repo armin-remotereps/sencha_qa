@@ -505,6 +505,18 @@ def controller_browser_get_url(
     return _build_browser_content_result(reply)
 
 
+def controller_browser_download(
+    project_id: int,
+    url: str,
+    save_path: str = "",
+    timeout: float = 120.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id, "controller.browser_download", timeout, url=url, save_path=save_path
+    )
+    return _build_action_result(reply)
+
+
 def controller_browser_take_screenshot(
     project_id: int,
     timeout: float = 30.0,

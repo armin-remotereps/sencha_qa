@@ -16,6 +16,7 @@ from projects.controller_protocol import (
     ActionTypeRegistry,
     BaseActionEvent,
     BrowserClickActionEvent,
+    BrowserDownloadActionEvent,
     BrowserGetElementsActionEvent,
     BrowserGetPageContentActionEvent,
     BrowserGetUrlActionEvent,
@@ -212,6 +213,11 @@ class ControllerConsumer(AsyncWebsocketConsumer):  # type: ignore[misc]
 
     async def controller_browser_take_screenshot(
         self, event: BrowserTakeScreenshotActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_browser_download(
+        self, event: BrowserDownloadActionEvent
     ) -> None:
         await self._forward_action(event)
 

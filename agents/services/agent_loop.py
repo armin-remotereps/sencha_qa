@@ -123,7 +123,8 @@ def _build_tool_taxonomy() -> str:
         "11. browser_hover — Hover over a web page element found by AI-based description\n"
         "12. browser_get_page_content — Get the text content of the current page\n"
         "13. browser_get_url — Get the current browser URL\n"
-        "14. browser_take_screenshot — Take a browser screenshot and answer a question about it"
+        "14. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
+        "15. browser_download — Download a file from a URL via the browser"
     )
 
 
@@ -198,13 +199,16 @@ def _build_tool_guidelines() -> str:
         '- browser_hover(description="the Settings menu") — hover over a web element\n'
         "- browser_get_page_content() — get the visible text of the current page\n"
         "- browser_get_url() — get the current page URL\n"
-        '- browser_take_screenshot(question="What does the page show?") — capture browser and ask about it\n\n'
+        '- browser_take_screenshot(question="What does the page show?") — capture browser and ask about it\n'
+        '- browser_download(url="https://example.com/file.exe") — download a file from a direct URL\n'
+        '- browser_download(url="https://example.com/file.exe", save_path="/home/user/file.exe") — download to a specific path\n\n'
         "WHEN TO USE WHICH:\n"
         "- For web testing, prefer browser_* tools. They are faster and more reliable than "
         "desktop tools for web interactions.\n"
-        "- For downloading software or files, use browser_navigate to go to the official "
-        "website, then browser_click to download. After downloading, use desktop tools or "
-        "execute_command to run the installer.\n"
+        "- For downloading files from a direct URL, prefer browser_download. It handles "
+        "cookie-gated and auth-gated downloads that curl/wget cannot.\n"
+        "- For downloading software from a website where you need to find the download link, "
+        "use browser_navigate + browser_click to locate and trigger the download.\n"
         "- Use desktop tools (click, type_text, key_press) for ANY native GUI interaction: "
         "installation wizards, setup dialogs, confirmation popups, file managers, system "
         "preferences, or any visible desktop element.\n"

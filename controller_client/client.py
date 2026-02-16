@@ -9,6 +9,7 @@ from websockets.asyncio.client import ClientConnection
 from controller_client.browser_executor import (
     BrowserSession,
     execute_browser_click,
+    execute_browser_download,
     execute_browser_get_elements,
     execute_browser_get_page_content,
     execute_browser_get_url,
@@ -37,6 +38,7 @@ from controller_client.protocol import (
     ScreenshotResponsePayload,
     deserialize_server_message,
     parse_browser_click_payload,
+    parse_browser_download_payload,
     parse_browser_hover_payload,
     parse_browser_navigate_payload,
     parse_browser_type_payload,
@@ -86,6 +88,7 @@ class ControllerClient:
             MessageType.BROWSER_GET_PAGE_CONTENT: self._handle_browser_get_page_content,
             MessageType.BROWSER_GET_URL: self._handle_browser_get_url,
             MessageType.BROWSER_TAKE_SCREENSHOT: self._handle_browser_take_screenshot,
+            MessageType.BROWSER_DOWNLOAD: self._handle_browser_download,
         }
         self._handshake_event = asyncio.Event()
 
@@ -392,6 +395,18 @@ class ControllerClient:
             await self._send_screenshot_response(request_id, result)
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.SCREENSHOT_FAILED, str(e))
+
+    async def _handle_browser_download(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_browser_download_payload(data)
+        try:
+            result = await asyncio.to_thread(
+                execute_browser_download, self._browser_session, payload
+            )
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
 
     async def _send_browser_content_result(
         self, request_id: str, result: BrowserContentResultPayload

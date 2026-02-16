@@ -7,6 +7,7 @@ from agents.services.vision_qa import answer_screenshot_question
 from agents.types import DMRConfig, ScreenshotCallback, ToolResult
 from projects.services import (
     controller_browser_click,
+    controller_browser_download,
     controller_browser_get_page_content,
     controller_browser_get_url,
     controller_browser_hover,
@@ -246,6 +247,18 @@ def browser_get_url(project_id: int) -> ToolResult:
         )
 
     return safe_tool_call("browser_get_url", _do)
+
+
+def browser_download(project_id: int, *, url: str, save_path: str = "") -> ToolResult:
+    def _do() -> ToolResult:
+        result = controller_browser_download(project_id, url, save_path)
+        return ToolResult(
+            tool_call_id="",
+            content=result["message"],
+            is_error=not result["success"],
+        )
+
+    return safe_tool_call("browser_download", _do)
 
 
 def browser_take_screenshot(

@@ -75,6 +75,7 @@ def test_build_system_prompt() -> None:
     assert "whoami" in prompt
     assert "Preconditions" in prompt
     assert "installation wizards" in prompt
+    assert "browser_download" in prompt
 
 
 def test_build_system_prompt_vision_tools() -> None:
@@ -822,6 +823,14 @@ def test_build_tool_guidelines_download_via_browser() -> None:
     """Test that tool guidelines include browser-based download strategy."""
     guidelines = _build_tool_guidelines()
 
-    assert "downloading software" in guidelines
-    assert "official website" in guidelines
+    assert "downloading" in guidelines
+    assert "browser_navigate" in guidelines
     assert "installation wizards" in guidelines
+
+
+def test_build_tool_guidelines_browser_download() -> None:
+    """Test that tool guidelines include browser_download tool."""
+    guidelines = _build_tool_guidelines()
+
+    assert "browser_download" in guidelines
+    assert "direct URL" in guidelines or "direct download" in guidelines

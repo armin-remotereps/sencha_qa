@@ -21,7 +21,7 @@ def test_context() -> ToolContext:
 
 def test_get_all_tool_definitions_count() -> None:
     tools = get_all_tool_definitions()
-    assert len(tools) == 14
+    assert len(tools) == 15
 
 
 def test_get_all_tool_definitions_categories() -> None:
@@ -58,6 +58,7 @@ def test_get_all_tool_definitions_tool_names() -> None:
         "browser_get_page_content",
         "browser_get_url",
         "browser_take_screenshot",
+        "browser_download",
     }
     assert names == expected
 
@@ -264,6 +265,55 @@ def test_dispatch_click_no_vision_config() -> None:
     result = dispatch_tool_call(tool_call, context)
     assert result.is_error is True
     assert "Vision model not configured" in result.content
+
+
+def test_dispatch_tool_call_browser_download(test_context: ToolContext) -> None:
+    tool_call = ToolCall(
+        tool_call_id="call_download",
+        tool_name="browser_download",
+        arguments={"url": "https://example.com/file.exe", "save_path": "/tmp/file.exe"},
+    )
+    with patch(
+        "agents.services.tool_registry.tools_controller.browser_download"
+    ) as mock_download:
+        mock_download.return_value = ToolResult(
+            tool_call_id="",
+            content="Downloaded to /tmp/file.exe (1024 bytes)",
+            is_error=False,
+        )
+        result = dispatch_tool_call(tool_call, test_context)
+
+    assert result.tool_call_id == "call_download"
+    assert result.is_error is False
+    assert "Downloaded" in result.content
+    mock_download.assert_called_once_with(
+        1, url="https://example.com/file.exe", save_path="/tmp/file.exe"
+    )
+
+
+def test_dispatch_tool_call_browser_download_default_save_path(
+    test_context: ToolContext,
+) -> None:
+    tool_call = ToolCall(
+        tool_call_id="call_download_default",
+        tool_name="browser_download",
+        arguments={"url": "https://example.com/installer.dmg"},
+    )
+    with patch(
+        "agents.services.tool_registry.tools_controller.browser_download"
+    ) as mock_download:
+        mock_download.return_value = ToolResult(
+            tool_call_id="",
+            content="Downloaded to /home/user/Downloads/installer.dmg (2048 bytes)",
+            is_error=False,
+        )
+        result = dispatch_tool_call(tool_call, test_context)
+
+    assert result.tool_call_id == "call_download_default"
+    assert result.is_error is False
+    mock_download.assert_called_once_with(
+        1, url="https://example.com/installer.dmg", save_path=""
+    )
 
 
 def test_dispatch_take_screenshot_no_vision_config() -> None:

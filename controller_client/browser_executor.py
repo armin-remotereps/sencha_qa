@@ -1,6 +1,7 @@
 import base64
 import logging
 import time
+from pathlib import Path
 
 from playwright.sync_api import (
     Browser,
@@ -15,6 +16,7 @@ from controller_client.protocol import (
     ActionResultPayload,
     BrowserClickPayload,
     BrowserContentResultPayload,
+    BrowserDownloadPayload,
     BrowserHoverPayload,
     BrowserNavigatePayload,
     BrowserTypePayload,
@@ -260,6 +262,31 @@ def execute_browser_take_screenshot(
         width=width,
         height=height,
         format="png",
+    )
+
+
+def execute_browser_download(
+    session: BrowserSession, payload: BrowserDownloadPayload
+) -> ActionResultPayload:
+    start = time.monotonic()
+    try:
+        page = session.ensure_page()
+        with page.expect_download(timeout=60000) as download_info:
+            page.goto(payload.url)
+        download = download_info.value
+        save_path = payload.save_path or str(
+            Path.home() / "Downloads" / download.suggested_filename
+        )
+        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+        download.save_as(save_path)
+        file_size = Path(save_path).stat().st_size
+    except Exception as e:
+        raise ExecutionError(f"Browser download failed: {e}") from e
+    duration_ms = (time.monotonic() - start) * 1000
+    return ActionResultPayload(
+        success=True,
+        message=f"Downloaded to {save_path} ({file_size} bytes)",
+        duration_ms=duration_ms,
     )
 
 

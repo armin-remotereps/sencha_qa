@@ -32,6 +32,7 @@ class MessageType(StrEnum):
     BROWSER_GET_PAGE_CONTENT = "browser_get_page_content"
     BROWSER_GET_URL = "browser_get_url"
     BROWSER_TAKE_SCREENSHOT = "browser_take_screenshot"
+    BROWSER_DOWNLOAD = "browser_download"
 
 
 class MouseButton(StrEnum):
@@ -153,6 +154,12 @@ class BrowserTypePayload:
 @dataclass(frozen=True)
 class BrowserHoverPayload:
     element_index: int
+
+
+@dataclass(frozen=True)
+class BrowserDownloadPayload:
+    url: str
+    save_path: str
 
 
 @dataclass(frozen=True)
@@ -301,4 +308,11 @@ def parse_browser_type_payload(data: dict[str, object]) -> BrowserTypePayload:
 def parse_browser_hover_payload(data: dict[str, object]) -> BrowserHoverPayload:
     return BrowserHoverPayload(
         element_index=_extract_int(data, "element_index"),
+    )
+
+
+def parse_browser_download_payload(data: dict[str, object]) -> BrowserDownloadPayload:
+    return BrowserDownloadPayload(
+        url=_extract_str(data, "url"),
+        save_path=_extract_str(data, "save_path", default=""),
     )

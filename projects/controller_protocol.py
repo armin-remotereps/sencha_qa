@@ -82,6 +82,11 @@ class BrowserTakeScreenshotActionEvent(BaseActionEvent):
     pass
 
 
+class BrowserDownloadActionEvent(BaseActionEvent):
+    url: str
+    save_path: str
+
+
 class ActionTypeRegistry:
     _ACTION_TYPE_MAP: Final[dict[str, MessageType]] = {
         "controller.click": MessageType.CLICK,
@@ -99,6 +104,7 @@ class ActionTypeRegistry:
         "controller.browser_get_page_content": MessageType.BROWSER_GET_PAGE_CONTENT,
         "controller.browser_get_url": MessageType.BROWSER_GET_URL,
         "controller.browser_take_screenshot": MessageType.BROWSER_TAKE_SCREENSHOT,
+        "controller.browser_download": MessageType.BROWSER_DOWNLOAD,
     }
 
     _PAYLOAD_KEYS: Final[dict[str, tuple[str, ...]]] = {
@@ -124,6 +130,7 @@ class ActionTypeRegistry:
         "controller.browser_get_page_content": (),
         "controller.browser_get_url": (),
         "controller.browser_take_screenshot": (),
+        "controller.browser_download": ("url", "save_path"),
     }
 
     @classmethod
