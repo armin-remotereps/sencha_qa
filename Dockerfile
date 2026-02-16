@@ -4,7 +4,7 @@ WORKDIR /src
 
 RUN python3.13 -m venv /opt/venv
 
-ENV PATH="/opt/venv/bin$PATH"
+ENV PATH="/opt/venv/bin:$PATH"
 
 RUN apt update && apt install -y libpq-dev build-essential python3-dev gcc
 
