@@ -61,7 +61,7 @@ services:
         volumes:
             - "STATIC:/src/static"
             - "MEDIA:/src/media"
-        entrypoint: "python -m celery -A auto_tester worker -l INFO -Q upload --concurrency=5"
+        entrypoint: "python -m celery -A auto_tester worker -l INFO -Q upload,celery --concurrency=5"
 
     execution-celery:
         hostname: execute
@@ -80,6 +80,20 @@ services:
             - "MEDIA:/src/media"
             - /var/run/docker.sock:/var/run/docker.sock
         entrypoint: "python -m celery -A auto_tester worker -l INFO -Q execution --concurrency=2"
+
+    beat-celery:
+        hostname: execute
+        image: local/auto_tester:latest
+        build: .
+        env_file:
+            - "./.env"
+        restart: always
+        depends_on:
+            - "db"
+            - "redis"
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
+        entrypoint: "python -m celery -A auto_tester beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler"
 
     flower:
         image: local/auto_tester:latest
