@@ -6,10 +6,22 @@ from typing import Any, TypeAlias
 import websockets
 from websockets.asyncio.client import ClientConnection
 
+from controller_client.browser_executor import (
+    BrowserSession,
+    execute_browser_click,
+    execute_browser_get_elements,
+    execute_browser_get_page_content,
+    execute_browser_get_url,
+    execute_browser_hover,
+    execute_browser_navigate,
+    execute_browser_take_screenshot,
+    execute_browser_type,
+)
 from controller_client.config import ClientConfig
 from controller_client.exceptions import AuthenticationError, ExecutionError
 from controller_client.executor import (
     execute_click,
+    execute_command,
     execute_drag,
     execute_hover,
     execute_key_press,
@@ -18,15 +30,22 @@ from controller_client.executor import (
 )
 from controller_client.protocol import (
     ActionResultPayload,
+    BrowserContentResultPayload,
+    CommandResultPayload,
     ErrorCode,
     MessageType,
     ScreenshotResponsePayload,
     deserialize_server_message,
+    parse_browser_click_payload,
+    parse_browser_hover_payload,
+    parse_browser_navigate_payload,
+    parse_browser_type_payload,
     parse_click_payload,
     parse_drag_payload,
     parse_handshake_ack_payload,
     parse_hover_payload,
     parse_key_press_payload,
+    parse_run_command_payload,
     parse_type_text_payload,
     serialize_message,
 )
@@ -48,6 +67,7 @@ class ControllerClient:
         self._config = config
         self._running = False
         self._connection: ClientConnection | None = None
+        self._browser_session = BrowserSession()
         self._handlers: dict[MessageType, MessageHandler] = {
             MessageType.HANDSHAKE_ACK: self._handle_handshake_ack,
             MessageType.CLICK: self._handle_click,
@@ -56,7 +76,16 @@ class ControllerClient:
             MessageType.TYPE_TEXT: self._handle_type_text,
             MessageType.KEY_PRESS: self._handle_key_press,
             MessageType.SCREENSHOT_REQUEST: self._handle_screenshot,
+            MessageType.RUN_COMMAND: self._handle_run_command,
             MessageType.PING: self._handle_ping,
+            MessageType.BROWSER_NAVIGATE: self._handle_browser_navigate,
+            MessageType.BROWSER_CLICK: self._handle_browser_click,
+            MessageType.BROWSER_TYPE: self._handle_browser_type,
+            MessageType.BROWSER_HOVER: self._handle_browser_hover,
+            MessageType.BROWSER_GET_ELEMENTS: self._handle_browser_get_elements,
+            MessageType.BROWSER_GET_PAGE_CONTENT: self._handle_browser_get_page_content,
+            MessageType.BROWSER_GET_URL: self._handle_browser_get_url,
+            MessageType.BROWSER_TAKE_SCREENSHOT: self._handle_browser_take_screenshot,
         }
         self._handshake_event = asyncio.Event()
 
@@ -90,6 +119,7 @@ class ControllerClient:
 
     async def stop(self) -> None:
         self._running = False
+        await asyncio.to_thread(self._browser_session.close)
         if self._connection is not None:
             await self._connection.close()
 
@@ -243,6 +273,134 @@ class ControllerClient:
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.SCREENSHOT_FAILED, str(e))
 
+    async def _handle_run_command(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_run_command_payload(data)
+        try:
+            result = await asyncio.to_thread(execute_command, payload)
+            await self._send_command_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _send_command_result(
+        self, request_id: str, result: CommandResultPayload
+    ) -> None:
+        message = serialize_message(
+            MessageType.COMMAND_RESULT,
+            request_id=request_id,
+            success=result.success,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            return_code=result.return_code,
+            duration_ms=result.duration_ms,
+        )
+        await self._send_message(message)
+
     async def _handle_ping(self, request_id: str, data: dict[str, object]) -> None:
         message = serialize_message(MessageType.PONG, request_id=request_id)
+        await self._send_message(message)
+
+    async def _handle_browser_navigate(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_browser_navigate_payload(data)
+        try:
+            result = await asyncio.to_thread(
+                execute_browser_navigate, self._browser_session, payload
+            )
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_browser_click(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_browser_click_payload(data)
+        try:
+            result = await asyncio.to_thread(
+                execute_browser_click, self._browser_session, payload
+            )
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_browser_type(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_browser_type_payload(data)
+        try:
+            result = await asyncio.to_thread(
+                execute_browser_type, self._browser_session, payload
+            )
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_browser_hover(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_browser_hover_payload(data)
+        try:
+            result = await asyncio.to_thread(
+                execute_browser_hover, self._browser_session, payload
+            )
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_browser_get_elements(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        try:
+            result = await asyncio.to_thread(
+                execute_browser_get_elements, self._browser_session
+            )
+            await self._send_browser_content_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_browser_get_page_content(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        try:
+            result = await asyncio.to_thread(
+                execute_browser_get_page_content, self._browser_session
+            )
+            await self._send_browser_content_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_browser_get_url(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        try:
+            result = await asyncio.to_thread(
+                execute_browser_get_url, self._browser_session
+            )
+            await self._send_browser_content_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_browser_take_screenshot(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        try:
+            result = await asyncio.to_thread(
+                execute_browser_take_screenshot, self._browser_session
+            )
+            await self._send_screenshot_response(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.SCREENSHOT_FAILED, str(e))
+
+    async def _send_browser_content_result(
+        self, request_id: str, result: BrowserContentResultPayload
+    ) -> None:
+        message = serialize_message(
+            MessageType.BROWSER_CONTENT_RESULT,
+            request_id=request_id,
+            success=result.success,
+            content=result.content,
+            duration_ms=result.duration_ms,
+        )
         await self._send_message(message)

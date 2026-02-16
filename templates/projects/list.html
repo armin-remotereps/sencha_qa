@@ -61,7 +61,14 @@
   <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
     {% for project in projects %}
     <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-5">
-      <h3 class="text-lg font-semibold text-zinc-100">{{ project.name }}</h3>
+      <div class="flex items-center">
+        <h3 class="text-lg font-semibold text-zinc-100">{{ project.name }}</h3>
+        {% if project.agent_connected %}
+        <span class="ml-2 inline-flex items-center rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs font-medium text-emerald-400">Connected</span>
+        {% else %}
+        <span class="ml-2 inline-flex items-center rounded-full bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-500">Offline</span>
+        {% endif %}
+      </div>
 
       {# Tag badges #}
       <div class="mt-2 flex flex-wrap gap-1">
@@ -74,6 +81,12 @@
 
       {# Action buttons #}
       <div class="mt-4 flex gap-2">
+        <a
+          href="{% url 'projects:detail' project_id=project.id %}"
+          class="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600"
+        >
+          Details
+        </a>
         <a
           href="{% url 'projects:test_case_list' project_id=project.id %}"
           class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"

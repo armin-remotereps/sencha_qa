@@ -6,12 +6,14 @@ import pytest
 from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
     ClickPayload,
+    CommandResultPayload,
     DragPayload,
     ErrorCode,
     HoverPayload,
     KeyPressPayload,
     MessageType,
     MouseButton,
+    RunCommandPayload,
     TypeTextPayload,
     deserialize_server_message,
     parse_click_payload,
@@ -19,6 +21,7 @@ from controller_client.protocol import (
     parse_handshake_ack_payload,
     parse_hover_payload,
     parse_key_press_payload,
+    parse_run_command_payload,
     parse_type_text_payload,
     serialize_message,
 )
@@ -40,7 +43,11 @@ class TestMessageType:
         assert MessageType.TYPE_TEXT.value == "type_text"
         assert MessageType.KEY_PRESS.value == "key_press"
         assert MessageType.SCREENSHOT_REQUEST.value == "screenshot_request"
+        assert MessageType.RUN_COMMAND.value == "run_command"
         assert MessageType.PING.value == "ping"
+
+    def test_client_command_result_type(self) -> None:
+        assert MessageType.COMMAND_RESULT.value == "command_result"
 
 
 class TestMouseButton:
@@ -204,3 +211,43 @@ class TestParseKeyPressPayload:
         data: dict[str, object] = {}
         with pytest.raises(ProtocolError, match="keys"):
             parse_key_press_payload(data)
+
+
+class TestParseRunCommandPayload:
+    def test_valid(self) -> None:
+        data: dict[str, object] = {"command": "echo hello", "timeout": 10.0}
+        payload = parse_run_command_payload(data)
+        assert payload == RunCommandPayload(command="echo hello", timeout=10.0)
+
+    def test_default_timeout(self) -> None:
+        data: dict[str, object] = {"command": "ls"}
+        payload = parse_run_command_payload(data)
+        assert payload.timeout == 30.0
+
+    def test_missing_command(self) -> None:
+        data: dict[str, object] = {"timeout": 5.0}
+        with pytest.raises(ProtocolError, match="command"):
+            parse_run_command_payload(data)
+
+
+class TestCommandResultPayload:
+    def test_creation(self) -> None:
+        payload = CommandResultPayload(
+            success=True,
+            stdout="hello\n",
+            stderr="",
+            return_code=0,
+            duration_ms=42.5,
+        )
+        assert payload.success is True
+        assert payload.stdout == "hello\n"
+        assert payload.stderr == ""
+        assert payload.return_code == 0
+        assert payload.duration_ms == 42.5
+
+    def test_frozen(self) -> None:
+        payload = CommandResultPayload(
+            success=False, stdout="", stderr="err", return_code=1, duration_ms=0.0
+        )
+        with pytest.raises(AttributeError):
+            payload.success = True  # type: ignore[misc]

@@ -1,40 +1,39 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import dataclasses
 import html
+import io
 import logging
+import secrets
 import time
+import uuid
 import xml.etree.ElementTree as ET
+import zipfile
 from collections.abc import Callable
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, TypedDict
 
 from asgiref.sync import async_to_sync
-from celery import group
+from celery import chain
 from channels.layers import get_channel_layer
+from django.conf import settings
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
 from django.core.paginator import Page, Paginator
 from django.db import transaction
 from django.db.models import Count, QuerySet
+from django.utils import timezone
 
 from accounts.models import CustomUser
-from agents.services.agent_loop import build_agent_config, run_agent
 from agents.types import (
     AgentConfig,
     AgentResult,
     AgentStopReason,
     ChatMessage,
     ScreenshotCallback,
-)
-from environments.services.docker_client import (
-    close_docker_client,
-    get_docker_client,
-)
-from environments.services.orchestration import (
-    provision_environment,
-    teardown_environment,
 )
 from projects.models import (
     ParsedTestCase,
@@ -52,6 +51,8 @@ from projects.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+_AGENT_POLL_INTERVAL_SECONDS = 2
 
 
 @transaction.atomic
@@ -140,6 +141,384 @@ def _sync_tags(project: Project, tag_names: list[str]) -> None:
     normalized = _normalize_tag_names(tag_names)
     tags = _get_or_create_tags(normalized)
     project.tags.set(tags)
+
+
+# ============================================================================
+# CONTROLLER AGENT SERVICES
+# ============================================================================
+
+
+def generate_api_key() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def get_project_by_api_key(api_key: str) -> Project | None:
+    try:
+        return Project.objects.filter(api_key=api_key, archived=False).get()
+    except Project.DoesNotExist:
+        return None
+
+
+def regenerate_api_key(project: Project) -> str:
+    project.api_key = generate_api_key()
+    project.save()
+    return project.api_key
+
+
+def mark_agent_connected(project: Project, system_info: dict[str, Any]) -> bool:
+    """Returns True if connection established, False if already connected."""
+    rows_updated = Project.objects.filter(id=project.id, agent_connected=False).update(
+        agent_connected=True,
+        agent_system_info=system_info,
+    )
+    if rows_updated > 0:
+        project.refresh_from_db()
+        return True
+    return False
+
+
+def mark_agent_disconnected(project: Project) -> None:
+    project.agent_connected = False
+    project.agent_system_info = {}
+    project.last_connected_at = timezone.now()
+    project.save()
+
+
+class AgentStatusEvent(TypedDict):
+    type: str
+    agent_connected: bool
+    agent_system_info: dict[str, Any]
+    last_connected_at: str | None
+
+
+def _agent_status_group(project_id: int) -> str:
+    return f"agent_status_{project_id}"
+
+
+def _build_agent_status_event(project: Project) -> AgentStatusEvent:
+    return {
+        "type": "agent.status",
+        "agent_connected": project.agent_connected,
+        "agent_system_info": project.agent_system_info,
+        "last_connected_at": (
+            project.last_connected_at.isoformat() if project.last_connected_at else None
+        ),
+    }
+
+
+def broadcast_agent_status(project: Project) -> None:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        return
+
+    event = _build_agent_status_event(project)
+    async_to_sync(layer.group_send)(_agent_status_group(project.id), event)
+
+
+# ============================================================================
+# CONTROLLER ACTION SERVICES
+# ============================================================================
+
+
+class ControllerActionError(Exception):
+    pass
+
+
+class ActionResult(TypedDict):
+    success: bool
+    message: str
+    duration_ms: float
+
+
+class ScreenshotResult(TypedDict):
+    success: bool
+    image_base64: str
+    width: int
+    height: int
+    format: str
+
+
+class CommandResult(TypedDict):
+    success: bool
+    stdout: str
+    stderr: str
+    return_code: int
+    duration_ms: float
+
+
+def _controller_group(project_id: int) -> str:
+    return f"controller_{project_id}"
+
+
+def _get_channel_layer_or_raise() -> Any:
+    layer: Any = get_channel_layer()
+    if layer is None:
+        raise ControllerActionError("Channel layer is not configured")
+    return layer
+
+
+def _dispatch_controller_action(
+    project_id: int,
+    event_type: str,
+    reply_timeout: float,
+    **payload: Any,
+) -> dict[str, Any]:
+    layer = _get_channel_layer_or_raise()
+    reply_channel: str = async_to_sync(layer.new_channel)()
+    request_id = str(uuid.uuid4())
+
+    event: dict[str, Any] = {
+        "type": event_type,
+        "request_id": request_id,
+        "reply_channel": reply_channel,
+        **payload,
+    }
+    async_to_sync(layer.group_send)(_controller_group(project_id), event)
+
+    try:
+        result: dict[str, Any] = async_to_sync(asyncio.wait_for)(
+            layer.receive(reply_channel), timeout=reply_timeout
+        )
+        return result
+    except asyncio.TimeoutError as exc:
+        raise ControllerActionError(
+            f"Timed out waiting for reply after {reply_timeout}s"
+        ) from exc
+
+
+def _build_action_result(reply: dict[str, Any]) -> ActionResult:
+    return ActionResult(
+        success=reply.get("success", False),
+        message=reply.get("message", ""),
+        duration_ms=reply.get("duration_ms", 0.0),
+    )
+
+
+def controller_click(
+    project_id: int,
+    x: int,
+    y: int,
+    button: str = "left",
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id, "controller.click", timeout, x=x, y=y, button=button
+    )
+    return _build_action_result(reply)
+
+
+def controller_hover(
+    project_id: int,
+    x: int,
+    y: int,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id, "controller.hover", timeout, x=x, y=y
+    )
+    return _build_action_result(reply)
+
+
+def controller_drag(
+    project_id: int,
+    start_x: int,
+    start_y: int,
+    end_x: int,
+    end_y: int,
+    button: str = "left",
+    duration: float = 0.5,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.drag",
+        timeout,
+        start_x=start_x,
+        start_y=start_y,
+        end_x=end_x,
+        end_y=end_y,
+        button=button,
+        duration=duration,
+    )
+    return _build_action_result(reply)
+
+
+def controller_type_text(
+    project_id: int,
+    text: str,
+    interval: float = 0.0,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id, "controller.type_text", timeout, text=text, interval=interval
+    )
+    return _build_action_result(reply)
+
+
+def controller_key_press(
+    project_id: int,
+    keys: str,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id, "controller.key_press", timeout, keys=keys
+    )
+    return _build_action_result(reply)
+
+
+def controller_screenshot(
+    project_id: int,
+    timeout: float = 30.0,
+) -> ScreenshotResult:
+    reply = _dispatch_controller_action(project_id, "controller.screenshot", timeout)
+    return ScreenshotResult(
+        success=reply.get("success", False),
+        image_base64=reply.get("image_base64", ""),
+        width=reply.get("width", 0),
+        height=reply.get("height", 0),
+        format=reply.get("format", "png"),
+    )
+
+
+def controller_run_command(
+    project_id: int,
+    command: str,
+    timeout: float = 30.0,
+) -> CommandResult:
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.run_command",
+        timeout + 5.0,
+        command=command,
+        timeout=timeout,
+    )
+    return CommandResult(
+        success=reply.get("success", False),
+        stdout=reply.get("stdout", ""),
+        stderr=reply.get("stderr", ""),
+        return_code=reply.get("return_code", -1),
+        duration_ms=reply.get("duration_ms", 0.0),
+    )
+
+
+# ============================================================================
+# BROWSER ACTION SERVICES
+# ============================================================================
+
+
+class BrowserContentResult(TypedDict):
+    success: bool
+    content: str
+    duration_ms: float
+
+
+def _build_browser_content_result(reply: dict[str, Any]) -> BrowserContentResult:
+    return BrowserContentResult(
+        success=reply.get("success", False),
+        content=reply.get("content", ""),
+        duration_ms=reply.get("duration_ms", 0.0),
+    )
+
+
+def controller_browser_navigate(
+    project_id: int,
+    url: str,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id, "controller.browser_navigate", timeout, url=url
+    )
+    return _build_action_result(reply)
+
+
+def controller_browser_click(
+    project_id: int,
+    element_index: int,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.browser_click",
+        timeout,
+        element_index=element_index,
+    )
+    return _build_action_result(reply)
+
+
+def controller_browser_type(
+    project_id: int,
+    element_index: int,
+    text: str,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.browser_type",
+        timeout,
+        element_index=element_index,
+        text=text,
+    )
+    return _build_action_result(reply)
+
+
+def controller_browser_hover(
+    project_id: int,
+    element_index: int,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.browser_hover",
+        timeout,
+        element_index=element_index,
+    )
+    return _build_action_result(reply)
+
+
+def controller_browser_get_elements(
+    project_id: int,
+    timeout: float = 30.0,
+) -> BrowserContentResult:
+    reply = _dispatch_controller_action(
+        project_id, "controller.browser_get_elements", timeout
+    )
+    return _build_browser_content_result(reply)
+
+
+def controller_browser_get_page_content(
+    project_id: int,
+    timeout: float = 30.0,
+) -> BrowserContentResult:
+    reply = _dispatch_controller_action(
+        project_id, "controller.browser_get_page_content", timeout
+    )
+    return _build_browser_content_result(reply)
+
+
+def controller_browser_get_url(
+    project_id: int,
+    timeout: float = 30.0,
+) -> BrowserContentResult:
+    reply = _dispatch_controller_action(
+        project_id, "controller.browser_get_url", timeout
+    )
+    return _build_browser_content_result(reply)
+
+
+def controller_browser_take_screenshot(
+    project_id: int,
+    timeout: float = 30.0,
+) -> ScreenshotResult:
+    reply = _dispatch_controller_action(
+        project_id, "controller.browser_take_screenshot", timeout
+    )
+    return ScreenshotResult(
+        success=reply.get("success", False),
+        image_base64=reply.get("image_base64", ""),
+        width=reply.get("width", 0),
+        height=reply.get("height", 0),
+        format=reply.get("format", "png"),
+    )
 
 
 # ============================================================================
@@ -536,6 +915,12 @@ def redo_test_run(test_run: TestRun) -> None:
     test_run.save(update_fields=["status", "updated_at"])
 
 
+def _has_active_test_run(project: Project) -> bool:
+    return TestRun.objects.filter(
+        project=project, status=TestRunStatus.STARTED
+    ).exists()
+
+
 def start_test_run(test_run: TestRun) -> None:
     from projects.tasks import execute_test_run_case
 
@@ -544,12 +929,14 @@ def start_test_run(test_run: TestRun) -> None:
         raise ValueError("Cannot start a test run with no test cases.")
     if test_run.status != TestRunStatus.WAITING:
         raise ValueError("Test run is not in WAITING status.")
+    if _has_active_test_run(test_run.project):
+        raise ValueError("Another test run is already in progress for this project.")
 
     test_run.status = TestRunStatus.STARTED
     test_run.save(update_fields=["status", "updated_at"])
     _broadcast_test_run_status(test_run)
 
-    group([execute_test_run_case.s(pid) for pid in pivot_ids]).apply_async()
+    chain([execute_test_run_case.si(pid) for pid in pivot_ids]).apply_async()
 
 
 def get_test_run_summary(test_run: TestRun) -> dict[str, int]:
@@ -703,15 +1090,33 @@ def fetch_test_case_state(
 # ============================================================================
 
 
+def _wait_for_agent_connection(
+    project: Project,
+    timeout: int | None = None,
+) -> None:
+    if timeout is None:
+        timeout = settings.CONTROLLER_AGENT_CONNECT_TIMEOUT
+    start = time.monotonic()
+    while time.monotonic() - start < timeout:
+        project.refresh_from_db()
+        if project.agent_connected:
+            return
+        time.sleep(_AGENT_POLL_INTERVAL_SECONDS)
+    raise TimeoutError(
+        f"Controller agent did not connect within {timeout}s for project {project.id}"
+    )
+
+
 def execute_test_run_test_case(pivot_id: int) -> None:
+    from agents.services.agent_loop import build_agent_config, run_agent
+
     pivot = _fetch_pivot(pivot_id)
+    project = pivot.test_run.project
     _mark_pivot_in_progress(pivot)
 
-    client = get_docker_client()
-    container_id = ""
     try:
-        container_info = provision_environment(client, name_suffix=f"trtc-{pivot_id}")
-        container_id = container_info.container_id
+        if not project.agent_connected:
+            _wait_for_agent_connection(project)
 
         on_log = _build_log_callback(pivot)
         on_screenshot = _build_screenshot_callback(pivot)
@@ -720,11 +1125,12 @@ def execute_test_run_test_case(pivot_id: int) -> None:
         )
         task_description = _build_task_description(pivot.test_case)
 
-        result = run_agent(task_description, container_info.ports, config=config)
+        result = run_agent(task_description, project.id, config=config)
         _finalize_pivot(pivot, result)
     except Exception as exc:
         logger.exception("execute_test_run_test_case failed for pivot %d", pivot_id)
         _mark_pivot_failed(pivot, str(exc))
+        raise
     except BaseException as exc:
         logger.critical(
             "execute_test_run_test_case hit BaseException for pivot %d: %s",
@@ -734,14 +1140,11 @@ def execute_test_run_test_case(pivot_id: int) -> None:
         _mark_pivot_failed(pivot, str(exc))
         raise
     finally:
-        if container_id:
-            teardown_environment(client, container_id)
-        close_docker_client(client)
         _update_test_run_status_if_needed(pivot.test_run)
 
 
 def _fetch_pivot(pivot_id: int) -> TestRunTestCase:
-    return TestRunTestCase.objects.select_related("test_run", "test_case").get(
+    return TestRunTestCase.objects.select_related("test_run__project", "test_case").get(
         pk=pivot_id
     )
 
@@ -865,3 +1268,51 @@ def _update_test_run_status_if_needed(test_run: TestRun) -> None:
         test_run.status = TestRunStatus.DONE
         test_run.save(update_fields=["status", "updated_at"])
         _broadcast_test_run_status(test_run)
+
+
+# ============================================================================
+# CONTROLLER CLIENT DOWNLOAD SERVICES
+# ============================================================================
+
+_CONTROLLER_CLIENT_EXCLUDE_DIRS = {".venv", "__pycache__", ".pytest_cache", "tests"}
+_CONTROLLER_CLIENT_EXCLUDE_FILES = {".env"}
+
+
+def _should_include_path(relative_path: Path) -> bool:
+    for part in relative_path.parts:
+        if part in _CONTROLLER_CLIENT_EXCLUDE_DIRS:
+            return False
+    if relative_path.name in _CONTROLLER_CLIENT_EXCLUDE_FILES:
+        return False
+    return True
+
+
+def _generate_env_content(project: Project) -> str:
+    return (
+        f"CONTROLLER_HOST={settings.CONTROLLER_SERVER_HOST}\n"
+        f"CONTROLLER_PORT={settings.CONTROLLER_SERVER_PORT}\n"
+        f"CONTROLLER_API_KEY={project.api_key}\n"
+        "CONTROLLER_RECONNECT_INTERVAL=5\n"
+        "CONTROLLER_MAX_RECONNECT_ATTEMPTS=10\n"
+        "CONTROLLER_LOG_LEVEL=INFO\n"
+    )
+
+
+def generate_controller_client_zip(project: Project) -> bytes:
+    controller_dir = settings.BASE_DIR / "controller_client"
+    buffer = io.BytesIO()
+
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in sorted(controller_dir.rglob("*")):
+            if not file_path.is_file():
+                continue
+            relative = file_path.relative_to(controller_dir)
+            if not _should_include_path(relative):
+                continue
+            arcname = str(Path("controller_client") / relative)
+            zf.write(file_path, arcname)
+
+        env_content = _generate_env_content(project)
+        zf.writestr("controller_client/.env", env_content)
+
+    return buffer.getvalue()

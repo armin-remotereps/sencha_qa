@@ -1,5 +1,5 @@
 from __future__ import annotations
 
 
-class VncElementNotFoundError(Exception):
+class ElementNotFoundError(Exception):
     pass

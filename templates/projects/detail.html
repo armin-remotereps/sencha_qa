@@ -1,0 +1,290 @@
+{% extends "dashboard/base_dashboard.html" %}
+
+{% block dashboard_content %}
+<div
+  x-data="{
+    agentConnected: {{ project.agent_connected|yesno:'true,false' }},
+    systemInfo: {{ project.agent_system_info|safe }},
+    lastConnectedAt: '{{ project.last_connected_at|date:"N j, Y, P"|default:"" }}',
+    showApiKey: false,
+    showRegenerateModal: false,
+    ws: null,
+
+    init() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      this.ws = new WebSocket(
+        protocol + '//' + window.location.host + '/ws/projects/{{ project.id }}/agent-status/'
+      );
+
+      this.ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'agent_status') {
+          this.agentConnected = data.agent_connected;
+          this.systemInfo = data.agent_system_info || {};
+          this.lastConnectedAt = data.last_connected_at || '';
+        }
+      };
+    },
+
+    copyApiKey() {
+      navigator.clipboard.writeText('{{ project.api_key }}');
+    }
+  }"
+>
+  {# BREADCRUMB #}
+  <nav class="mb-4 text-sm text-zinc-400">
+    <a href="{% url 'projects:list' %}" class="hover:text-zinc-200">Projects</a>
+    <span class="mx-1">/</span>
+    <span class="text-zinc-200">{{ project.name }}</span>
+  </nav>
+
+  {# HEADER #}
+  <div class="mb-6 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <h1 class="text-2xl font-bold text-zinc-100">{{ project.name }}</h1>
+      <span
+        x-show="agentConnected"
+        class="inline-flex items-center rounded-full bg-emerald-900/50 px-3 py-1 text-sm font-medium text-emerald-400"
+      >
+        Connected
+      </span>
+      <span
+        x-show="!agentConnected"
+        class="inline-flex items-center rounded-full bg-zinc-800 px-3 py-1 text-sm font-medium text-zinc-500"
+      >
+        Disconnected
+      </span>
+    </div>
+    <a
+      href="{% url 'projects:list' %}"
+      class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
+    >
+      Back to Projects
+    </a>
+  </div>
+
+  {# AGENT SYSTEM INFO (shown only when connected) #}
+  <div
+    x-show="agentConnected && systemInfo && Object.keys(systemInfo).length > 0"
+    class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-5"
+  >
+    <h2 class="mb-4 text-lg font-semibold text-zinc-100">Agent System Info</h2>
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div x-show="systemInfo.os">
+        <p class="text-xs font-medium uppercase text-zinc-500">Operating System</p>
+        <p class="mt-1 text-sm text-zinc-100" x-text="systemInfo.os"></p>
+      </div>
+      <div x-show="systemInfo.version">
+        <p class="text-xs font-medium uppercase text-zinc-500">Version</p>
+        <p class="mt-1 text-sm text-zinc-100" x-text="systemInfo.version"></p>
+      </div>
+      <div x-show="systemInfo.architecture">
+        <p class="text-xs font-medium uppercase text-zinc-500">Architecture</p>
+        <p class="mt-1 text-sm text-zinc-100" x-text="systemInfo.architecture"></p>
+      </div>
+      <div x-show="systemInfo.hostname">
+        <p class="text-xs font-medium uppercase text-zinc-500">Hostname</p>
+        <p class="mt-1 text-sm text-zinc-100" x-text="systemInfo.hostname"></p>
+      </div>
+      <div x-show="systemInfo.screen_resolution">
+        <p class="text-xs font-medium uppercase text-zinc-500">Screen Resolution</p>
+        <p class="mt-1 text-sm text-zinc-100" x-text="systemInfo.screen_resolution"></p>
+      </div>
+    </div>
+  </div>
+
+  {# LAST CONNECTED (shown when disconnected and last_connected_at exists) #}
+  <div
+    x-show="!agentConnected && lastConnectedAt"
+    class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-5"
+  >
+    <p class="text-sm text-zinc-400">
+      Last connected: <span class="text-zinc-100" x-text="lastConnectedAt"></span>
+    </p>
+  </div>
+
+  {# API KEY SECTION #}
+  <div class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-5">
+    <h2 class="mb-4 text-lg font-semibold text-zinc-100">API Key</h2>
+    <div class="flex items-center gap-3">
+      <div class="flex-1">
+        <input
+          type="text"
+          readonly
+          :value="showApiKey ? '{{ project.api_key }}' : '••••••••••••••••••••••••••••••••'"
+          class="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100 font-mono"
+        />
+      </div>
+      <button
+        @click="showApiKey = !showApiKey"
+        class="rounded-md bg-zinc-700 px-3 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
+      >
+        <span x-show="!showApiKey">Reveal</span>
+        <span x-show="showApiKey">Hide</span>
+      </button>
+      <button
+        @click="copyApiKey()"
+        class="rounded-md bg-zinc-700 px-3 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
+      >
+        Copy
+      </button>
+      <button
+        @click="showRegenerateModal = true"
+        class="rounded-md bg-red-900/50 px-3 py-2 text-sm font-medium text-red-400 hover:bg-red-900"
+      >
+        Regenerate
+      </button>
+    </div>
+  </div>
+
+  {# CONTROLLER CLIENT SECTION #}
+  <div
+    x-data="{ showSetup: false, platform: 'unix' }"
+    class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-5"
+  >
+    <h2 class="mb-4 text-lg font-semibold text-zinc-100">Controller Client</h2>
+    <div class="flex items-center gap-3">
+      <form method="post" action="{% url 'projects:download_controller_client' project_id=project.id %}">
+        {% csrf_token %}
+        <button
+          type="submit"
+          class="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600"
+        >
+          Download Controller Client
+        </button>
+      </form>
+      <button
+        @click="showSetup = !showSetup"
+        class="rounded-md bg-zinc-700 px-3 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
+      >
+        <span x-show="!showSetup">Setup Instructions</span>
+        <span x-show="showSetup">Hide Instructions</span>
+      </button>
+    </div>
+
+    <div x-show="showSetup" x-cloak class="mt-4">
+      <div class="mb-3 flex gap-2">
+        <button
+          @click="platform = 'unix'"
+          :class="platform === 'unix'
+            ? 'bg-emerald-700 text-white'
+            : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'"
+          class="rounded-md px-3 py-1.5 text-sm font-medium"
+        >
+          Linux / macOS
+        </button>
+        <button
+          @click="platform = 'cmd'"
+          :class="platform === 'cmd'
+            ? 'bg-emerald-700 text-white'
+            : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'"
+          class="rounded-md px-3 py-1.5 text-sm font-medium"
+        >
+          Windows CMD
+        </button>
+        <button
+          @click="platform = 'ps'"
+          :class="platform === 'ps'
+            ? 'bg-emerald-700 text-white'
+            : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'"
+          class="rounded-md px-3 py-1.5 text-sm font-medium"
+        >
+          Windows PowerShell
+        </button>
+      </div>
+
+      <div class="rounded-md border border-zinc-700 bg-zinc-950 p-4">
+        <ol class="list-decimal space-y-2 pl-5 text-sm text-zinc-300">
+          <li>Extract the downloaded ZIP file and <code class="text-emerald-400">cd</code> into the extracted folder</li>
+          <li>
+            Run the setup script:
+            <div x-show="platform === 'unix'" class="mt-1">
+              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">bash controller_client/scripts/setup.sh</code>
+            </div>
+            <div x-show="platform === 'cmd'" class="mt-1">
+              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">controller_client\scripts\setup.bat</code>
+            </div>
+            <div x-show="platform === 'ps'" class="mt-1">
+              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">.\controller_client\scripts\setup.ps1</code>
+            </div>
+          </li>
+          <li>The <code class="text-emerald-400">.env</code> file is pre-configured with your project's connection info</li>
+          <li>
+            Start the client:
+            <div x-show="platform === 'unix'" class="mt-1">
+              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">controller_client/.venv/bin/python -m controller_client.main</code>
+            </div>
+            <div x-show="platform === 'cmd'" class="mt-1">
+              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">controller_client\.venv\Scripts\python -m controller_client.main</code>
+            </div>
+            <div x-show="platform === 'ps'" class="mt-1">
+              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">controller_client\.venv\Scripts\python -m controller_client.main</code>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  {# NAVIGATION LINKS #}
+  <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-5">
+    <h2 class="mb-4 text-lg font-semibold text-zinc-100">Project Navigation</h2>
+    <div class="flex flex-wrap gap-3">
+      <a
+        href="{% url 'projects:test_case_list' project_id=project.id %}"
+        class="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600"
+      >
+        Test Cases
+      </a>
+      <a
+        href="{% url 'projects:test_run_list' project_id=project.id %}"
+        class="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600"
+      >
+        Test Runs
+      </a>
+      <a
+        href="{% url 'projects:upload_list' project_id=project.id %}"
+        class="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600"
+      >
+        Uploads
+      </a>
+    </div>
+  </div>
+
+  {# REGENERATE API KEY CONFIRMATION MODAL #}
+  <div
+    x-show="showRegenerateModal"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+    @click.self="showRegenerateModal = false"
+  >
+    <div
+      class="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-6"
+      @click.stop
+    >
+      <h2 class="mb-4 text-lg font-semibold text-zinc-100">Regenerate API Key</h2>
+      <p class="mb-6 text-sm text-zinc-400">
+        This will invalidate the current API key. Any agents using the old key will need to be updated. Are you sure?
+      </p>
+      <form method="post" action="{% url 'projects:regenerate_api_key' project_id=project.id %}">
+        {% csrf_token %}
+        <div class="flex justify-end gap-3">
+          <button
+            type="button"
+            @click="showRegenerateModal = false"
+            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500"
+          >
+            Regenerate
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

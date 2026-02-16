@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import dataclasses
 import logging
-from typing import Callable, cast
+from typing import Callable
 
-from agents.services import tools_browser, tools_screen, tools_shell, tools_vnc
+from agents.services import tools_controller
 from agents.services.tool_definitions import (
     get_all_tool_definitions as get_all_tool_definitions,
 )
@@ -28,18 +29,14 @@ def dispatch_tool_call(tool_call: ToolCall, context: ToolContext) -> ToolResult:
         )
 
     result = handler(context, tool_call.arguments)
-    return ToolResult(
-        tool_call_id=tool_call.tool_call_id,
-        content=result.content,
-        is_error=result.is_error,
-    )
+    return dataclasses.replace(result, tool_call_id=tool_call.tool_call_id)
 
 
 def _handle_execute_command(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
     command = str(arguments.get("command", ""))
-    return tools_shell.execute_command(context.ssh_session, command=command)
+    return tools_controller.execute_command(context.project_id, command=command)
 
 
 def _handle_take_screenshot(
@@ -50,50 +47,73 @@ def _handle_take_screenshot(
         return ToolResult(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
-    return tools_screen.take_screenshot(
-        context.ssh_session,
+    return tools_controller.take_screenshot(
+        context.project_id,
         question=question,
         vision_config=context.vision_config,
         on_screenshot=context.on_screenshot,
     )
 
 
-def _handle_screen_type_text(
-    context: ToolContext, arguments: dict[str, object]
-) -> ToolResult:
+def _handle_click(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    description = str(arguments.get("description", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_controller.click(
+        context.project_id,
+        description=description,
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+    )
+
+
+def _handle_type_text(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     text = str(arguments.get("text", ""))
-    return tools_screen.screen_type_text(context.ssh_session, text=text)
+    return tools_controller.type_text(context.project_id, text=text)
 
 
-def _handle_screen_key_press(
-    context: ToolContext, arguments: dict[str, object]
-) -> ToolResult:
+def _handle_key_press(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     keys = str(arguments.get("keys", ""))
-    return tools_screen.screen_key_press(context.ssh_session, keys=keys)
+    return tools_controller.key_press(context.project_id, keys=keys)
 
 
-def _handle_screen_list_windows(
-    context: ToolContext, arguments: dict[str, object]
-) -> ToolResult:
-    return tools_screen.screen_list_windows(context.ssh_session)
+def _handle_hover(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    description = str(arguments.get("description", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_controller.hover(
+        context.project_id,
+        description=description,
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+    )
 
 
-def _handle_screen_get_active_window(
-    context: ToolContext, arguments: dict[str, object]
-) -> ToolResult:
-    return tools_screen.screen_get_active_window(context.ssh_session)
+def _handle_drag(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    start_description = str(arguments.get("start_description", ""))
+    end_description = str(arguments.get("end_description", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_controller.drag(
+        context.project_id,
+        start_description=start_description,
+        end_description=end_description,
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+    )
 
 
 def _handle_browser_navigate(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
     url = str(arguments.get("url", ""))
-    return tools_browser.browser_navigate(
-        context.playwright_session,
-        url=url,
-        vision_config=context.vision_config,
-        on_screenshot=context.on_screenshot,
-    )
+    return tools_controller.browser_navigate(context.project_id, url=url)
 
 
 def _handle_browser_click(
@@ -104,8 +124,8 @@ def _handle_browser_click(
         return ToolResult(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
-    return tools_browser.browser_click(
-        context.playwright_session,
+    return tools_controller.browser_click(
+        context.project_id,
         description=description,
         dmr_config=context.vision_config,
     )
@@ -120,8 +140,8 @@ def _handle_browser_type(
         return ToolResult(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
-    return tools_browser.browser_type(
-        context.playwright_session,
+    return tools_controller.browser_type(
+        context.project_id,
         description=description,
         text=text,
         dmr_config=context.vision_config,
@@ -136,8 +156,8 @@ def _handle_browser_hover(
         return ToolResult(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
-    return tools_browser.browser_hover(
-        context.playwright_session,
+    return tools_controller.browser_hover(
+        context.project_id,
         description=description,
         dmr_config=context.vision_config,
     )
@@ -146,16 +166,13 @@ def _handle_browser_hover(
 def _handle_browser_get_page_content(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
-    max_length = cast(int, arguments.get("max_length", 5000))
-    return tools_browser.browser_get_page_content(
-        context.playwright_session, max_length=max_length
-    )
+    return tools_controller.browser_get_page_content(context.project_id)
 
 
 def _handle_browser_get_url(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
-    return tools_browser.browser_get_url(context.playwright_session)
+    return tools_controller.browser_get_url(context.project_id)
 
 
 def _handle_browser_take_screenshot(
@@ -166,88 +183,22 @@ def _handle_browser_take_screenshot(
         return ToolResult(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
-    return tools_browser.browser_take_screenshot(
-        context.playwright_session,
+    return tools_controller.browser_take_screenshot(
+        context.project_id,
         question=question,
         vision_config=context.vision_config,
         on_screenshot=context.on_screenshot,
     )
-
-
-def _handle_vnc_take_screenshot(
-    context: ToolContext, arguments: dict[str, object]
-) -> ToolResult:
-    question = str(arguments.get("question", ""))
-    if context.vision_config is None:
-        return ToolResult(
-            tool_call_id="", content="Vision model not configured.", is_error=True
-        )
-    return tools_vnc.vnc_take_screenshot(
-        context.vnc_session,
-        question=question,
-        vision_config=context.vision_config,
-        on_screenshot=context.on_screenshot,
-    )
-
-
-def _handle_vnc_click(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
-    description = str(arguments.get("description", ""))
-    if context.vision_config is None:
-        return ToolResult(
-            tool_call_id="", content="Vision model not configured.", is_error=True
-        )
-    return tools_vnc.vnc_click(
-        context.vnc_session,
-        description=description,
-        vision_config=context.vision_config,
-        on_screenshot=context.on_screenshot,
-    )
-
-
-def _handle_vnc_type(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
-    description = str(arguments.get("description", ""))
-    text = str(arguments.get("text", ""))
-    if context.vision_config is None:
-        return ToolResult(
-            tool_call_id="", content="Vision model not configured.", is_error=True
-        )
-    return tools_vnc.vnc_type(
-        context.vnc_session,
-        description=description,
-        text=text,
-        vision_config=context.vision_config,
-        on_screenshot=context.on_screenshot,
-    )
-
-
-def _handle_vnc_hover(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
-    description = str(arguments.get("description", ""))
-    if context.vision_config is None:
-        return ToolResult(
-            tool_call_id="", content="Vision model not configured.", is_error=True
-        )
-    return tools_vnc.vnc_hover(
-        context.vnc_session,
-        description=description,
-        vision_config=context.vision_config,
-        on_screenshot=context.on_screenshot,
-    )
-
-
-def _handle_vnc_key_press(
-    context: ToolContext, arguments: dict[str, object]
-) -> ToolResult:
-    keys = str(arguments.get("keys", ""))
-    return tools_vnc.vnc_key_press(context.vnc_session, keys=keys)
 
 
 _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "execute_command": _handle_execute_command,
     "take_screenshot": _handle_take_screenshot,
-    "screen_type_text": _handle_screen_type_text,
-    "screen_key_press": _handle_screen_key_press,
-    "screen_list_windows": _handle_screen_list_windows,
-    "screen_get_active_window": _handle_screen_get_active_window,
+    "click": _handle_click,
+    "type_text": _handle_type_text,
+    "key_press": _handle_key_press,
+    "hover": _handle_hover,
+    "drag": _handle_drag,
     "browser_navigate": _handle_browser_navigate,
     "browser_click": _handle_browser_click,
     "browser_type": _handle_browser_type,
@@ -255,9 +206,4 @@ _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "browser_get_page_content": _handle_browser_get_page_content,
     "browser_get_url": _handle_browser_get_url,
     "browser_take_screenshot": _handle_browser_take_screenshot,
-    "vnc_take_screenshot": _handle_vnc_take_screenshot,
-    "vnc_click": _handle_vnc_click,
-    "vnc_type": _handle_vnc_type,
-    "vnc_hover": _handle_vnc_hover,
-    "vnc_key_press": _handle_vnc_key_press,
 }

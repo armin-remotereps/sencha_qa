@@ -25,9 +25,15 @@ class TagAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
 
 @admin.register(Project)
 class ProjectAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
-    list_display = ("name", "archived", "created_at")
-    list_filter = ("archived", "tags")
+    list_display = ("name", "archived", "agent_connected", "created_at")
+    list_filter = ("archived", "agent_connected", "tags")
     filter_horizontal = ("tags", "members")
+    readonly_fields = (
+        "api_key",
+        "agent_connected",
+        "agent_system_info",
+        "last_connected_at",
+    )
     actions = ("archive_projects", "unarchive_projects")
 
     @admin.action(description="Archive selected projects")

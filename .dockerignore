@@ -1,0 +1,14 @@
+.venv/
+venv/
+OmniParser/
+.git/
+__pycache__/
+*.pyc
+.env
+media/
+staticfiles/
+docs/
+.claude/
+.mypy_cache/
+.pytest_cache/
+node_modules/

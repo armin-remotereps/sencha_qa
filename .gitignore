@@ -57,3 +57,6 @@ plan.md
 
 # OmniParser weights
 OmniParser/weights/
+
+# Generated test reports
+*_TEST_REPORT.md

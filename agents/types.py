@@ -3,20 +3,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Protocol
-
-if TYPE_CHECKING:
-    from agents.services.playwright_session import PlaywrightSessionManager
-    from agents.services.ssh_session import SSHSessionManager
-    from agents.services.vnc_session import VncSessionManager
-    from environments.types import ContainerPorts
+from typing import Protocol
 
 
 class ToolCategory(Enum):
-    SHELL = "shell"
-    SCREEN = "screen"
+    CONTROLLER = "controller"
     BROWSER = "browser"
-    VNC = "vnc"
 
 
 class AgentStopReason(Enum):
@@ -126,10 +118,7 @@ class AgentResult:
 
 @dataclass(frozen=True)
 class ToolContext:
-    ports: ContainerPorts
-    ssh_session: SSHSessionManager
-    playwright_session: PlaywrightSessionManager
-    vnc_session: VncSessionManager
+    project_id: int
     summarizer_config: DMRConfig | None = None
     vision_config: DMRConfig | None = None
     on_screenshot: ScreenshotCallback | None = None

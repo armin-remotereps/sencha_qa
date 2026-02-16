@@ -6,7 +6,6 @@ from collections.abc import Callable
 
 from django.conf import settings
 
-from agents.services.agent_resource_manager import AgentResourceManager
 from agents.services.context_summarizer import summarize_context_if_needed
 from agents.services.dmr_client import send_chat_completion
 from agents.services.dmr_config import (
@@ -26,7 +25,6 @@ from agents.types import (
     ToolContext,
     ToolResult,
 )
-from environments.types import ContainerPorts
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +36,6 @@ def _debug_log(message: str, on_log: Callable[[str], None] | None) -> None:
 
 
 def build_system_prompt(task_description: str) -> str:
-    """Build the system prompt for the agent."""
     return "\n\n".join(
         [
             _build_role_description(),
@@ -83,11 +80,23 @@ def _build_qa_rules() -> str:
 
 def _build_tool_taxonomy() -> str:
     return (
-        "You have four categories of tools:\n\n"
-        "1. SHELL: Execute commands via SSH (apt-get, bash scripts, etc.)\n"
-        "2. SCREEN: Observe the desktop and use keyboard via SSH+xdotool (screenshots, typing, key presses)\n"
-        "3. BROWSER: Control the Chromium browser via Playwright CDP (DOM-based element finding)\n"
-        "4. VNC: Interact with the desktop via VNC protocol (vision-based clicking, hovering, element finding)"
+        "You have the following tools:\n\n"
+        "DESKTOP TOOLS (PyAutoGUI — for desktop/native app interactions):\n"
+        "1. execute_command — Run shell commands in the container\n"
+        "2. take_screenshot — Capture the desktop and answer a question about it using vision AI\n"
+        "3. click — Click an element found by vision-based natural-language description\n"
+        "4. type_text — Type text using the keyboard\n"
+        "5. key_press — Press a key or key combination\n"
+        "6. hover — Hover over an element found by vision-based description\n"
+        "7. drag — Drag from one element to another, both found by vision-based description\n\n"
+        "BROWSER TOOLS (Playwright — for web page interactions):\n"
+        "8. browser_navigate — Navigate the browser to a URL\n"
+        "9. browser_click — Click a web page element found by AI-based description\n"
+        "10. browser_type — Type text into a web page element found by AI-based description\n"
+        "11. browser_hover — Hover over a web page element found by AI-based description\n"
+        "12. browser_get_page_content — Get the text content of the current page\n"
+        "13. browser_get_url — Get the current browser URL\n"
+        "14. browser_take_screenshot — Take a browser screenshot and answer a question about it"
     )
 
 
@@ -95,35 +104,43 @@ def _build_environment_context() -> str:
     return (
         "ENVIRONMENT:\n"
         "- The desktop (XFCE4) is already running on display :0\n"
-        "- Chromium browser is installed but NOT running yet. It starts automatically "
-        "when you call any browser tool (e.g. browser_navigate). Do NOT try to install or launch it manually.\n"
-        '- To start browsing, use browser_navigate(url="...") directly.\n'
-        "- You are running as root. Do NOT use sudo — it is not installed."
+        "- Chromium browser is available via browser tools (Playwright). "
+        "Use browser_navigate to open a URL — no need to launch a browser manually.\n"
+        "- Before running privileged commands, check your user with `whoami` and "
+        "whether `sudo` is available. Adapt your commands accordingly."
     )
 
 
 def _build_tool_guidelines() -> str:
     return (
-        "BROWSER TOOLS use natural-language descriptions, NOT CSS selectors:\n"
-        '- browser_navigate(url="https://google.com") - go to a URL (use this FIRST for web tasks)\n'
-        '- browser_click(description="the Login button") - describe what to click\n'
-        '- browser_type(description="the username input field", text="admin") - describe the field\n'
-        '- browser_hover(description="the Settings menu") - describe what to hover\n\n'
-        "VNC TOOLS use vision-based element finding (no DOM access):\n"
-        '- vnc_take_screenshot(question="What is on screen?") - capture VNC framebuffer and ask about it\n'
-        '- vnc_click(description="the OK button") - vision AI finds and clicks the element\n'
-        '- vnc_type(description="the search box", text="hello") - vision AI finds input, clicks, types\n'
-        '- vnc_hover(description="the File menu") - vision AI finds and hovers over element\n'
-        '- vnc_key_press(keys="Return") - send key via VNC (X11 keysym names)\n\n'
-        "SCREENSHOT TOOLS require a question:\n"
-        '- take_screenshot(question="What windows are open?") - asks about the desktop (via SSH)\n'
-        '- browser_take_screenshot(question="Is the login form visible?") - asks about the browser\n'
-        '- vnc_take_screenshot(question="What dialog is showing?") - asks about VNC framebuffer\n\n'
+        "TOOL USAGE:\n\n"
+        "DESKTOP TOOLS (for native desktop interactions):\n"
+        "- Vision-based tools (click, hover, drag) use natural-language descriptions "
+        "to find elements on the screen via AI vision.\n"
+        '- click(description="the Login button") — describe what to click\n'
+        '- hover(description="the Settings menu") — describe what to hover\n'
+        '- drag(start_description="file icon", end_description="trash icon") — describe start and end\n'
+        '- type_text(text="hello") — type text using the keyboard\n'
+        '- key_press(keys="Return") — press a key or key combination\n'
+        '- take_screenshot(question="What is on screen?") — capture desktop and ask about it\n'
+        '- execute_command(command="ls -la") — run a shell command\n\n'
+        "BROWSER TOOLS (for web page interactions — preferred for web testing):\n"
+        '- browser_navigate(url="https://example.com") — open a URL in the browser\n'
+        '- browser_click(description="the Login button") — click a web page element\n'
+        '- browser_type(description="the email input", text="user@example.com") — type into a web element\n'
+        '- browser_hover(description="the Settings menu") — hover over a web element\n'
+        "- browser_get_page_content() — get the visible text of the current page\n"
+        "- browser_get_url() — get the current page URL\n"
+        '- browser_take_screenshot(question="What does the page show?") — capture browser and ask about it\n\n'
+        "WHEN TO USE WHICH:\n"
+        "- For web testing, prefer browser_* tools. They are faster and more reliable than "
+        "desktop tools for web interactions.\n"
+        "- Use desktop tools (click, type_text, key_press) for native desktop applications.\n"
+        "- Use execute_command for shell operations.\n\n"
         "SHELL RULES:\n"
         "- If you launch a GUI application or long-running process (e.g. gnome-calculator, "
-        "firefox, flask run, node server.js, vim), append ' &' so it runs in the "
-        "background. Otherwise the command will block for 120s and time out.\n"
-        "- Example: 'gnome-calculator &' instead of 'gnome-calculator'\n\n"
+        "flask run, node server.js, vim), append ' &' so it runs in the "
+        "background. Otherwise the command will block and time out.\n\n"
         "When you have completed the task, respond with a text message summarizing what you did. "
         "Do NOT call any tools when you are done - just provide your final text response."
     )
@@ -132,11 +149,11 @@ def _build_tool_guidelines() -> str:
 def _build_task_section(task_description: str) -> str:
     return (
         "IMPORTANT:\n"
-        "- For web tasks, start with browser_navigate — the browser is already running\n"
+        "- For web tasks, use browser_navigate to open URLs — no need to launch a browser manually\n"
+        "- Use browser_click/browser_type for web page interactions\n"
         "- Use 'execute_command' for shell operations\n"
-        "- Use screenshot tools with specific questions to observe the environment\n"
-        "- Use browser tools with descriptive element names for web testing\n"
-        "- Use VNC tools for desktop GUI interactions that need vision-based element finding\n"
+        "- Use take_screenshot or browser_take_screenshot with specific questions to observe the environment\n"
+        "- Use click/hover with descriptive element names for native desktop GUI interactions\n"
         "- Always check tool output and use screenshots to verify results\n"
         "- If a tool fails, try to diagnose and fix the issue\n\n"
         f"YOUR TASK:\n{task_description}"
@@ -148,7 +165,6 @@ def build_agent_config(
     model: str | None = None,
     vision_model: str | None = None,
 ) -> AgentConfig:
-    """Build AgentConfig from Django settings."""
     dmr_config = build_dmr_config(model=model)
     vision_config = build_vision_config(model=vision_model)
     return AgentConfig(
@@ -161,15 +177,10 @@ def build_agent_config(
 
 def run_agent(
     task_description: str,
-    ports: ContainerPorts,
+    project_id: int,
     *,
     config: AgentConfig | None = None,
 ) -> AgentResult:
-    """Execute an AI agent to complete a task in a containerized environment.
-
-    The agent operates autonomously using provided tools until task completion,
-    timeout, or iteration limit.
-    """
     if config is None:
         config = build_agent_config()
 
@@ -177,24 +188,19 @@ def run_agent(
     if config.vision_dmr is not None and config.vision_dmr.api_key is None:
         ensure_model_available(config.vision_dmr)
 
-    # Warm up models so first real request doesn't hit cold-start timeout
     warm_up_model(config.dmr)
     if config.vision_dmr is not None and config.vision_dmr.api_key is None:
         warm_up_model(config.vision_dmr)
 
     summarizer_config = build_summarizer_config()
 
-    with AgentResourceManager(ports) as resources:
-        context = ToolContext(
-            ports=ports,
-            ssh_session=resources.ssh,
-            playwright_session=resources.playwright,
-            vnc_session=resources.vnc,
-            summarizer_config=summarizer_config,
-            vision_config=config.vision_dmr,
-            on_screenshot=config.on_screenshot,
-        )
-        return _run_agent_loop(task_description, context, config=config)
+    context = ToolContext(
+        project_id=project_id,
+        summarizer_config=summarizer_config,
+        vision_config=config.vision_dmr,
+        on_screenshot=config.on_screenshot,
+    )
+    return _run_agent_loop(task_description, context, config=config)
 
 
 def _run_agent_loop(
@@ -203,7 +209,6 @@ def _run_agent_loop(
     *,
     config: AgentConfig,
 ) -> AgentResult:
-    """Inner agent loop extracted for testability."""
     system_prompt = build_system_prompt(task_description)
     tool_definitions = get_all_tool_definitions()
 
@@ -217,7 +222,6 @@ def _run_agent_loop(
     on_log = config.on_log
 
     while iterations < config.max_iterations:
-        # Check timeout
         elapsed = time.monotonic() - start_time
         if elapsed > config.timeout_seconds:
             logger.warning("Agent timed out after %.1f seconds", elapsed)
@@ -251,16 +255,13 @@ def _run_agent_loop(
                 error=f"DMR request failed: {e}",
             )
 
-        # Log agent thinking and response
         if response.reasoning_content:
             _debug_log(f"[Thinking] {response.reasoning_content}", on_log)
         if isinstance(response.message.content, str) and response.message.content:
             _debug_log(f"[Agent] {response.message.content}", on_log)
 
-        # Add assistant message to history
         messages.append(response.message)
 
-        # If no tool calls, the agent is done
         if response.message.tool_calls is None:
             _debug_log(f"Agent completed task after {iterations} iterations", on_log)
             return AgentResult(
@@ -269,7 +270,6 @@ def _run_agent_loop(
                 messages=tuple(messages),
             )
 
-        # Execute tool calls
         for tool_call in response.message.tool_calls:
             _debug_log(
                 f"[Tool Call] {tool_call.tool_name}({tool_call.arguments})", on_log
@@ -296,7 +296,6 @@ def _build_tool_result_message(
     *,
     summarizer_config: DMRConfig | None = None,
 ) -> ChatMessage:
-    """Build a ChatMessage from a ToolResult, summarizing large outputs."""
     content = summarize_output(
         tool_result.content,
         tool_name=tool_result.tool_call_id,

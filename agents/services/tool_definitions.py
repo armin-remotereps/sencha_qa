@@ -3,12 +3,12 @@ from __future__ import annotations
 from agents.types import ToolCategory, ToolDefinition, ToolParameter
 
 
-def get_shell_tool_definitions() -> tuple[ToolDefinition, ...]:
+def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
     return (
         ToolDefinition(
             name="execute_command",
-            description="Execute a shell command in the container via SSH. Returns stdout, stderr, and exit code.",
-            category=ToolCategory.SHELL,
+            description="Execute a shell command in the container. Returns stdout, stderr, and exit code.",
+            category=ToolCategory.CONTROLLER,
             parameters=(
                 ToolParameter(
                     name="command",
@@ -18,15 +18,10 @@ def get_shell_tool_definitions() -> tuple[ToolDefinition, ...]:
                 ),
             ),
         ),
-    )
-
-
-def get_screen_tool_definitions() -> tuple[ToolDefinition, ...]:
-    return (
         ToolDefinition(
             name="take_screenshot",
-            description="Take a screenshot of the desktop and answer a question about it.",
-            category=ToolCategory.SCREEN,
+            description="Take a screenshot of the desktop and answer a question about it using vision AI.",
+            category=ToolCategory.CONTROLLER,
             parameters=(
                 ToolParameter(
                     name="question",
@@ -37,9 +32,22 @@ def get_screen_tool_definitions() -> tuple[ToolDefinition, ...]:
             ),
         ),
         ToolDefinition(
-            name="screen_type_text",
-            description="Type text on the desktop using the keyboard.",
-            category=ToolCategory.SCREEN,
+            name="click",
+            description="Click an element on the desktop found by vision-based natural-language description.",
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                ToolParameter(
+                    name="description",
+                    type="string",
+                    description="Natural language description of the element to click.",
+                    required=True,
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="type_text",
+            description="Type text using the keyboard.",
+            category=ToolCategory.CONTROLLER,
             parameters=(
                 ToolParameter(
                     name="text",
@@ -50,9 +58,9 @@ def get_screen_tool_definitions() -> tuple[ToolDefinition, ...]:
             ),
         ),
         ToolDefinition(
-            name="screen_key_press",
+            name="key_press",
             description="Press a key or key combination (e.g., 'Return', 'ctrl+c', 'alt+F4').",
-            category=ToolCategory.SCREEN,
+            category=ToolCategory.CONTROLLER,
             parameters=(
                 ToolParameter(
                     name="keys",
@@ -63,16 +71,36 @@ def get_screen_tool_definitions() -> tuple[ToolDefinition, ...]:
             ),
         ),
         ToolDefinition(
-            name="screen_list_windows",
-            description="List all open windows on the desktop.",
-            category=ToolCategory.SCREEN,
-            parameters=(),
+            name="hover",
+            description="Hover over an element on the desktop found by vision-based natural-language description.",
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                ToolParameter(
+                    name="description",
+                    type="string",
+                    description="Natural language description of the element to hover over.",
+                    required=True,
+                ),
+            ),
         ),
         ToolDefinition(
-            name="screen_get_active_window",
-            description="Get the name of the currently active window.",
-            category=ToolCategory.SCREEN,
-            parameters=(),
+            name="drag",
+            description="Drag from one element to another on the desktop, both found by vision-based description.",
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                ToolParameter(
+                    name="start_description",
+                    type="string",
+                    description="Natural language description of the element to drag from.",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="end_description",
+                    type="string",
+                    description="Natural language description of the element to drag to.",
+                    required=True,
+                ),
+            ),
         ),
     )
 
@@ -81,20 +109,20 @@ def get_browser_tool_definitions() -> tuple[ToolDefinition, ...]:
     return (
         ToolDefinition(
             name="browser_navigate",
-            description="Navigate to a URL in the browser. Returns the page title and a visual description of the page.",
+            description="Navigate the browser to a URL.",
             category=ToolCategory.BROWSER,
             parameters=(
                 ToolParameter(
                     name="url",
                     type="string",
-                    description="URL to navigate to.",
+                    description="The URL to navigate to.",
                     required=True,
                 ),
             ),
         ),
         ToolDefinition(
             name="browser_click",
-            description="Click an element in the browser by natural-language description.",
+            description="Click a browser element found by AI-based natural-language description.",
             category=ToolCategory.BROWSER,
             parameters=(
                 ToolParameter(
@@ -107,7 +135,7 @@ def get_browser_tool_definitions() -> tuple[ToolDefinition, ...]:
         ),
         ToolDefinition(
             name="browser_type",
-            description="Type text into a form element found by natural-language description.",
+            description="Type text into a browser element found by AI-based natural-language description.",
             category=ToolCategory.BROWSER,
             parameters=(
                 ToolParameter(
@@ -119,14 +147,14 @@ def get_browser_tool_definitions() -> tuple[ToolDefinition, ...]:
                 ToolParameter(
                     name="text",
                     type="string",
-                    description="Text to type.",
+                    description="The text to type into the element.",
                     required=True,
                 ),
             ),
         ),
         ToolDefinition(
             name="browser_hover",
-            description="Hover over an element found by natural-language description.",
+            description="Hover over a browser element found by AI-based natural-language description.",
             category=ToolCategory.BROWSER,
             parameters=(
                 ToolParameter(
@@ -141,14 +169,7 @@ def get_browser_tool_definitions() -> tuple[ToolDefinition, ...]:
             name="browser_get_page_content",
             description="Get the text content of the current browser page.",
             category=ToolCategory.BROWSER,
-            parameters=(
-                ToolParameter(
-                    name="max_length",
-                    type="integer",
-                    description="Maximum length of content to return.",
-                    required=False,
-                ),
-            ),
+            parameters=(),
         ),
         ToolDefinition(
             name="browser_get_url",
@@ -158,7 +179,7 @@ def get_browser_tool_definitions() -> tuple[ToolDefinition, ...]:
         ),
         ToolDefinition(
             name="browser_take_screenshot",
-            description="Take a screenshot of the browser and answer a question about it.",
+            description="Take a screenshot of the browser and answer a question about it using vision AI.",
             category=ToolCategory.BROWSER,
             parameters=(
                 ToolParameter(
@@ -172,86 +193,5 @@ def get_browser_tool_definitions() -> tuple[ToolDefinition, ...]:
     )
 
 
-def get_vnc_tool_definitions() -> tuple[ToolDefinition, ...]:
-    return (
-        ToolDefinition(
-            name="vnc_take_screenshot",
-            description="Capture the VNC desktop framebuffer and answer a question about it using vision AI.",
-            category=ToolCategory.VNC,
-            parameters=(
-                ToolParameter(
-                    name="question",
-                    type="string",
-                    description="Question to answer about the VNC screenshot.",
-                    required=True,
-                ),
-            ),
-        ),
-        ToolDefinition(
-            name="vnc_click",
-            description="Click an element on the VNC desktop found by vision-based natural-language description.",
-            category=ToolCategory.VNC,
-            parameters=(
-                ToolParameter(
-                    name="description",
-                    type="string",
-                    description="Natural language description of the element to click.",
-                    required=True,
-                ),
-            ),
-        ),
-        ToolDefinition(
-            name="vnc_type",
-            description="Find an input element on the VNC desktop by description, click to focus, then type text.",
-            category=ToolCategory.VNC,
-            parameters=(
-                ToolParameter(
-                    name="description",
-                    type="string",
-                    description="Natural language description of the input element.",
-                    required=True,
-                ),
-                ToolParameter(
-                    name="text",
-                    type="string",
-                    description="Text to type into the element.",
-                    required=True,
-                ),
-            ),
-        ),
-        ToolDefinition(
-            name="vnc_hover",
-            description="Hover over an element on the VNC desktop found by vision-based natural-language description.",
-            category=ToolCategory.VNC,
-            parameters=(
-                ToolParameter(
-                    name="description",
-                    type="string",
-                    description="Natural language description of the element to hover over.",
-                    required=True,
-                ),
-            ),
-        ),
-        ToolDefinition(
-            name="vnc_key_press",
-            description="Press a key or key combination via VNC (e.g., 'Return', 'ctrl-a', 'alt-F4').",
-            category=ToolCategory.VNC,
-            parameters=(
-                ToolParameter(
-                    name="keys",
-                    type="string",
-                    description="Key or key combination to press (X11 keysym names).",
-                    required=True,
-                ),
-            ),
-        ),
-    )
-
-
 def get_all_tool_definitions() -> tuple[ToolDefinition, ...]:
-    return (
-        *get_shell_tool_definitions(),
-        *get_screen_tool_definitions(),
-        *get_browser_tool_definitions(),
-        *get_vnc_tool_definitions(),
-    )
+    return get_controller_tool_definitions() + get_browser_tool_definitions()

@@ -170,7 +170,7 @@ def test_serialize_tools() -> None:
     tool = ToolDefinition(
         name="run_shell",
         description="Execute a shell command",
-        category=ToolCategory.SHELL,
+        category=ToolCategory.CONTROLLER,
         parameters=(param1, param2, param3),
     )
     serialized = _serialize_tools((tool,))
@@ -419,7 +419,7 @@ def test_send_chat_completion_with_tools(mock_client_class: MagicMock) -> None:
     tool = ToolDefinition(
         name="shell",
         description="Run shell",
-        category=ToolCategory.SHELL,
+        category=ToolCategory.CONTROLLER,
         parameters=(param,),
     )
     response = send_chat_completion(config, messages, tools=(tool,))

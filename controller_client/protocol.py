@@ -11,6 +11,8 @@ class MessageType(StrEnum):
     HANDSHAKE = "handshake"
     ACTION_RESULT = "action_result"
     SCREENSHOT_RESPONSE = "screenshot_response"
+    COMMAND_RESULT = "command_result"
+    BROWSER_CONTENT_RESULT = "browser_content_result"
     ERROR = "error"
     PONG = "pong"
     HANDSHAKE_ACK = "handshake_ack"
@@ -20,7 +22,16 @@ class MessageType(StrEnum):
     TYPE_TEXT = "type_text"
     KEY_PRESS = "key_press"
     SCREENSHOT_REQUEST = "screenshot_request"
+    RUN_COMMAND = "run_command"
     PING = "ping"
+    BROWSER_NAVIGATE = "browser_navigate"
+    BROWSER_CLICK = "browser_click"
+    BROWSER_TYPE = "browser_type"
+    BROWSER_HOVER = "browser_hover"
+    BROWSER_GET_ELEMENTS = "browser_get_elements"
+    BROWSER_GET_PAGE_CONTENT = "browser_get_page_content"
+    BROWSER_GET_URL = "browser_get_url"
+    BROWSER_TAKE_SCREENSHOT = "browser_take_screenshot"
 
 
 class MouseButton(StrEnum):
@@ -106,6 +117,49 @@ class TypeTextPayload:
 @dataclass(frozen=True)
 class KeyPressPayload:
     keys: str
+
+
+@dataclass(frozen=True)
+class RunCommandPayload:
+    command: str
+    timeout: float
+
+
+@dataclass(frozen=True)
+class CommandResultPayload:
+    success: bool
+    stdout: str
+    stderr: str
+    return_code: int
+    duration_ms: float
+
+
+@dataclass(frozen=True)
+class BrowserNavigatePayload:
+    url: str
+
+
+@dataclass(frozen=True)
+class BrowserClickPayload:
+    element_index: int
+
+
+@dataclass(frozen=True)
+class BrowserTypePayload:
+    element_index: int
+    text: str
+
+
+@dataclass(frozen=True)
+class BrowserHoverPayload:
+    element_index: int
+
+
+@dataclass(frozen=True)
+class BrowserContentResultPayload:
+    success: bool
+    content: str
+    duration_ms: float
 
 
 def serialize_message(
@@ -215,4 +269,36 @@ def parse_type_text_payload(data: dict[str, object]) -> TypeTextPayload:
 def parse_key_press_payload(data: dict[str, object]) -> KeyPressPayload:
     return KeyPressPayload(
         keys=_extract_str(data, "keys"),
+    )
+
+
+def parse_run_command_payload(data: dict[str, object]) -> RunCommandPayload:
+    return RunCommandPayload(
+        command=_extract_str(data, "command"),
+        timeout=_extract_number(data, "timeout", default=30.0),
+    )
+
+
+def parse_browser_navigate_payload(data: dict[str, object]) -> BrowserNavigatePayload:
+    return BrowserNavigatePayload(
+        url=_extract_str(data, "url"),
+    )
+
+
+def parse_browser_click_payload(data: dict[str, object]) -> BrowserClickPayload:
+    return BrowserClickPayload(
+        element_index=_extract_int(data, "element_index"),
+    )
+
+
+def parse_browser_type_payload(data: dict[str, object]) -> BrowserTypePayload:
+    return BrowserTypePayload(
+        element_index=_extract_int(data, "element_index"),
+        text=_extract_str(data, "text"),
+    )
+
+
+def parse_browser_hover_payload(data: dict[str, object]) -> BrowserHoverPayload:
+    return BrowserHoverPayload(
+        element_index=_extract_int(data, "element_index"),
     )
