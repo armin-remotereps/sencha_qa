@@ -6,10 +6,12 @@ import pytest
 from django.test import override_settings
 
 from agents.services.agent_loop import (
+    _build_environment_context,
     _build_role_description,
     _build_task_section,
     _build_tool_guidelines,
     _build_tool_result_message,
+    _get_os_name,
     _run_agent_loop,
     build_agent_config,
     build_system_prompt,
@@ -51,9 +53,9 @@ def mock_tool_definitions() -> tuple[ToolDefinition, ...]:
 
 
 def test_build_system_prompt() -> None:
-    """Test that build_system_prompt includes the task description."""
+    """Test that build_system_prompt includes the task description for Linux."""
     task = "Install Firefox and open Google"
-    prompt = build_system_prompt(task)
+    prompt = build_system_prompt(task, system_info={"os": "Linux"})
 
     assert "Install Firefox and open Google" in prompt
     assert "strict QA tester" in prompt
@@ -74,7 +76,7 @@ def test_build_system_prompt() -> None:
 
 def test_build_system_prompt_vision_tools() -> None:
     """Test that build_system_prompt includes vision-based tool examples."""
-    prompt = build_system_prompt("test task")
+    prompt = build_system_prompt("test task", system_info=None)
 
     assert "vision" in prompt.lower()
     assert "click" in prompt
@@ -82,6 +84,75 @@ def test_build_system_prompt_vision_tools() -> None:
     assert "drag" in prompt
     assert "take_screenshot" in prompt
     assert "description" in prompt
+
+
+def test_build_system_prompt_macos() -> None:
+    """Test that macOS system_info produces macOS-specific prompt."""
+    prompt = build_system_prompt("test task", system_info={"os": "Darwin"})
+
+    assert "macOS" in prompt
+    assert "brew" in prompt
+    assert "/Applications/" in prompt
+    assert "XFCE4" not in prompt
+    assert "apt-get" not in prompt
+    assert "Ubuntu" not in prompt
+
+
+def test_build_system_prompt_windows() -> None:
+    """Test that Windows system_info produces Windows-specific prompt."""
+    prompt = build_system_prompt("test task", system_info={"os": "Windows"})
+
+    assert "Windows" in prompt
+    assert "winget" in prompt
+    assert "XFCE4" not in prompt
+    assert "apt-get" not in prompt
+
+
+def test_build_system_prompt_no_system_info() -> None:
+    """Test that None system_info falls back to Linux."""
+    prompt = build_system_prompt("test task", system_info=None)
+
+    assert "Linux desktop environment" in prompt
+    assert "XFCE4" in prompt
+
+
+def test_build_system_prompt_empty_dict() -> None:
+    """Test that empty dict system_info falls back to Linux."""
+    prompt = build_system_prompt("test task", system_info={})
+
+    assert "Linux desktop environment" in prompt
+    assert "XFCE4" in prompt
+
+
+def test_get_os_name_variants() -> None:
+    """Test _get_os_name with various inputs."""
+    assert _get_os_name(None) == "Linux"
+    assert _get_os_name({}) == "Linux"
+    assert _get_os_name({"os": "Darwin"}) == "Darwin"
+    assert _get_os_name({"os": "Windows"}) == "Windows"
+    assert _get_os_name({"os": "Linux"}) == "Linux"
+
+
+def test_build_environment_context_darwin() -> None:
+    """Test that Darwin environment context mentions macOS specifics."""
+    ctx = _build_environment_context(system_info={"os": "Darwin"})
+    assert "macOS" in ctx
+    assert "brew" in ctx
+    assert "/Applications/" in ctx
+
+
+def test_build_environment_context_windows() -> None:
+    """Test that Windows environment context mentions Windows specifics."""
+    ctx = _build_environment_context(system_info={"os": "Windows"})
+    assert "Windows" in ctx
+    assert "winget" in ctx
+
+
+def test_build_environment_context_linux_fallback() -> None:
+    """Test that Linux/default environment context uses XFCE4."""
+    ctx = _build_environment_context(system_info=None)
+    assert "XFCE4" in ctx
+    assert "display :0" in ctx
 
 
 @override_settings(

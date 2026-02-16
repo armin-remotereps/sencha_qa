@@ -1125,7 +1125,12 @@ def execute_test_run_test_case(pivot_id: int) -> None:
         )
         task_description = _build_task_description(pivot.test_case)
 
-        result = run_agent(task_description, project.id, config=config)
+        result = run_agent(
+            task_description,
+            project.id,
+            config=config,
+            system_info=project.agent_system_info or None,
+        )
         _finalize_pivot(pivot, result)
     except Exception as exc:
         logger.exception("execute_test_run_test_case failed for pivot %d", pivot_id)

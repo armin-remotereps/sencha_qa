@@ -7,6 +7,7 @@ from asgiref.sync import async_to_sync
 from celery import Task, shared_task
 from channels.layers import get_channel_layer
 from django.db import transaction
+
 from projects.models import TestCaseUpload, UploadStatus
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -87,7 +88,7 @@ def _handle_failure(upload: TestCaseUpload) -> None:
     _send_upload_progress(upload)
 
 
-@shared_task(  # type: ignore[misc]
+@shared_task(  # type: ignore[untyped-decorator]
     bind=True,
     name="projects.tasks.process_xml_upload",
     queue="upload",
@@ -133,7 +134,7 @@ def process_xml_upload(self: Task[None, None], upload_id: int) -> None:
         _handle_failure(upload)
 
 
-@shared_task(  # type: ignore[misc]
+@shared_task(  # type: ignore[untyped-decorator]
     bind=True,
     name="projects.tasks.execute_test_run_case",
     queue="execution",

@@ -35,31 +35,54 @@ def _debug_log(message: str, on_log: Callable[[str], None] | None) -> None:
         on_log(message)
 
 
-def build_system_prompt(task_description: str) -> str:
+def build_system_prompt(
+    task_description: str,
+    *,
+    system_info: dict[str, object] | None = None,
+) -> str:
     return "\n\n".join(
         [
-            _build_role_description(),
+            _build_role_description(system_info=system_info),
             _build_tool_guidelines(),
             _build_task_section(task_description),
         ]
     )
 
 
-def _build_role_description() -> str:
+def _build_role_description(
+    *,
+    system_info: dict[str, object] | None = None,
+) -> str:
     return "\n\n".join(
         [
-            _build_agent_persona(),
+            _build_agent_persona(system_info=system_info),
             _build_qa_rules(),
             _build_tool_taxonomy(),
-            _build_environment_context(),
+            _build_environment_context(system_info=system_info),
         ]
     )
 
 
-def _build_agent_persona() -> str:
+def _get_os_name(system_info: dict[str, object] | None) -> str:
+    if not system_info:
+        return "Linux"
+    return str(system_info.get("os", "Linux"))
+
+
+def _build_agent_persona(
+    *,
+    system_info: dict[str, object] | None = None,
+) -> str:
+    os_name = _get_os_name(system_info)
+    if os_name == "Darwin":
+        env_description = "a macOS desktop environment"
+    elif os_name == "Windows":
+        env_description = "a Windows desktop environment"
+    else:
+        env_description = "a Linux desktop environment (Ubuntu 24.04 with XFCE4)"
     return (
-        "You are a strict QA tester operating inside a Linux desktop environment "
-        "(Ubuntu 24.04 with XFCE4). Your job is to execute test cases exactly as written "
+        f"You are a strict QA tester operating inside {env_description}. "
+        "Your job is to execute test cases exactly as written "
         "and report honest results."
     )
 
@@ -100,7 +123,33 @@ def _build_tool_taxonomy() -> str:
     )
 
 
-def _build_environment_context() -> str:
+def _build_environment_context(
+    *,
+    system_info: dict[str, object] | None = None,
+) -> str:
+    os_name = _get_os_name(system_info)
+    if os_name == "Darwin":
+        return (
+            "ENVIRONMENT:\n"
+            "- This is a macOS system.\n"
+            "- Chromium browser is available via browser tools (Playwright). "
+            "Use browser_navigate to open a URL.\n"
+            "- Package manager: Use `brew` for CLI packages. GUI apps are typically "
+            "in /Applications/ and can be installed via .dmg or `brew install --cask`.\n"
+            "- Before running privileged commands, check your user with `whoami` and "
+            "whether `sudo` is available."
+        )
+    if os_name == "Windows":
+        return (
+            "ENVIRONMENT:\n"
+            "- This is a Windows system.\n"
+            "- Chromium browser is available via browser tools (Playwright). "
+            "Use browser_navigate to open a URL.\n"
+            "- Package manager: Use `winget` or `choco` if available. Programs are "
+            "typically installed via .exe or .msi installers.\n"
+            "- Before running privileged commands, check your user and whether you "
+            "have administrator privileges."
+        )
     return (
         "ENVIRONMENT:\n"
         "- The desktop (XFCE4) is already running on display :0\n"
@@ -180,6 +229,7 @@ def run_agent(
     project_id: int,
     *,
     config: AgentConfig | None = None,
+    system_info: dict[str, object] | None = None,
 ) -> AgentResult:
     if config is None:
         config = build_agent_config()
@@ -200,7 +250,9 @@ def run_agent(
         vision_config=config.vision_dmr,
         on_screenshot=config.on_screenshot,
     )
-    return _run_agent_loop(task_description, context, config=config)
+    return _run_agent_loop(
+        task_description, context, config=config, system_info=system_info
+    )
 
 
 def _run_agent_loop(
@@ -208,8 +260,9 @@ def _run_agent_loop(
     context: ToolContext,
     *,
     config: AgentConfig,
+    system_info: dict[str, object] | None = None,
 ) -> AgentResult:
-    system_prompt = build_system_prompt(task_description)
+    system_prompt = build_system_prompt(task_description, system_info=system_info)
     tool_definitions = get_all_tool_definitions()
 
     messages: list[ChatMessage] = [
