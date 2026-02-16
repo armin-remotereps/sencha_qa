@@ -104,6 +104,7 @@ services:
         depends_on:
             - "upload-celery"
             - "execution-celery"
+            - "beat-celery"
         ports:
             - "127.0.0.1:5555:5555"
         entrypoint: "python -m celery -A auto_tester flower --basic-auth=sencha:1qaz2wsx --url-prefix=flower"
