@@ -28,7 +28,7 @@ services:
         env_file:
             - "./.env"
         volumes:
-            - "STATIC:/src/static"
+            - "STATIC:/src/staticfiles"
             - "MEDIA:/src/media"
         entrypoint: "python manage.py collectstatic --noinput"
 
@@ -44,7 +44,7 @@ services:
         ports:
             - "127.0.0.1:8000:8000"
         volumes:
-            - "STATIC:/src/static"
+            - "STATIC:/src/staticfiles"
             - "MEDIA:/src/media"
         entrypoint: "python -m daphne -b 0.0.0.0 -p 8000 auto_tester.asgi:application"
 
@@ -59,7 +59,7 @@ services:
             - "db"
             - "redis"
         volumes:
-            - "STATIC:/src/static"
+            - "STATIC:/src/staticfiles"
             - "MEDIA:/src/media"
         entrypoint: "python -m celery -A auto_tester worker -l INFO -Q upload,celery --concurrency=5"
 
@@ -76,7 +76,7 @@ services:
         extra_hosts:
             - "host.docker.internal:host-gateway"
         volumes:
-            - "STATIC:/src/static"
+            - "STATIC:/src/staticfiles"
             - "MEDIA:/src/media"
             - /var/run/docker.sock:/var/run/docker.sock
         entrypoint: "python -m celery -A auto_tester worker -l INFO -Q execution --concurrency=2"
@@ -119,7 +119,7 @@ services:
             - "80:80"
             - "443:443"
         volumes:
-            - "STATIC:/src/static"
+            - "STATIC:/src/staticfiles"
             - "MEDIA:/src/media"
             - "./nginx/server.conf:/etc/nginx/conf.d/server.conf:ro"
             - "LETSENCRYPT:/etc/letsencrypt"
