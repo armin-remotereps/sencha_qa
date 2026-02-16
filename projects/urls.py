@@ -18,6 +18,11 @@ urlpatterns: list[URLPattern] = [
         name="regenerate_api_key",
     ),
     path(
+        "<int:project_id>/download-client/",
+        views.download_controller_client,
+        name="download_controller_client",
+    ),
+    path(
         "<int:project_id>/test-cases/",
         views.test_case_list,
         name="test_case_list",

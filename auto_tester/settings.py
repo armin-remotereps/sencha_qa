@@ -28,7 +28,6 @@ INSTALLED_APPS: list[str] = [
     "accounts",
     "dashboard",
     "projects",
-    "environments",
     "agents",
     "omniparser_wrapper",
 ]
@@ -191,11 +190,6 @@ LOGGING = {
             "level": LOG_LEVEL,
             "propagate": False,
         },
-        "environments": {
-            "handlers": ["console"],
-            "level": LOG_LEVEL,
-            "propagate": False,
-        },
         "projects": {
             "handlers": ["console"],
             "level": LOG_LEVEL,
@@ -232,30 +226,13 @@ VISION_BACKEND: str = config("VISION_BACKEND", default="dmr", cast=str)
 AGENT_MAX_ITERATIONS: int = config("AGENT_MAX_ITERATIONS", default=30, cast=int)
 AGENT_TIMEOUT_SECONDS: int = config("AGENT_TIMEOUT_SECONDS", default=300, cast=int)
 
-# Docker
-DOCKER_HOST: str = config(
-    "DOCKER_HOST", default="unix:///var/run/docker.sock", cast=str
-)
-
 # Upload size limits
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
 
-# Testing Environment
-ENV_IMAGE_NAME: str = config("ENV_IMAGE_NAME", default="auto-tester-env", cast=str)
-ENV_IMAGE_TAG: str = config("ENV_IMAGE_TAG", default="latest", cast=str)
-ENV_VNC_PASSWORD: str = config("ENV_VNC_PASSWORD", default="testpass123", cast=str)
-ENV_CONTAINER_PREFIX: str = config(
-    "ENV_CONTAINER_PREFIX", default="auto-tester-env", cast=str
-)
-ENV_HEALTH_CHECK_TIMEOUT: int = config("ENV_HEALTH_CHECK_TIMEOUT", default=60, cast=int)
-ENV_HEALTH_CHECK_INTERVAL: int = config(
-    "ENV_HEALTH_CHECK_INTERVAL", default=2, cast=int
-)
-
 # Controller
 CONTROLLER_SERVER_HOST: str = config(
-    "CONTROLLER_SERVER_HOST", default="host.docker.internal", cast=str
+    "CONTROLLER_SERVER_HOST", default="localhost", cast=str
 )
 CONTROLLER_SERVER_PORT: int = config("CONTROLLER_SERVER_PORT", default=8000, cast=int)
 CONTROLLER_AGENT_CONNECT_TIMEOUT: int = config(

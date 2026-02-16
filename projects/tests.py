@@ -3427,16 +3427,8 @@ class ExecuteTestRunTestCaseIntegrationTests(TestCase):
     @patch("agents.services.agent_loop.run_agent")
     @patch("agents.services.agent_loop.build_agent_config")
     @patch("projects.services._wait_for_agent_connection")
-    @patch("projects.services.teardown_environment")
-    @patch("projects.services.provision_environment")
-    @patch("projects.services.close_docker_client")
-    @patch("projects.services.get_docker_client")
     def test_should_execute_full_flow_successfully(
         self,
-        mock_get_client: MagicMock,
-        mock_close_client: MagicMock,
-        mock_provision: MagicMock,
-        mock_teardown: MagicMock,
         mock_wait_agent: MagicMock,
         mock_build_config: MagicMock,
         mock_run_agent: MagicMock,
@@ -3448,16 +3440,7 @@ class ExecuteTestRunTestCaseIntegrationTests(TestCase):
             ChatMessage,
             DMRConfig,
         )
-        from environments.types import ContainerInfo, ContainerPorts
 
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        mock_provision.return_value = ContainerInfo(
-            container_id="abc123",
-            name="test-container",
-            ports=ContainerPorts(vnc=5900),
-            status="running",
-        )
         mock_build_config.return_value = AgentConfig(
             dmr=DMRConfig(host="localhost", port="12434", model="test"),
         )
@@ -3480,34 +3463,24 @@ class ExecuteTestRunTestCaseIntegrationTests(TestCase):
         call_args = mock_run_agent.call_args
         self.assertEqual(call_args[0][1], self.project.id)
 
-        mock_teardown.assert_called_once_with(mock_client, "abc123")
-        mock_close_client.assert_called_once_with(mock_client)
-
     @patch("agents.services.agent_loop.run_agent")
     @patch("agents.services.agent_loop.build_agent_config")
-    @patch("projects.services.teardown_environment")
-    @patch("projects.services.provision_environment")
-    @patch("projects.services.close_docker_client")
-    @patch("projects.services.get_docker_client")
+    @patch(
+        "projects.services._wait_for_agent_connection",
+        side_effect=Exception("Agent connection failed"),
+    )
     def test_should_handle_exception_gracefully(
         self,
-        mock_get_client: MagicMock,
-        mock_close_client: MagicMock,
-        mock_provision: MagicMock,
-        mock_teardown: MagicMock,
+        mock_wait_agent: MagicMock,
         mock_build_config: MagicMock,
         mock_run_agent: MagicMock,
     ) -> None:
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        mock_provision.side_effect = Exception("Docker failed")
-
-        with self.assertRaises(Exception, msg="Docker failed"):
+        with self.assertRaises(Exception, msg="Agent connection failed"):
             execute_test_run_test_case(self.pivot.pk)
 
         self.pivot.refresh_from_db()
         self.assertEqual(self.pivot.status, TestRunTestCaseStatus.FAILED)
-        self.assertIn("Docker failed", self.pivot.result)
+        self.assertIn("Agent connection failed", self.pivot.result)
 
     @patch("agents.services.agent_loop.run_agent")
     @patch("agents.services.agent_loop.build_agent_config")
@@ -3536,9 +3509,7 @@ class ExecuteTestRunTestCaseIntegrationTests(TestCase):
             messages=(ChatMessage(role="assistant", content="Done"),),
         )
 
-        with patch("projects.services.get_docker_client") as mock_get_client:
-            execute_test_run_test_case(self.pivot.pk)
-            mock_get_client.assert_not_called()
+        execute_test_run_test_case(self.pivot.pk)
 
 
 # ============================================================================
@@ -4338,28 +4309,28 @@ class StartTestRunTests(TestCase):
         )
 
     @patch("projects.tasks.execute_test_run_case")
-    def test_should_dispatch_group_for_all_pivots(self, mock_task: MagicMock) -> None:
-        """Verify start_test_run dispatches a Celery group with all pivot ids."""
+    def test_should_dispatch_chain_for_all_pivots(self, mock_task: MagicMock) -> None:
+        """Verify start_test_run dispatches a Celery chain with all pivot ids."""
         mock_signature = MagicMock()
-        mock_task.s = MagicMock(return_value=mock_signature)
+        mock_task.si = MagicMock(return_value=mock_signature)
 
-        mock_group_result = MagicMock()
-        with patch("projects.services.group") as mock_group:
-            mock_group.return_value.apply_async = MagicMock(
-                return_value=mock_group_result
+        mock_chain_result = MagicMock()
+        with patch("projects.services.chain") as mock_chain:
+            mock_chain.return_value.apply_async = MagicMock(
+                return_value=mock_chain_result
             )
             start_test_run(self.test_run)
 
         pivot_ids = sorted([self.p1.id, self.p2.id])
-        actual_calls = sorted([c.args[0] for c in mock_task.s.call_args_list])
+        actual_calls = sorted([c.args[0] for c in mock_task.si.call_args_list])
         self.assertEqual(actual_calls, pivot_ids)
 
     @patch("projects.tasks.execute_test_run_case")
     def test_should_set_status_to_started(self, mock_task: MagicMock) -> None:
         """Verify test run status changes to STARTED."""
-        mock_task.s = MagicMock(return_value=MagicMock())
-        with patch("projects.services.group") as mock_group:
-            mock_group.return_value.apply_async = MagicMock()
+        mock_task.si = MagicMock(return_value=MagicMock())
+        with patch("projects.services.chain") as mock_chain:
+            mock_chain.return_value.apply_async = MagicMock()
             start_test_run(self.test_run)
 
         self.test_run.refresh_from_db()
@@ -4376,6 +4347,17 @@ class StartTestRunTests(TestCase):
         self.test_run.status = TestRunStatus.STARTED
         self.test_run.save()
         with self.assertRaises(ValueError):
+            start_test_run(self.test_run)
+
+    @patch("projects.tasks.execute_test_run_case")
+    def test_should_raise_when_another_run_is_active(
+        self, mock_task: MagicMock
+    ) -> None:
+        """Verify ValueError when project already has a STARTED test run."""
+        other_run = TestRun.objects.create(
+            project=self.project, status=TestRunStatus.STARTED
+        )
+        with self.assertRaises(ValueError, msg="already in progress"):
             start_test_run(self.test_run)
 
 
@@ -4532,16 +4514,13 @@ class ExecuteTestRunTestCaseBaseExceptionTests(TestCase):
             test_run=self.test_run, test_case=self.tc
         )
 
-    @patch("projects.services.close_docker_client")
-    @patch("projects.services.teardown_environment")
-    @patch("projects.services.provision_environment", side_effect=SystemExit(1))
-    @patch("projects.services.get_docker_client")
+    @patch(
+        "projects.services._wait_for_agent_connection",
+        side_effect=SystemExit(1),
+    )
     def test_should_mark_pivot_failed_on_system_exit(
         self,
-        mock_get_client: MagicMock,
-        mock_provision: MagicMock,
-        mock_teardown: MagicMock,
-        mock_close: MagicMock,
+        mock_wait_agent: MagicMock,
     ) -> None:
         """Verify pivot is marked FAILED when SystemExit is raised."""
         with self.assertRaises(SystemExit):
@@ -4550,19 +4529,13 @@ class ExecuteTestRunTestCaseBaseExceptionTests(TestCase):
         self.pivot.refresh_from_db()
         self.assertEqual(self.pivot.status, TestRunTestCaseStatus.FAILED)
 
-    @patch("projects.services.close_docker_client")
-    @patch("projects.services.teardown_environment")
     @patch(
-        "projects.services.provision_environment",
+        "projects.services._wait_for_agent_connection",
         side_effect=KeyboardInterrupt(),
     )
-    @patch("projects.services.get_docker_client")
     def test_should_mark_pivot_failed_on_keyboard_interrupt(
         self,
-        mock_get_client: MagicMock,
-        mock_provision: MagicMock,
-        mock_teardown: MagicMock,
-        mock_close: MagicMock,
+        mock_wait_agent: MagicMock,
     ) -> None:
         """Verify pivot is marked FAILED when KeyboardInterrupt is raised."""
         with self.assertRaises(KeyboardInterrupt):
@@ -4571,22 +4544,23 @@ class ExecuteTestRunTestCaseBaseExceptionTests(TestCase):
         self.pivot.refresh_from_db()
         self.assertEqual(self.pivot.status, TestRunTestCaseStatus.FAILED)
 
-    @patch("projects.services.close_docker_client")
-    @patch("projects.services.teardown_environment")
-    @patch("projects.services.provision_environment", side_effect=SystemExit(1))
-    @patch("projects.services.get_docker_client")
+    @patch(
+        "projects.services._update_test_run_status_if_needed",
+    )
+    @patch(
+        "projects.services._wait_for_agent_connection",
+        side_effect=SystemExit(1),
+    )
     def test_should_still_run_finally_block(
         self,
-        mock_get_client: MagicMock,
-        mock_provision: MagicMock,
-        mock_teardown: MagicMock,
-        mock_close: MagicMock,
+        mock_wait_agent: MagicMock,
+        mock_update_status: MagicMock,
     ) -> None:
         """Verify finally block runs cleanup even on BaseException."""
         with self.assertRaises(SystemExit):
             execute_test_run_test_case(self.pivot.id)
 
-        mock_close.assert_called_once()
+        mock_update_status.assert_called_once()
 
 
 # ============================================================================
@@ -4880,12 +4854,12 @@ class BroadcastIntegrationTests(TestCase):
         _update_test_run_status_if_needed(self.tr)
         mock_tr_bc.assert_not_called()
 
-    @patch("projects.tasks.execute_test_run_case.delay")
+    @patch("projects.services.chain")
     @patch("projects.services._broadcast_test_run_status")
     def test_start_test_run_should_broadcast(
         self,
         mock_tr_bc: MagicMock,
-        mock_task: MagicMock,
+        mock_chain: MagicMock,
     ) -> None:
         start_test_run(self.tr)
         mock_tr_bc.assert_called_once_with(self.tr)

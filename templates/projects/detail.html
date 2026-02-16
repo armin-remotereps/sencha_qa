@@ -137,6 +137,95 @@
     </div>
   </div>
 
+  {# CONTROLLER CLIENT SECTION #}
+  <div
+    x-data="{ showSetup: false, platform: 'unix' }"
+    class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-5"
+  >
+    <h2 class="mb-4 text-lg font-semibold text-zinc-100">Controller Client</h2>
+    <div class="flex items-center gap-3">
+      <form method="post" action="{% url 'projects:download_controller_client' project_id=project.id %}">
+        {% csrf_token %}
+        <button
+          type="submit"
+          class="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-600"
+        >
+          Download Controller Client
+        </button>
+      </form>
+      <button
+        @click="showSetup = !showSetup"
+        class="rounded-md bg-zinc-700 px-3 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
+      >
+        <span x-show="!showSetup">Setup Instructions</span>
+        <span x-show="showSetup">Hide Instructions</span>
+      </button>
+    </div>
+
+    <div x-show="showSetup" x-cloak class="mt-4">
+      <div class="mb-3 flex gap-2">
+        <button
+          @click="platform = 'unix'"
+          :class="platform === 'unix'
+            ? 'bg-emerald-700 text-white'
+            : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'"
+          class="rounded-md px-3 py-1.5 text-sm font-medium"
+        >
+          Linux / macOS
+        </button>
+        <button
+          @click="platform = 'cmd'"
+          :class="platform === 'cmd'
+            ? 'bg-emerald-700 text-white'
+            : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'"
+          class="rounded-md px-3 py-1.5 text-sm font-medium"
+        >
+          Windows CMD
+        </button>
+        <button
+          @click="platform = 'ps'"
+          :class="platform === 'ps'
+            ? 'bg-emerald-700 text-white'
+            : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'"
+          class="rounded-md px-3 py-1.5 text-sm font-medium"
+        >
+          Windows PowerShell
+        </button>
+      </div>
+
+      <div class="rounded-md border border-zinc-700 bg-zinc-950 p-4">
+        <ol class="list-decimal space-y-2 pl-5 text-sm text-zinc-300">
+          <li>Extract the downloaded ZIP file and <code class="text-emerald-400">cd</code> into the extracted folder</li>
+          <li>
+            Run the setup script:
+            <div x-show="platform === 'unix'" class="mt-1">
+              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">bash controller_client/scripts/setup.sh</code>
+            </div>
+            <div x-show="platform === 'cmd'" class="mt-1">
+              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">controller_client\scripts\setup.bat</code>
+            </div>
+            <div x-show="platform === 'ps'" class="mt-1">
+              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">.\controller_client\scripts\setup.ps1</code>
+            </div>
+          </li>
+          <li>The <code class="text-emerald-400">.env</code> file is pre-configured with your project's connection info</li>
+          <li>
+            Start the client:
+            <div x-show="platform === 'unix'" class="mt-1">
+              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">controller_client/.venv/bin/python -m controller_client.main</code>
+            </div>
+            <div x-show="platform === 'cmd'" class="mt-1">
+              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">controller_client\.venv\Scripts\python -m controller_client.main</code>
+            </div>
+            <div x-show="platform === 'ps'" class="mt-1">
+              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">controller_client\.venv\Scripts\python -m controller_client.main</code>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
   {# NAVIGATION LINKS #}
   <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-5">
     <h2 class="mb-4 text-lg font-semibold text-zinc-100">Project Navigation</h2>

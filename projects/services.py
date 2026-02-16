@@ -4,17 +4,20 @@ import asyncio
 import base64
 import dataclasses
 import html
+import io
 import logging
 import secrets
 import time
 import uuid
 import xml.etree.ElementTree as ET
+import zipfile
 from collections.abc import Callable
 from dataclasses import asdict
+from pathlib import Path
 from typing import Any, TypedDict
 
 from asgiref.sync import async_to_sync
-from celery import group
+from celery import chain
 from channels.layers import get_channel_layer
 from django.conf import settings
 from django.core.files.base import ContentFile
@@ -31,14 +34,6 @@ from agents.types import (
     AgentStopReason,
     ChatMessage,
     ScreenshotCallback,
-)
-from environments.services.docker_client import (
-    close_docker_client,
-    get_docker_client,
-)
-from environments.services.orchestration import (
-    provision_environment,
-    teardown_environment,
 )
 from projects.models import (
     ParsedTestCase,
@@ -920,6 +915,12 @@ def redo_test_run(test_run: TestRun) -> None:
     test_run.save(update_fields=["status", "updated_at"])
 
 
+def _has_active_test_run(project: Project) -> bool:
+    return TestRun.objects.filter(
+        project=project, status=TestRunStatus.STARTED
+    ).exists()
+
+
 def start_test_run(test_run: TestRun) -> None:
     from projects.tasks import execute_test_run_case
 
@@ -928,12 +929,14 @@ def start_test_run(test_run: TestRun) -> None:
         raise ValueError("Cannot start a test run with no test cases.")
     if test_run.status != TestRunStatus.WAITING:
         raise ValueError("Test run is not in WAITING status.")
+    if _has_active_test_run(test_run.project):
+        raise ValueError("Another test run is already in progress for this project.")
 
     test_run.status = TestRunStatus.STARTED
     test_run.save(update_fields=["status", "updated_at"])
     _broadcast_test_run_status(test_run)
 
-    group([execute_test_run_case.s(pid) for pid in pivot_ids]).apply_async()
+    chain([execute_test_run_case.si(pid) for pid in pivot_ids]).apply_async()
 
 
 def get_test_run_summary(test_run: TestRun) -> dict[str, int]:
@@ -1111,15 +1114,8 @@ def execute_test_run_test_case(pivot_id: int) -> None:
     project = pivot.test_run.project
     _mark_pivot_in_progress(pivot)
 
-    provisioned_container_id = ""
-    client = None
     try:
         if not project.agent_connected:
-            client = get_docker_client()
-            container_info = provision_environment(
-                client, name_suffix=f"trtc-{pivot_id}", api_key=project.api_key
-            )
-            provisioned_container_id = container_info.container_id
             _wait_for_agent_connection(project)
 
         on_log = _build_log_callback(pivot)
@@ -1144,10 +1140,6 @@ def execute_test_run_test_case(pivot_id: int) -> None:
         _mark_pivot_failed(pivot, str(exc))
         raise
     finally:
-        if client is not None:
-            if provisioned_container_id:
-                teardown_environment(client, provisioned_container_id)
-            close_docker_client(client)
         _update_test_run_status_if_needed(pivot.test_run)
 
 
@@ -1276,3 +1268,51 @@ def _update_test_run_status_if_needed(test_run: TestRun) -> None:
         test_run.status = TestRunStatus.DONE
         test_run.save(update_fields=["status", "updated_at"])
         _broadcast_test_run_status(test_run)
+
+
+# ============================================================================
+# CONTROLLER CLIENT DOWNLOAD SERVICES
+# ============================================================================
+
+_CONTROLLER_CLIENT_EXCLUDE_DIRS = {".venv", "__pycache__", ".pytest_cache", "tests"}
+_CONTROLLER_CLIENT_EXCLUDE_FILES = {".env"}
+
+
+def _should_include_path(relative_path: Path) -> bool:
+    for part in relative_path.parts:
+        if part in _CONTROLLER_CLIENT_EXCLUDE_DIRS:
+            return False
+    if relative_path.name in _CONTROLLER_CLIENT_EXCLUDE_FILES:
+        return False
+    return True
+
+
+def _generate_env_content(project: Project) -> str:
+    return (
+        f"CONTROLLER_HOST={settings.CONTROLLER_SERVER_HOST}\n"
+        f"CONTROLLER_PORT={settings.CONTROLLER_SERVER_PORT}\n"
+        f"CONTROLLER_API_KEY={project.api_key}\n"
+        "CONTROLLER_RECONNECT_INTERVAL=5\n"
+        "CONTROLLER_MAX_RECONNECT_ATTEMPTS=10\n"
+        "CONTROLLER_LOG_LEVEL=INFO\n"
+    )
+
+
+def generate_controller_client_zip(project: Project) -> bytes:
+    controller_dir = settings.BASE_DIR / "controller_client"
+    buffer = io.BytesIO()
+
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in sorted(controller_dir.rglob("*")):
+            if not file_path.is_file():
+                continue
+            relative = file_path.relative_to(controller_dir)
+            if not _should_include_path(relative):
+                continue
+            arcname = str(Path("controller_client") / relative)
+            zf.write(file_path, arcname)
+
+        env_content = _generate_env_content(project)
+        zf.writestr("controller_client/.env", env_content)
+
+    return buffer.getvalue()

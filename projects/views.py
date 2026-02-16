@@ -22,6 +22,7 @@ from projects.services import (
     delete_test_case,
     delete_test_run,
     delete_upload,
+    generate_controller_client_zip,
     get_all_tags_for_user,
     get_project_for_user,
     get_test_case_for_project,
@@ -143,6 +144,18 @@ def project_regenerate_api_key(request: HttpRequest, project: Project) -> HttpRe
     regenerate_api_key(project)
     messages.success(request, "API key regenerated successfully.")
     return redirect("projects:detail", project_id=project.id)
+
+
+@project_membership_required
+@require_POST
+def download_controller_client(request: HttpRequest, project: Project) -> HttpResponse:
+    """Generate and download the controller client ZIP for the project."""
+    zip_bytes = generate_controller_client_zip(project)
+    response = HttpResponse(zip_bytes, content_type="application/zip")
+    response["Content-Disposition"] = (
+        f'attachment; filename="controller-client-{project.id}.zip"'
+    )
+    return response
 
 
 # ============================================================================
