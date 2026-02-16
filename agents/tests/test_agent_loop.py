@@ -7,6 +7,7 @@ from django.test import override_settings
 
 from agents.services.agent_loop import (
     _build_environment_context,
+    _build_qa_rules,
     _build_role_description,
     _build_task_section,
     _build_tool_guidelines,
@@ -72,6 +73,8 @@ def test_build_system_prompt() -> None:
     assert "browser_navigate" in prompt
     assert "Chromium" in prompt
     assert "whoami" in prompt
+    assert "Preconditions" in prompt
+    assert "installation wizards" in prompt
 
 
 def test_build_system_prompt_vision_tools() -> None:
@@ -96,6 +99,9 @@ def test_build_system_prompt_macos() -> None:
     assert "XFCE4" not in prompt
     assert "apt-get" not in prompt
     assert "Ubuntu" not in prompt
+    assert "full desktop access" in prompt
+    assert "Finder" in prompt
+    assert "browser to download" in prompt
 
 
 def test_build_system_prompt_windows() -> None:
@@ -106,6 +112,8 @@ def test_build_system_prompt_windows() -> None:
     assert "winget" in prompt
     assert "XFCE4" not in prompt
     assert "apt-get" not in prompt
+    assert "full desktop access" in prompt
+    assert "File Explorer" in prompt
 
 
 def test_build_system_prompt_no_system_info() -> None:
@@ -799,3 +807,21 @@ def test_on_log_callback_fires_on_tool_calls(
     assert any("[Tool Call]" in msg for msg in log_messages)
     assert any("[Tool Result]" in msg for msg in log_messages)
     assert any("[Agent]" in msg for msg in log_messages)
+
+
+def test_build_qa_rules_preconditions() -> None:
+    """Test that QA rules include mandatory preconditions handling."""
+    rules = _build_qa_rules()
+
+    assert "Preconditions" in rules
+    assert "FIRST" in rules
+    assert "mandatory setup" in rules
+
+
+def test_build_tool_guidelines_download_via_browser() -> None:
+    """Test that tool guidelines include browser-based download strategy."""
+    guidelines = _build_tool_guidelines()
+
+    assert "downloading software" in guidelines
+    assert "official website" in guidelines
+    assert "installation wizards" in guidelines

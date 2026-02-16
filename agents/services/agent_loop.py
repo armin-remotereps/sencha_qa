@@ -92,6 +92,10 @@ def _build_qa_rules() -> str:
         "CRITICAL RULES:\n"
         "- You MUST follow each test step literally. If a step is ambiguous, incomplete, "
         "or impossible to execute, you MUST FAIL the test — do NOT guess, simulate, or skip.\n"
+        "- If the task includes Preconditions, you MUST execute them FIRST before starting "
+        "the test steps. Preconditions are mandatory setup actions (install software, run "
+        "scripts, configure settings), not just informational context. Execute every "
+        "precondition exactly as described.\n"
         "- If you cannot access a resource, find a UI element, or perform an action described "
         "in the test steps, FAIL the test immediately with a clear explanation of what went wrong.\n"
         "- NEVER pretend a step succeeded. NEVER fabricate results. If something does not work "
@@ -137,7 +141,12 @@ def _build_environment_context(
             "- Package manager: Use `brew` for CLI packages. GUI apps are typically "
             "in /Applications/ and can be installed via .dmg or `brew install --cask`.\n"
             "- Before running privileged commands, check your user with `whoami` and "
-            "whether `sudo` is available."
+            "whether `sudo` is available.\n"
+            "- You have full desktop access. Use desktop tools (click, type_text, key_press) "
+            "to interact with any native UI: installation wizards, dialogs, Finder, "
+            "System Preferences, etc.\n"
+            "- If a CLI install fails, use the browser to download from the official website, "
+            "then use desktop tools to complete the installation."
         )
     if os_name == "Windows":
         return (
@@ -148,7 +157,12 @@ def _build_environment_context(
             "- Package manager: Use `winget` or `choco` if available. Programs are "
             "typically installed via .exe or .msi installers.\n"
             "- Before running privileged commands, check your user and whether you "
-            "have administrator privileges."
+            "have administrator privileges.\n"
+            "- You have full desktop access. Use desktop tools (click, type_text, key_press) "
+            "to interact with any native UI: installation wizards, dialogs, File Explorer, "
+            "Settings, etc.\n"
+            "- If a CLI install fails, use the browser to download from the official website, "
+            "then use desktop tools to run the installer."
         )
     return (
         "ENVIRONMENT:\n"
@@ -156,7 +170,11 @@ def _build_environment_context(
         "- Chromium browser is available via browser tools (Playwright). "
         "Use browser_navigate to open a URL — no need to launch a browser manually.\n"
         "- Before running privileged commands, check your user with `whoami` and "
-        "whether `sudo` is available. Adapt your commands accordingly."
+        "whether `sudo` is available. Adapt your commands accordingly.\n"
+        "- You have full desktop access. Use desktop tools (click, type_text, key_press) "
+        "to interact with any native UI: dialogs, file managers, installation wizards, etc.\n"
+        "- If a CLI install fails, use the browser to download from the official website, "
+        "then use desktop tools to complete the installation."
     )
 
 
@@ -184,8 +202,14 @@ def _build_tool_guidelines() -> str:
         "WHEN TO USE WHICH:\n"
         "- For web testing, prefer browser_* tools. They are faster and more reliable than "
         "desktop tools for web interactions.\n"
-        "- Use desktop tools (click, type_text, key_press) for native desktop applications.\n"
-        "- Use execute_command for shell operations.\n\n"
+        "- For downloading software or files, use browser_navigate to go to the official "
+        "website, then browser_click to download. After downloading, use desktop tools or "
+        "execute_command to run the installer.\n"
+        "- Use desktop tools (click, type_text, key_press) for ANY native GUI interaction: "
+        "installation wizards, setup dialogs, confirmation popups, file managers, system "
+        "preferences, or any visible desktop element.\n"
+        "- Use execute_command for shell operations. If a CLI install fails, switch to the "
+        "browser download approach.\n\n"
         "SHELL RULES:\n"
         "- If you launch a GUI application or long-running process (e.g. gnome-calculator, "
         "flask run, node server.js, vim), append ' &' so it runs in the "
