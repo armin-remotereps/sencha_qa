@@ -4,7 +4,7 @@ import dataclasses
 import logging
 from typing import Callable
 
-from agents.services import tools_controller
+from agents.services import tools_controller, tools_search
 from agents.services.tool_definitions import (
     get_all_tool_definitions as get_all_tool_definitions,
 )
@@ -201,6 +201,19 @@ def _handle_browser_take_screenshot(
     )
 
 
+def _handle_web_search(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    raw_query = arguments.get("query", "")
+    if not isinstance(raw_query, str):
+        return ToolResult(
+            tool_call_id="",
+            content=f"Invalid query type: expected string, got {type(raw_query).__name__}",
+            is_error=True,
+        )
+    return tools_search.web_search(query=raw_query)
+
+
 _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "execute_command": _handle_execute_command,
     "take_screenshot": _handle_take_screenshot,
@@ -217,4 +230,5 @@ _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "browser_get_url": _handle_browser_get_url,
     "browser_take_screenshot": _handle_browser_take_screenshot,
     "browser_download": _handle_browser_download,
+    "web_search": _handle_web_search,
 }

@@ -124,7 +124,9 @@ def _build_tool_taxonomy() -> str:
         "12. browser_get_page_content — Get the text content of the current page\n"
         "13. browser_get_url — Get the current browser URL\n"
         "14. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
-        "15. browser_download — Download a file from a URL via the browser"
+        "15. browser_download — Download a file from a URL via the browser\n\n"
+        "SEARCH TOOLS (for looking up information on the web):\n"
+        "16. web_search — Search the web and return top results with titles, snippets, and URLs"
     )
 
 
@@ -213,7 +215,17 @@ def _build_tool_guidelines() -> str:
         "installation wizards, setup dialogs, confirmation popups, file managers, system "
         "preferences, or any visible desktop element.\n"
         "- Use execute_command for shell operations. If a CLI install fails, switch to the "
-        "browser download approach.\n\n"
+        "browser download approach.\n"
+        "- DESKTOP FALLBACK: If browser_click or browser_type fails because the target element "
+        "cannot be found (e.g., it is inside an iframe, shadow DOM, or a cookie consent overlay), "
+        "fall back to desktop tools: use take_screenshot to see the page, then use "
+        'click(description="...") to interact with the visible element. Desktop tools see the '
+        "full rendered screen and can reach elements that browser tools cannot.\n"
+        "- INSTALLATION LOOKUP: Before installing software, use web_search to look up the "
+        "correct install command for the current OS. This avoids guessing wrong package names "
+        "or using the wrong package manager.\n\n"
+        "SEARCH TOOLS (for looking up information on the web):\n"
+        '- web_search(query="how to install jdk 17 on macOS") — search the web and return top results\n\n'
         "SHELL RULES:\n"
         "- If you launch a GUI application or long-running process (e.g. gnome-calculator, "
         "flask run, node server.js, vim), append ' &' so it runs in the "

@@ -21,7 +21,7 @@ def test_context() -> ToolContext:
 
 def test_get_all_tool_definitions_count() -> None:
     tools = get_all_tool_definitions()
-    assert len(tools) == 15
+    assert len(tools) == 16
 
 
 def test_get_all_tool_definitions_categories() -> None:
@@ -29,6 +29,7 @@ def test_get_all_tool_definitions_categories() -> None:
     categories = {tool.category for tool in tools}
     assert ToolCategory.CONTROLLER in categories
     assert ToolCategory.BROWSER in categories
+    assert ToolCategory.SEARCH in categories
 
 
 def test_get_all_tool_definitions_valid_structure() -> None:
@@ -59,6 +60,7 @@ def test_get_all_tool_definitions_tool_names() -> None:
         "browser_get_url",
         "browser_take_screenshot",
         "browser_download",
+        "web_search",
     }
     assert names == expected
 
@@ -314,6 +316,26 @@ def test_dispatch_tool_call_browser_download_default_save_path(
     mock_download.assert_called_once_with(
         1, url="https://example.com/installer.dmg", save_path=""
     )
+
+
+def test_dispatch_tool_call_web_search(test_context: ToolContext) -> None:
+    tool_call = ToolCall(
+        tool_call_id="call_search",
+        tool_name="web_search",
+        arguments={"query": "install jdk 17 macOS"},
+    )
+    with patch("agents.services.tool_registry.tools_search.web_search") as mock_search:
+        mock_search.return_value = ToolResult(
+            tool_call_id="",
+            content="- Install JDK 17\n  Use brew install\n  https://example.com",
+            is_error=False,
+        )
+        result = dispatch_tool_call(tool_call, test_context)
+
+    assert result.tool_call_id == "call_search"
+    assert result.is_error is False
+    assert "JDK 17" in result.content
+    mock_search.assert_called_once_with(query="install jdk 17 macOS")
 
 
 def test_dispatch_take_screenshot_no_vision_config() -> None:

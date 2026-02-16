@@ -9,6 +9,7 @@ from typing import Protocol
 class ToolCategory(Enum):
     CONTROLLER = "controller"
     BROWSER = "browser"
+    SEARCH = "search"
 
 
 class AgentStopReason(Enum):

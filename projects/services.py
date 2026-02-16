@@ -383,15 +383,17 @@ def controller_screenshot(
 def controller_run_command(
     project_id: int,
     command: str,
-    timeout: float = 30.0,
 ) -> CommandResult:
     reply = _dispatch_controller_action(
         project_id,
         "controller.run_command",
-        timeout + 5.0,
+        float(settings.AGENT_TIMEOUT_SECONDS),
         command=command,
-        timeout=timeout,
     )
+    return _build_command_result(reply)
+
+
+def _build_command_result(reply: dict[str, Any]) -> CommandResult:
     return CommandResult(
         success=reply.get("success", False),
         stdout=reply.get("stdout", ""),

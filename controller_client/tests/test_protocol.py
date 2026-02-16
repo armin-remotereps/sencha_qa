@@ -215,17 +215,12 @@ class TestParseKeyPressPayload:
 
 class TestParseRunCommandPayload:
     def test_valid(self) -> None:
-        data: dict[str, object] = {"command": "echo hello", "timeout": 10.0}
+        data: dict[str, object] = {"command": "echo hello"}
         payload = parse_run_command_payload(data)
-        assert payload == RunCommandPayload(command="echo hello", timeout=10.0)
-
-    def test_default_timeout(self) -> None:
-        data: dict[str, object] = {"command": "ls"}
-        payload = parse_run_command_payload(data)
-        assert payload.timeout == 30.0
+        assert payload == RunCommandPayload(command="echo hello")
 
     def test_missing_command(self) -> None:
-        data: dict[str, object] = {"timeout": 5.0}
+        data: dict[str, object] = {}
         with pytest.raises(ProtocolError, match="command"):
             parse_run_command_payload(data)
 

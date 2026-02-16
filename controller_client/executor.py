@@ -144,16 +144,6 @@ def execute_command(payload: RunCommandPayload) -> CommandResultPayload:
             shell=True,  # noqa: S602
             capture_output=True,
             text=True,
-            timeout=payload.timeout,
-        )
-    except subprocess.TimeoutExpired:
-        duration_ms = (time.monotonic() - start) * 1000
-        return CommandResultPayload(
-            success=False,
-            stdout="",
-            stderr=f"Command timed out after {payload.timeout}s",
-            return_code=-1,
-            duration_ms=duration_ms,
         )
     except Exception as e:
         raise ExecutionError(f"Command execution failed: {e}") from e

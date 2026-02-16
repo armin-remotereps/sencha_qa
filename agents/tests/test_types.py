@@ -24,7 +24,8 @@ def test_tool_category_enum_members() -> None:
     """Test ToolCategory enum has all expected members."""
     assert ToolCategory.CONTROLLER.value == "controller"
     assert ToolCategory.BROWSER.value == "browser"
-    assert len(list(ToolCategory)) == 2
+    assert ToolCategory.SEARCH.value == "search"
+    assert len(list(ToolCategory)) == 3
 
 
 def test_agent_stop_reason_enum_members() -> None:

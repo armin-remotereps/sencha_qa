@@ -157,7 +157,7 @@ class TestExecuteBackgroundCommand:
     def test_background_command_returns_immediately(
         self, mock_popen: MagicMock
     ) -> None:
-        payload = RunCommandPayload(command="gnome-calculator &", timeout=30.0)
+        payload = RunCommandPayload(command="gnome-calculator &")
         result = execute_command(payload)
         assert result.success is True
         assert result.return_code == 0
@@ -168,7 +168,7 @@ class TestExecuteBackgroundCommand:
     @patch("controller_client.executor.subprocess.Popen")
     def test_background_command_failure(self, mock_popen: MagicMock) -> None:
         mock_popen.side_effect = OSError("spawn failed")
-        payload = RunCommandPayload(command="badapp &", timeout=30.0)
+        payload = RunCommandPayload(command="badapp &")
         with pytest.raises(ExecutionError, match="Background command failed"):
             execute_command(payload)
 
@@ -179,7 +179,7 @@ class TestExecuteCommand:
         mock_run.return_value = MagicMock(
             returncode=0, stdout="hello world\n", stderr=""
         )
-        payload = RunCommandPayload(command="echo hello world", timeout=30.0)
+        payload = RunCommandPayload(command="echo hello world")
         result = execute_command(payload)
         assert result.success is True
         assert result.stdout == "hello world\n"
@@ -191,33 +191,21 @@ class TestExecuteCommand:
             shell=True,
             capture_output=True,
             text=True,
-            timeout=30.0,
         )
 
     @patch("controller_client.executor.subprocess.run")
     def test_failing_command(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found\n")
-        payload = RunCommandPayload(command="false", timeout=30.0)
+        payload = RunCommandPayload(command="false")
         result = execute_command(payload)
         assert result.success is False
         assert result.return_code == 1
         assert result.stderr == "not found\n"
 
     @patch("controller_client.executor.subprocess.run")
-    def test_timeout(self, mock_run: MagicMock) -> None:
-        import subprocess
-
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="sleep 100", timeout=5.0)
-        payload = RunCommandPayload(command="sleep 100", timeout=5.0)
-        result = execute_command(payload)
-        assert result.success is False
-        assert result.return_code == -1
-        assert "timed out" in result.stderr.lower()
-
-    @patch("controller_client.executor.subprocess.run")
     def test_exception_raises_execution_error(self, mock_run: MagicMock) -> None:
         mock_run.side_effect = OSError("no such file")
-        payload = RunCommandPayload(command="badcmd", timeout=30.0)
+        payload = RunCommandPayload(command="badcmd")
         with pytest.raises(ExecutionError, match="Command execution failed"):
             execute_command(payload)
 

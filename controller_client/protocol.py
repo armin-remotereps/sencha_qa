@@ -123,7 +123,6 @@ class KeyPressPayload:
 @dataclass(frozen=True)
 class RunCommandPayload:
     command: str
-    timeout: float
 
 
 @dataclass(frozen=True)
@@ -282,7 +281,6 @@ def parse_key_press_payload(data: dict[str, object]) -> KeyPressPayload:
 def parse_run_command_payload(data: dict[str, object]) -> RunCommandPayload:
     return RunCommandPayload(
         command=_extract_str(data, "command"),
-        timeout=_extract_number(data, "timeout", default=30.0),
     )
 
 

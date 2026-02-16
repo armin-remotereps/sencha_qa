@@ -834,3 +834,29 @@ def test_build_tool_guidelines_browser_download() -> None:
 
     assert "browser_download" in guidelines
     assert "direct URL" in guidelines or "direct download" in guidelines
+
+
+def test_build_tool_guidelines_desktop_fallback() -> None:
+    """Test that tool guidelines include desktop fallback for iframes/shadow DOM."""
+    guidelines = _build_tool_guidelines()
+
+    assert "DESKTOP FALLBACK" in guidelines
+    assert "iframe" in guidelines
+    assert "shadow DOM" in guidelines
+    assert "cookie consent" in guidelines
+
+
+def test_build_tool_guidelines_web_search() -> None:
+    """Test that tool guidelines include web_search and installation lookup."""
+    guidelines = _build_tool_guidelines()
+
+    assert "web_search" in guidelines
+    assert "INSTALLATION LOOKUP" in guidelines
+
+
+def test_build_system_prompt_includes_search_tools() -> None:
+    """Test that system prompt includes search tool taxonomy."""
+    prompt = build_system_prompt("test task", system_info=None)
+
+    assert "SEARCH TOOLS" in prompt
+    assert "web_search" in prompt

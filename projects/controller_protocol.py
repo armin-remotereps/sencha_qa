@@ -46,7 +46,6 @@ class ScreenshotActionEvent(BaseActionEvent):
 
 class RunCommandActionEvent(BaseActionEvent):
     command: str
-    timeout: float
 
 
 class BrowserNavigateActionEvent(BaseActionEvent):
@@ -121,7 +120,7 @@ class ActionTypeRegistry:
         "controller.type_text": ("text", "interval"),
         "controller.key_press": ("keys",),
         "controller.screenshot": (),
-        "controller.run_command": ("command", "timeout"),
+        "controller.run_command": ("command",),
         "controller.browser_navigate": ("url",),
         "controller.browser_click": ("element_index",),
         "controller.browser_type": ("element_index", "text"),

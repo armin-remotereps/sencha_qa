@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from django.core.management.base import BaseCommand
+
 from projects.services import (
     CommandResult,
     ControllerActionError,
@@ -20,22 +21,13 @@ class Command(BaseCommand):
         parser.add_argument(
             "--command", type=str, required=True, help="Shell command to execute"
         )
-        parser.add_argument(
-            "--timeout",
-            type=float,
-            default=30.0,
-            help="Command timeout in seconds (default: 30)",
-        )
 
     def handle(self, *args: Any, **options: Any) -> None:
         project_id: int = options["project_id"]
         command: str = options["command"]
-        timeout: float = options["timeout"]
 
         try:
-            result: CommandResult = controller_run_command(
-                project_id, command=command, timeout=timeout
-            )
+            result: CommandResult = controller_run_command(project_id, command=command)
         except ControllerActionError as exc:
             self.stderr.write(f"ERROR: {exc}")
             return

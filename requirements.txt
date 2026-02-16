@@ -55,3 +55,4 @@ screeninfo~=0.8.1
 uiautomation~=2.0.29
 dashscope~=1.25.12
 groq~=1.0.0
+duckduckgo-search~=8.1.1

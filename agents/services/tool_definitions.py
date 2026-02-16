@@ -212,5 +212,27 @@ def get_browser_tool_definitions() -> tuple[ToolDefinition, ...]:
     )
 
 
+def get_search_tool_definitions() -> tuple[ToolDefinition, ...]:
+    return (
+        ToolDefinition(
+            name="web_search",
+            description="Search the web and return top results with titles, snippets, and URLs.",
+            category=ToolCategory.SEARCH,
+            parameters=(
+                ToolParameter(
+                    name="query",
+                    type="string",
+                    description="The search query.",
+                    required=True,
+                ),
+            ),
+        ),
+    )
+
+
 def get_all_tool_definitions() -> tuple[ToolDefinition, ...]:
-    return get_controller_tool_definitions() + get_browser_tool_definitions()
+    return (
+        get_controller_tool_definitions()
+        + get_browser_tool_definitions()
+        + get_search_tool_definitions()
+    )
