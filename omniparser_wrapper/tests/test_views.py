@@ -59,7 +59,6 @@ class ParseScreenshotViewTest(TestCase):
     def setUp(self) -> None:
         self.client = Client()
         self.url = "/omniparser/parse/"
-        self.headers = {"HTTP_X_API_KEY": "test-key"}
 
     def test_missing_api_key_returns_401(self) -> None:
         response = self.client.post(
@@ -83,7 +82,7 @@ class ParseScreenshotViewTest(TestCase):
             self.url,
             data="not json",
             content_type="application/json",
-            **self.headers,  # type: ignore[arg-type]
+            HTTP_X_API_KEY="test-key",
         )
         assert response.status_code == 400
 
@@ -92,7 +91,7 @@ class ParseScreenshotViewTest(TestCase):
             self.url,
             data=json.dumps({}),
             content_type="application/json",
-            **self.headers,  # type: ignore[arg-type]
+            HTTP_X_API_KEY="test-key",
         )
         assert response.status_code == 400
 
@@ -121,7 +120,7 @@ class ParseScreenshotViewTest(TestCase):
             self.url,
             data=json.dumps({"image_base64": "abc123"}),
             content_type="application/json",
-            **self.headers,  # type: ignore[arg-type]
+            HTTP_X_API_KEY="test-key",
         )
         assert response.status_code == 200
         data = json.loads(response.content)
@@ -140,12 +139,12 @@ class ParseScreenshotViewTest(TestCase):
             self.url,
             data=json.dumps({"image_base64": "abc123"}),
             content_type="application/json",
-            **self.headers,  # type: ignore[arg-type]
+            HTTP_X_API_KEY="test-key",
         )
         assert response.status_code == 500
 
     def test_get_method_not_allowed(self) -> None:
-        response = self.client.get(self.url, **self.headers)  # type: ignore[arg-type]
+        response = self.client.get(self.url, HTTP_X_API_KEY="test-key")
         assert response.status_code == 405
 
 
@@ -154,7 +153,6 @@ class ParseScreenshotPixelsViewTest(TestCase):
     def setUp(self) -> None:
         self.client = Client()
         self.url = "/omniparser/parse/pixels/"
-        self.headers = {"HTTP_X_API_KEY": "test-key"}
 
     def test_missing_api_key_returns_401(self) -> None:
         response = self.client.post(
@@ -169,7 +167,7 @@ class ParseScreenshotPixelsViewTest(TestCase):
             self.url,
             data="not json",
             content_type="application/json",
-            **self.headers,  # type: ignore[arg-type]
+            HTTP_X_API_KEY="test-key",
         )
         assert response.status_code == 400
 
@@ -178,7 +176,7 @@ class ParseScreenshotPixelsViewTest(TestCase):
             self.url,
             data=json.dumps({}),
             content_type="application/json",
-            **self.headers,  # type: ignore[arg-type]
+            HTTP_X_API_KEY="test-key",
         )
         assert response.status_code == 400
 
@@ -207,7 +205,7 @@ class ParseScreenshotPixelsViewTest(TestCase):
             self.url,
             data=json.dumps({"image_base64": "abc123"}),
             content_type="application/json",
-            **self.headers,  # type: ignore[arg-type]
+            HTTP_X_API_KEY="test-key",
         )
         assert response.status_code == 200
         data = json.loads(response.content)
@@ -225,6 +223,6 @@ class ParseScreenshotPixelsViewTest(TestCase):
             self.url,
             data=json.dumps({"image_base64": "abc123"}),
             content_type="application/json",
-            **self.headers,  # type: ignore[arg-type]
+            HTTP_X_API_KEY="test-key",
         )
         assert response.status_code == 500

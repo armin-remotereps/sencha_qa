@@ -5,6 +5,8 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 from asgiref.sync import sync_to_async
 from django.contrib.admin.sites import AdminSite
 from django.db import IntegrityError
+from django.forms import ChoiceField
+from django.http import HttpResponseRedirect
 from django.test import RequestFactory, TestCase, TransactionTestCase
 from django.urls import reverse
 
@@ -199,7 +201,9 @@ class CreateProjectServiceTests(TestCase):
         # Should only have 1 tag, not 4 (1 initial + 1 added, not 3)
         self.assertEqual(Tag.objects.count(), initial_tag_count)
         self.assertEqual(project.tags.count(), 1)
-        self.assertEqual(project.tags.first().name, "existing")  # type: ignore[union-attr]
+        first_tag = project.tags.first()
+        assert first_tag is not None
+        self.assertEqual(first_tag.name, "existing")
 
     def test_should_handle_empty_tags_list(self) -> None:
         project = create_project(
@@ -342,8 +346,8 @@ class GetProjectForUserServiceTests(TestCase):
 
     def test_should_return_project_when_user_is_member(self) -> None:
         result = get_project_for_user(self.project.id, self.owner)
-        self.assertIsNotNone(result)
-        self.assertEqual(result.id, self.project.id)  # type: ignore[union-attr]
+        assert result is not None
+        self.assertEqual(result.id, self.project.id)
 
     def test_should_return_none_when_user_not_member(self) -> None:
         result = get_project_for_user(self.project.id, self.non_member)
@@ -380,8 +384,8 @@ class GetProjectByIdServiceTests(TestCase):
     def test_should_return_project_when_user_is_member_even_if_archived(self) -> None:
         archive_project(self.project)
         result = get_project_by_id(self.project.id, self.owner)
-        self.assertIsNotNone(result)
-        self.assertEqual(result.id, self.project.id)  # type: ignore[union-attr]
+        assert result is not None
+        self.assertEqual(result.id, self.project.id)
 
     def test_should_return_none_when_user_not_member(self) -> None:
         result = get_project_by_id(self.project.id, self.non_member)
@@ -691,7 +695,8 @@ class ProjectListViewTests(TestCase):
     def test_should_redirect_when_unauthenticated(self) -> None:
         response = self.client.get(reverse("projects:list"))
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_return_200_with_correct_template_when_authenticated(self) -> None:
         self.client.force_login(self.user)
@@ -737,7 +742,8 @@ class ProjectCreateViewTests(TestCase):
             {"name": "New Project", "tags": "python"},
         )
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_return_405_for_get_request(self) -> None:
         self.client.force_login(self.user)
@@ -788,7 +794,8 @@ class ProjectEditViewTests(TestCase):
             {"name": "Updated Name", "tags": "python"},
         )
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_return_405_for_get_request(self) -> None:
         self.client.force_login(self.user)
@@ -844,7 +851,8 @@ class ProjectArchiveViewTests(TestCase):
     def test_should_redirect_when_unauthenticated(self) -> None:
         response = self.client.post(reverse("projects:archive", args=[self.project.id]))
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_return_405_for_get_request(self) -> None:
         self.client.force_login(self.user)
@@ -1159,9 +1167,9 @@ class TestCaseServiceTests(TestCase):
             data=TestCaseData(title="Valid Test Case"),
         )
         retrieved = get_test_case_for_project(test_case.id, self.project)
-        self.assertIsNotNone(retrieved)
-        self.assertEqual(retrieved.id, test_case.id)  # type: ignore[union-attr]
-        self.assertEqual(retrieved.title, "Valid Test Case")  # type: ignore[union-attr]
+        assert retrieved is not None
+        self.assertEqual(retrieved.id, test_case.id)
+        self.assertEqual(retrieved.title, "Valid Test Case")
 
     def test_should_return_none_when_test_case_in_different_project(self) -> None:
         """Verify service enforces project boundaries - cannot access other project's test cases."""
@@ -1323,7 +1331,10 @@ class TestCaseFormTests(TestCase):
     def test_should_have_correct_type_choices(self) -> None:
         """Verify type field has all TestCaseType choices."""
         form = TestCaseForm()
-        type_choices = dict(form.fields["type"].choices)  # type: ignore[attr-defined]
+        type_field = form.fields["type"]
+        assert isinstance(type_field, ChoiceField)
+        choices: Any = type_field.choices
+        type_choices = dict(choices)
         self.assertIn(TestCaseType.FUNCTIONAL, type_choices)
         self.assertIn(TestCaseType.SECURITY, type_choices)
         self.assertIn(TestCaseType.PERFORMANCE, type_choices)
@@ -1333,7 +1344,10 @@ class TestCaseFormTests(TestCase):
     def test_should_have_correct_priority_choices(self) -> None:
         """Verify priority field has all TestCasePriority choices."""
         form = TestCaseForm()
-        priority_choices = dict(form.fields["priority"].choices)  # type: ignore[attr-defined]
+        priority_field = form.fields["priority"]
+        assert isinstance(priority_field, ChoiceField)
+        choices: Any = priority_field.choices
+        priority_choices = dict(choices)
         self.assertIn(TestCasePriority.DONT_TEST, priority_choices)
         self.assertIn(TestCasePriority.TEST_IF_TIME_LOW, priority_choices)
         self.assertIn(TestCasePriority.TEST_IF_TIME_MID, priority_choices)
@@ -1374,7 +1388,8 @@ class TestCaseViewTests(TestCase):
         url = reverse("projects:test_case_list", args=[self.project.id])
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_return_404_when_user_not_project_member(self) -> None:
         """Verify non-members cannot access project's test cases."""
@@ -1420,7 +1435,8 @@ class TestCaseViewTests(TestCase):
         url = reverse("projects:test_case_create", args=[self.project.id])
         response = self.client.post(url, {"title": "New Test"})
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_require_membership_for_test_case_create(self) -> None:
         """Verify non-members cannot create test cases."""
@@ -1456,8 +1472,9 @@ class TestCaseViewTests(TestCase):
             },
         )
         self.assertEqual(response.status_code, 302)
+        assert isinstance(response, HttpResponseRedirect)
         self.assertEqual(
-            response.url,  # type: ignore[attr-defined]
+            response.url,
             reverse("projects:test_case_list", args=[self.project.id]),
         )
 
@@ -1481,7 +1498,8 @@ class TestCaseViewTests(TestCase):
         url = reverse("projects:test_case_edit", args=[self.project.id, test_case.id])
         response = self.client.post(url, {"title": "Updated"})
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_require_membership_for_test_case_edit(self) -> None:
         """Verify non-members cannot edit test cases."""
@@ -1523,8 +1541,9 @@ class TestCaseViewTests(TestCase):
             },
         )
         self.assertEqual(response.status_code, 302)
+        assert isinstance(response, HttpResponseRedirect)
         self.assertEqual(
-            response.url,  # type: ignore[attr-defined]
+            response.url,
             reverse("projects:test_case_list", args=[self.project.id]),
         )
 
@@ -1583,7 +1602,8 @@ class TestCaseViewTests(TestCase):
         url = reverse("projects:test_case_delete", args=[self.project.id, test_case.id])
         response = self.client.post(url)
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_require_membership_for_test_case_delete(self) -> None:
         """Verify non-members cannot delete test cases."""
@@ -1606,8 +1626,9 @@ class TestCaseViewTests(TestCase):
         url = reverse("projects:test_case_delete", args=[self.project.id, test_case.id])
         response = self.client.post(url)
         self.assertEqual(response.status_code, 302)
+        assert isinstance(response, HttpResponseRedirect)
         self.assertEqual(
-            response.url,  # type: ignore[attr-defined]
+            response.url,
             reverse("projects:test_case_list", args=[self.project.id]),
         )
 
@@ -2101,8 +2122,8 @@ class GetUploadForProjectServiceTests(TestCase):
     def test_should_return_upload_when_valid(self) -> None:
         """Verify returns upload when it belongs to the given project."""
         result = self.get_upload_for_project(self.upload.id, self.project)
-        self.assertIsNotNone(result)
-        self.assertEqual(result.id, self.upload.id)  # type: ignore[union-attr]
+        assert result is not None
+        self.assertEqual(result.id, self.upload.id)
 
     def test_should_return_none_when_upload_in_different_project(self) -> None:
         """Verify returns None when upload belongs to a different project."""
@@ -2782,7 +2803,8 @@ class UploadListViewTests(TestCase):
         url = reverse("projects:upload_list", args=[self.project.id])
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_return_404_when_user_not_project_member(self) -> None:
         """Verify non-members cannot access upload list."""
@@ -2844,7 +2866,8 @@ class UploadCreateViewTests(TestCase):
         )
         response = self.client.post(url, {"file": xml_file})
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_return_404_when_user_not_project_member(self) -> None:
         """Verify non-members cannot upload files."""
@@ -2944,7 +2967,8 @@ class UploadCancelViewTests(TestCase):
         url = reverse("projects:upload_cancel", args=[self.project.id, self.upload.id])
         response = self.client.post(url)
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_return_404_when_user_not_project_member(self) -> None:
         """Verify non-members cannot cancel uploads."""
@@ -3003,7 +3027,8 @@ class UploadDeleteViewTests(TestCase):
         url = reverse("projects:upload_delete", args=[self.project.id, self.upload.id])
         response = self.client.post(url)
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_return_404_when_user_not_project_member(self) -> None:
         """Verify non-members cannot delete uploads."""
@@ -3791,8 +3816,8 @@ class GetTestRunForProjectTests(TestCase):
     def test_should_return_test_run(self) -> None:
         """Verify test run is returned when it exists for the project."""
         result = get_test_run_for_project(self.test_run.id, self.project)
-        self.assertIsNotNone(result)
-        self.assertEqual(result.id, self.test_run.id)  # type: ignore[union-attr]
+        assert result is not None
+        self.assertEqual(result.id, self.test_run.id)
 
     def test_should_return_none_for_nonexistent_id(self) -> None:
         """Verify None is returned when test run ID does not exist."""
@@ -3820,8 +3845,8 @@ class GetTestRunCaseDetailTests(TestCase):
     def test_should_return_pivot(self) -> None:
         """Verify pivot is returned when it exists for the project."""
         result = get_test_run_case_detail(self.pivot.id, self.project)
-        self.assertIsNotNone(result)
-        self.assertEqual(result.id, self.pivot.id)  # type: ignore[union-attr]
+        assert result is not None
+        self.assertEqual(result.id, self.pivot.id)
 
     def test_should_return_none_for_nonexistent_pivot(self) -> None:
         """Verify None is returned when pivot ID does not exist."""
@@ -3895,7 +3920,9 @@ class ListWaitingTestRunsForProjectTests(TestCase):
 
         result = list_waiting_test_runs_for_project(self.project)
         self.assertEqual(result.count(), 1)
-        self.assertEqual(result.first().id, tr1.id)  # type: ignore[union-attr]
+        first_run = result.first()
+        assert first_run is not None
+        self.assertEqual(first_run.id, tr1.id)
 
     def test_should_filter_by_project(self) -> None:
         """Verify only test runs for the specified project are returned."""
@@ -3975,7 +4002,8 @@ class TestRunListViewTests(TestCase):
         url = reverse("projects:test_run_list", args=[self.project.id])
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_require_membership(self) -> None:
         """Verify non-members cannot access project's test runs."""
@@ -4021,7 +4049,8 @@ class TestRunCreateViewTests(TestCase):
         url = reverse("projects:test_run_create", args=[self.project.id])
         response = self.client.post(url, {"test_case_ids": [self.tc1.id]})
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_require_membership(self) -> None:
         """Verify non-members cannot create test runs."""
@@ -4039,9 +4068,10 @@ class TestRunCreateViewTests(TestCase):
 
         test_run = TestRun.objects.get(project=self.project)
         self.assertEqual(TestRunTestCase.objects.filter(test_run=test_run).count(), 2)
+        assert isinstance(response, HttpResponseRedirect)
         self.assertIn(
             reverse("projects:test_run_detail", args=[self.project.id, test_run.id]),
-            response.url,  # type: ignore[attr-defined]
+            response.url,
         )
 
     def test_should_redirect_to_test_case_list_when_empty(self) -> None:
@@ -4050,8 +4080,9 @@ class TestRunCreateViewTests(TestCase):
         url = reverse("projects:test_run_create", args=[self.project.id])
         response = self.client.post(url, {"test_case_ids": []})
         self.assertEqual(response.status_code, 302)
+        assert isinstance(response, HttpResponseRedirect)
         self.assertEqual(
-            response.url,  # type: ignore[attr-defined]
+            response.url,
             reverse("projects:test_case_list", args=[self.project.id]),
         )
 
@@ -4085,7 +4116,8 @@ class TestRunAddCasesViewTests(TestCase):
         )
         response = self.client.post(url, {"test_case_ids": [self.tc1.id]})
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_require_membership(self) -> None:
         """Verify non-members cannot add cases to test runs."""
@@ -4107,11 +4139,12 @@ class TestRunAddCasesViewTests(TestCase):
         self.assertEqual(
             TestRunTestCase.objects.filter(test_run=self.test_run).count(), 2
         )
+        assert isinstance(response, HttpResponseRedirect)
         self.assertIn(
             reverse(
                 "projects:test_run_detail", args=[self.project.id, self.test_run.id]
             ),
-            response.url,  # type: ignore[attr-defined]
+            response.url,
         )
 
     def test_should_return_404_for_nonexistent_test_run(self) -> None:
@@ -4154,7 +4187,8 @@ class TestRunDetailViewTests(TestCase):
         )
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_require_membership(self) -> None:
         """Verify non-members cannot access test run details."""
@@ -4229,7 +4263,8 @@ class TestRunCaseDetailViewTests(TestCase):
         )
         response = self.client.get(url)
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_require_membership(self) -> None:
         """Verify non-members cannot access test run case details."""
@@ -4381,7 +4416,7 @@ class ExecuteTestRunCaseTaskTests(TestCase):
         """Verify task is routed to execution queue."""
         from projects.tasks import execute_test_run_case
 
-        self.assertEqual(execute_test_run_case.queue, "execution")
+        self.assertEqual(getattr(execute_test_run_case, "queue"), "execution")
 
     def test_should_have_zero_max_retries(self) -> None:
         """Verify task does not retry."""
@@ -4444,7 +4479,8 @@ class TestRunStartViewTests(TestCase):
         )
         response = self.client.post(url)
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/accounts/login/", response.url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
 
     def test_should_require_membership(self) -> None:
         """Verify non-members cannot start a test run."""
@@ -4478,7 +4514,8 @@ class TestRunStartViewTests(TestCase):
             "projects:test_run_detail",
             args=[self.project.id, self.test_run.id],
         )
-        self.assertEqual(response.url, expected_url)  # type: ignore[attr-defined]
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertEqual(response.url, expected_url)
 
     @patch("projects.views.start_test_run", side_effect=ValueError("not waiting"))
     def test_should_handle_value_error_gracefully(self, mock_start: MagicMock) -> None:
@@ -4896,8 +4933,8 @@ class ControllerAgentServiceTests(TestCase):
         self.project.save()
 
         result = get_project_by_api_key(known_key)
-        self.assertIsNotNone(result)
-        self.assertEqual(result.id, self.project.id)  # type: ignore[union-attr]
+        assert result is not None
+        self.assertEqual(result.id, self.project.id)
 
     def test_get_project_by_api_key_invalid(self) -> None:
         result = get_project_by_api_key("invalid_bogus_key")

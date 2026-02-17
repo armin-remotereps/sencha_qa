@@ -40,7 +40,7 @@ from projects.services import broadcast_agent_status, mark_agent_disconnected
 logger = logging.getLogger(__name__)
 
 
-class ControllerConsumer(AsyncWebsocketConsumer):  # type: ignore[misc]
+class ControllerConsumer(AsyncWebsocketConsumer):
     _authenticated: bool
     _project: Project | None
     _reply_tracker: ReplyTracker

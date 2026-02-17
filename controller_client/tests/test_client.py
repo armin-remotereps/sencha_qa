@@ -1,4 +1,6 @@
 import json
+from dataclasses import replace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -8,18 +10,18 @@ from controller_client.config import ClientConfig
 from controller_client.exceptions import AuthenticationError
 from controller_client.protocol import MessageType
 
+_DEFAULT_CONFIG = ClientConfig(
+    host="localhost",
+    port=8000,
+    api_key="test-key",
+    reconnect_interval=1,
+    max_reconnect_attempts=3,
+    log_level="DEBUG",
+)
 
-def _make_config(**overrides: object) -> ClientConfig:
-    defaults: dict[str, object] = {
-        "host": "localhost",
-        "port": 8000,
-        "api_key": "test-key",
-        "reconnect_interval": 1,
-        "max_reconnect_attempts": 3,
-        "log_level": "DEBUG",
-    }
-    defaults.update(overrides)
-    return ClientConfig(**defaults)  # type: ignore[arg-type]
+
+def _make_config(**overrides: Any) -> ClientConfig:
+    return replace(_DEFAULT_CONFIG, **overrides)
 
 
 class TestControllerClientInit:

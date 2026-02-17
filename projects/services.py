@@ -950,7 +950,7 @@ def start_test_run(test_run: TestRun) -> None:
     test_run.save(update_fields=["status", "updated_at"])
     _broadcast_test_run_status(test_run)
 
-    chain([execute_test_run_case.si(pid) for pid in pivot_ids]).apply_async()
+    chain(*[execute_test_run_case.si(pid) for pid in pivot_ids]).apply_async()
 
 
 def get_test_run_summary(test_run: TestRun) -> dict[str, int]:

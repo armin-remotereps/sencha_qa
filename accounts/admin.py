@@ -5,7 +5,7 @@ from accounts.models import CustomUser
 
 
 @admin.register(CustomUser)
-class CustomUserAdmin(UserAdmin):  # type: ignore[type-arg]
+class CustomUserAdmin(UserAdmin[CustomUser]):
     ordering = ("email",)
     list_display = ("email", "first_name", "last_name", "is_staff", "is_active")
     search_fields = ("email", "first_name", "last_name")

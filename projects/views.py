@@ -7,7 +7,7 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
-from accounts.models import CustomUser
+from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
 from projects.forms import ProjectForm, TestCaseForm
 from projects.models import Project, TestCaseUpload, UploadStatus
@@ -60,8 +60,8 @@ def _parse_test_case_ids(request: HttpRequest) -> list[int]:
 
 
 @login_required
-def project_list(request: HttpRequest) -> HttpResponse:
-    user: CustomUser = request.user  # type: ignore[assignment]
+def project_list(request: AuthenticatedRequest) -> HttpResponse:
+    user = request.user
     search = request.GET.get("search", "").strip() or None
     tag_filter = request.GET.get("tag", "").strip() or None
     page = request.GET.get("page", "1")
@@ -91,8 +91,8 @@ def project_list(request: HttpRequest) -> HttpResponse:
 
 @login_required
 @require_POST
-def project_create(request: HttpRequest) -> HttpResponse:
-    user: CustomUser = request.user  # type: ignore[assignment]
+def project_create(request: AuthenticatedRequest) -> HttpResponse:
+    user = request.user
     form = ProjectForm(request.POST)
     if form.is_valid():
         create_project(
@@ -105,8 +105,8 @@ def project_create(request: HttpRequest) -> HttpResponse:
 
 @login_required
 @require_POST
-def project_edit(request: HttpRequest, project_id: int) -> HttpResponse:
-    user: CustomUser = request.user  # type: ignore[assignment]
+def project_edit(request: AuthenticatedRequest, project_id: int) -> HttpResponse:
+    user = request.user
     project = get_project_for_user(project_id, user)
     if project is None:
         raise Http404
@@ -123,8 +123,8 @@ def project_edit(request: HttpRequest, project_id: int) -> HttpResponse:
 
 @login_required
 @require_POST
-def project_archive(request: HttpRequest, project_id: int) -> HttpResponse:
-    user: CustomUser = request.user  # type: ignore[assignment]
+def project_archive(request: AuthenticatedRequest, project_id: int) -> HttpResponse:
+    user = request.user
     project = get_project_for_user(project_id, user)
     if project is None:
         raise Http404
@@ -262,7 +262,7 @@ def upload_list(request: HttpRequest, project: Project) -> HttpResponse:
 
 @project_membership_required
 @require_POST
-def upload_create(request: HttpRequest, project: Project) -> HttpResponse:
+def upload_create(request: AuthenticatedRequest, project: Project) -> HttpResponse:
     """Validate and process an uploaded TestRail XML file."""
     file = request.FILES.get("file")
     if not file:
@@ -277,7 +277,7 @@ def upload_create(request: HttpRequest, project: Project) -> HttpResponse:
         return redirect("projects:upload_list", project_id=project.id)
 
     file.seek(0)
-    user: CustomUser = request.user  # type: ignore[assignment]
+    user = request.user
     upload = create_upload(project=project, user=user, file=file)
     start_upload_processing(upload)
     return redirect("projects:upload_list", project_id=project.id)
