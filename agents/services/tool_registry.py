@@ -211,7 +211,10 @@ def _handle_web_search(
             content=f"Invalid query type: expected string, got {type(raw_query).__name__}",
             is_error=True,
         )
-    return tools_search.web_search(query=raw_query)
+    return tools_search.web_search(
+        query=raw_query,
+        summarizer_config=context.summarizer_config,
+    )
 
 
 _TOOL_HANDLERS: dict[str, _HandlerFunc] = {

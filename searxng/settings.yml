@@ -1,0 +1,40 @@
+use_default_settings: true
+
+general:
+  instance_name: "SenchaQA Search"
+
+search:
+  formats:
+    - html
+    - json
+
+server:
+  port: 8888
+  bind_address: "0.0.0.0"
+  limiter: false
+  public_instance: false
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    disabled: false
+    timeout: 10.0
+
+  - name: bing
+    engine: bing
+    shortcut: b
+    disabled: false
+    timeout: 10.0
+
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    disabled: false
+    timeout: 10.0
+
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    disabled: false
+    timeout: 10.0

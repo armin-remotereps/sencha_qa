@@ -13,9 +13,17 @@ def test_context() -> ToolContext:
     mock_vision = DMRConfig(
         host="test", port="8080", model="test-vision", temperature=0.0, max_tokens=1000
     )
+    mock_summarizer = DMRConfig(
+        host="test",
+        port="8080",
+        model="test-summarizer",
+        temperature=0.0,
+        max_tokens=512,
+    )
     return ToolContext(
         project_id=1,
         vision_config=mock_vision,
+        summarizer_config=mock_summarizer,
     )
 
 
@@ -335,7 +343,10 @@ def test_dispatch_tool_call_web_search(test_context: ToolContext) -> None:
     assert result.tool_call_id == "call_search"
     assert result.is_error is False
     assert "JDK 17" in result.content
-    mock_search.assert_called_once_with(query="install jdk 17 macOS")
+    mock_search.assert_called_once_with(
+        query="install jdk 17 macOS",
+        summarizer_config=test_context.summarizer_config,
+    )
 
 
 def test_dispatch_take_screenshot_no_vision_config() -> None:

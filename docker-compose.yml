@@ -15,6 +15,15 @@ services:
         ports:
             - "127.0.0.1:6379:6379"
 
+    searxng:
+        image: searxng/searxng:latest
+        restart: always
+        volumes:
+            - "./searxng/settings.yml:/etc/searxng/settings.yml:ro"
+            - "./searxng/limiter.toml:/etc/searxng/limiter.toml:ro"
+        ports:
+            - "127.0.0.1:8888:8888"
+
     migrate:
         image: local/auto_tester:latest
         build: .
@@ -73,6 +82,7 @@ services:
         depends_on:
             - "db"
             - "redis"
+            - "searxng"
         extra_hosts:
             - "host.docker.internal:host-gateway"
         volumes:

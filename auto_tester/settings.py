@@ -234,6 +234,13 @@ VISION_BACKEND: str = config("VISION_BACKEND", default="dmr", cast=str)
 AGENT_MAX_ITERATIONS: int = config("AGENT_MAX_ITERATIONS", default=30, cast=int)
 AGENT_TIMEOUT_SECONDS: int = config("AGENT_TIMEOUT_SECONDS", default=300, cast=int)
 
+# SearXNG (metasearch engine)
+SEARXNG_BASE_URL: str = config(
+    "SEARXNG_BASE_URL", default="http://localhost:8888", cast=str
+)
+SEARXNG_MAX_RESULTS: int = config("SEARXNG_MAX_RESULTS", default=5, cast=int)
+SEARXNG_REQUEST_TIMEOUT: int = config("SEARXNG_REQUEST_TIMEOUT", default=15, cast=int)
+
 # Upload size limits
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
