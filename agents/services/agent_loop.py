@@ -98,6 +98,9 @@ def _build_qa_rules() -> str:
         "precondition exactly as described.\n"
         "- If you cannot access a resource, find a UI element, or perform an action described "
         "in the test steps, FAIL the test immediately with a clear explanation of what went wrong.\n"
+        "- AUTHENTICATION: If a URL or download requires login/authentication and the credentials "
+        "are NOT provided in the test case, FAIL the test immediately. Do NOT search for alternative "
+        "sources, mirrors, or workarounds. Report the exact URL and that authentication is required.\n"
         "- NEVER pretend a step succeeded. NEVER fabricate results. If something does not work "
         "as described, the test FAILS.\n"
         "- Verify every expected result. If the actual result does not match the expected result, "
@@ -182,8 +185,26 @@ def _build_environment_context(
 
 
 def _build_tool_guidelines() -> str:
+    return "\n\n".join(
+        [
+            "TOOL USAGE:",
+            _build_desktop_tool_examples(),
+            _build_browser_tool_examples(),
+            _build_tool_selection_rules(),
+            _build_search_tool_examples(),
+            _build_shell_rules(),
+            _build_retry_limits(),
+            (
+                "When you have completed the task, respond with a text message summarizing "
+                "what you did. Do NOT call any tools when you are done - just provide your "
+                "final text response."
+            ),
+        ]
+    )
+
+
+def _build_desktop_tool_examples() -> str:
     return (
-        "TOOL USAGE:\n\n"
         "DESKTOP TOOLS (for native desktop interactions):\n"
         "- Vision-based tools (click, hover, drag) use natural-language descriptions "
         "to find elements on the screen via AI vision.\n"
@@ -193,7 +214,12 @@ def _build_tool_guidelines() -> str:
         '- type_text(text="hello") — type text using the keyboard\n'
         '- key_press(keys="Return") — press a key or key combination\n'
         '- take_screenshot(question="What is on screen?") — capture desktop and ask about it\n'
-        '- execute_command(command="ls -la") — run a shell command\n\n'
+        '- execute_command(command="ls -la") — run a shell command'
+    )
+
+
+def _build_browser_tool_examples() -> str:
+    return (
         "BROWSER TOOLS (for web page interactions — preferred for web testing):\n"
         '- browser_navigate(url="https://example.com") — open a URL in the browser\n'
         '- browser_click(description="the Login button") — click a web page element\n'
@@ -203,7 +229,12 @@ def _build_tool_guidelines() -> str:
         "- browser_get_url() — get the current page URL\n"
         '- browser_take_screenshot(question="What does the page show?") — capture browser and ask about it\n'
         '- browser_download(url="https://example.com/file.exe") — download a file from a direct URL\n'
-        '- browser_download(url="https://example.com/file.exe", save_path="/home/user/file.exe") — download to a specific path\n\n'
+        '- browser_download(url="https://example.com/file.exe", save_path="/home/user/file.exe") — download to a specific path'
+    )
+
+
+def _build_tool_selection_rules() -> str:
+    return (
         "WHEN TO USE WHICH:\n"
         "- For web testing, prefer browser_* tools. They are faster and more reliable than "
         "desktop tools for web interactions.\n"
@@ -216,22 +247,42 @@ def _build_tool_guidelines() -> str:
         "preferences, or any visible desktop element.\n"
         "- Use execute_command for shell operations. If a CLI install fails, switch to the "
         "browser download approach.\n"
-        "- DESKTOP FALLBACK: If browser_click or browser_type fails because the target element "
-        "cannot be found (e.g., it is inside an iframe, shadow DOM, or a cookie consent overlay), "
-        "fall back to desktop tools: use take_screenshot to see the page, then use "
-        'click(description="...") to interact with the visible element. Desktop tools see the '
-        "full rendered screen and can reach elements that browser tools cannot.\n"
+        "- DESKTOP FALLBACK: If a browser tool fails or times out for ANY reason after 2 attempts, "
+        "escalate with these steps:\n"
+        "  1. STOP retrying the browser tool.\n"
+        "  2. Use take_screenshot to DIAGNOSE what is visible on screen (overlays, popups, "
+        "cookie banners, login forms, etc.).\n"
+        "  3. Use desktop click to dismiss overlays or interact with visible elements directly.\n"
+        "  4. After clearing blockers, retry browser tools if needed.\n"
         "- INSTALLATION LOOKUP: Before installing software, use web_search to look up the "
         "correct install command for the current OS. This avoids guessing wrong package names "
-        "or using the wrong package manager.\n\n"
+        "or using the wrong package manager."
+    )
+
+
+def _build_search_tool_examples() -> str:
+    return (
         "SEARCH TOOLS (for looking up information on the web):\n"
-        '- web_search(query="how to install jdk 17 on macOS") — search the web and return top results\n\n'
+        '- web_search(query="how to install jdk 17 on macOS") — search the web and return top results'
+    )
+
+
+def _build_shell_rules() -> str:
+    return (
         "SHELL RULES:\n"
         "- If you launch a GUI application or long-running process (e.g. gnome-calculator, "
         "flask run, node server.js, vim), append ' &' so it runs in the "
-        "background. Otherwise the command will block and time out.\n\n"
-        "When you have completed the task, respond with a text message summarizing what you did. "
-        "Do NOT call any tools when you are done - just provide your final text response."
+        "background. Otherwise the command will block and time out."
+    )
+
+
+def _build_retry_limits() -> str:
+    return (
+        "RETRY LIMITS:\n"
+        "- If the same tool returns the same error 3 times in a row, STOP and switch strategy "
+        "or fail the test.\n"
+        "- If web_search returns no useful results after 3 queries, STOP searching.\n"
+        "- Do NOT make minor variations of the same failing action."
     )
 
 

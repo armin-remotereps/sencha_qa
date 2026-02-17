@@ -837,13 +837,17 @@ def test_build_tool_guidelines_browser_download() -> None:
 
 
 def test_build_tool_guidelines_desktop_fallback() -> None:
-    """Test that tool guidelines include desktop fallback for iframes/shadow DOM."""
+    """Test that tool guidelines include numbered desktop fallback escalation."""
     guidelines = _build_tool_guidelines()
 
     assert "DESKTOP FALLBACK" in guidelines
-    assert "iframe" in guidelines
-    assert "shadow DOM" in guidelines
-    assert "cookie consent" in guidelines
+    assert "2 attempts" in guidelines
+    assert "ANY reason" in guidelines
+    assert "take_screenshot" in guidelines
+    assert "1." in guidelines
+    assert "2." in guidelines
+    assert "3." in guidelines
+    assert "4." in guidelines
 
 
 def test_build_tool_guidelines_web_search() -> None:
@@ -852,6 +856,25 @@ def test_build_tool_guidelines_web_search() -> None:
 
     assert "web_search" in guidelines
     assert "INSTALLATION LOOKUP" in guidelines
+
+
+def test_build_qa_rules_authentication_failfast() -> None:
+    """Test that QA rules include authentication fail-fast rule."""
+    rules = _build_qa_rules()
+
+    assert "AUTHENTICATION" in rules
+    assert "credentials" in rules
+    assert "FAIL" in rules
+    assert "Do NOT search" in rules
+
+
+def test_build_tool_guidelines_retry_limits() -> None:
+    """Test that tool guidelines include retry limits section."""
+    guidelines = _build_tool_guidelines()
+
+    assert "RETRY LIMITS" in guidelines
+    assert "3 times" in guidelines
+    assert "STOP" in guidelines
 
 
 def test_build_system_prompt_includes_search_tools() -> None:

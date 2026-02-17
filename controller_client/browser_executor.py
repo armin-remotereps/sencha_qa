@@ -3,13 +3,9 @@ import logging
 import time
 from pathlib import Path
 
-from playwright.sync_api import (
-    Browser,
-    BrowserContext,
-    Page,
-    Playwright,
-    sync_playwright,
-)
+from playwright.sync_api import Browser, BrowserContext, Page, Playwright
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+from playwright.sync_api import sync_playwright
 
 from controller_client.exceptions import ExecutionError
 from controller_client.protocol import (
@@ -24,6 +20,53 @@ from controller_client.protocol import (
 )
 
 logger = logging.getLogger(__name__)
+
+_LOGIN_INDICATORS: tuple[str, ...] = (
+    "login",
+    "log in",
+    "sign in",
+    "signin",
+    "authenticate",
+    "authorization",
+    "sso",
+    "cas/login",
+    "oauth",
+    "saml",
+)
+
+_DOWNLOAD_TIMEOUT_MS: int = 15000
+
+
+def _has_login_in_url(page: Page) -> bool:
+    url_lower = page.url.lower()
+    return any(indicator in url_lower for indicator in _LOGIN_INDICATORS)
+
+
+def _has_login_in_title(page: Page) -> bool:
+    try:
+        title_lower = page.title().lower()
+    except Exception:
+        return False
+    return any(indicator in title_lower for indicator in _LOGIN_INDICATORS)
+
+
+def _detect_login_page(page: Page) -> str | None:
+    if _has_login_in_url(page) or _has_login_in_title(page):
+        return page.url
+    return None
+
+
+def _handle_download_timeout(page: Page) -> None:
+    login_url = _detect_login_page(page)
+    if login_url is not None:
+        raise ExecutionError(
+            f"Browser download failed: redirected to login page ({login_url})"
+        )
+    raise ExecutionError(
+        f"Browser download failed: No download triggered. "
+        f"Browser landed on: {page.url}"
+    )
+
 
 _COLLECT_ELEMENTS_JS = """
 () => {
@@ -271,7 +314,7 @@ def execute_browser_download(
     start = time.monotonic()
     try:
         page = session.ensure_page()
-        with page.expect_download(timeout=60000) as download_info:
+        with page.expect_download(timeout=_DOWNLOAD_TIMEOUT_MS) as download_info:
             page.goto(payload.url)
         download = download_info.value
         save_path = payload.save_path or str(
@@ -280,6 +323,10 @@ def execute_browser_download(
         Path(save_path).parent.mkdir(parents=True, exist_ok=True)
         download.save_as(save_path)
         file_size = Path(save_path).stat().st_size
+    except PlaywrightTimeoutError:
+        _handle_download_timeout(page)
+    except ExecutionError:
+        raise
     except Exception as e:
         raise ExecutionError(f"Browser download failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
