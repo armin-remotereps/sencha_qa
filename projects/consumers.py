@@ -22,7 +22,7 @@ from projects.services import (
 )
 
 
-class AuthenticatedConsumer(AsyncWebsocketConsumer):  # type: ignore[misc]
+class AuthenticatedConsumer(AsyncWebsocketConsumer):
     group_name: str
 
     async def connect(self) -> None:

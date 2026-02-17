@@ -1,0 +1,23 @@
+from typing import Any
+
+class AsyncWebsocketConsumer:
+    scope: dict[str, Any]
+    channel_layer: Any
+    channel_name: str
+    async def connect(self) -> None: ...
+    async def disconnect(self, close_code: int) -> None: ...
+    async def accept(self, subprotocol: str | None = None) -> None: ...
+    async def close(self, code: int | None = None) -> None: ...
+    async def send(
+        self,
+        text_data: str | None = None,
+        bytes_data: bytes | None = None,
+        close: bool = False,
+    ) -> None: ...
+    async def receive(
+        self,
+        text_data: str | None = None,
+        bytes_data: bytes | None = None,
+    ) -> None: ...
+    @classmethod
+    def as_asgi(cls, **kwargs: Any) -> Any: ...

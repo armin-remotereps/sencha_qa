@@ -5,9 +5,9 @@ from functools import wraps
 from typing import Any, TypeVar
 
 from django.contrib.auth.decorators import login_required
-from django.http import Http404, HttpRequest, HttpResponse
+from django.http import Http404, HttpResponse
 
-from accounts.models import CustomUser
+from accounts.types import AuthenticatedRequest
 from projects.services import get_project_for_user
 
 F = TypeVar("F", bound=Callable[..., HttpResponse])
@@ -17,8 +17,10 @@ def project_membership_required(
     view_func: F,
 ) -> F:
     @wraps(view_func)
-    def _wrapped(request: HttpRequest, project_id: int, **kwargs: Any) -> HttpResponse:
-        user: CustomUser = request.user  # type: ignore[assignment]
+    def _wrapped(
+        request: AuthenticatedRequest, project_id: int, **kwargs: Any
+    ) -> HttpResponse:
+        user = request.user
         project = get_project_for_user(project_id, user)
         if project is None:
             raise Http404

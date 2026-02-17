@@ -10,6 +10,7 @@ daphne~=4.2.1
 channels-redis~=4.3.0
 mypy~=1.19.1
 django-stubs~=5.2.9
+celery-types~=0.22.0
 black~=26.1.0
 isort~=7.0.0
 pre-commit~=4.5.1

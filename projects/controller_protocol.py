@@ -154,7 +154,8 @@ class ControllerMessageBuilder:
         message_type = self._registry.get_message_type(event_type)
         payload_keys = self._registry.get_payload_keys(event_type)
 
+        raw: dict[str, Any] = dict(event)
         payload_kwargs: dict[str, Any] = {
-            key: event[key] for key in payload_keys if key in event  # type: ignore[literal-required]
+            key: raw[key] for key in payload_keys if key in raw
         }
         return serialize_message(message_type, request_id, **payload_kwargs)

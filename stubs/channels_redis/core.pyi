@@ -1,0 +1,3 @@
+from channels.layers import BaseChannelLayer
+
+class RedisChannelLayer(BaseChannelLayer): ...

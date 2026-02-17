@@ -18,13 +18,13 @@ from projects.models import (
 
 
 @admin.register(Tag)
-class TagAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
+class TagAdmin(admin.ModelAdmin[Tag]):
     list_display = ("name",)
     search_fields = ("name",)
 
 
 @admin.register(Project)
-class ProjectAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
+class ProjectAdmin(admin.ModelAdmin[Project]):
     list_display = ("name", "archived", "agent_connected", "created_at")
     list_filter = ("archived", "agent_connected", "tags")
     filter_horizontal = ("tags", "members")
@@ -50,7 +50,7 @@ class ProjectAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
 
 
 @admin.register(TestCase)
-class TestCaseAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
+class TestCaseAdmin(admin.ModelAdmin[TestCase]):
     list_display = (
         "title",
         "project",
@@ -64,7 +64,7 @@ class TestCaseAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
 
 
 @admin.register(TestCaseUpload)
-class TestCaseUploadAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
+class TestCaseUploadAdmin(admin.ModelAdmin[TestCaseUpload]):
     list_display = (
         "original_filename",
         "project",
@@ -78,28 +78,28 @@ class TestCaseUploadAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
     search_fields = ("original_filename",)
 
 
-class TestRunTestCaseInline(admin.TabularInline):  # type: ignore[type-arg]
+class TestRunTestCaseInline(admin.TabularInline[TestRunTestCase, TestRun]):
     model = TestRunTestCase
     extra = 1
     readonly_fields = ("status", "result", "logs")
 
 
 @admin.register(TestRun)
-class TestRunAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
+class TestRunAdmin(admin.ModelAdmin[TestRun]):
     list_display = ("id", "project", "status", "created_at")
     list_filter = ("status", "project")
     readonly_fields = ("status",)
     inlines = [TestRunTestCaseInline]
 
 
-class TestRunScreenshotInline(admin.TabularInline):  # type: ignore[type-arg]
+class TestRunScreenshotInline(admin.TabularInline[TestRunScreenshot, TestRunTestCase]):
     model = TestRunScreenshot
     extra = 0
     readonly_fields = ("image", "tool_name", "created_at")
 
 
 @admin.register(TestRunTestCase)
-class TestRunTestCaseAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
+class TestRunTestCaseAdmin(admin.ModelAdmin[TestRunTestCase]):
     list_display = ("id", "test_run", "test_case", "status", "created_at")
     list_filter = ("status",)
     readonly_fields = ("status", "result", "logs")
@@ -107,7 +107,7 @@ class TestRunTestCaseAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
 
 
 @admin.register(TestRunScreenshot)
-class TestRunScreenshotAdmin(admin.ModelAdmin):  # type: ignore[type-arg]
+class TestRunScreenshotAdmin(admin.ModelAdmin[TestRunScreenshot]):
     list_display = ("id", "test_run_test_case", "tool_name", "created_at")
     list_filter = ("tool_name",)
     readonly_fields = ("image", "tool_name", "created_at")

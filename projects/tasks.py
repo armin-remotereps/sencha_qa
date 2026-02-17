@@ -4,7 +4,8 @@ import logging
 from typing import Any
 
 from asgiref.sync import async_to_sync
-from celery import Task, shared_task
+from celery import shared_task
+from celery.app.task import Task
 from channels.layers import get_channel_layer
 from django.db import transaction
 
@@ -88,7 +89,7 @@ def _handle_failure(upload: TestCaseUpload) -> None:
     _send_upload_progress(upload)
 
 
-@shared_task(  # type: ignore[untyped-decorator]
+@shared_task(
     bind=True,
     name="projects.tasks.process_xml_upload",
     queue="upload",
@@ -98,7 +99,7 @@ def _handle_failure(upload: TestCaseUpload) -> None:
     soft_time_limit=600,
     time_limit=660,
 )
-def process_xml_upload(self: Task[None, None], upload_id: int) -> None:
+def process_xml_upload(self: Task[[int], None], upload_id: int) -> None:
     logger.info(
         "process_xml_upload started: task_id=%s upload_id=%s",
         self.request.id,
@@ -134,7 +135,7 @@ def process_xml_upload(self: Task[None, None], upload_id: int) -> None:
         _handle_failure(upload)
 
 
-@shared_task(  # type: ignore[untyped-decorator]
+@shared_task(
     bind=True,
     name="projects.tasks.execute_test_run_case",
     queue="execution",
@@ -144,7 +145,7 @@ def process_xml_upload(self: Task[None, None], upload_id: int) -> None:
     soft_time_limit=1800,
     time_limit=1860,
 )
-def execute_test_run_case(self: Task[None, None], pivot_id: int) -> None:
+def execute_test_run_case(self: Task[[int], None], pivot_id: int) -> None:
     from projects.services import execute_test_run_test_case
 
     logger.info(
