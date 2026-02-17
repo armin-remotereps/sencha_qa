@@ -16,8 +16,9 @@ services:
             - "127.0.0.1:6379:6379"
 
     searxng:
-        image: searxng/searxng:latest
+        image: searxng/searxng:2026.2.6-b5bb27f23
         restart: always
+        entrypoint: ["sh", "-c", "update-ca-certificates && cd /usr/local/searxng && . ./.venv/bin/activate && python -m granian --host 0.0.0.0 --port 8888 --interface wsgi --workers 1 --backlog 1024 searx.webapp:application"]
         volumes:
             - "./searxng/settings.yml:/etc/searxng/settings.yml:ro"
             - "./searxng/limiter.toml:/etc/searxng/limiter.toml:ro"

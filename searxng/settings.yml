@@ -13,6 +13,8 @@ server:
   bind_address: "0.0.0.0"
   limiter: false
   public_instance: false
+  http_protocol_version: "1.1"
+  secret_key: "searxng_secret_key_for_sencha_qa_testing_only_change_in_production"
 
 engines:
   - name: google
