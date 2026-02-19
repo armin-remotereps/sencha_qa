@@ -123,3 +123,30 @@ class ToolContext:
     summarizer_config: DMRConfig | None = None
     vision_config: DMRConfig | None = None
     on_screenshot: ScreenshotCallback | None = None
+
+
+@dataclass(frozen=True)
+class PixelBBox:
+    x_min: int
+    y_min: int
+    x_max: int
+    y_max: int
+
+
+@dataclass(frozen=True)
+class PixelUIElement:
+    index: int
+    type: str
+    content: str
+    bbox: PixelBBox
+    center_x: int
+    center_y: int
+    interactivity: bool
+
+
+@dataclass(frozen=True)
+class PixelParseResult:
+    annotated_image: str
+    elements: tuple[PixelUIElement, ...]
+    image_width: int
+    image_height: int

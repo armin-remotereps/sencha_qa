@@ -1,0 +1,22 @@
+services:
+  omniparser:
+    build:
+      context: ..
+      dockerfile: omniparser_service/Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${OMNIPARSER_WEIGHTS_DIR:-./OmniParser/weights}:/app/OmniParser/weights
+    environment:
+      - OMNIPARSER_API_KEY=${OMNIPARSER_API_KEY:-}
+      - OMNIPARSER_WEIGHTS_DIR=/app/OmniParser/weights
+      - OMNIPARSER_PRELOAD_MODELS=true
+      - OMNIPARSER_LOG_LEVEL=${OMNIPARSER_LOG_LEVEL:-INFO}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped

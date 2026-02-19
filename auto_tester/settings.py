@@ -41,7 +41,6 @@ INSTALLED_APPS: list[str] = [
     "dashboard",
     "projects",
     "agents",
-    "omniparser_wrapper",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -280,23 +279,9 @@ CONTEXT_SUMMARIZE_CHUNK_SIZE: int = config(
     "CONTEXT_SUMMARIZE_CHUNK_SIZE", default=8000, cast=int
 )
 
-# OmniParser
+# OmniParser (client-side only — server runs as standalone FastAPI service)
 OMNIPARSER_URL: str = config("OMNIPARSER_URL", default="", cast=str)
 OMNIPARSER_API_KEY: str = config("OMNIPARSER_API_KEY", default="", cast=str)
 OMNIPARSER_REQUEST_TIMEOUT: int = config(
     "OMNIPARSER_REQUEST_TIMEOUT", default=600, cast=int
-)
-OMNIPARSER_WEIGHTS_DIR: str = config(
-    "OMNIPARSER_WEIGHTS_DIR",
-    default=str(BASE_DIR / "OmniParser" / "weights"),
-    cast=str,
-)
-OMNIPARSER_BOX_THRESHOLD: float = config(
-    "OMNIPARSER_BOX_THRESHOLD", default=0.05, cast=float
-)
-OMNIPARSER_IOU_THRESHOLD: float = config(
-    "OMNIPARSER_IOU_THRESHOLD", default=0.7, cast=float
-)
-OMNIPARSER_CAPTION_BATCH_SIZE: int = config(
-    "OMNIPARSER_CAPTION_BATCH_SIZE", default=64, cast=int
 )

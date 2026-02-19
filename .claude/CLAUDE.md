@@ -51,7 +51,7 @@ pip install -r requirements.txt
 - **projects/** — Core domain: Projects, TestCases, TestCaseUploads, TestRuns, TestRunTestCases, TestRunScreenshots. Contains views, services, tasks, models, consumers, forms, controller protocol
 - **agents/** — AI agent system: agent loop, tool definitions, tool registry, DMR client, vision QA, OmniParser integration, context/output summarizers, search tools
 - **dashboard/** — Landing/home page
-- **omniparser_wrapper/** — OmniParser screen parsing integration
+- **omniparser_service/** — Standalone FastAPI service for OmniParser screen parsing (GPU-enabled, separate Dockerfile). Runs independently on port 8080, called by the agents app via HTTP client (`agents/services/omniparser_client.py`)
 - **controller_client/** — Standalone Python client that runs on target machines. Connects to the server via WebSocket, receives action commands (click, type, screenshot, browser actions), and replies with results
 
 ### Key Patterns
@@ -105,6 +105,10 @@ Project → TestCaseUpload → TestCase
 Project → TestRun → TestRunTestCase (pivot) → TestRunScreenshot
 Project has: members (M2M CustomUser), tags (M2M Tag), api_key, agent_connected
 ```
+
+## Parallel Development
+
+This project uses git worktrees for parallel development. Each worktree must use a unique port when running the Django dev server to avoid conflicts (e.g., `runserver 8001`, `daphne -p 8001`).
 
 ## Spec-Driven Development
 

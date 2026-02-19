@@ -7,8 +7,13 @@ from collections.abc import Callable
 from agents.exceptions import ElementNotFoundError
 from agents.services.dmr_client import send_chat_completion
 from agents.services.omniparser_client import parse_screenshot_remote
-from agents.types import ChatMessage, DMRConfig, ImageContent, TextContent
-from omniparser_wrapper.types import PixelUIElement
+from agents.types import (
+    ChatMessage,
+    DMRConfig,
+    ImageContent,
+    PixelUIElement,
+    TextContent,
+)
 from projects.services import controller_screenshot
 
 logger = logging.getLogger(__name__)
