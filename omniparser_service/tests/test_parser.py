@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import base64
-import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
-from django.test import TestCase, override_settings
 
-from omniparser_wrapper.services.parser import (
+from omniparser_service.parser import (
     OmniParserService,
     RawElementDict,
     _build_draw_config,
@@ -15,10 +13,10 @@ from omniparser_wrapper.services.parser import (
     _resolve_thresholds,
     _to_pixel_element,
 )
-from omniparser_wrapper.types import BBox, ParseResult, PixelParseResult, UIElement
+from omniparser_service.types import BBox, ParseResult, PixelParseResult, UIElement
 
 
-class BuildElementTest(TestCase):
+class TestBuildElement:
     def test_basic_element(self) -> None:
         raw: RawElementDict = {
             "type": "text",
@@ -54,7 +52,7 @@ class BuildElementTest(TestCase):
         assert element.center_y == pytest.approx(0.6)
 
 
-class ToPixelElementTest(TestCase):
+class TestToPixelElement:
     def test_conversion(self) -> None:
         element = UIElement(
             index=0,
@@ -92,7 +90,7 @@ class ToPixelElementTest(TestCase):
         assert pixel.center_y == 39
 
 
-class BuildDrawConfigTest(TestCase):
+class TestBuildDrawConfig:
     def test_draw_config_keys(self) -> None:
         config = _build_draw_config((1920, 1080))
         assert "text_scale" in config
@@ -106,56 +104,60 @@ class BuildDrawConfigTest(TestCase):
         assert small["text_scale"] < large["text_scale"]
 
 
-class ResolveThresholdsTest(TestCase):
-    @override_settings(OMNIPARSER_BOX_THRESHOLD=0.05, OMNIPARSER_IOU_THRESHOLD=0.7)
+class TestResolveThresholds:
     def test_uses_settings_defaults(self) -> None:
-        box, iou = _resolve_thresholds(None, None)
-        assert box == 0.05
-        assert iou == 0.7
+        with patch("omniparser_service.parser.settings") as mock_settings:
+            mock_settings.box_threshold = 0.05
+            mock_settings.iou_threshold = 0.7
+            box, iou = _resolve_thresholds(None, None)
+            assert box == 0.05
+            assert iou == 0.7
 
-    @override_settings(OMNIPARSER_BOX_THRESHOLD=0.05, OMNIPARSER_IOU_THRESHOLD=0.7)
     def test_overrides_with_provided_values(self) -> None:
         box, iou = _resolve_thresholds(0.1, 0.5)
         assert box == 0.1
         assert iou == 0.5
 
 
-class OmniParserServiceSingletonTest(TestCase):
-    def test_singleton(self) -> None:
+class TestOmniParserServiceSingleton:
+    def setup_method(self) -> None:
         OmniParserService._instance = None
+        OmniParserService._parser = None
+
+    def teardown_method(self) -> None:
+        OmniParserService._instance = None
+        OmniParserService._parser = None
+
+    def test_singleton(self) -> None:
         a = OmniParserService()
         b = OmniParserService()
         assert a is b
-        OmniParserService._instance = None
 
     def test_models_not_loaded_initially(self) -> None:
-        OmniParserService._instance = None
-        OmniParserService._parser = None
         service = OmniParserService()
         assert service.models_loaded is False
+
+
+class TestOmniParserServiceParse:
+    def setup_method(self) -> None:
         OmniParserService._instance = None
         OmniParserService._parser = None
 
-
-class OmniParserServiceParseTest(TestCase):
-    def setUp(self) -> None:
+    def teardown_method(self) -> None:
         OmniParserService._instance = None
         OmniParserService._parser = None
 
-    def tearDown(self) -> None:
-        OmniParserService._instance = None
-        OmniParserService._parser = None
+    @patch("omniparser_service.parser.settings")
+    @patch("omniparser_service.parser._ensure_omniparser_on_path")
+    def test_parse_returns_parse_result(
+        self, mock_path: MagicMock, mock_settings: MagicMock
+    ) -> None:
+        mock_settings.weights_dir = "/fake/weights"
+        mock_settings.box_threshold = 0.05
+        mock_settings.iou_threshold = 0.7
+        mock_settings.caption_batch_size = 64
 
-    @override_settings(
-        OMNIPARSER_WEIGHTS_DIR="/fake/weights",
-        OMNIPARSER_BOX_THRESHOLD=0.05,
-        OMNIPARSER_IOU_THRESHOLD=0.7,
-        OMNIPARSER_CAPTION_BATCH_SIZE=64,
-    )
-    @patch("omniparser_wrapper.services.parser._ensure_omniparser_on_path")
-    def test_parse_returns_parse_result(self, mock_path: MagicMock) -> None:
         service = OmniParserService()
-
         mock_parser = MagicMock()
         mock_parser.som_model = MagicMock()
         mock_parser.caption_model_processor = MagicMock()
@@ -175,15 +177,15 @@ class OmniParserServiceParseTest(TestCase):
 
         with (
             patch(
-                "omniparser_wrapper.services.parser._decode_image",
+                "omniparser_service.parser._decode_image",
                 return_value=(mock_image, 1920, 1080),
             ),
             patch(
-                "omniparser_wrapper.services.parser._run_ocr",
+                "omniparser_service.parser._run_ocr",
                 return_value=("text", [[0.1, 0.2, 0.3, 0.4]]),
             ),
             patch(
-                "omniparser_wrapper.services.parser._run_som_labeling",
+                "omniparser_service.parser._run_som_labeling",
                 return_value=("annotated_b64", fake_parsed),
             ),
         ):
@@ -197,16 +199,17 @@ class OmniParserServiceParseTest(TestCase):
         assert result.image_width == 1920
         assert result.image_height == 1080
 
-    @override_settings(
-        OMNIPARSER_WEIGHTS_DIR="/fake/weights",
-        OMNIPARSER_BOX_THRESHOLD=0.05,
-        OMNIPARSER_IOU_THRESHOLD=0.7,
-        OMNIPARSER_CAPTION_BATCH_SIZE=64,
-    )
-    @patch("omniparser_wrapper.services.parser._ensure_omniparser_on_path")
-    def test_parse_pixels_returns_pixel_result(self, mock_path: MagicMock) -> None:
-        service = OmniParserService()
+    @patch("omniparser_service.parser.settings")
+    @patch("omniparser_service.parser._ensure_omniparser_on_path")
+    def test_parse_pixels_returns_pixel_result(
+        self, mock_path: MagicMock, mock_settings: MagicMock
+    ) -> None:
+        mock_settings.weights_dir = "/fake/weights"
+        mock_settings.box_threshold = 0.05
+        mock_settings.iou_threshold = 0.7
+        mock_settings.caption_batch_size = 64
 
+        service = OmniParserService()
         mock_parser = MagicMock()
         mock_parser.som_model = MagicMock()
         mock_parser.caption_model_processor = MagicMock()
@@ -226,15 +229,15 @@ class OmniParserServiceParseTest(TestCase):
 
         with (
             patch(
-                "omniparser_wrapper.services.parser._decode_image",
+                "omniparser_service.parser._decode_image",
                 return_value=(mock_image, 1000, 1000),
             ),
             patch(
-                "omniparser_wrapper.services.parser._run_ocr",
+                "omniparser_service.parser._run_ocr",
                 return_value=("text", []),
             ),
             patch(
-                "omniparser_wrapper.services.parser._run_som_labeling",
+                "omniparser_service.parser._run_som_labeling",
                 return_value=("annotated_b64", fake_parsed),
             ),
         ):

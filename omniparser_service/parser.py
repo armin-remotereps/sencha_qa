@@ -8,9 +8,10 @@ import threading
 from pathlib import Path
 from typing import Any, Final, TypedDict
 
-from django.conf import settings
+from PIL import Image
 
-from omniparser_wrapper.types import (
+from omniparser_service.config import settings
+from omniparser_service.types import (
     BBox,
     ParseResult,
     PixelBBox,
@@ -32,11 +33,10 @@ class RawElementDict(TypedDict, total=False):
     content: str
     bbox: list[float]
     interactivity: bool
-    source: str
 
 
 def _ensure_omniparser_on_path() -> None:
-    omniparser_root = str(Path(settings.BASE_DIR) / "OmniParser")
+    omniparser_root = str(Path(__file__).resolve().parent.parent / "OmniParser")
     if omniparser_root not in sys.path:
         sys.path.insert(0, omniparser_root)
 
@@ -77,9 +77,7 @@ def _to_pixel_element(element: UIElement, width: int, height: int) -> PixelUIEle
     )
 
 
-def _decode_image(image_base64: str) -> tuple[Any, int, int]:
-    from PIL import Image
-
+def _decode_image(image_base64: str) -> tuple[Image.Image, int, int]:
     image_bytes = base64.b64decode(image_base64)
     image = Image.open(io.BytesIO(image_bytes))
     width: int = image.size[0]
@@ -102,20 +100,16 @@ def _resolve_thresholds(
     iou_threshold: float | None,
 ) -> tuple[float, float]:
     effective_box = (
-        box_threshold
-        if box_threshold is not None
-        else settings.OMNIPARSER_BOX_THRESHOLD
+        box_threshold if box_threshold is not None else settings.box_threshold
     )
     effective_iou = (
-        iou_threshold
-        if iou_threshold is not None
-        else settings.OMNIPARSER_IOU_THRESHOLD
+        iou_threshold if iou_threshold is not None else settings.iou_threshold
     )
     return effective_box, effective_iou
 
 
 def _run_ocr(image: Any) -> tuple[Any, Any]:
-    from util.utils import check_ocr_box
+    from util.utils import check_ocr_box  # type: ignore[import-not-found]
 
     (text, ocr_bbox), _ = check_ocr_box(
         image,
@@ -151,7 +145,7 @@ def _run_som_labeling(
         use_local_semantics=True,
         iou_threshold=iou_threshold,
         scale_img=False,
-        batch_size=settings.OMNIPARSER_CAPTION_BATCH_SIZE,
+        batch_size=settings.caption_batch_size,
     )
     return annotated_img, parsed_content_list
 
@@ -178,14 +172,14 @@ class OmniParserService:
             if self._parser is not None:
                 return
             _ensure_omniparser_on_path()
-            from util.omniparser import Omniparser
+            from util.omniparser import Omniparser  # type: ignore[import-not-found]
 
-            weights_dir = settings.OMNIPARSER_WEIGHTS_DIR
+            weights_dir = settings.weights_dir
             config = {
                 "som_model_path": str(Path(weights_dir) / "icon_detect" / "model.pt"),
                 "caption_model_name": "florence2",
                 "caption_model_path": str(Path(weights_dir) / "icon_caption_florence"),
-                "BOX_TRESHOLD": settings.OMNIPARSER_BOX_THRESHOLD,
+                "BOX_TRESHOLD": settings.box_threshold,
             }
             self._parser = Omniparser(config)
             logger.info("OmniParser models loaded from %s", weights_dir)
@@ -197,7 +191,6 @@ class OmniParserService:
         iou_threshold: float | None = None,
     ) -> ParseResult:
         self.load_models()
-        _ensure_omniparser_on_path()
 
         image, width, height = _decode_image(image_base64)
         draw_config = _build_draw_config(image.size)
