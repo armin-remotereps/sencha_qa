@@ -106,6 +106,10 @@ Project → TestRun → TestRunTestCase (pivot) → TestRunScreenshot
 Project has: members (M2M CustomUser), tags (M2M Tag), api_key, agent_connected
 ```
 
+## Parallel Development
+
+This project uses git worktrees for parallel development. Each worktree must use a unique port when running the Django dev server to avoid conflicts (e.g., `runserver 8001`, `daphne -p 8001`).
+
 ## Spec-Driven Development
 
 Feature specs live in `docs/specs/`, implementation docs in `docs/impl/`. When implementing a spec (e.g., `docs/specs/001.User Management.md`), create corresponding `docs/impl/001.User Management-impl.md` after completion.
