@@ -245,6 +245,13 @@ SEARXNG_BASE_URL: str = config(
 SEARXNG_MAX_RESULTS: int = config("SEARXNG_MAX_RESULTS", default=5, cast=int)
 SEARXNG_REQUEST_TIMEOUT: int = config("SEARXNG_REQUEST_TIMEOUT", default=15, cast=int)
 
+# Search page fetching (trafilatura)
+SEARCH_FETCH_PAGE_COUNT: int = config("SEARCH_FETCH_PAGE_COUNT", default=3, cast=int)
+SEARCH_PAGE_MAX_LENGTH: int = config("SEARCH_PAGE_MAX_LENGTH", default=2000, cast=int)
+SEARCH_PAGE_FETCH_TIMEOUT: int = config(
+    "SEARCH_PAGE_FETCH_TIMEOUT", default=10, cast=int
+)
+
 # Upload size limits
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
