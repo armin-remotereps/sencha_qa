@@ -853,6 +853,12 @@ def list_uploads_for_project(
     return paginator.get_page(page)
 
 
+def list_completed_uploads_for_project(*, project: Project) -> QuerySet[TestCaseUpload]:
+    return TestCaseUpload.objects.filter(
+        project=project, status=UploadStatus.COMPLETED
+    ).order_by("-created_at")
+
+
 # ============================================================================
 # XML PARSING SERVICES
 # ============================================================================

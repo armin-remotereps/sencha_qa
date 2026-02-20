@@ -196,29 +196,7 @@
   {% endif %}
 
   {# PAGINATION #}
-  {% if test_cases.has_other_pages %}
-  <div class="mt-6 flex items-center justify-center gap-2">
-    {% if test_cases.has_previous %}
-    <a
-      href="?page={{ test_cases.previous_page_number }}{% if search %}&search={{ search }}{% endif %}{% if current_upload %}&upload={{ current_upload }}{% endif %}"
-      class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
-    >
-      Previous
-    </a>
-    {% endif %}
-    <span class="text-sm text-zinc-400">
-      Page {{ test_cases.number }} of {{ test_cases.paginator.num_pages }}
-    </span>
-    {% if test_cases.has_next %}
-    <a
-      href="?page={{ test_cases.next_page_number }}{% if search %}&search={{ search }}{% endif %}{% if current_upload %}&upload={{ current_upload }}{% endif %}"
-      class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
-    >
-      Next
-    </a>
-    {% endif %}
-  </div>
-  {% endif %}
+  {% include "components/pagination.html" with page_obj=test_cases %}
 
   {# CREATE MODAL #}
   <div

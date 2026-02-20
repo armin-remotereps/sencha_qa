@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-from accounts.models import CustomUser
-from accounts.types import AuthenticatedRequest
+from typing import Any
+
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.paginator import Page
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
+
+from accounts.models import CustomUser
+from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
 from projects.forms import ProjectForm, TestCaseForm
-from projects.models import Project, TestCaseUpload, UploadStatus
+from projects.models import Project
 from projects.services import (
     abort_test_run,
     add_cases_to_test_run,
@@ -34,6 +38,7 @@ from projects.services import (
     get_test_run_summary,
     get_upload_for_project,
     is_valid_xml_filename,
+    list_completed_uploads_for_project,
     list_other_projects_for_user,
     list_projects_for_user,
     list_test_cases_for_project,
@@ -51,11 +56,40 @@ from projects.services import (
     validate_testrail_xml,
 )
 
-PROJECTS_PER_PAGE = 9
-TEST_CASES_PER_PAGE = 20
-UPLOADS_PER_PAGE = 20
-TEST_RUNS_PER_PAGE = 20
-TEST_RUN_CASES_PER_PAGE = 20
+ALLOWED_PER_PAGE = [10, 20, 50, 100]
+DEFAULT_PER_PAGE = 20
+PROJECTS_DEFAULT_PER_PAGE = 9
+
+
+def _parse_per_page(request: HttpRequest, default: int = DEFAULT_PER_PAGE) -> int:
+    try:
+        value = int(request.GET.get("per_page", ""))
+    except ValueError:
+        return default
+    return value if value in ALLOWED_PER_PAGE else default
+
+
+def _parse_page(request: HttpRequest) -> int:
+    try:
+        return max(1, int(request.GET.get("page", "1")))
+    except ValueError:
+        return 1
+
+
+def _build_query_params(request: HttpRequest) -> str:
+    params = request.GET.copy()
+    params.pop("page", None)
+    encoded = params.urlencode()
+    return f"&{encoded}" if encoded else ""
+
+
+def _get_elided_page_range(page_obj: Page[Any]) -> list[int | str]:
+    return [
+        int(p) if isinstance(p, int) else str(p)
+        for p in page_obj.paginator.get_elided_page_range(
+            page_obj.number, on_each_side=1, on_ends=1
+        )
+    ]
 
 
 def _parse_test_case_ids(request: HttpRequest) -> list[int]:
@@ -68,14 +102,15 @@ def project_list(request: AuthenticatedRequest) -> HttpResponse:
     user = request.user
     search = request.GET.get("search", "").strip() or None
     tag_filter = request.GET.get("tag", "").strip() or None
-    page = request.GET.get("page", "1")
+    page = _parse_page(request)
+    per_page = _parse_per_page(request, PROJECTS_DEFAULT_PER_PAGE)
 
     projects = list_projects_for_user(
         user=user,
         search=search,
         tag_filter=tag_filter,
-        page=int(page),
-        per_page=PROJECTS_PER_PAGE,
+        page=page,
+        per_page=per_page,
     )
     tags = get_all_tags_for_user(user)
     form = ProjectForm()
@@ -89,6 +124,10 @@ def project_list(request: AuthenticatedRequest) -> HttpResponse:
             "form": form,
             "search": search or "",
             "current_tag": tag_filter or "",
+            "per_page": per_page,
+            "allowed_per_page": ALLOWED_PER_PAGE,
+            "elided_page_range": _get_elided_page_range(projects),
+            "query_params": _build_query_params(request),
         },
     )
 
@@ -186,19 +225,18 @@ def test_case_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
     search = request.GET.get("search", "").strip() or None
     upload_filter = request.GET.get("upload", "").strip() or None
     upload_id: int | None = int(upload_filter) if upload_filter else None
-    page = request.GET.get("page", "1")
+    page = _parse_page(request)
+    per_page = _parse_per_page(request)
 
     test_cases = list_test_cases_for_project(
         project=project,
         search=search,
         upload_id=upload_id,
-        page=int(page),
-        per_page=TEST_CASES_PER_PAGE,
+        page=page,
+        per_page=per_page,
     )
     form = TestCaseForm()
-    completed_uploads = TestCaseUpload.objects.filter(
-        project=project, status=UploadStatus.COMPLETED
-    ).order_by("-created_at")
+    completed_uploads = list_completed_uploads_for_project(project=project)
     waiting_test_runs = list_waiting_test_runs_for_project(project)
     user: CustomUser = request.user
     other_projects = list_other_projects_for_user(user=user, exclude_project=project)
@@ -215,6 +253,10 @@ def test_case_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
             "current_upload": upload_id or "",
             "waiting_test_runs": waiting_test_runs,
             "other_projects": other_projects,
+            "per_page": per_page,
+            "allowed_per_page": ALLOWED_PER_PAGE,
+            "elided_page_range": _get_elided_page_range(test_cases),
+            "query_params": _build_query_params(request),
         },
     )
 
@@ -290,10 +332,9 @@ def test_case_copy_to_project(
 @project_membership_required
 def upload_list(request: HttpRequest, project: Project) -> HttpResponse:
     """Display paginated upload history with drag-drop upload zone."""
-    page = request.GET.get("page", "1")
-    uploads = list_uploads_for_project(
-        project=project, page=int(page), per_page=UPLOADS_PER_PAGE
-    )
+    page = _parse_page(request)
+    per_page = _parse_per_page(request)
+    uploads = list_uploads_for_project(project=project, page=page, per_page=per_page)
     upload_create_url = reverse("projects:upload_create", args=[project.id])
     return render(
         request,
@@ -302,6 +343,10 @@ def upload_list(request: HttpRequest, project: Project) -> HttpResponse:
             "project": project,
             "uploads": uploads,
             "upload_create_url": upload_create_url,
+            "per_page": per_page,
+            "allowed_per_page": ALLOWED_PER_PAGE,
+            "elided_page_range": _get_elided_page_range(uploads),
+            "query_params": _build_query_params(request),
         },
     )
 
@@ -364,9 +409,10 @@ def upload_delete(
 
 @project_membership_required
 def test_run_list(request: HttpRequest, project: Project) -> HttpResponse:
-    page = request.GET.get("page", "1")
+    page = _parse_page(request)
+    per_page = _parse_per_page(request)
     test_runs = list_test_runs_for_project(
-        project=project, page=int(page), per_page=TEST_RUNS_PER_PAGE
+        project=project, page=page, per_page=per_page
     )
     return render(
         request,
@@ -374,6 +420,10 @@ def test_run_list(request: HttpRequest, project: Project) -> HttpResponse:
         {
             "project": project,
             "test_runs": test_runs,
+            "per_page": per_page,
+            "allowed_per_page": ALLOWED_PER_PAGE,
+            "elided_page_range": _get_elided_page_range(test_runs),
+            "query_params": _build_query_params(request),
         },
     )
 
@@ -497,10 +547,9 @@ def test_run_detail(
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
         raise Http404
-    page = request.GET.get("page", "1")
-    cases = list_test_run_cases(
-        test_run=test_run, page=int(page), per_page=TEST_RUN_CASES_PER_PAGE
-    )
+    page = _parse_page(request)
+    per_page = _parse_per_page(request)
+    cases = list_test_run_cases(test_run=test_run, page=page, per_page=per_page)
     summary = get_test_run_summary(test_run)
     return render(
         request,
@@ -510,6 +559,10 @@ def test_run_detail(
             "test_run": test_run,
             "cases": cases,
             "summary": summary,
+            "per_page": per_page,
+            "allowed_per_page": ALLOWED_PER_PAGE,
+            "elided_page_range": _get_elided_page_range(cases),
+            "query_params": _build_query_params(request),
         },
     )
 
