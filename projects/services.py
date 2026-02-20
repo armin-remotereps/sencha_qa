@@ -24,7 +24,7 @@ from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
 from django.core.paginator import Page, Paginator
 from django.db import transaction
-from django.db.models import Count, QuerySet
+from django.db.models import Count, Q, QuerySet
 from django.utils import timezone
 
 from accounts.models import CustomUser
@@ -35,6 +35,7 @@ from agents.types import (
     ChatMessage,
     ScreenshotCallback,
 )
+from auto_tester.celery import app as celery_app
 from projects.models import (
     ParsedTestCase,
     Project,
@@ -677,8 +678,6 @@ def start_upload_processing(upload: TestCaseUpload) -> str:
 
 def cancel_upload_processing(upload: TestCaseUpload) -> None:
     """Revoke Celery task if running, delete partial test cases, set status cancelled."""
-    from auto_tester.celery import app as celery_app
-
     celery_app.control.revoke(upload.celery_task_id, terminate=True)
     upload.test_cases.all().delete()
     upload.status = UploadStatus.CANCELLED
@@ -974,8 +973,8 @@ def remove_case_from_test_run(test_run: TestRun, pivot_id: int) -> None:
 
 @transaction.atomic
 def redo_test_run(test_run: TestRun) -> None:
-    if test_run.status != TestRunStatus.DONE:
-        raise ValueError("Only completed test runs can be redone.")
+    if test_run.status not in (TestRunStatus.DONE, TestRunStatus.CANCELLED):
+        raise ValueError("Only completed or cancelled test runs can be redone.")
     for pivot in test_run.pivot_entries.all():
         for screenshot in pivot.screenshots.all():
             screenshot.image.delete(save=False)
@@ -985,7 +984,8 @@ def redo_test_run(test_run: TestRun) -> None:
         pivot.logs = ""
         pivot.save(update_fields=["status", "result", "logs", "updated_at"])
     test_run.status = TestRunStatus.WAITING
-    test_run.save(update_fields=["status", "updated_at"])
+    test_run.celery_task_id = ""
+    test_run.save(update_fields=["status", "celery_task_id", "updated_at"])
 
 
 def _has_active_test_run(project: Project) -> bool:
@@ -1009,18 +1009,21 @@ def start_test_run(test_run: TestRun) -> None:
     test_run.save(update_fields=["status", "updated_at"])
     _broadcast_test_run_status(test_run)
 
-    chain(*[execute_test_run_case.si(pid) for pid in pivot_ids]).apply_async()
+    result = chain(*[execute_test_run_case.si(pid) for pid in pivot_ids]).apply_async()
+    test_run.celery_task_id = result.id
+    test_run.save(update_fields=["celery_task_id", "updated_at"])
 
 
 def get_test_run_summary(test_run: TestRun) -> dict[str, int]:
-    pivots = test_run.pivot_entries.all()
-    return {
-        "total": pivots.count(),
-        "created": pivots.filter(status=TestRunTestCaseStatus.CREATED).count(),
-        "in_progress": pivots.filter(status=TestRunTestCaseStatus.IN_PROGRESS).count(),
-        "success": pivots.filter(status=TestRunTestCaseStatus.SUCCESS).count(),
-        "failed": pivots.filter(status=TestRunTestCaseStatus.FAILED).count(),
-    }
+    result = test_run.pivot_entries.aggregate(
+        total=Count("id"),
+        created=Count("id", filter=Q(status=TestRunTestCaseStatus.CREATED)),
+        in_progress=Count("id", filter=Q(status=TestRunTestCaseStatus.IN_PROGRESS)),
+        success=Count("id", filter=Q(status=TestRunTestCaseStatus.SUCCESS)),
+        failed=Count("id", filter=Q(status=TestRunTestCaseStatus.FAILED)),
+        cancelled=Count("id", filter=Q(status=TestRunTestCaseStatus.CANCELLED)),
+    )
+    return {k: v or 0 for k, v in result.items()}
 
 
 # ============================================================================
@@ -1184,6 +1187,9 @@ def execute_test_run_test_case(pivot_id: int) -> None:
     from agents.services.agent_loop import build_agent_config, run_agent
 
     pivot = _fetch_pivot(pivot_id)
+    if pivot.test_run.status == TestRunStatus.CANCELLED:
+        return
+
     project = pivot.test_run.project
     _mark_pivot_in_progress(pivot)
 
@@ -1331,8 +1337,51 @@ def _mark_pivot_failed(pivot: TestRunTestCase, error: str) -> None:
     _broadcast_pivot_status_to_case(pivot)
 
 
+def _mark_pivot_cancelled(pivot: TestRunTestCase) -> None:
+    pivot.status = TestRunTestCaseStatus.CANCELLED
+    pivot.save(update_fields=["status", "updated_at"])
+    _broadcast_pivot_status_to_run(pivot)
+    _broadcast_pivot_status_to_case(pivot)
+
+
+@transaction.atomic
+def abort_test_run(test_run: TestRun, reason: str = "Test run aborted") -> None:
+    if test_run.status != TestRunStatus.STARTED:
+        return
+
+    test_run.status = TestRunStatus.CANCELLED
+    test_run.save(update_fields=["status", "updated_at"])
+
+    for pivot in test_run.pivot_entries.filter(
+        status=TestRunTestCaseStatus.IN_PROGRESS
+    ):
+        _mark_pivot_failed(pivot, reason)
+
+    for pivot in test_run.pivot_entries.filter(status=TestRunTestCaseStatus.CREATED):
+        _mark_pivot_cancelled(pivot)
+
+    _broadcast_test_run_status(test_run)
+
+    celery_task_id = test_run.celery_task_id
+    if celery_task_id:
+        transaction.on_commit(
+            lambda: celery_app.control.revoke(celery_task_id, terminate=True)
+        )
+
+
+def abort_active_test_run_on_disconnect(project: Project) -> None:
+    active_run = TestRun.objects.filter(
+        project=project, status=TestRunStatus.STARTED
+    ).first()
+    if active_run is not None:
+        abort_test_run(active_run, reason="Controller client disconnected")
+
+
 def _update_test_run_status_if_needed(test_run: TestRun) -> None:
     test_run.refresh_from_db()
+    if test_run.status == TestRunStatus.CANCELLED:
+        return
+
     all_pivots = test_run.pivot_entries.all()
 
     if not all_pivots.exists():
