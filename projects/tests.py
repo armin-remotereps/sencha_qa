@@ -56,10 +56,12 @@ from projects.services import (
     add_cases_to_test_run,
     archive_project,
     broadcast_agent_status,
+    copy_test_cases_to_project,
     create_project,
     create_test_case,
     create_test_run_with_cases,
     delete_test_case,
+    duplicate_project,
     execute_test_run_test_case,
     generate_api_key,
     get_all_tags_for_user,
@@ -70,6 +72,7 @@ from projects.services import (
     get_test_run_case_detail,
     get_test_run_for_project,
     get_test_run_summary,
+    list_other_projects_for_user,
     list_projects_for_user,
     list_test_cases_for_project,
     list_test_run_cases,
@@ -5632,3 +5635,341 @@ class ControllerActionServiceTests(TestCase):
         self.assertEqual(result["width"], 1920)
         self.assertEqual(result["height"], 1080)
         self.assertEqual(result["format"], "png")
+
+
+# ============================================================================
+# PROJECT DUPLICATION & TEST CASE COPY TESTS
+# ============================================================================
+
+
+class DuplicateProjectServiceTests(TestCase):
+    """Tests for duplicate_project service function."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="dupuser@example.com",
+            password="pass123",
+        )
+        self.source = create_project(
+            user=self.user,
+            name="Original",
+            tag_names=["python", "django"],
+        )
+        TestCaseModel.objects.create(
+            project=self.source,
+            title="TC1",
+            type="Functional",
+            priority="4 - Must Test",
+            steps="Step 1",
+            expected="Expected 1",
+        )
+        TestCaseModel.objects.create(
+            project=self.source,
+            title="TC2",
+            type="Regression",
+            priority="5 - Must Test",
+            preconditions="Pre 2",
+        )
+
+    def test_should_create_project_with_given_name(self) -> None:
+        dup = duplicate_project(
+            source_project=self.source, user=self.user, name="My Copy"
+        )
+        self.assertEqual(dup.name, "My Copy")
+
+    def test_should_copy_tags(self) -> None:
+        dup = duplicate_project(source_project=self.source, user=self.user, name="Copy")
+        tag_names = set(dup.tags.values_list("name", flat=True))
+        self.assertEqual(tag_names, {"python", "django"})
+
+    def test_should_add_requesting_user_as_sole_member(self) -> None:
+        other = CustomUser.objects.create_user(
+            email="other@example.com", password="pass123"
+        )
+        self.source.members.add(other)
+        dup = duplicate_project(source_project=self.source, user=self.user, name="Copy")
+        members = list(dup.members.all())
+        self.assertEqual(len(members), 1)
+        self.assertEqual(members[0], self.user)
+
+    def test_should_copy_all_test_cases(self) -> None:
+        dup = duplicate_project(source_project=self.source, user=self.user, name="Copy")
+        self.assertEqual(dup.test_cases.count(), 2)
+
+    def test_copied_test_cases_should_have_null_upload(self) -> None:
+        dup = duplicate_project(source_project=self.source, user=self.user, name="Copy")
+        for tc in dup.test_cases.all():
+            self.assertIsNone(tc.upload)
+
+    def test_copied_test_cases_should_preserve_fields(self) -> None:
+        dup = duplicate_project(source_project=self.source, user=self.user, name="Copy")
+        tc1 = dup.test_cases.get(title="TC1")
+        self.assertEqual(tc1.type, "Functional")
+        self.assertEqual(tc1.steps, "Step 1")
+        self.assertEqual(tc1.expected, "Expected 1")
+
+    def test_should_generate_unique_api_key(self) -> None:
+        dup = duplicate_project(source_project=self.source, user=self.user, name="Copy")
+        self.assertNotEqual(dup.api_key, self.source.api_key)
+
+    def test_source_project_should_remain_untouched(self) -> None:
+        duplicate_project(source_project=self.source, user=self.user, name="Copy")
+        self.source.refresh_from_db()
+        self.assertEqual(self.source.name, "Original")
+        self.assertEqual(self.source.test_cases.count(), 2)
+
+
+class CopyTestCasesToProjectServiceTests(TestCase):
+    """Tests for copy_test_cases_to_project service function."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="copyuser@example.com",
+            password="pass123",
+        )
+        self.source = create_project(user=self.user, name="Source", tag_names=[])
+        self.target = create_project(user=self.user, name="Target", tag_names=[])
+        self.tc1 = TestCaseModel.objects.create(
+            project=self.source, title="TC1", steps="S1", expected="E1"
+        )
+        self.tc2 = TestCaseModel.objects.create(
+            project=self.source, title="TC2", steps="S2", expected="E2"
+        )
+        self.tc3 = TestCaseModel.objects.create(
+            project=self.source, title="TC3", steps="S3", expected="E3"
+        )
+
+    def test_should_copy_selected_cases_to_target(self) -> None:
+        count = copy_test_cases_to_project(
+            source_project=self.source,
+            target_project=self.target,
+            test_case_ids=[self.tc1.id, self.tc3.id],
+        )
+        self.assertEqual(count, 2)
+        self.assertEqual(self.target.test_cases.count(), 2)
+
+    def test_should_preserve_fields_on_copy(self) -> None:
+        copy_test_cases_to_project(
+            source_project=self.source,
+            target_project=self.target,
+            test_case_ids=[self.tc1.id],
+        )
+        copied = self.target.test_cases.get(title="TC1")
+        self.assertEqual(copied.steps, "S1")
+        self.assertEqual(copied.expected, "E1")
+
+    def test_copied_cases_should_have_null_upload(self) -> None:
+        copy_test_cases_to_project(
+            source_project=self.source,
+            target_project=self.target,
+            test_case_ids=[self.tc1.id],
+        )
+        for tc in self.target.test_cases.all():
+            self.assertIsNone(tc.upload)
+
+    def test_should_ignore_foreign_ids(self) -> None:
+        other_project = create_project(user=self.user, name="Other", tag_names=[])
+        foreign_tc = TestCaseModel.objects.create(
+            project=other_project, title="Foreign"
+        )
+        count = copy_test_cases_to_project(
+            source_project=self.source,
+            target_project=self.target,
+            test_case_ids=[self.tc1.id, foreign_tc.id],
+        )
+        self.assertEqual(count, 1)
+
+    def test_source_should_remain_untouched(self) -> None:
+        copy_test_cases_to_project(
+            source_project=self.source,
+            target_project=self.target,
+            test_case_ids=[self.tc1.id, self.tc2.id],
+        )
+        self.assertEqual(self.source.test_cases.count(), 3)
+
+
+class ListOtherProjectsForUserServiceTests(TestCase):
+    """Tests for list_other_projects_for_user service function."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="listuser@example.com",
+            password="pass123",
+        )
+        self.p1 = create_project(user=self.user, name="Alpha", tag_names=[])
+        self.p2 = create_project(user=self.user, name="Beta", tag_names=[])
+        self.p3 = create_project(user=self.user, name="Gamma", tag_names=[])
+
+    def test_should_exclude_current_project(self) -> None:
+        result = list_other_projects_for_user(user=self.user, exclude_project=self.p1)
+        ids = set(result.values_list("id", flat=True))
+        self.assertNotIn(self.p1.id, ids)
+        self.assertIn(self.p2.id, ids)
+        self.assertIn(self.p3.id, ids)
+
+    def test_should_exclude_archived_projects(self) -> None:
+        archive_project(self.p2)
+        result = list_other_projects_for_user(user=self.user, exclude_project=self.p1)
+        ids = set(result.values_list("id", flat=True))
+        self.assertNotIn(self.p2.id, ids)
+
+    def test_should_exclude_non_member_projects(self) -> None:
+        other_user = CustomUser.objects.create_user(
+            email="other@example.com", password="pass123"
+        )
+        foreign = create_project(user=other_user, name="Foreign", tag_names=[])
+        result = list_other_projects_for_user(user=self.user, exclude_project=self.p1)
+        ids = set(result.values_list("id", flat=True))
+        self.assertNotIn(foreign.id, ids)
+
+    def test_should_order_by_name(self) -> None:
+        result = list(
+            list_other_projects_for_user(
+                user=self.user, exclude_project=self.p1
+            ).values_list("name", flat=True)
+        )
+        self.assertEqual(result, ["Beta", "Gamma"])
+
+
+class ProjectDuplicateViewTests(TestCase):
+    """Tests for project_duplicate view."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="dupview@example.com",
+            password="pass123",
+        )
+        self.non_member = CustomUser.objects.create_user(
+            email="nonmember@example.com",
+            password="pass123",
+        )
+        self.project = create_project(
+            user=self.user, name="Original", tag_names=["web"]
+        )
+        TestCaseModel.objects.create(project=self.project, title="TC1")
+
+    def test_should_redirect_when_unauthenticated(self) -> None:
+        response = self.client.post(
+            reverse("projects:duplicate", args=[self.project.id])
+        )
+        self.assertEqual(response.status_code, 302)
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
+
+    def test_should_return_405_for_get_request(self) -> None:
+        self.client.force_login(self.user)
+        response = self.client.get(
+            reverse("projects:duplicate", args=[self.project.id])
+        )
+        self.assertEqual(response.status_code, 405)
+
+    def test_should_return_404_when_user_not_member(self) -> None:
+        self.client.force_login(self.non_member)
+        response = self.client.post(
+            reverse("projects:duplicate", args=[self.project.id])
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_return_404_for_missing_project(self) -> None:
+        self.client.force_login(self.user)
+        response = self.client.post(reverse("projects:duplicate", args=[99999]))
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_duplicate_with_custom_name(self) -> None:
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("projects:duplicate", args=[self.project.id]),
+            {"name": "Custom Name"},
+        )
+        self.assertRedirects(response, reverse("projects:list"))
+        dup = Project.objects.get(name="Custom Name")
+        self.assertEqual(dup.test_cases.count(), 1)
+        self.assertIn(self.user, dup.members.all())
+
+    def test_should_duplicate_with_default_name(self) -> None:
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("projects:duplicate", args=[self.project.id]),
+        )
+        self.assertRedirects(response, reverse("projects:list"))
+        self.assertTrue(Project.objects.filter(name="Copy of Original").exists())
+
+
+class CopyTestCasesToProjectViewTests(TestCase):
+    """Tests for test_case_copy_to_project view."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="copyview@example.com",
+            password="pass123",
+        )
+        self.non_member = CustomUser.objects.create_user(
+            email="nonmember2@example.com",
+            password="pass123",
+        )
+        self.source = create_project(user=self.user, name="Source", tag_names=[])
+        self.target = create_project(user=self.user, name="Target", tag_names=[])
+        self.tc1 = TestCaseModel.objects.create(project=self.source, title="TC1")
+        self.tc2 = TestCaseModel.objects.create(project=self.source, title="TC2")
+
+    def test_should_redirect_when_unauthenticated(self) -> None:
+        response = self.client.post(
+            reverse("projects:test_case_copy_to_project", args=[self.source.id])
+        )
+        self.assertEqual(response.status_code, 302)
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
+
+    def test_should_return_405_for_get_request(self) -> None:
+        self.client.force_login(self.user)
+        response = self.client.get(
+            reverse("projects:test_case_copy_to_project", args=[self.source.id])
+        )
+        self.assertEqual(response.status_code, 405)
+
+    def test_should_return_404_when_user_not_member_of_source(self) -> None:
+        self.client.force_login(self.non_member)
+        response = self.client.post(
+            reverse("projects:test_case_copy_to_project", args=[self.source.id]),
+            {"target_project_id": self.target.id, "test_case_ids": [self.tc1.id]},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_return_404_when_user_not_member_of_target(self) -> None:
+        self.client.force_login(self.user)
+        other_user = CustomUser.objects.create_user(
+            email="otherowner@example.com", password="pass123"
+        )
+        foreign_target = create_project(user=other_user, name="Foreign", tag_names=[])
+        response = self.client.post(
+            reverse("projects:test_case_copy_to_project", args=[self.source.id]),
+            {"target_project_id": foreign_target.id, "test_case_ids": [self.tc1.id]},
+        )
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_redirect_on_empty_ids(self) -> None:
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("projects:test_case_copy_to_project", args=[self.source.id]),
+            {"target_project_id": self.target.id},
+        )
+        self.assertRedirects(
+            response,
+            reverse("projects:test_case_list", args=[self.source.id]),
+        )
+
+    def test_should_copy_and_redirect_to_target(self) -> None:
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("projects:test_case_copy_to_project", args=[self.source.id]),
+            {
+                "target_project_id": self.target.id,
+                "test_case_ids": [self.tc1.id, self.tc2.id],
+            },
+        )
+        self.assertRedirects(
+            response,
+            reverse("projects:test_case_list", args=[self.target.id]),
+        )
+        self.assertEqual(self.target.test_cases.count(), 2)
+        self.assertEqual(self.source.test_cases.count(), 2)
