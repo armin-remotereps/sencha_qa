@@ -25,7 +25,7 @@ from django.core.files.uploadedfile import UploadedFile
 from django.core.paginator import Page, Paginator
 from django.db import transaction
 from django.db.models import Count, Prefetch, Q, QuerySet
-from django.utils import timezone
+from django.utils import dateformat, timezone
 
 from accounts.models import CustomUser
 from agents.types import (
@@ -1310,7 +1310,7 @@ def _broadcast_screenshot(
         "screenshot_id": screenshot.id,
         "image_url": screenshot.image.url,
         "tool_name": screenshot.tool_name,
-        "created_at": screenshot.created_at.isoformat(),
+        "created_at": dateformat.format(screenshot.created_at, "M d, H:i"),
     }
     async_to_sync(layer.group_send)(_test_run_case_group(pivot.id), event)
 
