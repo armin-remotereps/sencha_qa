@@ -569,6 +569,9 @@ def test_run_detail(
     page = _parse_page(request)
     per_page = _parse_per_page(request)
     cases = list_test_run_cases(test_run=test_run, page=page, per_page=per_page)
+    for pivot in cases:
+        all_screenshots = list(pivot.screenshots.all())
+        pivot.last_screenshot = all_screenshots[-1] if all_screenshots else None  # type: ignore[attr-defined]
     summary = get_test_run_summary(test_run)
     form = TestCaseForm()
     can_edit = can_edit_test_case_in_run(test_run)
@@ -597,7 +600,7 @@ def test_run_case_detail(
     pivot = get_test_run_case_detail(pivot_id, project)
     if pivot is None or pivot.test_run_id != test_run_id:
         raise Http404
-    screenshots = pivot.screenshots.all()
+    screenshots = list(pivot.screenshots.all())
     form = TestCaseForm()
     can_edit = can_edit_test_case_in_run(pivot.test_run)
     return render(

@@ -5,6 +5,7 @@ from typing import Any
 
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+from django.utils import dateformat
 
 from accounts.models import CustomUser
 from projects.models import (
@@ -196,7 +197,7 @@ class TestRunCaseConsumer(AuthenticatedConsumer):
                             "screenshot_id": s.id,
                             "image_url": s.image.url,
                             "tool_name": s.tool_name,
-                            "created_at": s.created_at.isoformat(),
+                            "created_at": dateformat.format(s.created_at, "M d, H:i"),
                         }
                         for s in screenshots
                     ],
