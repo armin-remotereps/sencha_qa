@@ -24,6 +24,16 @@ urlpatterns: list[URLPattern] = [
         name="regenerate_api_key",
     ),
     path(
+        "<int:project_id>/save-prompt/",
+        views.project_save_prompt,
+        name="save_prompt",
+    ),
+    path(
+        "<int:project_id>/refine-prompt/",
+        views.project_refine_prompt,
+        name="refine_prompt",
+    ),
+    path(
         "<int:project_id>/download-client/",
         views.download_controller_client,
         name="download_controller_client",

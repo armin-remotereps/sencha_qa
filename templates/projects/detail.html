@@ -226,6 +226,71 @@
     </div>
   </div>
 
+  {# PROJECT PROMPT #}
+  <div
+    x-data="projectPrompt()"
+    class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-5"
+  >
+    <div class="mb-4 flex items-center justify-between">
+      <h2 class="text-lg font-semibold text-zinc-100">Project Prompt</h2>
+      <span class="text-xs text-zinc-500" x-text="prompt.length + ' / {{ prompt_max_length }}'"></span>
+    </div>
+    <p class="mb-3 text-sm text-zinc-400">
+      Provide context about your application for the AI agent: URLs, credentials,
+      environment details, navigation hints, and known issues.
+    </p>
+    <textarea
+      x-model="prompt"
+      maxlength="{{ prompt_max_length }}"
+      rows="8"
+      placeholder="e.g. App URL: https://staging.myapp.com&#10;Login: admin@test.com / password123&#10;The dashboard takes ~5s to load after login..."
+      class="w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 placeholder-zinc-600 focus:border-emerald-600 focus:outline-none focus:ring-1 focus:ring-emerald-600"
+    ></textarea>
+    <p
+      x-show="prompt.length > {{ prompt_max_length }} * 0.95"
+      class="mt-1 text-xs text-amber-400"
+    >
+      Approaching character limit
+    </p>
+    <div class="mt-3 flex items-center gap-3">
+      <form
+        id="savePromptForm"
+        method="post"
+        action="{% url 'projects:save_prompt' project_id=project.id %}"
+      >
+        {% csrf_token %}
+        <input type="hidden" name="project_prompt" :value="prompt" />
+        <button
+          type="submit"
+          :disabled="!dirty"
+          :class="dirty
+            ? 'bg-emerald-700 text-white hover:bg-emerald-600'
+            : 'bg-zinc-700 text-zinc-500 cursor-not-allowed'"
+          class="rounded-md px-4 py-2 text-sm font-medium"
+        >
+          Save Prompt
+        </button>
+      </form>
+      <button
+        @click="refineWithAI()"
+        :disabled="refining || !prompt.trim()"
+        :class="refining || !prompt.trim()
+          ? 'bg-zinc-700 text-zinc-500 cursor-not-allowed'
+          : 'bg-indigo-700 text-white hover:bg-indigo-600'"
+        class="rounded-md px-4 py-2 text-sm font-medium"
+      >
+        <span x-show="!refining">Refine with AI</span>
+        <span x-show="refining">Refining...</span>
+      </button>
+      <span
+        x-show="statusMsg"
+        x-text="statusMsg"
+        :class="statusError ? 'text-red-400' : 'text-emerald-400'"
+        class="text-sm"
+      ></span>
+    </div>
+  </div>
+
   {# NAVIGATION LINKS #}
   <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-5">
     <h2 class="mb-4 text-lg font-semibold text-zinc-100">Project Navigation</h2>
@@ -287,4 +352,55 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('projectPrompt', () => ({
+    prompt: '{{ project.project_prompt|escapejs }}',
+    savedPrompt: '{{ project.project_prompt|escapejs }}',
+    dirty: false,
+    refining: false,
+    statusMsg: '',
+    statusError: false,
+
+    init() {
+      this.$watch('prompt', () => {
+        this.dirty = this.prompt !== this.savedPrompt;
+      });
+    },
+
+    async refineWithAI() {
+      this.refining = true;
+      this.statusMsg = '';
+      this.statusError = false;
+      try {
+        const csrfToken = document.querySelector('#savePromptForm [name=csrfmiddlewaretoken]').value;
+        const resp = await fetch('{% url "projects:refine_prompt" project_id=project.id %}', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': csrfToken,
+          },
+          body: JSON.stringify({ prompt: this.prompt }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          this.statusMsg = data.error || 'Refinement failed.';
+          this.statusError = true;
+          return;
+        }
+        this.prompt = data.refined_prompt;
+        this.statusMsg = 'Refined successfully — review and save.';
+      } catch (err) {
+        this.statusMsg = 'Could not reach the server.';
+        this.statusError = true;
+      } finally {
+        this.refining = false;
+      }
+    },
+  }));
+});
+</script>
 {% endblock %}

@@ -221,9 +221,16 @@ def get_project_by_api_key(api_key: str) -> Project | None:
 
 
 def regenerate_api_key(project: Project) -> str:
+    """Generate and persist a new API key for the given project."""
     project.api_key = generate_api_key()
     project.save()
     return project.api_key
+
+
+def save_project_prompt(*, project: Project, prompt: str) -> Project:
+    project.project_prompt = prompt
+    project.save(update_fields=["project_prompt", "updated_at"])
+    return project
 
 
 def mark_agent_connected(project: Project, system_info: dict[str, Any]) -> bool:
@@ -1166,7 +1173,8 @@ def start_test_run(test_run: TestRun) -> None:
         raise ValueError("Another test run is already in progress for this project.")
 
     test_run.status = TestRunStatus.STARTED
-    test_run.save(update_fields=["status", "updated_at"])
+    test_run.project_prompt = test_run.project.project_prompt
+    test_run.save(update_fields=["status", "project_prompt", "updated_at"])
     _broadcast_test_run_status(test_run)
 
     result = chain(*[execute_test_run_case.si(pid) for pid in pivot_ids]).apply_async()
@@ -1369,6 +1377,7 @@ def execute_test_run_test_case(pivot_id: int) -> None:
             project.id,
             config=config,
             system_info=project.agent_system_info or None,
+            project_prompt=pivot.test_run.project_prompt or None,
         )
         _finalize_pivot(pivot, result)
     except Exception as exc:

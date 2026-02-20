@@ -79,6 +79,7 @@ class Project(models.Model):
     agent_connected = models.BooleanField(default=False, db_index=True)
     agent_system_info = models.JSONField(default=dict, blank=True)
     last_connected_at = models.DateTimeField(null=True, blank=True)
+    project_prompt = models.TextField(blank=True, default="")
 
     def __str__(self) -> str:
         return self.name
@@ -192,6 +193,7 @@ class TestRun(models.Model):
         db_index=True,
     )
     celery_task_id = models.CharField(max_length=255, blank=True, default="")
+    project_prompt = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

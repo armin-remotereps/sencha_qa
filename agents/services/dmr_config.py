@@ -25,6 +25,16 @@ def build_summarizer_config(*, model: str | None = None) -> DMRConfig:
     )
 
 
+def build_refiner_config(*, model: str | None = None) -> DMRConfig:
+    return DMRConfig(
+        host=settings.DMR_HOST,
+        port=settings.DMR_PORT,
+        model=model or settings.DMR_PROMPT_REFINER_MODEL,
+        temperature=0.3,
+        max_tokens=2048,
+    )
+
+
 def build_vision_dmr_config(*, model: str | None = None) -> DMRConfig:
     return DMRConfig(
         host=settings.DMR_HOST,
