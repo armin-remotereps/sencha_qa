@@ -5,11 +5,19 @@ import sys
 
 from controller_client.client import ControllerClient
 from controller_client.config import load_config, setup_logging
+from controller_client.exceptions import PrivilegeError
+from controller_client.privileges import check_privileges
 
 logger = logging.getLogger(__name__)
 
 
 def main(argv: list[str] | None = None) -> None:
+    try:
+        check_privileges()
+    except PrivilegeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     config = load_config(argv)
     setup_logging(config.log_level)
 
