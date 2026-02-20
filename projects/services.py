@@ -743,6 +743,10 @@ def create_test_case(*, project: Project, data: TestCaseData) -> TestCase:
     return TestCase.objects.create(project=project, **asdict(data))
 
 
+def can_edit_test_case_in_run(test_run: TestRun) -> bool:
+    return test_run.status != TestRunStatus.STARTED
+
+
 def update_test_case(*, test_case: TestCase, data: TestCaseData) -> TestCase:
     for field, value in asdict(data).items():
         setattr(test_case, field, value)

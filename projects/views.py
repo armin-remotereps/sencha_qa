@@ -5,9 +5,10 @@ from typing import Any
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Page
-from django.http import Http404, HttpRequest, HttpResponse
+from django.http import Http404, HttpRequest, HttpResponse, HttpResponseForbidden
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from accounts.models import CustomUser
@@ -19,6 +20,7 @@ from projects.services import (
     abort_test_run,
     add_cases_to_test_run,
     archive_project,
+    can_edit_test_case_in_run,
     cancel_upload_processing,
     copy_test_cases_to_project,
     create_project,
@@ -551,6 +553,8 @@ def test_run_detail(
     per_page = _parse_per_page(request)
     cases = list_test_run_cases(test_run=test_run, page=page, per_page=per_page)
     summary = get_test_run_summary(test_run)
+    form = TestCaseForm()
+    can_edit = can_edit_test_case_in_run(test_run)
     return render(
         request,
         "projects/test_run_detail.html",
@@ -563,6 +567,8 @@ def test_run_detail(
             "allowed_per_page": ALLOWED_PER_PAGE,
             "elided_page_range": _get_elided_page_range(cases),
             "query_params": _build_query_params(request),
+            "form": form,
+            "can_edit": can_edit,
         },
     )
 
@@ -575,6 +581,8 @@ def test_run_case_detail(
     if pivot is None or pivot.test_run_id != test_run_id:
         raise Http404
     screenshots = pivot.screenshots.all()
+    form = TestCaseForm()
+    can_edit = can_edit_test_case_in_run(pivot.test_run)
     return render(
         request,
         "projects/test_run_case_detail.html",
@@ -583,5 +591,42 @@ def test_run_case_detail(
             "test_run": pivot.test_run,
             "pivot": pivot,
             "screenshots": screenshots,
+            "form": form,
+            "can_edit": can_edit,
         },
     )
+
+
+@project_membership_required
+@require_POST
+def test_run_case_edit(
+    request: HttpRequest,
+    project: Project,
+    test_run_id: int,
+    test_case_id: int,
+) -> HttpResponse:
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    if not can_edit_test_case_in_run(test_run):
+        return HttpResponseForbidden()
+    test_case = get_test_case_for_project(test_case_id, project)
+    if test_case is None:
+        raise Http404
+    if not test_run.pivot_entries.filter(test_case=test_case).exists():
+        raise Http404
+    form = TestCaseForm(request.POST)
+    if form.is_valid():
+        update_test_case(test_case=test_case, data=form.to_data())
+    else:
+        messages.error(request, "Invalid test case data. Please check your input.")
+    fallback_url = reverse(
+        "projects:test_run_detail",
+        kwargs={"project_id": project.id, "test_run_id": test_run.id},
+    )
+    next_url = request.POST.get("next", "")
+    if next_url and url_has_allowed_host_and_scheme(
+        next_url, allowed_hosts={request.get_host()}
+    ):
+        return redirect(next_url)
+    return redirect(fallback_url)
