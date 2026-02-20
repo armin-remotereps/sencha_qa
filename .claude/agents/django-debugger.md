@@ -92,7 +92,7 @@ When presented with a bug or error, follow this systematic approach:
 - **Never bypass the service layer** — If the bug is in a view or task doing business logic, the fix is to move that logic to a service
 - **Never install packages with `pip install x`** — If a new dependency is needed, find it on PyPI, add it to requirements.txt as `package~=x.y.z`, then install via `pip install -r requirements.txt`
 - **Never use `os.environ` directly in application code** — All env vars go through settings.py
-- **Preserve existing test patterns** — When modifying tests, follow the existing test style and TDD approach
+- **No unit tests** — Do not write pytest/unittest files or use mocks. Testing is done E2E by dedicated testing agents
 - **Always check `example.env`** — If you add or modify any environment variable in settings.py, update example.env accordingly
 
 ## Output Format

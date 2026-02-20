@@ -88,21 +88,12 @@ def _handle_results(results: list[ResultType | BaseException]) -> list[ResultTyp
     ...
 ```
 
-## Test-First Approach
+## Implementation Approach
 
-Before implementing any logic:
 1. **Define the interface** — Create function/class stubs with full type signatures and docstrings.
-2. **Write tests** — Create comprehensive test cases using `pytest` and `pytest-asyncio` that cover:
-   - Happy path with multiple items
-   - Empty input
-   - Single item
-   - Semaphore respects concurrency limit (use timing or mock to verify)
-   - Individual task failure doesn't crash the batch
-   - All tasks failing
-   - Cancellation/timeout behavior
-3. **Run tests** — Confirm they fail (red phase).
-4. **Implement** — Write the minimal, clean code to make tests pass (green phase).
-5. **Refactor** — Simplify and clean up while keeping tests green.
+2. **Implement** — Write the clean, minimal code.
+3. **Refactor** — Simplify and clean up.
+4. Testing is done E2E by `logic-tester` agent against the real system — do NOT write pytest/unittest files or use mocks.
 
 ## Django/Celery Integration Notes
 
