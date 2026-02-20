@@ -86,6 +86,19 @@ class BrowserDownloadActionEvent(BaseActionEvent):
     save_path: str
 
 
+class StartInteractiveCmdActionEvent(BaseActionEvent):
+    command: str
+
+
+class SendInputActionEvent(BaseActionEvent):
+    session_id: str
+    input_text: str
+
+
+class TerminateInteractiveCmdActionEvent(BaseActionEvent):
+    session_id: str
+
+
 class ActionTypeRegistry:
     _ACTION_TYPE_MAP: Final[dict[str, MessageType]] = {
         "controller.click": MessageType.CLICK,
@@ -104,6 +117,9 @@ class ActionTypeRegistry:
         "controller.browser_get_url": MessageType.BROWSER_GET_URL,
         "controller.browser_take_screenshot": MessageType.BROWSER_TAKE_SCREENSHOT,
         "controller.browser_download": MessageType.BROWSER_DOWNLOAD,
+        "controller.start_interactive_cmd": MessageType.START_INTERACTIVE_CMD,
+        "controller.send_input": MessageType.SEND_INPUT,
+        "controller.terminate_interactive_cmd": MessageType.TERMINATE_INTERACTIVE_CMD,
     }
 
     _PAYLOAD_KEYS: Final[dict[str, tuple[str, ...]]] = {
@@ -130,6 +146,9 @@ class ActionTypeRegistry:
         "controller.browser_get_url": (),
         "controller.browser_take_screenshot": (),
         "controller.browser_download": ("url", "save_path"),
+        "controller.start_interactive_cmd": ("command",),
+        "controller.send_input": ("session_id", "input_text"),
+        "controller.terminate_interactive_cmd": ("session_id",),
     }
 
     @classmethod

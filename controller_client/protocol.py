@@ -33,6 +33,10 @@ class MessageType(StrEnum):
     BROWSER_GET_URL = "browser_get_url"
     BROWSER_TAKE_SCREENSHOT = "browser_take_screenshot"
     BROWSER_DOWNLOAD = "browser_download"
+    START_INTERACTIVE_CMD = "start_interactive_cmd"
+    SEND_INPUT = "send_input"
+    TERMINATE_INTERACTIVE_CMD = "terminate_interactive_cmd"
+    INTERACTIVE_OUTPUT = "interactive_output"
 
 
 class MouseButton(StrEnum):
@@ -165,6 +169,31 @@ class BrowserDownloadPayload:
 class BrowserContentResultPayload:
     success: bool
     content: str
+    duration_ms: float
+
+
+@dataclass(frozen=True)
+class StartInteractiveCmdPayload:
+    command: str
+
+
+@dataclass(frozen=True)
+class SendInputPayload:
+    session_id: str
+    input_text: str
+
+
+@dataclass(frozen=True)
+class TerminateInteractiveCmdPayload:
+    session_id: str
+
+
+@dataclass(frozen=True)
+class InteractiveOutputPayload:
+    session_id: str
+    output: str
+    is_alive: bool
+    exit_code: int | None
     duration_ms: float
 
 
@@ -313,4 +342,45 @@ def parse_browser_download_payload(data: dict[str, object]) -> BrowserDownloadPa
     return BrowserDownloadPayload(
         url=_extract_str(data, "url"),
         save_path=_extract_str(data, "save_path", default=""),
+    )
+
+
+def _extract_bool(
+    data: dict[str, object], field: str, default: bool | None = None
+) -> bool:
+    value = data.get(field, default)
+    if not isinstance(value, bool):
+        raise ProtocolError(f"Missing or invalid '{field}'")
+    return value
+
+
+def _extract_optional_int(data: dict[str, object], field: str) -> int | None:
+    value = data.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, int):
+        raise ProtocolError(f"Invalid '{field}': expected int or null")
+    return value
+
+
+def parse_start_interactive_cmd_payload(
+    data: dict[str, object],
+) -> StartInteractiveCmdPayload:
+    return StartInteractiveCmdPayload(
+        command=_extract_str(data, "command"),
+    )
+
+
+def parse_send_input_payload(data: dict[str, object]) -> SendInputPayload:
+    return SendInputPayload(
+        session_id=_extract_str(data, "session_id"),
+        input_text=_extract_str(data, "input_text"),
+    )
+
+
+def parse_terminate_interactive_cmd_payload(
+    data: dict[str, object],
+) -> TerminateInteractiveCmdPayload:
+    return TerminateInteractiveCmdPayload(
+        session_id=_extract_str(data, "session_id"),
     )

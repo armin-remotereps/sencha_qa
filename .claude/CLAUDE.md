@@ -18,11 +18,6 @@ celery -A auto_tester worker -Q upload -l info -n upload@%h
 celery -A auto_tester worker -Q execution -l info -n execution@%h
 celery -A auto_tester beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
 
-# Tests
-pytest                                  # all tests
-pytest projects/tests.py                # single test file
-pytest -k test_name                     # single test by name
-
 # Type checking (strict mode)
 mypy .                                  # runs with strict=True, excludes venv|migrations|OmniParser
 
@@ -105,6 +100,10 @@ Project → TestCaseUpload → TestCase
 Project → TestRun → TestRunTestCase (pivot) → TestRunScreenshot
 Project has: members (M2M CustomUser), tags (M2M Tag), api_key, agent_connected
 ```
+
+## Testing
+
+**E2E only — no unit tests, no pytest, no mocking.** All testing is done by dedicated agents (`nightmare-tester` for UI, `logic-tester` for backend) against the real running system. Do not write pytest/unittest files.
 
 ## Parallel Development
 

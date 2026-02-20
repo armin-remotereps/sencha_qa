@@ -39,6 +39,25 @@ def _handle_execute_command(
     return tools_controller.execute_command(context.project_id, command=command)
 
 
+def _handle_start_interactive_command(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    command = str(arguments.get("command", ""))
+    return tools_controller.start_interactive_command(
+        context.project_id, command=command
+    )
+
+
+def _handle_send_command_input(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    session_id = str(arguments.get("session_id", ""))
+    input_text = str(arguments.get("input_text", ""))
+    return tools_controller.send_command_input(
+        context.project_id, session_id=session_id, input_text=input_text
+    )
+
+
 def _handle_take_screenshot(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
@@ -219,6 +238,8 @@ def _handle_web_search(
 
 _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "execute_command": _handle_execute_command,
+    "start_interactive_command": _handle_start_interactive_command,
+    "send_command_input": _handle_send_command_input,
     "take_screenshot": _handle_take_screenshot,
     "click": _handle_click,
     "type_text": _handle_type_text,

@@ -10,3 +10,4 @@ types-PyAutoGUI~=0.9.3.9
 mypy~=1.15.0
 black~=25.1.0
 isort~=6.0.1
+pexpect~=4.9.0

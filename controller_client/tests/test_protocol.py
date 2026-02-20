@@ -10,11 +10,17 @@ from controller_client.protocol import (
     DragPayload,
     ErrorCode,
     HoverPayload,
+    InteractiveOutputPayload,
     KeyPressPayload,
     MessageType,
     MouseButton,
     RunCommandPayload,
+    SendInputPayload,
+    StartInteractiveCmdPayload,
+    TerminateInteractiveCmdPayload,
     TypeTextPayload,
+    _extract_bool,
+    _extract_optional_int,
     deserialize_server_message,
     parse_click_payload,
     parse_drag_payload,
@@ -22,6 +28,9 @@ from controller_client.protocol import (
     parse_hover_payload,
     parse_key_press_payload,
     parse_run_command_payload,
+    parse_send_input_payload,
+    parse_start_interactive_cmd_payload,
+    parse_terminate_interactive_cmd_payload,
     parse_type_text_payload,
     serialize_message,
 )
@@ -246,3 +255,149 @@ class TestCommandResultPayload:
         )
         with pytest.raises(AttributeError):
             payload.success = True  # type: ignore[misc]
+
+
+class TestInteractiveMessageTypes:
+    def test_interactive_message_types(self) -> None:
+        assert MessageType.START_INTERACTIVE_CMD.value == "start_interactive_cmd"
+        assert MessageType.SEND_INPUT.value == "send_input"
+        assert (
+            MessageType.TERMINATE_INTERACTIVE_CMD.value == "terminate_interactive_cmd"
+        )
+        assert MessageType.INTERACTIVE_OUTPUT.value == "interactive_output"
+
+
+class TestExtractBool:
+    def test_valid_true(self) -> None:
+        data: dict[str, object] = {"is_alive": True}
+        assert _extract_bool(data, "is_alive") is True
+
+    def test_valid_false(self) -> None:
+        data: dict[str, object] = {"is_alive": False}
+        assert _extract_bool(data, "is_alive") is False
+
+    def test_default(self) -> None:
+        data: dict[str, object] = {}
+        assert _extract_bool(data, "is_alive", default=True) is True
+
+    def test_missing_raises(self) -> None:
+        data: dict[str, object] = {}
+        with pytest.raises(ProtocolError, match="is_alive"):
+            _extract_bool(data, "is_alive")
+
+    def test_wrong_type_raises(self) -> None:
+        data: dict[str, object] = {"is_alive": "yes"}
+        with pytest.raises(ProtocolError, match="is_alive"):
+            _extract_bool(data, "is_alive")
+
+
+class TestExtractOptionalInt:
+    def test_valid_int(self) -> None:
+        data: dict[str, object] = {"exit_code": 0}
+        assert _extract_optional_int(data, "exit_code") == 0
+
+    def test_none(self) -> None:
+        data: dict[str, object] = {"exit_code": None}
+        assert _extract_optional_int(data, "exit_code") is None
+
+    def test_missing(self) -> None:
+        data: dict[str, object] = {}
+        assert _extract_optional_int(data, "exit_code") is None
+
+    def test_wrong_type_raises(self) -> None:
+        data: dict[str, object] = {"exit_code": "zero"}
+        with pytest.raises(ProtocolError, match="exit_code"):
+            _extract_optional_int(data, "exit_code")
+
+
+class TestStartInteractiveCmdPayload:
+    def test_creation(self) -> None:
+        payload = StartInteractiveCmdPayload(command="sudo apt install -y nginx")
+        assert payload.command == "sudo apt install -y nginx"
+
+    def test_frozen(self) -> None:
+        payload = StartInteractiveCmdPayload(command="test")
+        with pytest.raises(AttributeError):
+            payload.command = "other"  # type: ignore[misc]
+
+
+class TestSendInputPayload:
+    def test_creation(self) -> None:
+        payload = SendInputPayload(session_id="abc-123", input_text="password")
+        assert payload.session_id == "abc-123"
+        assert payload.input_text == "password"
+
+
+class TestTerminateInteractiveCmdPayload:
+    def test_creation(self) -> None:
+        payload = TerminateInteractiveCmdPayload(session_id="abc-123")
+        assert payload.session_id == "abc-123"
+
+
+class TestInteractiveOutputPayload:
+    def test_creation(self) -> None:
+        payload = InteractiveOutputPayload(
+            session_id="s1",
+            output="some output",
+            is_alive=True,
+            exit_code=None,
+            duration_ms=42.5,
+        )
+        assert payload.session_id == "s1"
+        assert payload.output == "some output"
+        assert payload.is_alive is True
+        assert payload.exit_code is None
+        assert payload.duration_ms == 42.5
+
+    def test_with_exit_code(self) -> None:
+        payload = InteractiveOutputPayload(
+            session_id="s2",
+            output="",
+            is_alive=False,
+            exit_code=0,
+            duration_ms=100.0,
+        )
+        assert payload.exit_code == 0
+        assert payload.is_alive is False
+
+
+class TestParseStartInteractiveCmdPayload:
+    def test_valid(self) -> None:
+        data: dict[str, object] = {"command": "sudo apt install -y nginx"}
+        payload = parse_start_interactive_cmd_payload(data)
+        assert payload.command == "sudo apt install -y nginx"
+
+    def test_missing_command(self) -> None:
+        data: dict[str, object] = {}
+        with pytest.raises(ProtocolError, match="command"):
+            parse_start_interactive_cmd_payload(data)
+
+
+class TestParseSendInputPayload:
+    def test_valid(self) -> None:
+        data: dict[str, object] = {"session_id": "s1", "input_text": "y"}
+        payload = parse_send_input_payload(data)
+        assert payload.session_id == "s1"
+        assert payload.input_text == "y"
+
+    def test_missing_session_id(self) -> None:
+        data: dict[str, object] = {"input_text": "y"}
+        with pytest.raises(ProtocolError, match="session_id"):
+            parse_send_input_payload(data)
+
+    def test_missing_input_text(self) -> None:
+        data: dict[str, object] = {"session_id": "s1"}
+        with pytest.raises(ProtocolError, match="input_text"):
+            parse_send_input_payload(data)
+
+
+class TestParseTerminateInteractiveCmdPayload:
+    def test_valid(self) -> None:
+        data: dict[str, object] = {"session_id": "s1"}
+        payload = parse_terminate_interactive_cmd_payload(data)
+        assert payload.session_id == "s1"
+
+    def test_missing_session_id(self) -> None:
+        data: dict[str, object] = {}
+        with pytest.raises(ProtocolError, match="session_id"):
+            parse_terminate_interactive_cmd_payload(data)

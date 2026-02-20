@@ -31,6 +31,9 @@ from projects.controller_protocol import (
     KeyPressActionEvent,
     RunCommandActionEvent,
     ScreenshotActionEvent,
+    SendInputActionEvent,
+    StartInteractiveCmdActionEvent,
+    TerminateInteractiveCmdActionEvent,
     TypeTextActionEvent,
 )
 from projects.controller_reply_tracker import ReplyTracker
@@ -105,6 +108,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             "screenshot_response": self._reply_tracker.send_screenshot_result,
             "command_result": self._reply_tracker.send_command_result,
             "browser_content_result": self._reply_tracker.send_browser_content_result,
+            "interactive_output": self._reply_tracker.send_interactive_output,
         }
 
         handler = handlers.get(msg_type)
@@ -218,6 +222,19 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
     async def controller_browser_download(
         self, event: BrowserDownloadActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_start_interactive_cmd(
+        self, event: StartInteractiveCmdActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_send_input(self, event: SendInputActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_terminate_interactive_cmd(
+        self, event: TerminateInteractiveCmdActionEvent
     ) -> None:
         await self._forward_action(event)
 

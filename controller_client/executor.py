@@ -7,15 +7,20 @@ import pyautogui
 from PIL import Image
 
 from controller_client.exceptions import ExecutionError
+from controller_client.interactive_session import InteractiveSessionManager
 from controller_client.protocol import (
     ActionResultPayload,
     ClickPayload,
     CommandResultPayload,
     DragPayload,
     HoverPayload,
+    InteractiveOutputPayload,
     KeyPressPayload,
     RunCommandPayload,
     ScreenshotResponsePayload,
+    SendInputPayload,
+    StartInteractiveCmdPayload,
+    TerminateInteractiveCmdPayload,
     TypeTextPayload,
 )
 
@@ -173,4 +178,58 @@ def execute_screenshot() -> ScreenshotResponsePayload:
         width=width,
         height=height,
         format="png",
+    )
+
+
+def execute_start_interactive_cmd(
+    session_manager: InteractiveSessionManager,
+    payload: StartInteractiveCmdPayload,
+    timeout: float,
+) -> InteractiveOutputPayload:
+    try:
+        session = session_manager.start_session(payload.command, timeout)
+        output = session.start()
+    except Exception as e:
+        raise ExecutionError(f"Start interactive command failed: {e}") from e
+    return InteractiveOutputPayload(
+        session_id=session.session_id,
+        output=output,
+        is_alive=session.is_alive(),
+        exit_code=session.exit_code(),
+        duration_ms=session.elapsed_ms(),
+    )
+
+
+def execute_send_input(
+    session_manager: InteractiveSessionManager,
+    payload: SendInputPayload,
+) -> InteractiveOutputPayload:
+    try:
+        session = session_manager.get_session(payload.session_id)
+        output = session.send_input(payload.input_text)
+    except Exception as e:
+        raise ExecutionError(f"Send input failed: {e}") from e
+    return InteractiveOutputPayload(
+        session_id=session.session_id,
+        output=output,
+        is_alive=session.is_alive(),
+        exit_code=session.exit_code(),
+        duration_ms=session.elapsed_ms(),
+    )
+
+
+def execute_terminate_interactive_cmd(
+    session_manager: InteractiveSessionManager,
+    payload: TerminateInteractiveCmdPayload,
+) -> InteractiveOutputPayload:
+    try:
+        session = session_manager.terminate_session(payload.session_id)
+    except Exception as e:
+        raise ExecutionError(f"Terminate interactive command failed: {e}") from e
+    return InteractiveOutputPayload(
+        session_id=session.session_id,
+        output="",
+        is_alive=False,
+        exit_code=session.exit_code(),
+        duration_ms=session.elapsed_ms(),
     )

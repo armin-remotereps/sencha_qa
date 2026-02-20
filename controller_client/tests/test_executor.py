@@ -11,14 +11,21 @@ from controller_client.executor import (
     execute_hover,
     execute_key_press,
     execute_screenshot,
+    execute_send_input,
+    execute_start_interactive_cmd,
+    execute_terminate_interactive_cmd,
     execute_type_text,
 )
+from controller_client.interactive_session import InteractiveSessionManager
 from controller_client.protocol import (
     ClickPayload,
     DragPayload,
     HoverPayload,
     KeyPressPayload,
     RunCommandPayload,
+    SendInputPayload,
+    StartInteractiveCmdPayload,
+    TerminateInteractiveCmdPayload,
     TypeTextPayload,
 )
 
@@ -230,3 +237,65 @@ class TestExecuteScreenshot:
         mock_pyautogui.screenshot.side_effect = RuntimeError("no display")
         with pytest.raises(ExecutionError, match="Screenshot failed"):
             execute_screenshot()
+
+
+class TestExecuteStartInteractiveCmd:
+    def test_start_echo(self) -> None:
+        manager = InteractiveSessionManager()
+        payload = StartInteractiveCmdPayload(command="echo hello")
+        result = execute_start_interactive_cmd(manager, payload, timeout=30.0)
+        assert "hello" in result.output
+        assert len(result.session_id) > 0
+        assert result.duration_ms >= 0
+        manager.terminate_all()
+
+    def test_start_cat(self) -> None:
+        manager = InteractiveSessionManager()
+        payload = StartInteractiveCmdPayload(command="cat")
+        result = execute_start_interactive_cmd(manager, payload, timeout=30.0)
+        assert result.is_alive is True
+        assert len(result.session_id) > 0
+        manager.terminate_all()
+
+
+class TestExecuteSendInput:
+    def test_send_input_to_cat(self) -> None:
+        manager = InteractiveSessionManager()
+        start_payload = StartInteractiveCmdPayload(command="cat")
+        start_result = execute_start_interactive_cmd(
+            manager, start_payload, timeout=30.0
+        )
+        send_payload = SendInputPayload(
+            session_id=start_result.session_id, input_text="hello world"
+        )
+        result = execute_send_input(manager, send_payload)
+        assert "hello world" in result.output
+        manager.terminate_all()
+
+    def test_send_input_invalid_session(self) -> None:
+        manager = InteractiveSessionManager()
+        payload = SendInputPayload(session_id="bad-id", input_text="test")
+        with pytest.raises(ExecutionError, match="Send input failed"):
+            execute_send_input(manager, payload)
+
+
+class TestExecuteTerminateInteractiveCmd:
+    def test_terminate(self) -> None:
+        manager = InteractiveSessionManager()
+        start_payload = StartInteractiveCmdPayload(command="sleep 60")
+        start_result = execute_start_interactive_cmd(
+            manager, start_payload, timeout=30.0
+        )
+        term_payload = TerminateInteractiveCmdPayload(
+            session_id=start_result.session_id
+        )
+        result = execute_terminate_interactive_cmd(manager, term_payload)
+        assert result.is_alive is False
+
+    def test_terminate_invalid_session(self) -> None:
+        manager = InteractiveSessionManager()
+        payload = TerminateInteractiveCmdPayload(session_id="bad-id")
+        with pytest.raises(
+            ExecutionError, match="Terminate interactive command failed"
+        ):
+            execute_terminate_interactive_cmd(manager, payload)

@@ -24,3 +24,5 @@ flower~=2.0.1
 playwright~=1.50.0
 websockets~=16.0
 types-PyAutoGUI~=0.9.3.20241230
+pexpect~=4.9.0
+types-pexpect~=4.9.0.20260127
