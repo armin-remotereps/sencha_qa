@@ -116,6 +116,7 @@
         <tr>
           <th class="px-4 py-3">Test Case</th>
           <th class="px-4 py-3">Status</th>
+          <th class="px-4 py-3">Screenshot</th>
           <th class="px-4 py-3">Created</th>
           <th class="px-4 py-3">Actions</th>
         </tr>
@@ -129,6 +130,15 @@
               :class="getPivotBadgeClass(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
               x-text="getPivotLabel(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
             >{{ pivot.get_status_display }}</span>
+          </td>
+          <td class="px-4 py-3">
+            {% if pivot.last_screenshot %}
+            <a href="{{ pivot.last_screenshot.image.url }}" target="_blank">
+              <img src="{{ pivot.last_screenshot.image.url }}" loading="lazy" alt="Last screenshot" class="h-[60px] w-[80px] rounded border border-zinc-700 object-cover transition-opacity hover:opacity-80">
+            </a>
+            {% else %}
+            <span class="text-xs text-zinc-600">--</span>
+            {% endif %}
           </td>
           <td class="px-4 py-3 text-zinc-400">{{ pivot.created_at|date:"M d, Y H:i" }}</td>
           <td class="px-4 py-3 flex items-center gap-2">

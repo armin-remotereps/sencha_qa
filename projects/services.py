@@ -24,7 +24,7 @@ from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
 from django.core.paginator import Page, Paginator
 from django.db import transaction
-from django.db.models import Count, Q, QuerySet
+from django.db.models import Count, Prefetch, Q, QuerySet
 from django.utils import timezone
 
 from accounts.models import CustomUser
@@ -1094,6 +1094,12 @@ def get_test_run_case_detail(pivot_id: int, project: Project) -> TestRunTestCase
     try:
         return (
             TestRunTestCase.objects.select_related("test_run", "test_case")
+            .prefetch_related(
+                Prefetch(
+                    "screenshots",
+                    queryset=TestRunScreenshot.objects.order_by("created_at"),
+                )
+            )
             .filter(id=pivot_id, test_run__project=project)
             .get()
         )
@@ -1104,7 +1110,16 @@ def get_test_run_case_detail(pivot_id: int, project: Project) -> TestRunTestCase
 def list_test_run_cases(
     *, test_run: TestRun, page: int, per_page: int
 ) -> Page[TestRunTestCase]:
-    qs = test_run.pivot_entries.select_related("test_case").order_by("-created_at")
+    qs = (
+        test_run.pivot_entries.select_related("test_case")
+        .prefetch_related(
+            Prefetch(
+                "screenshots",
+                queryset=TestRunScreenshot.objects.order_by("created_at"),
+            )
+        )
+        .order_by("-created_at")
+    )
     paginator: Paginator[TestRunTestCase] = Paginator(qs, per_page)
     return paginator.get_page(page)
 
