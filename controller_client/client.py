@@ -6,6 +6,7 @@ from typing import Any, TypeAlias
 import websockets
 from websockets.asyncio.client import ClientConnection
 
+from controller_client.app_launcher import execute_launch_app
 from controller_client.browser_executor import (
     BrowserSession,
     execute_browser_click,
@@ -53,6 +54,7 @@ from controller_client.protocol import (
     parse_handshake_ack_payload,
     parse_hover_payload,
     parse_key_press_payload,
+    parse_launch_app_payload,
     parse_run_command_payload,
     parse_send_input_payload,
     parse_start_interactive_cmd_payload,
@@ -107,6 +109,7 @@ class ControllerClient:
             MessageType.START_INTERACTIVE_CMD: self._handle_start_interactive_cmd,
             MessageType.SEND_INPUT: self._handle_send_input,
             MessageType.TERMINATE_INTERACTIVE_CMD: self._handle_terminate_interactive_cmd,
+            MessageType.LAUNCH_APP: self._handle_launch_app,
         }
         self._handshake_event = asyncio.Event()
 
@@ -492,6 +495,16 @@ class ControllerClient:
                 execute_terminate_interactive_cmd, self._session_manager, payload
             )
             await self._send_interactive_output(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_launch_app(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_launch_app_payload(data)
+        try:
+            result = await asyncio.to_thread(execute_launch_app, payload)
+            await self._send_action_result(request_id, result)
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
 

@@ -38,6 +38,7 @@ class MessageType(StrEnum):
     SEND_INPUT = "send_input"
     TERMINATE_INTERACTIVE_CMD = "terminate_interactive_cmd"
     INTERACTIVE_OUTPUT = "interactive_output"
+    LAUNCH_APP = "launch_app"
 
 
 class MouseButton(StrEnum):
@@ -207,6 +208,11 @@ class InteractiveOutputPayload:
     is_alive: bool
     exit_code: int | None
     duration_ms: float
+
+
+@dataclass(frozen=True)
+class LaunchAppPayload:
+    app_name: str
 
 
 def serialize_message(
@@ -395,4 +401,10 @@ def parse_terminate_interactive_cmd_payload(
 ) -> TerminateInteractiveCmdPayload:
     return TerminateInteractiveCmdPayload(
         session_id=_extract_str(data, "session_id"),
+    )
+
+
+def parse_launch_app_payload(data: dict[str, object]) -> LaunchAppPayload:
+    return LaunchAppPayload(
+        app_name=_extract_str(data, "app_name"),
     )

@@ -19,6 +19,7 @@ from projects.services import (
     controller_drag,
     controller_hover,
     controller_key_press,
+    controller_launch_app,
     controller_run_command_streaming,
     controller_screenshot,
     controller_send_input,
@@ -208,6 +209,18 @@ def drag(
         )
 
     return safe_tool_call("drag", _do)
+
+
+def launch_app(project_id: int, *, app_name: str) -> ToolResult:
+    def _do() -> ToolResult:
+        result = controller_launch_app(project_id, app_name)
+        return ToolResult(
+            tool_call_id="",
+            content=result["message"],
+            is_error=not result["success"],
+        )
+
+    return safe_tool_call("launch_app", _do)
 
 
 # ============================================================================

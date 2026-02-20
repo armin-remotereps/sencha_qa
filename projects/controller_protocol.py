@@ -99,6 +99,10 @@ class TerminateInteractiveCmdActionEvent(BaseActionEvent):
     session_id: str
 
 
+class LaunchAppActionEvent(BaseActionEvent):
+    app_name: str
+
+
 class ActionTypeRegistry:
     _ACTION_TYPE_MAP: Final[dict[str, MessageType]] = {
         "controller.click": MessageType.CLICK,
@@ -120,6 +124,7 @@ class ActionTypeRegistry:
         "controller.start_interactive_cmd": MessageType.START_INTERACTIVE_CMD,
         "controller.send_input": MessageType.SEND_INPUT,
         "controller.terminate_interactive_cmd": MessageType.TERMINATE_INTERACTIVE_CMD,
+        "controller.launch_app": MessageType.LAUNCH_APP,
     }
 
     _PAYLOAD_KEYS: Final[dict[str, tuple[str, ...]]] = {
@@ -149,6 +154,7 @@ class ActionTypeRegistry:
         "controller.start_interactive_cmd": ("command",),
         "controller.send_input": ("session_id", "input_text"),
         "controller.terminate_interactive_cmd": ("session_id",),
+        "controller.launch_app": ("app_name",),
     }
 
     @classmethod

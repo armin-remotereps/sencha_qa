@@ -140,6 +140,24 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                 ),
             ),
         ),
+        ToolDefinition(
+            name="launch_app",
+            description=(
+                "Launch a GUI application by its human-readable name. "
+                "Discovers installed apps on the remote machine using OS-native methods "
+                "and fuzzy-matches the provided name. If no confident match is found, "
+                "returns a list of similar app names as suggestions."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                ToolParameter(
+                    name="app_name",
+                    type="string",
+                    description="The human-readable name of the application to launch (e.g. 'Calculator', 'Chrome', 'Firefox').",
+                    required=True,
+                ),
+            ),
+        ),
     )
 
 

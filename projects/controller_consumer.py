@@ -7,6 +7,7 @@ from typing import Any
 
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
+
 from projects.controller_authenticator import (
     ControllerAuthenticator,
     HandshakeMessageBuilder,
@@ -28,6 +29,7 @@ from projects.controller_protocol import (
     DragActionEvent,
     HoverActionEvent,
     KeyPressActionEvent,
+    LaunchAppActionEvent,
     RunCommandActionEvent,
     ScreenshotActionEvent,
     SendInputActionEvent,
@@ -241,6 +243,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     async def controller_terminate_interactive_cmd(
         self, event: TerminateInteractiveCmdActionEvent
     ) -> None:
+        await self._forward_action(event)
+
+    async def controller_launch_app(self, event: LaunchAppActionEvent) -> None:
         await self._forward_action(event)
 
     async def _send_handshake_ack(

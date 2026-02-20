@@ -16,16 +16,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, TypedDict
 
-from accounts.models import CustomUser
-from agents.types import (
-    AgentConfig,
-    AgentResult,
-    AgentStopReason,
-    ChatMessage,
-    ScreenshotCallback,
-)
 from asgiref.sync import async_to_sync
-from auto_tester.celery import app as celery_app
 from celery import chain
 from channels.layers import get_channel_layer
 from django.conf import settings
@@ -35,6 +26,16 @@ from django.core.paginator import Page, Paginator
 from django.db import transaction
 from django.db.models import Count, Q, QuerySet
 from django.utils import timezone
+
+from accounts.models import CustomUser
+from agents.types import (
+    AgentConfig,
+    AgentResult,
+    AgentStopReason,
+    ChatMessage,
+    ScreenshotCallback,
+)
+from auto_tester.celery import app as celery_app
 from projects.models import (
     ParsedTestCase,
     Project,
@@ -702,6 +703,17 @@ def controller_browser_download(
 ) -> ActionResult:
     reply = _dispatch_controller_action(
         project_id, "controller.browser_download", timeout, url=url, save_path=save_path
+    )
+    return _build_action_result(reply)
+
+
+def controller_launch_app(
+    project_id: int,
+    app_name: str,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id, "controller.launch_app", timeout, app_name=app_name
     )
     return _build_action_result(reply)
 
