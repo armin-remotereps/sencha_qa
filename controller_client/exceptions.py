@@ -16,3 +16,11 @@ class ExecutionError(ControllerError):
 
 class ProtocolError(ControllerError):
     pass
+
+
+class PrivilegeError(ControllerError):
+    """Raised when the process lacks required OS privileges.
+
+    Windows: requires Administrator elevation.
+    Unix: requires root (UID 0).
+    """
