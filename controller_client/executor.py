@@ -1,7 +1,10 @@
 import base64
 import io
+import os
 import subprocess
+import threading
 import time
+from collections.abc import Callable
 
 import pyautogui
 from PIL import Image
@@ -16,6 +19,7 @@ from controller_client.protocol import (
     KeyPressPayload,
     RunCommandPayload,
     ScreenshotResponsePayload,
+    StreamName,
     TypeTextPayload,
 )
 
@@ -153,6 +157,76 @@ def execute_command(payload: RunCommandPayload) -> CommandResultPayload:
         stdout=completed.stdout,
         stderr=completed.stderr,
         return_code=completed.returncode,
+        duration_ms=duration_ms,
+    )
+
+
+def _read_stream(
+    stream: io.TextIOWrapper,
+    stream_name: StreamName,
+    lines: list[str],
+    on_output: Callable[[str, StreamName], None],
+) -> None:
+    for line in stream:
+        lines.append(line)
+        on_output(line, stream_name)
+
+
+def execute_command_streaming(
+    payload: RunCommandPayload,
+    on_output: Callable[[str, StreamName], None],
+) -> CommandResultPayload:
+    if _is_background_command(payload.command):
+        return _execute_background_command(payload.command)
+
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    start = time.monotonic()
+    try:
+        process = subprocess.Popen(
+            payload.command,
+            shell=True,  # noqa: S602
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=env,
+        )
+    except Exception as e:
+        raise ExecutionError(f"Command execution failed: {e}") from e
+
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+
+    if process.stdout is None or process.stderr is None:
+        raise ExecutionError("Process streams were not captured")
+
+    stdout_thread = threading.Thread(
+        target=_read_stream,
+        args=(process.stdout, StreamName.STDOUT, stdout_lines, on_output),
+        daemon=True,
+    )
+    stderr_thread = threading.Thread(
+        target=_read_stream,
+        args=(process.stderr, StreamName.STDERR, stderr_lines, on_output),
+        daemon=True,
+    )
+
+    stdout_thread.start()
+    stderr_thread.start()
+
+    process.wait()
+    stdout_thread.join()
+    stderr_thread.join()
+
+    process.stdout.close()
+    process.stderr.close()
+
+    duration_ms = (time.monotonic() - start) * 1000
+    return CommandResultPayload(
+        success=process.returncode == 0,
+        stdout="".join(stdout_lines),
+        stderr="".join(stderr_lines),
+        return_code=process.returncode,
         duration_ms=duration_ms,
     )
 

@@ -17,7 +17,7 @@ def mock_vision_config() -> DMRConfig:
 
 def test_execute_command_success() -> None:
     with patch(
-        "agents.services.tools_controller.controller_run_command"
+        "agents.services.tools_controller.controller_run_command_streaming"
     ) as mock_controller:
         mock_controller.return_value = {
             "stdout": "hello world",
@@ -30,12 +30,14 @@ def test_execute_command_success() -> None:
         assert result.is_error is False
         assert "hello world" in result.content
         assert "Exit code: 0" in result.content
-        mock_controller.assert_called_once_with(1, "echo hello")
+        mock_controller.assert_called_once_with(
+            1, "echo hello", on_output=mock_controller.call_args[1]["on_output"]
+        )
 
 
 def test_execute_command_with_stderr() -> None:
     with patch(
-        "agents.services.tools_controller.controller_run_command"
+        "agents.services.tools_controller.controller_run_command_streaming"
     ) as mock_controller:
         mock_controller.return_value = {
             "stdout": "output",
@@ -53,7 +55,7 @@ def test_execute_command_with_stderr() -> None:
 
 def test_execute_command_non_zero_exit() -> None:
     with patch(
-        "agents.services.tools_controller.controller_run_command"
+        "agents.services.tools_controller.controller_run_command_streaming"
     ) as mock_controller:
         mock_controller.return_value = {
             "stdout": "",
@@ -70,7 +72,7 @@ def test_execute_command_non_zero_exit() -> None:
 
 def test_execute_command_exception() -> None:
     with patch(
-        "agents.services.tools_controller.controller_run_command"
+        "agents.services.tools_controller.controller_run_command_streaming"
     ) as mock_controller:
         mock_controller.side_effect = Exception("Connection lost")
 
@@ -79,6 +81,35 @@ def test_execute_command_exception() -> None:
         assert result.is_error is True
         assert "execute_command error:" in result.content
         assert "Connection lost" in result.content
+
+
+def test_execute_command_streams_to_on_log() -> None:
+    logged: list[str] = []
+
+    def _fake_streaming(
+        project_id: int, command: str, on_output: object = None
+    ) -> dict[str, object]:
+        assert callable(on_output)
+        on_output("hello world\n", "stdout")
+        on_output("warn\n", "stderr")
+        return {
+            "stdout": "hello world\n",
+            "stderr": "warn\n",
+            "return_code": 0,
+        }
+
+    with patch(
+        "agents.services.tools_controller.controller_run_command_streaming"
+    ) as mock_controller:
+        mock_controller.side_effect = _fake_streaming
+
+        result = tools_controller.execute_command(
+            1, command="echo hello", on_log=logged.append
+        )
+
+        assert result.is_error is False
+        assert any("$ hello world" in msg for msg in logged)
+        assert any("$ [stderr] warn" in msg for msg in logged)
 
 
 def test_take_screenshot_success(mock_vision_config: DMRConfig) -> None:

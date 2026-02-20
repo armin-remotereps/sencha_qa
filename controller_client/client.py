@@ -22,7 +22,7 @@ from controller_client.config import ClientConfig
 from controller_client.exceptions import AuthenticationError, ExecutionError
 from controller_client.executor import (
     execute_click,
-    execute_command,
+    execute_command_streaming,
     execute_drag,
     execute_hover,
     execute_key_press,
@@ -36,6 +36,7 @@ from controller_client.protocol import (
     ErrorCode,
     MessageType,
     ScreenshotResponsePayload,
+    StreamName,
     deserialize_server_message,
     parse_browser_click_payload,
     parse_browser_download_payload,
@@ -280,11 +281,40 @@ class ControllerClient:
         self, request_id: str, data: dict[str, object]
     ) -> None:
         payload = parse_run_command_payload(data)
+        loop = asyncio.get_running_loop()
+
+        def _on_output(line: str, stream: StreamName) -> None:
+            future = asyncio.run_coroutine_threadsafe(
+                self._send_command_output_line(request_id, line, stream), loop
+            )
+            try:
+                future.result(timeout=5)
+            except Exception:
+                logger.warning(
+                    "Failed to send command output line for request %s: %r",
+                    request_id,
+                    line,
+                    exc_info=True,
+                )
+
         try:
-            result = await asyncio.to_thread(execute_command, payload)
+            result = await asyncio.to_thread(
+                execute_command_streaming, payload, _on_output
+            )
             await self._send_command_result(request_id, result)
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _send_command_output_line(
+        self, request_id: str, line: str, stream: StreamName
+    ) -> None:
+        message = serialize_message(
+            MessageType.COMMAND_OUTPUT,
+            request_id=request_id,
+            line=line,
+            stream=stream,
+        )
+        await self._send_message(message)
 
     async def _send_command_result(
         self, request_id: str, result: CommandResultPayload

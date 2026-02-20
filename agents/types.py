@@ -95,6 +95,9 @@ class DMRResponse:
     reasoning_content: str | None = None
 
 
+LogCallback = Callable[[str], None]
+
+
 class ScreenshotCallback(Protocol):
     def __call__(self, base64_data: str, tool_name: str) -> None: ...
 
@@ -105,7 +108,7 @@ class AgentConfig:
     vision_dmr: DMRConfig | None = None
     max_iterations: int = 30
     timeout_seconds: int = 900
-    on_log: Callable[[str], None] | None = None
+    on_log: LogCallback | None = None
     on_screenshot: ScreenshotCallback | None = None
 
 
@@ -123,3 +126,4 @@ class ToolContext:
     summarizer_config: DMRConfig | None = None
     vision_config: DMRConfig | None = None
     on_screenshot: ScreenshotCallback | None = None
+    on_log: LogCallback | None = None
