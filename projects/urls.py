@@ -114,4 +114,9 @@ urlpatterns: list[URLPattern] = [
         views.test_run_case_detail,
         name="test_run_case_detail",
     ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:test_case_id>/edit/",
+        views.test_run_case_edit,
+        name="test_run_case_edit",
+    ),
 ]

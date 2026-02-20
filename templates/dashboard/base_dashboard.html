@@ -47,6 +47,15 @@
 
   {# Main Content #}
   <main class="min-w-0 flex-1 overflow-hidden p-6">
+    {% if messages %}
+    <div class="mb-4 space-y-2">
+      {% for message in messages %}
+      <div class="rounded-md px-4 py-3 text-sm {% if message.tags == 'error' %}border border-red-900 bg-red-950/50 text-red-400{% elif message.tags == 'success' %}border border-emerald-900 bg-emerald-950/50 text-emerald-400{% else %}border border-zinc-700 bg-zinc-800 text-zinc-300{% endif %}">
+        {{ message }}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
     {% block dashboard_content %}{% endblock %}
   </main>
 </div>

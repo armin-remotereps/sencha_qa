@@ -132,6 +132,26 @@
           </td>
           <td class="px-4 py-3 text-zinc-400">{{ pivot.created_at|date:"M d, Y H:i" }}</td>
           <td class="px-4 py-3 flex items-center gap-2">
+            {% if can_edit %}
+            <button
+              x-show="testRunStatus !== 'started'"
+              @click="openEditModal($el)"
+              data-id="{{ pivot.test_case.id }}"
+              data-title="{{ pivot.test_case.title|escape }}"
+              data-testrail-id="{{ pivot.test_case.testrail_id|escape }}"
+              data-template="{{ pivot.test_case.template|escape }}"
+              data-type="{{ pivot.test_case.type|escape }}"
+              data-priority="{{ pivot.test_case.priority|escape }}"
+              data-estimate="{{ pivot.test_case.estimate|escape }}"
+              data-references="{{ pivot.test_case.references|escape }}"
+              data-preconditions="{{ pivot.test_case.preconditions|escape }}"
+              data-steps="{{ pivot.test_case.steps|escape }}"
+              data-expected="{{ pivot.test_case.expected|escape }}"
+              class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
+            >
+              Edit
+            </button>
+            {% endif %}
             <a
               href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=test_run.id pivot_id=pivot.id %}"
               class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
@@ -182,6 +202,167 @@
     {% endif %}
   </div>
   {% endif %}
+
+  {# EDIT MODAL #}
+  <div
+    x-show="showEditModal"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+    @click.self="showEditModal = false"
+  >
+    <div
+      class="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900 p-6"
+      @click.stop
+    >
+      <h2 class="mb-4 text-lg font-semibold text-zinc-100">Edit Test Case</h2>
+      <form
+        method="post"
+        :action="'{% url 'projects:test_run_case_edit' project_id=project.id test_run_id=test_run.id test_case_id=0 %}'.replace('/0/', '/' + editId + '/')"
+      >
+        {% csrf_token %}
+        <input
+          type="hidden"
+          name="next"
+          value="{% url 'projects:test_run_detail' project_id=project.id test_run_id=test_run.id %}"
+        >
+        <div class="space-y-4">
+
+          {# Title #}
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Title</label>
+            <input
+              type="text"
+              name="title"
+              x-model="editTitle"
+              required
+              class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+            >
+          </div>
+
+          {# Type + Priority #}
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">Type</label>
+              <select
+                name="type"
+                x-model="editType"
+                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+              >
+                {% for value, label in form.fields.type.choices %}
+                <option value="{{ value }}">{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">Priority</label>
+              <select
+                name="priority"
+                x-model="editPriority"
+                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+              >
+                {% for value, label in form.fields.priority.choices %}
+                <option value="{{ value }}">{{ label }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+
+          {# TestRail ID + Template #}
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">TestRail ID</label>
+              <input
+                type="text"
+                name="testrail_id"
+                x-model="editTestrailId"
+                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+              >
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">Template</label>
+              <input
+                type="text"
+                name="template"
+                x-model="editTemplate"
+                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+              >
+            </div>
+          </div>
+
+          {# Estimate + References #}
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">Estimate</label>
+              <input
+                type="text"
+                name="estimate"
+                x-model="editEstimate"
+                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+              >
+            </div>
+            <div>
+              <label class="mb-1 block text-sm font-medium text-zinc-300">References</label>
+              <input
+                type="text"
+                name="references"
+                x-model="editReferences"
+                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+              >
+            </div>
+          </div>
+
+          {# Preconditions #}
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Preconditions</label>
+            <textarea
+              name="preconditions"
+              x-model="editPreconditions"
+              rows="3"
+              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+            ></textarea>
+          </div>
+
+          {# Steps #}
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Steps</label>
+            <textarea
+              name="steps"
+              x-model="editSteps"
+              rows="3"
+              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+            ></textarea>
+          </div>
+
+          {# Expected Result #}
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Expected Result</label>
+            <textarea
+              name="expected"
+              x-model="editExpected"
+              rows="3"
+              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+            ></textarea>
+          </div>
+
+        </div>
+        <div class="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            @click="showEditModal = false"
+            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+          >
+            Save
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
 </div>
 {% endblock %}
 
@@ -202,6 +383,34 @@ document.addEventListener('alpine:init', () => {
       {% for pivot in cases %}
       {{ pivot.id }}: '{{ pivot.status }}'{% if not forloop.last %},{% endif %}
       {% endfor %}
+    },
+
+    showEditModal: false,
+    editId: 0,
+    editTitle: '',
+    editTestrailId: '',
+    editTemplate: '',
+    editType: '',
+    editPriority: '',
+    editEstimate: '',
+    editReferences: '',
+    editPreconditions: '',
+    editSteps: '',
+    editExpected: '',
+
+    openEditModal(el) {
+      this.editId = el.dataset.id;
+      this.editTitle = el.dataset.title;
+      this.editTestrailId = el.dataset.testrailId;
+      this.editTemplate = el.dataset.template;
+      this.editType = el.dataset.type;
+      this.editPriority = el.dataset.priority;
+      this.editEstimate = el.dataset.estimate;
+      this.editReferences = el.dataset.references;
+      this.editPreconditions = el.dataset.preconditions;
+      this.editSteps = el.dataset.steps;
+      this.editExpected = el.dataset.expected;
+      this.showEditModal = true;
     },
 
     getPivotBadgeClass(status) {
