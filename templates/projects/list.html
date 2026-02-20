@@ -13,6 +13,14 @@
       this.editProjectName = name;
       this.editProjectTags = tags;
       this.showEditModal = true;
+    },
+    showDuplicateModal: false,
+    duplicateProjectId: 0,
+    duplicateProjectName: '',
+    openDuplicateModal(id, name) {
+      this.duplicateProjectId = id;
+      this.duplicateProjectName = 'Copy of ' + name;
+      this.showDuplicateModal = true;
     }
   }"
 >
@@ -100,10 +108,16 @@
           Test Runs
         </a>
         <button
-          @click="openEditModal({{ project.id }}, '{{ project.name }}', '{% for tag in project.tags.all %}{{ tag.name }}{% if not forloop.last %}, {% endif %}{% endfor %}')"
+          @click="openEditModal({{ project.id }}, '{{ project.name|escapejs }}', '{% for tag in project.tags.all %}{{ tag.name|escapejs }}{% if not forloop.last %}, {% endif %}{% endfor %}')"
           class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
         >
           Edit
+        </button>
+        <button
+          @click="openDuplicateModal({{ project.id }}, '{{ project.name|escapejs }}')"
+          class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
+        >
+          Duplicate
         </button>
         <form method="post" action="{% url 'projects:archive' project.id %}">
           {% csrf_token %}
@@ -241,6 +255,50 @@
             class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
           >
             Save
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {# DUPLICATE MODAL #}
+  <div
+    x-show="showDuplicateModal"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+    @click.self="showDuplicateModal = false"
+  >
+    <div
+      class="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-6"
+      @click.stop
+    >
+      <h2 class="mb-4 text-lg font-semibold text-zinc-100">Duplicate Project</h2>
+      <form method="post" :action="'/projects/' + duplicateProjectId + '/duplicate/'">
+        {% csrf_token %}
+        <div class="space-y-4">
+          <div>
+            <label class="mb-1 block text-sm font-medium text-zinc-300">Project Name</label>
+            <input
+              type="text"
+              name="name"
+              x-model="duplicateProjectName"
+              class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
+            >
+          </div>
+        </div>
+        <div class="mt-6 flex justify-end gap-3">
+          <button
+            type="button"
+            @click="showDuplicateModal = false"
+            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+          >
+            Duplicate
           </button>
         </div>
       </form>

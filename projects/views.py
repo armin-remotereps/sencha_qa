@@ -7,6 +7,7 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
+from accounts.models import CustomUser
 from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
 from projects.forms import ProjectForm, TestCaseForm
@@ -15,6 +16,7 @@ from projects.services import (
     add_cases_to_test_run,
     archive_project,
     cancel_upload_processing,
+    copy_test_cases_to_project,
     create_project,
     create_test_case,
     create_test_run_with_cases,
@@ -22,6 +24,7 @@ from projects.services import (
     delete_test_case,
     delete_test_run,
     delete_upload,
+    duplicate_project,
     generate_controller_client_zip,
     get_all_tags_for_user,
     get_project_for_user,
@@ -31,6 +34,7 @@ from projects.services import (
     get_test_run_summary,
     get_upload_for_project,
     is_valid_xml_filename,
+    list_other_projects_for_user,
     list_projects_for_user,
     list_test_cases_for_project,
     list_test_run_cases,
@@ -133,6 +137,20 @@ def project_archive(request: AuthenticatedRequest, project_id: int) -> HttpRespo
     return redirect("projects:list")
 
 
+@login_required
+@require_POST
+def project_duplicate(request: AuthenticatedRequest, project_id: int) -> HttpResponse:
+    user: CustomUser = request.user
+    project = get_project_for_user(project_id, user)
+    if project is None:
+        raise Http404
+
+    name = request.POST.get("name", "").strip() or f"Copy of {project.name}"
+    duplicate_project(source_project=project, user=user, name=name)
+    messages.success(request, f'Project duplicated as "{name}".')
+    return redirect("projects:list")
+
+
 @project_membership_required
 def project_detail(request: HttpRequest, project: Project) -> HttpResponse:
     return render(request, "projects/detail.html", {"project": project})
@@ -164,8 +182,7 @@ def download_controller_client(request: HttpRequest, project: Project) -> HttpRe
 
 
 @project_membership_required
-def test_case_list(request: HttpRequest, project: Project) -> HttpResponse:
-    """Display paginated test cases with optional search and upload filter."""
+def test_case_list(request: AuthenticatedRequest, project: Project) -> HttpResponse:
     search = request.GET.get("search", "").strip() or None
     upload_filter = request.GET.get("upload", "").strip() or None
     upload_id: int | None = int(upload_filter) if upload_filter else None
@@ -183,6 +200,8 @@ def test_case_list(request: HttpRequest, project: Project) -> HttpResponse:
         project=project, status=UploadStatus.COMPLETED
     ).order_by("-created_at")
     waiting_test_runs = list_waiting_test_runs_for_project(project)
+    user: CustomUser = request.user
+    other_projects = list_other_projects_for_user(user=user, exclude_project=project)
 
     return render(
         request,
@@ -195,6 +214,7 @@ def test_case_list(request: HttpRequest, project: Project) -> HttpResponse:
             "uploads": completed_uploads,
             "current_upload": upload_id or "",
             "waiting_test_runs": waiting_test_runs,
+            "other_projects": other_projects,
         },
     )
 
@@ -234,6 +254,32 @@ def test_case_delete(
 
     delete_test_case(test_case)
     return redirect("projects:test_case_list", project_id=project.id)
+
+
+@project_membership_required
+@require_POST
+def test_case_copy_to_project(
+    request: AuthenticatedRequest, project: Project
+) -> HttpResponse:
+    user: CustomUser = request.user
+    target_project_id = request.POST.get("target_project_id", "")
+    if not target_project_id.isdigit():
+        raise Http404
+    target_project = get_project_for_user(int(target_project_id), user)
+    if target_project is None:
+        raise Http404
+
+    test_case_ids = _parse_test_case_ids(request)
+    if not test_case_ids:
+        return redirect("projects:test_case_list", project_id=project.id)
+
+    count = copy_test_cases_to_project(
+        source_project=project,
+        target_project=target_project,
+        test_case_ids=test_case_ids,
+    )
+    messages.success(request, f"{count} test case(s) copied to {target_project.name}.")
+    return redirect("projects:test_case_list", project_id=target_project.id)
 
 
 # ============================================================================

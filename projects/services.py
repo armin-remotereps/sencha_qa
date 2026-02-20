@@ -81,6 +81,65 @@ def unarchive_project(project: Project) -> None:
     project.save()
 
 
+def _clone_test_case(*, source: TestCase, target_project: Project) -> TestCase:
+    return TestCase(
+        project=target_project,
+        upload=None,
+        testrail_id=source.testrail_id,
+        title=source.title,
+        template=source.template,
+        type=source.type,
+        priority=source.priority,
+        estimate=source.estimate,
+        references=source.references,
+        preconditions=source.preconditions,
+        steps=source.steps,
+        expected=source.expected,
+        is_converted=source.is_converted,
+    )
+
+
+@transaction.atomic
+def duplicate_project(
+    *, source_project: Project, user: CustomUser, name: str
+) -> Project:
+    """Copies tags and test cases (without upload association) from the source."""
+    new_project = Project.objects.create(name=name)
+    _sync_tags(new_project, list(source_project.tags.values_list("name", flat=True)))
+    new_project.members.add(user)
+    source_cases = TestCase.objects.filter(project=source_project)
+    copies = [
+        _clone_test_case(source=tc, target_project=new_project) for tc in source_cases
+    ]
+    TestCase.objects.bulk_create(copies)
+    return new_project
+
+
+@transaction.atomic
+def copy_test_cases_to_project(
+    *, source_project: Project, target_project: Project, test_case_ids: list[int]
+) -> int:
+    """Only test cases belonging to source_project are copied. Returns the count."""
+    source_cases = TestCase.objects.filter(id__in=test_case_ids, project=source_project)
+    copies = [
+        _clone_test_case(source=tc, target_project=target_project)
+        for tc in source_cases
+    ]
+    TestCase.objects.bulk_create(copies)
+    return len(copies)
+
+
+def list_other_projects_for_user(
+    *, user: CustomUser, exclude_project: Project
+) -> QuerySet[Project]:
+    """Results are ordered alphabetically by name."""
+    return (
+        Project.objects.filter(members=user, archived=False)
+        .exclude(id=exclude_project.id)
+        .order_by("name")
+    )
+
+
 def get_project_for_user(project_id: int, user: CustomUser) -> Project | None:
     try:
         return Project.objects.filter(id=project_id, archived=False, members=user).get()

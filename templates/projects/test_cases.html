@@ -5,6 +5,7 @@
   x-data="{
     showCreateModal: false,
     showEditModal: false,
+    showCopyToProjectModal: false,
     editId: 0,
     editTitle: '',
     editTestrailId: '',
@@ -462,6 +463,14 @@
     >
       Add to Existing
     </button>
+    {% if other_projects %}
+    <button
+      @click="showCopyToProjectModal = true"
+      class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
+    >
+      Copy to Project
+    </button>
+    {% endif %}
     <button
       @click="selectedIds = []; selectAll = false"
       class="rounded-md bg-zinc-800 px-3 py-2 text-sm text-zinc-400 hover:bg-zinc-700"
@@ -505,6 +514,50 @@
       <div class="mt-4 flex justify-end">
         <button
           @click="showAddToRunModal = false"
+          class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  </div>
+
+  {# COPY TO PROJECT MODAL #}
+  <div
+    x-show="showCopyToProjectModal"
+    x-cloak
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+    @click.self="showCopyToProjectModal = false"
+  >
+    <div
+      class="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-6"
+      @click.stop
+    >
+      <h2 class="mb-4 text-lg font-semibold text-zinc-100">Copy to Project</h2>
+      {% if other_projects %}
+      <div class="space-y-2">
+        {% for proj in other_projects %}
+        <form method="post" action="{% url 'projects:test_case_copy_to_project' project_id=project.id %}">
+          {% csrf_token %}
+          <input type="hidden" name="target_project_id" value="{{ proj.id }}">
+          <template x-for="id in selectedIds" :key="id">
+            <input type="hidden" name="test_case_ids" :value="id">
+          </template>
+          <button
+            type="submit"
+            class="w-full rounded-md border border-zinc-700 bg-zinc-800 px-4 py-3 text-left text-sm text-zinc-100 hover:bg-zinc-700"
+          >
+            {{ proj.name }}
+          </button>
+        </form>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-sm text-zinc-400">No other projects available.</p>
+      {% endif %}
+      <div class="mt-4 flex justify-end">
+        <button
+          @click="showCopyToProjectModal = false"
           class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
         >
           Cancel
