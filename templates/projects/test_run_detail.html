@@ -50,13 +50,13 @@
       </form>
       {% endif %}
       {% if test_run.status == "done" or test_run.status == "cancelled" %}
-      <form method="post" action="{% url 'projects:test_run_redo' project_id=project.id test_run_id=test_run.id %}" onsubmit="return confirm('Reset this test run? All results, logs, and screenshots will be cleared.')">
+      <form method="post" action="{% url 'projects:test_run_reset' project_id=project.id test_run_id=test_run.id %}" onsubmit="return confirm('Reset this test run? All results, logs, and screenshots will be cleared.')">
         {% csrf_token %}
         <button
           type="submit"
           class="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500"
         >
-          Redo Run
+          Reset Run
         </button>
       </form>
       {% endif %}

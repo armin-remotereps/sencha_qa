@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+from accounts.models import CustomUser
+from accounts.types import AuthenticatedRequest
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
-
-from accounts.models import CustomUser
-from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
 from projects.forms import ProjectForm, TestCaseForm
 from projects.models import Project, TestCaseUpload, UploadStatus
@@ -42,9 +41,9 @@ from projects.services import (
     list_test_runs_for_project,
     list_uploads_for_project,
     list_waiting_test_runs_for_project,
-    redo_test_run,
     regenerate_api_key,
     remove_case_from_test_run,
+    reset_test_run,
     start_test_run,
     start_upload_processing,
     update_project,
@@ -476,14 +475,14 @@ def test_run_remove_case(
 
 @project_membership_required
 @require_POST
-def test_run_redo(
+def test_run_reset(
     request: HttpRequest, project: Project, test_run_id: int
 ) -> HttpResponse:
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
         raise Http404
     try:
-        redo_test_run(test_run)
+        reset_test_run(test_run)
     except ValueError as exc:
         messages.error(request, str(exc))
     return redirect(

@@ -1111,9 +1111,9 @@ def remove_case_from_test_run(test_run: TestRun, pivot_id: int) -> None:
 
 
 @transaction.atomic
-def redo_test_run(test_run: TestRun) -> None:
+def reset_test_run(test_run: TestRun) -> None:
     if test_run.status not in (TestRunStatus.DONE, TestRunStatus.CANCELLED):
-        raise ValueError("Only completed or cancelled test runs can be redone.")
+        raise ValueError("Only completed or cancelled test runs can be reset.")
     for pivot in test_run.pivot_entries.all():
         for screenshot in pivot.screenshots.all():
             screenshot.image.delete(save=False)

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from django.urls import URLPattern, path
-
 from projects import views
 
 app_name = "projects"
@@ -85,9 +84,9 @@ urlpatterns: list[URLPattern] = [
         name="test_run_delete",
     ),
     path(
-        "<int:project_id>/test-runs/<int:test_run_id>/redo/",
-        views.test_run_redo,
-        name="test_run_redo",
+        "<int:project_id>/test-runs/<int:test_run_id>/reset/",
+        views.test_run_reset,
+        name="test_run_reset",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/start/",
