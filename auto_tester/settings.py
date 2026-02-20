@@ -292,6 +292,30 @@ CONTEXT_SUMMARIZE_CHUNK_SIZE: int = config(
     "CONTEXT_SUMMARIZE_CHUNK_SIZE", default=8000, cast=int
 )
 
+# Orchestrator (sub-agent architecture)
+ORCHESTRATOR_MODEL: str = config(
+    "ORCHESTRATOR_MODEL", default="ai/qwen3:32B-Q8_K_XL", cast=str
+)
+ORCHESTRATOR_MAX_TOKENS: int = config("ORCHESTRATOR_MAX_TOKENS", default=4096, cast=int)
+ORCHESTRATOR_TEMPERATURE: float = config(
+    "ORCHESTRATOR_TEMPERATURE", default=0.1, cast=float
+)
+ORCHESTRATOR_MAX_SUBTASKS: int = config(
+    "ORCHESTRATOR_MAX_SUBTASKS", default=30, cast=int
+)
+ORCHESTRATOR_MAX_RECOVERY_ATTEMPTS: int = config(
+    "ORCHESTRATOR_MAX_RECOVERY_ATTEMPTS", default=1, cast=int
+)
+
+# Sub-Agent
+SUB_AGENT_MODEL: str = config("SUB_AGENT_MODEL", default="ai/mistral", cast=str)
+SUB_AGENT_MAX_TOKENS: int = config("SUB_AGENT_MAX_TOKENS", default=2048, cast=int)
+SUB_AGENT_TEMPERATURE: float = config("SUB_AGENT_TEMPERATURE", default=0.1, cast=float)
+SUB_AGENT_MAX_ITERATIONS: int = config("SUB_AGENT_MAX_ITERATIONS", default=15, cast=int)
+SUB_AGENT_TIMEOUT_SECONDS: int = config(
+    "SUB_AGENT_TIMEOUT_SECONDS", default=180, cast=int
+)
+
 # OmniParser (client-side only — server runs as standalone FastAPI service)
 OMNIPARSER_URL: str = config("OMNIPARSER_URL", default="", cast=str)
 OMNIPARSER_API_KEY: str = config("OMNIPARSER_API_KEY", default="", cast=str)

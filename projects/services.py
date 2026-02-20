@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import dataclasses
 import html
 import io
 import logging
@@ -29,7 +28,6 @@ from django.utils import dateformat, timezone
 
 from accounts.models import CustomUser
 from agents.types import (
-    AgentConfig,
     AgentResult,
     AgentStopReason,
     ChatMessage,
@@ -1367,8 +1365,6 @@ def _wait_for_agent_connection(
 
 
 def execute_test_run_test_case(pivot_id: int) -> None:
-    from agents.services.agent_loop import build_agent_config, run_agent
-
     pivot = _fetch_pivot(pivot_id)
     if pivot.test_run.status == TestRunStatus.CANCELLED:
         return
@@ -1382,15 +1378,17 @@ def execute_test_run_test_case(pivot_id: int) -> None:
 
         on_log = _build_log_callback(pivot)
         on_screenshot = _build_screenshot_callback(pivot)
-        config = _build_config_with_callbacks(
-            build_agent_config(), on_log, on_screenshot
-        )
         task_description = _build_task_description(pivot.test_case)
 
-        result = run_agent(
+        from agents.services.orchestrator import (  # local import: breaks circular dependency
+            run_orchestrator,
+        )
+
+        result = run_orchestrator(
             task_description,
             project.id,
-            config=config,
+            on_log=on_log,
+            on_screenshot=on_screenshot,
             system_info=project.agent_system_info or None,
             project_prompt=pivot.test_run.project_prompt or None,
         )
@@ -1473,14 +1471,6 @@ def _persist_screenshot(
         tool_name=tool_name,
     )
     _broadcast_screenshot(pivot, screenshot)
-
-
-def _build_config_with_callbacks(
-    config: AgentConfig,
-    on_log: Callable[[str], None],
-    on_screenshot: ScreenshotCallback,
-) -> AgentConfig:
-    return dataclasses.replace(config, on_log=on_log, on_screenshot=on_screenshot)
 
 
 def _build_task_description(test_case: TestCase) -> str:

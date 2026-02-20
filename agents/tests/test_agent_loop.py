@@ -6,17 +6,19 @@ import pytest
 from django.test import override_settings
 
 from agents.services.agent_loop import (
-    _build_environment_context,
-    _build_qa_rules,
     _build_role_description,
     _build_task_section,
-    _build_tool_guidelines,
     _build_tool_result_message,
-    _get_os_name,
     _run_agent_loop,
     build_agent_config,
     build_system_prompt,
     run_agent,
+)
+from agents.services.prompt_parts import (
+    build_environment_context,
+    build_qa_rules,
+    build_tool_guidelines,
+    get_os_name,
 )
 from agents.types import (
     AgentConfig,
@@ -133,33 +135,33 @@ def test_build_system_prompt_empty_dict() -> None:
     assert "XFCE4" in prompt
 
 
-def test_get_os_name_variants() -> None:
-    """Test _get_os_name with various inputs."""
-    assert _get_os_name(None) == "Linux"
-    assert _get_os_name({}) == "Linux"
-    assert _get_os_name({"os": "Darwin"}) == "Darwin"
-    assert _get_os_name({"os": "Windows"}) == "Windows"
-    assert _get_os_name({"os": "Linux"}) == "Linux"
+def testget_os_name_variants() -> None:
+    """Test get_os_name with various inputs."""
+    assert get_os_name(None) == "Linux"
+    assert get_os_name({}) == "Linux"
+    assert get_os_name({"os": "Darwin"}) == "Darwin"
+    assert get_os_name({"os": "Windows"}) == "Windows"
+    assert get_os_name({"os": "Linux"}) == "Linux"
 
 
-def test_build_environment_context_darwin() -> None:
+def testbuild_environment_context_darwin() -> None:
     """Test that Darwin environment context mentions macOS specifics."""
-    ctx = _build_environment_context(system_info={"os": "Darwin"})
+    ctx = build_environment_context(system_info={"os": "Darwin"})
     assert "macOS" in ctx
     assert "brew" in ctx
     assert "/Applications/" in ctx
 
 
-def test_build_environment_context_windows() -> None:
+def testbuild_environment_context_windows() -> None:
     """Test that Windows environment context mentions Windows specifics."""
-    ctx = _build_environment_context(system_info={"os": "Windows"})
+    ctx = build_environment_context(system_info={"os": "Windows"})
     assert "Windows" in ctx
     assert "winget" in ctx
 
 
-def test_build_environment_context_linux_fallback() -> None:
+def testbuild_environment_context_linux_fallback() -> None:
     """Test that Linux/default environment context uses XFCE4."""
-    ctx = _build_environment_context(system_info=None)
+    ctx = build_environment_context(system_info=None)
     assert "XFCE4" in ctx
     assert "display :0" in ctx
 
@@ -810,35 +812,35 @@ def test_on_log_callback_fires_on_tool_calls(
     assert any("[Agent]" in msg for msg in log_messages)
 
 
-def test_build_qa_rules_preconditions() -> None:
+def testbuild_qa_rules_preconditions() -> None:
     """Test that QA rules include mandatory preconditions handling."""
-    rules = _build_qa_rules()
+    rules = build_qa_rules()
 
     assert "Preconditions" in rules
     assert "FIRST" in rules
     assert "mandatory setup" in rules
 
 
-def test_build_tool_guidelines_download_via_browser() -> None:
+def testbuild_tool_guidelines_download_via_browser() -> None:
     """Test that tool guidelines include browser-based download strategy."""
-    guidelines = _build_tool_guidelines()
+    guidelines = build_tool_guidelines()
 
     assert "downloading" in guidelines
     assert "browser_navigate" in guidelines
     assert "installation wizards" in guidelines
 
 
-def test_build_tool_guidelines_browser_download() -> None:
+def testbuild_tool_guidelines_browser_download() -> None:
     """Test that tool guidelines include browser_download tool."""
-    guidelines = _build_tool_guidelines()
+    guidelines = build_tool_guidelines()
 
     assert "browser_download" in guidelines
     assert "direct URL" in guidelines or "direct download" in guidelines
 
 
-def test_build_tool_guidelines_desktop_fallback() -> None:
+def testbuild_tool_guidelines_desktop_fallback() -> None:
     """Test that tool guidelines include numbered desktop fallback escalation."""
-    guidelines = _build_tool_guidelines()
+    guidelines = build_tool_guidelines()
 
     assert "DESKTOP FALLBACK" in guidelines
     assert "2 attempts" in guidelines
@@ -850,17 +852,17 @@ def test_build_tool_guidelines_desktop_fallback() -> None:
     assert "4." in guidelines
 
 
-def test_build_tool_guidelines_web_search() -> None:
+def testbuild_tool_guidelines_web_search() -> None:
     """Test that tool guidelines include web_search and installation lookup."""
-    guidelines = _build_tool_guidelines()
+    guidelines = build_tool_guidelines()
 
     assert "web_search" in guidelines
     assert "INSTALLATION LOOKUP" in guidelines
 
 
-def test_build_qa_rules_authentication_failfast() -> None:
+def testbuild_qa_rules_authentication_failfast() -> None:
     """Test that QA rules include authentication fail-fast rule."""
-    rules = _build_qa_rules()
+    rules = build_qa_rules()
 
     assert "AUTHENTICATION" in rules
     assert "credentials" in rules
@@ -868,9 +870,9 @@ def test_build_qa_rules_authentication_failfast() -> None:
     assert "Do NOT search" in rules
 
 
-def test_build_tool_guidelines_retry_limits() -> None:
+def testbuild_tool_guidelines_retry_limits() -> None:
     """Test that tool guidelines include retry limits section."""
-    guidelines = _build_tool_guidelines()
+    guidelines = build_tool_guidelines()
 
     assert "RETRY LIMITS" in guidelines
     assert "3 times" in guidelines

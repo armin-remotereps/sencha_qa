@@ -1,0 +1,123 @@
+SECRET_KEY=<generate-a-strong-secret-key>
+DEBUG=False
+LOG_LEVEL=WARNING
+ALLOWED_HOSTS=sench.remotereps.com,localhost,127.0.0.1
+CSRF_TRUSTED_ORIGINS=https://sench.remotereps.com
+
+# Database
+DB_NAME=auto_tester
+DB_USER=postgres
+DB_PASSWORD=<strong-db-password>
+DB_HOST=localhost
+DB_PORT=5432
+
+# Redis
+REDIS_URL=redis://localhost:6379/0
+
+# ---------------------------------------------------------------------------
+# Docker Model Runner (DGX Spark)
+# ---------------------------------------------------------------------------
+# If Django runs ON the DGX Spark, use localhost:12434 (default DMR port).
+# If Django runs REMOTELY with SSH tunnel, use localhost:<forwarded-port>.
+DMR_HOST=localhost
+DMR_PORT=12434
+
+# Agent brain — pure text model for reasoning + tool calling.
+# DO NOT use a VL (vision-language) model here; it wastes parameters on
+# vision capabilities that the text-only agent loop never uses, and is
+# ~40% slower for text generation.
+DMR_MODEL=ai/qwen3:32B-Q8_K_XL
+
+# Vision model — used for screenshot analysis by vision tools.
+# This one SHOULD be a VL model.
+DMR_VISION_MODEL=ai/qwen3-vl:32B-Q8_K_XL
+
+# Temperature: keep LOW for tool calling precision.
+# 0.9 causes malformed JSON tool calls. 0.1 is reliable.
+DMR_TEMPERATURE=0.1
+
+# Max OUTPUT tokens per API call (not context window).
+# The agent typically responds with a short message + one tool call (~200-500 tokens).
+# 4096 is generous and safe. Do NOT set this close to the context window size.
+DMR_MAX_TOKENS=4096
+
+# Request timeout in seconds. 32B models on DGX Spark generate ~20-40 tok/s,
+# so 4096 output tokens takes ~100-200s worst case.
+DMR_REQUEST_TIMEOUT=300
+
+# ---------------------------------------------------------------------------
+# OpenAI API (alternative vision backend)
+# ---------------------------------------------------------------------------
+OPENAI_API_KEY=<your-openai-api-key>
+OPENAI_BASE_URL=https://api.openai.com/v1/chat/completions
+OPENAI_VISION_MODEL=gpt-4o
+OPENAI_TEMPERATURE=0.1
+OPENAI_MAX_TOKENS=4096
+OPENAI_REQUEST_TIMEOUT=120
+
+# Vision Backend: "dmr" or "openai"
+# - "dmr": uses DMR_VISION_MODEL (qwen3-vl) on DGX Spark — free, private, but slower
+# - "openai": uses OpenAI API — faster, costs money, sends screenshots to OpenAI
+VISION_BACKEND=dmr
+
+# ---------------------------------------------------------------------------
+# Agent Loop
+# ---------------------------------------------------------------------------
+AGENT_MAX_ITERATIONS=30
+AGENT_TIMEOUT_SECONDS=600
+
+# ---------------------------------------------------------------------------
+# SearXNG (metasearch engine)
+# ---------------------------------------------------------------------------
+SEARXNG_BASE_URL=http://localhost:8888
+SEARXNG_MAX_RESULTS=5
+SEARXNG_REQUEST_TIMEOUT=15
+
+# ---------------------------------------------------------------------------
+# Search page fetching (trafilatura)
+# ---------------------------------------------------------------------------
+SEARCH_FETCH_PAGE_COUNT=3
+SEARCH_PAGE_MAX_LENGTH=2000
+SEARCH_PAGE_FETCH_TIMEOUT=10
+
+# ---------------------------------------------------------------------------
+# Output Summarizer
+# ---------------------------------------------------------------------------
+# Lightweight model for summarizing long tool outputs (command results, page content).
+DMR_SUMMARIZER_MODEL=ai/mistral
+
+# Tool outputs longer than this (in chars) get summarized before entering context.
+OUTPUT_SUMMARIZE_THRESHOLD=2000
+
+# Chunk size for map-reduce summarization of very long outputs.
+OUTPUT_SUMMARIZE_CHUNK_SIZE=12000
+
+# ---------------------------------------------------------------------------
+# Context Summarizer
+# ---------------------------------------------------------------------------
+# When total conversation size (in chars) exceeds this, older messages get
+# summarized to free context space. Must be well below the model's actual
+# context window (32k tokens ≈ ~100k chars). 40000 chars ≈ ~10k-12k tokens,
+# leaving ~20k tokens for the last few messages + new output.
+CONTEXT_SUMMARIZE_THRESHOLD=40000
+
+# Number of most recent messages to always preserve (never summarized).
+CONTEXT_PRESERVE_LAST_MESSAGES=6
+
+# Chunk size for map-reduce context summarization.
+CONTEXT_SUMMARIZE_CHUNK_SIZE=12000
+
+# ---------------------------------------------------------------------------
+# Controller
+# ---------------------------------------------------------------------------
+CONTROLLER_SERVER_HOST=localhost
+CONTROLLER_SERVER_PORT=8000
+CONTROLLER_AGENT_CONNECT_TIMEOUT=60
+INTERACTIVE_CMD_TIMEOUT_SECONDS=300
+
+# ---------------------------------------------------------------------------
+# OmniParser
+# ---------------------------------------------------------------------------
+OMNIPARSER_URL=http://localhost:8080
+OMNIPARSER_API_KEY=<your-omniparser-api-key>
+OMNIPARSER_REQUEST_TIMEOUT=600
