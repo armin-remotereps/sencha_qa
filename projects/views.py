@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Page
-from django.http import Http404, HttpRequest, HttpResponse, HttpResponseForbidden
+from django.http import (
+    Http404,
+    HttpRequest,
+    HttpResponse,
+    HttpResponseForbidden,
+    JsonResponse,
+)
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -16,6 +23,7 @@ from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
 from projects.forms import ProjectForm, TestCaseForm
 from projects.models import Project
+from projects.prompt_refiner import refine_project_prompt
 from projects.services import (
     abort_test_run,
     add_cases_to_test_run,
@@ -51,6 +59,7 @@ from projects.services import (
     regenerate_api_key,
     remove_case_from_test_run,
     reset_test_run,
+    save_project_prompt,
     start_test_run,
     start_upload_processing,
     update_project,
@@ -61,6 +70,7 @@ from projects.services import (
 ALLOWED_PER_PAGE = [10, 20, 50, 100]
 DEFAULT_PER_PAGE = 20
 PROJECTS_DEFAULT_PER_PAGE = 9
+PROJECT_PROMPT_MAX_LENGTH = 4000
 
 
 def _parse_per_page(request: HttpRequest, default: int = DEFAULT_PER_PAGE) -> int:
@@ -194,7 +204,14 @@ def project_duplicate(request: AuthenticatedRequest, project_id: int) -> HttpRes
 
 @project_membership_required
 def project_detail(request: HttpRequest, project: Project) -> HttpResponse:
-    return render(request, "projects/detail.html", {"project": project})
+    return render(
+        request,
+        "projects/detail.html",
+        {
+            "project": project,
+            "prompt_max_length": PROJECT_PROMPT_MAX_LENGTH,
+        },
+    )
 
 
 @project_membership_required
@@ -630,3 +647,29 @@ def test_run_case_edit(
     ):
         return redirect(next_url)
     return redirect(fallback_url)
+
+
+@project_membership_required
+@require_POST
+def project_save_prompt(request: HttpRequest, project: Project) -> HttpResponse:
+    prompt = request.POST.get("project_prompt", "")[:PROJECT_PROMPT_MAX_LENGTH]
+    save_project_prompt(project=project, prompt=prompt)
+    messages.success(request, "Project prompt saved.")
+    return redirect("projects:detail", project_id=project.id)
+
+
+@project_membership_required
+@require_POST
+def project_refine_prompt(request: HttpRequest, project: Project) -> HttpResponse:
+    try:
+        body = json.loads(request.body)
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON body."}, status=400)
+    raw_prompt = str(body.get("prompt", ""))[:PROJECT_PROMPT_MAX_LENGTH]
+    if not raw_prompt.strip():
+        return JsonResponse({"error": "Prompt is empty."}, status=400)
+    try:
+        refined = refine_project_prompt(raw_prompt)
+    except Exception:
+        return JsonResponse({"error": "Refinement service unavailable."}, status=503)
+    return JsonResponse({"refined_prompt": refined})

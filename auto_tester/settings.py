@@ -271,6 +271,9 @@ INTERACTIVE_CMD_TIMEOUT_SECONDS: int = config(
 DMR_SUMMARIZER_MODEL: str = config(
     "DMR_SUMMARIZER_MODEL", default="ai/mistral", cast=str
 )
+DMR_PROMPT_REFINER_MODEL: str = config(
+    "DMR_PROMPT_REFINER_MODEL", default=DMR_MODEL, cast=str
+)
 OUTPUT_SUMMARIZE_THRESHOLD: int = config(
     "OUTPUT_SUMMARIZE_THRESHOLD", default=2000, cast=int
 )
