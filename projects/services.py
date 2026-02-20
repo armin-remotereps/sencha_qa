@@ -718,6 +718,17 @@ def controller_launch_app(
     return _build_action_result(reply)
 
 
+def controller_check_app_installed(
+    project_id: int,
+    app_name: str,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id, "controller.check_app_installed", timeout, app_name=app_name
+    )
+    return _build_action_result(reply)
+
+
 def controller_browser_take_screenshot(
     project_id: int,
     timeout: float = 30.0,

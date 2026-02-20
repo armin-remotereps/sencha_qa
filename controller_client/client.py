@@ -6,6 +6,7 @@ from typing import Any, TypeAlias
 import websockets
 from websockets.asyncio.client import ClientConnection
 
+from controller_client.app_checker import execute_check_app_installed
 from controller_client.app_launcher import execute_launch_app
 from controller_client.browser_executor import (
     BrowserSession,
@@ -49,6 +50,7 @@ from controller_client.protocol import (
     parse_browser_hover_payload,
     parse_browser_navigate_payload,
     parse_browser_type_payload,
+    parse_check_app_installed_payload,
     parse_click_payload,
     parse_drag_payload,
     parse_handshake_ack_payload,
@@ -110,6 +112,7 @@ class ControllerClient:
             MessageType.SEND_INPUT: self._handle_send_input,
             MessageType.TERMINATE_INTERACTIVE_CMD: self._handle_terminate_interactive_cmd,
             MessageType.LAUNCH_APP: self._handle_launch_app,
+            MessageType.CHECK_APP_INSTALLED: self._handle_check_app_installed,
         }
         self._handshake_event = asyncio.Event()
 
@@ -504,6 +507,16 @@ class ControllerClient:
         payload = parse_launch_app_payload(data)
         try:
             result = await asyncio.to_thread(execute_launch_app, payload)
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_check_app_installed(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_check_app_installed_payload(data)
+        try:
+            result = await asyncio.to_thread(execute_check_app_installed, payload)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))

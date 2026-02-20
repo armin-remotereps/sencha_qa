@@ -137,6 +137,13 @@ def _handle_launch_app(
     return tools_controller.launch_app(context.project_id, app_name=app_name)
 
 
+def _handle_check_app_installed(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    app_name = str(arguments.get("app_name", ""))
+    return tools_controller.check_app_installed(context.project_id, app_name=app_name)
+
+
 def _handle_browser_navigate(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
@@ -256,6 +263,7 @@ _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "hover": _handle_hover,
     "drag": _handle_drag,
     "launch_app": _handle_launch_app,
+    "check_app_installed": _handle_check_app_installed,
     "browser_navigate": _handle_browser_navigate,
     "browser_click": _handle_browser_click,
     "browser_type": _handle_browser_type,

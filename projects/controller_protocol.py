@@ -103,6 +103,10 @@ class LaunchAppActionEvent(BaseActionEvent):
     app_name: str
 
 
+class CheckAppInstalledActionEvent(BaseActionEvent):
+    app_name: str
+
+
 class ActionTypeRegistry:
     _ACTION_TYPE_MAP: Final[dict[str, MessageType]] = {
         "controller.click": MessageType.CLICK,
@@ -125,6 +129,7 @@ class ActionTypeRegistry:
         "controller.send_input": MessageType.SEND_INPUT,
         "controller.terminate_interactive_cmd": MessageType.TERMINATE_INTERACTIVE_CMD,
         "controller.launch_app": MessageType.LAUNCH_APP,
+        "controller.check_app_installed": MessageType.CHECK_APP_INSTALLED,
     }
 
     _PAYLOAD_KEYS: Final[dict[str, tuple[str, ...]]] = {
@@ -155,6 +160,7 @@ class ActionTypeRegistry:
         "controller.send_input": ("session_id", "input_text"),
         "controller.terminate_interactive_cmd": ("session_id",),
         "controller.launch_app": ("app_name",),
+        "controller.check_app_installed": ("app_name",),
     }
 
     @classmethod

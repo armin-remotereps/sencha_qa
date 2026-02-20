@@ -15,6 +15,7 @@ from projects.services import (
     controller_browser_navigate,
     controller_browser_take_screenshot,
     controller_browser_type,
+    controller_check_app_installed,
     controller_click,
     controller_drag,
     controller_hover,
@@ -221,6 +222,18 @@ def launch_app(project_id: int, *, app_name: str) -> ToolResult:
         )
 
     return safe_tool_call("launch_app", _do)
+
+
+def check_app_installed(project_id: int, *, app_name: str) -> ToolResult:
+    def _do() -> ToolResult:
+        result = controller_check_app_installed(project_id, app_name)
+        return ToolResult(
+            tool_call_id="",
+            content=result["message"],
+            is_error=not result["success"],
+        )
+
+    return safe_tool_call("check_app_installed", _do)
 
 
 # ============================================================================

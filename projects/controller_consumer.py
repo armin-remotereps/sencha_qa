@@ -24,6 +24,7 @@ from projects.controller_protocol import (
     BrowserNavigateActionEvent,
     BrowserTakeScreenshotActionEvent,
     BrowserTypeActionEvent,
+    CheckAppInstalledActionEvent,
     ClickActionEvent,
     ControllerMessageBuilder,
     DragActionEvent,
@@ -246,6 +247,11 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await self._forward_action(event)
 
     async def controller_launch_app(self, event: LaunchAppActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_check_app_installed(
+        self, event: CheckAppInstalledActionEvent
+    ) -> None:
         await self._forward_action(event)
 
     async def _send_handshake_ack(

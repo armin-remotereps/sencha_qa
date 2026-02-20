@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import time
 
+from django.conf import settings
+
 from agents.services.context_summarizer import summarize_context_if_needed
 from agents.services.dmr_client import send_chat_completion
 from agents.services.dmr_config import (
@@ -23,7 +25,6 @@ from agents.types import (
     ToolContext,
     ToolResult,
 )
-from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -119,18 +120,20 @@ def _build_tool_taxonomy() -> str:
         "6. type_text — Type text using the keyboard\n"
         "7. key_press — Press a key or key combination\n"
         "8. hover — Hover over an element found by vision-based description\n"
-        "9. drag — Drag from one element to another, both found by vision-based description\n\n"
+        "9. drag — Drag from one element to another, both found by vision-based description\n"
+        "10. check_app_installed — Check if software is already installed (CLI or GUI) before installing\n"
+        "11. launch_app — Launch a GUI application by name\n\n"
         "BROWSER TOOLS (Playwright — for web page interactions):\n"
-        "10. browser_navigate — Navigate the browser to a URL\n"
-        "11. browser_click — Click a web page element found by AI-based description\n"
-        "12. browser_type — Type text into a web page element found by AI-based description\n"
-        "13. browser_hover — Hover over a web page element found by AI-based description\n"
-        "14. browser_get_page_content — Get the text content of the current page\n"
-        "15. browser_get_url — Get the current browser URL\n"
-        "16. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
-        "17. browser_download — Download a file from a URL via the browser\n\n"
+        "12. browser_navigate — Navigate the browser to a URL\n"
+        "13. browser_click — Click a web page element found by AI-based description\n"
+        "14. browser_type — Type text into a web page element found by AI-based description\n"
+        "15. browser_hover — Hover over a web page element found by AI-based description\n"
+        "16. browser_get_page_content — Get the text content of the current page\n"
+        "17. browser_get_url — Get the current browser URL\n"
+        "18. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
+        "19. browser_download — Download a file from a URL via the browser\n\n"
         "SEARCH TOOLS (for looking up information on the web):\n"
-        "18. web_search — Search the web and return top results with titles, snippets, and URLs"
+        "20. web_search — Search the web and return top results with titles, snippets, and URLs"
     )
 
 
@@ -217,7 +220,9 @@ def _build_desktop_tool_examples() -> str:
         '- take_screenshot(question="What is on screen?") — capture desktop and ask about it\n'
         '- execute_command(command="ls -la") — run a shell command\n'
         '- start_interactive_command(command="sudo apt install -y nginx") — start a command that may prompt for input\n'
-        '- send_command_input(session_id="...", input_text="password123") — send input to an interactive session'
+        '- send_command_input(session_id="...", input_text="password123") — send input to an interactive session\n'
+        '- check_app_installed(app_name="Firefox") — check if software is installed before attempting to install it\n'
+        '- launch_app(app_name="Calculator") — launch a GUI application by name'
     )
 
 
@@ -257,6 +262,8 @@ def _build_tool_selection_rules() -> str:
         "cookie banners, login forms, etc.).\n"
         "  3. Use desktop click to dismiss overlays or interact with visible elements directly.\n"
         "  4. After clearing blockers, retry browser tools if needed.\n"
+        "- APP CHECK: Before installing ANY software, ALWAYS call check_app_installed first. "
+        "If the app is already installed, skip the installation entirely.\n"
         "- INSTALLATION LOOKUP: Before installing software, use web_search to look up the "
         "correct install command for the current OS. This avoids guessing wrong package names "
         "or using the wrong package manager."

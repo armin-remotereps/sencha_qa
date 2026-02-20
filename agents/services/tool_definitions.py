@@ -158,6 +158,24 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                 ),
             ),
         ),
+        ToolDefinition(
+            name="check_app_installed",
+            description=(
+                "Check whether a software application is already installed on the remote machine. "
+                "Searches both CLI tools (via PATH lookup) and GUI applications (via OS-native discovery). "
+                "Returns 'INSTALLED: ...' or 'NOT INSTALLED: ...'. "
+                "ALWAYS call this before attempting to install any software to avoid redundant installations."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                ToolParameter(
+                    name="app_name",
+                    type="string",
+                    description="The name of the application to check (e.g. 'Firefox', 'git', 'Docker').",
+                    required=True,
+                ),
+            ),
+        ),
     )
 
 

@@ -39,6 +39,7 @@ class MessageType(StrEnum):
     TERMINATE_INTERACTIVE_CMD = "terminate_interactive_cmd"
     INTERACTIVE_OUTPUT = "interactive_output"
     LAUNCH_APP = "launch_app"
+    CHECK_APP_INSTALLED = "check_app_installed"
 
 
 class MouseButton(StrEnum):
@@ -212,6 +213,11 @@ class InteractiveOutputPayload:
 
 @dataclass(frozen=True)
 class LaunchAppPayload:
+    app_name: str
+
+
+@dataclass(frozen=True)
+class CheckAppInstalledPayload:
     app_name: str
 
 
@@ -406,5 +412,13 @@ def parse_terminate_interactive_cmd_payload(
 
 def parse_launch_app_payload(data: dict[str, object]) -> LaunchAppPayload:
     return LaunchAppPayload(
+        app_name=_extract_str(data, "app_name"),
+    )
+
+
+def parse_check_app_installed_payload(
+    data: dict[str, object],
+) -> CheckAppInstalledPayload:
+    return CheckAppInstalledPayload(
         app_name=_extract_str(data, "app_name"),
     )
