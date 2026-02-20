@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pyautogui
 
 try:
-    from screeninfo import get_monitors
+    from screeninfo import get_monitors  # type: ignore[import-not-found]
 
     _SCREENINFO_AVAILABLE = True
 except ImportError:
