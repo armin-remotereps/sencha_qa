@@ -12,6 +12,7 @@ from projects.decorators import project_membership_required
 from projects.forms import ProjectForm, TestCaseForm
 from projects.models import Project, TestCaseUpload, UploadStatus
 from projects.services import (
+    abort_test_run,
     add_cases_to_test_run,
     archive_project,
     cancel_upload_processing,
@@ -371,6 +372,20 @@ def test_run_start(
         start_test_run(test_run)
     except ValueError as exc:
         messages.error(request, str(exc))
+    return redirect(
+        "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
+    )
+
+
+@project_membership_required
+@require_POST
+def test_run_abort(
+    request: HttpRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    abort_test_run(test_run)
     return redirect(
         "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
     )

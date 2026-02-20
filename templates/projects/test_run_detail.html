@@ -20,6 +20,7 @@
       <span x-show="testRunStatus === 'waiting'" class="rounded-full bg-yellow-900/50 px-3 py-1 text-sm text-yellow-400">Waiting</span>
       <span x-show="testRunStatus === 'started'" class="rounded-full bg-blue-900/50 px-3 py-1 text-sm text-blue-400">Started</span>
       <span x-show="testRunStatus === 'done'" class="rounded-full bg-emerald-900/50 px-3 py-1 text-sm text-emerald-400">Done</span>
+      <span x-show="testRunStatus === 'cancelled'" class="rounded-full bg-orange-900/50 px-3 py-1 text-sm text-orange-400">Cancelled</span>
     </div>
     <div class="flex items-center gap-3">
       {% if test_run.status == "waiting" and summary.total > 0 %}
@@ -33,7 +34,22 @@
         </button>
       </form>
       {% endif %}
-      {% if test_run.status == "done" %}
+      {% if test_run.status == "started" %}
+      <form
+        method="post"
+        action="{% url 'projects:test_run_abort' project_id=project.id test_run_id=test_run.id %}"
+        onsubmit="return confirm('Abort this test run? In-progress cases will be marked as failed and pending cases as cancelled.')"
+      >
+        {% csrf_token %}
+        <button
+          type="submit"
+          class="rounded-md bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-500"
+        >
+          Abort Run
+        </button>
+      </form>
+      {% endif %}
+      {% if test_run.status == "done" or test_run.status == "cancelled" %}
       <form method="post" action="{% url 'projects:test_run_redo' project_id=project.id test_run_id=test_run.id %}" onsubmit="return confirm('Reset this test run? All results, logs, and screenshots will be cleared.')">
         {% csrf_token %}
         <button
@@ -65,7 +81,7 @@
   </div>
 
   {# SUMMARY CARDS #}
-  <div class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+  <div class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
     <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
       <p class="text-sm text-zinc-400">Total</p>
       <p class="mt-1 text-2xl font-bold text-zinc-100" x-text="summary.total">{{ summary.total }}</p>
@@ -85,6 +101,10 @@
     <div class="rounded-lg border border-red-900 bg-red-950/30 p-4">
       <p class="text-sm text-red-400">Failed</p>
       <p class="mt-1 text-2xl font-bold text-red-300" x-text="summary.failed">{{ summary.failed }}</p>
+    </div>
+    <div class="rounded-lg border border-orange-900 bg-orange-950/30 p-4">
+      <p class="text-sm text-orange-400">Cancelled</p>
+      <p class="mt-1 text-2xl font-bold text-orange-300" x-text="summary.cancelled">{{ summary.cancelled }}</p>
     </div>
   </div>
 
@@ -175,7 +195,8 @@ document.addEventListener('alpine:init', () => {
       created: {{ summary.created }},
       in_progress: {{ summary.in_progress }},
       success: {{ summary.success }},
-      failed: {{ summary.failed }}
+      failed: {{ summary.failed }},
+      cancelled: {{ summary.cancelled }}
     },
     pivotStatuses: {
       {% for pivot in cases %}
@@ -190,6 +211,7 @@ document.addEventListener('alpine:init', () => {
         case 'in_progress': return base + ' bg-blue-900/50 text-blue-400';
         case 'success': return base + ' bg-emerald-900/50 text-emerald-400';
         case 'failed': return base + ' bg-red-900/50 text-red-400';
+        case 'cancelled': return base + ' bg-orange-900/50 text-orange-400';
         default: return base + ' bg-zinc-800 text-zinc-400';
       }
     },
@@ -200,6 +222,7 @@ document.addEventListener('alpine:init', () => {
         case 'in_progress': return 'In Progress';
         case 'success': return 'Success';
         case 'failed': return 'Failed';
+        case 'cancelled': return 'Cancelled';
         default: return status;
       }
     },
@@ -232,7 +255,7 @@ document.addEventListener('alpine:init', () => {
           const prev = this.testRunStatus;
           this.testRunStatus = data.test_run_status;
           this.summary = data.summary;
-          if (data.test_run_status === 'done' && prev !== 'done') {
+          if ((data.test_run_status === 'done' || data.test_run_status === 'cancelled') && prev !== data.test_run_status) {
             setTimeout(() => window.location.reload(), 1500);
           }
           return;

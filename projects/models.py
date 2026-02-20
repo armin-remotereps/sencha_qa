@@ -46,6 +46,7 @@ class TestRunStatus(models.TextChoices):
     WAITING = "waiting", "Waiting"
     STARTED = "started", "Started"
     DONE = "done", "Done"
+    CANCELLED = "cancelled", "Cancelled"
 
 
 class TestRunTestCaseStatus(models.TextChoices):
@@ -53,6 +54,7 @@ class TestRunTestCaseStatus(models.TextChoices):
     IN_PROGRESS = "in_progress", "In Progress"
     SUCCESS = "success", "Success"
     FAILED = "failed", "Failed"
+    CANCELLED = "cancelled", "Cancelled"
 
 
 class Tag(models.Model):
@@ -189,6 +191,7 @@ class TestRun(models.Model):
         default=TestRunStatus.WAITING,
         db_index=True,
     )
+    celery_task_id = models.CharField(max_length=255, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

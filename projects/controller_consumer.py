@@ -35,7 +35,11 @@ from projects.controller_protocol import (
 )
 from projects.controller_reply_tracker import ReplyTracker
 from projects.models import Project
-from projects.services import broadcast_agent_status, mark_agent_disconnected
+from projects.services import (
+    abort_active_test_run_on_disconnect,
+    broadcast_agent_status,
+    mark_agent_disconnected,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +156,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         )
         await sync_to_async(mark_agent_disconnected)(self._project)
         await sync_to_async(broadcast_agent_status)(self._project)
+        await sync_to_async(abort_active_test_run_on_disconnect)(self._project)
 
     async def _forward_action(self, event: BaseActionEvent) -> None:
         request_id: str = event.get("request_id") or str(uuid.uuid4())

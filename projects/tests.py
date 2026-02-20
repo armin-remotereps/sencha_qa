@@ -49,10 +49,13 @@ from projects.services import (
     _extract_agent_summary,
     _fetch_pivot,
     _finalize_pivot,
+    _mark_pivot_cancelled,
     _mark_pivot_failed,
     _mark_pivot_in_progress,
     _persist_screenshot,
     _update_test_run_status_if_needed,
+    abort_active_test_run_on_disconnect,
+    abort_test_run,
     add_cases_to_test_run,
     archive_project,
     broadcast_agent_status,
@@ -77,6 +80,7 @@ from projects.services import (
     list_waiting_test_runs_for_project,
     mark_agent_connected,
     mark_agent_disconnected,
+    redo_test_run,
     regenerate_api_key,
     start_test_run,
     unarchive_project,
@@ -4350,6 +4354,7 @@ class StartTestRunTests(TestCase):
         mock_task.si = MagicMock(return_value=mock_signature)
 
         mock_chain_result = MagicMock()
+        mock_chain_result.id = "chain-task-id"
         with patch("projects.services.chain") as mock_chain:
             mock_chain.return_value.apply_async = MagicMock(
                 return_value=mock_chain_result
@@ -4364,8 +4369,12 @@ class StartTestRunTests(TestCase):
     def test_should_set_status_to_started(self, mock_task: MagicMock) -> None:
         """Verify test run status changes to STARTED."""
         mock_task.si = MagicMock(return_value=MagicMock())
+        mock_chain_result = MagicMock()
+        mock_chain_result.id = "chain-task-id"
         with patch("projects.services.chain") as mock_chain:
-            mock_chain.return_value.apply_async = MagicMock()
+            mock_chain.return_value.apply_async = MagicMock(
+                return_value=mock_chain_result
+            )
             start_test_run(self.test_run)
 
         self.test_run.refresh_from_db()
@@ -4898,6 +4907,7 @@ class BroadcastIntegrationTests(TestCase):
         mock_tr_bc: MagicMock,
         mock_chain: MagicMock,
     ) -> None:
+        mock_chain.return_value.apply_async.return_value.id = "chain-task-id"
         start_test_run(self.tr)
         mock_tr_bc.assert_called_once_with(self.tr)
 
@@ -5632,3 +5642,499 @@ class ControllerActionServiceTests(TestCase):
         self.assertEqual(result["width"], 1920)
         self.assertEqual(result["height"], 1080)
         self.assertEqual(result["format"], "png")
+
+
+# ============================================================================
+# ABORT TEST RUN SERVICE TESTS
+# ============================================================================
+
+
+class TestAbortTestRun(TestCase):
+    """Tests for abort_test_run service function."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Abort Run Project")
+        self.tc1 = TestCaseModel.objects.create(
+            project=self.project, title="TC Abort 1"
+        )
+        self.tc2 = TestCaseModel.objects.create(
+            project=self.project, title="TC Abort 2"
+        )
+        self.tc3 = TestCaseModel.objects.create(
+            project=self.project, title="TC Abort 3"
+        )
+        self.test_run = TestRun.objects.create(
+            project=self.project,
+            status=TestRunStatus.STARTED,
+            celery_task_id="celery-task-abc-123",
+        )
+        self.pivot_in_progress = TestRunTestCase.objects.create(
+            test_run=self.test_run,
+            test_case=self.tc1,
+            status=TestRunTestCaseStatus.IN_PROGRESS,
+        )
+        self.pivot_created = TestRunTestCase.objects.create(
+            test_run=self.test_run,
+            test_case=self.tc2,
+            status=TestRunTestCaseStatus.CREATED,
+        )
+        self.pivot_success = TestRunTestCase.objects.create(
+            test_run=self.test_run,
+            test_case=self.tc3,
+            status=TestRunTestCaseStatus.SUCCESS,
+        )
+
+    @patch("auto_tester.celery.app.control.revoke")
+    def test_should_revoke_celery_task_and_cancel_run(
+        self, mock_revoke: MagicMock
+    ) -> None:
+        """Verify abort_test_run revokes the Celery task and sets run to CANCELLED."""
+        with self.captureOnCommitCallbacks(execute=True):
+            abort_test_run(self.test_run)
+
+        mock_revoke.assert_called_once_with("celery-task-abc-123", terminate=True)
+        self.test_run.refresh_from_db()
+        self.assertEqual(self.test_run.status, TestRunStatus.CANCELLED)
+
+    @patch("auto_tester.celery.app.control.revoke")
+    def test_should_mark_in_progress_pivots_as_failed(
+        self, mock_revoke: MagicMock
+    ) -> None:
+        """Verify IN_PROGRESS pivots are marked FAILED after abort."""
+        abort_test_run(self.test_run, reason="Aborted by user")
+
+        self.pivot_in_progress.refresh_from_db()
+        self.assertEqual(self.pivot_in_progress.status, TestRunTestCaseStatus.FAILED)
+
+    @patch("auto_tester.celery.app.control.revoke")
+    def test_should_store_reason_in_failed_pivot_result(
+        self, mock_revoke: MagicMock
+    ) -> None:
+        """Verify the reason string is recorded in the result of FAILED pivots."""
+        abort_test_run(self.test_run, reason="Controller client disconnected")
+
+        self.pivot_in_progress.refresh_from_db()
+        self.assertIn("Controller client disconnected", self.pivot_in_progress.result)
+
+    @patch("auto_tester.celery.app.control.revoke")
+    def test_should_mark_created_pivots_as_cancelled(
+        self, mock_revoke: MagicMock
+    ) -> None:
+        """Verify CREATED pivots are marked CANCELLED after abort."""
+        abort_test_run(self.test_run)
+
+        self.pivot_created.refresh_from_db()
+        self.assertEqual(self.pivot_created.status, TestRunTestCaseStatus.CANCELLED)
+
+    @patch("auto_tester.celery.app.control.revoke")
+    def test_should_not_alter_already_terminal_pivots(
+        self, mock_revoke: MagicMock
+    ) -> None:
+        """Verify pivots already in a terminal state are left unchanged."""
+        abort_test_run(self.test_run)
+
+        self.pivot_success.refresh_from_db()
+        self.assertEqual(self.pivot_success.status, TestRunTestCaseStatus.SUCCESS)
+
+    def test_should_be_noop_when_run_is_not_started(self) -> None:
+        """Verify abort_test_run does nothing when the run is not STARTED."""
+        for non_started_status in (TestRunStatus.WAITING, TestRunStatus.DONE):
+            with self.subTest(status=non_started_status):
+                run = TestRun.objects.create(
+                    project=self.project, status=non_started_status
+                )
+                abort_test_run(run)
+                run.refresh_from_db()
+                self.assertEqual(run.status, non_started_status)
+
+    @patch("auto_tester.celery.app.control.revoke")
+    def test_should_not_call_revoke_when_no_celery_task_id(
+        self, mock_revoke: MagicMock
+    ) -> None:
+        """Verify revoke is skipped when celery_task_id is empty."""
+        self.test_run.celery_task_id = ""
+        self.test_run.save(update_fields=["celery_task_id"])
+
+        with self.captureOnCommitCallbacks(execute=True):
+            abort_test_run(self.test_run)
+
+        mock_revoke.assert_not_called()
+
+
+# ============================================================================
+# ABORT ACTIVE TEST RUN ON DISCONNECT SERVICE TESTS
+# ============================================================================
+
+
+class TestAbortActiveTestRunOnDisconnect(TestCase):
+    """Tests for abort_active_test_run_on_disconnect service function."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Disconnect Abort Project")
+        self.tc = TestCaseModel.objects.create(project=self.project, title="TC Disc")
+
+    @patch("auto_tester.celery.app.control.revoke")
+    def test_should_abort_started_run_on_disconnect(
+        self, mock_revoke: MagicMock
+    ) -> None:
+        """Verify the active STARTED run is aborted when client disconnects."""
+        active_run = TestRun.objects.create(
+            project=self.project, status=TestRunStatus.STARTED
+        )
+        TestRunTestCase.objects.create(
+            test_run=active_run,
+            test_case=self.tc,
+            status=TestRunTestCaseStatus.IN_PROGRESS,
+        )
+
+        abort_active_test_run_on_disconnect(self.project)
+
+        active_run.refresh_from_db()
+        self.assertEqual(active_run.status, TestRunStatus.CANCELLED)
+
+    @patch("auto_tester.celery.app.control.revoke")
+    def test_should_store_disconnect_reason_in_failed_pivots(
+        self, mock_revoke: MagicMock
+    ) -> None:
+        """Verify the disconnect reason is stored in the result of failed pivots."""
+        active_run = TestRun.objects.create(
+            project=self.project, status=TestRunStatus.STARTED
+        )
+        pivot = TestRunTestCase.objects.create(
+            test_run=active_run,
+            test_case=self.tc,
+            status=TestRunTestCaseStatus.IN_PROGRESS,
+        )
+
+        abort_active_test_run_on_disconnect(self.project)
+
+        pivot.refresh_from_db()
+        self.assertIn("Controller client disconnected", pivot.result)
+
+    def test_should_be_noop_when_no_started_run_exists(self) -> None:
+        """Verify no error occurs and nothing changes when there is no active run."""
+        waiting_run = TestRun.objects.create(
+            project=self.project, status=TestRunStatus.WAITING
+        )
+
+        abort_active_test_run_on_disconnect(self.project)
+
+        waiting_run.refresh_from_db()
+        self.assertEqual(waiting_run.status, TestRunStatus.WAITING)
+
+
+# ============================================================================
+# START TEST RUN STORES CELERY TASK ID TESTS
+# ============================================================================
+
+
+class TestStartTestRunStoresCeleryTaskId(TestCase):
+    """Tests that start_test_run persists the Celery chain task ID on the run."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Task ID Project")
+        self.tc = TestCaseModel.objects.create(project=self.project, title="TC TaskId")
+        self.test_run = TestRun.objects.create(project=self.project)
+        TestRunTestCase.objects.create(test_run=self.test_run, test_case=self.tc)
+
+    @patch("projects.tasks.execute_test_run_case")
+    def test_should_store_chain_task_id_after_start(self, mock_task: MagicMock) -> None:
+        """Verify celery_task_id is saved to the test run after start_test_run."""
+        mock_task.si = MagicMock(return_value=MagicMock())
+        mock_chain_result = MagicMock()
+        mock_chain_result.id = "chain-task-id-xyz"
+
+        with patch("projects.services.chain") as mock_chain:
+            mock_chain.return_value.apply_async = MagicMock(
+                return_value=mock_chain_result
+            )
+            start_test_run(self.test_run)
+
+        self.test_run.refresh_from_db()
+        self.assertEqual(self.test_run.celery_task_id, "chain-task-id-xyz")
+
+    @patch("projects.tasks.execute_test_run_case")
+    def test_should_have_empty_task_id_before_start(self, mock_task: MagicMock) -> None:
+        """Verify celery_task_id is empty string before the run is started."""
+        self.test_run.refresh_from_db()
+        self.assertEqual(self.test_run.celery_task_id, "")
+
+
+# ============================================================================
+# REDO TEST RUN WITH CANCELLED STATUS TESTS
+# ============================================================================
+
+
+class TestRedoTestRunCancelled(TestCase):
+    """Tests that redo_test_run handles CANCELLED runs correctly."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Redo Cancelled Project")
+        self.tc1 = TestCaseModel.objects.create(project=self.project, title="TC Redo 1")
+        self.tc2 = TestCaseModel.objects.create(project=self.project, title="TC Redo 2")
+
+    def _create_run_with_pivots(self, status: TestRunStatus) -> TestRun:
+        """Create a test run in the given terminal status with two pivots."""
+        run = TestRun.objects.create(
+            project=self.project,
+            status=status,
+            celery_task_id="old-task-id",
+        )
+        TestRunTestCase.objects.create(
+            test_run=run,
+            test_case=self.tc1,
+            status=TestRunTestCaseStatus.FAILED,
+            result="Previous failure",
+        )
+        TestRunTestCase.objects.create(
+            test_run=run,
+            test_case=self.tc2,
+            status=TestRunTestCaseStatus.CANCELLED,
+            result="",
+        )
+        return run
+
+    def test_should_reset_cancelled_run_to_waiting(self) -> None:
+        """Verify redo_test_run resets a CANCELLED run back to WAITING status."""
+        run = self._create_run_with_pivots(TestRunStatus.CANCELLED)
+
+        redo_test_run(run)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, TestRunStatus.WAITING)
+
+    def test_should_clear_celery_task_id_on_redo_cancelled(self) -> None:
+        """Verify celery_task_id is cleared when redoing a CANCELLED run."""
+        run = self._create_run_with_pivots(TestRunStatus.CANCELLED)
+
+        redo_test_run(run)
+
+        run.refresh_from_db()
+        self.assertEqual(run.celery_task_id, "")
+
+    def test_should_reset_all_pivots_to_created_on_cancelled_redo(self) -> None:
+        """Verify all pivot statuses are reset to CREATED when redoing a CANCELLED run."""
+        run = self._create_run_with_pivots(TestRunStatus.CANCELLED)
+
+        redo_test_run(run)
+
+        for pivot in run.pivot_entries.all():
+            self.assertEqual(pivot.status, TestRunTestCaseStatus.CREATED)
+            self.assertEqual(pivot.result, "")
+
+    def test_should_still_work_on_done_runs(self) -> None:
+        """Verify redo_test_run continues to work for DONE runs as before."""
+        run = self._create_run_with_pivots(TestRunStatus.DONE)
+
+        redo_test_run(run)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, TestRunStatus.WAITING)
+        self.assertEqual(run.celery_task_id, "")
+
+    def test_should_raise_for_started_run(self) -> None:
+        """Verify redo_test_run raises ValueError for a STARTED run."""
+        run = TestRun.objects.create(project=self.project, status=TestRunStatus.STARTED)
+        with self.assertRaises(ValueError):
+            redo_test_run(run)
+
+    def test_should_raise_for_waiting_run(self) -> None:
+        """Verify redo_test_run raises ValueError for a WAITING run."""
+        run = TestRun.objects.create(project=self.project, status=TestRunStatus.WAITING)
+        with self.assertRaises(ValueError):
+            redo_test_run(run)
+
+
+# ============================================================================
+# UPDATE TEST RUN STATUS CANCELLED GUARD TESTS
+# ============================================================================
+
+
+class TestUpdateTestRunStatusCancelledGuard(TestCase):
+    """Tests that _update_test_run_status_if_needed does not overwrite CANCELLED."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Cancel Guard Project")
+        self.tc1 = TestCaseModel.objects.create(
+            project=self.project, title="TC Guard 1"
+        )
+        self.tc2 = TestCaseModel.objects.create(
+            project=self.project, title="TC Guard 2"
+        )
+
+    def test_should_not_overwrite_cancelled_with_done(self) -> None:
+        """Verify CANCELLED status is preserved even when all pivots are terminal."""
+        run = TestRun.objects.create(
+            project=self.project, status=TestRunStatus.CANCELLED
+        )
+        TestRunTestCase.objects.create(
+            test_run=run,
+            test_case=self.tc1,
+            status=TestRunTestCaseStatus.FAILED,
+        )
+        TestRunTestCase.objects.create(
+            test_run=run,
+            test_case=self.tc2,
+            status=TestRunTestCaseStatus.CANCELLED,
+        )
+
+        _update_test_run_status_if_needed(run)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, TestRunStatus.CANCELLED)
+
+    def test_should_mark_done_when_started_and_all_pivots_terminal(self) -> None:
+        """Verify STARTED run is correctly promoted to DONE when all pivots finish."""
+        run = TestRun.objects.create(project=self.project, status=TestRunStatus.STARTED)
+        TestRunTestCase.objects.create(
+            test_run=run,
+            test_case=self.tc1,
+            status=TestRunTestCaseStatus.SUCCESS,
+        )
+        TestRunTestCase.objects.create(
+            test_run=run,
+            test_case=self.tc2,
+            status=TestRunTestCaseStatus.FAILED,
+        )
+
+        _update_test_run_status_if_needed(run)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, TestRunStatus.DONE)
+
+
+# ============================================================================
+# EXECUTE TEST RUN TEST CASE EARLY EXIT TESTS
+# ============================================================================
+
+
+class TestExecuteTestRunTestCaseEarlyExit(TestCase):
+    """Tests that execute_test_run_test_case exits early when run is CANCELLED."""
+
+    def setUp(self) -> None:
+        self.project = Project.objects.create(name="Early Exit Project")
+        self.tc = TestCaseModel.objects.create(
+            project=self.project, title="TC Early Exit"
+        )
+        self.test_run = TestRun.objects.create(
+            project=self.project, status=TestRunStatus.CANCELLED
+        )
+        self.pivot = TestRunTestCase.objects.create(
+            test_run=self.test_run,
+            test_case=self.tc,
+            status=TestRunTestCaseStatus.CREATED,
+        )
+
+    @patch("agents.services.agent_loop.run_agent")
+    @patch("agents.services.agent_loop.build_agent_config")
+    def test_should_return_immediately_when_run_is_cancelled(
+        self,
+        mock_build_config: MagicMock,
+        mock_run_agent: MagicMock,
+    ) -> None:
+        """Verify execute_test_run_test_case is a no-op when the run is CANCELLED."""
+        execute_test_run_test_case(self.pivot.pk)
+
+        mock_run_agent.assert_not_called()
+        mock_build_config.assert_not_called()
+
+    @patch("agents.services.agent_loop.run_agent")
+    @patch("agents.services.agent_loop.build_agent_config")
+    def test_should_leave_pivot_as_created_when_run_is_cancelled(
+        self,
+        mock_build_config: MagicMock,
+        mock_run_agent: MagicMock,
+    ) -> None:
+        """Verify the pivot status remains CREATED when the run is already CANCELLED."""
+        execute_test_run_test_case(self.pivot.pk)
+
+        self.pivot.refresh_from_db()
+        self.assertEqual(self.pivot.status, TestRunTestCaseStatus.CREATED)
+
+
+# ============================================================================
+# TEST RUN ABORT VIEW TESTS
+# ============================================================================
+
+
+class TestTestRunAbortView(TestCase):
+    """Tests for the test_run_abort view."""
+
+    def setUp(self) -> None:
+        self.user = CustomUser.objects.create_user(
+            email="aborter@example.com", password="testpass123"
+        )
+        self.non_member = CustomUser.objects.create_user(
+            email="outsider@example.com", password="testpass123"
+        )
+        self.project = create_project(
+            user=self.user, name="Abort View Project", tag_names=[]
+        )
+        self.tc = TestCaseModel.objects.create(project=self.project, title="TC View")
+        self.test_run = TestRun.objects.create(
+            project=self.project, status=TestRunStatus.STARTED
+        )
+        TestRunTestCase.objects.create(
+            test_run=self.test_run,
+            test_case=self.tc,
+            status=TestRunTestCaseStatus.IN_PROGRESS,
+        )
+
+    def _abort_url(self) -> str:
+        """Return the abort URL for the current test run."""
+        return reverse(
+            "projects:test_run_abort",
+            args=[self.project.id, self.test_run.id],
+        )
+
+    def test_should_redirect_unauthenticated_user_to_login(self) -> None:
+        """Verify unauthenticated POST to abort view redirects to login."""
+        response = self.client.post(self._abort_url())
+        self.assertEqual(response.status_code, 302)
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertIn("/accounts/login/", response.url)
+
+    def test_should_return_404_for_non_member(self) -> None:
+        """Verify non-project-members cannot abort a test run."""
+        self.client.force_login(self.non_member)
+        response = self.client.post(self._abort_url())
+        self.assertEqual(response.status_code, 404)
+
+    def test_should_reject_get_request_with_405(self) -> None:
+        """Verify GET requests to the abort endpoint return 405 Method Not Allowed."""
+        self.client.force_login(self.user)
+        response = self.client.get(self._abort_url())
+        self.assertEqual(response.status_code, 405)
+
+    @patch("projects.views.abort_test_run")
+    def test_should_call_abort_service_and_redirect_on_post(
+        self, mock_abort: MagicMock
+    ) -> None:
+        """Verify POST calls abort_test_run and redirects to test run detail."""
+        self.client.force_login(self.user)
+        response = self.client.post(self._abort_url())
+
+        mock_abort.assert_called_once_with(self.test_run)
+        self.assertEqual(response.status_code, 302)
+        expected_url = reverse(
+            "projects:test_run_detail",
+            args=[self.project.id, self.test_run.id],
+        )
+        assert isinstance(response, HttpResponseRedirect)
+        self.assertEqual(response.url, expected_url)
+
+    def test_should_return_404_for_nonexistent_test_run(self) -> None:
+        """Verify 404 is returned when the test run does not exist."""
+        self.client.force_login(self.user)
+        url = reverse("projects:test_run_abort", args=[self.project.id, 999999])
+        response = self.client.post(url)
+        self.assertEqual(response.status_code, 404)
+
+    @patch("auto_tester.celery.app.control.revoke")
+    def test_should_actually_cancel_run_on_post(self, mock_revoke: MagicMock) -> None:
+        """Integration: POST to abort view cancels the run in the database."""
+        self.client.force_login(self.user)
+        self.client.post(self._abort_url())
+
+        self.test_run.refresh_from_db()
+        self.assertEqual(self.test_run.status, TestRunStatus.CANCELLED)
