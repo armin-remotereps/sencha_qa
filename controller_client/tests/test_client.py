@@ -52,6 +52,7 @@ class TestControllerClientInit:
             MessageType.BROWSER_GET_PAGE_CONTENT,
             MessageType.BROWSER_GET_URL,
             MessageType.BROWSER_TAKE_SCREENSHOT,
+            MessageType.BROWSER_DOWNLOAD,
         }
         assert set(client._handlers.keys()) == expected
 
@@ -141,7 +142,7 @@ class TestClickHandler:
 
 class TestRunCommandHandler:
     @pytest.mark.asyncio
-    @patch("controller_client.client.execute_command")
+    @patch("controller_client.client.execute_command_streaming")
     async def test_run_command_dispatches(self, mock_exec: MagicMock) -> None:
         from controller_client.protocol import CommandResultPayload
 
@@ -161,7 +162,7 @@ class TestRunCommandHandler:
         await client._handle_run_command("r1", data)
 
         mock_exec.assert_called_once()
-        mock_conn.send.assert_called_once()
+        # Final command_result message should be sent
         sent = json.loads(mock_conn.send.call_args[0][0])
         assert sent["type"] == "command_result"
         assert sent["success"] is True
@@ -169,7 +170,7 @@ class TestRunCommandHandler:
         assert sent["return_code"] == 0
 
     @pytest.mark.asyncio
-    @patch("controller_client.client.execute_command")
+    @patch("controller_client.client.execute_command_streaming")
     async def test_run_command_error_sends_error_message(
         self, mock_exec: MagicMock
     ) -> None:
@@ -188,6 +189,44 @@ class TestRunCommandHandler:
         sent = json.loads(mock_conn.send.call_args[0][0])
         assert sent["type"] == "error"
         assert sent["code"] == "EXECUTION_FAILED"
+
+    @pytest.mark.asyncio
+    @patch("controller_client.client.execute_command_streaming")
+    async def test_run_command_sends_streaming_output(
+        self, mock_exec: MagicMock
+    ) -> None:
+        from controller_client.protocol import CommandResultPayload
+
+        def _fake_streaming(payload: Any, on_output: Any) -> CommandResultPayload:
+            on_output("line1\n", "stdout")
+            on_output("warning\n", "stderr")
+            return CommandResultPayload(
+                success=True,
+                stdout="line1\n",
+                stderr="warning\n",
+                return_code=0,
+                duration_ms=5.0,
+            )
+
+        mock_exec.side_effect = _fake_streaming
+        config = _make_config()
+        client = ControllerClient(config)
+        mock_conn = AsyncMock()
+        client._connection = mock_conn
+
+        data: dict[str, object] = {"command": "echo line1", "timeout": 30.0}
+        await client._handle_run_command("r1", data)
+
+        # Should have sent 2 output messages + 1 final result
+        assert mock_conn.send.call_count == 3
+        calls = [json.loads(c[0][0]) for c in mock_conn.send.call_args_list]
+        assert calls[0]["type"] == "command_output"
+        assert calls[0]["line"] == "line1\n"
+        assert calls[0]["stream"] == "stdout"
+        assert calls[1]["type"] == "command_output"
+        assert calls[1]["line"] == "warning\n"
+        assert calls[1]["stream"] == "stderr"
+        assert calls[2]["type"] == "command_result"
 
 
 class TestStopClient:

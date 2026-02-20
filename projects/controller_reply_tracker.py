@@ -19,6 +19,9 @@ class ReplyTracker:
     def pop_reply_channel(self, request_id: str) -> str | None:
         return self._pending_replies.pop(request_id, None)
 
+    def peek_reply_channel(self, request_id: str) -> str | None:
+        return self._pending_replies.get(request_id)
+
     def has_pending_reply(self, request_id: str) -> bool:
         return request_id in self._pending_replies
 
@@ -62,6 +65,25 @@ class ReplyTracker:
                 "width": data.get("width", 0),
                 "height": data.get("height", 0),
                 "format": data.get("format", "png"),
+            },
+        )
+        return True
+
+    async def send_command_output(self, request_id: str, data: dict[str, Any]) -> bool:
+        reply_channel = self.peek_reply_channel(request_id)
+        if not reply_channel:
+            logger.warning(
+                "Received command_output with unknown request_id: %s", request_id
+            )
+            return False
+
+        await self._channel_layer.send(
+            reply_channel,
+            {
+                "type": "command.output",
+                "request_id": request_id,
+                "line": data.get("line", ""),
+                "stream": data.get("stream", "stdout"),
             },
         )
         return True

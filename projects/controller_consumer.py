@@ -107,6 +107,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         handlers = {
             "action_result": self._reply_tracker.send_action_result,
             "screenshot_response": self._reply_tracker.send_screenshot_result,
+            "command_output": self._reply_tracker.send_command_output,
             "command_result": self._reply_tracker.send_command_result,
             "browser_content_result": self._reply_tracker.send_browser_content_result,
         }

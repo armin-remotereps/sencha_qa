@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 from agents.services import tools_controller, tools_search
 from agents.services.tool_definitions import (
@@ -36,7 +36,9 @@ def _handle_execute_command(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
     command = str(arguments.get("command", ""))
-    return tools_controller.execute_command(context.project_id, command=command)
+    return tools_controller.execute_command(
+        context.project_id, command=command, on_log=context.on_log
+    )
 
 
 def _handle_take_screenshot(

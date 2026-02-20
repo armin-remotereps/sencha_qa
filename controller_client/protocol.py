@@ -11,6 +11,7 @@ class MessageType(StrEnum):
     HANDSHAKE = "handshake"
     ACTION_RESULT = "action_result"
     SCREENSHOT_RESPONSE = "screenshot_response"
+    COMMAND_OUTPUT = "command_output"
     COMMAND_RESULT = "command_result"
     BROWSER_CONTENT_RESULT = "browser_content_result"
     ERROR = "error"
@@ -38,6 +39,11 @@ class MessageType(StrEnum):
 class MouseButton(StrEnum):
     LEFT = "left"
     RIGHT = "right"
+
+
+class StreamName(StrEnum):
+    STDOUT = "stdout"
+    STDERR = "stderr"
 
 
 class ErrorCode(StrEnum):
@@ -123,6 +129,12 @@ class KeyPressPayload:
 @dataclass(frozen=True)
 class RunCommandPayload:
     command: str
+
+
+@dataclass(frozen=True)
+class CommandOutputPayload:
+    line: str
+    stream: StreamName
 
 
 @dataclass(frozen=True)

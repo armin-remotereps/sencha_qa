@@ -7,6 +7,7 @@ from controller_client.executor import (
     _is_background_command,
     execute_click,
     execute_command,
+    execute_command_streaming,
     execute_drag,
     execute_hover,
     execute_key_press,
@@ -208,6 +209,69 @@ class TestExecuteCommand:
         payload = RunCommandPayload(command="badcmd")
         with pytest.raises(ExecutionError, match="Command execution failed"):
             execute_command(payload)
+
+
+class TestExecuteCommandStreaming:
+    def test_streaming_collects_stdout_lines(self) -> None:
+        collected: list[tuple[str, str]] = []
+
+        def on_output(line: str, stream: str) -> None:
+            collected.append((line, stream))
+
+        payload = RunCommandPayload(command="echo line1 && echo line2")
+        result = execute_command_streaming(payload, on_output)
+
+        assert result.success is True
+        assert result.return_code == 0
+        assert "line1" in result.stdout
+        assert "line2" in result.stdout
+        stdout_lines = [l for l, s in collected if s == "stdout"]
+        assert len(stdout_lines) >= 2
+
+    def test_streaming_collects_stderr(self) -> None:
+        collected: list[tuple[str, str]] = []
+
+        def on_output(line: str, stream: str) -> None:
+            collected.append((line, stream))
+
+        payload = RunCommandPayload(command="echo err >&2")
+        result = execute_command_streaming(payload, on_output)
+
+        assert "err" in result.stderr
+        stderr_lines = [l for l, s in collected if s == "stderr"]
+        assert len(stderr_lines) >= 1
+
+    def test_streaming_background_bypasses(self) -> None:
+        collected: list[tuple[str, str]] = []
+
+        def on_output(line: str, stream: str) -> None:
+            collected.append((line, stream))
+
+        with patch("controller_client.executor.subprocess.Popen"):
+            payload = RunCommandPayload(command="sleep 100 &")
+            result = execute_command_streaming(payload, on_output)
+
+        assert result.success is True
+        assert len(collected) == 0
+
+    def test_streaming_failing_command(self) -> None:
+        collected: list[tuple[str, str]] = []
+
+        def on_output(line: str, stream: str) -> None:
+            collected.append((line, stream))
+
+        payload = RunCommandPayload(command="echo oops >&2 && exit 1")
+        result = execute_command_streaming(payload, on_output)
+
+        assert result.success is False
+        assert result.return_code == 1
+
+    def test_streaming_exception_raises_execution_error(self) -> None:
+        with patch("controller_client.executor.subprocess.Popen") as mock_popen:
+            mock_popen.side_effect = OSError("no such file")
+            payload = RunCommandPayload(command="badcmd")
+            with pytest.raises(ExecutionError, match="Command execution failed"):
+                execute_command_streaming(payload, lambda l, s: None)
 
 
 class TestExecuteScreenshot:

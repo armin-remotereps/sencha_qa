@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Callable
 
 from django.conf import settings
 
@@ -22,6 +21,7 @@ from agents.types import (
     AgentStopReason,
     ChatMessage,
     DMRConfig,
+    LogCallback,
     ToolContext,
     ToolResult,
 )
@@ -29,7 +29,7 @@ from agents.types import (
 logger = logging.getLogger(__name__)
 
 
-def _debug_log(message: str, on_log: Callable[[str], None] | None) -> None:
+def _debug_log(message: str, on_log: LogCallback | None) -> None:
     logger.debug(message)
     if on_log is not None:
         on_log(message)
@@ -340,6 +340,7 @@ def run_agent(
         summarizer_config=summarizer_config,
         vision_config=config.vision_dmr,
         on_screenshot=config.on_screenshot,
+        on_log=config.on_log,
     )
     return _run_agent_loop(
         task_description, context, config=config, system_info=system_info

@@ -4,7 +4,7 @@ from agents.services.browser_element_finder import find_element_index
 from agents.services.controller_element_finder import find_element_coordinates
 from agents.services.tool_utils import safe_tool_call
 from agents.services.vision_qa import answer_screenshot_question
-from agents.types import DMRConfig, ScreenshotCallback, ToolResult
+from agents.types import DMRConfig, LogCallback, ScreenshotCallback, ToolResult
 from projects.services import (
     controller_browser_click,
     controller_browser_download,
@@ -18,15 +18,35 @@ from projects.services import (
     controller_drag,
     controller_hover,
     controller_key_press,
-    controller_run_command,
+    controller_run_command_streaming,
     controller_screenshot,
     controller_type_text,
 )
 
+_STDOUT_LOG_PREFIX = "$ "
+_STDERR_LOG_PREFIX = "$ [stderr] "
 
-def execute_command(project_id: int, *, command: str) -> ToolResult:
+
+def _format_command_output_line(line: str, stream: str) -> str:
+    prefix = _STDERR_LOG_PREFIX if stream == "stderr" else _STDOUT_LOG_PREFIX
+    return f"{prefix}{line.rstrip()}"
+
+
+def execute_command(
+    project_id: int,
+    *,
+    command: str,
+    on_log: LogCallback | None = None,
+) -> ToolResult:
+    def _on_output(line: str, stream: str) -> None:
+        if on_log is None:
+            return
+        on_log(_format_command_output_line(line, stream))
+
     def _do() -> ToolResult:
-        result = controller_run_command(project_id, command)
+        result = controller_run_command_streaming(
+            project_id, command, on_output=_on_output
+        )
         parts: list[str] = []
         if result["stdout"]:
             parts.append(result["stdout"])

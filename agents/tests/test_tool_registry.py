@@ -92,7 +92,9 @@ def test_dispatch_tool_call_execute_command(test_context: ToolContext) -> None:
     assert result.tool_call_id == "call_123"
     assert result.is_error is False
     assert "hello" in result.content
-    mock_execute.assert_called_once_with(1, command="echo hello")
+    mock_execute.assert_called_once_with(
+        1, command="echo hello", on_log=test_context.on_log
+    )
 
 
 def test_dispatch_tool_call_click(test_context: ToolContext) -> None:
@@ -263,6 +265,27 @@ def test_dispatch_tool_call_preserves_tool_call_id(test_context: ToolContext) ->
         )
         result = dispatch_tool_call(tool_call, test_context)
     assert result.tool_call_id == "unique_id_12345"
+
+
+def test_dispatch_execute_command_passes_on_log(test_context: ToolContext) -> None:
+    mock_log = MagicMock()
+    from dataclasses import replace
+
+    context_with_log = replace(test_context, on_log=mock_log)
+    tool_call = ToolCall(
+        tool_call_id="call_log",
+        tool_name="execute_command",
+        arguments={"command": "echo hi"},
+    )
+    with patch(
+        "agents.services.tool_registry.tools_controller.execute_command"
+    ) as mock_execute:
+        mock_execute.return_value = ToolResult(
+            tool_call_id="", content="hi\nExit code: 0", is_error=False
+        )
+        dispatch_tool_call(tool_call, context_with_log)
+
+    mock_execute.assert_called_once_with(1, command="echo hi", on_log=mock_log)
 
 
 def test_dispatch_click_no_vision_config() -> None:

@@ -444,13 +444,74 @@ def controller_run_command(
     project_id: int,
     command: str,
 ) -> CommandResult:
-    reply = _dispatch_controller_action(
-        project_id,
-        "controller.run_command",
-        float(settings.AGENT_TIMEOUT_SECONDS),
-        command=command,
-    )
-    return _build_command_result(reply)
+    return controller_run_command_streaming(project_id, command)
+
+
+def controller_run_command_streaming(
+    project_id: int,
+    command: str,
+    on_output: Callable[[str, str], None] | None = None,
+) -> CommandResult:
+    layer = _get_channel_layer_or_raise()
+    reply_channel: str = async_to_sync(layer.new_channel)()
+    request_id = str(uuid.uuid4())
+    timeout = float(settings.AGENT_TIMEOUT_SECONDS)
+
+    _dispatch_run_command_event(layer, project_id, request_id, reply_channel, command)
+    return _receive_streaming_command_result(layer, reply_channel, timeout, on_output)
+
+
+def _dispatch_run_command_event(
+    layer: Any,
+    project_id: int,
+    request_id: str,
+    reply_channel: str,
+    command: str,
+) -> None:
+    event: dict[str, Any] = {
+        "type": "controller.run_command",
+        "request_id": request_id,
+        "reply_channel": reply_channel,
+        "command": command,
+    }
+    async_to_sync(layer.group_send)(_controller_group(project_id), event)
+
+
+def _receive_streaming_command_result(
+    layer: Any,
+    reply_channel: str,
+    timeout: float,
+    on_output: Callable[[str, str], None] | None,
+) -> CommandResult:
+    deadline = time.monotonic() + timeout
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ControllerActionError(
+                f"Timed out waiting for command result after {timeout}s"
+            )
+
+        try:
+            reply: dict[str, Any] = async_to_sync(asyncio.wait_for)(
+                layer.receive(reply_channel), timeout=remaining
+            )
+        except asyncio.TimeoutError as exc:
+            raise ControllerActionError(
+                f"Timed out waiting for command result after {timeout}s"
+            ) from exc
+
+        msg_type = reply.get("type", "")
+        if msg_type == "command.output":
+            if on_output is not None:
+                line = str(reply.get("line", ""))
+                stream = str(reply.get("stream", "stdout"))
+                on_output(line, stream)
+            continue
+
+        if msg_type == "command.result":
+            return _build_command_result(reply)
+
+        logger.warning("Unexpected message type in streaming receive: %s", msg_type)
 
 
 def _build_command_result(reply: dict[str, Any]) -> CommandResult:
