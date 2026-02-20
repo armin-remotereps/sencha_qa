@@ -16,16 +16,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, TypedDict
 
-from accounts.models import CustomUser
-from agents.types import (
-    AgentConfig,
-    AgentResult,
-    AgentStopReason,
-    ChatMessage,
-    ScreenshotCallback,
-)
 from asgiref.sync import async_to_sync
-from auto_tester.celery import app as celery_app
 from celery import chain
 from channels.layers import get_channel_layer
 from django.conf import settings
@@ -35,6 +26,16 @@ from django.core.paginator import Page, Paginator
 from django.db import transaction
 from django.db.models import Count, Q, QuerySet
 from django.utils import timezone
+
+from accounts.models import CustomUser
+from agents.types import (
+    AgentConfig,
+    AgentResult,
+    AgentStopReason,
+    ChatMessage,
+    ScreenshotCallback,
+)
+from auto_tester.celery import app as celery_app
 from projects.models import (
     ParsedTestCase,
     Project,
@@ -839,6 +840,12 @@ def list_uploads_for_project(
     ).order_by("-created_at")
     paginator: Paginator[TestCaseUpload] = Paginator(qs, per_page)
     return paginator.get_page(page)
+
+
+def list_completed_uploads_for_project(*, project: Project) -> QuerySet[TestCaseUpload]:
+    return TestCaseUpload.objects.filter(
+        project=project, status=UploadStatus.COMPLETED
+    ).order_by("-created_at")
 
 
 # ============================================================================

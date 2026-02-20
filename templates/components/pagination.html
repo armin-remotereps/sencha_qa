@@ -1,0 +1,75 @@
+{% if page_obj.has_other_pages or page_obj.paginator.count > 0 %}
+<div class="mt-6 flex flex-col items-center gap-4 sm:flex-row sm:justify-between">
+
+  {# Showing X-Y of Z #}
+  <p class="text-sm text-zinc-400">
+    Showing
+    {{ page_obj.start_index }}&ndash;{{ page_obj.end_index }}
+    of {{ page_obj.paginator.count }}
+  </p>
+
+  {# Page number links #}
+  {% if page_obj.has_other_pages %}
+  <nav class="flex items-center gap-1">
+    {# Previous #}
+    {% if page_obj.has_previous %}
+    <a
+      href="?page={{ page_obj.previous_page_number }}{{ query_params }}"
+      class="rounded-md bg-zinc-800 px-2.5 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+    >
+      &larr;
+    </a>
+    {% else %}
+    <span class="rounded-md bg-zinc-900 px-2.5 py-1.5 text-sm text-zinc-600 cursor-not-allowed">&larr;</span>
+    {% endif %}
+
+    {% for pg in elided_page_range %}
+      {% if pg == page_obj.number %}
+        <span class="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-semibold text-white">{{ pg }}</span>
+      {% elif pg == "…" %}
+        <span class="px-1 text-sm text-zinc-500">&hellip;</span>
+      {% else %}
+        <a
+          href="?page={{ pg }}{{ query_params }}"
+          class="rounded-md bg-zinc-800 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+        >{{ pg }}</a>
+      {% endif %}
+    {% endfor %}
+
+    {# Next #}
+    {% if page_obj.has_next %}
+    <a
+      href="?page={{ page_obj.next_page_number }}{{ query_params }}"
+      class="rounded-md bg-zinc-800 px-2.5 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700"
+    >
+      &rarr;
+    </a>
+    {% else %}
+    <span class="rounded-md bg-zinc-900 px-2.5 py-1.5 text-sm text-zinc-600 cursor-not-allowed">&rarr;</span>
+    {% endif %}
+  </nav>
+  {% endif %}
+
+  {# Per-page selector #}
+  <form method="get" class="flex items-center gap-2">
+    {# Preserve existing query params as hidden fields (except page & per_page) #}
+    {% for key, value in request.GET.items %}
+      {% if key != "page" and key != "per_page" %}
+        <input type="hidden" name="{{ key }}" value="{{ value }}">
+      {% endif %}
+    {% endfor %}
+    <label for="per_page" class="text-sm text-zinc-400">Per page:</label>
+    <select
+      id="per_page"
+      name="per_page"
+      onchange="this.form.submit()"
+      class="h-8 rounded-md border border-zinc-700 bg-zinc-900 px-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+    >
+      {% for option in allowed_per_page %}
+        <option value="{{ option }}" {% if per_page == option %}selected{% endif %}>{{ option }}</option>
+      {% endfor %}
+    </select>
+  </form>
+
+</div>
+{% endif %}
