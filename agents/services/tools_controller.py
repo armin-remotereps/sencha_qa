@@ -6,6 +6,7 @@ from agents.services.tool_utils import safe_tool_call
 from agents.services.vision_qa import answer_screenshot_question
 from agents.types import DMRConfig, LogCallback, ScreenshotCallback, ToolResult
 from projects.services import (
+    InteractiveCommandResult,
     controller_browser_click,
     controller_browser_download,
     controller_browser_get_page_content,
@@ -20,6 +21,8 @@ from projects.services import (
     controller_key_press,
     controller_run_command_streaming,
     controller_screenshot,
+    controller_send_input,
+    controller_start_interactive_command,
     controller_type_text,
 )
 
@@ -60,6 +63,40 @@ def execute_command(
         )
 
     return safe_tool_call("execute_command", _do)
+
+
+def _format_interactive_output(
+    result: InteractiveCommandResult, include_session_id: bool = False
+) -> str:
+    parts: list[str] = []
+    if include_session_id:
+        parts.append(f"Session ID: {result['session_id']}")
+    if result["output"]:
+        parts.append(f"Output:\n{result['output']}")
+    parts.append(f"Process alive: {result['is_alive']}")
+    if result["exit_code"] is not None:
+        parts.append(f"Exit code: {result['exit_code']}")
+    return "\n".join(parts)
+
+
+def start_interactive_command(project_id: int, *, command: str) -> ToolResult:
+    def _do() -> ToolResult:
+        result = controller_start_interactive_command(project_id, command)
+        content = _format_interactive_output(result, include_session_id=True)
+        return ToolResult(tool_call_id="", content=content, is_error=False)
+
+    return safe_tool_call("start_interactive_command", _do)
+
+
+def send_command_input(
+    project_id: int, *, session_id: str, input_text: str
+) -> ToolResult:
+    def _do() -> ToolResult:
+        result = controller_send_input(project_id, session_id, input_text)
+        content = _format_interactive_output(result)
+        return ToolResult(tool_call_id="", content=content, is_error=False)
+
+    return safe_tool_call("send_command_input", _do)
 
 
 def take_screenshot(

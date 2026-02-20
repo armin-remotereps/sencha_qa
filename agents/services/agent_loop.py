@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 import time
 
-from django.conf import settings
-
 from agents.services.context_summarizer import summarize_context_if_needed
 from agents.services.dmr_client import send_chat_completion
 from agents.services.dmr_config import (
@@ -25,6 +23,7 @@ from agents.types import (
     ToolContext,
     ToolResult,
 )
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -113,23 +112,25 @@ def _build_tool_taxonomy() -> str:
         "You have the following tools:\n\n"
         "DESKTOP TOOLS (PyAutoGUI — for desktop/native app interactions):\n"
         "1. execute_command — Run shell commands in the container\n"
-        "2. take_screenshot — Capture the desktop and answer a question about it using vision AI\n"
-        "3. click — Click an element found by vision-based natural-language description\n"
-        "4. type_text — Type text using the keyboard\n"
-        "5. key_press — Press a key or key combination\n"
-        "6. hover — Hover over an element found by vision-based description\n"
-        "7. drag — Drag from one element to another, both found by vision-based description\n\n"
+        "2. start_interactive_command — Start a command that may prompt for input (sudo, apt install, ssh, passwd)\n"
+        "3. send_command_input — Send input to a running interactive command session\n"
+        "4. take_screenshot — Capture the desktop and answer a question about it using vision AI\n"
+        "5. click — Click an element found by vision-based natural-language description\n"
+        "6. type_text — Type text using the keyboard\n"
+        "7. key_press — Press a key or key combination\n"
+        "8. hover — Hover over an element found by vision-based description\n"
+        "9. drag — Drag from one element to another, both found by vision-based description\n\n"
         "BROWSER TOOLS (Playwright — for web page interactions):\n"
-        "8. browser_navigate — Navigate the browser to a URL\n"
-        "9. browser_click — Click a web page element found by AI-based description\n"
-        "10. browser_type — Type text into a web page element found by AI-based description\n"
-        "11. browser_hover — Hover over a web page element found by AI-based description\n"
-        "12. browser_get_page_content — Get the text content of the current page\n"
-        "13. browser_get_url — Get the current browser URL\n"
-        "14. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
-        "15. browser_download — Download a file from a URL via the browser\n\n"
+        "10. browser_navigate — Navigate the browser to a URL\n"
+        "11. browser_click — Click a web page element found by AI-based description\n"
+        "12. browser_type — Type text into a web page element found by AI-based description\n"
+        "13. browser_hover — Hover over a web page element found by AI-based description\n"
+        "14. browser_get_page_content — Get the text content of the current page\n"
+        "15. browser_get_url — Get the current browser URL\n"
+        "16. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
+        "17. browser_download — Download a file from a URL via the browser\n\n"
         "SEARCH TOOLS (for looking up information on the web):\n"
-        "16. web_search — Search the web and return top results with titles, snippets, and URLs"
+        "18. web_search — Search the web and return top results with titles, snippets, and URLs"
     )
 
 
@@ -214,7 +215,9 @@ def _build_desktop_tool_examples() -> str:
         '- type_text(text="hello") — type text using the keyboard\n'
         '- key_press(keys="Return") — press a key or key combination\n'
         '- take_screenshot(question="What is on screen?") — capture desktop and ask about it\n'
-        '- execute_command(command="ls -la") — run a shell command'
+        '- execute_command(command="ls -la") — run a shell command\n'
+        '- start_interactive_command(command="sudo apt install -y nginx") — start a command that may prompt for input\n'
+        '- send_command_input(session_id="...", input_text="password123") — send input to an interactive session'
     )
 
 
@@ -272,7 +275,12 @@ def _build_shell_rules() -> str:
         "SHELL RULES:\n"
         "- If you launch a GUI application or long-running process (e.g. gnome-calculator, "
         "flask run, node server.js, vim), append ' &' so it runs in the "
-        "background. Otherwise the command will block and time out."
+        "background. Otherwise the command will block and time out.\n"
+        "- INTERACTIVE COMMANDS: If a command may prompt for user input (sudo, apt install, "
+        "ssh, passwd, or any command that asks yes/no or for a password), use "
+        "start_interactive_command instead of execute_command. Then use send_command_input "
+        "to respond to each prompt. Use execute_command only for non-interactive commands "
+        "that will complete without user input."
     )
 
 

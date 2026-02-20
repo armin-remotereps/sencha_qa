@@ -27,13 +27,18 @@ from controller_client.executor import (
     execute_hover,
     execute_key_press,
     execute_screenshot,
+    execute_send_input,
+    execute_start_interactive_cmd,
+    execute_terminate_interactive_cmd,
     execute_type_text,
 )
+from controller_client.interactive_session import InteractiveSessionManager
 from controller_client.protocol import (
     ActionResultPayload,
     BrowserContentResultPayload,
     CommandResultPayload,
     ErrorCode,
+    InteractiveOutputPayload,
     MessageType,
     ScreenshotResponsePayload,
     StreamName,
@@ -49,6 +54,9 @@ from controller_client.protocol import (
     parse_hover_payload,
     parse_key_press_payload,
     parse_run_command_payload,
+    parse_send_input_payload,
+    parse_start_interactive_cmd_payload,
+    parse_terminate_interactive_cmd_payload,
     parse_type_text_payload,
     serialize_message,
 )
@@ -66,11 +74,17 @@ MessageHandler: TypeAlias = Callable[
 
 
 class ControllerClient:
-    def __init__(self, config: ClientConfig) -> None:
+    def __init__(
+        self,
+        config: ClientConfig,
+        interactive_cmd_timeout: float = 300.0,
+    ) -> None:
         self._config = config
         self._running = False
         self._connection: ClientConnection | None = None
         self._browser_session = BrowserSession()
+        self._session_manager = InteractiveSessionManager()
+        self._interactive_cmd_timeout = interactive_cmd_timeout
         self._handlers: dict[MessageType, MessageHandler] = {
             MessageType.HANDSHAKE_ACK: self._handle_handshake_ack,
             MessageType.CLICK: self._handle_click,
@@ -90,6 +104,9 @@ class ControllerClient:
             MessageType.BROWSER_GET_URL: self._handle_browser_get_url,
             MessageType.BROWSER_TAKE_SCREENSHOT: self._handle_browser_take_screenshot,
             MessageType.BROWSER_DOWNLOAD: self._handle_browser_download,
+            MessageType.START_INTERACTIVE_CMD: self._handle_start_interactive_cmd,
+            MessageType.SEND_INPUT: self._handle_send_input,
+            MessageType.TERMINATE_INTERACTIVE_CMD: self._handle_terminate_interactive_cmd,
         }
         self._handshake_event = asyncio.Event()
 
@@ -123,6 +140,7 @@ class ControllerClient:
 
     async def stop(self) -> None:
         self._running = False
+        self._session_manager.terminate_all()
         await asyncio.to_thread(self._browser_session.close)
         if self._connection is not None:
             await self._connection.close()
@@ -437,6 +455,59 @@ class ControllerClient:
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_start_interactive_cmd(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_start_interactive_cmd_payload(data)
+        try:
+            result = await asyncio.to_thread(
+                execute_start_interactive_cmd,
+                self._session_manager,
+                payload,
+                self._interactive_cmd_timeout,
+            )
+            await self._send_interactive_output(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_send_input(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_send_input_payload(data)
+        try:
+            result = await asyncio.to_thread(
+                execute_send_input, self._session_manager, payload
+            )
+            await self._send_interactive_output(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_terminate_interactive_cmd(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_terminate_interactive_cmd_payload(data)
+        try:
+            result = await asyncio.to_thread(
+                execute_terminate_interactive_cmd, self._session_manager, payload
+            )
+            await self._send_interactive_output(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _send_interactive_output(
+        self, request_id: str, result: InteractiveOutputPayload
+    ) -> None:
+        message = serialize_message(
+            MessageType.INTERACTIVE_OUTPUT,
+            request_id=request_id,
+            session_id=result.session_id,
+            output=result.output,
+            is_alive=result.is_alive,
+            exit_code=result.exit_code,
+            duration_ms=result.duration_ms,
+        )
+        await self._send_message(message)
 
     async def _send_browser_content_result(
         self, request_id: str, result: BrowserContentResultPayload

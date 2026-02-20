@@ -16,7 +16,16 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, TypedDict
 
+from accounts.models import CustomUser
+from agents.types import (
+    AgentConfig,
+    AgentResult,
+    AgentStopReason,
+    ChatMessage,
+    ScreenshotCallback,
+)
 from asgiref.sync import async_to_sync
+from auto_tester.celery import app as celery_app
 from celery import chain
 from channels.layers import get_channel_layer
 from django.conf import settings
@@ -26,16 +35,6 @@ from django.core.paginator import Page, Paginator
 from django.db import transaction
 from django.db.models import Count, Q, QuerySet
 from django.utils import timezone
-
-from accounts.models import CustomUser
-from agents.types import (
-    AgentConfig,
-    AgentResult,
-    AgentStopReason,
-    ChatMessage,
-    ScreenshotCallback,
-)
-from auto_tester.celery import app as celery_app
 from projects.models import (
     ParsedTestCase,
     Project,
@@ -54,6 +53,7 @@ from projects.models import (
 logger = logging.getLogger(__name__)
 
 _AGENT_POLL_INTERVAL_SECONDS = 2
+_INTERACTIVE_TERMINATE_TIMEOUT_SECONDS = 30.0
 
 
 @transaction.atomic
@@ -522,6 +522,72 @@ def _build_command_result(reply: dict[str, Any]) -> CommandResult:
         return_code=reply.get("return_code", -1),
         duration_ms=reply.get("duration_ms", 0.0),
     )
+
+
+# ============================================================================
+# INTERACTIVE COMMAND SERVICES
+# ============================================================================
+
+
+class InteractiveCommandResult(TypedDict):
+    session_id: str
+    output: str
+    is_alive: bool
+    exit_code: int | None
+    duration_ms: float
+
+
+def _build_interactive_command_result(
+    reply: dict[str, Any],
+) -> InteractiveCommandResult:
+    return InteractiveCommandResult(
+        session_id=reply.get("session_id", ""),
+        output=reply.get("output", ""),
+        is_alive=reply.get("is_alive", False),
+        exit_code=reply.get("exit_code"),
+        duration_ms=reply.get("duration_ms", 0.0),
+    )
+
+
+def controller_start_interactive_command(
+    project_id: int,
+    command: str,
+) -> InteractiveCommandResult:
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.start_interactive_cmd",
+        float(settings.INTERACTIVE_CMD_TIMEOUT_SECONDS),
+        command=command,
+    )
+    return _build_interactive_command_result(reply)
+
+
+def controller_send_input(
+    project_id: int,
+    session_id: str,
+    input_text: str,
+) -> InteractiveCommandResult:
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.send_input",
+        float(settings.INTERACTIVE_CMD_TIMEOUT_SECONDS),
+        session_id=session_id,
+        input_text=input_text,
+    )
+    return _build_interactive_command_result(reply)
+
+
+def controller_terminate_interactive_command(
+    project_id: int,
+    session_id: str,
+) -> InteractiveCommandResult:
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.terminate_interactive_cmd",
+        _INTERACTIVE_TERMINATE_TIMEOUT_SECONDS,
+        session_id=session_id,
+    )
+    return _build_interactive_command_result(reply)
 
 
 # ============================================================================

@@ -263,6 +263,9 @@ CONTROLLER_SERVER_PORT: int = config("CONTROLLER_SERVER_PORT", default=8000, cas
 CONTROLLER_AGENT_CONNECT_TIMEOUT: int = config(
     "CONTROLLER_AGENT_CONNECT_TIMEOUT", default=60, cast=int
 )
+INTERACTIVE_CMD_TIMEOUT_SECONDS: int = config(
+    "INTERACTIVE_CMD_TIMEOUT_SECONDS", default=300, cast=int
+)
 
 # Output Summarizer
 DMR_SUMMARIZER_MODEL: str = config(

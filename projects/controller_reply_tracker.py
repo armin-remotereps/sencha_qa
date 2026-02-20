@@ -132,3 +132,28 @@ class ReplyTracker:
             },
         )
         return True
+
+    async def send_interactive_output(
+        self, request_id: str, data: dict[str, Any]
+    ) -> bool:
+        reply_channel = self.pop_reply_channel(request_id)
+        if not reply_channel:
+            logger.warning(
+                "Received interactive_output with unknown request_id: %s",
+                request_id,
+            )
+            return False
+
+        await self._channel_layer.send(
+            reply_channel,
+            {
+                "type": "interactive.output",
+                "request_id": request_id,
+                "session_id": data.get("session_id", ""),
+                "output": data.get("output", ""),
+                "is_alive": data.get("is_alive", False),
+                "exit_code": data.get("exit_code"),
+                "duration_ms": data.get("duration_ms", 0.0),
+            },
+        )
+        return True
