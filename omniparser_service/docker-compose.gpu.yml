@@ -6,7 +6,7 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - ${OMNIPARSER_WEIGHTS_DIR:-./OmniParser/weights}:/app/OmniParser/weights
+      - ${OMNIPARSER_WEIGHTS_DIR:-../OmniParser/weights}:/app/OmniParser/weights
     environment:
       - OMNIPARSER_API_KEY=${OMNIPARSER_API_KEY:-}
       - OMNIPARSER_WEIGHTS_DIR=/app/OmniParser/weights
