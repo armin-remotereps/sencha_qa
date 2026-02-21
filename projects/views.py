@@ -25,6 +25,7 @@ from projects.forms import ProjectForm, TestCaseForm
 from projects.models import Project
 from projects.prompt_refiner import refine_project_prompt
 from projects.services import (
+    STATUS_FILTER_CHOICES,
     abort_test_run,
     add_cases_to_test_run,
     archive_project,
@@ -244,6 +245,7 @@ def test_case_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
     search = request.GET.get("search", "").strip() or None
     upload_filter = request.GET.get("upload", "").strip() or None
     upload_id: int | None = int(upload_filter) if upload_filter else None
+    status_filter = request.GET.get("status", "").strip() or None
     page = _parse_page(request)
     per_page = _parse_per_page(request)
 
@@ -251,6 +253,7 @@ def test_case_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
         project=project,
         search=search,
         upload_id=upload_id,
+        status_filter=status_filter,
         page=page,
         per_page=per_page,
     )
@@ -270,6 +273,8 @@ def test_case_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
             "search": search or "",
             "uploads": completed_uploads,
             "current_upload": upload_id or "",
+            "current_status": status_filter or "",
+            "status_choices": STATUS_FILTER_CHOICES,
             "waiting_test_runs": waiting_test_runs,
             "other_projects": other_projects,
             "per_page": per_page,

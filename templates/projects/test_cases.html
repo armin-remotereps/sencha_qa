@@ -104,6 +104,20 @@
       </option>
       {% endfor %}
     </select>
+    <select
+      name="status"
+      class="h-10 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+      onchange="this.form.submit()"
+    >
+      {% for value, label in status_choices %}
+      <option
+        value="{{ value }}"
+        {% if current_status == value %}selected{% endif %}
+      >
+        {{ label }}
+      </option>
+      {% endfor %}
+    </select>
     <button
       type="submit"
       class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
@@ -126,10 +140,12 @@
               class="h-4 w-4 rounded border-zinc-700 bg-zinc-900 text-emerald-600 focus:ring-2 focus:ring-emerald-500"
             >
           </th>
+          <th class="px-4 py-3">TestRail ID</th>
           <th class="px-4 py-3">Title</th>
           <th class="px-4 py-3">Type</th>
           <th class="px-4 py-3">Priority</th>
           <th class="px-4 py-3">Converted</th>
+          <th class="px-4 py-3">Last Run</th>
           <th class="px-4 py-3">Actions</th>
         </tr>
       </thead>
@@ -144,6 +160,7 @@
               class="h-4 w-4 rounded border-zinc-700 bg-zinc-900 text-emerald-600 focus:ring-2 focus:ring-emerald-500"
             >
           </td>
+          <td class="px-4 py-3 font-mono text-sm text-zinc-400">{% if tc.testrail_id %}{{ tc.testrail_id }}{% else %}--{% endif %}</td>
           <td class="px-4 py-3 font-medium text-zinc-100">{{ tc.title }}</td>
           <td class="px-4 py-3 text-zinc-400">{{ tc.type }}</td>
           <td class="px-4 py-3 text-zinc-400">{{ tc.priority }}</td>
@@ -152,6 +169,21 @@
             <span class="rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-400">Yes</span>
             {% else %}
             <span class="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">No</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3">
+            {% if tc.last_run_status == "success" %}
+            <a href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=tc.last_run_test_run_id pivot_id=tc.last_run_pivot_id %}" class="rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-400 hover:bg-emerald-900">Success</a>
+            {% elif tc.last_run_status == "failed" %}
+            <a href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=tc.last_run_test_run_id pivot_id=tc.last_run_pivot_id %}" class="rounded-full bg-red-900/50 px-2 py-0.5 text-xs text-red-400 hover:bg-red-900">Failed</a>
+            {% elif tc.last_run_status == "in_progress" %}
+            <a href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=tc.last_run_test_run_id pivot_id=tc.last_run_pivot_id %}" class="rounded-full bg-blue-900/50 px-2 py-0.5 text-xs text-blue-400 hover:bg-blue-900">In Progress</a>
+            {% elif tc.last_run_status == "created" %}
+            <a href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=tc.last_run_test_run_id pivot_id=tc.last_run_pivot_id %}" class="rounded-full bg-zinc-700 px-2 py-0.5 text-xs text-zinc-300 hover:bg-zinc-600">Created</a>
+            {% elif tc.last_run_status == "cancelled" %}
+            <a href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=tc.last_run_test_run_id pivot_id=tc.last_run_pivot_id %}" class="rounded-full bg-orange-900/50 px-2 py-0.5 text-xs text-orange-400 hover:bg-orange-900">Cancelled</a>
+            {% else %}
+            <span class="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-500 whitespace-nowrap">Never Run</span>
             {% endif %}
           </td>
           <td class="px-4 py-3">

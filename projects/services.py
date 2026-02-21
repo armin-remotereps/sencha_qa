@@ -23,7 +23,7 @@ from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
 from django.core.paginator import Page, Paginator
 from django.db import transaction
-from django.db.models import Count, Prefetch, Q, QuerySet
+from django.db.models import Count, OuterRef, Prefetch, Q, QuerySet, Subquery
 from django.utils import dateformat, timezone
 
 from accounts.models import CustomUser
@@ -781,6 +781,16 @@ def get_test_case_for_project(test_case_id: int, project: Project) -> TestCase |
         return None
 
 
+VALID_STATUS_FILTERS: frozenset[str] = frozenset(
+    choice.value for choice in TestRunTestCaseStatus
+) | frozenset({"never_run"})
+
+STATUS_FILTER_CHOICES: list[tuple[str, str]] = [
+    ("", "All Statuses"),
+    ("never_run", "Never Run"),
+] + [(choice.value, choice.label) for choice in TestRunTestCaseStatus]
+
+
 def list_test_cases_for_project(
     *,
     project: Project,
@@ -788,10 +798,21 @@ def list_test_cases_for_project(
     page: int,
     per_page: int,
     upload_id: int | None = None,
+    status_filter: str | None = None,
 ) -> Page[TestCase]:
-    """Return a paginated list of test cases for a project, optionally filtered by upload."""
-    qs: QuerySet[TestCase] = TestCase.objects.filter(project=project).order_by(
-        "-created_at"
+    """Return a paginated list of test cases for a project, optionally filtered."""
+    latest_pivot = TestRunTestCase.objects.filter(
+        test_case=OuterRef("pk"),
+    ).order_by("-created_at")
+
+    qs: QuerySet[TestCase] = (
+        TestCase.objects.filter(project=project)
+        .annotate(
+            last_run_pivot_id=Subquery(latest_pivot.values("pk")[:1]),
+            last_run_status=Subquery(latest_pivot.values("status")[:1]),
+            last_run_test_run_id=Subquery(latest_pivot.values("test_run_id")[:1]),
+        )
+        .order_by("-created_at")
     )
 
     if search:
@@ -799,6 +820,12 @@ def list_test_cases_for_project(
 
     if upload_id is not None:
         qs = qs.filter(upload_id=upload_id)
+
+    if status_filter and status_filter in VALID_STATUS_FILTERS:
+        if status_filter == "never_run":
+            qs = qs.filter(**{"last_run_pivot_id__isnull": True})
+        else:
+            qs = qs.filter(**{"last_run_status": status_filter})
 
     paginator: Paginator[TestCase] = Paginator(qs, per_page)
     return paginator.get_page(page)
