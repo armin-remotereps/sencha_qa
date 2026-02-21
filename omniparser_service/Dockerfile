@@ -8,6 +8,8 @@ WORKDIR /build
 
 COPY omniparser_service/requirements.txt .
 RUN python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir \
+        torch torchvision --index-url https://download.pytorch.org/whl/cu128 && \
     /opt/venv/bin/pip install --no-cache-dir -r requirements.txt
 
 
