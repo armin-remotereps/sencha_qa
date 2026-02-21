@@ -1,6 +1,6 @@
 .venv/
 venv/
-OmniParser/
+OmniParser/weights/
 .git/
 __pycache__/
 *.pyc
