@@ -888,17 +888,19 @@ def validate_testrail_xml(content: str) -> tuple[bool, str]:
     """Validate that content is a well-formed TestRail XML export.
 
     Returns (True, "") if valid, (False, error_message) if not.
-    Checks: valid XML, has <suite> root, has at least one <case> element.
+    Accepts both suite exports (<suite>/<case>) and run exports (<run>/<test>).
     """
     root = _parse_xml_root(content)
     if root is None:
         return False, "Content is not valid XML."
 
-    if root.tag != "suite":
-        return False, "Root element must be <suite>, not <{0}>.".format(root.tag)
+    if root.tag not in ("suite", "run"):
+        return False, "Root element must be <suite> or <run>, not <{0}>.".format(
+            root.tag
+        )
 
     if not _has_case_elements(root):
-        return False, "XML must contain at least one <case> element."
+        return False, "XML must contain at least one <case> or <test> element."
 
     return True, ""
 
@@ -906,15 +908,16 @@ def validate_testrail_xml(content: str) -> tuple[bool, str]:
 def parse_testrail_xml(file_path: str) -> list[ParsedTestCase]:
     """Parse a TestRail XML export file into a list of ParsedTestCase dataclasses.
 
-    Walks <suite>/<sections>/<section>/<cases>/<case> and extracts all fields.
+    Supports both suite exports (<suite>/<case>) and run exports (<run>/<test>).
     HTML entities in <custom> children are decoded via html.unescape().
     """
     tree = ET.parse(file_path)  # noqa: S314
     root = tree.getroot()
     cases: list[ParsedTestCase] = []
 
-    for case_element in root.iter("case"):
-        cases.append(_parse_single_case(case_element))
+    item_tag = "test" if root.tag == "run" else "case"
+    for element in root.iter(item_tag):
+        cases.append(_parse_single_case(element))
 
     return cases
 
@@ -959,8 +962,11 @@ def _parse_xml_root(content: str) -> ET.Element | None:
 
 
 def _has_case_elements(root: ET.Element) -> bool:
-    """Check whether the XML tree contains at least one <case> element."""
-    return next(root.iter("case"), None) is not None
+    """Check whether the XML tree contains at least one <case> or <test> element."""
+    return (
+        next(root.iter("case"), None) is not None
+        or next(root.iter("test"), None) is not None
+    )
 
 
 def _parse_single_case(case_element: ET.Element) -> ParsedTestCase:
@@ -969,7 +975,7 @@ def _parse_single_case(case_element: ET.Element) -> ParsedTestCase:
     preconditions, steps, expected = _extract_custom_fields(custom)
 
     return ParsedTestCase(
-        testrail_id=_text(case_element, "id"),
+        testrail_id=_text(case_element, "caseid") or _text(case_element, "id"),
         title=_text(case_element, "title"),
         template=_text(case_element, "template") or "Test Case",
         type=_text(case_element, "type"),

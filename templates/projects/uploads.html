@@ -197,8 +197,10 @@ document.addEventListener('alpine:init', () => {
       const reader = new FileReader();
       reader.onload = (e) => {
         const content = e.target.result;
-        if (!content.includes('<suite>') || !content.includes('<cases>')) {
-          this.fileError = 'Invalid TestRails XML: missing <suite> or <cases> tags';
+        const isSuiteExport = content.includes('<suite>') && content.includes('<cases>');
+        const isRunExport = content.includes('<run>') && content.includes('<tests>');
+        if (!isSuiteExport && !isRunExport) {
+          this.fileError = 'Invalid TestRails XML: must contain <suite>/<cases> or <run>/<tests> tags';
           return;
         }
 
