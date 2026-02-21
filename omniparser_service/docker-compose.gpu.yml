@@ -7,6 +7,8 @@ services:
       - "8080:8080"
     volumes:
       - ${OMNIPARSER_WEIGHTS_DIR:-../OmniParser/weights}:/app/OmniParser/weights
+      - easyocr-models:/root/.EasyOCR
+      - paddleocr-models:/root/.paddleocr
     environment:
       - OMNIPARSER_API_KEY=${OMNIPARSER_API_KEY:-}
       - OMNIPARSER_WEIGHTS_DIR=/app/OmniParser/weights
@@ -20,3 +22,7 @@ services:
               count: 1
               capabilities: [gpu]
     restart: unless-stopped
+
+volumes:
+  easyocr-models:
+  paddleocr-models:
