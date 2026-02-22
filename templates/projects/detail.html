@@ -194,18 +194,29 @@
       </div>
 
       <div class="rounded-md border border-zinc-700 bg-zinc-950 p-4">
+        <div class="mb-3 rounded-md bg-amber-900/30 border border-amber-700/50 px-3 py-2">
+          <p class="text-xs text-amber-400">
+            <strong>Requires Python 3.13+</strong> — the setup script will verify your Python version automatically.
+          </p>
+        </div>
         <ol class="list-decimal space-y-2 pl-5 text-sm text-zinc-300">
           <li>Extract the downloaded ZIP file and <code class="text-emerald-400">cd</code> into the extracted folder</li>
           <li>
             Run the setup script:
-            <div x-show="platform === 'unix'" class="mt-1">
-              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">bash controller_client/scripts/setup.sh</code>
+            <div x-show="platform === 'unix'" class="mt-1 space-y-1">
+              <code class="block rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">sudo bash controller_client/scripts/setup.sh</code>
+              <p class="text-xs text-zinc-500">If your default <code>python3</code> is not 3.13+, specify the binary:</p>
+              <code class="block rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-400 font-mono">sudo bash controller_client/scripts/setup.sh --python python3.13</code>
             </div>
-            <div x-show="platform === 'cmd'" class="mt-1">
-              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">controller_client\scripts\setup.bat</code>
+            <div x-show="platform === 'cmd'" class="mt-1 space-y-1">
+              <code class="block rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">controller_client\scripts\setup.bat</code>
+              <p class="text-xs text-zinc-500">If your default <code>python</code> is not 3.13+, specify the binary:</p>
+              <code class="block rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-400 font-mono">controller_client\scripts\setup.bat python3.13</code>
             </div>
-            <div x-show="platform === 'ps'" class="mt-1">
-              <code class="rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">.\controller_client\scripts\setup.ps1</code>
+            <div x-show="platform === 'ps'" class="mt-1 space-y-1">
+              <code class="block rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">.\controller_client\scripts\setup.ps1</code>
+              <p class="text-xs text-zinc-500">If your default <code>python</code> is not 3.13+, specify the binary:</p>
+              <code class="block rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-400 font-mono">.\controller_client\scripts\setup.ps1 -Python python3.13</code>
             </div>
           </li>
           <li>The <code class="text-emerald-400">.env</code> file is pre-configured with your project's connection info</li>

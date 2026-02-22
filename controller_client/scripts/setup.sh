@@ -6,6 +6,41 @@ if [[ "$EUID" -ne 0 ]]; then
     exit 1
 fi
 
+# Parse --python argument
+PYTHON_BIN="python3"
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --python)
+            PYTHON_BIN="$2"
+            shift 2
+            ;;
+        *)
+            echo "Unknown argument: $1" >&2
+            echo "Usage: $0 [--python <python-binary>]" >&2
+            exit 1
+            ;;
+    esac
+done
+
+# Verify the Python binary exists
+if ! command -v "$PYTHON_BIN" &> /dev/null; then
+    echo "Error: Python binary '$PYTHON_BIN' not found." >&2
+    exit 1
+fi
+
+# Check Python version >= 3.13
+PYTHON_VERSION=$("$PYTHON_BIN" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+PYTHON_MAJOR=$("$PYTHON_BIN" -c "import sys; print(sys.version_info.major)")
+PYTHON_MINOR=$("$PYTHON_BIN" -c "import sys; print(sys.version_info.minor)")
+
+if [[ "$PYTHON_MAJOR" -lt 3 ]] || { [[ "$PYTHON_MAJOR" -eq 3 ]] && [[ "$PYTHON_MINOR" -lt 13 ]]; }; then
+    echo "Error: Python 3.13+ is required, but '$PYTHON_BIN' is Python $PYTHON_VERSION." >&2
+    echo "Hint: specify the correct binary with --python, e.g.: $0 --python python3.13" >&2
+    exit 1
+fi
+
+echo "Using Python $PYTHON_VERSION ($PYTHON_BIN)"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 ROOT_DIR="$(dirname "$PROJECT_DIR")"
@@ -33,7 +68,7 @@ fi
 # Create virtual environment
 if [ ! -d "$PROJECT_DIR/.venv" ]; then
     echo "[2/5] Creating Python virtual environment..."
-    python3 -m venv "$PROJECT_DIR/.venv"
+    "$PYTHON_BIN" -m venv "$PROJECT_DIR/.venv"
 else
     echo "[2/5] Virtual environment already exists, skipping..."
 fi
@@ -45,7 +80,7 @@ echo "[3/5] Installing dependencies..."
 
 # Install Playwright browsers
 echo "[4/5] Installing Playwright browsers..."
-"$PROJECT_DIR/.venv/bin/playwright" install
+"$PROJECT_DIR/.venv/bin/playwright" install --with-deps
 
 # Copy example.env to .env if not exists
 if [ ! -f "$PROJECT_DIR/.env" ]; then
