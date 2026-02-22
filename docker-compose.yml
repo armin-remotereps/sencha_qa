@@ -58,7 +58,7 @@ services:
         volumes:
             - "STATIC:/src/staticfiles"
             - "MEDIA:/src/media"
-        entrypoint: "python -m daphne -b 0.0.0.0 -p 8000 auto_tester.asgi:application"
+        entrypoint: "python -m daphne -b 0.0.0.0 -p 8000 --ping-interval 5 --ping-timeout 10 auto_tester.asgi:application"
 
     upload-celery:
         hostname: upload
