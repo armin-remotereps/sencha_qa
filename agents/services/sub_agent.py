@@ -31,12 +31,14 @@ def run_sub_agent(
     *,
     config: AgentConfig,
     system_info: dict[str, object] | None = None,
+    project_prompt: str | None = None,
 ) -> SubTaskResult:
     system_prompt = build_sub_agent_system_prompt(
         sub_task.description,
         sub_task.expected_result,
         state_description,
         system_info=system_info,
+        project_prompt=project_prompt,
     )
 
     summarizer_config = build_summarizer_config()

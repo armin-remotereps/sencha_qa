@@ -70,7 +70,9 @@ def run_orchestrator(
     )
     _log(on_log, "[Orchestrator] Planning: decomposing test case into sub-tasks...")
 
-    sub_tasks = _plan_sub_tasks(orchestrator_dmr, task_description, on_log=on_log)
+    sub_tasks = _plan_sub_tasks(
+        orchestrator_dmr, task_description, project_prompt=project_prompt, on_log=on_log
+    )
     _log(
         on_log,
         f"[Orchestrator] Planning complete: {len(sub_tasks)} sub-tasks created.",
@@ -86,6 +88,7 @@ def run_orchestrator(
         project_id=project_id,
         sub_agent_config=sub_agent_config,
         system_info=system_info,
+        project_prompt=project_prompt,
         on_log=on_log,
     )
 
@@ -140,9 +143,10 @@ def _plan_sub_tasks(
     orchestrator_dmr: DMRConfig,
     task_description: str,
     *,
+    project_prompt: str | None = None,
     on_log: LogCallback | None = None,
 ) -> tuple[SubTask, ...]:
-    system_prompt = build_plan_system_prompt()
+    system_prompt = build_plan_system_prompt(project_prompt=project_prompt)
     messages = (
         ChatMessage(role="system", content=system_prompt),
         ChatMessage(role="user", content=task_description),
@@ -184,6 +188,7 @@ def _execute_sub_tasks(
     project_id: int,
     sub_agent_config: AgentConfig,
     system_info: dict[str, object] | None = None,
+    project_prompt: str | None = None,
     on_log: LogCallback | None = None,
 ) -> OrchestratorResult:
     results: list[SubTaskResult] = []
@@ -215,6 +220,7 @@ def _execute_sub_tasks(
             project_id,
             config=sub_agent_config,
             system_info=system_info,
+            project_prompt=project_prompt,
         )
         total_iterations += result.iterations
         results.append(result)
@@ -253,6 +259,7 @@ def _execute_sub_tasks(
             project_id=project_id,
             sub_agent_config=sub_agent_config,
             system_info=system_info,
+            project_prompt=project_prompt,
             results=results,
             state_lines=state_lines,
             recovery_counts=recovery_counts,
@@ -280,6 +287,7 @@ def _attempt_recovery(
     project_id: int,
     sub_agent_config: AgentConfig,
     system_info: dict[str, object] | None,
+    project_prompt: str | None,
     results: list[SubTaskResult],
     state_lines: list[str],
     recovery_counts: dict[int, int],
@@ -310,6 +318,7 @@ def _attempt_recovery(
         project_id,
         config=sub_agent_config,
         system_info=system_info,
+        project_prompt=project_prompt,
     )
     results.append(recovery_result)
 
