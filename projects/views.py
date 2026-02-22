@@ -23,7 +23,6 @@ from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
 from projects.forms import ProjectForm, TestCaseForm
 from projects.models import Project
-from projects.prompt_refiner import refine_project_prompt
 from projects.services import (
     STATUS_FILTER_CHOICES,
     abort_test_run,
@@ -67,6 +66,7 @@ from projects.services import (
     update_test_case,
     validate_testrail_xml,
 )
+from projects.tasks import refine_project_prompt_task
 
 ALLOWED_PER_PAGE = [10, 20, 50, 100]
 DEFAULT_PER_PAGE = 20
@@ -673,11 +673,10 @@ def project_refine_prompt(request: HttpRequest, project: Project) -> HttpRespons
         body = json.loads(request.body)
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON body."}, status=400)
+    if not isinstance(body, dict):
+        return JsonResponse({"error": "Invalid JSON body."}, status=400)
     raw_prompt = str(body.get("prompt", ""))[:PROJECT_PROMPT_MAX_LENGTH]
     if not raw_prompt.strip():
         return JsonResponse({"error": "Prompt is empty."}, status=400)
-    try:
-        refined = refine_project_prompt(raw_prompt)
-    except Exception:
-        return JsonResponse({"error": "Refinement service unavailable."}, status=503)
-    return JsonResponse({"refined_prompt": refined})
+    refine_project_prompt_task.delay(project.id, raw_prompt)
+    return JsonResponse({"status": "accepted"}, status=202)

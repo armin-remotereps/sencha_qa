@@ -250,7 +250,7 @@ class AgentStatusConsumer(AuthenticatedConsumer):
             return False
 
         self._project_id = project.id
-        self.group_name = f"agent_status_{project.id}"
+        self.group_name = _agent_status_group(project.id)
         return True
 
     async def _send_initial_state(self) -> None:
@@ -284,6 +284,17 @@ class AgentStatusConsumer(AuthenticatedConsumer):
                     "agent_connected": event["agent_connected"],
                     "agent_system_info": event["agent_system_info"],
                     "last_connected_at": event["last_connected_at"],
+                }
+            )
+        )
+
+    async def prompt_refined(self, event: dict[str, Any]) -> None:
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "prompt_refined",
+                    "refined_prompt": event["refined_prompt"],
+                    "error": event["error"],
                 }
             )
         )
