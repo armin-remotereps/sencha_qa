@@ -70,6 +70,9 @@ def _parse_sub_task_result(agent_result: AgentResult) -> SubTaskResult:
     if last_text:
         status, summary = _parse_result_text(last_text)
         if status:
+            logger.info(
+                "Sub-agent result parsing: found explicit RESULT: %s", status.upper()
+            )
             return SubTaskResult(
                 status=status,
                 summary=summary,
@@ -78,12 +81,21 @@ def _parse_sub_task_result(agent_result: AgentResult) -> SubTaskResult:
             )
 
     if agent_result.stop_reason == AgentStopReason.TASK_COMPLETE:
+        logger.info(
+            "Sub-agent result parsing: no explicit RESULT, "
+            "stop_reason=TASK_COMPLETE — auto-passing"
+        )
         return SubTaskResult(
             status="pass",
             summary=last_text or "Step completed successfully.",
             iterations=agent_result.iterations,
         )
 
+    logger.info(
+        "Sub-agent result parsing: no explicit RESULT, "
+        "stop_reason=%s — defaulting to fail",
+        agent_result.stop_reason,
+    )
     return SubTaskResult(
         status="fail",
         summary=last_text or agent_result.error or "Step failed.",

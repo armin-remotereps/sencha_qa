@@ -189,6 +189,12 @@ class ControllerClient:
                 continue
 
             handler = self._handlers.get(message_type)
+            logger.info(
+                "WS message received: type=%s request_id=%s handler_found=%s",
+                message_type.value if hasattr(message_type, "value") else message_type,
+                request_id,
+                handler is not None,
+            )
             if handler is not None:
                 await handler(request_id, data)
             else:

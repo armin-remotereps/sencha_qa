@@ -63,6 +63,11 @@ def run_orchestrator(
 
     _ensure_models_ready(orchestrator_dmr, sub_agent_dmr, vision_dmr)
 
+    _log(
+        on_log,
+        f"[Orchestrator] Models: orchestrator={orchestrator_dmr.model}, "
+        f"sub_agent={sub_agent_dmr.model}, vision={vision_dmr.model}",
+    )
     _log(on_log, "[Orchestrator] Planning: decomposing test case into sub-tasks...")
 
     sub_tasks = _plan_sub_tasks(orchestrator_dmr, task_description, on_log=on_log)

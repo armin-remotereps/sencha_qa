@@ -165,6 +165,10 @@ def _run_agent_loop(
         )
     tool_definitions = get_all_tool_definitions()
 
+    _debug_log(
+        f"[Agent] Loaded {len(tool_definitions)} tool definitions", config.on_log
+    )
+
     messages: list[ChatMessage] = [
         ChatMessage(role="system", content=system_prompt),
         ChatMessage(role="user", content=task_description),
@@ -172,6 +176,7 @@ def _run_agent_loop(
 
     start_time = time.monotonic()
     iterations = 0
+    tool_calls_made = 0
     on_log = config.on_log
 
     while iterations < config.max_iterations:
@@ -216,7 +221,11 @@ def _run_agent_loop(
         messages.append(response.message)
 
         if response.message.tool_calls is None:
-            _debug_log(f"Agent completed task after {iterations} iterations", on_log)
+            _debug_log(
+                f"[Agent] No tool calls in response — completing "
+                f"(total tool calls made: {tool_calls_made})",
+                on_log,
+            )
             return AgentResult(
                 stop_reason=AgentStopReason.TASK_COMPLETE,
                 iterations=iterations,
@@ -224,6 +233,7 @@ def _run_agent_loop(
             )
 
         for tool_call in response.message.tool_calls:
+            tool_calls_made += 1
             _debug_log(
                 f"[Tool Call] {tool_call.tool_name}({tool_call.arguments})", on_log
             )

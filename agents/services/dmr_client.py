@@ -78,7 +78,12 @@ def send_chat_completion(
     timeout = _get_timeout(config)
     payload = _build_payload(config, messages, tools, keep_alive)
 
-    logger.debug("DMR request to %s with %d messages", url, len(messages))
+    logger.info(
+        "DMR request: model=%s messages=%d tools=%d",
+        config.model,
+        len(messages),
+        len(tools),
+    )
 
     with httpx.Client(timeout=timeout) as client:
         response = client.post(url, json=payload, headers=headers)
@@ -87,4 +92,18 @@ def send_chat_completion(
         response.raise_for_status()
 
     data = response.json()
-    return _parse_response(data)
+    parsed = _parse_response(data)
+
+    has_tool_calls = parsed.message.tool_calls is not None
+    tool_call_count = len(parsed.message.tool_calls) if parsed.message.tool_calls else 0
+    logger.info(
+        "DMR response: finish_reason=%s tool_calls=%s (count=%d) "
+        "usage(prompt=%d, completion=%d)",
+        parsed.finish_reason,
+        has_tool_calls,
+        tool_call_count,
+        parsed.usage_prompt_tokens,
+        parsed.usage_completion_tokens,
+    )
+
+    return parsed
