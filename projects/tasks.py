@@ -10,6 +10,8 @@ from channels.layers import get_channel_layer
 from django.db import transaction
 
 from projects.models import TestCaseUpload, UploadStatus
+from projects.prompt_refiner import refine_project_prompt
+from projects.services import _agent_status_group
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -159,3 +161,59 @@ def execute_test_run_case(self: Task[[int], None], pivot_id: int) -> None:
         self.request.id,
         pivot_id,
     )
+
+
+def _send_prompt_refined(
+    project_id: int,
+    *,
+    refined_prompt: str = "",
+    error: str = "",
+) -> None:
+    channel_layer: Any = get_channel_layer()
+    if channel_layer is None:
+        return
+
+    async_to_sync(channel_layer.group_send)(
+        _agent_status_group(project_id),
+        {
+            "type": "prompt.refined",
+            "refined_prompt": refined_prompt,
+            "error": error,
+        },
+    )
+
+
+@shared_task(
+    bind=True,
+    name="projects.tasks.refine_project_prompt_task",
+    max_retries=0,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=660,
+    time_limit=720,
+)
+def refine_project_prompt_task(
+    self: Task[[int, str], None],
+    project_id: int,
+    raw_prompt: str,
+) -> None:
+    logger.info(
+        "refine_project_prompt_task started: task_id=%s project_id=%s",
+        self.request.id,
+        project_id,
+    )
+    try:
+        refined = refine_project_prompt(raw_prompt)
+        _send_prompt_refined(project_id, refined_prompt=refined)
+        logger.info(
+            "refine_project_prompt_task completed: task_id=%s project_id=%s",
+            self.request.id,
+            project_id,
+        )
+    except Exception:
+        logger.exception(
+            "refine_project_prompt_task failed: task_id=%s project_id=%s",
+            self.request.id,
+            project_id,
+        )
+        _send_prompt_refined(project_id, error="Refinement service unavailable.")

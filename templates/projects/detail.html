@@ -22,6 +22,8 @@
           this.agentConnected = data.agent_connected;
           this.systemInfo = data.agent_system_info || {};
           this.lastConnectedAt = data.last_connected_at || '';
+        } else if (data.type === 'prompt_refined') {
+          window.dispatchEvent(new CustomEvent('prompt-refined', { detail: data }));
         }
       };
     },
@@ -380,6 +382,21 @@ document.addEventListener('alpine:init', () => {
       this.$watch('prompt', () => {
         this.dirty = this.prompt !== this.savedPrompt;
       });
+
+      window.addEventListener('prompt-refined', (e) => {
+        if (!this.refining) return;
+        clearTimeout(this._refineTimeout);
+        const data = e.detail;
+        this.refining = false;
+        if (data.error) {
+          this.statusMsg = data.error;
+          this.statusError = true;
+        } else {
+          this.prompt = data.refined_prompt;
+          this.statusMsg = 'Refined successfully — review and save.';
+          this.statusError = false;
+        }
+      });
     },
 
     async refineWithAI() {
@@ -396,18 +413,23 @@ document.addEventListener('alpine:init', () => {
           },
           body: JSON.stringify({ prompt: this.prompt }),
         });
-        const data = await resp.json();
-        if (!resp.ok) {
-          this.statusMsg = data.error || 'Refinement failed.';
-          this.statusError = true;
+        if (resp.status === 202) {
+          this._refineTimeout = setTimeout(() => {
+            if (this.refining) {
+              this.refining = false;
+              this.statusMsg = 'Refinement timed out. Please try again.';
+              this.statusError = true;
+            }
+          }, 120000);
           return;
         }
-        this.prompt = data.refined_prompt;
-        this.statusMsg = 'Refined successfully — review and save.';
+        const data = await resp.json();
+        this.statusMsg = data.error || 'Refinement failed.';
+        this.statusError = true;
+        this.refining = false;
       } catch (err) {
         this.statusMsg = 'Could not reach the server.';
         this.statusError = true;
-      } finally {
         this.refining = false;
       }
     },
