@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$EUID" -ne 0 ]]; then
-    echo "Error: This script must be run as root. Use: sudo $0" >&2
-    exit 1
-fi
-
 # Parse --python argument
 PYTHON_BIN="python3"
 while [[ $# -gt 0 ]]; do
@@ -54,7 +49,7 @@ if [[ "$(uname -s)" == "Linux" ]]; then
     if command -v apt-get &> /dev/null; then
         if ! command -v gnome-screenshot &> /dev/null; then
             echo "  Installing gnome-screenshot (required by PyAutoGUI)..."
-            apt-get install -y gnome-screenshot
+            sudo apt-get install -y gnome-screenshot
         else
             echo "  gnome-screenshot already installed."
         fi

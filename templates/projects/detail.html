@@ -204,9 +204,9 @@
           <li>
             Run the setup script:
             <div x-show="platform === 'unix'" class="mt-1 space-y-1">
-              <code class="block rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">sudo bash controller_client/scripts/setup.sh</code>
+              <code class="block rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">bash controller_client/scripts/setup.sh</code>
               <p class="text-xs text-zinc-500">If your default <code>python3</code> is not 3.13+, specify the binary:</p>
-              <code class="block rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-400 font-mono">sudo bash controller_client/scripts/setup.sh --python python3.13</code>
+              <code class="block rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-400 font-mono">bash controller_client/scripts/setup.sh --python python3.13</code>
             </div>
             <div x-show="platform === 'cmd'" class="mt-1 space-y-1">
               <code class="block rounded bg-zinc-800 px-2 py-1 text-xs text-emerald-400 font-mono">controller_client\scripts\setup.bat</code>
