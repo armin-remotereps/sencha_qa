@@ -281,6 +281,25 @@ def broadcast_agent_status(project: Project) -> None:
     async_to_sync(layer.group_send)(_agent_status_group(project.id), event)
 
 
+def force_disconnect_controller(project: Project) -> bool:
+    """Send a force-disconnect event to the controller client.
+
+    Returns True if the project was connected (event sent), False otherwise.
+    """
+    if not project.agent_connected:
+        return False
+
+    layer: Any = get_channel_layer()
+    if layer is None:
+        return False
+
+    async_to_sync(layer.group_send)(
+        _controller_group(project.id),
+        {"type": "controller.force_disconnect"},
+    )
+    return True
+
+
 # ============================================================================
 # CONTROLLER ACTION SERVICES
 # ============================================================================

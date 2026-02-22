@@ -50,6 +50,20 @@
       >
         Connected
       </span>
+      <form
+        x-show="agentConnected"
+        method="post"
+        action="{% url 'projects:force_disconnect' project_id=project.id %}"
+        class="inline"
+      >
+        {% csrf_token %}
+        <button
+          type="submit"
+          class="rounded-full bg-red-900/50 px-3 py-1 text-sm font-medium text-red-400 hover:bg-red-900"
+        >
+          Force Disconnect
+        </button>
+      </form>
       <span
         x-show="!agentConnected"
         class="inline-flex items-center rounded-full bg-zinc-800 px-3 py-1 text-sm font-medium text-zinc-500"

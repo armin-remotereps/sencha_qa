@@ -39,6 +39,7 @@ from projects.services import (
     delete_test_run,
     delete_upload,
     duplicate_project,
+    force_disconnect_controller,
     generate_controller_client_zip,
     get_all_tags_for_user,
     get_project_for_user,
@@ -233,6 +234,16 @@ def download_controller_client(request: HttpRequest, project: Project) -> HttpRe
         f'attachment; filename="controller-client-{project.id}.zip"'
     )
     return response
+
+
+@project_membership_required
+@require_POST
+def project_force_disconnect(request: HttpRequest, project: Project) -> HttpResponse:
+    if force_disconnect_controller(project):
+        messages.success(request, "Controller client disconnected.")
+    else:
+        messages.info(request, "No controller client is connected.")
+    return redirect("projects:detail", project_id=project.id)
 
 
 # ============================================================================

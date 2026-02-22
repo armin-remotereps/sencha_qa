@@ -39,6 +39,11 @@ urlpatterns: list[URLPattern] = [
         name="download_controller_client",
     ),
     path(
+        "<int:project_id>/force-disconnect/",
+        views.project_force_disconnect,
+        name="force_disconnect",
+    ),
+    path(
         "<int:project_id>/test-cases/",
         views.test_case_list,
         name="test_case_list",

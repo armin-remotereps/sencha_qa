@@ -165,6 +165,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await sync_to_async(broadcast_agent_status)(self._project)
         await sync_to_async(abort_active_test_run_on_disconnect)(self._project)
 
+    async def controller_force_disconnect(self, event: dict[str, Any]) -> None:
+        await self.close()
+
     async def _forward_action(self, event: BaseActionEvent) -> None:
         request_id: str = event.get("request_id") or str(uuid.uuid4())
         reply_channel: str = event.get("reply_channel", "")
