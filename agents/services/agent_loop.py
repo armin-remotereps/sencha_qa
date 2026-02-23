@@ -23,9 +23,11 @@ from agents.services.prompt_parts import (
 )
 from agents.services.tool_registry import dispatch_tool_call, get_all_tool_definitions
 from agents.types import (
+    AgentCancelledError,
     AgentConfig,
     AgentResult,
     AgentStopReason,
+    CancellationCheck,
     ChatMessage,
     DMRConfig,
     LogCallback,
@@ -34,6 +36,11 @@ from agents.types import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _check_cancellation(cancellation_check: CancellationCheck | None) -> None:
+    if cancellation_check is not None and cancellation_check():
+        raise AgentCancelledError("Agent cancelled by external request")
 
 
 def _debug_log(message: str, on_log: LogCallback | None) -> None:
@@ -191,6 +198,7 @@ def _run_agent_loop(
             )
 
         iterations += 1
+        _check_cancellation(config.cancellation_check)
         _debug_log(f"Agent iteration {iterations}/{config.max_iterations}", on_log)
 
         messages = summarize_context_if_needed(
@@ -219,6 +227,7 @@ def _run_agent_loop(
             _debug_log(f"[Agent] {response.message.content}", on_log)
 
         messages.append(response.message)
+        _check_cancellation(config.cancellation_check)
 
         if response.message.tool_calls is None:
             _debug_log(
@@ -233,6 +242,7 @@ def _run_agent_loop(
             )
 
         for tool_call in response.message.tool_calls:
+            _check_cancellation(config.cancellation_check)
             tool_calls_made += 1
             _debug_log(
                 f"[Tool Call] {tool_call.tool_name}({tool_call.arguments})", on_log

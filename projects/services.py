@@ -28,9 +28,9 @@ from django.utils import dateformat, timezone
 
 from accounts.models import CustomUser
 from agents.types import (
+    AgentCancelledError,
     AgentResult,
     AgentStopReason,
-    ChatMessage,
     ScreenshotCallback,
 )
 from auto_tester.celery import app as celery_app
@@ -1413,14 +1413,28 @@ def fetch_test_case_state(
 # ============================================================================
 
 
+def _build_cancellation_check(test_run_id: int) -> Callable[[], bool]:
+    def _is_cancelled() -> bool:
+        return TestRun.objects.filter(
+            pk=test_run_id, status=TestRunStatus.CANCELLED
+        ).exists()
+
+    return _is_cancelled
+
+
 def _wait_for_agent_connection(
     project: Project,
     timeout: int | None = None,
+    cancellation_check: Callable[[], bool] | None = None,
 ) -> None:
     if timeout is None:
         timeout = settings.CONTROLLER_AGENT_CONNECT_TIMEOUT
     start = time.monotonic()
     while time.monotonic() - start < timeout:
+        if cancellation_check is not None and cancellation_check():
+            raise AgentCancelledError(
+                "Test run cancelled while waiting for agent connection"
+            )
         project.refresh_from_db()
         if project.agent_connected:
             return
@@ -1436,11 +1450,12 @@ def execute_test_run_test_case(pivot_id: int) -> None:
         return
 
     project = pivot.test_run.project
+    cancellation_check = _build_cancellation_check(pivot.test_run.id)
     _mark_pivot_in_progress(pivot)
 
     try:
         if not project.agent_connected:
-            _wait_for_agent_connection(project)
+            _wait_for_agent_connection(project, cancellation_check=cancellation_check)
 
         on_log = _build_log_callback(pivot)
         on_screenshot = _build_screenshot_callback(pivot)
@@ -1457,8 +1472,14 @@ def execute_test_run_test_case(pivot_id: int) -> None:
             on_screenshot=on_screenshot,
             system_info=project.agent_system_info or None,
             project_prompt=pivot.test_run.project_prompt or None,
+            cancellation_check=cancellation_check,
         )
         _finalize_pivot(pivot, result)
+    except AgentCancelledError:
+        logger.info("Test run cancelled for pivot %d", pivot_id)
+        pivot.refresh_from_db()
+        if pivot.status != TestRunTestCaseStatus.CANCELLED:
+            _mark_pivot_cancelled(pivot)
     except Exception as exc:
         logger.exception("execute_test_run_test_case failed for pivot %d", pivot_id)
         _mark_pivot_failed(pivot, str(exc))
@@ -1551,7 +1572,9 @@ def _build_task_description(test_case: TestCase) -> str:
 
 
 def _finalize_pivot(pivot: TestRunTestCase, result: AgentResult) -> None:
-    if result.stop_reason == AgentStopReason.TASK_COMPLETE:
+    if result.stop_reason == AgentStopReason.CANCELLED:
+        pivot.status = TestRunTestCaseStatus.CANCELLED
+    elif result.stop_reason == AgentStopReason.TASK_COMPLETE:
         pivot.status = TestRunTestCaseStatus.SUCCESS
     else:
         pivot.status = TestRunTestCaseStatus.FAILED
@@ -1595,7 +1618,7 @@ def abort_test_run(test_run: TestRun, reason: str = "Test run aborted") -> None:
     for pivot in test_run.pivot_entries.filter(
         status=TestRunTestCaseStatus.IN_PROGRESS
     ):
-        _mark_pivot_failed(pivot, reason)
+        _mark_pivot_cancelled(pivot)
 
     for pivot in test_run.pivot_entries.filter(status=TestRunTestCaseStatus.CREATED):
         _mark_pivot_cancelled(pivot)
