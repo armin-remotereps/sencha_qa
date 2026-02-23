@@ -29,6 +29,7 @@ from django.utils import dateformat, timezone
 from accounts.models import CustomUser
 from agents.types import (
     AgentCancelledError,
+    AgentConfig,
     AgentResult,
     AgentStopReason,
     ScreenshotCallback,
@@ -1474,18 +1475,23 @@ def execute_test_run_test_case(pivot_id: int) -> None:
         on_screenshot = _build_screenshot_callback(pivot)
         task_description = _build_task_description(pivot.test_case)
 
-        from agents.services.orchestrator import (  # local import: breaks circular dependency
-            run_orchestrator,
-        )
+        from agents.services.agent_loop import run_agent
+        from agents.services.dmr_config import build_dmr_config, build_vision_config
 
-        result = run_orchestrator(
+        result = run_agent(
             task_description,
             project.id,
-            on_log=on_log,
-            on_screenshot=on_screenshot,
+            config=AgentConfig(
+                dmr=build_dmr_config(),
+                vision_dmr=build_vision_config(),
+                max_iterations=settings.AGENT_MAX_ITERATIONS,
+                timeout_seconds=settings.AGENT_TIMEOUT_SECONDS,
+                on_log=on_log,
+                on_screenshot=on_screenshot,
+                cancellation_check=cancellation_check,
+            ),
             system_info=project.agent_system_info or None,
             project_prompt=pivot.test_run.project_prompt or None,
-            cancellation_check=cancellation_check,
         )
         _finalize_pivot(pivot, result)
     except AgentCancelledError:

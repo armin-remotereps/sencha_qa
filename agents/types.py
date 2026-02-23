@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal, Protocol
+from typing import Protocol
 
 
 class ToolCategory(Enum):
@@ -125,35 +125,6 @@ class AgentResult:
     iterations: int
     messages: tuple[ChatMessage, ...]
     error: str | None = None
-
-
-@dataclass(frozen=True)
-class SubTask:
-    description: str
-    expected_result: str
-
-
-@dataclass(frozen=True)
-class SubTaskResult:
-    status: Literal["pass", "fail"]
-    summary: str
-    iterations: int
-    error: str | None = None
-
-
-@dataclass(frozen=True)
-class OrchestratorDecision:
-    action: Literal["continue", "recover", "stop"]
-    reason: str
-    recovery_task: SubTask | None = None
-
-
-@dataclass(frozen=True)
-class OrchestratorResult:
-    status: Literal["pass", "fail"]
-    summary: str
-    sub_task_results: tuple[SubTaskResult, ...]
-    total_iterations: int
 
 
 @dataclass(frozen=True)

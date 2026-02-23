@@ -57,26 +57,6 @@ def build_openai_vision_config(*, model: str | None = None) -> DMRConfig:
     )
 
 
-def build_orchestrator_config(*, model: str | None = None) -> DMRConfig:
-    return DMRConfig(
-        host=settings.DMR_HOST,
-        port=settings.DMR_PORT,
-        model=model or settings.ORCHESTRATOR_MODEL,
-        temperature=settings.ORCHESTRATOR_TEMPERATURE,
-        max_tokens=settings.ORCHESTRATOR_MAX_TOKENS,
-    )
-
-
-def build_sub_agent_config(*, model: str | None = None) -> DMRConfig:
-    return DMRConfig(
-        host=settings.DMR_HOST,
-        port=settings.DMR_PORT,
-        model=model or settings.SUB_AGENT_MODEL,
-        temperature=settings.SUB_AGENT_TEMPERATURE,
-        max_tokens=settings.SUB_AGENT_MAX_TOKENS,
-    )
-
-
 def build_vision_config(*, model: str | None = None) -> DMRConfig:
     if settings.VISION_BACKEND == "openai":
         return build_openai_vision_config(model=model)
