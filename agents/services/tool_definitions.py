@@ -272,6 +272,16 @@ def get_browser_tool_definitions() -> tuple[ToolDefinition, ...]:
                 ),
             ),
         ),
+        ToolDefinition(
+            name="browser_list_downloads",
+            description=(
+                "List all downloads that occurred during this browser session. "
+                "Blocks until every in-progress download finishes (up to 5 minutes). "
+                "Use this after clicking a download link to confirm the file was saved."
+            ),
+            category=ToolCategory.BROWSER,
+            parameters=(),
+        ),
     )
 
 

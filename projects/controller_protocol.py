@@ -86,6 +86,10 @@ class BrowserDownloadActionEvent(BaseActionEvent):
     save_path: str
 
 
+class BrowserListDownloadsActionEvent(BaseActionEvent):
+    pass
+
+
 class StartInteractiveCmdActionEvent(BaseActionEvent):
     command: str
 
@@ -125,6 +129,7 @@ class ActionTypeRegistry:
         "controller.browser_get_url": MessageType.BROWSER_GET_URL,
         "controller.browser_take_screenshot": MessageType.BROWSER_TAKE_SCREENSHOT,
         "controller.browser_download": MessageType.BROWSER_DOWNLOAD,
+        "controller.browser_list_downloads": MessageType.BROWSER_LIST_DOWNLOADS,
         "controller.start_interactive_cmd": MessageType.START_INTERACTIVE_CMD,
         "controller.send_input": MessageType.SEND_INPUT,
         "controller.terminate_interactive_cmd": MessageType.TERMINATE_INTERACTIVE_CMD,
@@ -156,6 +161,7 @@ class ActionTypeRegistry:
         "controller.browser_get_url": (),
         "controller.browser_take_screenshot": (),
         "controller.browser_download": ("url", "save_path"),
+        "controller.browser_list_downloads": (),
         "controller.start_interactive_cmd": ("command",),
         "controller.send_input": ("session_id", "input_text"),
         "controller.terminate_interactive_cmd": ("session_id",),

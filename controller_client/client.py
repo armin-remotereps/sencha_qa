@@ -16,6 +16,7 @@ from controller_client.browser_executor import (
     execute_browser_get_page_content,
     execute_browser_get_url,
     execute_browser_hover,
+    execute_browser_list_downloads,
     execute_browser_navigate,
     execute_browser_take_screenshot,
     execute_browser_type,
@@ -48,6 +49,7 @@ from controller_client.protocol import (
     parse_browser_click_payload,
     parse_browser_download_payload,
     parse_browser_hover_payload,
+    parse_browser_list_downloads_payload,
     parse_browser_navigate_payload,
     parse_browser_type_payload,
     parse_check_app_installed_payload,
@@ -108,6 +110,7 @@ class ControllerClient:
             MessageType.BROWSER_GET_URL: self._handle_browser_get_url,
             MessageType.BROWSER_TAKE_SCREENSHOT: self._handle_browser_take_screenshot,
             MessageType.BROWSER_DOWNLOAD: self._handle_browser_download,
+            MessageType.BROWSER_LIST_DOWNLOADS: self._handle_browser_list_downloads,
             MessageType.START_INTERACTIVE_CMD: self._handle_start_interactive_cmd,
             MessageType.SEND_INPUT: self._handle_send_input,
             MessageType.TERMINATE_INTERACTIVE_CMD: self._handle_terminate_interactive_cmd,
@@ -463,6 +466,19 @@ class ControllerClient:
         try:
             result = await asyncio.to_thread(
                 execute_browser_download, self._browser_session, payload
+            )
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_browser_list_downloads(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        """Handle a browser_list_downloads command and return a downloads summary."""
+        parse_browser_list_downloads_payload(data)
+        try:
+            result = await asyncio.to_thread(
+                execute_browser_list_downloads, self._browser_session
             )
             await self._send_action_result(request_id, result)
         except ExecutionError as e:

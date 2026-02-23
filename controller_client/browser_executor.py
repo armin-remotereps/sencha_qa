@@ -1,9 +1,12 @@
 import base64
 import logging
+import threading
 import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
-from playwright.sync_api import Browser, BrowserContext, Page, Playwright
+from playwright.sync_api import Browser, BrowserContext, Download, Page, Playwright
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
@@ -108,12 +111,29 @@ _COLLECT_ELEMENTS_JS = """
 """
 
 
+@dataclass
+class DownloadRecord:
+    """Mutable record tracking a single browser-triggered download."""
+
+    filename: str
+    path: str
+    status: str
+    size: int = 0
+    error: str = ""
+    started_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    completed_event: threading.Event = field(default_factory=threading.Event)
+
+
 class BrowserSession:
     def __init__(self) -> None:
         self._playwright: Playwright | None = None
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._downloads: list[DownloadRecord] = []
+        self._downloads_lock: threading.Lock = threading.Lock()
 
     def ensure_page(self) -> Page:
         if self._page is not None and not self._page.is_closed():
@@ -131,9 +151,11 @@ class BrowserSession:
         if self._context is None:
             self._context = self._browser.new_context(
                 viewport={"width": 1280, "height": 720},
+                accept_downloads=True,
             )
 
         self._page = self._context.new_page()
+        self._page.on("download", self._on_download)
         return self._page
 
     def close(self) -> None:
@@ -159,6 +181,40 @@ class BrowserSession:
             self._playwright = None
 
         self._page = None
+
+    def _on_download(self, download: Download) -> None:
+        """Handle a download event by spawning a background save thread."""
+        record = DownloadRecord(
+            filename=download.suggested_filename,
+            path="",
+            status="in_progress",
+        )
+        with self._downloads_lock:
+            self._downloads.append(record)
+        thread = threading.Thread(
+            target=self._save_download,
+            args=(download, record),
+            daemon=True,
+        )
+        thread.start()
+
+    def _save_download(self, download: Download, record: DownloadRecord) -> None:
+        """Save a download to disk and update the record with the outcome."""
+        save_path = Path.home() / "Downloads" / record.filename
+        try:
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            download.save_as(str(save_path))
+            file_size = save_path.stat().st_size
+            with self._downloads_lock:
+                record.path = str(save_path)
+                record.size = file_size
+                record.status = "completed"
+        except Exception as e:
+            with self._downloads_lock:
+                record.status = "failed"
+                record.error = str(e)
+            logger.warning("Download save failed for %s: %s", record.filename, e)
+        record.completed_event.set()
 
 
 def execute_browser_navigate(
@@ -335,6 +391,62 @@ def execute_browser_download(
         message=f"Downloaded to {save_path} ({file_size} bytes)",
         duration_ms=duration_ms,
     )
+
+
+def execute_browser_list_downloads(
+    session: BrowserSession,
+) -> ActionResultPayload:
+    """Return a human-readable summary of all downloads recorded in this session.
+
+    Waits up to 300 seconds for any in-progress downloads to complete before
+    building the report, so the caller always gets a final status.
+    """
+    start = time.monotonic()
+    with session._downloads_lock:
+        snapshot = list(session._downloads)
+    if not snapshot:
+        duration_ms = (time.monotonic() - start) * 1000
+        return ActionResultPayload(
+            success=True,
+            message="No downloads recorded.",
+            duration_ms=duration_ms,
+        )
+    deadline = time.monotonic() + 300.0
+    for record in snapshot:
+        if record.status == "in_progress":
+            remaining = max(0.0, deadline - time.monotonic())
+            record.completed_event.wait(timeout=remaining)
+    message = _format_downloads_list(snapshot)
+    duration_ms = (time.monotonic() - start) * 1000
+    return ActionResultPayload(
+        success=True,
+        message=message,
+        duration_ms=duration_ms,
+    )
+
+
+def _format_downloads_list(records: list[DownloadRecord]) -> str:
+    """Format a list of download records into a readable multi-line string."""
+    lines: list[str] = []
+    for i, r in enumerate(records, 1):
+        parts = [f"[{i}] {r.filename} — {r.status}"]
+        if r.path:
+            parts.append(f"  Path: {r.path}")
+        if r.size > 0:
+            parts.append(f"  Size: {_format_size(r.size)}")
+        if r.error:
+            parts.append(f"  Error: {r.error}")
+        lines.append("\n".join(parts))
+    return "\n".join(lines)
+
+
+def _format_size(size_bytes: int) -> str:
+    """Convert a byte count into a human-readable size string."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    if size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
 
 
 def _build_element_list(elements: list[object]) -> str:

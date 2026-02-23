@@ -34,6 +34,7 @@ class MessageType(StrEnum):
     BROWSER_GET_URL = "browser_get_url"
     BROWSER_TAKE_SCREENSHOT = "browser_take_screenshot"
     BROWSER_DOWNLOAD = "browser_download"
+    BROWSER_LIST_DOWNLOADS = "browser_list_downloads"
     START_INTERACTIVE_CMD = "start_interactive_cmd"
     SEND_INPUT = "send_input"
     TERMINATE_INTERACTIVE_CMD = "terminate_interactive_cmd"
@@ -177,6 +178,11 @@ class BrowserHoverPayload:
 class BrowserDownloadPayload:
     url: str
     save_path: str
+
+
+@dataclass(frozen=True)
+class BrowserListDownloadsPayload:
+    pass
 
 
 @dataclass(frozen=True)
@@ -367,6 +373,13 @@ def parse_browser_download_payload(data: dict[str, object]) -> BrowserDownloadPa
         url=_extract_str(data, "url"),
         save_path=_extract_str(data, "save_path", default=""),
     )
+
+
+def parse_browser_list_downloads_payload(
+    data: dict[str, object],
+) -> BrowserListDownloadsPayload:
+    """Parse a browser_list_downloads message (no fields required)."""
+    return BrowserListDownloadsPayload()
 
 
 def _extract_bool(

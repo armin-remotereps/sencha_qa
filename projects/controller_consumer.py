@@ -21,6 +21,7 @@ from projects.controller_protocol import (
     BrowserGetPageContentActionEvent,
     BrowserGetUrlActionEvent,
     BrowserHoverActionEvent,
+    BrowserListDownloadsActionEvent,
     BrowserNavigateActionEvent,
     BrowserTakeScreenshotActionEvent,
     BrowserTypeActionEvent,
@@ -233,6 +234,11 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
     async def controller_browser_download(
         self, event: BrowserDownloadActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_browser_list_downloads(
+        self, event: BrowserListDownloadsActionEvent
     ) -> None:
         await self._forward_action(event)
 

@@ -735,6 +735,21 @@ def controller_browser_download(
     return _build_action_result(reply)
 
 
+def controller_browser_list_downloads(
+    project_id: int,
+    timeout: float = 310.0,
+) -> ActionResult:
+    """List all downloads that occurred during this browser session.
+
+    Blocks until every in-progress download finishes.  The 310 s timeout
+    equals a 5-minute download wait plus a 10-second buffer.
+    """
+    reply = _dispatch_controller_action(
+        project_id, "controller.browser_list_downloads", timeout
+    )
+    return _build_action_result(reply)
+
+
 def controller_launch_app(
     project_id: int,
     app_name: str,
