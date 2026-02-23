@@ -41,15 +41,6 @@ def _handle_execute_command(
     )
 
 
-def _handle_start_interactive_command(
-    context: ToolContext, arguments: dict[str, object]
-) -> ToolResult:
-    command = str(arguments.get("command", ""))
-    return tools_controller.start_interactive_command(
-        context.project_id, command=command
-    )
-
-
 def _handle_send_command_input(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
@@ -254,7 +245,6 @@ def _handle_web_search(
 
 _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "execute_command": _handle_execute_command,
-    "start_interactive_command": _handle_start_interactive_command,
     "send_command_input": _handle_send_command_input,
     "take_screenshot": _handle_take_screenshot,
     "click": _handle_click,

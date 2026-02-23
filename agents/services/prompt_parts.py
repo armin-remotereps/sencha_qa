@@ -50,26 +50,25 @@ def build_tool_taxonomy() -> str:
     return (
         "You have the following tools:\n\n"
         "DESKTOP TOOLS (PyAutoGUI — for desktop/native app interactions):\n"
-        "1. execute_command — Run shell commands in the container\n"
-        "2. start_interactive_command — Start a command that may prompt for input (sudo, apt install, ssh, passwd)\n"
-        "3. send_command_input — Send input to a running interactive command session\n"
-        "4. take_screenshot — Capture the desktop and answer a question about it using vision AI\n"
-        "5. click — Click an element found by vision-based natural-language description\n"
-        "6. type_text — Type text using the keyboard\n"
-        "7. key_press — Press a key or key combination\n"
-        "8. hover — Hover over an element found by vision-based description\n"
-        "9. drag — Drag from one element to another, both found by vision-based description\n\n"
+        "1. execute_command — Run shell commands (handles both interactive and non-interactive)\n"
+        "2. send_command_input — Send input to a running interactive command session\n"
+        "3. take_screenshot — Capture the desktop and answer a question about it using vision AI\n"
+        "4. click — Click an element found by vision-based natural-language description\n"
+        "5. type_text — Type text using the keyboard\n"
+        "6. key_press — Press a key or key combination\n"
+        "7. hover — Hover over an element found by vision-based description\n"
+        "8. drag — Drag from one element to another, both found by vision-based description\n\n"
         "BROWSER TOOLS (Playwright — for web page interactions):\n"
-        "10. browser_navigate — Navigate the browser to a URL\n"
-        "11. browser_click — Click a web page element found by AI-based description\n"
-        "12. browser_type — Type text into a web page element found by AI-based description\n"
-        "13. browser_hover — Hover over a web page element found by AI-based description\n"
-        "14. browser_get_page_content — Get the text content of the current page\n"
-        "15. browser_get_url — Get the current browser URL\n"
-        "16. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
-        "17. browser_download — Download a file from a URL via the browser\n\n"
+        "9. browser_navigate — Navigate the browser to a URL\n"
+        "10. browser_click — Click a web page element found by AI-based description\n"
+        "11. browser_type — Type text into a web page element found by AI-based description\n"
+        "12. browser_hover — Hover over a web page element found by AI-based description\n"
+        "13. browser_get_page_content — Get the text content of the current page\n"
+        "14. browser_get_url — Get the current browser URL\n"
+        "15. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
+        "16. browser_download — Download a file from a URL via the browser\n\n"
         "SEARCH TOOLS (for looking up information on the web):\n"
-        "18. web_search — Search the web and return top results with titles, snippets, and URLs"
+        "17. web_search — Search the web and return top results with titles, snippets, and URLs"
     )
 
 
@@ -155,7 +154,6 @@ def build_desktop_tool_examples() -> str:
         '- key_press(keys="Return") — press a key or key combination\n'
         '- take_screenshot(question="What is on screen?") — capture desktop and ask about it\n'
         '- execute_command(command="ls -la") — run a shell command\n'
-        '- start_interactive_command(command="sudo apt install -y nginx") — start a command that may prompt for input\n'
         '- send_command_input(session_id="...", input_text="password123") — send input to an interactive session'
     )
 
@@ -187,8 +185,8 @@ def build_tool_selection_rules() -> str:
         "- Use desktop tools (click, type_text, key_press) for ANY native GUI interaction: "
         "installation wizards, setup dialogs, confirmation popups, file managers, system "
         "preferences, or any visible desktop element.\n"
-        "- Use execute_command for shell operations. If a CLI install fails, switch to the "
-        "browser download approach.\n"
+        "- Use execute_command for shell operations. It handles both interactive and non-interactive "
+        "commands automatically. If a CLI install fails, switch to the browser download approach.\n"
         "- DESKTOP FALLBACK: If a browser tool fails or times out for ANY reason after 2 attempts, "
         "escalate with these steps:\n"
         "  1. STOP retrying the browser tool.\n"
@@ -215,11 +213,10 @@ def build_shell_rules() -> str:
         "- If you launch a GUI application or long-running process (e.g. gnome-calculator, "
         "flask run, node server.js, vim), append ' &' so it runs in the "
         "background. Otherwise the command will block and time out.\n"
-        "- INTERACTIVE COMMANDS: If a command may prompt for user input (sudo, apt install, "
-        "ssh, passwd, or any command that asks yes/no or for a password), use "
-        "start_interactive_command instead of execute_command. Then use send_command_input "
-        "to respond to each prompt. Use execute_command only for non-interactive commands "
-        "that will complete without user input."
+        "- execute_command handles interactive prompts automatically. If a command needs "
+        "input (sudo password, Y/n confirmation), it returns a session_id. Use "
+        "send_command_input to respond to each prompt. Pass empty input_text to read "
+        "more output without sending anything."
     )
 
 

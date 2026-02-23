@@ -37,7 +37,8 @@ class InteractiveSession:
 
     def send_input(self, text: str, read_timeout: float = _DEFAULT_READ_TIMEOUT) -> str:
         child = self._require_child()
-        child.sendline(text)
+        if text:
+            child.sendline(text)
         return self._read_output(child, read_timeout)
 
     def read_output(self, read_timeout: float = _DEFAULT_READ_TIMEOUT) -> str:

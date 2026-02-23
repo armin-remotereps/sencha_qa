@@ -7,7 +7,11 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
     return (
         ToolDefinition(
             name="execute_command",
-            description="Execute a shell command in the container. Returns stdout, stderr, and exit code.",
+            description=(
+                "Execute a shell command. Handles both interactive and non-interactive commands. "
+                "If the command needs input (sudo password, Y/n confirmation), it returns a "
+                "session_id — use send_command_input to respond."
+            ),
             category=ToolCategory.CONTROLLER,
             parameters=(
                 ToolParameter(
@@ -19,39 +23,24 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
             ),
         ),
         ToolDefinition(
-            name="start_interactive_command",
-            description=(
-                "Start an interactive command that may prompt for input (e.g. sudo, apt install, ssh, passwd). "
-                "Returns a session_id and initial output. Use send_command_input to respond to prompts."
-            ),
-            category=ToolCategory.CONTROLLER,
-            parameters=(
-                ToolParameter(
-                    name="command",
-                    type="string",
-                    description="The shell command to start interactively.",
-                    required=True,
-                ),
-            ),
-        ),
-        ToolDefinition(
             name="send_command_input",
             description=(
                 "Send input to a running interactive command session. "
-                "Returns the output produced after sending the input."
+                "Returns the output produced after sending the input. "
+                "Pass empty input_text to read more output without sending anything."
             ),
             category=ToolCategory.CONTROLLER,
             parameters=(
                 ToolParameter(
                     name="session_id",
                     type="string",
-                    description="The session ID returned by start_interactive_command.",
+                    description="The session ID returned by execute_command.",
                     required=True,
                 ),
                 ToolParameter(
                     name="input_text",
                     type="string",
-                    description="The text to send as input (e.g. password, 'y' for confirmation).",
+                    description="The text to send as input (e.g. password, 'y' for confirmation). Empty string to just read output.",
                     required=True,
                 ),
             ),

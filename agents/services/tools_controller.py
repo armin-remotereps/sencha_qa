@@ -21,50 +21,13 @@ from projects.services import (
     controller_hover,
     controller_key_press,
     controller_launch_app,
-    controller_run_command_streaming,
     controller_screenshot,
     controller_send_input,
     controller_start_interactive_command,
     controller_type_text,
 )
 
-_STDOUT_LOG_PREFIX = "$ "
-_STDERR_LOG_PREFIX = "$ [stderr] "
-
-
-def _format_command_output_line(line: str, stream: str) -> str:
-    prefix = _STDERR_LOG_PREFIX if stream == "stderr" else _STDOUT_LOG_PREFIX
-    return f"{prefix}{line.rstrip()}"
-
-
-def execute_command(
-    project_id: int,
-    *,
-    command: str,
-    on_log: LogCallback | None = None,
-) -> ToolResult:
-    def _on_output(line: str, stream: str) -> None:
-        if on_log is None:
-            return
-        on_log(_format_command_output_line(line, stream))
-
-    def _do() -> ToolResult:
-        result = controller_run_command_streaming(
-            project_id, command, on_output=_on_output
-        )
-        parts: list[str] = []
-        if result["stdout"]:
-            parts.append(result["stdout"])
-        if result["stderr"]:
-            parts.append(f"STDERR: {result['stderr']}")
-        parts.append(f"Exit code: {result['return_code']}")
-        return ToolResult(
-            tool_call_id="",
-            content="\n".join(parts),
-            is_error=result["return_code"] != 0,
-        )
-
-    return safe_tool_call("execute_command", _do)
+_LOG_PREFIX = "$ "
 
 
 def _format_interactive_output(
@@ -81,13 +44,30 @@ def _format_interactive_output(
     return "\n".join(parts)
 
 
-def start_interactive_command(project_id: int, *, command: str) -> ToolResult:
+def execute_command(
+    project_id: int,
+    *,
+    command: str,
+    on_log: LogCallback | None = None,
+) -> ToolResult:
     def _do() -> ToolResult:
         result = controller_start_interactive_command(project_id, command)
+        if on_log is not None and result["output"]:
+            on_log(f"{_LOG_PREFIX}{result['output'].rstrip()}")
+        if not result["is_alive"]:
+            parts: list[str] = []
+            if result["output"]:
+                parts.append(result["output"])
+            parts.append(f"Exit code: {result['exit_code']}")
+            return ToolResult(
+                tool_call_id="",
+                content="\n".join(parts),
+                is_error=result["exit_code"] != 0,
+            )
         content = _format_interactive_output(result, include_session_id=True)
         return ToolResult(tool_call_id="", content=content, is_error=False)
 
-    return safe_tool_call("start_interactive_command", _do)
+    return safe_tool_call("execute_command", _do)
 
 
 def send_command_input(

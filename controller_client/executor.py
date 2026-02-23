@@ -142,6 +142,9 @@ def _execute_background_command(command: str) -> CommandResultPayload:
     )
 
 
+_NON_INTERACTIVE_TIMEOUT_SECONDS = 120
+
+
 def execute_command(payload: RunCommandPayload) -> CommandResultPayload:
     if _is_background_command(payload.command):
         return _execute_background_command(payload.command)
@@ -153,6 +156,21 @@ def execute_command(payload: RunCommandPayload) -> CommandResultPayload:
             shell=True,  # noqa: S602
             capture_output=True,
             text=True,
+            timeout=_NON_INTERACTIVE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        duration_ms = (time.monotonic() - start) * 1000
+        return CommandResultPayload(
+            success=False,
+            stdout="",
+            stderr=(
+                f"Command timed out after {_NON_INTERACTIVE_TIMEOUT_SECONDS}s. "
+                "This usually means the command is waiting for input (password, "
+                "confirmation, etc.). Use start_interactive_command instead of "
+                "execute_command for commands that require user input."
+            ),
+            return_code=-1,
+            duration_ms=duration_ms,
         )
     except Exception as e:
         raise ExecutionError(f"Command execution failed: {e}") from e
