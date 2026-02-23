@@ -9,9 +9,9 @@ from celery.app.task import Task
 from channels.layers import get_channel_layer
 from django.db import transaction
 
-from projects.models import TestCaseUpload, UploadStatus
+from projects.models import Project, TestCaseUpload, UploadStatus
 from projects.prompt_refiner import refine_project_prompt
-from projects.services import _agent_status_group
+from projects.services import _agent_status_group, save_project_prompt
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -204,6 +204,8 @@ def refine_project_prompt_task(
     )
     try:
         refined = refine_project_prompt(raw_prompt)
+        project = Project.objects.get(id=project_id)
+        save_project_prompt(project=project, prompt=refined)
         _send_prompt_refined(project_id, refined_prompt=refined)
         logger.info(
             "refine_project_prompt_task completed: task_id=%s project_id=%s",
