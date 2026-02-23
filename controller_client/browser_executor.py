@@ -111,10 +111,11 @@ _COLLECT_ELEMENTS_JS = """
 """
 
 
+_LIST_DOWNLOADS_WAIT_S: float = 300.0
+
+
 @dataclass
 class DownloadRecord:
-    """Mutable record tracking a single browser-triggered download."""
-
     filename: str
     path: str
     status: str
@@ -182,8 +183,11 @@ class BrowserSession:
 
         self._page = None
 
+    def snapshot_downloads(self) -> list[DownloadRecord]:
+        with self._downloads_lock:
+            return list(self._downloads)
+
     def _on_download(self, download: Download) -> None:
-        """Handle a download event by spawning a background save thread."""
         record = DownloadRecord(
             filename=download.suggested_filename,
             path="",
@@ -199,7 +203,6 @@ class BrowserSession:
         thread.start()
 
     def _save_download(self, download: Download, record: DownloadRecord) -> None:
-        """Save a download to disk and update the record with the outcome."""
         save_path = Path.home() / "Downloads" / record.filename
         try:
             save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -396,14 +399,8 @@ def execute_browser_download(
 def execute_browser_list_downloads(
     session: BrowserSession,
 ) -> ActionResultPayload:
-    """Return a human-readable summary of all downloads recorded in this session.
-
-    Waits up to 300 seconds for any in-progress downloads to complete before
-    building the report, so the caller always gets a final status.
-    """
     start = time.monotonic()
-    with session._downloads_lock:
-        snapshot = list(session._downloads)
+    snapshot = session.snapshot_downloads()
     if not snapshot:
         duration_ms = (time.monotonic() - start) * 1000
         return ActionResultPayload(
@@ -411,7 +408,7 @@ def execute_browser_list_downloads(
             message="No downloads recorded.",
             duration_ms=duration_ms,
         )
-    deadline = time.monotonic() + 300.0
+    deadline = time.monotonic() + _LIST_DOWNLOADS_WAIT_S
     for record in snapshot:
         if record.status == "in_progress":
             remaining = max(0.0, deadline - time.monotonic())
@@ -426,10 +423,9 @@ def execute_browser_list_downloads(
 
 
 def _format_downloads_list(records: list[DownloadRecord]) -> str:
-    """Format a list of download records into a readable multi-line string."""
     lines: list[str] = []
     for i, r in enumerate(records, 1):
-        parts = [f"[{i}] {r.filename} — {r.status}"]
+        parts = [f"[{i}] {r.filename} - {r.status}"]
         if r.path:
             parts.append(f"  Path: {r.path}")
         if r.size > 0:
@@ -441,12 +437,13 @@ def _format_downloads_list(records: list[DownloadRecord]) -> str:
 
 
 def _format_size(size_bytes: int) -> str:
-    """Convert a byte count into a human-readable size string."""
     if size_bytes < 1024:
         return f"{size_bytes} B"
     if size_bytes < 1024 * 1024:
         return f"{size_bytes / 1024:.1f} KB"
-    return f"{size_bytes / (1024 * 1024):.1f} MB"
+    if size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
 def _build_element_list(elements: list[object]) -> str:

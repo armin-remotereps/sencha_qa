@@ -181,11 +181,6 @@ class BrowserDownloadPayload:
 
 
 @dataclass(frozen=True)
-class BrowserListDownloadsPayload:
-    pass
-
-
-@dataclass(frozen=True)
 class BrowserContentResultPayload:
     success: bool
     content: str
@@ -373,13 +368,6 @@ def parse_browser_download_payload(data: dict[str, object]) -> BrowserDownloadPa
         url=_extract_str(data, "url"),
         save_path=_extract_str(data, "save_path", default=""),
     )
-
-
-def parse_browser_list_downloads_payload(
-    data: dict[str, object],
-) -> BrowserListDownloadsPayload:
-    """Parse a browser_list_downloads message (no fields required)."""
-    return BrowserListDownloadsPayload()
 
 
 def _extract_bool(

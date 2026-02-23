@@ -49,7 +49,6 @@ from controller_client.protocol import (
     parse_browser_click_payload,
     parse_browser_download_payload,
     parse_browser_hover_payload,
-    parse_browser_list_downloads_payload,
     parse_browser_navigate_payload,
     parse_browser_type_payload,
     parse_check_app_installed_payload,
@@ -474,8 +473,6 @@ class ControllerClient:
     async def _handle_browser_list_downloads(
         self, request_id: str, data: dict[str, object]
     ) -> None:
-        """Handle a browser_list_downloads command and return a downloads summary."""
-        parse_browser_list_downloads_payload(data)
         try:
             result = await asyncio.to_thread(
                 execute_browser_list_downloads, self._browser_session

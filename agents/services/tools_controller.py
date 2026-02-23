@@ -326,8 +326,6 @@ def browser_download(project_id: int, *, url: str, save_path: str = "") -> ToolR
 
 
 def browser_list_downloads(project_id: int) -> ToolResult:
-    """Return the list of completed downloads for the current browser session."""
-
     def _do() -> ToolResult:
         result = controller_browser_list_downloads(project_id)
         return ToolResult(
