@@ -22,9 +22,11 @@ from agents.services.orchestrator_prompts import (
 )
 from agents.services.sub_agent import run_sub_agent
 from agents.types import (
+    AgentCancelledError,
     AgentConfig,
     AgentResult,
     AgentStopReason,
+    CancellationCheck,
     ChatMessage,
     DMRConfig,
     LogCallback,
@@ -56,6 +58,7 @@ def run_orchestrator(
     on_screenshot: ScreenshotCallback | None = None,
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
+    cancellation_check: CancellationCheck | None = None,
 ) -> AgentResult:
     orchestrator_dmr = build_orchestrator_config()
     sub_agent_dmr = build_sub_agent_config()
@@ -73,13 +76,16 @@ def run_orchestrator(
     sub_tasks = _plan_sub_tasks(
         orchestrator_dmr, task_description, project_prompt=project_prompt, on_log=on_log
     )
+
+    _check_cancelled(cancellation_check, on_log)
+
     _log(
         on_log,
         f"[Orchestrator] Planning complete: {len(sub_tasks)} sub-tasks created.",
     )
 
     sub_agent_config = _build_sub_agent_execution_config(
-        sub_agent_dmr, vision_dmr, on_log, on_screenshot
+        sub_agent_dmr, vision_dmr, on_log, on_screenshot, cancellation_check
     )
 
     orchestrator_result = _execute_sub_tasks(
@@ -90,6 +96,7 @@ def run_orchestrator(
         system_info=system_info,
         project_prompt=project_prompt,
         on_log=on_log,
+        cancellation_check=cancellation_check,
     )
 
     _log(
@@ -122,6 +129,7 @@ def _build_sub_agent_execution_config(
     vision_dmr: DMRConfig,
     on_log: LogCallback | None,
     on_screenshot: ScreenshotCallback | None,
+    cancellation_check: CancellationCheck | None,
 ) -> AgentConfig:
     return AgentConfig(
         dmr=sub_agent_dmr,
@@ -130,6 +138,7 @@ def _build_sub_agent_execution_config(
         timeout_seconds=settings.SUB_AGENT_TIMEOUT_SECONDS,
         on_log=on_log,
         on_screenshot=on_screenshot,
+        cancellation_check=cancellation_check,
     )
 
 
@@ -137,6 +146,15 @@ def _log(on_log: LogCallback | None, message: str) -> None:
     logger.info(message)
     if on_log is not None:
         on_log(message)
+
+
+def _check_cancelled(
+    cancellation_check: CancellationCheck | None,
+    on_log: LogCallback | None,
+) -> None:
+    if cancellation_check is not None and cancellation_check():
+        _log(on_log, "[Orchestrator] Cancellation detected")
+        raise AgentCancelledError("Orchestrator cancelled by external request")
 
 
 def _plan_sub_tasks(
@@ -190,6 +208,7 @@ def _execute_sub_tasks(
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
     on_log: LogCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
 ) -> OrchestratorResult:
     results: list[SubTaskResult] = []
     state_lines: list[str] = []
@@ -205,6 +224,7 @@ def _execute_sub_tasks(
     i = 0
 
     while i < len(sub_tasks):
+        _check_cancelled(cancellation_check, on_log)
         sub_task = sub_tasks[i]
         step_num = i + 1
         state_description = "\n".join(state_lines) if state_lines else ""

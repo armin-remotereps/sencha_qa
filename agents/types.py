@@ -17,6 +17,7 @@ class AgentStopReason(Enum):
     TIMEOUT = "timeout"
     TASK_COMPLETE = "task_complete"
     ERROR = "error"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,11 @@ class DMRResponse:
 
 
 LogCallback = Callable[[str], None]
+CancellationCheck = Callable[[], bool]
+
+
+class AgentCancelledError(Exception):
+    pass
 
 
 class ScreenshotCallback(Protocol):
@@ -110,6 +116,7 @@ class AgentConfig:
     timeout_seconds: int = 900
     on_log: LogCallback | None = None
     on_screenshot: ScreenshotCallback | None = None
+    cancellation_check: CancellationCheck | None = None
 
 
 @dataclass(frozen=True)
