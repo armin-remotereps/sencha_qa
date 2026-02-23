@@ -39,6 +39,7 @@ class MessageType(StrEnum):
     SEND_INPUT = "send_input"
     TERMINATE_INTERACTIVE_CMD = "terminate_interactive_cmd"
     INTERACTIVE_OUTPUT = "interactive_output"
+    WAIT_FOR_COMMAND = "wait_for_command"
     LAUNCH_APP = "launch_app"
     CHECK_APP_INSTALLED = "check_app_installed"
 
@@ -210,6 +211,11 @@ class InteractiveOutputPayload:
     is_alive: bool
     exit_code: int | None
     duration_ms: float
+
+
+@dataclass(frozen=True)
+class WaitForCommandPayload:
+    session_id: str
 
 
 @dataclass(frozen=True)
@@ -407,6 +413,12 @@ def parse_terminate_interactive_cmd_payload(
     data: dict[str, object],
 ) -> TerminateInteractiveCmdPayload:
     return TerminateInteractiveCmdPayload(
+        session_id=_extract_str(data, "session_id"),
+    )
+
+
+def parse_wait_for_command_payload(data: dict[str, object]) -> WaitForCommandPayload:
+    return WaitForCommandPayload(
         session_id=_extract_str(data, "session_id"),
     )
 

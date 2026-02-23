@@ -26,6 +26,7 @@ from projects.services import (
     controller_send_input,
     controller_start_interactive_command,
     controller_type_text,
+    controller_wait_for_command,
 )
 
 _LOG_PREFIX = "$ "
@@ -80,6 +81,23 @@ def send_command_input(
         return ToolResult(tool_call_id="", content=content, is_error=False)
 
     return safe_tool_call("send_command_input", _do)
+
+
+def wait_for_command(
+    project_id: int,
+    *,
+    session_id: str,
+    on_log: LogCallback | None = None,
+) -> ToolResult:
+    def _do() -> ToolResult:
+        result = controller_wait_for_command(project_id, session_id)
+        if on_log is not None and result["output"]:
+            on_log(f"{_LOG_PREFIX}{result['output'].rstrip()}")
+        content = _format_interactive_output(result)
+        is_error = result["exit_code"] is not None and result["exit_code"] != 0
+        return ToolResult(tool_call_id="", content=content, is_error=is_error)
+
+    return safe_tool_call("wait_for_command", _do)
 
 
 def take_screenshot(

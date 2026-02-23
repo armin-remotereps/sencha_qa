@@ -1,0 +1,3 @@
+from screeninfo.common import Monitor
+
+def get_monitors() -> list[Monitor]: ...

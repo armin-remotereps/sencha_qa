@@ -34,6 +34,7 @@ from controller_client.executor import (
     execute_start_interactive_cmd,
     execute_terminate_interactive_cmd,
     execute_type_text,
+    execute_wait_for_command,
 )
 from controller_client.interactive_session import InteractiveSessionManager
 from controller_client.protocol import (
@@ -63,6 +64,7 @@ from controller_client.protocol import (
     parse_start_interactive_cmd_payload,
     parse_terminate_interactive_cmd_payload,
     parse_type_text_payload,
+    parse_wait_for_command_payload,
     serialize_message,
 )
 from controller_client.system_info import gather_system_info
@@ -112,6 +114,7 @@ class ControllerClient:
             MessageType.BROWSER_LIST_DOWNLOADS: self._handle_browser_list_downloads,
             MessageType.START_INTERACTIVE_CMD: self._handle_start_interactive_cmd,
             MessageType.SEND_INPUT: self._handle_send_input,
+            MessageType.WAIT_FOR_COMMAND: self._handle_wait_for_command,
             MessageType.TERMINATE_INTERACTIVE_CMD: self._handle_terminate_interactive_cmd,
             MessageType.LAUNCH_APP: self._handle_launch_app,
             MessageType.CHECK_APP_INSTALLED: self._handle_check_app_installed,
@@ -503,6 +506,18 @@ class ControllerClient:
         try:
             result = await asyncio.to_thread(
                 execute_send_input, self._session_manager, payload
+            )
+            await self._send_interactive_output(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_wait_for_command(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_wait_for_command_payload(data)
+        try:
+            result = await asyncio.to_thread(
+                execute_wait_for_command, self._session_manager, payload
             )
             await self._send_interactive_output(request_id, result)
         except ExecutionError as e:

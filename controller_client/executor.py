@@ -26,6 +26,7 @@ from controller_client.protocol import (
     StreamName,
     TerminateInteractiveCmdPayload,
     TypeTextPayload,
+    WaitForCommandPayload,
 )
 
 pyautogui.FAILSAFE = False
@@ -304,6 +305,31 @@ def execute_send_input(
     return InteractiveOutputPayload(
         session_id=session.session_id,
         output=output,
+        is_alive=session.is_alive(),
+        exit_code=session.exit_code(),
+        duration_ms=session.elapsed_ms(),
+    )
+
+
+def execute_wait_for_command(
+    session_manager: InteractiveSessionManager,
+    payload: WaitForCommandPayload,
+) -> InteractiveOutputPayload:
+    try:
+        session = session_manager.get_session(payload.session_id)
+        chunks: list[str] = []
+        while session.is_alive():
+            chunk = session.read_output()
+            if chunk:
+                chunks.append(chunk)
+        final = session.read_output()
+        if final:
+            chunks.append(final)
+    except Exception as e:
+        raise ExecutionError(f"Wait for command failed: {e}") from e
+    return InteractiveOutputPayload(
+        session_id=session.session_id,
+        output="".join(chunks),
         is_alive=session.is_alive(),
         exit_code=session.exit_code(),
         duration_ms=session.elapsed_ms(),

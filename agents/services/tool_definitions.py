@@ -23,6 +23,25 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
             ),
         ),
         ToolDefinition(
+            name="wait_for_command",
+            description=(
+                "Wait for a long-running interactive command to finish. "
+                "Use this after execute_command returns with is_alive=True for "
+                "commands that take a long time (e.g. package installs, large downloads). "
+                "Blocks until the process exits, polling every 5 seconds, and returns "
+                "all accumulated output plus the exit code."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                ToolParameter(
+                    name="session_id",
+                    type="string",
+                    description="The session ID returned by execute_command.",
+                    required=True,
+                ),
+            ),
+        ),
+        ToolDefinition(
             name="send_command_input",
             description=(
                 "Send input to a running interactive command session. "

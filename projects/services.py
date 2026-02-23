@@ -606,6 +606,19 @@ def controller_send_input(
     return _build_interactive_command_result(reply)
 
 
+def controller_wait_for_command(
+    project_id: int,
+    session_id: str,
+) -> InteractiveCommandResult:
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.wait_for_command",
+        float(settings.INTERACTIVE_CMD_TIMEOUT_SECONDS),
+        session_id=session_id,
+    )
+    return _build_interactive_command_result(reply)
+
+
 def controller_terminate_interactive_command(
     project_id: int,
     session_id: str,

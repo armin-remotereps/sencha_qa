@@ -38,6 +38,7 @@ from projects.controller_protocol import (
     StartInteractiveCmdActionEvent,
     TerminateInteractiveCmdActionEvent,
     TypeTextActionEvent,
+    WaitForCommandActionEvent,
 )
 from projects.controller_reply_tracker import ReplyTracker
 from projects.models import Project
@@ -248,6 +249,11 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await self._forward_action(event)
 
     async def controller_send_input(self, event: SendInputActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_wait_for_command(
+        self, event: WaitForCommandActionEvent
+    ) -> None:
         await self._forward_action(event)
 
     async def controller_terminate_interactive_cmd(

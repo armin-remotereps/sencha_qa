@@ -99,6 +99,10 @@ class SendInputActionEvent(BaseActionEvent):
     input_text: str
 
 
+class WaitForCommandActionEvent(BaseActionEvent):
+    session_id: str
+
+
 class TerminateInteractiveCmdActionEvent(BaseActionEvent):
     session_id: str
 
@@ -132,6 +136,7 @@ class ActionTypeRegistry:
         "controller.browser_list_downloads": MessageType.BROWSER_LIST_DOWNLOADS,
         "controller.start_interactive_cmd": MessageType.START_INTERACTIVE_CMD,
         "controller.send_input": MessageType.SEND_INPUT,
+        "controller.wait_for_command": MessageType.WAIT_FOR_COMMAND,
         "controller.terminate_interactive_cmd": MessageType.TERMINATE_INTERACTIVE_CMD,
         "controller.launch_app": MessageType.LAUNCH_APP,
         "controller.check_app_installed": MessageType.CHECK_APP_INSTALLED,
@@ -164,6 +169,7 @@ class ActionTypeRegistry:
         "controller.browser_list_downloads": (),
         "controller.start_interactive_cmd": ("command",),
         "controller.send_input": ("session_id", "input_text"),
+        "controller.wait_for_command": ("session_id",),
         "controller.terminate_interactive_cmd": ("session_id",),
         "controller.launch_app": ("app_name",),
         "controller.check_app_installed": ("app_name",),
