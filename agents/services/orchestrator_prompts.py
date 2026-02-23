@@ -41,6 +41,10 @@ def build_plan_system_prompt(project_prompt: str | None = None) -> str:
         )
 
     prompt += (
+        "- IMPORTANT: Each shell command runs in a FRESH, isolated session — 'cd' in one "
+        "command does NOT affect the next. Never create a sub-task whose only action is 'cd'. "
+        "Instead, use absolute paths in commands, or instruct the executor to use the `cwd` "
+        "parameter of execute_command.\n"
         "- Keep descriptions precise — the executor has no context beyond what you provide.\n"
         "- Do NOT include verification-only sub-tasks unless the test case explicitly requires "
         "checking something after an action. Instead, include verification in the expected_result "

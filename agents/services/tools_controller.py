@@ -50,10 +50,13 @@ def execute_command(
     project_id: int,
     *,
     command: str,
+    cwd: str = "",
     on_log: LogCallback | None = None,
 ) -> ToolResult:
+    effective_command = f"cd {cwd} && {command}" if cwd else command
+
     def _do() -> ToolResult:
-        result = controller_start_interactive_command(project_id, command)
+        result = controller_start_interactive_command(project_id, effective_command)
         if on_log is not None and result["output"]:
             on_log(f"{_LOG_PREFIX}{result['output'].rstrip()}")
         if not result["is_alive"]:

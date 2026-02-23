@@ -36,8 +36,10 @@ def _handle_execute_command(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
     command = str(arguments.get("command", ""))
+    raw_cwd = arguments.get("cwd")
+    cwd = str(raw_cwd) if raw_cwd else ""
     return tools_controller.execute_command(
-        context.project_id, command=command, on_log=context.on_log
+        context.project_id, command=command, cwd=cwd, on_log=context.on_log
     )
 
 

@@ -154,6 +154,7 @@ def build_desktop_tool_examples() -> str:
         '- key_press(keys="Return") — press a key or key combination\n'
         '- take_screenshot(question="What is on screen?") — capture desktop and ask about it\n'
         '- execute_command(command="ls -la") — run a shell command\n'
+        '- execute_command(command="npm install", cwd="/home/user/project") — run in a specific directory\n'
         '- send_command_input(session_id="...", input_text="password123") — send input to an interactive session'
     )
 
@@ -210,6 +211,9 @@ def build_search_tool_examples() -> str:
 def build_shell_rules() -> str:
     return (
         "SHELL RULES:\n"
+        "- STATELESS SHELL: Each execute_command runs in a fresh session. A standalone 'cd' has "
+        "NO effect on later commands. To run a command in a specific directory, EITHER use the "
+        "cwd parameter (preferred) OR chain commands: 'cd /path && your_command'.\n"
         "- If you launch a GUI application or long-running process (e.g. gnome-calculator, "
         "flask run, node server.js, vim), append ' &' so it runs in the "
         "background. Otherwise the command will block and time out.\n"
