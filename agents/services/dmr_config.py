@@ -5,7 +5,69 @@ from django.conf import settings
 from agents.types import DMRConfig
 
 
+def _build_openai_agent_config(*, model: str | None = None) -> DMRConfig:
+    return DMRConfig(
+        host="",
+        port="",
+        model=model or settings.OPENAI_AGENT_MODEL,
+        temperature=settings.OPENAI_TEMPERATURE,
+        max_tokens=settings.OPENAI_MAX_TOKENS,
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+    )
+
+
+def _build_openai_orchestrator_config(*, model: str | None = None) -> DMRConfig:
+    return DMRConfig(
+        host="",
+        port="",
+        model=model or settings.OPENAI_ORCHESTRATOR_MODEL,
+        temperature=settings.ORCHESTRATOR_TEMPERATURE,
+        max_tokens=settings.ORCHESTRATOR_MAX_TOKENS,
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+    )
+
+
+def _build_openai_sub_agent_config(*, model: str | None = None) -> DMRConfig:
+    return DMRConfig(
+        host="",
+        port="",
+        model=model or settings.OPENAI_SUB_AGENT_MODEL,
+        temperature=settings.SUB_AGENT_TEMPERATURE,
+        max_tokens=settings.SUB_AGENT_MAX_TOKENS,
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+    )
+
+
+def _build_openai_summarizer_config(*, model: str | None = None) -> DMRConfig:
+    return DMRConfig(
+        host="",
+        port="",
+        model=model or settings.OPENAI_SUMMARIZER_MODEL,
+        temperature=0.0,
+        max_tokens=1024,
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+    )
+
+
+def _build_openai_refiner_config(*, model: str | None = None) -> DMRConfig:
+    return DMRConfig(
+        host="",
+        port="",
+        model=model or settings.OPENAI_REFINER_MODEL,
+        temperature=0.3,
+        max_tokens=2048,
+        api_key=settings.OPENAI_API_KEY,
+        base_url=settings.OPENAI_BASE_URL,
+    )
+
+
 def build_dmr_config(*, model: str | None = None) -> DMRConfig:
+    if settings.INFERENCE_BACKEND == "openai":
+        return _build_openai_agent_config(model=model)
     return DMRConfig(
         host=settings.DMR_HOST,
         port=settings.DMR_PORT,
@@ -16,16 +78,20 @@ def build_dmr_config(*, model: str | None = None) -> DMRConfig:
 
 
 def build_summarizer_config(*, model: str | None = None) -> DMRConfig:
+    if settings.INFERENCE_BACKEND == "openai":
+        return _build_openai_summarizer_config(model=model)
     return DMRConfig(
         host=settings.DMR_HOST,
         port=settings.DMR_PORT,
         model=model or settings.DMR_SUMMARIZER_MODEL,
         temperature=0.0,
-        max_tokens=512,
+        max_tokens=1024,
     )
 
 
 def build_refiner_config(*, model: str | None = None) -> DMRConfig:
+    if settings.INFERENCE_BACKEND == "openai":
+        return _build_openai_refiner_config(model=model)
     return DMRConfig(
         host=settings.DMR_HOST,
         port=settings.DMR_PORT,
@@ -58,6 +124,8 @@ def build_openai_vision_config(*, model: str | None = None) -> DMRConfig:
 
 
 def build_orchestrator_config(*, model: str | None = None) -> DMRConfig:
+    if settings.INFERENCE_BACKEND == "openai":
+        return _build_openai_orchestrator_config(model=model)
     return DMRConfig(
         host=settings.DMR_HOST,
         port=settings.DMR_PORT,
@@ -68,6 +136,8 @@ def build_orchestrator_config(*, model: str | None = None) -> DMRConfig:
 
 
 def build_sub_agent_config(*, model: str | None = None) -> DMRConfig:
+    if settings.INFERENCE_BACKEND == "openai":
+        return _build_openai_sub_agent_config(model=model)
     return DMRConfig(
         host=settings.DMR_HOST,
         port=settings.DMR_PORT,

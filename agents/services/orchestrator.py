@@ -115,13 +115,11 @@ def _ensure_models_ready(
 ) -> None:
     ensure_model_available(orchestrator_dmr)
     ensure_model_available(sub_agent_dmr)
-    if vision_dmr.api_key is None:
-        ensure_model_available(vision_dmr)
+    ensure_model_available(vision_dmr)
 
     warm_up_model(orchestrator_dmr)
     warm_up_model(sub_agent_dmr)
-    if vision_dmr.api_key is None:
-        warm_up_model(vision_dmr)
+    warm_up_model(vision_dmr)
 
 
 def _build_sub_agent_execution_config(

@@ -218,7 +218,7 @@ DMR_TEMPERATURE: float = config("DMR_TEMPERATURE", default=0.1, cast=float)
 DMR_MAX_TOKENS: int = config("DMR_MAX_TOKENS", default=4096, cast=int)
 DMR_REQUEST_TIMEOUT: int = config("DMR_REQUEST_TIMEOUT", default=600, cast=int)
 
-# OpenAI API (for vision model)
+# OpenAI API (shared credentials for all OpenAI-routed calls)
 OPENAI_API_KEY: str = config("OPENAI_API_KEY", default="", cast=str)
 OPENAI_BASE_URL: str = config(
     "OPENAI_BASE_URL",
@@ -230,8 +230,26 @@ OPENAI_TEMPERATURE: float = config("OPENAI_TEMPERATURE", default=0.1, cast=float
 OPENAI_MAX_TOKENS: int = config("OPENAI_MAX_TOKENS", default=4096, cast=int)
 OPENAI_REQUEST_TIMEOUT: int = config("OPENAI_REQUEST_TIMEOUT", default=120, cast=int)
 
+# Per-role OpenAI models (used when INFERENCE_BACKEND=openai)
+OPENAI_AGENT_MODEL: str = config("OPENAI_AGENT_MODEL", default="gpt-4o", cast=str)
+OPENAI_ORCHESTRATOR_MODEL: str = config(
+    "OPENAI_ORCHESTRATOR_MODEL", default="gpt-4o", cast=str
+)
+OPENAI_SUB_AGENT_MODEL: str = config(
+    "OPENAI_SUB_AGENT_MODEL", default="gpt-4o", cast=str
+)
+OPENAI_SUMMARIZER_MODEL: str = config(
+    "OPENAI_SUMMARIZER_MODEL", default="gpt-4o-mini", cast=str
+)
+OPENAI_REFINER_MODEL: str = config(
+    "OPENAI_REFINER_MODEL", default="gpt-4o-mini", cast=str
+)
+
 # Vision Backend: "dmr" or "openai"
 VISION_BACKEND: str = config("VISION_BACKEND", default="dmr", cast=str)
+
+# Inference Backend: "dmr" or "openai" (routes all non-vision roles)
+INFERENCE_BACKEND: str = config("INFERENCE_BACKEND", default="dmr", cast=str)
 
 # Agent
 AGENT_MAX_ITERATIONS: int = config("AGENT_MAX_ITERATIONS", default=30, cast=int)

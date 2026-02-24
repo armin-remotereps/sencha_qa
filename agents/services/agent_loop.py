@@ -130,11 +130,11 @@ def run_agent(
         config = build_agent_config()
 
     ensure_model_available(config.dmr)
-    if config.vision_dmr is not None and config.vision_dmr.api_key is None:
+    if config.vision_dmr is not None:
         ensure_model_available(config.vision_dmr)
 
     warm_up_model(config.dmr)
-    if config.vision_dmr is not None and config.vision_dmr.api_key is None:
+    if config.vision_dmr is not None:
         warm_up_model(config.vision_dmr)
 
     summarizer_config = build_summarizer_config()
