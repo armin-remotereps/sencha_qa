@@ -59,7 +59,12 @@ def _build_state_section(state_description: str) -> str:
         return (
             "CURRENT STATE:\nThis is the first step. No prior actions have been taken."
         )
-    return f"CURRENT STATE:\n{state_description}"
+    return (
+        "CURRENT STATE — the machine is in the state resulting from these prior actions. "
+        "Applications, windows, and terminals mentioned below are still open and available. "
+        "Take a screenshot first to see the current screen before acting:\n"
+        f"{state_description}"
+    )
 
 
 def _build_project_context(project_prompt: str) -> str:

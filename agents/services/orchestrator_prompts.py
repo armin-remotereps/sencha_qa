@@ -23,6 +23,12 @@ def build_plan_system_prompt(project_prompt: str | None = None) -> str:
         "- Each sub-task must be a single, concrete action with a verifiable expected result.\n"
         "- If a test step is compound (multiple actions), split it into separate sub-tasks.\n"
         "- Add implicit steps when needed (e.g., opening a browser before navigating to a URL).\n"
+        "- CRITICAL: Each sub-task is executed by a SEPARATE agent with NO memory of prior steps. "
+        "Every sub-task description must be FULLY self-contained — always specify WHICH "
+        "application, window, or terminal to use (e.g., 'In the VS Code integrated terminal, "
+        "run...' NOT just 'Run...'). If a prior step opened an application, subsequent steps "
+        "must reference that application explicitly (e.g., 'In the already-open VS Code "
+        "window, ...').\n"
     )
 
     if project_prompt:
@@ -45,7 +51,8 @@ def build_plan_system_prompt(project_prompt: str | None = None) -> str:
         "command does NOT affect the next. Never create a sub-task whose only action is 'cd'. "
         "Instead, use absolute paths in commands, or instruct the executor to use the `cwd` "
         "parameter of execute_command.\n"
-        "- Keep descriptions precise — the executor has no context beyond what you provide.\n"
+        "- Keep descriptions precise and self-contained — the executor only knows what you "
+        "write in each sub-task description plus a brief summary of prior step outcomes.\n"
         "- Do NOT include verification-only sub-tasks unless the test case explicitly requires "
         "checking something after an action. Instead, include verification in the expected_result "
         "of the action sub-task.\n\n"
