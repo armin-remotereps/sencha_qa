@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import logging
 
-import httpx
 from django.conf import settings
 
-from agents.types import DMRConfig
+from agents.services.dmr_client import send_chat_completion
+from agents.types import ChatMessage, DMRConfig
 
 logger = logging.getLogger(__name__)
 
 OUTPUT_HEAD_RATIO = 0.75
-_SUMMARIZER_MAX_RESPONSE_TOKENS = 512
 
 _BASE_SUMMARY_INSTRUCTIONS = (
     "You are a concise output summarizer for an automated test agent. "
@@ -114,9 +113,7 @@ def _split_into_chunks(text: str, chunk_size: int) -> list[str]:
 
 def _summarize_single(text: str, *, config: DMRConfig, tool_context: str) -> str:
     prompt = _build_chunk_prompt(text, tool_context=tool_context)
-    timeout = float(settings.DMR_REQUEST_TIMEOUT)
-    with httpx.Client(timeout=timeout) as client:
-        content = _call_dmr(prompt, config=config, client=client)
+    content = _call_summarizer(prompt, config=config)
     return f"[AI Summary] {content}"
 
 
@@ -124,17 +121,15 @@ def _map_summarize(
     chunks: list[str], *, config: DMRConfig, tool_context: str
 ) -> list[str]:
     summaries: list[str] = []
-    timeout = float(settings.DMR_REQUEST_TIMEOUT)
-    with httpx.Client(timeout=timeout) as client:
-        for idx, chunk in enumerate(chunks):
-            logger.info("[Summarizer] Summarizing chunk %d/%d", idx + 1, len(chunks))
-            prompt = _build_chunk_prompt(
-                chunk,
-                tool_context=tool_context,
-                chunk_label=f"Chunk {idx + 1}/{len(chunks)}",
-            )
-            summary = _call_dmr(prompt, config=config, client=client)
-            summaries.append(summary)
+    for idx, chunk in enumerate(chunks):
+        logger.info("[Summarizer] Summarizing chunk %d/%d", idx + 1, len(chunks))
+        prompt = _build_chunk_prompt(
+            chunk,
+            tool_context=tool_context,
+            chunk_label=f"Chunk {idx + 1}/{len(chunks)}",
+        )
+        summary = _call_summarizer(prompt, config=config)
+        summaries.append(summary)
     return summaries
 
 
@@ -142,9 +137,7 @@ def _reduce_summaries(
     summaries: list[str], *, config: DMRConfig, tool_context: str
 ) -> str:
     prompt = _build_reduce_prompt(summaries, tool_context=tool_context)
-    timeout = float(settings.DMR_REQUEST_TIMEOUT)
-    with httpx.Client(timeout=timeout) as client:
-        content = _call_dmr(prompt, config=config, client=client)
+    content = _call_summarizer(prompt, config=config)
     return f"[AI Summary] {content}"
 
 
@@ -175,52 +168,22 @@ def _build_reduce_prompt(summaries: list[str], *, tool_context: str) -> str:
     return prompt
 
 
-# -- DMR transport -----------------------------------------------------------
+# -- Summarizer transport (routes via dmr_client) ---------------------------
 
 
-def _call_dmr(prompt: str, *, config: DMRConfig, client: httpx.Client) -> str:
-    url = f"http://{config.host}:{config.port}/engines/llama.cpp/v1/chat/completions"
-    payload: dict[str, object] = {
-        "model": config.model,
-        "messages": [
-            {"role": "system", "content": "You summarize command outputs concisely."},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0.0,
-        "max_tokens": _SUMMARIZER_MAX_RESPONSE_TOKENS,
-    }
-
-    response = client.post(url, json=payload)
-    response.raise_for_status()
-    return _extract_content(response.json())
-
-
-def _extract_content(data: object) -> str:
-    if not isinstance(data, dict):
-        msg = "Unexpected response format"
-        raise ValueError(msg)
-
-    choices = data.get("choices")
-    if not isinstance(choices, list) or len(choices) == 0:
-        msg = "No choices in summarizer response"
-        raise ValueError(msg)
-
-    choice = choices[0]
-    if not isinstance(choice, dict):
-        msg = "Invalid summarizer response format"
-        raise ValueError(msg)
-
-    message = choice.get("message")
-    if not isinstance(message, dict):
-        msg = "No message in summarizer response"
-        raise ValueError(msg)
-
-    content = message.get("content")
-    if not isinstance(content, str):
-        msg = "Summarizer returned non-string content"
-        raise ValueError(msg)
-
-    return content.strip()
+def _call_summarizer(prompt: str, *, config: DMRConfig) -> str:
+    messages = (
+        ChatMessage(
+            role="system",
+            content="You summarize command outputs concisely.",
+        ),
+        ChatMessage(role="user", content=prompt),
+    )
+    response = send_chat_completion(config, messages)
+    content = response.message.content
+    if isinstance(content, str):
+        return content.strip()
+    return ""
 
 
 # -- Truncation fallback -----------------------------------------------------

@@ -44,6 +44,8 @@ def is_model_available(config: DMRConfig) -> bool:
 
 
 def ensure_model_available(config: DMRConfig) -> None:
+    if config.api_key is not None:
+        return
     if is_model_available(config):
         logger.debug("Model already available: %s", config.model)
         return
@@ -57,6 +59,9 @@ def ensure_model_available(config: DMRConfig) -> None:
 
 
 def warm_up_model(config: DMRConfig) -> None:
+    if config.api_key is not None:
+        return
+
     from agents.services.dmr_client import send_chat_completion
 
     logger.info("Warming up model: %s", config.model)
