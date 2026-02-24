@@ -780,6 +780,26 @@ def controller_check_app_installed(
     return _build_action_result(reply)
 
 
+def controller_cleanup_environment(
+    project_id: int,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id, "controller.cleanup_environment", timeout
+    )
+    return _build_action_result(reply)
+
+
+def _safe_cleanup(project_id: int) -> None:
+    try:
+        timeout = float(settings.CLEANUP_TIMEOUT_SECONDS)
+        controller_cleanup_environment(project_id, timeout=timeout)
+    except Exception:
+        logger.warning(
+            "Environment cleanup failed for project %d", project_id, exc_info=True
+        )
+
+
 def controller_browser_take_screenshot(
     project_id: int,
     timeout: float = 30.0,
@@ -1469,6 +1489,8 @@ def execute_test_run_test_case(pivot_id: int) -> None:
         if not project.agent_connected:
             _wait_for_agent_connection(project, cancellation_check=cancellation_check)
 
+        _safe_cleanup(project.id)
+
         on_log = _build_log_callback(pivot)
         on_screenshot = _build_screenshot_callback(pivot)
         task_description = _build_task_description(pivot.test_case)
@@ -1506,6 +1528,7 @@ def execute_test_run_test_case(pivot_id: int) -> None:
         _mark_pivot_failed(pivot, str(exc))
         raise
     finally:
+        _safe_cleanup(project.id)
         _update_test_run_status_if_needed(pivot.test_run)
 
 

@@ -21,6 +21,7 @@ from controller_client.browser_executor import (
     execute_browser_take_screenshot,
     execute_browser_type,
 )
+from controller_client.cleanup import execute_cleanup
 from controller_client.config import ClientConfig
 from controller_client.exceptions import AuthenticationError, ExecutionError
 from controller_client.executor import (
@@ -37,6 +38,7 @@ from controller_client.executor import (
     execute_wait_for_command,
 )
 from controller_client.interactive_session import InteractiveSessionManager
+from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import (
     ActionResultPayload,
     BrowserContentResultPayload,
@@ -91,6 +93,7 @@ class ControllerClient:
         self._connection: ClientConnection | None = None
         self._browser_session = BrowserSession()
         self._session_manager = InteractiveSessionManager()
+        self._process_tracker = ProcessTracker()
         self._interactive_cmd_timeout = interactive_cmd_timeout
         self._handlers: dict[MessageType, MessageHandler] = {
             MessageType.HANDSHAKE_ACK: self._handle_handshake_ack,
@@ -118,6 +121,7 @@ class ControllerClient:
             MessageType.TERMINATE_INTERACTIVE_CMD: self._handle_terminate_interactive_cmd,
             MessageType.LAUNCH_APP: self._handle_launch_app,
             MessageType.CHECK_APP_INSTALLED: self._handle_check_app_installed,
+            MessageType.CLEANUP_ENVIRONMENT: self._handle_cleanup_environment,
         }
         self._handshake_event = asyncio.Event()
 
@@ -151,6 +155,7 @@ class ControllerClient:
 
     async def stop(self) -> None:
         self._running = False
+        self._process_tracker.kill_all()
         self._session_manager.terminate_all()
         await asyncio.to_thread(self._browser_session.close)
         if self._connection is not None:
@@ -334,7 +339,7 @@ class ControllerClient:
 
         try:
             result = await asyncio.to_thread(
-                execute_command_streaming, payload, _on_output
+                execute_command_streaming, payload, _on_output, self._process_tracker
             )
             await self._send_command_result(request_id, result)
         except ExecutionError as e:
@@ -494,6 +499,7 @@ class ControllerClient:
                 self._session_manager,
                 payload,
                 self._interactive_cmd_timeout,
+                self._process_tracker,
             )
             await self._send_interactive_output(request_id, result)
         except ExecutionError as e:
@@ -540,7 +546,9 @@ class ControllerClient:
     ) -> None:
         payload = parse_launch_app_payload(data)
         try:
-            result = await asyncio.to_thread(execute_launch_app, payload)
+            result = await asyncio.to_thread(
+                execute_launch_app, payload, self._process_tracker
+            )
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
@@ -551,6 +559,20 @@ class ControllerClient:
         payload = parse_check_app_installed_payload(data)
         try:
             result = await asyncio.to_thread(execute_check_app_installed, payload)
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_cleanup_environment(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        try:
+            result = await asyncio.to_thread(
+                execute_cleanup,
+                self._browser_session,
+                self._session_manager,
+                self._process_tracker,
+            )
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))

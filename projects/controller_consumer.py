@@ -26,6 +26,7 @@ from projects.controller_protocol import (
     BrowserTakeScreenshotActionEvent,
     BrowserTypeActionEvent,
     CheckAppInstalledActionEvent,
+    CleanupEnvironmentActionEvent,
     ClickActionEvent,
     ControllerMessageBuilder,
     DragActionEvent,
@@ -266,6 +267,11 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
     async def controller_check_app_installed(
         self, event: CheckAppInstalledActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_cleanup_environment(
+        self, event: CleanupEnvironmentActionEvent
     ) -> None:
         await self._forward_action(event)
 

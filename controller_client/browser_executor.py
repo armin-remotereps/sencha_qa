@@ -182,6 +182,11 @@ class BrowserSession:
             self._playwright = None
 
         self._page = None
+        self.clear_downloads()
+
+    def clear_downloads(self) -> None:
+        with self._downloads_lock:
+            self._downloads.clear()
 
     def snapshot_downloads(self) -> list[DownloadRecord]:
         with self._downloads_lock:

@@ -115,6 +115,10 @@ class CheckAppInstalledActionEvent(BaseActionEvent):
     app_name: str
 
 
+class CleanupEnvironmentActionEvent(BaseActionEvent):
+    pass
+
+
 class ActionTypeRegistry:
     _ACTION_TYPE_MAP: Final[dict[str, MessageType]] = {
         "controller.click": MessageType.CLICK,
@@ -140,6 +144,7 @@ class ActionTypeRegistry:
         "controller.terminate_interactive_cmd": MessageType.TERMINATE_INTERACTIVE_CMD,
         "controller.launch_app": MessageType.LAUNCH_APP,
         "controller.check_app_installed": MessageType.CHECK_APP_INSTALLED,
+        "controller.cleanup_environment": MessageType.CLEANUP_ENVIRONMENT,
     }
 
     _PAYLOAD_KEYS: Final[dict[str, tuple[str, ...]]] = {
@@ -173,6 +178,7 @@ class ActionTypeRegistry:
         "controller.terminate_interactive_cmd": ("session_id",),
         "controller.launch_app": ("app_name",),
         "controller.check_app_installed": ("app_name",),
+        "controller.cleanup_environment": (),
     }
 
     @classmethod

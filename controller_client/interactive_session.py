@@ -7,6 +7,7 @@ import uuid
 import pexpect
 
 from controller_client.exceptions import ExecutionError
+from controller_client.process_tracker import ProcessTracker
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,11 @@ class InteractiveSession:
     def session_id(self) -> str:
         return self._session_id
 
-    def start(self, read_timeout: float = _DEFAULT_READ_TIMEOUT) -> str:
+    def start(
+        self,
+        process_tracker: ProcessTracker,
+        read_timeout: float = _DEFAULT_READ_TIMEOUT,
+    ) -> str:
         self._start_time = time.monotonic()
         self._child = pexpect.spawn(
             "/bin/bash",
@@ -33,6 +38,8 @@ class InteractiveSession:
             encoding="utf-8",
             timeout=read_timeout,
         )
+        if self._child.pid is not None:
+            process_tracker.register(self._child.pid)
         return self._read_output(self._child, read_timeout)
 
     def send_input(self, text: str, read_timeout: float = _DEFAULT_READ_TIMEOUT) -> str:

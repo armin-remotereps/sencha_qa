@@ -13,13 +13,16 @@ from controller_client.app_discovery import (
     discover_apps,
     find_best_match,
 )
+from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import ActionResultPayload, LaunchAppPayload
 
 _MAX_SUGGESTIONS = 5
 _FIELD_CODE_PATTERN = re.compile(r"\s*%[a-zA-Z]")
 
 
-def execute_launch_app(payload: LaunchAppPayload) -> ActionResultPayload:
+def execute_launch_app(
+    payload: LaunchAppPayload, process_tracker: ProcessTracker
+) -> ActionResultPayload:
     start = time.monotonic()
     query = payload.app_name.strip()
 
@@ -35,7 +38,7 @@ def execute_launch_app(payload: LaunchAppPayload) -> ActionResultPayload:
     best_match, best_score = find_best_match(query, candidates)
 
     if best_match is not None and best_score >= MATCH_THRESHOLD:
-        message, success = _launch_app(best_match)
+        message, success = _launch_app(best_match, process_tracker)
     else:
         message = _build_suggestion_message(query, candidates)
         success = False
@@ -48,26 +51,30 @@ def execute_launch_app(payload: LaunchAppPayload) -> ActionResultPayload:
     )
 
 
-def _launch_app(candidate: AppCandidate) -> tuple[str, bool]:
+def _launch_app(
+    candidate: AppCandidate, process_tracker: ProcessTracker
+) -> tuple[str, bool]:
     system = platform.system()
     try:
         if system == "Darwin":
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 ["open", "-a", candidate.exec_path],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            process_tracker.register(proc.pid)
         elif system == "Windows":
             os.startfile(candidate.exec_path)  # type: ignore[attr-defined]  # noqa: S606
         else:
             exec_cmd = _strip_field_codes(candidate.exec_path)
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 exec_cmd,
                 shell=True,  # noqa: S602
                 start_new_session=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+            process_tracker.register(proc.pid)
     except OSError as exc:
         return f"Failed to launch '{candidate.display_name}': {exc}", False
 

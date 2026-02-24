@@ -266,6 +266,7 @@ CONTROLLER_AGENT_CONNECT_TIMEOUT: int = config(
 INTERACTIVE_CMD_TIMEOUT_SECONDS: int = config(
     "INTERACTIVE_CMD_TIMEOUT_SECONDS", default=300, cast=int
 )
+CLEANUP_TIMEOUT_SECONDS: int = config("CLEANUP_TIMEOUT_SECONDS", default=30, cast=int)
 
 # Output Summarizer
 DMR_SUMMARIZER_MODEL: str = config(

@@ -42,6 +42,7 @@ class MessageType(StrEnum):
     WAIT_FOR_COMMAND = "wait_for_command"
     LAUNCH_APP = "launch_app"
     CHECK_APP_INSTALLED = "check_app_installed"
+    CLEANUP_ENVIRONMENT = "cleanup_environment"
 
 
 class MouseButton(StrEnum):

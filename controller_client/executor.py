@@ -11,6 +11,7 @@ from PIL import Image
 
 from controller_client.exceptions import ExecutionError
 from controller_client.interactive_session import InteractiveSessionManager
+from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import (
     ActionResultPayload,
     ClickPayload,
@@ -120,10 +121,12 @@ def _is_background_command(command: str) -> bool:
     return stripped.endswith("&") and not stripped.endswith("&&")
 
 
-def _execute_background_command(command: str) -> CommandResultPayload:
+def _execute_background_command(
+    command: str, process_tracker: ProcessTracker
+) -> CommandResultPayload:
     start = time.monotonic()
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             command,
             shell=True,  # noqa: S602
             stdin=subprocess.DEVNULL,
@@ -131,6 +134,7 @@ def _execute_background_command(command: str) -> CommandResultPayload:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        process_tracker.register(proc.pid)
     except Exception as e:
         raise ExecutionError(f"Background command failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -146,9 +150,11 @@ def _execute_background_command(command: str) -> CommandResultPayload:
 _NON_INTERACTIVE_TIMEOUT_SECONDS = 120
 
 
-def execute_command(payload: RunCommandPayload) -> CommandResultPayload:
+def execute_command(
+    payload: RunCommandPayload, process_tracker: ProcessTracker
+) -> CommandResultPayload:
     if _is_background_command(payload.command):
-        return _execute_background_command(payload.command)
+        return _execute_background_command(payload.command, process_tracker)
 
     start = time.monotonic()
     try:
@@ -199,9 +205,10 @@ def _read_stream(
 def execute_command_streaming(
     payload: RunCommandPayload,
     on_output: Callable[[str, StreamName], None],
+    process_tracker: ProcessTracker,
 ) -> CommandResultPayload:
     if _is_background_command(payload.command):
-        return _execute_background_command(payload.command)
+        return _execute_background_command(payload.command, process_tracker)
 
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     start = time.monotonic()
@@ -278,10 +285,11 @@ def execute_start_interactive_cmd(
     session_manager: InteractiveSessionManager,
     payload: StartInteractiveCmdPayload,
     timeout: float,
+    process_tracker: ProcessTracker,
 ) -> InteractiveOutputPayload:
     try:
         session = session_manager.start_session(payload.command, timeout)
-        output = session.start()
+        output = session.start(process_tracker)
     except Exception as e:
         raise ExecutionError(f"Start interactive command failed: {e}") from e
     return InteractiveOutputPayload(
