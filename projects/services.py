@@ -1265,8 +1265,7 @@ def start_test_run(test_run: TestRun) -> None:
         raise ValueError("Another test run is already in progress for this project.")
 
     test_run.status = TestRunStatus.STARTED
-    test_run.project_prompt = test_run.project.project_prompt
-    test_run.save(update_fields=["status", "project_prompt", "updated_at"])
+    test_run.save(update_fields=["status", "updated_at"])
     _broadcast_test_run_status(test_run)
 
     result = chain(*[execute_test_run_case.si(pid) for pid in pivot_ids]).apply_async()
@@ -1478,13 +1477,14 @@ def execute_test_run_test_case(pivot_id: int) -> None:
             run_orchestrator,
         )
 
+        project.refresh_from_db(fields=["project_prompt"])
         result = run_orchestrator(
             task_description,
             project.id,
             on_log=on_log,
             on_screenshot=on_screenshot,
             system_info=project.agent_system_info or None,
-            project_prompt=pivot.test_run.project_prompt or None,
+            project_prompt=project.project_prompt or None,
             cancellation_check=cancellation_check,
         )
         _finalize_pivot(pivot, result)

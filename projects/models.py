@@ -193,7 +193,6 @@ class TestRun(models.Model):
         db_index=True,
     )
     celery_task_id = models.CharField(max_length=255, blank=True, default="")
-    project_prompt = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
