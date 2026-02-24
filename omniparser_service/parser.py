@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import gc
 import io
 import logging
 import sys
@@ -8,6 +9,7 @@ import threading
 from pathlib import Path
 from typing import Any, Final, TypedDict
 
+import torch
 from PIL import Image
 
 from omniparser_service.config import settings
@@ -192,32 +194,38 @@ class OmniParserService:
     ) -> ParseResult:
         self.load_models()
 
-        image, width, height = _decode_image(image_base64)
-        draw_config = _build_draw_config(image.size)
-        effective_box, effective_iou = _resolve_thresholds(box_threshold, iou_threshold)
-        ocr_text, ocr_bbox = _run_ocr(image)
+        try:
+            image, width, height = _decode_image(image_base64)
+            draw_config = _build_draw_config(image.size)
+            effective_box, effective_iou = _resolve_thresholds(
+                box_threshold, iou_threshold
+            )
+            ocr_text, ocr_bbox = _run_ocr(image)
 
-        annotated_img, parsed_content_list = _run_som_labeling(
-            image=image,
-            som_model=self._parser.som_model,
-            caption_model_processor=self._parser.caption_model_processor,
-            ocr_text=ocr_text,
-            ocr_bbox=ocr_bbox,
-            draw_config=draw_config,
-            box_threshold=effective_box,
-            iou_threshold=effective_iou,
-        )
+            annotated_img, parsed_content_list = _run_som_labeling(
+                image=image,
+                som_model=self._parser.som_model,
+                caption_model_processor=self._parser.caption_model_processor,
+                ocr_text=ocr_text,
+                ocr_bbox=ocr_bbox,
+                draw_config=draw_config,
+                box_threshold=effective_box,
+                iou_threshold=effective_iou,
+            )
 
-        elements = tuple(
-            _build_element(i, raw) for i, raw in enumerate(parsed_content_list)
-        )
+            elements = tuple(
+                _build_element(i, raw) for i, raw in enumerate(parsed_content_list)
+            )
 
-        return ParseResult(
-            annotated_image=annotated_img,
-            elements=elements,
-            image_width=width,
-            image_height=height,
-        )
+            return ParseResult(
+                annotated_image=annotated_img,
+                elements=elements,
+                image_width=width,
+                image_height=height,
+            )
+        finally:
+            gc.collect()
+            torch.cuda.empty_cache()
 
     def parse_pixels(
         self,
