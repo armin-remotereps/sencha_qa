@@ -4,12 +4,12 @@ import logging
 
 from django.conf import settings
 
-from agents.services.dmr_client import send_chat_completion
+from agents.services.llm_client import send_chat_completion
 from agents.types import (
     ChatMessage,
     ContentPart,
-    DMRConfig,
     ImageContent,
+    LLMConfig,
     TextContent,
 )
 
@@ -33,7 +33,7 @@ _BASE_CONTEXT_INSTRUCTIONS = (
 def summarize_context_if_needed(
     messages: list[ChatMessage],
     *,
-    summarizer_config: DMRConfig | None = None,
+    summarizer_config: LLMConfig | None = None,
 ) -> list[ChatMessage]:
     threshold = int(settings.CONTEXT_SUMMARIZE_THRESHOLD)
     size = _estimate_context_size(messages)
@@ -129,7 +129,7 @@ def _split_messages(
 def _summarize_middle(
     middle: list[ChatMessage],
     *,
-    summarizer_config: DMRConfig | None,
+    summarizer_config: LLMConfig | None,
 ) -> str:
     serialized = _serialize_messages_for_summary(middle)
     return _summarize_with_fallback(
@@ -177,7 +177,7 @@ def _content_to_text(content: str | tuple[ContentPart, ...] | None) -> str:
 def _summarize_with_fallback(
     text: str,
     *,
-    summarizer_config: DMRConfig | None,
+    summarizer_config: LLMConfig | None,
 ) -> str:
     threshold = int(settings.CONTEXT_SUMMARIZE_THRESHOLD)
     if summarizer_config is not None:
@@ -195,7 +195,7 @@ def _summarize_with_fallback(
     return _truncate_context(text, max_length=threshold)
 
 
-def _route_summarization(text: str, *, config: DMRConfig) -> str:
+def _route_summarization(text: str, *, config: LLMConfig) -> str:
     chunk_size = int(settings.CONTEXT_SUMMARIZE_CHUNK_SIZE)
     chunks = _split_into_chunks(text, chunk_size)
 
@@ -214,12 +214,12 @@ def _split_into_chunks(text: str, chunk_size: int) -> list[str]:
     return chunks
 
 
-def _summarize_single(text: str, *, config: DMRConfig) -> str:
+def _summarize_single(text: str, *, config: LLMConfig) -> str:
     prompt = _build_chunk_prompt(text)
     return _call_summarizer(prompt, config=config)
 
 
-def _map_summarize(chunks: list[str], *, config: DMRConfig) -> list[str]:
+def _map_summarize(chunks: list[str], *, config: LLMConfig) -> list[str]:
     summaries: list[str] = []
     for idx, chunk in enumerate(chunks):
         logger.info("[Context] Summarizing chunk %d/%d", idx + 1, len(chunks))
@@ -232,7 +232,7 @@ def _map_summarize(chunks: list[str], *, config: DMRConfig) -> list[str]:
     return summaries
 
 
-def _reduce_summaries(summaries: list[str], *, config: DMRConfig) -> str:
+def _reduce_summaries(summaries: list[str], *, config: LLMConfig) -> str:
     prompt = _build_reduce_prompt(summaries)
     return _call_summarizer(prompt, config=config)
 
@@ -257,7 +257,7 @@ def _build_reduce_prompt(summaries: list[str]) -> str:
     return prompt
 
 
-def _call_summarizer(prompt: str, *, config: DMRConfig) -> str:
+def _call_summarizer(prompt: str, *, config: LLMConfig) -> str:
     messages = (
         ChatMessage(
             role="system",

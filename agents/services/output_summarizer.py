@@ -4,8 +4,8 @@ import logging
 
 from django.conf import settings
 
-from agents.services.dmr_client import send_chat_completion
-from agents.types import ChatMessage, DMRConfig
+from agents.services.llm_client import send_chat_completion
+from agents.types import ChatMessage, LLMConfig
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ def summarize_output(
     *,
     tool_name: str = "",
     is_error: bool = False,
-    summarizer_config: DMRConfig | None = None,
+    summarizer_config: LLMConfig | None = None,
 ) -> str:
     threshold: int = int(settings.OUTPUT_SUMMARIZE_THRESHOLD)
     if len(output) <= threshold:
@@ -52,7 +52,7 @@ def _summarize_with_fallback(
     *,
     tool_name: str,
     is_error: bool,
-    summarizer_config: DMRConfig | None,
+    summarizer_config: LLMConfig | None,
     threshold: int,
 ) -> str:
     if summarizer_config is not None:
@@ -78,7 +78,7 @@ def _summarize_with_fallback(
 def _route_summarization(
     output: str,
     *,
-    config: DMRConfig,
+    config: LLMConfig,
     tool_name: str,
     is_error: bool,
 ) -> str:
@@ -111,14 +111,14 @@ def _split_into_chunks(text: str, chunk_size: int) -> list[str]:
     return chunks
 
 
-def _summarize_single(text: str, *, config: DMRConfig, tool_context: str) -> str:
+def _summarize_single(text: str, *, config: LLMConfig, tool_context: str) -> str:
     prompt = _build_chunk_prompt(text, tool_context=tool_context)
     content = _call_summarizer(prompt, config=config)
     return f"[AI Summary] {content}"
 
 
 def _map_summarize(
-    chunks: list[str], *, config: DMRConfig, tool_context: str
+    chunks: list[str], *, config: LLMConfig, tool_context: str
 ) -> list[str]:
     summaries: list[str] = []
     for idx, chunk in enumerate(chunks):
@@ -134,7 +134,7 @@ def _map_summarize(
 
 
 def _reduce_summaries(
-    summaries: list[str], *, config: DMRConfig, tool_context: str
+    summaries: list[str], *, config: LLMConfig, tool_context: str
 ) -> str:
     prompt = _build_reduce_prompt(summaries, tool_context=tool_context)
     content = _call_summarizer(prompt, config=config)
@@ -168,10 +168,10 @@ def _build_reduce_prompt(summaries: list[str], *, tool_context: str) -> str:
     return prompt
 
 
-# -- Summarizer transport (routes via dmr_client) ---------------------------
+# -- Summarizer transport (routes via llm_client) ----------------------------
 
 
-def _call_summarizer(prompt: str, *, config: DMRConfig) -> str:
+def _call_summarizer(prompt: str, *, config: LLMConfig) -> str:
     messages = (
         ChatMessage(
             role="system",

@@ -6,13 +6,12 @@ import time
 from django.conf import settings
 
 from agents.services.context_summarizer import summarize_context_if_needed
-from agents.services.dmr_client import send_chat_completion
-from agents.services.dmr_config import (
-    build_dmr_config,
+from agents.services.llm_client import send_chat_completion
+from agents.services.llm_config import (
+    build_llm_config,
     build_summarizer_config,
     build_vision_config,
 )
-from agents.services.dmr_model_manager import ensure_model_available, warm_up_model
 from agents.services.output_summarizer import summarize_output
 from agents.services.prompt_parts import (
     build_agent_persona,
@@ -29,7 +28,7 @@ from agents.types import (
     AgentStopReason,
     CancellationCheck,
     ChatMessage,
-    DMRConfig,
+    LLMConfig,
     LogCallback,
     ToolContext,
     ToolResult,
@@ -108,11 +107,11 @@ def build_agent_config(
     model: str | None = None,
     vision_model: str | None = None,
 ) -> AgentConfig:
-    dmr_config = build_dmr_config(model=model)
+    llm_config = build_llm_config(model=model)
     vision_config = build_vision_config(model=vision_model)
     return AgentConfig(
-        dmr=dmr_config,
-        vision_dmr=vision_config,
+        llm=llm_config,
+        vision_llm=vision_config,
         max_iterations=settings.AGENT_MAX_ITERATIONS,
         timeout_seconds=settings.AGENT_TIMEOUT_SECONDS,
     )
@@ -129,20 +128,12 @@ def run_agent(
     if config is None:
         config = build_agent_config()
 
-    ensure_model_available(config.dmr)
-    if config.vision_dmr is not None:
-        ensure_model_available(config.vision_dmr)
-
-    warm_up_model(config.dmr)
-    if config.vision_dmr is not None:
-        warm_up_model(config.vision_dmr)
-
     summarizer_config = build_summarizer_config()
 
     context = ToolContext(
         project_id=project_id,
         summarizer_config=summarizer_config,
-        vision_config=config.vision_dmr,
+        vision_config=config.vision_llm,
         on_screenshot=config.on_screenshot,
         on_log=config.on_log,
     )
@@ -208,17 +199,17 @@ def _run_agent_loop(
 
         try:
             response = send_chat_completion(
-                config.dmr,
+                config.llm,
                 tuple(messages),
                 tool_definitions,
             )
         except Exception as e:
-            logger.error("DMR request failed: %s", e)
+            logger.error("LLM request failed: %s", e)
             return AgentResult(
                 stop_reason=AgentStopReason.ERROR,
                 iterations=iterations,
                 messages=tuple(messages),
-                error=f"DMR request failed: {e}",
+                error=f"LLM request failed: {e}",
             )
 
         if response.reasoning_content:
@@ -267,7 +258,7 @@ def _run_agent_loop(
 def _build_tool_result_message(
     tool_result: ToolResult,
     *,
-    summarizer_config: DMRConfig | None = None,
+    summarizer_config: LLMConfig | None = None,
 ) -> ChatMessage:
     content = summarize_output(
         tool_result.content,

@@ -4,7 +4,7 @@ from agents.services.browser_element_finder import find_element_index
 from agents.services.controller_element_finder import find_element_coordinates
 from agents.services.tool_utils import safe_tool_call
 from agents.services.vision_qa import answer_screenshot_question
-from agents.types import DMRConfig, LogCallback, ScreenshotCallback, ToolResult
+from agents.types import LLMConfig, LogCallback, ScreenshotCallback, ToolResult
 from projects.services import (
     InteractiveCommandResult,
     controller_browser_click,
@@ -107,7 +107,7 @@ def take_screenshot(
     project_id: int,
     *,
     question: str,
-    vision_config: DMRConfig,
+    vision_config: LLMConfig,
     on_screenshot: ScreenshotCallback | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
@@ -125,7 +125,7 @@ def click(
     project_id: int,
     *,
     description: str,
-    vision_config: DMRConfig,
+    vision_config: LLMConfig,
     on_screenshot: ScreenshotCallback | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
@@ -166,7 +166,7 @@ def hover(
     project_id: int,
     *,
     description: str,
-    vision_config: DMRConfig,
+    vision_config: LLMConfig,
     on_screenshot: ScreenshotCallback | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
@@ -188,7 +188,7 @@ def drag(
     *,
     start_description: str,
     end_description: str,
-    vision_config: DMRConfig,
+    vision_config: LLMConfig,
     on_screenshot: ScreenshotCallback | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
@@ -259,10 +259,10 @@ def browser_click(
     project_id: int,
     *,
     description: str,
-    dmr_config: DMRConfig,
+    vision_config: LLMConfig,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        idx = find_element_index(project_id, description, dmr_config)
+        idx = find_element_index(project_id, description, vision_config)
         controller_browser_click(project_id, idx)
         return ToolResult(
             tool_call_id="",
@@ -278,10 +278,10 @@ def browser_type(
     *,
     description: str,
     text: str,
-    dmr_config: DMRConfig,
+    vision_config: LLMConfig,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        idx = find_element_index(project_id, description, dmr_config)
+        idx = find_element_index(project_id, description, vision_config)
         controller_browser_type(project_id, idx, text)
         return ToolResult(
             tool_call_id="",
@@ -296,10 +296,10 @@ def browser_hover(
     project_id: int,
     *,
     description: str,
-    dmr_config: DMRConfig,
+    vision_config: LLMConfig,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        idx = find_element_index(project_id, description, dmr_config)
+        idx = find_element_index(project_id, description, vision_config)
         controller_browser_hover(project_id, idx)
         return ToolResult(
             tool_call_id="",
@@ -362,7 +362,7 @@ def browser_take_screenshot(
     project_id: int,
     *,
     question: str,
-    vision_config: DMRConfig,
+    vision_config: LLMConfig,
     on_screenshot: ScreenshotCallback | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:

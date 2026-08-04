@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agents.services.dmr_client import send_chat_completion
-from agents.services.dmr_config import build_refiner_config
+from agents.services.llm_client import send_chat_completion
+from agents.services.llm_config import build_refiner_config
 from agents.types import ChatMessage
 
 _REFINER_SYSTEM_PROMPT = (

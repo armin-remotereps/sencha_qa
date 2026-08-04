@@ -5,8 +5,8 @@ import json
 from agents.types import (
     ChatMessage,
     ContentPart,
-    DMRResponse,
     ImageContent,
+    LLMResponse,
     MessageDict,
     TextContent,
     ToolCall,
@@ -111,10 +111,10 @@ def _serialize_tools(
     return result
 
 
-def _parse_response(data: dict[str, object]) -> DMRResponse:
+def _parse_response(data: dict[str, object]) -> LLMResponse:
     choices = data.get("choices")
     if not isinstance(choices, list) or len(choices) == 0:
-        msg = "No choices in DMR response"
+        msg = "No choices in LLM response"
         raise ValueError(msg)
 
     choice = choices[0]
@@ -125,7 +125,7 @@ def _parse_response(data: dict[str, object]) -> DMRResponse:
     finish_reason = str(choice.get("finish_reason", "stop"))
     raw_message = choice.get("message")
     if not isinstance(raw_message, dict):
-        msg = "No message in DMR response choice"
+        msg = "No message in LLM response choice"
         raise ValueError(msg)
 
     tool_calls = _parse_tool_calls(raw_message)
@@ -146,7 +146,7 @@ def _parse_response(data: dict[str, object]) -> DMRResponse:
     if not isinstance(usage, dict):
         usage = {}
 
-    return DMRResponse(
+    return LLMResponse(
         message=message,
         reasoning_content=reasoning,
         finish_reason=finish_reason,

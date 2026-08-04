@@ -164,7 +164,7 @@ def _handle_browser_click(
     return tools_controller.browser_click(
         context.project_id,
         description=description,
-        dmr_config=context.vision_config,
+        vision_config=context.vision_config,
     )
 
 
@@ -181,7 +181,7 @@ def _handle_browser_type(
         context.project_id,
         description=description,
         text=text,
-        dmr_config=context.vision_config,
+        vision_config=context.vision_config,
     )
 
 
@@ -196,7 +196,7 @@ def _handle_browser_hover(
     return tools_controller.browser_hover(
         context.project_id,
         description=description,
-        dmr_config=context.vision_config,
+        vision_config=context.vision_config,
     )
 
 
