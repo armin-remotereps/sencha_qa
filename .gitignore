@@ -56,7 +56,7 @@ plan.md
 .playwright-mcp/
 
 # OmniParser weights
-OmniParser/weights/
+controller_client/omniparser/weights/
 
 # Generated test reports
 *_TEST_REPORT.md
