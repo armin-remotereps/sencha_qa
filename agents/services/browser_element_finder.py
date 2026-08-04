@@ -5,8 +5,8 @@ import re
 from collections.abc import Sequence
 
 from agents.exceptions import ElementNotFoundError
-from agents.services.dmr_client import send_chat_completion
-from agents.types import ChatMessage, DMRConfig
+from agents.services.llm_client import send_chat_completion
+from agents.types import ChatMessage, LLMConfig
 from projects.services import controller_browser_get_elements
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ _CHUNK_SIZE = 25
 def find_element_index(
     project_id: int,
     description: str,
-    dmr_config: DMRConfig,
+    vision_config: LLMConfig,
 ) -> int:
     result = controller_browser_get_elements(project_id)
     element_list = result["content"]
@@ -30,17 +30,17 @@ def find_element_index(
         raise ElementNotFoundError("No interactive elements found on the page")
 
     if len(element_list) <= _ELEMENT_LIST_CHAR_BUDGET:
-        answer = _ask_ai_for_element(description, element_list, dmr_config)
+        answer = _ask_ai_for_element(description, element_list, vision_config)
         max_idx = _extract_max_index(element_list)
         return _parse_ai_response(answer, description, max_idx)
 
-    return _find_element_chunked(element_list, description, dmr_config)
+    return _find_element_chunked(element_list, description, vision_config)
 
 
 def _find_element_chunked(
     element_list: str,
     description: str,
-    dmr_config: DMRConfig,
+    vision_config: LLMConfig,
 ) -> int:
     lines = element_list.strip().split("\n")
     chunks = _split_into_chunks(lines, _CHUNK_SIZE)
@@ -49,7 +49,7 @@ def _find_element_chunked(
     for chunk in chunks:
         chunk_text = "\n".join(chunk)
         try:
-            answer = _ask_ai_for_element(description, chunk_text, dmr_config)
+            answer = _ask_ai_for_element(description, chunk_text, vision_config)
             max_idx = _extract_max_index(chunk_text)
             idx = _parse_ai_response(answer, description, max_idx)
             candidates.append(idx)
@@ -66,7 +66,7 @@ def _find_element_chunked(
         line for line in lines if _line_matches_any_index(line, candidates)
     ]
     candidate_text = "\n".join(candidate_lines)
-    answer = _ask_ai_for_element(description, candidate_text, dmr_config)
+    answer = _ask_ai_for_element(description, candidate_text, vision_config)
     max_idx = max(candidates)
     return _parse_ai_response(answer, description, max_idx)
 
@@ -84,7 +84,7 @@ def _extract_max_index(element_list: str) -> int:
 
 
 def _ask_ai_for_element(
-    description: str, element_list: str, dmr_config: DMRConfig
+    description: str, element_list: str, vision_config: LLMConfig
 ) -> str:
     prompt = (
         f"Find the element matching this description: '{description}'\n\n"
@@ -108,7 +108,7 @@ def _ask_ai_for_element(
         ChatMessage(role="user", content=prompt),
     )
 
-    response = send_chat_completion(dmr_config, messages)
+    response = send_chat_completion(vision_config, messages)
     answer = response.message.content
     if not isinstance(answer, str):
         raise ElementNotFoundError("AI returned no response for element finding")

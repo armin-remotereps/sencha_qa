@@ -5,12 +5,12 @@ import re
 from collections.abc import Callable
 
 from agents.exceptions import ElementNotFoundError
-from agents.services.dmr_client import send_chat_completion
+from agents.services.llm_client import send_chat_completion
 from agents.services.omniparser_client import parse_screenshot_remote
 from agents.types import (
     ChatMessage,
-    DMRConfig,
     ImageContent,
+    LLMConfig,
     PixelUIElement,
     TextContent,
 )
@@ -33,7 +33,7 @@ _ELEMENT_MATCHER_SYSTEM_PROMPT = (
 def find_element_coordinates_omniparser(
     project_id: int,
     description: str,
-    vision_config: DMRConfig,
+    vision_config: LLMConfig,
     *,
     on_screenshot: Callable[[str, str], None] | None = None,
 ) -> tuple[int, int]:
@@ -72,16 +72,16 @@ def _match_element_by_description(
     elements: tuple[PixelUIElement, ...],
     annotated_image_base64: str,
     description: str,
-    dmr_config: DMRConfig,
+    vision_config: LLMConfig,
 ) -> PixelUIElement:
     element_list = _build_element_list(elements)
     messages = _build_match_messages(element_list, annotated_image_base64, description)
 
-    response = send_chat_completion(dmr_config, messages)
+    response = send_chat_completion(vision_config, messages)
     answer = response.message.content
 
     if not isinstance(answer, str):
-        msg = f"DMR returned empty content when matching element: {description}"
+        msg = f"LLM returned empty content when matching element: {description}"
         raise ElementNotFoundError(msg)
 
     return _parse_match_response(answer.strip(), description, elements)
@@ -131,7 +131,7 @@ def _parse_match_response(
 
     match = re.search(r"(\d+)", answer)
     if match is None:
-        msg = f"Could not parse element index from DMR response: {answer}"
+        msg = f"Could not parse element index from LLM response: {answer}"
         raise ElementNotFoundError(msg)
 
     index = int(match.group(1))
@@ -141,7 +141,7 @@ def _parse_match_response(
             return el
 
     msg = (
-        f"DMR returned index {index} which does not match any detected "
+        f"LLM returned index {index} which does not match any detected "
         f"element (valid: {[e.index for e in elements]})"
     )
     raise ElementNotFoundError(msg)

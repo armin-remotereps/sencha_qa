@@ -44,7 +44,7 @@ pip install -r requirements.txt
 - **auto_tester/** — Django project config (settings, celery, asgi, urls)
 - **accounts/** — Custom user model (`CustomUser`, email-based auth, no username), login/logout views, `EmailBackend`
 - **projects/** — Core domain: Projects, TestCases, TestCaseUploads, TestRuns, TestRunTestCases, TestRunScreenshots. Contains views, services, tasks, models, consumers, forms, controller protocol
-- **agents/** — AI agent system: agent loop, tool definitions, tool registry, DMR client, vision QA, OmniParser integration, context/output summarizers, search tools
+- **agents/** — AI agent system: agent loop, tool definitions, tool registry, LLM client, vision QA, OmniParser integration, context/output summarizers, search tools
 - **dashboard/** — Landing/home page
 - **omniparser_service/** — Standalone FastAPI service for OmniParser screen parsing (GPU-enabled, separate Dockerfile). Runs independently on port 8080, called by the agents app via HTTP client (`agents/services/omniparser_client.py`)
 - **controller_client/** — Standalone Python client that runs on target machines. Connects to the server via WebSocket, receives action commands (click, type, screenshot, browser actions), and replies with results
@@ -68,9 +68,7 @@ Task routing is defined in `settings.CELERY_TASK_ROUTES`.
 
 **Controller Protocol**: The controller client on the target machine connects via WebSocket. The server dispatches actions (click, type, screenshot, browser commands) through the channel layer and waits for replies. All controller actions are in `projects/services.py` (functions prefixed `controller_*`).
 
-**AI Agent Loop** (`agents/services/agent_loop.py`): Observe-think-act loop that uses DMR (Docker Model Runner) or OpenAI for vision. Tools are registered via `tool_registry.py` and defined in `tool_definitions.py`. The agent takes screenshots, analyzes them, and executes actions on the remote machine.
-
-**Vision Backend**: Configurable via `VISION_BACKEND` setting — either `dmr` (Docker Model Runner, local) or `openai`.
+**AI Agent Loop** (`agents/services/agent_loop.py`): Observe-think-act loop that uses OpenAI for reasoning and vision. Tools are registered via `tool_registry.py` and defined in `tool_definitions.py`. The agent takes screenshots, analyzes them, and executes actions on the remote machine.
 
 **Authorization**: `@project_membership_required` decorator in `projects/decorators.py` handles both `@login_required` and project membership checks. Views receive a resolved `project` kwarg.
 

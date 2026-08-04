@@ -2,21 +2,21 @@ from __future__ import annotations
 
 import logging
 
-from agents.services.dmr_client import send_chat_completion
-from agents.types import ChatMessage, DMRConfig, ImageContent, TextContent
+from agents.services.llm_client import send_chat_completion
+from agents.types import ChatMessage, ImageContent, LLMConfig, TextContent
 
 logger = logging.getLogger(__name__)
 
 
 def answer_screenshot_question(
-    vision_config: DMRConfig,
+    vision_config: LLMConfig,
     image_base64: str,
     question: str,
 ) -> str:
     """Send a screenshot to the vision model with a specific question.
 
     Args:
-        vision_config: DMR configuration for the vision model.
+        vision_config: LLM configuration for the vision model.
         image_base64: Base64-encoded PNG screenshot.
         question: Question to ask about the screenshot.
 

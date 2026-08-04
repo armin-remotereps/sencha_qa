@@ -7,13 +7,12 @@ from typing import Literal
 
 from django.conf import settings
 
-from agents.services.dmr_client import send_chat_completion
-from agents.services.dmr_config import (
+from agents.services.llm_client import send_chat_completion
+from agents.services.llm_config import (
     build_orchestrator_config,
     build_sub_agent_config,
     build_vision_config,
 )
-from agents.services.dmr_model_manager import ensure_model_available, warm_up_model
 from agents.services.orchestrator_prompts import (
     build_evaluate_prompt,
     build_evaluate_system_prompt,
@@ -28,7 +27,7 @@ from agents.types import (
     AgentStopReason,
     CancellationCheck,
     ChatMessage,
-    DMRConfig,
+    LLMConfig,
     LogCallback,
     OrchestratorDecision,
     OrchestratorResult,
@@ -60,21 +59,19 @@ def run_orchestrator(
     project_prompt: str | None = None,
     cancellation_check: CancellationCheck | None = None,
 ) -> AgentResult:
-    orchestrator_dmr = build_orchestrator_config()
-    sub_agent_dmr = build_sub_agent_config()
-    vision_dmr = build_vision_config()
-
-    _ensure_models_ready(orchestrator_dmr, sub_agent_dmr, vision_dmr)
+    orchestrator_llm = build_orchestrator_config()
+    sub_agent_llm = build_sub_agent_config()
+    vision_llm = build_vision_config()
 
     _log(
         on_log,
-        f"[Orchestrator] Models: orchestrator={orchestrator_dmr.model}, "
-        f"sub_agent={sub_agent_dmr.model}, vision={vision_dmr.model}",
+        f"[Orchestrator] Models: orchestrator={orchestrator_llm.model}, "
+        f"sub_agent={sub_agent_llm.model}, vision={vision_llm.model}",
     )
     _log(on_log, "[Orchestrator] Planning: decomposing test case into sub-tasks...")
 
     sub_tasks = _plan_sub_tasks(
-        orchestrator_dmr, task_description, project_prompt=project_prompt, on_log=on_log
+        orchestrator_llm, task_description, project_prompt=project_prompt, on_log=on_log
     )
 
     _check_cancelled(cancellation_check, on_log)
@@ -85,11 +82,11 @@ def run_orchestrator(
     )
 
     sub_agent_config = _build_sub_agent_execution_config(
-        sub_agent_dmr, vision_dmr, on_log, on_screenshot, cancellation_check
+        sub_agent_llm, vision_llm, on_log, on_screenshot, cancellation_check
     )
 
     orchestrator_result = _execute_sub_tasks(
-        orchestrator_dmr=orchestrator_dmr,
+        orchestrator_llm=orchestrator_llm,
         sub_tasks=sub_tasks,
         project_id=project_id,
         sub_agent_config=sub_agent_config,
@@ -108,30 +105,16 @@ def run_orchestrator(
     return _to_agent_result(orchestrator_result)
 
 
-def _ensure_models_ready(
-    orchestrator_dmr: DMRConfig,
-    sub_agent_dmr: DMRConfig,
-    vision_dmr: DMRConfig,
-) -> None:
-    ensure_model_available(orchestrator_dmr)
-    ensure_model_available(sub_agent_dmr)
-    ensure_model_available(vision_dmr)
-
-    warm_up_model(orchestrator_dmr)
-    warm_up_model(sub_agent_dmr)
-    warm_up_model(vision_dmr)
-
-
 def _build_sub_agent_execution_config(
-    sub_agent_dmr: DMRConfig,
-    vision_dmr: DMRConfig,
+    sub_agent_llm: LLMConfig,
+    vision_llm: LLMConfig,
     on_log: LogCallback | None,
     on_screenshot: ScreenshotCallback | None,
     cancellation_check: CancellationCheck | None,
 ) -> AgentConfig:
     return AgentConfig(
-        dmr=sub_agent_dmr,
-        vision_dmr=vision_dmr,
+        llm=sub_agent_llm,
+        vision_llm=vision_llm,
         max_iterations=settings.SUB_AGENT_MAX_ITERATIONS,
         timeout_seconds=settings.SUB_AGENT_TIMEOUT_SECONDS,
         on_log=on_log,
@@ -156,7 +139,7 @@ def _check_cancelled(
 
 
 def _plan_sub_tasks(
-    orchestrator_dmr: DMRConfig,
+    orchestrator_llm: LLMConfig,
     task_description: str,
     *,
     project_prompt: str | None = None,
@@ -168,7 +151,7 @@ def _plan_sub_tasks(
         ChatMessage(role="user", content=task_description),
     )
 
-    response = send_chat_completion(orchestrator_dmr, messages)
+    response = send_chat_completion(orchestrator_llm, messages)
     raw_text = _extract_text(response.message)
 
     parsed = _parse_json_response(raw_text)
@@ -199,7 +182,7 @@ def _plan_sub_tasks(
 
 def _execute_sub_tasks(
     *,
-    orchestrator_dmr: DMRConfig,
+    orchestrator_llm: LLMConfig,
     sub_tasks: tuple[SubTask, ...],
     project_id: int,
     sub_agent_config: AgentConfig,
@@ -255,7 +238,7 @@ def _execute_sub_tasks(
 
         remaining = total - step_num
         decision = _evaluate_failure(
-            orchestrator_dmr=orchestrator_dmr,
+            orchestrator_llm=orchestrator_llm,
             evaluate_messages=evaluate_messages,
             sub_task=sub_task,
             sub_task_result=result,
@@ -293,7 +276,7 @@ def _execute_sub_tasks(
         state_lines.append(f"Step {step_num}: FAILED (stopped) — {result.summary}")
         break
 
-    return _build_verdict(orchestrator_dmr, results, total_iterations)
+    return _build_verdict(orchestrator_llm, results, total_iterations)
 
 
 def _attempt_recovery(
@@ -355,7 +338,7 @@ def _attempt_recovery(
 
 
 def _build_verdict(
-    orchestrator_dmr: DMRConfig,
+    orchestrator_llm: LLMConfig,
     results: list[SubTaskResult],
     total_iterations: int,
 ) -> OrchestratorResult:
@@ -367,7 +350,7 @@ def _build_verdict(
         ChatMessage(role="system", content="Summarize the test case execution."),
         ChatMessage(role="user", content=verdict_prompt),
     )
-    verdict_response = send_chat_completion(orchestrator_dmr, verdict_messages)
+    verdict_response = send_chat_completion(orchestrator_llm, verdict_messages)
     summary = _extract_text(verdict_response.message)
 
     return OrchestratorResult(
@@ -380,7 +363,7 @@ def _build_verdict(
 
 def _evaluate_failure(
     *,
-    orchestrator_dmr: DMRConfig,
+    orchestrator_llm: LLMConfig,
     evaluate_messages: list[ChatMessage],
     sub_task: SubTask,
     sub_task_result: SubTaskResult,
@@ -393,7 +376,7 @@ def _evaluate_failure(
     )
     evaluate_messages.append(ChatMessage(role="user", content=prompt))
 
-    response = send_chat_completion(orchestrator_dmr, tuple(evaluate_messages))
+    response = send_chat_completion(orchestrator_llm, tuple(evaluate_messages))
     raw_text = _extract_text(response.message)
     evaluate_messages.append(ChatMessage(role="assistant", content=raw_text))
 

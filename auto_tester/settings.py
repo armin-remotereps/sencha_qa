@@ -209,15 +209,6 @@ LOGGING = {
     },
 }
 
-# Docker Model Runner
-DMR_HOST: str = config("DMR_HOST", default="localhost", cast=str)
-DMR_PORT: str = config("DMR_PORT", default="12434", cast=str)
-DMR_MODEL: str = config("DMR_MODEL", default="ai/mistral", cast=str)
-DMR_VISION_MODEL: str = config("DMR_VISION_MODEL", default="ai/qwen3-vl", cast=str)
-DMR_TEMPERATURE: float = config("DMR_TEMPERATURE", default=0.1, cast=float)
-DMR_MAX_TOKENS: int = config("DMR_MAX_TOKENS", default=4096, cast=int)
-DMR_REQUEST_TIMEOUT: int = config("DMR_REQUEST_TIMEOUT", default=600, cast=int)
-
 # OpenAI API (shared credentials for all OpenAI-routed calls)
 OPENAI_API_KEY: str = config("OPENAI_API_KEY", default="", cast=str)
 OPENAI_BASE_URL: str = config(
@@ -230,7 +221,7 @@ OPENAI_TEMPERATURE: float = config("OPENAI_TEMPERATURE", default=0.1, cast=float
 OPENAI_MAX_TOKENS: int = config("OPENAI_MAX_TOKENS", default=4096, cast=int)
 OPENAI_REQUEST_TIMEOUT: int = config("OPENAI_REQUEST_TIMEOUT", default=120, cast=int)
 
-# Per-role OpenAI models (used when INFERENCE_BACKEND=openai)
+# Per-role OpenAI models
 OPENAI_AGENT_MODEL: str = config("OPENAI_AGENT_MODEL", default="gpt-4o", cast=str)
 OPENAI_ORCHESTRATOR_MODEL: str = config(
     "OPENAI_ORCHESTRATOR_MODEL", default="gpt-4o", cast=str
@@ -244,12 +235,6 @@ OPENAI_SUMMARIZER_MODEL: str = config(
 OPENAI_REFINER_MODEL: str = config(
     "OPENAI_REFINER_MODEL", default="gpt-4o-mini", cast=str
 )
-
-# Vision Backend: "dmr" or "openai"
-VISION_BACKEND: str = config("VISION_BACKEND", default="dmr", cast=str)
-
-# Inference Backend: "dmr" or "openai" (routes all non-vision roles)
-INFERENCE_BACKEND: str = config("INFERENCE_BACKEND", default="dmr", cast=str)
 
 # Agent
 AGENT_MAX_ITERATIONS: int = config("AGENT_MAX_ITERATIONS", default=30, cast=int)
@@ -287,12 +272,6 @@ INTERACTIVE_CMD_TIMEOUT_SECONDS: int = config(
 CLEANUP_TIMEOUT_SECONDS: int = config("CLEANUP_TIMEOUT_SECONDS", default=30, cast=int)
 
 # Output Summarizer
-DMR_SUMMARIZER_MODEL: str = config(
-    "DMR_SUMMARIZER_MODEL", default="ai/mistral", cast=str
-)
-DMR_PROMPT_REFINER_MODEL: str = config(
-    "DMR_PROMPT_REFINER_MODEL", default=DMR_MODEL, cast=str
-)
 OUTPUT_SUMMARIZE_THRESHOLD: int = config(
     "OUTPUT_SUMMARIZE_THRESHOLD", default=2000, cast=int
 )
@@ -312,9 +291,6 @@ CONTEXT_SUMMARIZE_CHUNK_SIZE: int = config(
 )
 
 # Orchestrator (sub-agent architecture)
-ORCHESTRATOR_MODEL: str = config(
-    "ORCHESTRATOR_MODEL", default="ai/qwen3:32B-Q8_K_XL", cast=str
-)
 ORCHESTRATOR_MAX_TOKENS: int = config("ORCHESTRATOR_MAX_TOKENS", default=4096, cast=int)
 ORCHESTRATOR_TEMPERATURE: float = config(
     "ORCHESTRATOR_TEMPERATURE", default=0.1, cast=float
@@ -327,7 +303,6 @@ ORCHESTRATOR_MAX_RECOVERY_ATTEMPTS: int = config(
 )
 
 # Sub-Agent
-SUB_AGENT_MODEL: str = config("SUB_AGENT_MODEL", default="ai/mistral", cast=str)
 SUB_AGENT_MAX_TOKENS: int = config("SUB_AGENT_MAX_TOKENS", default=2048, cast=int)
 SUB_AGENT_TEMPERATURE: float = config("SUB_AGENT_TEMPERATURE", default=0.1, cast=float)
 SUB_AGENT_MAX_ITERATIONS: int = config("SUB_AGENT_MAX_ITERATIONS", default=15, cast=int)

@@ -5,7 +5,7 @@ import re
 from typing import Literal
 
 from agents.services.agent_loop import _run_agent_loop
-from agents.services.dmr_config import build_summarizer_config
+from agents.services.llm_config import build_summarizer_config
 from agents.services.sub_agent_prompts import build_sub_agent_system_prompt
 from agents.types import (
     AgentConfig,
@@ -46,7 +46,7 @@ def run_sub_agent(
     context = ToolContext(
         project_id=project_id,
         summarizer_config=summarizer_config,
-        vision_config=config.vision_dmr,
+        vision_config=config.vision_llm,
         on_screenshot=config.on_screenshot,
         on_log=config.on_log,
     )

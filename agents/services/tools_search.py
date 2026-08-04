@@ -8,9 +8,9 @@ import httpx
 import trafilatura
 from django.conf import settings
 
-from agents.services.dmr_client import send_chat_completion
+from agents.services.llm_client import send_chat_completion
 from agents.services.tool_utils import safe_tool_call
-from agents.types import ChatMessage, DMRConfig, ToolResult
+from agents.types import ChatMessage, LLMConfig, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ _PAGE_FETCH_USER_AGENT: str = (
 )
 
 
-def web_search(*, query: str, summarizer_config: DMRConfig | None = None) -> ToolResult:
+def web_search(*, query: str, summarizer_config: LLMConfig | None = None) -> ToolResult:
     """Execute a web search via SearXNG and optionally summarize with AI.
 
     When summarizer_config is provided the result contains both an AI summary
@@ -134,7 +134,7 @@ def _format_results(
 def _summarize_results(
     query: str,
     formatted_results: str,
-    config: DMRConfig,
+    config: LLMConfig,
 ) -> str:
     user_prompt = f"Search query: {query}\n\nSearch results:\n{formatted_results}"
     messages = (
@@ -152,7 +152,7 @@ def _build_result(content: str) -> ToolResult:
     return ToolResult(tool_call_id="", content=content, is_error=False)
 
 
-def _attempt_summarization(query: str, formatted: str, config: DMRConfig) -> ToolResult:
+def _attempt_summarization(query: str, formatted: str, config: LLMConfig) -> ToolResult:
     try:
         summary = _summarize_results(query, formatted, config)
         combined = (
@@ -168,7 +168,7 @@ def _attempt_summarization(query: str, formatted: str, config: DMRConfig) -> Too
         return _build_result(formatted)
 
 
-def _execute_search(query: str, summarizer_config: DMRConfig | None) -> ToolResult:
+def _execute_search(query: str, summarizer_config: LLMConfig | None) -> ToolResult:
     results = _fetch_searxng_results(query)
 
     if not results:

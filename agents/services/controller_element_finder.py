@@ -8,9 +8,9 @@ from agents.exceptions import ElementNotFoundError
 from agents.services.controller_omniparser_element_finder import (
     find_element_coordinates_omniparser,
 )
-from agents.services.dmr_client import send_chat_completion
+from agents.services.llm_client import send_chat_completion
 from agents.services.omniparser_client import is_omniparser_configured
-from agents.types import ChatMessage, DMRConfig, ImageContent, TextContent
+from agents.types import ChatMessage, ImageContent, LLMConfig, TextContent
 from projects.services import controller_screenshot
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 def find_element_coordinates(
     project_id: int,
     description: str,
-    vision_config: DMRConfig,
+    vision_config: LLMConfig,
     *,
     on_screenshot: Callable[[str, str], None] | None = None,
 ) -> tuple[int, int]:
@@ -38,7 +38,7 @@ def find_element_coordinates(
 def _query_vision_model(
     image_base64: str,
     description: str,
-    vision_config: DMRConfig,
+    vision_config: LLMConfig,
 ) -> tuple[int, int]:
     messages = _build_locator_messages(image_base64, description)
     answer = _send_locator_query(vision_config, messages, description)
@@ -72,7 +72,7 @@ def _build_locator_messages(
 
 
 def _send_locator_query(
-    vision_config: DMRConfig,
+    vision_config: LLMConfig,
     messages: tuple[ChatMessage, ...],
     description: str,
 ) -> str:

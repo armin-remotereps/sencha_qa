@@ -77,18 +77,16 @@ class ChatMessage:
 
 
 @dataclass(frozen=True)
-class DMRConfig:
-    host: str
-    port: str
+class LLMConfig:
     model: str
-    temperature: float = 0.9
-    max_tokens: int = 4096
-    api_key: str | None = None
-    base_url: str | None = None
+    api_key: str
+    endpoint_url: str
+    temperature: float
+    max_tokens: int
 
 
 @dataclass(frozen=True)
-class DMRResponse:
+class LLMResponse:
     message: ChatMessage
     finish_reason: str
     usage_prompt_tokens: int
@@ -110,8 +108,8 @@ class ScreenshotCallback(Protocol):
 
 @dataclass(frozen=True)
 class AgentConfig:
-    dmr: DMRConfig
-    vision_dmr: DMRConfig | None = None
+    llm: LLMConfig
+    vision_llm: LLMConfig | None = None
     max_iterations: int = 30
     timeout_seconds: int = 900
     on_log: LogCallback | None = None
@@ -159,8 +157,8 @@ class OrchestratorResult:
 @dataclass(frozen=True)
 class ToolContext:
     project_id: int
-    summarizer_config: DMRConfig | None = None
-    vision_config: DMRConfig | None = None
+    summarizer_config: LLMConfig | None = None
+    vision_config: LLMConfig | None = None
     on_screenshot: ScreenshotCallback | None = None
     on_log: LogCallback | None = None
 
