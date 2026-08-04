@@ -43,6 +43,8 @@ class MessageType(StrEnum):
     LAUNCH_APP = "launch_app"
     CHECK_APP_INSTALLED = "check_app_installed"
     CLEANUP_ENVIRONMENT = "cleanup_environment"
+    FIND_ELEMENT = "find_element"
+    FIND_ELEMENT_RESULT = "find_element_result"
 
 
 class MouseButton(StrEnum):
@@ -62,6 +64,7 @@ class ErrorCode(StrEnum):
     UNKNOWN_COMMAND = "UNKNOWN_COMMAND"
     SCREENSHOT_FAILED = "SCREENSHOT_FAILED"
     TIMEOUT = "TIMEOUT"
+    FIND_ELEMENT_FAILED = "FIND_ELEMENT_FAILED"
 
 
 @dataclass(frozen=True)
@@ -229,10 +232,46 @@ class CheckAppInstalledPayload:
     app_name: str
 
 
+@dataclass(frozen=True)
+class FindElementPayload:
+    box_threshold: float | None
+    iou_threshold: float | None
+
+
+@dataclass(frozen=True)
+class PixelBBoxPayload:
+    x_min: int
+    y_min: int
+    x_max: int
+    y_max: int
+
+
+@dataclass(frozen=True)
+class PixelElementPayload:
+    index: int
+    type: str
+    content: str
+    bbox: PixelBBoxPayload
+    center_x: int
+    center_y: int
+    interactivity: bool
+
+
+@dataclass(frozen=True)
+class FindElementResultPayload:
+    success: bool
+    annotated_image_base64: str
+    elements: tuple[PixelElementPayload, ...]
+    image_width: int
+    image_height: int
+
+
 def serialize_message(
     message_type: MessageType,
     request_id: str | None = None,
-    **payload: str | int | float | bool | dict[str, str | int] | None,
+    # object, not a narrower union: find_element results carry nested
+    # lists of element dicts, which the original union couldn't express.
+    **payload: object,
 ) -> str:
     message: dict[str, object] = {
         "type": message_type,
@@ -395,6 +434,15 @@ def _extract_optional_int(data: dict[str, object], field: str) -> int | None:
     return value
 
 
+def _extract_optional_number(data: dict[str, object], field: str) -> float | None:
+    value = data.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, (int, float)):
+        raise ProtocolError(f"Invalid '{field}': expected number or null")
+    return float(value)
+
+
 def parse_start_interactive_cmd_payload(
     data: dict[str, object],
 ) -> StartInteractiveCmdPayload:
@@ -435,4 +483,11 @@ def parse_check_app_installed_payload(
 ) -> CheckAppInstalledPayload:
     return CheckAppInstalledPayload(
         app_name=_extract_str(data, "app_name"),
+    )
+
+
+def parse_find_element_payload(data: dict[str, object]) -> FindElementPayload:
+    return FindElementPayload(
+        box_threshold=_extract_optional_number(data, "box_threshold"),
+        iou_threshold=_extract_optional_number(data, "iou_threshold"),
     )
