@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import logging
 from collections.abc import Callable, Coroutine
 from typing import Any, TypeAlias
@@ -37,6 +38,7 @@ from controller_client.executor import (
     execute_type_text,
     execute_wait_for_command,
 )
+from controller_client.omniparser_executor import execute_find_element
 from controller_client.interactive_session import InteractiveSessionManager
 from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import (
@@ -44,6 +46,7 @@ from controller_client.protocol import (
     BrowserContentResultPayload,
     CommandResultPayload,
     ErrorCode,
+    FindElementResultPayload,
     InteractiveOutputPayload,
     MessageType,
     ScreenshotResponsePayload,
@@ -57,6 +60,7 @@ from controller_client.protocol import (
     parse_check_app_installed_payload,
     parse_click_payload,
     parse_drag_payload,
+    parse_find_element_payload,
     parse_handshake_ack_payload,
     parse_hover_payload,
     parse_key_press_payload,
@@ -122,6 +126,7 @@ class ControllerClient:
             MessageType.LAUNCH_APP: self._handle_launch_app,
             MessageType.CHECK_APP_INSTALLED: self._handle_check_app_installed,
             MessageType.CLEANUP_ENVIRONMENT: self._handle_cleanup_environment,
+            MessageType.FIND_ELEMENT: self._handle_find_element,
         }
         self._handshake_event = asyncio.Event()
 
@@ -245,6 +250,21 @@ class ControllerClient:
         )
         await self._send_message(message)
 
+    async def _send_find_element_result(
+        self, request_id: str, result: FindElementResultPayload
+    ) -> None:
+        elements_payload = [dataclasses.asdict(el) for el in result.elements]
+        message = serialize_message(
+            MessageType.FIND_ELEMENT_RESULT,
+            request_id=request_id,
+            success=result.success,
+            annotated_image_base64=result.annotated_image_base64,
+            elements=elements_payload,
+            image_width=result.image_width,
+            image_height=result.image_height,
+        )
+        await self._send_message(message)
+
     async def _send_error(
         self, request_id: str, code: ErrorCode, message: str, details: str = ""
     ) -> None:
@@ -316,6 +336,16 @@ class ControllerClient:
             await self._send_screenshot_response(request_id, result)
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.SCREENSHOT_FAILED, str(e))
+
+    async def _handle_find_element(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_find_element_payload(data)
+        try:
+            result = await asyncio.to_thread(execute_find_element, payload)
+            await self._send_find_element_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.FIND_ELEMENT_FAILED, str(e))
 
     async def _handle_run_command(
         self, request_id: str, data: dict[str, object]
