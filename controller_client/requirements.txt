@@ -11,6 +11,7 @@ mypy~=1.15.0
 black~=25.1.0
 isort~=6.0.1
 pexpect~=4.9.0
+types-pexpect~=4.9.0.20260127
 torch~=2.10.0
 torchvision~=0.25.0
 ultralytics==8.3.70
