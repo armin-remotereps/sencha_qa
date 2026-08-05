@@ -31,6 +31,9 @@ from agents.types import (
     AgentCancelledError,
     AgentResult,
     AgentStopReason,
+    PixelBBox,
+    PixelParseResult,
+    PixelUIElement,
     ScreenshotCallback,
 )
 from auto_tester.celery import app as celery_app
@@ -466,6 +469,51 @@ def controller_screenshot(
         width=reply.get("width", 0),
         height=reply.get("height", 0),
         format=reply.get("format", "png"),
+    )
+
+
+def _build_pixel_element(data: dict[str, Any]) -> PixelUIElement:
+    bbox_data: dict[str, Any] = data.get("bbox", {})
+    return PixelUIElement(
+        index=data.get("index", 0),
+        type=data.get("type", "unknown"),
+        content=data.get("content", ""),
+        bbox=PixelBBox(
+            x_min=bbox_data.get("x_min", 0),
+            y_min=bbox_data.get("y_min", 0),
+            x_max=bbox_data.get("x_max", 0),
+            y_max=bbox_data.get("y_max", 0),
+        ),
+        center_x=data.get("center_x", 0),
+        center_y=data.get("center_y", 0),
+        interactivity=data.get("interactivity", False),
+    )
+
+
+def controller_find_elements(
+    project_id: int,
+    box_threshold: float | None = None,
+    iou_threshold: float | None = None,
+    timeout: float = 120.0,
+) -> PixelParseResult:
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.find_element",
+        timeout,
+        box_threshold=box_threshold,
+        iou_threshold=iou_threshold,
+    )
+    if not reply.get("success", False):
+        raise ControllerActionError("Controller failed to find elements on screen")
+
+    elements_data: list[dict[str, Any]] = reply.get("elements", [])
+    elements = tuple(_build_pixel_element(el) for el in elements_data)
+
+    return PixelParseResult(
+        annotated_image=reply.get("annotated_image_base64", ""),
+        elements=elements,
+        image_width=reply.get("image_width", 0),
+        image_height=reply.get("image_height", 0),
     )
 
 
