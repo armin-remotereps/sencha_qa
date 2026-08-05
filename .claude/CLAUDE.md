@@ -20,10 +20,17 @@ celery -A auto_tester beat -l info --scheduler django_celery_beat.schedulers:Dat
 
 # Type checking (strict mode)
 mypy .                                  # runs with strict=True, excludes venv|migrations|controller_client
+controller_client/.venv/bin/mypy --config-file controller_client/setup.cfg controller_client/  # separate venv/config
 
 # Formatting
 black .
 isort .
+
+# Unit tests — always scope Django's test command to real Django apps (bare
+# `manage.py test` walks the whole project tree by default and will also try
+# to import controller_client/tests/, which needs its own separate venv)
+python manage.py test agents projects accounts dashboard
+controller_client/.venv/bin/python -m pytest controller_client/tests/
 
 # Infrastructure
 docker compose up db redis searxng -d   # minimal local services
