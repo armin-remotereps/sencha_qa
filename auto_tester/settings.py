@@ -310,9 +310,3 @@ SUB_AGENT_TIMEOUT_SECONDS: int = config(
     "SUB_AGENT_TIMEOUT_SECONDS", default=180, cast=int
 )
 
-# OmniParser (client-side only — server runs as standalone FastAPI service)
-OMNIPARSER_URL: str = config("OMNIPARSER_URL", default="", cast=str)
-OMNIPARSER_API_KEY: str = config("OMNIPARSER_API_KEY", default="", cast=str)
-OMNIPARSER_REQUEST_TIMEOUT: int = config(
-    "OMNIPARSER_REQUEST_TIMEOUT", default=600, cast=int
-)
