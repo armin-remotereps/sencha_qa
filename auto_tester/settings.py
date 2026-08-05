@@ -149,6 +149,7 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "projects.tasks.process_xml_upload": {"queue": "upload"},
     "projects.tasks.execute_test_run_case": {"queue": "execution"},
+    "projects.tasks.refine_project_prompt_task": {"queue": "upload"},
 }
 
 # Channels
