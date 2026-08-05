@@ -100,7 +100,7 @@ Project has: members (M2M CustomUser), tags (M2M Tag), api_key, agent_connected
 
 ## Testing
 
-**E2E only — no unit tests, no pytest, no mocking.** All testing is done by dedicated agents (`nightmare-tester` for UI, `logic-tester` for backend) against the real running system. Do not write pytest/unittest files.
+Verify new logic with unit tests (pytest / Django's test framework) rather than standing up the real running system. The user runs end-to-end/manual verification themselves — don't dispatch `nightmare-tester`/`logic-tester` against the live system unless explicitly asked.
 
 ## Parallel Development
 
