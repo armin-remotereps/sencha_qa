@@ -30,6 +30,7 @@ from projects.controller_protocol import (
     ClickActionEvent,
     ControllerMessageBuilder,
     DragActionEvent,
+    FindElementActionEvent,
     HoverActionEvent,
     KeyPressActionEvent,
     LaunchAppActionEvent,
@@ -119,6 +120,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             "command_result": self._reply_tracker.send_command_result,
             "browser_content_result": self._reply_tracker.send_browser_content_result,
             "interactive_output": self._reply_tracker.send_interactive_output,
+            "find_element_result": self._reply_tracker.send_find_element_result,
         }
 
         handler = handlers.get(msg_type)
@@ -273,6 +275,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     async def controller_cleanup_environment(
         self, event: CleanupEnvironmentActionEvent
     ) -> None:
+        await self._forward_action(event)
+
+    async def controller_find_element(self, event: FindElementActionEvent) -> None:
         await self._forward_action(event)
 
     async def _send_handshake_ack(

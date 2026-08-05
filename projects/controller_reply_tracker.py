@@ -157,3 +157,28 @@ class ReplyTracker:
             },
         )
         return True
+
+    async def send_find_element_result(
+        self, request_id: str, data: dict[str, Any]
+    ) -> bool:
+        reply_channel = self.pop_reply_channel(request_id)
+        if not reply_channel:
+            logger.warning(
+                "Received find_element_result with unknown request_id: %s",
+                request_id,
+            )
+            return False
+
+        await self._channel_layer.send(
+            reply_channel,
+            {
+                "type": "find_element.result",
+                "request_id": request_id,
+                "success": data.get("success", False),
+                "annotated_image_base64": data.get("annotated_image_base64", ""),
+                "elements": data.get("elements", []),
+                "image_width": data.get("image_width", 0),
+                "image_height": data.get("image_height", 0),
+            },
+        )
+        return True

@@ -119,6 +119,11 @@ class CleanupEnvironmentActionEvent(BaseActionEvent):
     pass
 
 
+class FindElementActionEvent(BaseActionEvent):
+    box_threshold: float | None
+    iou_threshold: float | None
+
+
 class ActionTypeRegistry:
     _ACTION_TYPE_MAP: Final[dict[str, MessageType]] = {
         "controller.click": MessageType.CLICK,
@@ -145,6 +150,7 @@ class ActionTypeRegistry:
         "controller.launch_app": MessageType.LAUNCH_APP,
         "controller.check_app_installed": MessageType.CHECK_APP_INSTALLED,
         "controller.cleanup_environment": MessageType.CLEANUP_ENVIRONMENT,
+        "controller.find_element": MessageType.FIND_ELEMENT,
     }
 
     _PAYLOAD_KEYS: Final[dict[str, tuple[str, ...]]] = {
@@ -179,6 +185,7 @@ class ActionTypeRegistry:
         "controller.launch_app": ("app_name",),
         "controller.check_app_installed": ("app_name",),
         "controller.cleanup_environment": (),
+        "controller.find_element": ("box_threshold", "iou_threshold"),
     }
 
     @classmethod
