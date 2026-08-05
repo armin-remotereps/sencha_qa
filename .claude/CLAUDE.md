@@ -19,7 +19,7 @@ celery -A auto_tester worker -Q execution -l info -n execution@%h
 celery -A auto_tester beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
 
 # Type checking (strict mode)
-mypy .                                  # runs with strict=True, excludes venv|migrations|OmniParser
+mypy .                                  # runs with strict=True, excludes venv|migrations|controller_client
 
 # Formatting
 black .
@@ -46,8 +46,7 @@ pip install -r requirements.txt
 - **projects/** — Core domain: Projects, TestCases, TestCaseUploads, TestRuns, TestRunTestCases, TestRunScreenshots. Contains views, services, tasks, models, consumers, forms, controller protocol
 - **agents/** — AI agent system: agent loop, tool definitions, tool registry, LLM client, vision QA, OmniParser integration, context/output summarizers, search tools
 - **dashboard/** — Landing/home page
-- **omniparser_service/** — Standalone FastAPI service for OmniParser screen parsing (GPU-enabled, separate Dockerfile). Runs independently on port 8080, called by the agents app via HTTP client (`agents/services/omniparser_client.py`)
-- **controller_client/** — Standalone Python client that runs on target machines. Connects to the server via WebSocket, receives action commands (click, type, screenshot, browser actions), and replies with results
+- **controller_client/** — Standalone Python client that runs on target machines. Connects to the server via WebSocket, receives action commands (click, type, screenshot, browser actions), and replies with results. Also runs OmniParser locally in-process (own venv/dependencies, own strict mypy config) to parse screenshots for element-finding — no central OmniParser service exists; the server dispatches a `find_element` action to the controller over the same WebSocket connection
 
 ### Key Patterns
 

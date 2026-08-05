@@ -4,13 +4,13 @@ repos:
     hooks:
       - id: black
         language_version: python3.13
-        exclude: OmniParser/
+        exclude: controller_client/omniparser/util/
 
   - repo: https://github.com/PyCQA/isort
     rev: 7.0.0
     hooks:
       - id: isort
-        exclude: OmniParser/
+        exclude: controller_client/omniparser/util/
 
   - repo: local
     hooks:
@@ -20,4 +20,4 @@ repos:
         language: system
         types: [python]
         args: ["--config-file", "setup.cfg"]
-        exclude: migrations/|OmniParser/
+        exclude: migrations/|controller_client/
