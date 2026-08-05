@@ -71,7 +71,7 @@ def _run_ocr(image: Any) -> tuple[Any, Any]:
     # has inserted the vendored package root onto sys.path. Whether mypy
     # itself can statically resolve "util" varies by environment, so the
     # ignore also tolerates being unused rather than failing either way.
-    from util.utils import check_ocr_box  # type: ignore[import-not-found, unused-ignore]
+    from util.utils import check_ocr_box  # type: ignore[import-not-found, unused-ignore]  # isort: skip
 
     (text, ocr_bbox), _ = check_ocr_box(
         image,
@@ -94,7 +94,7 @@ def _run_som_labeling(
     iou_threshold: float,
 ) -> tuple[str, list[_RawElementDict]]:
     # Deferred for the same sys.path reason as _run_ocr above.
-    from util.utils import get_som_labeled_img  # type: ignore[import-not-found, unused-ignore]
+    from util.utils import get_som_labeled_img  # type: ignore[import-not-found, unused-ignore]  # isort: skip
 
     annotated_img, _label_coords, parsed_content_list = get_som_labeled_img(
         image,
@@ -153,16 +153,28 @@ class _OmniParserModel:
                 return
             _ensure_omniparser_on_path()
             # Deferred for the same sys.path reason as _run_ocr above.
-            from util.omniparser import Omniparser  # type: ignore[import-not-found, unused-ignore]
+            from util.omniparser import Omniparser  # type: ignore[import-not-found, unused-ignore]  # isort: skip
 
             self._device = _detect_device()
             weights_dir = omniparser_weights_dir()
+            som_model_path = Path(weights_dir) / "icon_detect" / "model.pt"
+            caption_model_path = Path(weights_dir) / "icon_caption_florence"
+            # A missing weights path here isn't just a normal file-not-found:
+            # the vendored YOLO loader treats an unrecognized local path as a
+            # Hugging Face Hub model ID and silently starts downloading it
+            # instead of raising, so this needs to be caught explicitly.
+            if not som_model_path.is_file() or not caption_model_path.is_dir():
+                msg = (
+                    f"OmniParser weights not found at {weights_dir!r} "
+                    f"(expected {som_model_path} and {caption_model_path}). "
+                    "Run controller_client/scripts/setup.sh (or the weights "
+                    "download step) before using find_element."
+                )
+                raise ExecutionError(msg)
             config = {
-                "som_model_path": str(Path(weights_dir) / "icon_detect" / "model.pt"),
+                "som_model_path": str(som_model_path),
                 "caption_model_name": "florence2",
-                "caption_model_path": str(
-                    Path(weights_dir) / "icon_caption_florence"
-                ),
+                "caption_model_path": str(caption_model_path),
                 "BOX_TRESHOLD": omniparser_box_threshold(),
                 "device": self._device,
             }
