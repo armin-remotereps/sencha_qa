@@ -5,15 +5,22 @@ import re
 from collections.abc import Callable
 
 from agents.exceptions import ElementNotFoundError
-from agents.services.controller_omniparser_element_finder import (
-    find_element_coordinates_omniparser,
-)
 from agents.services.llm_client import send_chat_completion
-from agents.services.omniparser_client import is_omniparser_configured
-from agents.types import ChatMessage, ImageContent, LLMConfig, TextContent
-from projects.services import controller_screenshot
+from agents.types import ChatMessage, ImageContent, LLMConfig, PixelUIElement, TextContent
+from projects.services import controller_find_elements
 
 logger = logging.getLogger(__name__)
+
+_ELEMENT_MATCHER_SYSTEM_PROMPT = (
+    "You are a UI element matcher. You will be given an annotated screenshot "
+    "with numbered bounding boxes around detected UI elements, along with a "
+    "text list of those elements and a description of the element the user "
+    "wants to interact with.\n\n"
+    "Use BOTH the annotated image and the element list to find the best match.\n\n"
+    "Reply with ONLY the number of the matching element.\n"
+    "For example: 3\n\n"
+    "If no element matches the description, reply with: NOT_FOUND"
+)
 
 
 def find_element_coordinates(
@@ -23,84 +30,108 @@ def find_element_coordinates(
     *,
     on_screenshot: Callable[[str, str], None] | None = None,
 ) -> tuple[int, int]:
-    if is_omniparser_configured():
-        return find_element_coordinates_omniparser(
-            project_id, description, vision_config, on_screenshot=on_screenshot
-        )
+    parse_result = controller_find_elements(project_id)
 
-    result = controller_screenshot(project_id)
-    image_base64 = result["image_base64"]
     if on_screenshot is not None:
-        on_screenshot(image_base64, "controller_element_finder")
-    return _query_vision_model(image_base64, description, vision_config)
+        on_screenshot(parse_result.annotated_image, "controller_omniparser")
+
+    if not parse_result.elements:
+        msg = f"OmniParser found no UI elements on screen for: {description}"
+        raise ElementNotFoundError(msg)
+
+    matched = _match_element_by_description(
+        parse_result.elements,
+        parse_result.annotated_image,
+        description,
+        vision_config,
+    )
+
+    logger.debug(
+        "OmniParser matched element [%d] '%s' at (%d, %d) for '%s'",
+        matched.index,
+        matched.content,
+        matched.center_x,
+        matched.center_y,
+        description,
+    )
+
+    return matched.center_x, matched.center_y
 
 
-def _query_vision_model(
-    image_base64: str,
+def _match_element_by_description(
+    elements: tuple[PixelUIElement, ...],
+    annotated_image_base64: str,
     description: str,
     vision_config: LLMConfig,
-) -> tuple[int, int]:
-    messages = _build_locator_messages(image_base64, description)
-    answer = _send_locator_query(vision_config, messages, description)
-    return _parse_coordinates(answer, description)
+) -> PixelUIElement:
+    element_list = _build_element_list(elements)
+    messages = _build_match_messages(element_list, annotated_image_base64, description)
+
+    response = send_chat_completion(vision_config, messages)
+    answer = response.message.content
+
+    if not isinstance(answer, str):
+        msg = f"LLM returned empty content when matching element: {description}"
+        raise ElementNotFoundError(msg)
+
+    return _parse_match_response(answer.strip(), description, elements)
 
 
-def _build_locator_messages(
-    image_base64: str,
+def _build_match_messages(
+    element_list: str,
+    annotated_image_base64: str,
     description: str,
 ) -> tuple[ChatMessage, ...]:
     return (
-        ChatMessage(
-            role="system",
-            content=(
-                "You are a UI element locator. Given a screenshot and an element "
-                "description, find the element and return its center coordinates.\n\n"
-                "Reply with ONLY the coordinates in the format: x,y\n"
-                "For example: 450,320\n\n"
-                "If the element is not visible or cannot be found, reply with: NOT_FOUND\n"
-                "If the description is ambiguous (multiple matches), reply with: AMBIGUOUS"
-            ),
-        ),
+        ChatMessage(role="system", content=_ELEMENT_MATCHER_SYSTEM_PROMPT),
         ChatMessage(
             role="user",
             content=(
-                TextContent(text=f"Find the element: {description}"),
-                ImageContent(base64_data=image_base64),
+                ImageContent(base64_data=annotated_image_base64),
+                TextContent(
+                    text=(
+                        f"Detected UI elements:\n{element_list}\n\n"
+                        f"Find the element: {description}"
+                    )
+                ),
             ),
         ),
     )
 
 
-def _send_locator_query(
-    vision_config: LLMConfig,
-    messages: tuple[ChatMessage, ...],
-    description: str,
-) -> str:
-    response = send_chat_completion(vision_config, messages)
-    answer = response.message.content
-    if not isinstance(answer, str):
-        msg = f"Vision model returned no response for element: {description}"
-        raise ElementNotFoundError(msg)
-    return answer.strip()
+def _build_element_list(elements: tuple[PixelUIElement, ...]) -> str:
+    lines: list[str] = []
+    for el in elements:
+        lines.append(
+            f'[{el.index}] type={el.type}, content="{el.content}", '
+            f"center=({el.center_x}, {el.center_y}), "
+            f"interactive={el.interactivity}"
+        )
+    return "\n".join(lines)
 
 
-def _parse_coordinates(
+def _parse_match_response(
     answer: str,
     description: str,
-) -> tuple[int, int]:
-    if answer.startswith("NOT_FOUND"):
-        msg = f"Element not found on screen: {description}"
+    elements: tuple[PixelUIElement, ...],
+) -> PixelUIElement:
+    if "NOT_FOUND" in answer:
+        msg = f"No OmniParser element matches description: {description}"
         raise ElementNotFoundError(msg)
 
-    if answer.startswith("AMBIGUOUS"):
-        msg = f"Ambiguous element on screen: {description} — {answer}"
-        raise ElementNotFoundError(msg)
-
-    match = re.search(r"(\d+)\s*,\s*(\d+)", answer)
+    match = re.search(r"(\d+)", answer)
     if match is None:
-        msg = f"Could not parse coordinates from vision response: {answer}"
+        msg = f"Could not parse element index from LLM response: {answer}"
         raise ElementNotFoundError(msg)
 
-    x = int(match.group(1))
-    y = int(match.group(2))
-    return x, y
+    index = int(match.group(1))
+
+    for el in elements:
+        if el.index == index:
+            return el
+
+    msg = (
+        f"LLM returned index {index} which does not match any detected "
+        f"element (valid: {[e.index for e in elements]})"
+    )
+    raise ElementNotFoundError(msg)
