@@ -4,6 +4,7 @@ import json
 from typing import Any, Protocol
 
 from asgiref.sync import sync_to_async
+
 from projects.models import Project
 from projects.services import (
     broadcast_agent_status,

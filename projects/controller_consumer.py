@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import uuid
 from typing import Any
 
@@ -49,8 +48,6 @@ from projects.services import (
     broadcast_agent_status,
     mark_agent_disconnected,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class ControllerConsumer(AsyncWebsocketConsumer):
@@ -109,10 +106,6 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         if msg_type == "pong":
             return
 
-        if msg_type == "error":
-            logger.warning("Controller agent error: %s", data.get("message", ""))
-            return
-
         handlers = {
             "action_result": self._reply_tracker.send_action_result,
             "screenshot_response": self._reply_tracker.send_screenshot_result,
@@ -121,6 +114,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             "browser_content_result": self._reply_tracker.send_browser_content_result,
             "interactive_output": self._reply_tracker.send_interactive_output,
             "find_element_result": self._reply_tracker.send_find_element_result,
+            "error": self._reply_tracker.send_error,
         }
 
         handler = handlers.get(msg_type)

@@ -6,7 +6,13 @@ from collections.abc import Callable
 
 from agents.exceptions import ElementNotFoundError
 from agents.services.llm_client import send_chat_completion
-from agents.types import ChatMessage, ImageContent, LLMConfig, PixelUIElement, TextContent
+from agents.types import (
+    ChatMessage,
+    ImageContent,
+    LLMConfig,
+    PixelUIElement,
+    TextContent,
+)
 from projects.services import controller_find_elements
 
 logger = logging.getLogger(__name__)

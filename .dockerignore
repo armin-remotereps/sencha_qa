@@ -1,6 +1,11 @@
 .venv/
 venv/
-OmniParser/weights/
+# controller_client is downloaded/run by end users on their own machine, not
+# part of the server image; also covers its multi-GB venv and downloaded
+# OmniParser model weights, which .gitignore already excludes from git but
+# .dockerignore needs its own entry for (glob semantics differ, and the
+# weights moved here from the now-deleted root OmniParser/weights/).
+controller_client/
 .git/
 __pycache__/
 *.pyc

@@ -182,3 +182,23 @@ class ReplyTracker:
             },
         )
         return True
+
+    async def send_error(self, request_id: str, data: dict[str, Any]) -> bool:
+        reply_channel = self.pop_reply_channel(request_id)
+        if not reply_channel:
+            logger.warning(
+                "Controller agent error with no pending reply: %s",
+                data.get("message", ""),
+            )
+            return False
+
+        await self._channel_layer.send(
+            reply_channel,
+            {
+                "type": "error.result",
+                "request_id": request_id,
+                "code": data.get("code", ""),
+                "message": data.get("message", ""),
+            },
+        )
+        return True

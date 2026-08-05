@@ -89,3 +89,16 @@ class ControllerFindElementsTests(SimpleTestCase):
         ):
             with self.assertRaises(ControllerActionError):
                 controller_find_elements(42)
+
+    def test_raises_with_controllers_own_error_message_when_present(self) -> None:
+        with patch(
+            "projects.services._dispatch_controller_action",
+            return_value={
+                "success": False,
+                "message": "OmniParser weights not found at '/bad/path'",
+            },
+        ):
+            with self.assertRaisesMessage(
+                ControllerActionError, "OmniParser weights not found at '/bad/path'"
+            ):
+                controller_find_elements(42)

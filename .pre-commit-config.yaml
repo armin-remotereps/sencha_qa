@@ -21,3 +21,11 @@ repos:
         types: [python]
         args: ["--config-file", "setup.cfg"]
         exclude: migrations/|controller_client/
+
+      - id: mypy-controller-client
+        name: mypy (controller_client)
+        entry: controller_client/.venv/bin/mypy --config-file controller_client/setup.cfg
+        language: system
+        types: [python]
+        files: ^controller_client/
+        exclude: ^controller_client/omniparser/(util|weights)/

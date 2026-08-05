@@ -504,7 +504,8 @@ def controller_find_elements(
         iou_threshold=iou_threshold,
     )
     if not reply.get("success", False):
-        raise ControllerActionError("Controller failed to find elements on screen")
+        message = reply.get("message") or "Controller failed to find elements on screen"
+        raise ControllerActionError(message)
 
     elements_data: list[dict[str, Any]] = reply.get("elements", [])
     elements = tuple(_build_pixel_element(el) for el in elements_data)
