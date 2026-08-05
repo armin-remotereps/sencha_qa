@@ -45,7 +45,7 @@ echo ""
 
 # Install system dependencies (Linux only)
 if [[ "$(uname -s)" == "Linux" ]]; then
-    echo "[1/5] Installing system dependencies..."
+    echo "[1/7] Installing system dependencies..."
     if command -v apt-get &> /dev/null; then
         if ! command -v gnome-screenshot &> /dev/null; then
             echo "  Installing gnome-screenshot (required by PyAutoGUI)..."
@@ -57,34 +57,55 @@ if [[ "$(uname -s)" == "Linux" ]]; then
         echo "  WARNING: Non-apt system detected. Please install gnome-screenshot manually."
     fi
 else
-    echo "[1/5] System dependencies check skipped (not Linux)."
+    echo "[1/7] System dependencies check skipped (not Linux)."
 fi
 
 # Create virtual environment
 if [ ! -d "$PROJECT_DIR/.venv" ]; then
-    echo "[2/5] Creating Python virtual environment..."
+    echo "[2/7] Creating Python virtual environment..."
     "$PYTHON_BIN" -m venv "$PROJECT_DIR/.venv"
 else
-    echo "[2/5] Virtual environment already exists, skipping..."
+    echo "[2/7] Virtual environment already exists, skipping..."
 fi
 
-# Install dependencies
-echo "[3/5] Installing dependencies..."
 "$PROJECT_DIR/.venv/bin/pip" install --quiet --upgrade pip
+
+# Install torch/torchvision with a platform-appropriate build: CUDA wheel on
+# Linux/Windows with an NVIDIA GPU detected, CPU-only wheel otherwise (macOS
+# wheels already include MPS support with no separate index needed).
+echo "[3/7] Installing torch (platform-appropriate build)..."
+if [[ "$(uname -s)" == "Darwin" ]]; then
+    echo "  macOS detected, installing standard torch build (includes MPS support)."
+    "$PROJECT_DIR/.venv/bin/pip" install --quiet "torch~=2.10.0" "torchvision~=0.25.0"
+elif command -v nvidia-smi &> /dev/null; then
+    echo "  NVIDIA GPU detected, installing CUDA-enabled torch."
+    "$PROJECT_DIR/.venv/bin/pip" install --quiet "torch~=2.10.0" "torchvision~=0.25.0"
+else
+    echo "  No NVIDIA GPU detected, installing CPU-only torch."
+    "$PROJECT_DIR/.venv/bin/pip" install --quiet --index-url https://download.pytorch.org/whl/cpu "torch~=2.10.0" "torchvision~=0.25.0"
+fi
+
+# Install remaining dependencies
+echo "[4/7] Installing remaining dependencies..."
 "$PROJECT_DIR/.venv/bin/pip" install --quiet -r "$PROJECT_DIR/requirements.txt"
 
 # Install Playwright browsers
-echo "[4/5] Installing Playwright browsers..."
+echo "[5/7] Installing Playwright browsers..."
 "$PROJECT_DIR/.venv/bin/playwright" install --with-deps
+
+# Download OmniParser model weights
+echo "[6/7] Downloading OmniParser model weights (this may take a while, ~1.5GB)..."
+"$PROJECT_DIR/.venv/bin/pip" install --quiet "huggingface_hub[cli]"
+"$SCRIPT_DIR/download_omniparser_weights.sh" "$PROJECT_DIR/omniparser/weights"
 
 # Copy example.env to .env if not exists
 if [ ! -f "$PROJECT_DIR/.env" ]; then
-    echo "[5/5] Creating .env from example.env..."
+    echo "[7/7] Creating .env from example.env..."
     cp "$PROJECT_DIR/example.env" "$PROJECT_DIR/.env"
     echo ""
     echo "IMPORTANT: Edit .env and set your CONTROLLER_API_KEY"
 else
-    echo "[5/5] .env already exists, skipping..."
+    echo "[7/7] .env already exists, skipping..."
 fi
 
 echo ""

@@ -39,29 +39,49 @@ echo.
 
 :: Create virtual environment
 if not exist "%PROJECT_DIR%\.venv" (
-    echo [1/4] Creating Python virtual environment...
+    echo [1/6] Creating Python virtual environment...
     %PYTHON_BIN% -m venv "%PROJECT_DIR%\.venv"
 ) else (
-    echo [1/4] Virtual environment already exists, skipping...
+    echo [1/6] Virtual environment already exists, skipping...
 )
 
-:: Install dependencies
-echo [2/4] Installing dependencies...
 "%PROJECT_DIR%\.venv\Scripts\pip" install --quiet --upgrade pip
+
+:: Install torch/torchvision with a platform-appropriate build
+echo [2/6] Installing torch (platform-appropriate build)...
+where nvidia-smi >nul 2>&1
+if errorlevel 1 (
+    echo   No NVIDIA GPU detected, installing CPU-only torch.
+    "%PROJECT_DIR%\.venv\Scripts\pip" install --quiet --index-url https://download.pytorch.org/whl/cpu torch~=2.10.0 torchvision~=0.25.0
+) else (
+    echo   NVIDIA GPU detected, installing CUDA-enabled torch.
+    "%PROJECT_DIR%\.venv\Scripts\pip" install --quiet torch~=2.10.0 torchvision~=0.25.0
+)
+
+:: Install remaining dependencies
+echo [3/6] Installing remaining dependencies...
 "%PROJECT_DIR%\.venv\Scripts\pip" install --quiet -r "%PROJECT_DIR%\requirements.txt"
 
 :: Install Playwright browsers
-echo [3/4] Installing Playwright browsers...
+echo [4/6] Installing Playwright browsers...
 "%PROJECT_DIR%\.venv\Scripts\playwright" install --with-deps
+
+:: Download OmniParser model weights
+echo [5/6] Downloading OmniParser model weights (this may take a while, ~1.5GB)...
+"%PROJECT_DIR%\.venv\Scripts\pip" install --quiet "huggingface_hub[cli]"
+"%PROJECT_DIR%\.venv\Scripts\hf" download microsoft/OmniParser-v2.0 --local-dir "%PROJECT_DIR%\omniparser\weights"
+if exist "%PROJECT_DIR%\omniparser\weights\icon_caption" if not exist "%PROJECT_DIR%\omniparser\weights\icon_caption_florence" (
+    ren "%PROJECT_DIR%\omniparser\weights\icon_caption" icon_caption_florence
+)
 
 :: Copy example.env to .env if not exists
 if not exist "%PROJECT_DIR%\.env" (
-    echo [4/4] Creating .env from example.env...
+    echo [6/6] Creating .env from example.env...
     copy "%PROJECT_DIR%\example.env" "%PROJECT_DIR%\.env"
     echo.
     echo IMPORTANT: Edit .env and set your CONTROLLER_API_KEY
 ) else (
-    echo [4/4] .env already exists, skipping...
+    echo [6/6] .env already exists, skipping...
 )
 
 echo.
