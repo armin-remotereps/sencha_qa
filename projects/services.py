@@ -1749,7 +1749,14 @@ def _update_test_run_status_if_needed(test_run: TestRun) -> None:
 # CONTROLLER CLIENT DOWNLOAD SERVICES
 # ============================================================================
 
-_CONTROLLER_CLIENT_EXCLUDE_DIRS = {".venv", "__pycache__", ".pytest_cache", "tests"}
+_CONTROLLER_CLIENT_EXCLUDE_DIRS = {
+    ".venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    "tests",
+    "weights",
+}
 _CONTROLLER_CLIENT_EXCLUDE_FILES = {".env"}
 
 
