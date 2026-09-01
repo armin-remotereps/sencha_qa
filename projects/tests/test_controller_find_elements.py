@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, override_settings
 
 from projects.services import (
     ControllerActionError,
@@ -102,3 +102,66 @@ class ControllerFindElementsTests(SimpleTestCase):
                 ControllerActionError, "OmniParser weights not found at '/bad/path'"
             ):
                 controller_find_elements(42)
+
+    def test_appends_details_to_the_error_message_when_present(self) -> None:
+        with patch(
+            "projects.services._dispatch_controller_action",
+            return_value={
+                "success": False,
+                "message": "OmniParser weights not found at '/bad/path'",
+                "details": "phase=weights; device=cpu",
+            },
+        ):
+            with self.assertRaisesMessage(
+                ControllerActionError,
+                "OmniParser weights not found at '/bad/path' "
+                "(phase=weights; device=cpu)",
+            ):
+                controller_find_elements(42)
+
+    @override_settings(CONTROLLER_FIND_ELEMENT_TIMEOUT=120)
+    def test_default_timeout_comes_from_settings(self) -> None:
+        with patch(
+            "projects.services._dispatch_controller_action",
+            return_value={"success": True, "elements": []},
+        ) as mock_dispatch:
+            controller_find_elements(42)
+
+        mock_dispatch.assert_called_once_with(
+            42,
+            "controller.find_element",
+            120.0,
+            box_threshold=None,
+            iou_threshold=None,
+        )
+
+    @override_settings(CONTROLLER_FIND_ELEMENT_TIMEOUT=45)
+    def test_default_timeout_follows_a_changed_setting(self) -> None:
+        with patch(
+            "projects.services._dispatch_controller_action",
+            return_value={"success": True, "elements": []},
+        ) as mock_dispatch:
+            controller_find_elements(42)
+
+        mock_dispatch.assert_called_once_with(
+            42,
+            "controller.find_element",
+            45.0,
+            box_threshold=None,
+            iou_threshold=None,
+        )
+
+    def test_explicit_timeout_overrides_the_setting(self) -> None:
+        with patch(
+            "projects.services._dispatch_controller_action",
+            return_value={"success": True, "elements": []},
+        ) as mock_dispatch:
+            controller_find_elements(42, timeout=5.0)
+
+        mock_dispatch.assert_called_once_with(
+            42,
+            "controller.find_element",
+            5.0,
+            box_threshold=None,
+            iou_threshold=None,
+        )

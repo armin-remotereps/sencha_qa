@@ -37,6 +37,41 @@ class SendErrorTests(SimpleTestCase):
         self.assertEqual(message["message"], "weights missing")
         self.assertFalse(tracker.has_pending_reply("req-1"))
 
+    def test_forwards_details_when_the_controller_provides_them(self) -> None:
+        layer = _FakeChannelLayer()
+        # _FakeChannelLayer duck-types BaseChannelLayer's .send() without
+        # subclassing its ABC; mypy can't see the structural match.
+        tracker = ReplyTracker(layer)  # type: ignore[arg-type]
+        tracker.register_reply_channel("req-1", "reply-channel-1")
+
+        asyncio.run(
+            tracker.send_error(
+                "req-1",
+                {
+                    "code": "FIND_ELEMENT_FAILED",
+                    "message": "weights missing",
+                    "details": "phase=weights; device=cpu",
+                },
+            )
+        )
+
+        _, message = layer.sent[0]
+        self.assertEqual(message["details"], "phase=weights; device=cpu")
+
+    def test_defaults_details_to_empty_string_when_absent(self) -> None:
+        layer = _FakeChannelLayer()
+        # _FakeChannelLayer duck-types BaseChannelLayer's .send() without
+        # subclassing its ABC; mypy can't see the structural match.
+        tracker = ReplyTracker(layer)  # type: ignore[arg-type]
+        tracker.register_reply_channel("req-1", "reply-channel-1")
+
+        asyncio.run(
+            tracker.send_error("req-1", {"code": "TIMEOUT", "message": "timed out"})
+        )
+
+        _, message = layer.sent[0]
+        self.assertEqual(message["details"], "")
+
     def test_returns_false_when_no_pending_reply(self) -> None:
         layer = _FakeChannelLayer()
         # _FakeChannelLayer duck-types BaseChannelLayer's .send() without

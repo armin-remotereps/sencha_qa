@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from typing import Any
 
 from asgiref.sync import sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
+from controller_client.exceptions import ProtocolError
+from controller_client.protocol import (
+    parse_handshake_capabilities,
+    parse_omniparser_status_payload,
+)
 from projects.controller_authenticator import (
     ControllerAuthenticator,
     HandshakeMessageBuilder,
+    HandshakeStatus,
 )
 from projects.controller_protocol import (
     ActionTypeRegistry,
@@ -47,7 +54,10 @@ from projects.services import (
     abort_active_test_run_on_disconnect,
     broadcast_agent_status,
     mark_agent_disconnected,
+    update_agent_omniparser_status,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ControllerConsumer(AsyncWebsocketConsumer):
@@ -106,6 +116,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         if msg_type == "pong":
             return
 
+        if msg_type == "omniparser_status":
+            await self._handle_omniparser_status(data)
+            return
+
         handlers = {
             "action_result": self._reply_tracker.send_action_result,
             "screenshot_response": self._reply_tracker.send_screenshot_result,
@@ -121,15 +135,44 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         if handler:
             await handler(request_id, data)
 
+    async def _handle_omniparser_status(self, data: dict[str, Any]) -> None:
+        if self._project is None:
+            return
+
+        try:
+            payload = parse_omniparser_status_payload(data)
+        except ProtocolError as exc:
+            await self._send_error(f"Invalid omniparser_status: {exc}")
+            return
+
+        await sync_to_async(update_agent_omniparser_status)(self._project, payload)
+
     async def _handle_handshake(self, data: dict[str, Any], request_id: str) -> None:
         api_key: str = data.get("api_key", "")
         system_info: dict[str, Any] = data.get("system_info", {})
+        client_version: str = data.get("client_version", "")
 
-        result = await self._authenticator.authenticate_handshake(api_key, system_info)
+        try:
+            capabilities = parse_handshake_capabilities(data)
+        except ProtocolError as exc:
+            await self._send_handshake_ack(
+                "error", f"Invalid handshake: {exc}", request_id
+            )
+            await self.close()
+            return
+
+        result = await self._authenticator.authenticate_handshake(
+            api_key, system_info, client_version, capabilities
+        )
 
         if not result.success or result.project is None:
-            status = "already_connected" if "already" in result.reason else "error"
-            await self._send_handshake_ack(status, result.reason, request_id)
+            logger.warning(
+                "Controller handshake rejected (%s, client_version=%s): %s",
+                result.status,
+                client_version or "unknown",
+                result.reason,
+            )
+            await self._send_handshake_ack(result.status, result.reason, request_id)
             await self.close()
             return
 
@@ -276,7 +319,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
     async def _send_handshake_ack(
         self,
-        status: str,
+        status: HandshakeStatus,
         message: str,
         request_id: str = "",
         project_id: str = "",

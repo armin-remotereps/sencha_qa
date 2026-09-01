@@ -261,6 +261,9 @@ class AgentStatusConsumer(AuthenticatedConsumer):
             return {
                 "agent_connected": p.agent_connected,
                 "agent_system_info": p.agent_system_info,
+                "agent_client_version": p.agent_client_version,
+                "agent_capabilities": p.agent_capabilities,
+                "agent_omniparser_status": p.agent_omniparser_status,
                 "last_connected_at": (
                     p.last_connected_at.isoformat() if p.last_connected_at else None
                 ),
@@ -283,6 +286,9 @@ class AgentStatusConsumer(AuthenticatedConsumer):
                     "type": "agent_status",
                     "agent_connected": event["agent_connected"],
                     "agent_system_info": event["agent_system_info"],
+                    "agent_client_version": event["agent_client_version"],
+                    "agent_capabilities": event["agent_capabilities"],
+                    "agent_omniparser_status": event["agent_omniparser_status"],
                     "last_connected_at": event["last_connected_at"],
                 }
             )

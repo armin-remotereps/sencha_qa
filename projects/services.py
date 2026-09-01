@@ -10,7 +10,7 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, TypedDict
@@ -37,6 +37,13 @@ from agents.types import (
     ScreenshotCallback,
 )
 from auto_tester.celery import app as celery_app
+from controller_client.protocol import (
+    CLIENT_VERSION,
+    REQUIRED_CLIENT_CAPABILITIES,
+    OmniParserState,
+    OmniParserStatusPayload,
+    parse_omniparser_status_payload,
+)
 from projects.models import (
     ParsedTestCase,
     Project,
@@ -234,11 +241,61 @@ def save_project_prompt(*, project: Project, prompt: str) -> Project:
     return project
 
 
-def mark_agent_connected(project: Project, system_info: dict[str, Any]) -> bool:
+def check_controller_compatibility(
+    client_version: str, capabilities: Sequence[str]
+) -> str | None:
+    """Return a human-readable rejection reason for an incompatible controller.
+
+    Returns None when the controller reports every capability the server
+    currently dispatches to. A controller missing one of them would
+    otherwise authenticate fine and then silently time out the first time
+    the server tries to use that capability.
+    """
+    missing = _find_missing_capabilities(capabilities)
+    if not missing:
+        return None
+
+    reported_version = client_version or "unknown"
+    return (
+        "Controller client is incompatible: missing capabilities "
+        f"{', '.join(missing)}. Reported version {reported_version}, "
+        f"server expects {CLIENT_VERSION}. Please download a fresh "
+        "controller client ZIP from the project page and re-run the "
+        "platform setup script."
+    )
+
+
+def _find_missing_capabilities(capabilities: Sequence[str]) -> list[str]:
+    present = set(capabilities)
+    return sorted(cap for cap in REQUIRED_CLIENT_CAPABILITIES if cap not in present)
+
+
+def _initial_omniparser_status() -> dict[str, Any]:
+    return _serialize_omniparser_status(
+        OmniParserStatusPayload(
+            state=OmniParserState.LOADING,
+            message="Waiting for the controller to report OmniParser readiness",
+            device="",
+            weights_dir="",
+            phase="handshake",
+            load_seconds=0.0,
+        )
+    )
+
+
+def mark_agent_connected(
+    project: Project,
+    system_info: dict[str, Any],
+    client_version: str,
+    capabilities: Sequence[str],
+) -> bool:
     """Returns True if connection established, False if already connected."""
     rows_updated = Project.objects.filter(id=project.id, agent_connected=False).update(
         agent_connected=True,
         agent_system_info=system_info,
+        agent_client_version=client_version,
+        agent_capabilities=list(capabilities),
+        agent_omniparser_status=_initial_omniparser_status(),
     )
     if rows_updated > 0:
         project.refresh_from_db()
@@ -249,14 +306,40 @@ def mark_agent_connected(project: Project, system_info: dict[str, Any]) -> bool:
 def mark_agent_disconnected(project: Project) -> None:
     project.agent_connected = False
     project.agent_system_info = {}
+    project.agent_client_version = ""
+    project.agent_capabilities = []
+    project.agent_omniparser_status = {}
     project.last_connected_at = timezone.now()
     project.save()
+
+
+def update_agent_omniparser_status(
+    project: Project, status: OmniParserStatusPayload
+) -> None:
+    """Persist the controller's latest OmniParser readiness report."""
+    project.agent_omniparser_status = _serialize_omniparser_status(status)
+    project.save(update_fields=["agent_omniparser_status"])
+    broadcast_agent_status(project)
+
+
+def _serialize_omniparser_status(status: OmniParserStatusPayload) -> dict[str, Any]:
+    return {
+        "state": status.state.value,
+        "message": status.message,
+        "device": status.device,
+        "weights_dir": status.weights_dir,
+        "phase": status.phase,
+        "load_seconds": status.load_seconds,
+    }
 
 
 class AgentStatusEvent(TypedDict):
     type: str
     agent_connected: bool
     agent_system_info: dict[str, Any]
+    agent_client_version: str
+    agent_capabilities: list[str]
+    agent_omniparser_status: dict[str, Any]
     last_connected_at: str | None
 
 
@@ -269,6 +352,9 @@ def _build_agent_status_event(project: Project) -> AgentStatusEvent:
         "type": "agent.status",
         "agent_connected": project.agent_connected,
         "agent_system_info": project.agent_system_info,
+        "agent_client_version": project.agent_client_version,
+        "agent_capabilities": project.agent_capabilities,
+        "agent_omniparser_status": project.agent_omniparser_status,
         "last_connected_at": (
             project.last_connected_at.isoformat() if project.last_connected_at else None
         ),
@@ -374,7 +460,8 @@ def _dispatch_controller_action(
         return result
     except asyncio.TimeoutError as exc:
         raise ControllerActionError(
-            f"Timed out waiting for reply after {reply_timeout}s"
+            f"Timed out waiting for controller reply to {event_type} "
+            f"after {reply_timeout}s"
         ) from exc
 
 
@@ -490,22 +577,34 @@ def _build_pixel_element(data: dict[str, Any]) -> PixelUIElement:
     )
 
 
+def _raise_for_find_element_failure(reply: dict[str, Any]) -> None:
+    if reply.get("success", False):
+        return
+
+    message = reply.get("message") or "Controller failed to find elements on screen"
+    details = reply.get("details", "")
+    if details:
+        message = f"{message} ({details})"
+    raise ControllerActionError(message)
+
+
 def controller_find_elements(
     project_id: int,
     box_threshold: float | None = None,
     iou_threshold: float | None = None,
-    timeout: float = 120.0,
+    timeout: float | None = None,
 ) -> PixelParseResult:
+    resolved_timeout = (
+        float(settings.CONTROLLER_FIND_ELEMENT_TIMEOUT) if timeout is None else timeout
+    )
     reply = _dispatch_controller_action(
         project_id,
         "controller.find_element",
-        timeout,
+        resolved_timeout,
         box_threshold=box_threshold,
         iou_threshold=iou_threshold,
     )
-    if not reply.get("success", False):
-        message = reply.get("message") or "Controller failed to find elements on screen"
-        raise ControllerActionError(message)
+    _raise_for_find_element_failure(reply)
 
     elements_data: list[dict[str, Any]] = reply.get("elements", [])
     elements = tuple(_build_pixel_element(el) for el in elements_data)
@@ -1525,6 +1624,58 @@ def _wait_for_agent_connection(
     )
 
 
+def _wait_for_omniparser_ready(
+    project: Project,
+    cancellation_check: Callable[[], bool] | None = None,
+) -> None:
+    """Block until the controller reports OmniParser as ready to use.
+
+    A freshly connected controller still needs to load its OmniParser
+    weights in the background; running an action before that finishes
+    would otherwise time out with a confusing error.
+    """
+    timeout = settings.CONTROLLER_OMNIPARSER_READY_TIMEOUT
+    start = time.monotonic()
+    last_state = ""
+    while time.monotonic() - start < timeout:
+        _raise_if_run_cancelled(cancellation_check)
+        project.refresh_from_db()
+        last_state = _raise_for_omniparser_failure(project)
+        if last_state == OmniParserState.READY:
+            return
+        time.sleep(_AGENT_POLL_INTERVAL_SECONDS)
+    raise TimeoutError(
+        f"OmniParser did not become ready within {timeout}s for project "
+        f"{project.id} (last observed state: {last_state or 'unknown'})"
+    )
+
+
+def _raise_if_run_cancelled(cancellation_check: Callable[[], bool] | None) -> None:
+    if cancellation_check is not None and cancellation_check():
+        raise AgentCancelledError(
+            "Test run cancelled while waiting for OmniParser readiness"
+        )
+
+
+def _raise_for_omniparser_failure(project: Project) -> str:
+    if not project.agent_connected:
+        raise ControllerActionError(
+            "Controller disconnected while waiting for OmniParser readiness"
+        )
+
+    if not project.agent_omniparser_status:
+        return ""
+    status = parse_omniparser_status_payload(project.agent_omniparser_status)
+    if status.state is not OmniParserState.FAILED:
+        return status.state.value
+
+    raise ControllerActionError(
+        "OmniParser failed to initialize on the controller: "
+        f"{status.message} (phase={status.phase}, device={status.device}, "
+        f"weights_dir={status.weights_dir})"
+    )
+
+
 def execute_test_run_test_case(pivot_id: int) -> None:
     pivot = _fetch_pivot(pivot_id)
     if pivot.test_run.status == TestRunStatus.CANCELLED:
@@ -1537,6 +1688,8 @@ def execute_test_run_test_case(pivot_id: int) -> None:
     try:
         if not project.agent_connected:
             _wait_for_agent_connection(project, cancellation_check=cancellation_check)
+
+        _wait_for_omniparser_ready(project, cancellation_check=cancellation_check)
 
         _safe_cleanup(project.id)
 

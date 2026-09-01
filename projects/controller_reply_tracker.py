@@ -199,6 +199,7 @@ class ReplyTracker:
                 "request_id": request_id,
                 "code": data.get("code", ""),
                 "message": data.get("message", ""),
+                "details": data.get("details", ""),
             },
         )
         return True
