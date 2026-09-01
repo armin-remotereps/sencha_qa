@@ -1,11 +1,16 @@
 .venv/
 venv/
-# controller_client is downloaded/run by end users on their own machine, not
-# part of the server image; also covers its multi-GB venv and downloaded
-# OmniParser model weights, which .gitignore already excludes from git but
-# .dockerignore needs its own entry for (glob semantics differ, and the
-# weights moved here from the now-deleted root OmniParser/weights/).
-controller_client/
+# The tracked controller_client source MUST stay in the server image:
+# projects/controller_protocol.py imports controller_client.protocol, and
+# generate_controller_client_zip() reads the whole tree to build the download.
+# Only the heavy per-machine runtime artifacts are excluded (they are also
+# .gitignored, but .dockerignore needs its own entries).
+controller_client/.venv/
+controller_client/venv/
+controller_client/omniparser/weights/
+controller_client/.env
+controller_client/.pytest_cache/
+controller_client/.mypy_cache/
 .git/
 __pycache__/
 *.pyc

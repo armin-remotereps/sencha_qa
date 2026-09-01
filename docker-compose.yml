@@ -58,7 +58,13 @@ services:
         volumes:
             - "STATIC:/src/staticfiles"
             - "MEDIA:/src/media"
-        entrypoint: "python -m daphne -b 0.0.0.0 -p 8000 --ping-interval 5 --ping-timeout 10 auto_tester.asgi:application"
+        # Daphne rejects incoming WebSocket messages above 1 MiB by default
+        # (close code 1009). Controller screenshots and OmniParser
+        # find_element results (annotated PNG as base64 + element list) are
+        # routinely several MiB, so both limits are raised to 32 MiB; the
+        # controller bounds its own results to OMNIPARSER_MAX_RESULT_BYTES
+        # (default 8 MiB), well under this.
+        entrypoint: "python -m daphne -b 0.0.0.0 -p 8000 --ping-interval 5 --ping-timeout 10 --websocket-max-message-size 33554432 --websocket-max-frame-size 33554432 auto_tester.asgi:application"
 
     upload-celery:
         hostname: upload

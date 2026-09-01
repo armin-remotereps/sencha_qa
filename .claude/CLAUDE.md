@@ -9,9 +9,13 @@ Sencha QA (Auto Tester) — an AI-powered QA automation platform. Users create p
 ## Commands
 
 ```bash
-# Dev server (ASGI via Daphne, required for WebSockets)
-python manage.py runserver              # standard Django dev server
-python -m daphne -b 0.0.0.0 -p 8000 auto_tester.asgi:application  # production-like
+# Dev server (ASGI via Daphne, required for WebSockets). Daphne caps incoming
+# WebSocket messages at 1 MiB by default and closes the socket (code 1009) on
+# anything bigger; controller screenshots / OmniParser results are several MiB,
+# so always pass the two size flags (docker-compose.yml already does). Plain
+# `runserver` cannot raise that limit — use it only when no controller connects.
+python -m daphne -b 0.0.0.0 -p 8000 --websocket-max-message-size 33554432 --websocket-max-frame-size 33554432 auto_tester.asgi:application
+python manage.py runserver              # no controller traffic only (1 MiB WebSocket cap)
 
 # Celery workers (two separate queues)
 celery -A auto_tester worker -Q upload -l info -n upload@%h
@@ -35,6 +39,11 @@ controller_client/.venv/bin/python -m pytest controller_client/tests/
 # Infrastructure
 docker compose up db redis searxng -d   # minimal local services
 docker compose up -d                    # full stack including nginx, celery, flower
+scripts/verify_server_image.sh          # build the server image and assert it can import the shared controller protocol and package the controller ZIP
+
+# Controller client diagnostics (run on the controller machine, inside its venv,
+# from the directory that contains controller_client/)
+python -m controller_client.diagnose    # imports, weights, screenshot, device, model load, one inference, payload size
 
 # Migrations (use /migrate skill for the full workflow)
 python manage.py makemigrations
@@ -53,7 +62,7 @@ pip install -r requirements.txt
 - **projects/** — Core domain: Projects, TestCases, TestCaseUploads, TestRuns, TestRunTestCases, TestRunScreenshots. Contains views, services, tasks, models, consumers, forms, controller protocol
 - **agents/** — AI agent system: agent loop, tool definitions, tool registry, LLM client, vision QA, OmniParser integration, context/output summarizers, search tools
 - **dashboard/** — Landing/home page
-- **controller_client/** — Standalone Python client that runs on target machines. Connects to the server via WebSocket, receives action commands (click, type, screenshot, browser actions), and replies with results. Also runs OmniParser locally in-process (own venv/dependencies, own strict mypy config) to parse screenshots for element-finding — no central OmniParser service exists; the server dispatches a `find_element` action to the controller over the same WebSocket connection
+- **controller_client/** — Standalone Python client that runs on target machines. Connects to the server via WebSocket, receives action commands (click, type, screenshot, browser actions), and replies with results. Also runs OmniParser locally in-process (own venv/dependencies, own strict mypy config) to parse screenshots for element-finding — no central OmniParser service exists; the server dispatches a `find_element` action to the controller over the same WebSocket connection. The handshake carries `client_version` + a typed capability list (`controller_client/protocol.py`: `CLIENT_VERSION`, `ClientCapability`, `REQUIRED_CLIENT_CAPABILITIES`); the server rejects controllers missing a required capability before marking the project connected. After the handshake the controller preloads OmniParser in the background and reports `omniparser_status` (loading/ready/failed) which the server stores on `Project.agent_omniparser_status` and gates test-run execution on. The tracked `controller_client/` source must stay inside the server Docker image (shared protocol import + ZIP download); only its venv/weights are `.dockerignore`d
 
 ### Key Patterns
 
