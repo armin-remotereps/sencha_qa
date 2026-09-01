@@ -26,3 +26,4 @@ websockets~=16.0
 types-PyAutoGUI~=0.9.3.20241230
 pexpect~=4.9.0
 types-pexpect~=4.9.0.20260127
+python-dotenv~=1.2.2

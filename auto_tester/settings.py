@@ -1,10 +1,13 @@
 import django_stubs_ext
+from dotenv import load_dotenv
 
 django_stubs_ext.monkeypatch()
 
 from pathlib import Path
 
 from decouple import Csv, config
+
+load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
