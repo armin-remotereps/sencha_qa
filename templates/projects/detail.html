@@ -1,11 +1,19 @@
 {% extends "dashboard/base_dashboard.html" %}
 
 {% block dashboard_content %}
+{# Controller-reported values (system info, OmniParser error text, weights path)
+   are untrusted: json_script escapes them, JSON.parse reads them back. #}
+{{ project.agent_system_info|json_script:"agent-system-info" }}
+{{ project.agent_capabilities|json_script:"agent-capabilities" }}
+{{ project.agent_omniparser_status|json_script:"agent-omniparser-status" }}
 <div
   x-data="{
     agentConnected: {{ project.agent_connected|yesno:'true,false' }},
-    systemInfo: {{ project.agent_system_info|safe }},
+    systemInfo: JSON.parse(document.getElementById('agent-system-info').textContent),
     lastConnectedAt: '{{ project.last_connected_at|date:"N j, Y, P"|default:"" }}',
+    clientVersion: '{{ project.agent_client_version|escapejs }}',
+    capabilities: JSON.parse(document.getElementById('agent-capabilities').textContent),
+    omniparserStatus: JSON.parse(document.getElementById('agent-omniparser-status').textContent),
     showApiKey: false,
     showRegenerateModal: false,
     ws: null,
@@ -22,6 +30,9 @@
           this.agentConnected = data.agent_connected;
           this.systemInfo = data.agent_system_info || {};
           this.lastConnectedAt = data.last_connected_at || '';
+          this.clientVersion = data.agent_client_version || '';
+          this.capabilities = data.agent_capabilities || [];
+          this.omniparserStatus = data.agent_omniparser_status || {};
         } else if (data.type === 'prompt_refined') {
           window.dispatchEvent(new CustomEvent('prompt-refined', { detail: data }));
         }
@@ -49,6 +60,23 @@
         class="inline-flex items-center rounded-full bg-emerald-900/50 px-3 py-1 text-sm font-medium text-emerald-400"
       >
         Connected
+      </span>
+      <span
+        x-show="agentConnected && omniparserStatus.state === 'loading'"
+        class="inline-flex animate-pulse items-center rounded-full bg-amber-900/50 px-3 py-1 text-sm font-medium text-amber-400"
+      >
+        OmniParser loading&hellip;
+      </span>
+      <span
+        x-show="agentConnected && omniparserStatus.state === 'ready'"
+        class="inline-flex items-center rounded-full bg-emerald-900/50 px-3 py-1 text-sm font-medium text-emerald-400"
+        x-text="omniparserStatus.device ? 'OmniParser ready · ' + omniparserStatus.device : 'OmniParser ready'"
+      ></span>
+      <span
+        x-show="agentConnected && omniparserStatus.state === 'failed'"
+        class="inline-flex items-center rounded-full bg-red-900/50 px-3 py-1 text-sm font-medium text-red-400"
+      >
+        OmniParser failed
       </span>
       <form
         x-show="agentConnected"
@@ -79,6 +107,20 @@
     </a>
   </div>
 
+  {# OMNIPARSER FAILURE PANEL (shown only when initialization failed) #}
+  <div
+    x-show="agentConnected && omniparserStatus.state === 'failed'"
+    class="mb-6 rounded-lg border border-red-800 bg-red-950/30 p-5"
+  >
+    <h2 class="mb-2 text-lg font-semibold text-red-400">OmniParser failed to initialize</h2>
+    <p class="text-sm text-red-300" x-text="omniparserStatus.message"></p>
+    <p class="mt-2 font-mono text-xs text-zinc-500">
+      <span x-show="omniparserStatus.phase">phase: <span x-text="omniparserStatus.phase"></span></span>
+      <span x-show="omniparserStatus.device"> device: <span x-text="omniparserStatus.device"></span></span>
+      <span x-show="omniparserStatus.weights_dir"> weights_dir: <span x-text="omniparserStatus.weights_dir"></span></span>
+    </p>
+  </div>
+
   {# AGENT SYSTEM INFO (shown only when connected) #}
   <div
     x-show="agentConnected && systemInfo && Object.keys(systemInfo).length > 0"
@@ -90,9 +132,9 @@
         <p class="text-xs font-medium uppercase text-zinc-500">Operating System</p>
         <p class="mt-1 text-sm text-zinc-100" x-text="systemInfo.os"></p>
       </div>
-      <div x-show="systemInfo.version">
-        <p class="text-xs font-medium uppercase text-zinc-500">Version</p>
-        <p class="mt-1 text-sm text-zinc-100" x-text="systemInfo.version"></p>
+      <div x-show="systemInfo.os_version">
+        <p class="text-xs font-medium uppercase text-zinc-500">OS Version</p>
+        <p class="mt-1 text-sm text-zinc-100" x-text="systemInfo.os_version"></p>
       </div>
       <div x-show="systemInfo.architecture">
         <p class="text-xs font-medium uppercase text-zinc-500">Architecture</p>
@@ -102,9 +144,27 @@
         <p class="text-xs font-medium uppercase text-zinc-500">Hostname</p>
         <p class="mt-1 text-sm text-zinc-100" x-text="systemInfo.hostname"></p>
       </div>
-      <div x-show="systemInfo.screen_resolution">
+      <div x-show="systemInfo.screen_width && systemInfo.screen_height">
         <p class="text-xs font-medium uppercase text-zinc-500">Screen Resolution</p>
-        <p class="mt-1 text-sm text-zinc-100" x-text="systemInfo.screen_resolution"></p>
+        <p
+          class="mt-1 text-sm text-zinc-100"
+          x-text="systemInfo.screen_width + ' × ' + systemInfo.screen_height"
+        ></p>
+      </div>
+      <div x-show="clientVersion">
+        <p class="text-xs font-medium uppercase text-zinc-500">Controller Version</p>
+        <p class="mt-1 text-sm text-zinc-100" x-text="clientVersion"></p>
+      </div>
+      <div x-show="omniparserStatus.state === 'ready' && omniparserStatus.device">
+        <p class="text-xs font-medium uppercase text-zinc-500">OmniParser Device</p>
+        <p class="mt-1 text-sm text-zinc-100" x-text="omniparserStatus.device"></p>
+      </div>
+      <div x-show="omniparserStatus.state === 'ready' && omniparserStatus.load_seconds !== undefined">
+        <p class="text-xs font-medium uppercase text-zinc-500">Model Load Time</p>
+        <p
+          class="mt-1 text-sm text-zinc-100"
+          x-text="Math.round(omniparserStatus.load_seconds * 10) / 10 + ' s'"
+        ></p>
       </div>
     </div>
   </div>
@@ -159,6 +219,11 @@
     class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-5"
   >
     <h2 class="mb-4 text-lg font-semibold text-zinc-100">Controller Client</h2>
+    <p class="mb-4 text-sm text-zinc-400">
+      Controllers older than protocol 0.2.0 are rejected at connect time — re-download and re-run
+      the setup script below to update. Run <code class="text-zinc-300">python -m controller_client.diagnose</code>
+      to check the local OmniParser install.
+    </p>
     <div class="flex items-center gap-3">
       <form method="post" action="{% url 'projects:download_controller_client' project_id=project.id %}">
         {% csrf_token %}

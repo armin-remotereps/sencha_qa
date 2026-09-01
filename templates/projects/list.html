@@ -73,6 +73,15 @@
         <h3 class="text-lg font-semibold text-zinc-100">{{ project.name }}</h3>
         {% if project.agent_connected %}
         <span class="ml-2 inline-flex items-center rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs font-medium text-emerald-400">Connected</span>
+        {% with omniparser_state=project.agent_omniparser_status.state %}
+          {% if omniparser_state == 'ready' %}
+          <span class="ml-2 inline-flex items-center rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs font-medium text-emerald-400">OmniParser ready</span>
+          {% elif omniparser_state == 'loading' %}
+          <span class="ml-2 inline-flex items-center rounded-full bg-amber-900/50 px-2 py-0.5 text-xs font-medium text-amber-400">OmniParser loading</span>
+          {% elif omniparser_state == 'failed' %}
+          <span class="ml-2 inline-flex items-center rounded-full bg-red-900/50 px-2 py-0.5 text-xs font-medium text-red-400">OmniParser failed</span>
+          {% endif %}
+        {% endwith %}
         {% else %}
         <span class="ml-2 inline-flex items-center rounded-full bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-500">Offline</span>
         {% endif %}
