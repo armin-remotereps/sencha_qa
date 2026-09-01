@@ -5,6 +5,8 @@ import sys
 
 from controller_client.client import ControllerClient
 from controller_client.config import load_config, setup_logging
+from controller_client.env_check import verify_environment
+from controller_client.exceptions import EnvironmentCheckError
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +14,12 @@ logger = logging.getLogger(__name__)
 def main(argv: list[str] | None = None) -> None:
     config = load_config(argv)
     setup_logging(config.log_level)
+
+    try:
+        verify_environment()
+    except EnvironmentCheckError as exc:
+        logger.error("%s", exc)
+        sys.exit(1)
 
     logger.info("Starting controller client, connecting to %s", config.ws_url)
 

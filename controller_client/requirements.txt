@@ -2,6 +2,10 @@ websockets~=15.0
 PyAutoGUI==0.9.54
 python-decouple~=3.8
 Pillow~=11.2.1
+# Pinned explicitly (not just a transitive dep) so every pip install pass in
+# setup.ps1/sh/bat resolves the same version instead of drifting between
+# passes, which is what corrupts the on-disk package (see env_check.py).
+certifi~=2026.7.22
 screeninfo~=0.8.1
 playwright~=1.50.0
 pytest~=9.0.2
@@ -21,8 +25,18 @@ paddleocr~=2.10.0
 transformers~=4.48.0
 accelerate~=1.12.0
 timm~=1.0.24
+# transformers~=4.48.0 requires huggingface_hub<1.0; pinned here (with the
+# [cli] extra it used to get from a separate late `pip install` in the setup
+# scripts) so it's resolved together with transformers instead of a second
+# pass silently upgrading it past that ceiling.
+huggingface_hub[cli]~=0.36.2
 supervision==0.18.0
 opencv-python-headless~=4.11.0.86
-numpy==1.26.4
+# 1.26.4 has no cp313 Windows wheel (its Windows builds stopped at cp312), so
+# pip silently source-built it with whatever compiler it found on PATH,
+# landing on numpy's own "experimental, crashes are to be expected" MinGW
+# build. 2.1.1 is the newest version with a cp313 Windows wheel that still
+# satisfies ultralytics==8.3.70's numpy<=2.1.1 ceiling.
+numpy==2.1.1
 einops==0.8.0
 openai~=2.21.0

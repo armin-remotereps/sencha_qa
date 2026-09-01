@@ -34,10 +34,10 @@ Write-Host ""
 
 # Create virtual environment
 if (-not (Test-Path "$ProjectDir\.venv")) {
-    Write-Host "[1/7] Creating Python virtual environment..."
+    Write-Host "[1/8] Creating Python virtual environment..."
     & $Python -m venv "$ProjectDir\.venv"
 } else {
-    Write-Host "[1/7] Virtual environment already exists, skipping..."
+    Write-Host "[1/8] Virtual environment already exists, skipping..."
 }
 
 & "$ProjectDir\.venv\Scripts\pip" install --quiet --upgrade pip
@@ -46,7 +46,7 @@ if (-not (Test-Path "$ProjectDir\.venv")) {
 # an NVIDIA GPU is detected, CPU-only wheel otherwise. Unlike Linux, PyPI's
 # default Windows wheel is CPU-only (no bundled CUDA runtime) — the
 # CUDA-enabled build must be installed explicitly from PyTorch's own index.
-Write-Host "[2/7] Installing torch (platform-appropriate build)..."
+Write-Host "[2/8] Installing torch (platform-appropriate build)..."
 $hasNvidiaGpu = $null -ne (Get-Command "nvidia-smi" -ErrorAction SilentlyContinue)
 if ($hasNvidiaGpu) {
     Write-Host "  NVIDIA GPU detected, installing CUDA-enabled torch."
@@ -57,16 +57,17 @@ if ($hasNvidiaGpu) {
 }
 
 # Install remaining dependencies
-Write-Host "[3/7] Installing remaining dependencies..."
+Write-Host "[3/8] Installing remaining dependencies..."
 & "$ProjectDir\.venv\Scripts\pip" install --quiet -r "$ProjectDir\requirements.txt"
 
 # Install Playwright browsers
-Write-Host "[4/7] Installing Playwright browsers..."
+Write-Host "[4/8] Installing Playwright browsers..."
 & "$ProjectDir\.venv\Scripts\playwright" install --with-deps
 
-# Download OmniParser model weights
-Write-Host "[5/7] Downloading OmniParser model weights (this may take a while, ~1.5GB)..."
-& "$ProjectDir\.venv\Scripts\pip" install --quiet "huggingface_hub[cli]"
+# Download OmniParser model weights (huggingface_hub[cli] comes from
+# requirements.txt above, resolved together with transformers instead of a
+# separate late pip install that could drag it past transformers' <1.0 ceiling)
+Write-Host "[5/8] Downloading OmniParser model weights (this may take a while, ~1.5GB)..."
 & "$ProjectDir\.venv\Scripts\hf" download microsoft/OmniParser-v2.0 --local-dir "$ProjectDir\omniparser\weights"
 if ((Test-Path "$ProjectDir\omniparser\weights\icon_caption") -and (-not (Test-Path "$ProjectDir\omniparser\weights\icon_caption_florence"))) {
     Rename-Item "$ProjectDir\omniparser\weights\icon_caption" "icon_caption_florence"
@@ -76,17 +77,33 @@ if ((Test-Path "$ProjectDir\omniparser\weights\icon_caption") -and (-not (Test-P
 # their models at import time, independent of the OmniParser weights above).
 # Without this, that download happens silently on the first real
 # find_element call, on top of the OmniParser model load, risking a timeout.
-Write-Host "[6/7] Pre-warming OCR engines (downloads their own models on first use)..."
+Write-Host "[6/8] Pre-warming OCR engines (downloads their own models on first use)..."
 & "$ProjectDir\.venv\Scripts\python" -c "import sys; sys.path.insert(0, r'$ProjectDir\omniparser'); import util.utils"
 
 # Copy example.env to .env if not exists
 if (-not (Test-Path "$ProjectDir\.env")) {
-    Write-Host "[7/7] Creating .env from example.env..."
+    Write-Host "[7/8] Creating .env from example.env..."
     Copy-Item "$ProjectDir\example.env" "$ProjectDir\.env"
     Write-Host ""
     Write-Host "IMPORTANT: Edit .env and set your CONTROLLER_API_KEY" -ForegroundColor Yellow
 } else {
-    Write-Host "[7/7] .env already exists, skipping..."
+    Write-Host "[7/8] .env already exists, skipping..."
+}
+
+# Verify the environment isn't left in the corrupted-certifi state that has
+# broken click/screenshot tooling on client machines (partial overwrite
+# across the separate pip install passes above). Self-heal automatically if
+# it is, since fixing it here is far cheaper than debugging it mid test run.
+Write-Host "[8/8] Verifying environment..."
+& "$ProjectDir\.venv\Scripts\python" -c "import certifi; certifi.where()" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  certifi looks corrupted, reinstalling..." -ForegroundColor Yellow
+    & "$ProjectDir\.venv\Scripts\pip" install --quiet --force-reinstall --no-cache-dir certifi requests urllib3
+    & "$ProjectDir\.venv\Scripts\python" -c "import certifi; certifi.where()"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Error: certifi is still broken after a forced reinstall. Try deleting $ProjectDir\.venv and re-running this script." -ForegroundColor Red
+        exit 1
+    }
 }
 
 Write-Host ""

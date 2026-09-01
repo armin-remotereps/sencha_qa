@@ -16,3 +16,7 @@ class ExecutionError(ControllerError):
 
 class ProtocolError(ControllerError):
     pass
+
+
+class EnvironmentCheckError(ControllerError):
+    pass

@@ -39,10 +39,10 @@ echo.
 
 :: Create virtual environment
 if not exist "%PROJECT_DIR%\.venv" (
-    echo [1/7] Creating Python virtual environment...
+    echo [1/8] Creating Python virtual environment...
     %PYTHON_BIN% -m venv "%PROJECT_DIR%\.venv"
 ) else (
-    echo [1/7] Virtual environment already exists, skipping...
+    echo [1/8] Virtual environment already exists, skipping...
 )
 
 "%PROJECT_DIR%\.venv\Scripts\pip" install --quiet --upgrade pip
@@ -50,7 +50,7 @@ if not exist "%PROJECT_DIR%\.venv" (
 :: Install torch/torchvision with a platform-appropriate build. Unlike Linux,
 :: PyPI's default Windows wheel is CPU-only (no bundled CUDA runtime) - the
 :: CUDA-enabled build must be installed explicitly from PyTorch's own index.
-echo [2/7] Installing torch (platform-appropriate build)...
+echo [2/8] Installing torch (platform-appropriate build)...
 where nvidia-smi >nul 2>&1
 if errorlevel 1 (
     echo   No NVIDIA GPU detected, installing CPU-only torch.
@@ -61,16 +61,17 @@ if errorlevel 1 (
 )
 
 :: Install remaining dependencies
-echo [3/7] Installing remaining dependencies...
+echo [3/8] Installing remaining dependencies...
 "%PROJECT_DIR%\.venv\Scripts\pip" install --quiet -r "%PROJECT_DIR%\requirements.txt"
 
 :: Install Playwright browsers
-echo [4/7] Installing Playwright browsers...
+echo [4/8] Installing Playwright browsers...
 "%PROJECT_DIR%\.venv\Scripts\playwright" install --with-deps
 
-:: Download OmniParser model weights
-echo [5/7] Downloading OmniParser model weights (this may take a while, ~1.5GB)...
-"%PROJECT_DIR%\.venv\Scripts\pip" install --quiet "huggingface_hub[cli]"
+:: Download OmniParser model weights (huggingface_hub[cli] comes from
+:: requirements.txt above, resolved together with transformers instead of a
+:: separate late pip install that could drag it past transformers' <1.0 ceiling)
+echo [5/8] Downloading OmniParser model weights (this may take a while, ~1.5GB)...
 "%PROJECT_DIR%\.venv\Scripts\hf" download microsoft/OmniParser-v2.0 --local-dir "%PROJECT_DIR%\omniparser\weights"
 if exist "%PROJECT_DIR%\omniparser\weights\icon_caption" if not exist "%PROJECT_DIR%\omniparser\weights\icon_caption_florence" (
     ren "%PROJECT_DIR%\omniparser\weights\icon_caption" icon_caption_florence
@@ -80,17 +81,33 @@ if exist "%PROJECT_DIR%\omniparser\weights\icon_caption" if not exist "%PROJECT_
 :: their models at import time, independent of the OmniParser weights above).
 :: Without this, that download happens silently on the first real
 :: find_element call, on top of the OmniParser model load, risking a timeout.
-echo [6/7] Pre-warming OCR engines (downloads their own models on first use)...
+echo [6/8] Pre-warming OCR engines (downloads their own models on first use)...
 "%PROJECT_DIR%\.venv\Scripts\python" -c "import sys; sys.path.insert(0, r'%PROJECT_DIR%\omniparser'); import util.utils"
 
 :: Copy example.env to .env if not exists
 if not exist "%PROJECT_DIR%\.env" (
-    echo [7/7] Creating .env from example.env...
+    echo [7/8] Creating .env from example.env...
     copy "%PROJECT_DIR%\example.env" "%PROJECT_DIR%\.env"
     echo.
     echo IMPORTANT: Edit .env and set your CONTROLLER_API_KEY
 ) else (
-    echo [7/7] .env already exists, skipping...
+    echo [7/8] .env already exists, skipping...
+)
+
+:: Verify the environment isn't left in the corrupted-certifi state that has
+:: broken click/screenshot tooling on client machines (partial overwrite
+:: across the separate pip install passes above). Self-heal automatically if
+:: it is, since fixing it here is far cheaper than debugging it mid test run.
+echo [8/8] Verifying environment...
+"%PROJECT_DIR%\.venv\Scripts\python" -c "import certifi; certifi.where()" >nul 2>&1
+if errorlevel 1 (
+    echo   certifi looks corrupted, reinstalling...
+    "%PROJECT_DIR%\.venv\Scripts\pip" install --quiet --force-reinstall --no-cache-dir certifi requests urllib3
+    "%PROJECT_DIR%\.venv\Scripts\python" -c "import certifi; certifi.where()" >nul 2>&1
+    if errorlevel 1 (
+        echo Error: certifi is still broken after a forced reinstall. Try deleting %PROJECT_DIR%\.venv and re-running this script.
+        exit /b 1
+    )
 )
 
 echo.
