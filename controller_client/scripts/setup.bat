@@ -116,5 +116,8 @@ echo.
 echo To start the controller client:
 echo   cd %ROOT_DIR%
 echo   controller_client\.venv\Scripts\python -m controller_client.main
+echo.
+echo To check the OmniParser setup end to end (dependencies, weights, screenshot, model load, one inference):
+echo   controller_client\.venv\Scripts\python -m controller_client.diagnose
 
 endlocal

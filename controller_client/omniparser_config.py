@@ -34,3 +34,7 @@ def omniparser_iou_threshold() -> float:
 
 def omniparser_caption_batch_size() -> int:
     return _env_int("OMNIPARSER_CAPTION_BATCH_SIZE", 64)
+
+
+def omniparser_max_result_bytes() -> int:
+    return _env_int("OMNIPARSER_MAX_RESULT_BYTES", 8 * 1024 * 1024)

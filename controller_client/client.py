@@ -1,5 +1,4 @@
 import asyncio
-import dataclasses
 import logging
 from collections.abc import Callable, Coroutine
 from typing import Any, TypeAlias
@@ -24,7 +23,13 @@ from controller_client.browser_executor import (
 )
 from controller_client.cleanup import execute_cleanup
 from controller_client.config import ClientConfig
-from controller_client.exceptions import AuthenticationError, ExecutionError
+from controller_client.exceptions import (
+    AuthenticationError,
+    ExecutionError,
+    OmniParserError,
+    ProtocolError,
+    UnknownMessageTypeError,
+)
 from controller_client.executor import (
     execute_click,
     execute_command_streaming,
@@ -39,9 +44,15 @@ from controller_client.executor import (
     execute_wait_for_command,
 )
 from controller_client.interactive_session import InteractiveSessionManager
-from controller_client.omniparser_executor import execute_find_element
+from controller_client.omniparser_executor import (
+    execute_find_element,
+    get_omniparser_readiness,
+    load_omniparser_model,
+)
 from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import (
+    CLIENT_CAPABILITIES,
+    CLIENT_VERSION,
     ActionResultPayload,
     BrowserContentResultPayload,
     CommandResultPayload,
@@ -49,6 +60,8 @@ from controller_client.protocol import (
     FindElementResultPayload,
     InteractiveOutputPayload,
     MessageType,
+    OmniParserState,
+    OmniParserStatusPayload,
     ScreenshotResponsePayload,
     StreamName,
     deserialize_server_message,
@@ -71,13 +84,14 @@ from controller_client.protocol import (
     parse_terminate_interactive_cmd_payload,
     parse_type_text_payload,
     parse_wait_for_command_payload,
+    peek_request_id,
+    serialize_find_element_result,
     serialize_message,
 )
 from controller_client.system_info import gather_system_info
 
 logger = logging.getLogger(__name__)
 
-CLIENT_VERSION = "0.1.0"
 _MB = 1024 * 1024
 MAX_MESSAGE_SIZE = 10 * _MB
 
@@ -129,6 +143,7 @@ class ControllerClient:
             MessageType.FIND_ELEMENT: self._handle_find_element,
         }
         self._handshake_event = asyncio.Event()
+        self._omniparser_task: asyncio.Task[None] | None = None
 
     async def run(self) -> None:
         self._running = True
@@ -160,6 +175,7 @@ class ControllerClient:
 
     async def stop(self) -> None:
         self._running = False
+        await self._cancel_omniparser_task()
         self._process_tracker.kill_all()
         self._session_manager.terminate_all()
         await asyncio.to_thread(self._browser_session.close)
@@ -173,8 +189,11 @@ class ControllerClient:
         async with websockets.connect(url, max_size=MAX_MESSAGE_SIZE) as connection:
             self._connection = connection
             self._handshake_event.clear()
-            await self._send_handshake()
-            await self._message_loop(connection)
+            try:
+                await self._send_handshake()
+                await self._message_loop(connection)
+            finally:
+                await self._cancel_omniparser_task()
 
     async def _send_handshake(self) -> None:
         system_info = await asyncio.to_thread(gather_system_info)
@@ -182,11 +201,12 @@ class ControllerClient:
             MessageType.HANDSHAKE,
             api_key=self._config.api_key,
             client_version=CLIENT_VERSION,
+            capabilities=[capability.value for capability in CLIENT_CAPABILITIES],
             system_info=system_info.to_dict(),
         )
         if self._connection is not None:
             await self._connection.send(message)
-            logger.info("Handshake sent")
+            logger.info("Handshake sent (client_version=%s)", CLIENT_VERSION)
 
     async def _message_loop(self, connection: ClientConnection) -> None:
         async for raw_message in connection:
@@ -199,26 +219,67 @@ class ControllerClient:
 
             try:
                 message_type, request_id, data = deserialize_server_message(raw_message)
-            except Exception as e:
-                logger.error("Failed to deserialize message: %s", e)
+            except ProtocolError as e:
+                await self._reject_undecodable_message(raw_message, e)
                 continue
 
             handler = self._handlers.get(message_type)
             logger.info(
                 "WS message received: type=%s request_id=%s handler_found=%s",
-                message_type.value if hasattr(message_type, "value") else message_type,
+                message_type.value,
                 request_id,
                 handler is not None,
             )
-            if handler is not None:
-                await handler(request_id, data)
-            else:
+            if handler is None:
                 logger.warning("No handler for message type: %s", message_type)
                 await self._send_error(
                     request_id,
                     ErrorCode.UNKNOWN_COMMAND,
                     f"Unknown command: {message_type}",
                 )
+                continue
+
+            await self._dispatch(handler, message_type, request_id, data)
+
+    async def _reject_undecodable_message(
+        self, raw_message: str, error: ProtocolError
+    ) -> None:
+        """Answer a malformed/unknown message so the server does not wait for a timeout."""
+        request_id = peek_request_id(raw_message)
+        logger.error(
+            "Failed to deserialize message (request_id=%s): %s", request_id, error
+        )
+        if request_id is None:
+            return
+        code = (
+            ErrorCode.UNKNOWN_COMMAND
+            if isinstance(error, UnknownMessageTypeError)
+            else ErrorCode.INVALID_MESSAGE
+        )
+        await self._send_error(request_id, code, str(error))
+
+    async def _dispatch(
+        self,
+        handler: MessageHandler,
+        message_type: MessageType,
+        request_id: str,
+        data: dict[str, object],
+    ) -> None:
+        """Run a handler without letting its failure drop the connection."""
+        try:
+            await handler(request_id, data)
+        except AuthenticationError:
+            raise
+        except ProtocolError as e:
+            logger.error(
+                "Invalid %s message (request_id=%s): %s", message_type, request_id, e
+            )
+            await self._send_error(request_id, ErrorCode.INVALID_MESSAGE, str(e))
+        except Exception as e:
+            logger.exception(
+                "Handler for %s failed (request_id=%s)", message_type, request_id
+            )
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
 
     async def _send_message(self, message: str) -> None:
         if self._connection is not None:
@@ -253,15 +314,17 @@ class ControllerClient:
     async def _send_find_element_result(
         self, request_id: str, result: FindElementResultPayload
     ) -> None:
-        elements_payload = [dataclasses.asdict(el) for el in result.elements]
+        await self._send_message(serialize_find_element_result(request_id, result))
+
+    async def _send_omniparser_status(self, payload: OmniParserStatusPayload) -> None:
         message = serialize_message(
-            MessageType.FIND_ELEMENT_RESULT,
-            request_id=request_id,
-            success=result.success,
-            annotated_image_base64=result.annotated_image_base64,
-            elements=elements_payload,
-            image_width=result.image_width,
-            image_height=result.image_height,
+            MessageType.OMNIPARSER_STATUS,
+            state=payload.state.value,
+            message=payload.message,
+            device=payload.device,
+            weights_dir=payload.weights_dir,
+            phase=payload.phase,
+            load_seconds=payload.load_seconds,
         )
         await self._send_message(message)
 
@@ -282,11 +345,52 @@ class ControllerClient:
     ) -> None:
         ack = parse_handshake_ack_payload(data)
         if ack.status != "ok":
-            raise AuthenticationError(f"Handshake rejected: {ack.status}")
+            logger.error("Handshake rejected (%s): %s", ack.status, ack.message)
+            raise AuthenticationError(
+                f"Handshake rejected ({ack.status}): {ack.message}"
+            )
         logger.info(
             "Connected to project '%s' (id=%s)", ack.project_name, ack.project_id
         )
         self._handshake_event.set()
+        await self._cancel_omniparser_task()
+        self._omniparser_task = asyncio.create_task(self._initialize_omniparser())
+
+    async def _initialize_omniparser(self) -> None:
+        """Preload the OmniParser models and report readiness to the server.
+
+        Runs right after the handshake so cold model loading is never charged
+        to a find_element request timeout, and so the server can tell the user
+        why find_element will fail before it is ever used. On a warm reconnect
+        the models are already loaded and only the current readiness is sent.
+        """
+        readiness = get_omniparser_readiness()
+        if readiness.state is not OmniParserState.READY:
+            await self._send_omniparser_status(readiness.to_status_payload())
+            try:
+                await asyncio.to_thread(load_omniparser_model)
+            except OmniParserError as e:
+                logger.error(
+                    "OmniParser initialization failed (%s): %s", e.details(), e
+                )
+            except Exception:
+                logger.exception("Unexpected OmniParser initialization failure")
+        await self._send_omniparser_status(
+            get_omniparser_readiness().to_status_payload()
+        )
+
+    async def _cancel_omniparser_task(self) -> None:
+        task = self._omniparser_task
+        self._omniparser_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("OmniParser initialization task failed")
 
     async def _handle_click(self, request_id: str, data: dict[str, object]) -> None:
         payload = parse_click_payload(data)
@@ -344,6 +448,11 @@ class ControllerClient:
         try:
             result = await asyncio.to_thread(execute_find_element, payload)
             await self._send_find_element_result(request_id, result)
+        except OmniParserError as e:
+            logger.error("find_element failed (%s): %s", e.details(), e)
+            await self._send_error(
+                request_id, ErrorCode(e.code), str(e), details=e.details()
+            )
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.FIND_ELEMENT_FAILED, str(e))
 
