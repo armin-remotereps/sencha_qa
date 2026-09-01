@@ -1,10 +1,17 @@
+import dataclasses
 import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
+from typing import Final
 
-from controller_client.exceptions import ProtocolError
+from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
+
+# Bumped whenever the wire protocol changes in a way an older controller cannot
+# follow. The server ships this same file inside the controller ZIP, so the
+# version here is always the one a freshly downloaded controller reports.
+CLIENT_VERSION: Final[str] = "0.2.0"
 
 
 class MessageType(StrEnum):
@@ -45,6 +52,31 @@ class MessageType(StrEnum):
     CLEANUP_ENVIRONMENT = "cleanup_environment"
     FIND_ELEMENT = "find_element"
     FIND_ELEMENT_RESULT = "find_element_result"
+    OMNIPARSER_STATUS = "omniparser_status"
+
+
+class ClientCapability(StrEnum):
+    FIND_ELEMENT_LOCAL_V1 = "find_element_local_v1"
+    INTERACTIVE_COMMANDS_V1 = "interactive_commands_v1"
+    CLEANUP_ENVIRONMENT_V1 = "cleanup_environment_v1"
+    OMNIPARSER_STATUS_V1 = "omniparser_status_v1"
+
+
+# What this client advertises in its handshake.
+CLIENT_CAPABILITIES: Final[tuple[ClientCapability, ...]] = tuple(ClientCapability)
+
+# What the server insists on; a controller missing any of them would
+# authenticate fine and then silently time out on first use. Identical to
+# CLIENT_CAPABILITIES today; they diverge once a capability becomes optional.
+REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
+    ClientCapability
+)
+
+
+class OmniParserState(StrEnum):
+    LOADING = "loading"
+    READY = "ready"
+    FAILED = "failed"
 
 
 class MouseButton(StrEnum):
@@ -65,12 +97,15 @@ class ErrorCode(StrEnum):
     SCREENSHOT_FAILED = "SCREENSHOT_FAILED"
     TIMEOUT = "TIMEOUT"
     FIND_ELEMENT_FAILED = "FIND_ELEMENT_FAILED"
+    OMNIPARSER_NOT_READY = "OMNIPARSER_NOT_READY"
+    INCOMPATIBLE_CLIENT = "INCOMPATIBLE_CLIENT"
 
 
 @dataclass(frozen=True)
 class HandshakePayload:
     api_key: str
     client_version: str
+    capabilities: tuple[str, ...]
     system_info: dict[str, str | int]
 
 
@@ -100,8 +135,19 @@ class ErrorPayload:
 @dataclass(frozen=True)
 class HandshakeAckPayload:
     status: str
+    message: str
     project_id: str
     project_name: str
+
+
+@dataclass(frozen=True)
+class OmniParserStatusPayload:
+    state: OmniParserState
+    message: str
+    device: str
+    weights_dir: str
+    phase: str
+    load_seconds: float
 
 
 @dataclass(frozen=True)
@@ -282,6 +328,36 @@ def serialize_message(
     return json.dumps(message)
 
 
+def serialize_find_element_result(
+    request_id: str, result: FindElementResultPayload
+) -> str:
+    return serialize_message(
+        MessageType.FIND_ELEMENT_RESULT,
+        request_id=request_id,
+        success=result.success,
+        annotated_image_base64=result.annotated_image_base64,
+        elements=[dataclasses.asdict(element) for element in result.elements],
+        image_width=result.image_width,
+        image_height=result.image_height,
+    )
+
+
+def peek_request_id(raw: str) -> str | None:
+    """Best-effort ``request_id`` lookup for messages that failed to parse.
+
+    Lets the client answer a malformed or unknown message with an ``error``
+    the server can correlate, instead of leaving it to wait for a timeout.
+    """
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    request_id = data.get("request_id")
+    return request_id if isinstance(request_id, str) else None
+
+
 def deserialize_server_message(raw: str) -> tuple[MessageType, str, dict[str, object]]:
     try:
         data: dict[str, object] = json.loads(raw)
@@ -295,7 +371,7 @@ def deserialize_server_message(raw: str) -> tuple[MessageType, str, dict[str, ob
     try:
         message_type = MessageType(raw_type)
     except ValueError as e:
-        raise ProtocolError(f"Unknown message type: {raw_type}") from e
+        raise UnknownMessageTypeError(f"Unknown message type: {raw_type}") from e
 
     request_id = data.get("request_id")
     if not isinstance(request_id, str):
@@ -334,8 +410,34 @@ def _extract_number(
 def parse_handshake_ack_payload(data: dict[str, object]) -> HandshakeAckPayload:
     return HandshakeAckPayload(
         status=_extract_str(data, "status"),
-        project_id=_extract_str(data, "project_id"),
-        project_name=_extract_str(data, "project_name"),
+        message=_extract_str(data, "message", default=""),
+        project_id=_extract_str(data, "project_id", default=""),
+        project_name=_extract_str(data, "project_name", default=""),
+    )
+
+
+def parse_handshake_capabilities(data: dict[str, object]) -> tuple[str, ...]:
+    raw = data.get("capabilities", [])
+    if not isinstance(raw, list) or not all(isinstance(c, str) for c in raw):
+        raise ProtocolError("Invalid 'capabilities': expected a list of strings")
+    return tuple(raw)
+
+
+def parse_omniparser_status_payload(
+    data: dict[str, object],
+) -> OmniParserStatusPayload:
+    raw_state = _extract_str(data, "state")
+    try:
+        state = OmniParserState(raw_state)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown OmniParser state: {raw_state}") from e
+    return OmniParserStatusPayload(
+        state=state,
+        message=_extract_str(data, "message", default=""),
+        device=_extract_str(data, "device", default=""),
+        weights_dir=_extract_str(data, "weights_dir", default=""),
+        phase=_extract_str(data, "phase", default=""),
+        load_seconds=_extract_number(data, "load_seconds", default=0.0),
     )
 
 
