@@ -64,7 +64,10 @@ services:
         # routinely several MiB, so both limits are raised to 32 MiB; the
         # controller bounds its own results to OMNIPARSER_MAX_RESULT_BYTES
         # (default 8 MiB), well under this.
-        entrypoint: "python -m daphne -b 0.0.0.0 -p 8000 --ping-interval 5 --ping-timeout 10 --websocket-max-message-size 33554432 --websocket-max-frame-size 33554432 auto_tester.asgi:application"
+        # Controller actions can briefly saturate CPU or upload multi-megabyte
+        # screenshots. Keep the heartbeat tolerant of those bursts so Daphne
+        # does not reset an otherwise healthy WebSocket mid-action.
+        entrypoint: "python -m daphne -b 0.0.0.0 -p 8000 --ping-interval 30 --ping-timeout 120 --websocket-max-message-size 33554432 --websocket-max-frame-size 33554432 auto_tester.asgi:application"
 
     upload-celery:
         hostname: upload

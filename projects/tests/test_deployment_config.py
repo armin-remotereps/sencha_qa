@@ -8,6 +8,8 @@ from django.test import SimpleTestCase
 # Upper bound the controller enforces on a single find_element_result message
 # (controller_client/omniparser_config.py OMNIPARSER_MAX_RESULT_BYTES default).
 _CONTROLLER_MAX_RESULT_BYTES = 8 * 1024 * 1024
+_MIN_CONTROLLER_PING_INTERVAL_SECONDS = 30
+_MIN_CONTROLLER_PING_TIMEOUT_SECONDS = 120
 
 
 def _daphne_entrypoint() -> str:
@@ -40,3 +42,19 @@ class DaphneWebSocketLimitTests(SimpleTestCase):
             frame_limit, "api entrypoint lacks --websocket-max-frame-size"
         )
         self.assertEqual(frame_limit, message_limit)
+
+
+class DaphneWebSocketHeartbeatTests(SimpleTestCase):
+    """Controller work must not be mistaken for a dead WebSocket connection."""
+
+    def test_heartbeat_allows_long_controller_actions(self) -> None:
+        entrypoint = _daphne_entrypoint()
+        ping_interval = _flag_value(entrypoint, "--ping-interval")
+        ping_timeout = _flag_value(entrypoint, "--ping-timeout")
+
+        self.assertIsNotNone(ping_interval, "api entrypoint lacks --ping-interval")
+        self.assertIsNotNone(ping_timeout, "api entrypoint lacks --ping-timeout")
+        assert ping_interval is not None
+        assert ping_timeout is not None
+        self.assertGreaterEqual(ping_interval, _MIN_CONTROLLER_PING_INTERVAL_SECONDS)
+        self.assertGreaterEqual(ping_timeout, _MIN_CONTROLLER_PING_TIMEOUT_SECONDS)
