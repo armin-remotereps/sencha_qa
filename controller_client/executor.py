@@ -10,6 +10,7 @@ import pyautogui
 from PIL import Image
 
 from controller_client.exceptions import ExecutionError
+from controller_client.input_guard import ensure_input_not_blocked
 from controller_client.interactive_session import InteractiveSessionManager
 from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import (
@@ -34,6 +35,7 @@ pyautogui.FAILSAFE = False
 
 
 def execute_click(payload: ClickPayload) -> ActionResultPayload:
+    ensure_input_not_blocked()
     start = time.monotonic()
     try:
         pyautogui.click(x=payload.x, y=payload.y, button=payload.button)
@@ -48,6 +50,7 @@ def execute_click(payload: ClickPayload) -> ActionResultPayload:
 
 
 def execute_hover(payload: HoverPayload) -> ActionResultPayload:
+    ensure_input_not_blocked()
     start = time.monotonic()
     try:
         pyautogui.moveTo(x=payload.x, y=payload.y)
@@ -62,6 +65,7 @@ def execute_hover(payload: HoverPayload) -> ActionResultPayload:
 
 
 def execute_drag(payload: DragPayload) -> ActionResultPayload:
+    ensure_input_not_blocked()
     start = time.monotonic()
     try:
         pyautogui.moveTo(x=payload.start_x, y=payload.start_y)
@@ -85,6 +89,7 @@ def execute_drag(payload: DragPayload) -> ActionResultPayload:
 
 
 def execute_type_text(payload: TypeTextPayload) -> ActionResultPayload:
+    ensure_input_not_blocked()
     start = time.monotonic()
     try:
         pyautogui.typewrite(payload.text, interval=payload.interval)
@@ -99,6 +104,7 @@ def execute_type_text(payload: TypeTextPayload) -> ActionResultPayload:
 
 
 def execute_key_press(payload: KeyPressPayload) -> ActionResultPayload:
+    ensure_input_not_blocked()
     start = time.monotonic()
     try:
         keys = [k.strip() for k in payload.keys.split("+")]

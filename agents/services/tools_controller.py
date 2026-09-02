@@ -6,6 +6,8 @@ from agents.services.tool_utils import safe_tool_call
 from agents.services.vision_qa import answer_screenshot_question
 from agents.types import LLMConfig, LogCallback, ScreenshotCallback, ToolResult
 from projects.services import (
+    ActionResult,
+    ControllerActionError,
     InteractiveCommandResult,
     controller_browser_click,
     controller_browser_download,
@@ -30,6 +32,21 @@ from projects.services import (
 )
 
 _LOG_PREFIX = "$ "
+
+
+def _ensure_action_succeeded(result: ActionResult) -> None:
+    """Surface a controller-reported failure instead of claiming the action ran.
+
+    The controller answers input actions with either an action_result carrying
+    ``success`` or an error reply; both arrive here as an ActionResult, and a
+    failed one (for example Windows refusing to deliver input to an elevated
+    window) must reach the agent as an error, not as "Clicked ...".
+    """
+    if result["success"]:
+        return
+    raise ControllerActionError(
+        result["message"] or "Controller reported the action failed"
+    )
 
 
 def _format_interactive_output(
@@ -132,7 +149,7 @@ def click(
         x, y = find_element_coordinates(
             project_id, description, vision_config, on_screenshot=on_screenshot
         )
-        controller_click(project_id, x, y)
+        _ensure_action_succeeded(controller_click(project_id, x, y))
         return ToolResult(
             tool_call_id="",
             content=f"Clicked element at ({x}, {y}): {description}",
@@ -144,7 +161,7 @@ def click(
 
 def type_text(project_id: int, *, text: str) -> ToolResult:
     def _do() -> ToolResult:
-        controller_type_text(project_id, text)
+        _ensure_action_succeeded(controller_type_text(project_id, text))
         return ToolResult(
             tool_call_id="", content=f"Typed text: {text}", is_error=False
         )
@@ -154,7 +171,7 @@ def type_text(project_id: int, *, text: str) -> ToolResult:
 
 def key_press(project_id: int, *, keys: str) -> ToolResult:
     def _do() -> ToolResult:
-        controller_key_press(project_id, keys)
+        _ensure_action_succeeded(controller_key_press(project_id, keys))
         return ToolResult(
             tool_call_id="", content=f"Pressed keys: {keys}", is_error=False
         )
@@ -173,7 +190,7 @@ def hover(
         x, y = find_element_coordinates(
             project_id, description, vision_config, on_screenshot=on_screenshot
         )
-        controller_hover(project_id, x, y)
+        _ensure_action_succeeded(controller_hover(project_id, x, y))
         return ToolResult(
             tool_call_id="",
             content=f"Hovered over element at ({x}, {y}): {description}",
@@ -204,7 +221,7 @@ def drag(
             vision_config,
             on_screenshot=on_screenshot,
         )
-        controller_drag(project_id, sx, sy, ex, ey)
+        _ensure_action_succeeded(controller_drag(project_id, sx, sy, ex, ey))
         return ToolResult(
             tool_call_id="",
             content=f"Dragged from ({sx}, {sy}) to ({ex}, {ey})",

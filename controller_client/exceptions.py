@@ -26,6 +26,10 @@ class EnvironmentCheckError(ControllerError):
     pass
 
 
+class InputBlockedError(ExecutionError):
+    """Synthesized input would be discarded by the OS before reaching the screen."""
+
+
 class OmniParserError(ExecutionError):
     """An OmniParser load or find_element failure tagged with where it happened.
 
