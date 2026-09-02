@@ -334,9 +334,36 @@ def get_search_tool_definitions() -> tuple[ToolDefinition, ...]:
     )
 
 
+def get_utility_tool_definitions() -> tuple[ToolDefinition, ...]:
+    return (
+        ToolDefinition(
+            name="wait",
+            description=(
+                "Pause agent execution for a fixed number of seconds. Use after a UI "
+                "action when an application, page, dialog, or download needs time to "
+                "load. After waiting, inspect the UI to verify the expected result. "
+                "Do not use this for shell processes; use wait_for_command instead."
+            ),
+            category=ToolCategory.UTILITY,
+            parameters=(
+                ToolParameter(
+                    name="seconds",
+                    type="number",
+                    description=(
+                        "How long to pause, in seconds. Must be greater than 0 and "
+                        "at most 300. Fractional values such as 0.5 are allowed."
+                    ),
+                    required=True,
+                ),
+            ),
+        ),
+    )
+
+
 def get_all_tool_definitions() -> tuple[ToolDefinition, ...]:
     return (
         get_controller_tool_definitions()
         + get_browser_tool_definitions()
         + get_search_tool_definitions()
+        + get_utility_tool_definitions()
     )

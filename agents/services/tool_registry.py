@@ -4,7 +4,7 @@ import dataclasses
 import logging
 from collections.abc import Callable
 
-from agents.services import tools_controller, tools_search
+from agents.services import tools_controller, tools_search, tools_utility
 from agents.services.tool_definitions import (
     get_all_tool_definitions as get_all_tool_definitions,
 )
@@ -260,6 +260,12 @@ def _handle_web_search(
     )
 
 
+def _handle_wait(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    return tools_utility.wait(
+        arguments.get("seconds"), cancellation_check=context.cancellation_check
+    )
+
+
 _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "execute_command": _handle_execute_command,
     "send_command_input": _handle_send_command_input,
@@ -282,4 +288,5 @@ _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "browser_download": _handle_browser_download,
     "browser_list_downloads": _handle_browser_list_downloads,
     "web_search": _handle_web_search,
+    "wait": _handle_wait,
 }

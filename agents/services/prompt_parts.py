@@ -68,7 +68,9 @@ def build_tool_taxonomy() -> str:
         "15. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
         "16. browser_download — Download a file from a URL via the browser\n\n"
         "SEARCH TOOLS (for looking up information on the web):\n"
-        "17. web_search — Search the web and return top results with titles, snippets, and URLs"
+        "17. web_search — Search the web and return top results with titles, snippets, and URLs\n\n"
+        "UTILITY TOOLS:\n"
+        "18. wait — Pause for a fixed number of seconds while the UI settles"
     )
 
 
@@ -131,6 +133,7 @@ def build_tool_guidelines() -> str:
             build_browser_tool_examples(),
             build_tool_selection_rules(),
             build_search_tool_examples(),
+            build_utility_tool_examples(),
             build_shell_rules(),
             build_retry_limits(),
             (
@@ -205,6 +208,23 @@ def build_search_tool_examples() -> str:
     return (
         "SEARCH TOOLS (for looking up information on the web):\n"
         '- web_search(query="how to install jdk 17 on macOS") — search the web and return top results'
+    )
+
+
+def build_utility_tool_examples() -> str:
+    return (
+        "UTILITY TOOLS:\n"
+        "- wait(seconds=5) — pause for a fixed number of seconds (greater than 0, at most 300)\n"
+        "- Use wait after a UI action (click, browser_click, launch_app, a native download "
+        "button) when an application, page, dialog, or download needs a fixed settling delay.\n"
+        "- After waiting, ALWAYS inspect the screen or page (take_screenshot, "
+        "browser_take_screenshot, browser_get_page_content) to verify the expected result. "
+        "Waiting by itself does not prove the action succeeded.\n"
+        "- Do NOT use wait for shell processes: use wait_for_command for a running "
+        "execute_command session.\n"
+        "- For a Playwright-managed download (started via browser_download or a browser_click "
+        "that Playwright intercepts), prefer browser_list_downloads to check its status "
+        "directly. Use wait for generic/native download buttons or general UI loading."
     )
 
 

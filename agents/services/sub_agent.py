@@ -49,6 +49,7 @@ def run_sub_agent(
         vision_config=config.vision_llm,
         on_screenshot=config.on_screenshot,
         on_log=config.on_log,
+        cancellation_check=config.cancellation_check,
     )
 
     task_description = (

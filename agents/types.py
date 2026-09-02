@@ -10,6 +10,7 @@ class ToolCategory(Enum):
     CONTROLLER = "controller"
     BROWSER = "browser"
     SEARCH = "search"
+    UTILITY = "utility"
 
 
 class AgentStopReason(Enum):
@@ -161,6 +162,7 @@ class ToolContext:
     vision_config: LLMConfig | None = None
     on_screenshot: ScreenshotCallback | None = None
     on_log: LogCallback | None = None
+    cancellation_check: CancellationCheck | None = None
 
 
 @dataclass(frozen=True)
