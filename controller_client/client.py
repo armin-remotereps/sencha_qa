@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from collections.abc import Callable, Coroutine
+from pathlib import Path
 from typing import Any, TypeAlias
 
 import websockets
@@ -711,6 +712,7 @@ class ControllerClient:
                 self._browser_session,
                 self._session_manager,
                 self._process_tracker,
+                Path(self._config.cleanup_dir).expanduser(),
             )
             await self._send_action_result(request_id, result)
         except ExecutionError as e:

@@ -43,6 +43,19 @@ ROOT_DIR="$(dirname "$PROJECT_DIR")"
 echo "=== Controller Client Setup ==="
 echo ""
 
+# The server's cleanup_environment action empties the Downloads folder between
+# test cases (CONTROLLER_CLEANUP_DIR, default ~/Downloads). The client refuses
+# to delete its own files, but installing it there still means every cleanup
+# skips part of the folder and logs warnings.
+case "$PROJECT_DIR/" in
+    "$HOME/Downloads/"*)
+        echo "WARNING: the controller client is installed inside $HOME/Downloads." >&2
+        echo "         Test-run cleanup empties that folder. Move the client elsewhere (e.g. $HOME/controller_client)" >&2
+        echo "         or point CONTROLLER_CLEANUP_DIR in .env at a different folder." >&2
+        echo ""
+        ;;
+esac
+
 # Install system dependencies (Linux only)
 if [[ "$(uname -s)" == "Linux" ]]; then
     echo "[1/9] Installing system dependencies..."

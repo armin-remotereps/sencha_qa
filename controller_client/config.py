@@ -1,8 +1,13 @@
 import argparse
 import logging
 from dataclasses import dataclass
+from typing import Final
 
 from decouple import config as decouple_config
+
+# Folder the server's cleanup_environment action empties between test cases.
+# Overridable so the controller can live in ~/Downloads without wiping itself.
+DEFAULT_CLEANUP_DIR: Final[str] = "~/Downloads"
 
 
 @dataclass(frozen=True)
@@ -13,6 +18,7 @@ class ClientConfig:
     reconnect_interval: int
     max_reconnect_attempts: int
     log_level: str
+    cleanup_dir: str = DEFAULT_CLEANUP_DIR
 
     @property
     def ws_url(self) -> str:
@@ -36,6 +42,7 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
     parser.add_argument("--reconnect-interval", type=int, default=None)
     parser.add_argument("--max-reconnect-attempts", type=int, default=None)
     parser.add_argument("--log-level", type=str, default=None)
+    parser.add_argument("--cleanup-dir", type=str, default=None)
 
     args = parser.parse_args(argv)
 
@@ -48,6 +55,8 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
         max_reconnect_attempts=args.max_reconnect_attempts
         or _env_int("CONTROLLER_MAX_RECONNECT_ATTEMPTS", 10),
         log_level=args.log_level or _env_str("CONTROLLER_LOG_LEVEL", "INFO"),
+        cleanup_dir=args.cleanup_dir
+        or _env_str("CONTROLLER_CLEANUP_DIR", DEFAULT_CLEANUP_DIR),
     )
 
 

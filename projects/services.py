@@ -941,7 +941,17 @@ def controller_cleanup_environment(
 def _safe_cleanup(project_id: int) -> None:
     try:
         timeout = float(settings.CLEANUP_TIMEOUT_SECONDS)
-        controller_cleanup_environment(project_id, timeout=timeout)
+        result = controller_cleanup_environment(project_id, timeout=timeout)
+        if result["success"]:
+            logger.info(
+                "Environment cleanup for project %d: %s", project_id, result["message"]
+            )
+        else:
+            logger.warning(
+                "Environment cleanup for project %d left work undone: %s",
+                project_id,
+                result["message"],
+            )
     except Exception:
         logger.warning(
             "Environment cleanup failed for project %d", project_id, exc_info=True

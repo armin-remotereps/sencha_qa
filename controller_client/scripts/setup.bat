@@ -37,6 +37,21 @@ echo Using Python %PYTHON_VERSION% (%PYTHON_BIN%)
 echo === Controller Client Setup ===
 echo.
 
+:: The server's cleanup_environment action empties the Downloads folder between
+:: test cases (CONTROLLER_CLEANUP_DIR, default ~/Downloads). The client refuses
+:: to delete its own files, but installing it there still means every cleanup
+:: skips part of the folder and logs warnings.
+for %%I in ("%PROJECT_DIR%") do set PROJECT_DIR_FULL=%%~fI
+set "CLEANUP_DIR_PREFIX=%USERPROFILE%\Downloads\"
+set "PROJECT_DIR_CHECK=%PROJECT_DIR_FULL%\"
+call set "PROJECT_DIR_OUTSIDE=%%PROJECT_DIR_CHECK:%CLEANUP_DIR_PREFIX%=%%"
+if /I not "%PROJECT_DIR_OUTSIDE%"=="%PROJECT_DIR_CHECK%" (
+    echo WARNING: the controller client is installed inside %USERPROFILE%\Downloads.
+    echo          Test-run cleanup empties that folder. Move the client elsewhere ^(e.g. %USERPROFILE%\controller_client^)
+    echo          or point CONTROLLER_CLEANUP_DIR in .env at a different folder.
+    echo.
+)
+
 :: Create virtual environment
 if not exist "%PROJECT_DIR%\.venv" (
     echo [1/8] Creating Python virtual environment...

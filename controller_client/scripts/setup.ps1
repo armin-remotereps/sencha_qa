@@ -32,6 +32,18 @@ $RootDir = Split-Path -Parent $ProjectDir
 Write-Host "=== Controller Client Setup ===" -ForegroundColor Cyan
 Write-Host ""
 
+# The server's cleanup_environment action empties the Downloads folder between
+# test cases (CONTROLLER_CLEANUP_DIR, default ~/Downloads). The client refuses
+# to delete its own files, but installing it there still means every cleanup
+# skips part of the folder and logs warnings.
+$DownloadsDir = Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads'
+if ("$ProjectDir\".ToLower().StartsWith("$DownloadsDir\".ToLower())) {
+    Write-Host "WARNING: the controller client is installed inside $DownloadsDir." -ForegroundColor Yellow
+    Write-Host "         Test-run cleanup empties that folder. Move the client elsewhere (e.g. $env:USERPROFILE\controller_client)" -ForegroundColor Yellow
+    Write-Host "         or point CONTROLLER_CLEANUP_DIR in .env at a different folder." -ForegroundColor Yellow
+    Write-Host ""
+}
+
 # Create virtual environment
 if (-not (Test-Path "$ProjectDir\.venv")) {
     Write-Host "[1/8] Creating Python virtual environment..."
