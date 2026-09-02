@@ -359,3 +359,37 @@ async def test_find_element_omniparser_error_is_reported_with_details(
     assert error["request_id"] == "r9"
     assert error["code"] == "OMNIPARSER_NOT_READY"
     assert error["details"] == "phase=imports; device=; weights_dir=/w"
+
+
+class _FakeConnect:
+    """Stand-in for websockets.connect that records its keyword arguments."""
+
+    def __init__(self, connection: FakeConnection) -> None:
+        self.connection = connection
+        self.kwargs: dict[str, object] = {}
+
+    def __call__(self, url: str, **kwargs: object) -> _FakeConnect:
+        self.kwargs = kwargs
+        return self
+
+    async def __aenter__(self) -> FakeConnection:
+        return self.connection
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_connect_disables_client_keepalive_pings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = FakeConnection([])
+    fake_connect = _FakeConnect(connection)
+    monkeypatch.setattr(f"{CLIENT}.websockets.connect", fake_connect)
+    monkeypatch.setattr(f"{CLIENT}.gather_system_info", lambda: FakeSystemInfo())
+    client = _client_with(connection)
+
+    await client._connect_and_listen()
+
+    assert "ping_interval" in fake_connect.kwargs
+    assert fake_connect.kwargs["ping_interval"] is None

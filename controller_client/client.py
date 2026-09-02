@@ -187,7 +187,15 @@ class ControllerClient:
         url = self._config.ws_url
         logger.info("Connecting to %s", url)
 
-        async with websockets.connect(url, max_size=MAX_MESSAGE_SIZE) as connection:
+        # Client-side keepalive is off on purpose. Frames are ordered, so a
+        # ping queued behind a multi-MiB screenshot or find_element result on a
+        # slow uplink cannot be answered within the library's 20s default and
+        # the client would close the socket itself (1011 "keepalive ping
+        # timeout"). Daphne pings us every 30s with a 120s timeout instead,
+        # and our pong to it tolerates the same queueing.
+        async with websockets.connect(
+            url, max_size=MAX_MESSAGE_SIZE, ping_interval=None
+        ) as connection:
             self._connection = connection
             self._handshake_event.clear()
             try:
