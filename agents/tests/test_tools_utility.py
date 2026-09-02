@@ -58,7 +58,7 @@ class WaitToolDefinitionTests(SimpleTestCase):
         self.assertTrue(seconds.required)
 
 
-class WaitOperationTests(SimpleTestCase):
+class _FakeClockTestCase(SimpleTestCase):
     def setUp(self) -> None:
         self.clock = _FakeClock()
         monotonic_patch = patch(
@@ -72,6 +72,8 @@ class WaitOperationTests(SimpleTestCase):
         self.addCleanup(monotonic_patch.stop)
         self.addCleanup(sleep_patch.stop)
 
+
+class WaitOperationTests(_FakeClockTestCase):
     def test_integer_duration_succeeds(self) -> None:
         result = tools_utility.wait(10)
 
@@ -123,6 +125,42 @@ class WaitOperationTests(SimpleTestCase):
         result = tools_utility.wait(1, cancellation_check=None)
 
         self.assertFalse(result.is_error)
+
+
+class WaitBudgetTests(_FakeClockTestCase):
+    def test_wait_within_budget_is_unchanged(self) -> None:
+        result = tools_utility.wait(10, deadline=self.clock.now + 100)
+
+        self.assertFalse(result.is_error)
+        self.assertEqual(result.content, "Waited 10 seconds.")
+        self.assertAlmostEqual(self.clock.now, 1010.0)
+
+    def test_wait_exceeding_budget_is_shortened_with_margin(self) -> None:
+        result = tools_utility.wait(300, deadline=self.clock.now + 100)
+
+        self.assertFalse(result.is_error)
+        self.assertIn("Waited 85 of the 300 seconds requested", result.content)
+        self.assertIn("report the result now", result.content)
+        self.assertAlmostEqual(self.clock.now, 1085.0)
+
+    def test_exhausted_budget_does_not_sleep(self) -> None:
+        result = tools_utility.wait(30, deadline=self.clock.now + 15.5)
+
+        self.assertTrue(result.is_error)
+        self.assertIn("time budget is exhausted", result.content)
+        self.assertEqual(self.clock.sleep_calls, [])
+
+    def test_past_deadline_does_not_sleep(self) -> None:
+        result = tools_utility.wait(30, deadline=self.clock.now - 5)
+
+        self.assertTrue(result.is_error)
+        self.assertEqual(self.clock.sleep_calls, [])
+
+    def test_invalid_duration_is_rejected_before_budget_check(self) -> None:
+        result = tools_utility.wait(0, deadline=self.clock.now - 5)
+
+        self.assertTrue(result.is_error)
+        self.assertIn("Invalid seconds value", result.content)
 
 
 class WaitValidationTests(SimpleTestCase):
@@ -186,7 +224,21 @@ class WaitDispatchTests(SimpleTestCase):
             )
             dispatch_tool_call(tool_call, context)
 
-        mocked_wait.assert_called_once_with(2, cancellation_check=None)
+        mocked_wait.assert_called_once_with(2, cancellation_check=None, deadline=None)
+
+    def test_dispatch_forwards_deadline_from_context(self) -> None:
+        context = ToolContext(project_id=1, deadline=1234.5)
+        tool_call = ToolCall(
+            tool_call_id="call-abc", tool_name="wait", arguments={"seconds": 2}
+        )
+
+        with patch("agents.services.tools_utility.wait") as mocked_wait:
+            mocked_wait.return_value = ToolResult(
+                tool_call_id="", content="Waited 2 seconds.", is_error=False
+            )
+            dispatch_tool_call(tool_call, context)
+
+        mocked_wait.assert_called_once_with(2, cancellation_check=None, deadline=1234.5)
 
     def test_dispatch_forwards_cancellation_check_from_context(self) -> None:
         def cancellation_check() -> bool:
@@ -203,7 +255,9 @@ class WaitDispatchTests(SimpleTestCase):
             )
             dispatch_tool_call(tool_call, context)
 
-        mocked_wait.assert_called_once_with(2, cancellation_check=cancellation_check)
+        mocked_wait.assert_called_once_with(
+            2, cancellation_check=cancellation_check, deadline=None
+        )
 
     def test_dispatch_preserves_original_tool_call_id(self) -> None:
         context = ToolContext(project_id=1)

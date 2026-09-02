@@ -14,6 +14,7 @@ def build_sub_agent_system_prompt(
     expected_result: str,
     state_description: str,
     *,
+    timeout_seconds: int,
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
 ) -> str:
@@ -23,6 +24,7 @@ def build_sub_agent_system_prompt(
         build_tool_taxonomy(),
         build_environment_context(system_info=system_info),
         build_tool_guidelines(),
+        _build_time_budget_section(timeout_seconds),
         _build_result_format_instructions(),
     ]
     if project_prompt:
@@ -40,6 +42,16 @@ def _build_sub_agent_persona(
         system_info=system_info,
         role="a strict QA step executor",
         job="execute ONE test step exactly as described and report the result honestly",
+    )
+
+
+def _build_time_budget_section(timeout_seconds: int) -> str:
+    return (
+        f"TIME BUDGET:\nYou have {timeout_seconds} seconds of wall-clock time for this "
+        "step, counted from your first action. The step fails automatically when the "
+        "budget runs out, even if the action itself succeeded. Leave time for a final "
+        "screenshot and your RESULT answer; the wait tool shortens any wait that would "
+        "run past the budget."
     )
 
 

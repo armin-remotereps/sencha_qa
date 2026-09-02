@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from dataclasses import replace
 from typing import Literal
 
 from django.conf import settings
@@ -20,6 +21,11 @@ from agents.services.orchestrator_prompts import (
     build_verdict_prompt,
 )
 from agents.services.sub_agent import run_sub_agent
+from agents.services.sub_task_budget import (
+    TimeoutBounds,
+    build_timeout_bounds,
+    resolve_timeout_seconds,
+)
 from agents.types import (
     AgentCancelledError,
     AgentConfig,
@@ -70,8 +76,13 @@ def run_orchestrator(
     )
     _log(on_log, "[Orchestrator] Planning: decomposing test case into sub-tasks...")
 
+    bounds = build_timeout_bounds()
     sub_tasks = _plan_sub_tasks(
-        orchestrator_llm, task_description, project_prompt=project_prompt, on_log=on_log
+        orchestrator_llm,
+        task_description,
+        bounds=bounds,
+        project_prompt=project_prompt,
+        on_log=on_log,
     )
 
     _check_cancelled(cancellation_check, on_log)
@@ -90,6 +101,7 @@ def run_orchestrator(
         sub_tasks=sub_tasks,
         project_id=project_id,
         sub_agent_config=sub_agent_config,
+        bounds=bounds,
         system_info=system_info,
         project_prompt=project_prompt,
         on_log=on_log,
@@ -142,10 +154,15 @@ def _plan_sub_tasks(
     orchestrator_llm: LLMConfig,
     task_description: str,
     *,
+    bounds: TimeoutBounds,
     project_prompt: str | None = None,
     on_log: LogCallback | None = None,
 ) -> tuple[SubTask, ...]:
-    system_prompt = build_plan_system_prompt(project_prompt=project_prompt)
+    system_prompt = build_plan_system_prompt(
+        project_prompt=project_prompt,
+        min_timeout_seconds=bounds.minimum,
+        max_timeout_seconds=bounds.maximum,
+    )
     messages = (
         ChatMessage(role="system", content=system_prompt),
         ChatMessage(role="user", content=task_description),
@@ -164,20 +181,32 @@ def _plan_sub_tasks(
     max_subtasks: int = settings.ORCHESTRATOR_MAX_SUBTASKS
     raw_sub_tasks = raw_sub_tasks[:max_subtasks]
 
-    sub_tasks: list[SubTask] = []
-    for item in raw_sub_tasks:
-        if isinstance(item, dict):
-            sub_tasks.append(
-                SubTask(
-                    description=str(item.get("description", "")),
-                    expected_result=str(item.get("expected_result", "")),
-                )
-            )
+    sub_tasks = tuple(
+        _build_sub_task(item, bounds)
+        for item in raw_sub_tasks
+        if isinstance(item, dict)
+    )
 
     for i, st in enumerate(sub_tasks, 1):
-        _log(on_log, f"[Orchestrator]   Sub-task {i}: {st.description}")
+        _log(
+            on_log,
+            f"[Orchestrator]   Sub-task {i} (budget {st.timeout_seconds}s): "
+            f"{st.description}",
+        )
 
-    return tuple(sub_tasks)
+    return sub_tasks
+
+
+def _build_sub_task(item: dict[str, object], bounds: TimeoutBounds) -> SubTask:
+    return SubTask(
+        description=str(item.get("description", "")),
+        expected_result=str(item.get("expected_result", "")),
+        timeout_seconds=resolve_timeout_seconds(item.get("timeout_seconds"), bounds),
+    )
+
+
+def _config_for_sub_task(base: AgentConfig, sub_task: SubTask) -> AgentConfig:
+    return replace(base, timeout_seconds=sub_task.timeout_seconds)
 
 
 def _execute_sub_tasks(
@@ -186,6 +215,7 @@ def _execute_sub_tasks(
     sub_tasks: tuple[SubTask, ...],
     project_id: int,
     sub_agent_config: AgentConfig,
+    bounds: TimeoutBounds,
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
     on_log: LogCallback | None = None,
@@ -219,7 +249,7 @@ def _execute_sub_tasks(
             sub_task,
             state_description,
             project_id,
-            config=sub_agent_config,
+            config=_config_for_sub_task(sub_agent_config, sub_task),
             system_info=system_info,
             project_prompt=project_prompt,
         )
@@ -244,6 +274,7 @@ def _execute_sub_tasks(
             sub_task_result=result,
             state_description=state_description,
             remaining_tasks=remaining,
+            bounds=bounds,
             on_log=on_log,
         )
 
@@ -312,12 +343,16 @@ def _attempt_recovery(
 
     recovery_counts[step_index] = attempts + 1
 
-    _log(on_log, f"[Orchestrator]   Recovery: {decision.recovery_task.description}")
+    _log(
+        on_log,
+        f"[Orchestrator]   Recovery (budget {decision.recovery_task.timeout_seconds}s): "
+        f"{decision.recovery_task.description}",
+    )
     recovery_result = run_sub_agent(
         decision.recovery_task,
         state_description,
         project_id,
-        config=sub_agent_config,
+        config=_config_for_sub_task(sub_agent_config, decision.recovery_task),
         system_info=system_info,
         project_prompt=project_prompt,
     )
@@ -369,10 +404,16 @@ def _evaluate_failure(
     sub_task_result: SubTaskResult,
     state_description: str,
     remaining_tasks: int,
+    bounds: TimeoutBounds,
     on_log: LogCallback | None = None,
 ) -> OrchestratorDecision:
     prompt = build_evaluate_prompt(
-        sub_task, sub_task_result, state_description, remaining_tasks
+        sub_task,
+        sub_task_result,
+        state_description,
+        remaining_tasks,
+        min_timeout_seconds=bounds.minimum,
+        max_timeout_seconds=bounds.maximum,
     )
     evaluate_messages.append(ChatMessage(role="user", content=prompt))
 
@@ -398,10 +439,7 @@ def _evaluate_failure(
     if action == "recover":
         raw_recovery = parsed.get("recovery_task")
         if isinstance(raw_recovery, dict):
-            recovery_task = SubTask(
-                description=str(raw_recovery.get("description", "")),
-                expected_result=str(raw_recovery.get("expected_result", "")),
-            )
+            recovery_task = _build_sub_task(raw_recovery, bounds)
 
     return OrchestratorDecision(
         action=action,

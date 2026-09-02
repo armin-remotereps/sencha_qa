@@ -262,7 +262,9 @@ def _handle_web_search(
 
 def _handle_wait(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     return tools_utility.wait(
-        arguments.get("seconds"), cancellation_check=context.cancellation_check
+        arguments.get("seconds"),
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
     )
 
 

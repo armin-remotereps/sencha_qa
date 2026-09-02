@@ -319,3 +319,9 @@ SUB_AGENT_MAX_ITERATIONS: int = config("SUB_AGENT_MAX_ITERATIONS", default=15, c
 SUB_AGENT_TIMEOUT_SECONDS: int = config(
     "SUB_AGENT_TIMEOUT_SECONDS", default=180, cast=int
 )
+SUB_AGENT_MIN_TIMEOUT_SECONDS: int = config(
+    "SUB_AGENT_MIN_TIMEOUT_SECONDS", default=150, cast=int
+)
+SUB_AGENT_MAX_TIMEOUT_SECONDS: int = config(
+    "SUB_AGENT_MAX_TIMEOUT_SECONDS", default=900, cast=int
+)

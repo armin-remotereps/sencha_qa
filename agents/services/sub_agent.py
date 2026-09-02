@@ -37,6 +37,7 @@ def run_sub_agent(
         sub_task.description,
         sub_task.expected_result,
         state_description,
+        timeout_seconds=config.timeout_seconds,
         system_info=system_info,
         project_prompt=project_prompt,
     )

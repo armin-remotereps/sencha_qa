@@ -215,6 +215,9 @@ def build_utility_tool_examples() -> str:
     return (
         "UTILITY TOOLS:\n"
         "- wait(seconds=5) — pause for a fixed number of seconds (greater than 0, at most 300)\n"
+        "- wait never runs past the step's TIME BUDGET: a wait that would exceed it is "
+        "shortened and the result tells you so. Prefer several shorter waits with a check "
+        "in between over one long wait.\n"
         "- Use wait after a UI action (click, browser_click, launch_app, a native download "
         "button) when an application, page, dialog, or download needs a fixed settling delay.\n"
         "- After waiting, ALWAYS inspect the screen or page (take_screenshot, "

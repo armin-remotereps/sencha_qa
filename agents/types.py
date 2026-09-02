@@ -130,6 +130,7 @@ class AgentResult:
 class SubTask:
     description: str
     expected_result: str
+    timeout_seconds: int
 
 
 @dataclass(frozen=True)
@@ -163,6 +164,7 @@ class ToolContext:
     on_screenshot: ScreenshotCallback | None = None
     on_log: LogCallback | None = None
     cancellation_check: CancellationCheck | None = None
+    deadline: float | None = None
 
 
 @dataclass(frozen=True)

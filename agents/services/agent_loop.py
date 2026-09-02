@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import replace
 
 from django.conf import settings
 
@@ -174,6 +175,7 @@ def _run_agent_loop(
     ]
 
     start_time = time.monotonic()
+    context = replace(context, deadline=start_time + config.timeout_seconds)
     iterations = 0
     tool_calls_made = 0
     on_log = config.on_log
