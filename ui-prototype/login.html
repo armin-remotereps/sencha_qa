@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · Punk Hazard</title>
+  <link rel="stylesheet" href="assets/prototype.css">
+</head>
+<body>
+<main class="auth-page">
+  <div class="auth-card">
+
+    <div class="brand-plate">
+      <img src="../static/branding/punk-hazard-logo.png" alt="Punk Hazard">
+    </div>
+    <p class="auth-tagline">AI testing on real applications.</p>
+
+    <!-- Page-level error: representative failed sign-in attempt -->
+    <div class="alert alert-danger" role="alert">
+      <span class="alert-icon" aria-hidden="true">⚠</span>
+      <div>
+        <strong>We couldn't sign you in.</strong>
+        <p>Check your email and password.</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <form action="#" method="post" novalidate>
+
+        <div class="field has-error">
+          <label for="email">Email address</label>
+          <input
+            class="input"
+            id="email"
+            name="email"
+            type="email"
+            autocomplete="username"
+            value="alex@acme"
+            aria-invalid="true"
+            aria-describedby="email-error"
+          >
+          <p class="error-text" id="email-error">
+            <span aria-hidden="true">⚠</span>
+            Enter a valid email address.
+          </p>
+        </div>
+
+        <div class="field">
+          <label for="password">Password</label>
+          <input
+            class="input"
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+          >
+        </div>
+
+        <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+      </form>
+    </div>
+
+  </div>
+</main>
+</body>
+</html>

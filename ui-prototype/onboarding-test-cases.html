@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Add test cases · Punk Hazard</title>
+  <link rel="stylesheet" href="assets/prototype.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="dashboard.html">
+      <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+      <span class="brand-name">Punk Hazard</span>
+    </a>
+
+    <nav class="nav" aria-label="Main navigation">
+      <a class="nav-link" href="dashboard.html">◈ Dashboard</a>
+      <a class="nav-link" href="project-overview.html" aria-current="page">▣ Projects</a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">AB</span>
+        <div>
+          <div style="font-weight: 650; font-size: 0.9rem;">Alex Barton</div>
+          <div class="muted small">alex@acme.dev</div>
+        </div>
+      </div>
+      <nav class="nav" aria-label="User menu">
+        <a class="nav-link" href="#account">Account</a>
+        <a class="nav-link" href="login.html">Sign out</a>
+      </nav>
+    </div>
+  </aside>
+
+  <div>
+    <header class="topbar">
+      <a class="brand" href="dashboard.html">
+        <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+        <span class="brand-name">Punk Hazard</span>
+      </a>
+      <details class="mobile-nav">
+        <summary aria-label="Open menu">☰ Menu</summary>
+        <nav class="nav" aria-label="Main navigation">
+          <a class="nav-link" href="dashboard.html">Dashboard</a>
+          <a class="nav-link" href="project-overview.html" aria-current="page">Projects</a>
+          <a class="nav-link" href="#account">Account</a>
+          <a class="nav-link" href="login.html">Sign out</a>
+        </nav>
+      </details>
+    </header>
+
+    <main class="main">
+      <div class="narrow">
+
+        <nav class="breadcrumbs" aria-label="Breadcrumb">
+          <a href="dashboard.html">Dashboard</a>
+          <span class="sep" aria-hidden="true">›</span>
+          <a href="project-overview.html">Projects</a>
+          <span class="sep" aria-hidden="true">›</span>
+          <span>Mobile Checkout</span>
+          <span class="sep" aria-hidden="true">›</span>
+          <span aria-current="page">Setup</span>
+        </nav>
+
+        <h1>Add test cases</h1>
+        <p class="subtitle">Bring in the cases Punk Hazard will run — import an existing TestRail suite or start from scratch.</p>
+
+        <ol class="steps">
+          <li class="step is-done">
+            <span class="step-label"><a href="onboarding-project.html">Project details</a></span>
+          </li>
+          <li class="step is-done">
+            <span class="step-label"><a href="onboarding-context.html">Application context</a></span>
+          </li>
+          <li class="step is-current" aria-current="step">
+            <span class="step-label">Test cases</span>
+          </li>
+          <li class="step">
+            <span class="step-label">Test machine</span>
+          </li>
+          <li class="step">
+            <span class="step-label">First run</span>
+          </li>
+        </ol>
+
+        <div class="card">
+          <form action="#" method="post" novalidate>
+
+            <fieldset style="border: 0; padding: 0; margin: 0 0 20px;">
+              <legend class="visually-hidden">How would you like to add test cases?</legend>
+
+              <label class="radio-card selected" style="margin-bottom: 12px;">
+                <input type="radio" name="case-source" value="testrail" checked>
+                <span>
+                  <span class="radio-title">Import from TestRail</span>
+                  <span class="muted small">Upload a TestRail XML export and Punk Hazard will parse each case.</span>
+                </span>
+              </label>
+
+              <label class="radio-card">
+                <input type="radio" name="case-source" value="manual">
+                <span>
+                  <span class="radio-title">Create manually</span>
+                  <span class="muted small">Add test cases one at a time from the Test Cases page after setup.</span>
+                </span>
+              </label>
+            </fieldset>
+
+            <p class="hint">File requirements: TestRail XML export (<code>.xml</code>), up to 10 MB.</p>
+
+            <div class="dropzone">
+              <p><strong>Drag and drop your TestRail export here</strong></p>
+              <p class="small">or</p>
+              <label class="btn btn-secondary" for="testrail-file">Choose file</label>
+              <input class="visually-hidden" id="testrail-file" name="testrail-file" type="file" accept=".xml">
+            </div>
+
+          </form>
+
+          <div class="divider">Example: validating</div>
+          <div class="card card-raised">
+            <div class="skeleton skeleton-title"></div>
+            <div class="skeleton skeleton-text" style="width: 90%;"></div>
+            <div class="skeleton skeleton-text" style="width: 70%;"></div>
+            <p class="muted small" style="margin: 0;">Validating regression-suite.xml…</p>
+          </div>
+
+          <div class="divider">Example: import failed</div>
+          <div class="alert alert-danger">
+            <span class="alert-icon" aria-hidden="true">⚠</span>
+            <div>
+              <strong>Import failed</strong>
+              <p>Row 14: missing required field 'title'. Fix the export in TestRail and try again.</p>
+            </div>
+          </div>
+
+          <div class="divider">Example: import complete</div>
+          <div class="alert alert-success">
+            <span class="alert-icon" aria-hidden="true">✓</span>
+            <div>
+              <strong>Import complete</strong>
+              <p>18 test cases imported.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="wizard-actions">
+          <a class="btn btn-secondary" href="onboarding-context.html">← Back</a>
+          <div class="spacer"></div>
+          <a class="btn btn-ghost" href="dashboard.html">Finish later</a>
+          <a class="btn btn-primary" href="onboarding-runner.html">Save and continue →</a>
+        </div>
+
+      </div>
+    </main>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Acme Billing Portal · Punk Hazard</title>
+  <link rel="stylesheet" href="assets/prototype.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="dashboard.html">
+      <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+      <span class="brand-name">Punk Hazard</span>
+    </a>
+
+    <nav class="nav" aria-label="Main navigation">
+      <a class="nav-link" href="dashboard.html">◈ Dashboard</a>
+      <a class="nav-link" href="project-overview.html" aria-current="page">▣ Projects</a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">AB</span>
+        <div>
+          <div style="font-weight: 650; font-size: 0.9rem;">Alex Barton</div>
+          <div class="muted small">alex@acme.dev</div>
+        </div>
+      </div>
+      <nav class="nav" aria-label="User menu">
+        <a class="nav-link" href="#account">Account</a>
+        <a class="nav-link" href="login.html">Sign out</a>
+      </nav>
+    </div>
+  </aside>
+
+  <div>
+    <header class="topbar">
+      <a class="brand" href="dashboard.html">
+        <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+        <span class="brand-name">Punk Hazard</span>
+      </a>
+      <details class="mobile-nav">
+        <summary aria-label="Open menu">☰ Menu</summary>
+        <nav class="nav" aria-label="Main navigation">
+          <a class="nav-link" href="dashboard.html">Dashboard</a>
+          <a class="nav-link" href="project-overview.html" aria-current="page">Projects</a>
+          <a class="nav-link" href="#account">Account</a>
+          <a class="nav-link" href="login.html">Sign out</a>
+        </nav>
+      </details>
+    </header>
+
+    <main class="main">
+
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="dashboard.html">Dashboard</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <a href="project-overview.html">Projects</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <span aria-current="page">Acme Billing Portal</span>
+      </nav>
+
+      <div class="page-header">
+        <div>
+          <h1>Acme Billing Portal</h1>
+          <p class="subtitle">Web application · 64 test cases · test machine connected</p>
+        </div>
+        <div class="actions">
+          <a class="btn btn-primary" href="runs.html">Run tests</a>
+        </div>
+      </div>
+
+      <nav class="tabs" aria-label="Project navigation">
+        <a class="tab" href="project-overview.html" aria-current="page">Overview</a>
+        <a class="tab" href="test-cases.html">Test Cases</a>
+        <a class="tab" href="runs.html">Runs</a>
+        <a class="tab" href="environment.html">Environment</a>
+        <a class="tab" href="#settings">Settings</a>
+      </nav>
+
+      <!-- Recommended next action -->
+      <div class="alert alert-warning" role="alert">
+        <span class="alert-icon" aria-hidden="true">⚠</span>
+        <div>
+          <strong>3 cases failed in Nightly regression #42</strong>
+          <p>Login flow, invoice export, and PDF preview did not pass 6 hours ago.</p>
+          <a class="btn btn-sm btn-secondary" href="run-detail.html">Review failures</a>
+        </div>
+      </div>
+
+      <!-- Key stats -->
+      <section aria-labelledby="stats-h">
+        <h2 id="stats-h" class="visually-hidden">Project status</h2>
+        <div class="grid grid-4">
+          <a class="stat-card" href="environment.html" style="text-decoration: none; color: inherit;">
+            <div class="stat-label">Test machine</div>
+            <div><span class="badge badge-connected">Connected</span></div>
+            <div class="stat-note">WIN-ACME-01</div>
+          </a>
+          <a class="stat-card" href="test-cases.html" style="text-decoration: none; color: inherit;">
+            <div class="stat-label">Test cases</div>
+            <div class="stat-value">64</div>
+            <div class="stat-note">Imported from TestRail</div>
+          </a>
+          <a class="stat-card" href="run-detail.html" style="text-decoration: none; color: inherit;">
+            <div class="stat-label">Latest run</div>
+            <div><span class="badge badge-failed">3 failed</span></div>
+            <div class="stat-note">Nightly regression #42 · 6h ago</div>
+          </a>
+          <a class="stat-card" href="runs.html" style="text-decoration: none; color: inherit;">
+            <div class="stat-label">Pass rate · 30 days</div>
+            <div class="stat-value is-success">91%</div>
+            <div class="stat-note">Across 18 runs</div>
+          </a>
+        </div>
+      </section>
+
+      <!-- Setup progress -->
+      <section aria-labelledby="setup-h" class="card" style="margin-top: 24px;">
+        <div class="card-header">
+          <h2 id="setup-h">Setup progress</h2>
+          <span class="badge badge-passed">Complete</span>
+        </div>
+        <div class="progress" role="img" aria-label="Setup 100% complete" style="margin-bottom: 18px;">
+          <span style="width: 100%;"></span>
+        </div>
+        <ul class="checklist">
+          <li>
+            <span class="check-icon is-pass" aria-hidden="true">✓</span>
+            <div>
+              <div class="check-title">Project details</div>
+              <p class="check-help">Acme Billing Portal was created and named.</p>
+            </div>
+          </li>
+          <li>
+            <span class="check-icon is-pass" aria-hidden="true">✓</span>
+            <div>
+              <div class="check-title">Application context</div>
+              <p class="check-help">URL, platform, and environment notes are saved.</p>
+            </div>
+          </li>
+          <li>
+            <span class="check-icon is-pass" aria-hidden="true">✓</span>
+            <div>
+              <div class="check-title">Test cases imported</div>
+              <p class="check-help">64 cases imported from TestRail.</p>
+            </div>
+          </li>
+          <li>
+            <span class="check-icon is-pass" aria-hidden="true">✓</span>
+            <div>
+              <div class="check-title">Test machine connected</div>
+              <p class="check-help">WIN-ACME-01 is online and ready.</p>
+            </div>
+          </li>
+          <li>
+            <span class="check-icon is-pass" aria-hidden="true">✓</span>
+            <div>
+              <div class="check-title">First run complete</div>
+              <p class="check-help">Nightly regression #42 finished 6 hours ago.</p>
+            </div>
+          </li>
+        </ul>
+      </section>
+
+      <!-- Application context -->
+      <section aria-labelledby="context-h" class="card" style="margin-top: 16px;">
+        <div class="card-header">
+          <h2 id="context-h">Application context</h2>
+          <a class="btn btn-secondary" href="onboarding-context.html">Edit context</a>
+        </div>
+        <dl class="kv">
+          <div>
+            <dt>Application URL</dt>
+            <dd>https://billing.acme.dev</dd>
+          </div>
+          <div>
+            <dt>Platform</dt>
+            <dd>Web application</dd>
+          </div>
+          <div>
+            <dt>Environment notes</dt>
+            <dd>Staging tenant, seeded with sample invoices nightly</dd>
+          </div>
+        </dl>
+      </section>
+
+      <!-- Latest runs -->
+      <section aria-labelledby="latest-runs-h" class="card" style="margin-top: 16px;">
+        <div class="card-header">
+          <h2 id="latest-runs-h">Latest runs</h2>
+          <a class="btn btn-sm btn-ghost" href="runs.html">View all runs</a>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Run</th>
+                <th scope="col">Date</th>
+                <th scope="col">Result</th>
+                <th scope="col">Cases</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td data-label="Run" class="cell-primary"><a href="run-detail.html">Nightly regression #42</a></td>
+                <td data-label="Date">Today, 03:10</td>
+                <td data-label="Result"><span class="badge badge-failed">3 failed</span></td>
+                <td data-label="Cases">64</td>
+              </tr>
+              <tr>
+                <td data-label="Run" class="cell-primary"><a href="run-detail.html">Smoke pass #41</a></td>
+                <td data-label="Date">Yesterday, 14:20</td>
+                <td data-label="Result"><span class="badge badge-passed">All passed</span></td>
+                <td data-label="Cases">12</td>
+              </tr>
+              <tr>
+                <td data-label="Run" class="cell-primary"><a href="run-detail.html">Weekly regression #40</a></td>
+                <td data-label="Date">Aug 28, 09:00</td>
+                <td data-label="Result"><span class="badge badge-passed">All passed</span></td>
+                <td data-label="Cases">64</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</div>
+</body>
+</html>

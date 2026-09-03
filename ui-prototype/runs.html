@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Runs · Acme Billing Portal · Punk Hazard</title>
+  <link rel="stylesheet" href="assets/prototype.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="dashboard.html">
+      <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+      <span class="brand-name">Punk Hazard</span>
+    </a>
+
+    <nav class="nav" aria-label="Main navigation">
+      <a class="nav-link" href="dashboard.html">◈ Dashboard</a>
+      <a class="nav-link" href="project-overview.html" aria-current="page">▣ Projects</a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">AB</span>
+        <div>
+          <div style="font-weight: 650; font-size: 0.9rem;">Alex Barton</div>
+          <div class="muted small">alex@acme.dev</div>
+        </div>
+      </div>
+      <nav class="nav" aria-label="User menu">
+        <a class="nav-link" href="#account">Account</a>
+        <a class="nav-link" href="login.html">Sign out</a>
+      </nav>
+    </div>
+  </aside>
+
+  <div>
+    <header class="topbar">
+      <a class="brand" href="dashboard.html">
+        <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+        <span class="brand-name">Punk Hazard</span>
+      </a>
+      <details class="mobile-nav">
+        <summary aria-label="Open menu">☰ Menu</summary>
+        <nav class="nav" aria-label="Main navigation">
+          <a class="nav-link" href="dashboard.html">Dashboard</a>
+          <a class="nav-link" href="project-overview.html" aria-current="page">Projects</a>
+          <a class="nav-link" href="#account">Account</a>
+          <a class="nav-link" href="login.html">Sign out</a>
+        </nav>
+      </details>
+    </header>
+
+    <main class="main">
+
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="dashboard.html">Dashboard</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <a href="project-overview.html">Projects</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <span aria-current="page">Acme Billing Portal</span>
+      </nav>
+
+      <div class="page-header">
+        <div>
+          <h1>Runs</h1>
+          <p class="subtitle">64 test cases · latest run finished 6h ago</p>
+        </div>
+        <div class="actions">
+          <a class="btn btn-primary" href="run-detail.html">New run</a>
+        </div>
+      </div>
+
+      <nav class="tabs" aria-label="Project navigation">
+        <a class="tab" href="project-overview.html">Overview</a>
+        <a class="tab" href="test-cases.html">Test Cases</a>
+        <a class="tab" href="runs.html" aria-current="page">Runs</a>
+        <a class="tab" href="environment.html">Environment</a>
+        <a class="tab" href="#settings">Settings</a>
+      </nav>
+
+      <!-- Section: Run history table (desktop table / mobile stacked records) -->
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Run</th>
+              <th scope="col">Started</th>
+              <th scope="col">Status</th>
+              <th scope="col">Cases</th>
+              <th scope="col">Result</th>
+              <th scope="col">Duration</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td data-label="Run" class="cell-primary"><a href="run-detail.html">Smoke pass #43</a></td>
+              <td data-label="Started">Today 09:30</td>
+              <td data-label="Status"><span class="badge badge-running">Running</span></td>
+              <td data-label="Cases">12 cases</td>
+              <td data-label="Result" class="muted">In progress</td>
+              <td data-label="Duration">Running 45m</td>
+            </tr>
+            <tr>
+              <td data-label="Run" class="cell-primary"><a href="run-detail.html">Nightly regression #42</a></td>
+              <td data-label="Started">Today 02:22</td>
+              <td data-label="Status"><span class="badge badge-failed">Failed</span></td>
+              <td data-label="Cases">64 cases</td>
+              <td data-label="Result">61 passed · 3 failed</td>
+              <td data-label="Duration">48m</td>
+            </tr>
+            <tr>
+              <td data-label="Run" class="cell-primary"><a href="run-detail.html">Release check #41</a></td>
+              <td data-label="Started">Yesterday 14:05</td>
+              <td data-label="Status"><span class="badge badge-passed">Passed</span></td>
+              <td data-label="Cases">51 cases</td>
+              <td data-label="Result">51 passed</td>
+              <td data-label="Duration">32m</td>
+            </tr>
+            <tr>
+              <td data-label="Run" class="cell-primary"><a href="run-detail.html">Payments deep pass</a></td>
+              <td data-label="Started" class="muted">Not started</td>
+              <td data-label="Status"><span class="badge badge-draft">Draft</span></td>
+              <td data-label="Cases">18 cases selected</td>
+              <td data-label="Result" class="muted">Draft, not started</td>
+              <td data-label="Duration">—</td>
+            </tr>
+            <tr>
+              <td data-label="Run" class="cell-primary"><a href="run-detail.html">Weekly full suite #40</a></td>
+              <td data-label="Started">3 days ago</td>
+              <td data-label="Status"><span class="badge badge-passed">Passed</span></td>
+              <td data-label="Cases">64 cases</td>
+              <td data-label="Result">64 passed</td>
+              <td data-label="Duration">51m</td>
+            </tr>
+            <tr>
+              <td data-label="Run" class="cell-primary"><a href="run-detail.html">Release check #39</a></td>
+              <td data-label="Started">5 days ago</td>
+              <td data-label="Status"><span class="badge badge-passed">Passed</span></td>
+              <td data-label="Cases">49 cases</td>
+              <td data-label="Result">49 passed</td>
+              <td data-label="Duration">29m</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <nav class="pagination" aria-label="Run pages">
+        <a class="page-link" href="#" aria-disabled="true">Prev</a>
+        <a class="page-link" href="#" aria-current="page">1</a>
+        <a class="page-link" href="#">2</a>
+        <a class="page-link" href="#">Next</a>
+      </nav>
+
+      <div class="divider">Example: empty state</div>
+      <div class="empty">
+        <div class="empty-icon" aria-hidden="true">▶</div>
+        <h3>No runs yet</h3>
+        <p>Pick test cases to start your first run.</p>
+        <div class="actions" style="justify-content: center;">
+          <a class="btn btn-primary" href="test-cases.html">Choose test cases</a>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Application context · Punk Hazard</title>
+  <link rel="stylesheet" href="assets/prototype.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="dashboard.html">
+      <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+      <span class="brand-name">Punk Hazard</span>
+    </a>
+
+    <nav class="nav" aria-label="Main navigation">
+      <a class="nav-link" href="dashboard.html">◈ Dashboard</a>
+      <a class="nav-link" href="project-overview.html" aria-current="page">▣ Projects</a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">AB</span>
+        <div>
+          <div style="font-weight: 650; font-size: 0.9rem;">Alex Barton</div>
+          <div class="muted small">alex@acme.dev</div>
+        </div>
+      </div>
+      <nav class="nav" aria-label="User menu">
+        <a class="nav-link" href="#account">Account</a>
+        <a class="nav-link" href="login.html">Sign out</a>
+      </nav>
+    </div>
+  </aside>
+
+  <div>
+    <header class="topbar">
+      <a class="brand" href="dashboard.html">
+        <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+        <span class="brand-name">Punk Hazard</span>
+      </a>
+      <details class="mobile-nav">
+        <summary aria-label="Open menu">☰ Menu</summary>
+        <nav class="nav" aria-label="Main navigation">
+          <a class="nav-link" href="dashboard.html">Dashboard</a>
+          <a class="nav-link" href="project-overview.html" aria-current="page">Projects</a>
+          <a class="nav-link" href="#account">Account</a>
+          <a class="nav-link" href="login.html">Sign out</a>
+        </nav>
+      </details>
+    </header>
+
+    <main class="main">
+      <div class="narrow">
+
+        <nav class="breadcrumbs" aria-label="Breadcrumb">
+          <a href="dashboard.html">Dashboard</a>
+          <span class="sep" aria-hidden="true">›</span>
+          <a href="project-overview.html">Projects</a>
+          <span class="sep" aria-hidden="true">›</span>
+          <span>Mobile Checkout</span>
+          <span class="sep" aria-hidden="true">›</span>
+          <span aria-current="page">Setup</span>
+        </nav>
+
+        <h1>Application context</h1>
+        <p class="subtitle">Describe how Mobile Checkout works so the AI test runner understands the app before it starts clicking around.</p>
+
+        <ol class="steps">
+          <li class="step is-done">
+            <span class="step-label"><a href="onboarding-project.html">Project details</a></span>
+          </li>
+          <li class="step is-current" aria-current="step">
+            <span class="step-label">Application context</span>
+          </li>
+          <li class="step">
+            <span class="step-label">Test cases</span>
+          </li>
+          <li class="step">
+            <span class="step-label">Test machine</span>
+          </li>
+          <li class="step">
+            <span class="step-label">First run</span>
+          </li>
+        </ol>
+
+        <div class="card">
+          <form action="#" method="post" novalidate>
+
+            <div class="field">
+              <label for="app-url">Application URL</label>
+              <input class="input" id="app-url" name="app-url" type="url" placeholder="https://staging.acme.dev/checkout">
+            </div>
+
+            <div class="field">
+              <label for="app-platform">Platform / application type</label>
+              <select class="select" id="app-platform" name="app-platform">
+                <option>Web application</option>
+                <option>Windows desktop</option>
+                <option>Both</option>
+              </select>
+            </div>
+
+            <div class="field">
+              <label for="env-notes">Environment notes <span class="optional">(optional)</span></label>
+              <textarea class="textarea" id="env-notes" name="env-notes" placeholder="Staging environment, seeded with 40 demo products. Checkout uses a sandbox payment gateway."></textarea>
+            </div>
+
+            <div class="field">
+              <label for="nav-hints">Navigation hints <span class="optional">(optional)</span></label>
+              <textarea class="textarea" id="nav-hints" name="nav-hints" placeholder="Cart icon is top-right. Checkout is a 3-step flow: shipping, payment, review."></textarea>
+            </div>
+
+            <div class="field">
+              <label for="auth-notes">Authentication notes <span class="optional">(optional)</span></label>
+              <textarea class="textarea" id="auth-notes" name="auth-notes" placeholder="Sign in with the test account below. No SSO required."></textarea>
+              <div class="alert alert-warning" style="margin-top: 10px;">
+                <span class="alert-icon" aria-hidden="true">⚠</span>
+                <div>
+                  <strong>Use a dedicated test account</strong>
+                  <p>Don't paste real production passwords here. Create a dedicated test account for the AI test runner to use instead.</p>
+                </div>
+              </div>
+            </div>
+
+            <a class="btn btn-secondary" href="#">Refine with AI (optional)</a>
+
+          </form>
+        </div>
+
+        <div class="wizard-actions">
+          <a class="btn btn-secondary" href="onboarding-project.html">← Back</a>
+          <div class="spacer"></div>
+          <a class="btn btn-ghost" href="dashboard.html">Finish later</a>
+          <a class="btn btn-primary" href="onboarding-test-cases.html">Save and continue →</a>
+        </div>
+
+      </div>
+    </main>
+  </div>
+</div>
+</body>
+</html>

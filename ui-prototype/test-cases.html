@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Test Cases · Acme Billing Portal · Punk Hazard</title>
+  <link rel="stylesheet" href="assets/prototype.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="dashboard.html">
+      <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+      <span class="brand-name">Punk Hazard</span>
+    </a>
+
+    <nav class="nav" aria-label="Main navigation">
+      <a class="nav-link" href="dashboard.html">◈ Dashboard</a>
+      <a class="nav-link" href="project-overview.html" aria-current="page">▣ Projects</a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">AB</span>
+        <div>
+          <div style="font-weight: 650; font-size: 0.9rem;">Alex Barton</div>
+          <div class="muted small">alex@acme.dev</div>
+        </div>
+      </div>
+      <nav class="nav" aria-label="User menu">
+        <a class="nav-link" href="#account">Account</a>
+        <a class="nav-link" href="login.html">Sign out</a>
+      </nav>
+    </div>
+  </aside>
+
+  <div>
+    <header class="topbar">
+      <a class="brand" href="dashboard.html">
+        <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+        <span class="brand-name">Punk Hazard</span>
+      </a>
+      <details class="mobile-nav">
+        <summary aria-label="Open menu">☰ Menu</summary>
+        <nav class="nav" aria-label="Main navigation">
+          <a class="nav-link" href="dashboard.html">Dashboard</a>
+          <a class="nav-link" href="project-overview.html" aria-current="page">Projects</a>
+          <a class="nav-link" href="#account">Account</a>
+          <a class="nav-link" href="login.html">Sign out</a>
+        </nav>
+      </details>
+    </header>
+
+    <main class="main">
+
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="dashboard.html">Dashboard</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <a href="project-overview.html">Projects</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <span aria-current="page">Acme Billing Portal</span>
+      </nav>
+
+      <div class="page-header">
+        <div>
+          <h1>Test Cases</h1>
+          <p class="subtitle">64 test cases · imported from TestRail</p>
+        </div>
+        <div class="actions">
+          <a class="btn btn-secondary" href="#">Create test case</a>
+          <a class="btn btn-primary" href="onboarding-test-cases.html">Import from TestRail</a>
+        </div>
+      </div>
+
+      <nav class="tabs" aria-label="Project navigation">
+        <a class="tab" href="project-overview.html">Overview</a>
+        <a class="tab" href="test-cases.html" aria-current="page">Test Cases</a>
+        <a class="tab" href="runs.html">Runs</a>
+        <a class="tab" href="environment.html">Environment</a>
+        <a class="tab" href="#settings">Settings</a>
+      </nav>
+
+      <!-- Section: Search + filters -->
+      <form class="toolbar" action="#" method="get" role="search">
+        <div class="search">
+          <label class="visually-hidden" for="case-search">Search test cases</label>
+          <input class="input" type="search" id="case-search" name="q" placeholder="Search test cases…">
+        </div>
+        <div>
+          <label class="visually-hidden" for="tag-filter">Filter by tag</label>
+          <select class="select" id="tag-filter" name="tag">
+            <option value="">Any tag</option>
+            <option>Auth</option>
+            <option>Invoicing</option>
+            <option>Checkout</option>
+            <option>Account</option>
+          </select>
+        </div>
+        <div>
+          <label class="visually-hidden" for="status-filter">Filter by status</label>
+          <select class="select" id="status-filter" name="status">
+            <option value="">Any result</option>
+            <option>Passed</option>
+            <option>Failed</option>
+            <option>Never run</option>
+          </select>
+        </div>
+      </form>
+
+      <!-- Section: Bulk selection state -->
+      <div class="bulk-bar">
+        <span>3 selected</span>
+        <a class="btn btn-sm btn-secondary" href="#">Add to run</a>
+        <a class="btn btn-sm btn-secondary" href="#">Copy to project</a>
+        <a class="btn btn-sm btn-danger" href="#">Delete</a>
+      </div>
+
+      <!-- Section: Test case table (desktop table / mobile stacked records) -->
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col" class="cell-check">
+                <input type="checkbox" aria-label="Select all">
+              </th>
+              <th scope="col">Case</th>
+              <th scope="col">Tags</th>
+              <th scope="col">Last result</th>
+              <th scope="col">Last run</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td data-label="">
+                <input type="checkbox" checked aria-label="Select Sign in with valid credentials">
+              </td>
+              <td data-label="Case" class="cell-primary"><a href="#">Sign in with valid credentials</a></td>
+              <td data-label="Tags">Auth, Smoke</td>
+              <td data-label="Last result"><span class="badge badge-passed">Passed</span></td>
+              <td data-label="Last run">Sep 3, 2026</td>
+              <td data-label="" class="cell-actions">
+                <button type="button" class="icon-btn" aria-label="More actions for Sign in with valid credentials">⋯</button>
+              </td>
+            </tr>
+            <tr>
+              <td data-label="">
+                <input type="checkbox" checked aria-label="Select Export invoice as PDF">
+              </td>
+              <td data-label="Case" class="cell-primary"><a href="#">Export invoice as PDF</a></td>
+              <td data-label="Tags">Invoicing</td>
+              <td data-label="Last result"><span class="badge badge-failed">Failed</span></td>
+              <td data-label="Last run">Sep 4, 2026</td>
+              <td data-label="" class="cell-actions">
+                <button type="button" class="icon-btn" aria-label="More actions for Export invoice as PDF">⋯</button>
+              </td>
+            </tr>
+            <tr>
+              <td data-label="">
+                <input type="checkbox" checked aria-label="Select Apply discount code">
+              </td>
+              <td data-label="Case" class="cell-primary"><a href="#">Apply discount code</a></td>
+              <td data-label="Tags">Checkout</td>
+              <td data-label="Last result"><span class="badge badge-passed">Passed</span></td>
+              <td data-label="Last run">Sep 3, 2026</td>
+              <td data-label="" class="cell-actions">
+                <button type="button" class="icon-btn" aria-label="More actions for Apply discount code">⋯</button>
+              </td>
+            </tr>
+            <tr>
+              <td data-label="">
+                <input type="checkbox" aria-label="Select Sign in with invalid password shows error">
+              </td>
+              <td data-label="Case" class="cell-primary"><a href="#">Sign in with invalid password shows error</a></td>
+              <td data-label="Tags">Auth</td>
+              <td data-label="Last result"><span class="badge badge-passed">Passed</span></td>
+              <td data-label="Last run">Sep 3, 2026</td>
+              <td data-label="" class="cell-actions">
+                <button type="button" class="icon-btn" aria-label="More actions for Sign in with invalid password shows error">⋯</button>
+              </td>
+            </tr>
+            <tr>
+              <td data-label="">
+                <input type="checkbox" aria-label="Select Preview invoice email before sending">
+              </td>
+              <td data-label="Case" class="cell-primary"><a href="#">Preview invoice email before sending</a></td>
+              <td data-label="Tags">Invoicing</td>
+              <td data-label="Last result"><span class="badge badge-passed">Passed</span></td>
+              <td data-label="Last run">Sep 3, 2026</td>
+              <td data-label="" class="cell-actions">
+                <button type="button" class="icon-btn" aria-label="More actions for Preview invoice email before sending">⋯</button>
+              </td>
+            </tr>
+            <tr>
+              <td data-label="">
+                <input type="checkbox" aria-label="Select Apply multiple discount codes in one order">
+              </td>
+              <td data-label="Case" class="cell-primary"><a href="#">Apply multiple discount codes in one order</a></td>
+              <td data-label="Tags">Checkout, Edge case</td>
+              <td data-label="Last result"><span class="badge badge-draft">Never run</span></td>
+              <td data-label="Last run">—</td>
+              <td data-label="" class="cell-actions">
+                <button type="button" class="icon-btn" aria-label="More actions for Apply multiple discount codes in one order">⋯</button>
+              </td>
+            </tr>
+            <tr>
+              <td data-label="">
+                <input type="checkbox" aria-label="Select Update billing address">
+              </td>
+              <td data-label="Case" class="cell-primary"><a href="#">Update billing address</a></td>
+              <td data-label="Tags">Account</td>
+              <td data-label="Last result"><span class="badge badge-passed">Passed</span></td>
+              <td data-label="Last run">Sep 1, 2026</td>
+              <td data-label="" class="cell-actions">
+                <button type="button" class="icon-btn" aria-label="More actions for Update billing address">⋯</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <nav class="pagination" aria-label="Test case pages">
+        <a class="page-link" href="#" aria-disabled="true">Prev</a>
+        <a class="page-link" href="#" aria-current="page">1</a>
+        <a class="page-link" href="#">2</a>
+        <a class="page-link" href="#">3</a>
+        <a class="page-link" href="#">Next</a>
+      </nav>
+
+      <div class="divider">Example: empty state</div>
+      <div class="empty">
+        <div class="empty-icon" aria-hidden="true">▣</div>
+        <h3>No test cases yet</h3>
+        <p>Import your existing suite from TestRail, or create cases manually to get started.</p>
+        <div class="actions" style="justify-content: center;">
+          <a class="btn btn-primary" href="onboarding-test-cases.html">Import from TestRail</a>
+          <a class="btn btn-secondary" href="#">Create manually</a>
+        </div>
+      </div>
+
+      <div class="divider">Example: delete confirmation</div>
+      <div class="dialog-demo">
+        <div class="dialog" role="alertdialog" aria-labelledby="delete-dialog-title" aria-describedby="delete-dialog-desc">
+          <h3 id="delete-dialog-title">Delete 3 test cases?</h3>
+          <p id="delete-dialog-desc">This can't be undone. Deleting removes these cases from future runs — results from past runs are kept.</p>
+          <div class="dialog-actions">
+            <a class="btn btn-secondary" href="#">Cancel</a>
+            <a class="btn btn-danger-solid" href="#">Delete 3 cases</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider">Example: import validation error</div>
+      <div class="alert alert-danger" role="alert">
+        <span class="alert-icon" aria-hidden="true">⚠</span>
+        <div>
+          <strong>Import failed</strong>
+          <p>regression-suite.xml row 14: missing required field "title".</p>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+</body>
+</html>

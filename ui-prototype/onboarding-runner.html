@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Connect a test machine · Punk Hazard</title>
+  <link rel="stylesheet" href="assets/prototype.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="dashboard.html">
+      <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+      <span class="brand-name">Punk Hazard</span>
+    </a>
+
+    <nav class="nav" aria-label="Main navigation">
+      <a class="nav-link" href="dashboard.html">◈ Dashboard</a>
+      <a class="nav-link" href="project-overview.html" aria-current="page">▣ Projects</a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">AB</span>
+        <div>
+          <div style="font-weight: 650; font-size: 0.9rem;">Alex Barton</div>
+          <div class="muted small">alex@acme.dev</div>
+        </div>
+      </div>
+      <nav class="nav" aria-label="User menu">
+        <a class="nav-link" href="#account">Account</a>
+        <a class="nav-link" href="login.html">Sign out</a>
+      </nav>
+    </div>
+  </aside>
+
+  <div>
+    <header class="topbar">
+      <a class="brand" href="dashboard.html">
+        <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+        <span class="brand-name">Punk Hazard</span>
+      </a>
+      <details class="mobile-nav">
+        <summary aria-label="Open menu">☰ Menu</summary>
+        <nav class="nav" aria-label="Main navigation">
+          <a class="nav-link" href="dashboard.html">Dashboard</a>
+          <a class="nav-link" href="project-overview.html" aria-current="page">Projects</a>
+          <a class="nav-link" href="#account">Account</a>
+          <a class="nav-link" href="login.html">Sign out</a>
+        </nav>
+      </details>
+    </header>
+
+    <main class="main">
+      <div class="narrow">
+
+        <nav class="breadcrumbs" aria-label="Breadcrumb">
+          <a href="dashboard.html">Dashboard</a>
+          <span class="sep" aria-hidden="true">›</span>
+          <a href="project-overview.html">Projects</a>
+          <span class="sep" aria-hidden="true">›</span>
+          <span>Mobile Checkout</span>
+          <span class="sep" aria-hidden="true">›</span>
+          <span aria-current="page">Setup</span>
+        </nav>
+
+        <h1>Connect a test machine</h1>
+        <p class="subtitle">Install the Test Runner on a machine you control so Punk Hazard has somewhere to actually run your tests.</p>
+
+        <ol class="steps">
+          <li class="step is-done">
+            <span class="step-label"><a href="onboarding-project.html">Project details</a></span>
+          </li>
+          <li class="step is-done">
+            <span class="step-label"><a href="onboarding-context.html">Application context</a></span>
+          </li>
+          <li class="step is-done">
+            <span class="step-label"><a href="onboarding-test-cases.html">Test cases</a></span>
+          </li>
+          <li class="step is-current" aria-current="step">
+            <span class="step-label">Test machine</span>
+          </li>
+          <li class="step">
+            <span class="step-label">First run</span>
+          </li>
+        </ol>
+
+        <div class="card">
+          <p style="margin: 0;">Punk Hazard doesn't run tests in the cloud — it drives a real machine you control, the same way a person would: clicking, typing, and taking screenshots. The <strong>Test Runner</strong> is a small program you install on that machine so Punk Hazard can connect to it.</p>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>Choose your operating system</h2>
+          </div>
+
+          <fieldset style="border: 0; padding: 0; margin: 0 0 18px;">
+            <legend class="visually-hidden">Test machine operating system</legend>
+
+            <label class="radio-card selected" style="margin-bottom: 12px;">
+              <input type="radio" name="runner-os" value="windows" checked>
+              <span>
+                <span class="radio-title">Windows</span>
+                <span class="muted small">Recommended — required for driving Windows desktop applications.</span>
+              </span>
+            </label>
+
+            <label class="radio-card">
+              <input type="radio" name="runner-os" value="macos">
+              <span>
+                <span class="radio-title">macOS</span>
+                <span class="muted small">For testing web applications from a Mac.</span>
+              </span>
+            </label>
+          </fieldset>
+
+          <a class="btn btn-primary" href="#">⬇ Download Test Runner for Windows</a>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>Set it up</h2>
+          </div>
+          <ol class="setup-steps">
+            <li>
+              <div class="step-title">Unzip the download</div>
+              <p class="muted small" style="margin: 0;">Extract the Test Runner folder anywhere on the test machine.</p>
+            </li>
+            <li>
+              <div class="step-title">Run the install script</div>
+              <p class="muted small" style="margin: 0;">Double-click <code>install.bat</code> and let it finish.</p>
+            </li>
+            <li>
+              <div class="step-title">Paste your connection key when prompted</div>
+              <p class="muted small" style="margin: 0;">This links the Test Runner to Mobile Checkout.</p>
+            </li>
+            <li>
+              <div class="step-title">Leave the window open</div>
+              <p class="muted small" style="margin: 0;">The Test Runner needs to stay running while tests execute.</p>
+            </li>
+          </ol>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2>Connection status</h2>
+          </div>
+
+          <p><span class="badge badge-draft">Waiting for connection…</span></p>
+          <div class="skeleton skeleton-text" style="width: 60%;"></div>
+
+          <div class="divider">Example: connected</div>
+
+          <p><span class="badge badge-connected">Test machine connected</span></p>
+          <div class="alert alert-success" style="margin: 0;">
+            <span class="alert-icon" aria-hidden="true">✓</span>
+            <div>
+              <p style="margin: 0;">WIN-CHECKOUT-01 is connected and ready.</p>
+            </div>
+          </div>
+        </div>
+
+        <details class="card">
+          <summary style="cursor: pointer; font-weight: 650;">Advanced diagnostics</summary>
+          <dl class="kv" style="margin-top: 14px;">
+            <div><dt>Runner version</dt><dd>1.4.2</dd></div>
+            <div><dt>Capabilities</dt><dd>input, browser, screenshots</dd></div>
+            <div><dt>Visual engine</dt><dd>ready</dd></div>
+            <div>
+              <dt>Connection key</dt>
+              <dd style="display: flex; align-items: center; gap: 8px;">
+                ••••••••-example
+                <button class="icon-btn" type="button" aria-label="Show connection key">👁</button>
+              </dd>
+            </div>
+          </dl>
+        </details>
+
+        <div class="wizard-actions">
+          <a class="btn btn-secondary" href="onboarding-test-cases.html">← Back</a>
+          <div class="spacer"></div>
+          <a class="btn btn-ghost" href="dashboard.html">Finish later</a>
+          <a class="btn btn-primary" href="onboarding-first-run.html">Save and continue →</a>
+        </div>
+
+      </div>
+    </main>
+  </div>
+</div>
+</body>
+</html>

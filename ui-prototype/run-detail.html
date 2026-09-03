@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Nightly regression #42 · Punk Hazard</title>
+  <link rel="stylesheet" href="assets/prototype.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="dashboard.html">
+      <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+      <span class="brand-name">Punk Hazard</span>
+    </a>
+
+    <nav class="nav" aria-label="Main navigation">
+      <a class="nav-link" href="dashboard.html">◈ Dashboard</a>
+      <a class="nav-link" href="project-overview.html" aria-current="page">▣ Projects</a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">AB</span>
+        <div>
+          <div style="font-weight: 650; font-size: 0.9rem;">Alex Barton</div>
+          <div class="muted small">alex@acme.dev</div>
+        </div>
+      </div>
+      <nav class="nav" aria-label="User menu">
+        <a class="nav-link" href="#account">Account</a>
+        <a class="nav-link" href="login.html">Sign out</a>
+      </nav>
+    </div>
+  </aside>
+
+  <div>
+    <header class="topbar">
+      <a class="brand" href="dashboard.html">
+        <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+        <span class="brand-name">Punk Hazard</span>
+      </a>
+      <details class="mobile-nav">
+        <summary aria-label="Open menu">☰ Menu</summary>
+        <nav class="nav" aria-label="Main navigation">
+          <a class="nav-link" href="dashboard.html">Dashboard</a>
+          <a class="nav-link" href="project-overview.html" aria-current="page">Projects</a>
+          <a class="nav-link" href="#account">Account</a>
+          <a class="nav-link" href="login.html">Sign out</a>
+        </nav>
+      </details>
+    </header>
+
+    <main class="main">
+
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="dashboard.html">Dashboard</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <a href="project-overview.html">Projects</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <a href="project-overview.html">Acme Billing Portal</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <a href="runs.html">Runs</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <span aria-current="page">Nightly regression #42</span>
+      </nav>
+
+      <div class="page-header">
+        <div>
+          <h1>Nightly regression #42</h1>
+          <p class="subtitle">Finished today 03:10 · 48m · 64 cases</p>
+        </div>
+        <div class="actions">
+          <a class="btn btn-secondary" href="#">Re-run failed</a>
+          <a class="btn btn-danger" href="#">Reset run</a>
+        </div>
+      </div>
+
+      <nav class="tabs" aria-label="Project navigation">
+        <a class="tab" href="project-overview.html">Overview</a>
+        <a class="tab" href="test-cases.html">Test Cases</a>
+        <a class="tab" href="runs.html" aria-current="page">Runs</a>
+        <a class="tab" href="environment.html">Environment</a>
+        <a class="tab" href="#settings">Settings</a>
+      </nav>
+
+      <!-- Section: Summary stat cards -->
+      <div class="grid grid-4">
+        <div class="stat-card">
+          <div class="stat-label">Passed</div>
+          <div class="stat-value is-success">61</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Failed</div>
+          <div class="stat-value is-danger">3</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Duration</div>
+          <div class="stat-value">48m</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Pass rate</div>
+          <div class="stat-value">95%</div>
+        </div>
+      </div>
+
+      <!-- Section: Human-readable result summary (reads before case-level detail) -->
+      <div class="card" style="margin-top: 16px;">
+        <div class="card-header">
+          <h2>What happened</h2>
+        </div>
+        <p>61 of 64 cases passed. The three failures are all in the invoicing area: sign-in with SSO, invoice PDF export, and invoice email preview. The PDF export failure looks like a timeout while the export dialog was loading.</p>
+      </div>
+
+      <!-- Section: Case-level results, failures first -->
+      <div class="card">
+        <div class="card-header">
+          <h2>Case results</h2>
+        </div>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Case</th>
+                <th scope="col">Result</th>
+                <th scope="col">Duration</th>
+                <th scope="col">Failure reason</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td data-label="Case" class="cell-primary"><a href="#case">Sign in with SSO</a></td>
+                <td data-label="Result"><span class="badge badge-failed">Failed</span></td>
+                <td data-label="Duration">1m 40s</td>
+                <td data-label="Failure reason" class="muted">Redirected to a blank page after the SAML callback.</td>
+              </tr>
+              <tr>
+                <td data-label="Case" class="cell-primary"><a href="#case">Export invoice as PDF</a></td>
+                <td data-label="Result"><span class="badge badge-failed">Failed</span></td>
+                <td data-label="Duration">2m 05s</td>
+                <td data-label="Failure reason" class="muted">Timed out waiting for the export dialog to load.</td>
+              </tr>
+              <tr>
+                <td data-label="Case" class="cell-primary"><a href="#case">Preview invoice email before sending</a></td>
+                <td data-label="Result"><span class="badge badge-failed">Failed</span></td>
+                <td data-label="Duration">0m 52s</td>
+                <td data-label="Failure reason" class="muted">Preview pane never rendered the invoice HTML.</td>
+              </tr>
+              <tr>
+                <td data-label="Case" class="cell-primary"><a href="#case">Sign in with valid credentials</a></td>
+                <td data-label="Result"><span class="badge badge-passed">Passed</span></td>
+                <td data-label="Duration">0m 18s</td>
+                <td data-label="Failure reason" class="muted">—</td>
+              </tr>
+              <tr>
+                <td data-label="Case" class="cell-primary"><a href="#case">Apply discount code</a></td>
+                <td data-label="Result"><span class="badge badge-passed">Passed</span></td>
+                <td data-label="Duration">0m 41s</td>
+                <td data-label="Failure reason" class="muted">—</td>
+              </tr>
+              <tr>
+                <td data-label="Case" class="cell-primary"><a href="#case">Update billing address</a></td>
+                <td data-label="Result"><span class="badge badge-passed">Passed</span></td>
+                <td data-label="Duration">0m 33s</td>
+                <td data-label="Failure reason" class="muted">—</td>
+              </tr>
+              <tr>
+                <td data-label="Case" class="cell-primary"><a href="#case">Export invoice as CSV</a></td>
+                <td data-label="Result"><span class="badge badge-passed">Passed</span></td>
+                <td data-label="Duration">0m 27s</td>
+                <td data-label="Failure reason" class="muted">—</td>
+              </tr>
+              <tr>
+                <td data-label="Case" class="cell-primary"><a href="#case">Sign out from account menu</a></td>
+                <td data-label="Result"><span class="badge badge-passed">Passed</span></td>
+                <td data-label="Duration">0m 12s</td>
+                <td data-label="Failure reason" class="muted">—</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Section: Screenshot preview -->
+      <div class="card">
+        <div class="card-header">
+          <h2>Screenshots</h2>
+        </div>
+        <p class="hint">Click a screenshot to view full size.</p>
+        <div class="gallery">
+          <a class="shot" href="#lightbox">
+            <span class="shot-img" aria-hidden="true">🖥</span>
+            <span class="shot-caption">Step 1 — dashboard loaded</span>
+          </a>
+          <a class="shot" href="#lightbox">
+            <span class="shot-img" aria-hidden="true">🖥</span>
+            <span class="shot-caption">Step 2 — SSO sign-in form</span>
+          </a>
+          <a class="shot" href="#lightbox">
+            <span class="shot-img" aria-hidden="true">🖥</span>
+            <span class="shot-caption">Step 3 — invoice list</span>
+          </a>
+          <a class="shot" href="#lightbox">
+            <span class="shot-img" aria-hidden="true">🖥</span>
+            <span class="shot-caption">Step 4 — export dialog</span>
+          </a>
+          <a class="shot" href="#lightbox">
+            <span class="shot-img" aria-hidden="true">🖥</span>
+            <span class="shot-caption">Step 4 — export dialog (timeout)</span>
+          </a>
+          <a class="shot" href="#lightbox">
+            <span class="shot-img" aria-hidden="true">🖥</span>
+            <span class="shot-caption">Step 5 — email preview pane</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Section: Logs, visually secondary to the result above -->
+      <div class="card">
+        <div class="card-header">
+          <h2>Logs</h2>
+        </div>
+        <details>
+          <summary>Execution log — Export invoice as PDF (failed)</summary>
+          <pre class="code-block">[03:07:02] INFO  Navigating to /invoices/1042
+[03:07:03] INFO  Clicking "Export as PDF"
+[03:07:03] INFO  Waiting for export dialog
+[03:07:33] WARN  Export dialog did not appear within 30s
+[03:07:33] ERROR Timeout waiting for selector ".export-dialog"
+[03:07:33] INFO  Capturing failure screenshot
+[03:07:34] INFO  Case marked as failed
+[03:07:34] INFO  Continuing to next case</pre>
+        </details>
+      </div>
+
+      <div class="divider">Example: draft run readiness</div>
+      <div class="card">
+        <div class="card-header">
+          <h3>Ready to run?</h3>
+        </div>
+        <ul class="checklist">
+          <li>
+            <span class="check-icon is-pass" aria-hidden="true">✓</span>
+            <div>
+              <span class="visually-hidden">Passed check: </span>
+              <div class="check-title">12 cases selected</div>
+            </div>
+          </li>
+          <li>
+            <span class="check-icon is-fail" aria-hidden="true">✕</span>
+            <div>
+              <span class="visually-hidden">Failed check: </span>
+              <div class="check-title">Test machine not connected</div>
+              <p class="check-help">Runs need a connected test machine to execute steps. <a href="environment.html">Connect a test machine</a>.</p>
+            </div>
+          </li>
+          <li>
+            <span class="check-icon is-pass" aria-hidden="true">✓</span>
+            <div>
+              <span class="visually-hidden">Passed check: </span>
+              <div class="check-title">Visual engine ready</div>
+            </div>
+          </li>
+          <li>
+            <span class="check-icon is-fail" aria-hidden="true">✕</span>
+            <div>
+              <span class="visually-hidden">Failed check: </span>
+              <div class="check-title">Another run is active</div>
+              <p class="check-help">Wait for <a href="runs.html">Smoke pass #43</a> to finish, or abort it before starting this run.</p>
+            </div>
+          </li>
+          <li>
+            <span class="check-icon is-pass" aria-hidden="true">✓</span>
+            <div>
+              <span class="visually-hidden">Passed check: </span>
+              <div class="check-title">Application context provided</div>
+            </div>
+          </li>
+        </ul>
+        <div class="actions" style="margin-top: 16px;">
+          <a class="btn btn-primary" href="#" aria-disabled="true">Start run</a>
+        </div>
+        <p class="hint">Resolve the items above to start this run.</p>
+      </div>
+
+      <div class="divider">Example: running state</div>
+      <div class="card">
+        <div class="card-header">
+          <span class="badge badge-running">Running</span>
+          <span>Case 7 of 12 — Apply discount code</span>
+        </div>
+        <div class="skeleton skeleton-text" style="max-width: 340px;"></div>
+        <div class="actions" style="margin-top: 14px;">
+          <a class="btn btn-danger" href="#">Abort run</a>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+</body>
+</html>

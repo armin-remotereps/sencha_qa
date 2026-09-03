@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard · Punk Hazard</title>
+  <link rel="stylesheet" href="assets/prototype.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="dashboard.html">
+      <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+      <span class="brand-name">Punk Hazard</span>
+    </a>
+
+    <nav class="nav" aria-label="Main navigation">
+      <a class="nav-link" href="dashboard.html" aria-current="page">◈ Dashboard</a>
+      <a class="nav-link" href="project-overview.html">▣ Projects</a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">AB</span>
+        <div>
+          <div style="font-weight: 650; font-size: 0.9rem;">Alex Barton</div>
+          <div class="muted small">alex@acme.dev</div>
+        </div>
+      </div>
+      <nav class="nav" aria-label="User menu">
+        <a class="nav-link" href="#account">Account</a>
+        <a class="nav-link" href="login.html">Sign out</a>
+      </nav>
+    </div>
+  </aside>
+
+  <div>
+    <header class="topbar">
+      <a class="brand" href="dashboard.html">
+        <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+        <span class="brand-name">Punk Hazard</span>
+      </a>
+      <details class="mobile-nav">
+        <summary aria-label="Open menu">☰ Menu</summary>
+        <nav class="nav" aria-label="Main navigation">
+          <a class="nav-link" href="dashboard.html" aria-current="page">Dashboard</a>
+          <a class="nav-link" href="project-overview.html">Projects</a>
+          <a class="nav-link" href="#account">Account</a>
+          <a class="nav-link" href="login.html">Sign out</a>
+        </nav>
+      </details>
+    </header>
+
+    <main class="main">
+
+      <!-- 1. Welcome + primary actions -->
+      <div class="page-header">
+        <div>
+          <h1>Good morning, Alex</h1>
+          <p class="subtitle">2 runs in progress · 1 project needs attention</p>
+        </div>
+        <div class="actions">
+          <a class="btn btn-secondary" href="onboarding-test-cases.html">Continue setup: Mobile Checkout</a>
+          <a class="btn btn-primary" href="onboarding-project.html">+ New project</a>
+        </div>
+      </div>
+
+      <!-- 2. Attention required -->
+      <section aria-labelledby="attention-h" class="card" style="border-color: rgba(242, 184, 75, 0.45);">
+        <div class="card-header">
+          <h2 id="attention-h">Needs your attention</h2>
+        </div>
+
+        <ul class="activity">
+          <li>
+            <span class="activity-icon" aria-hidden="true">✕</span>
+            <div>
+              <strong>3 cases failed</strong> in <a href="run-detail.html">Nightly regression #42</a> — Acme Billing Portal
+              <div class="muted small">Login flow, invoice export, and PDF preview did not pass.</div>
+              <a class="btn btn-sm btn-secondary" style="margin-top: 8px;" href="run-detail.html">Review failures</a>
+            </div>
+            <time datetime="2026-09-04T03:10">6h ago</time>
+          </li>
+          <li>
+            <span class="activity-icon" aria-hidden="true">⏻</span>
+            <div>
+              <strong>Test machine disconnected</strong> — Orion CRM has a run scheduled for tonight
+              <div class="muted small">The Test Runner on WIN-ORION-02 went offline 2 hours ago.</div>
+              <a class="btn btn-sm btn-secondary" style="margin-top: 8px;" href="environment.html">Reconnect machine</a>
+            </div>
+            <time datetime="2026-09-04T07:20">2h ago</time>
+          </li>
+          <li>
+            <span class="activity-icon" aria-hidden="true">…</span>
+            <div>
+              <strong>Setup incomplete</strong> — Mobile Checkout has no test cases yet
+              <div class="muted small">Import from TestRail or create cases manually to finish setup.</div>
+              <a class="btn btn-sm btn-secondary" style="margin-top: 8px;" href="onboarding-test-cases.html">Continue setup</a>
+            </div>
+            <time datetime="2026-09-02T15:00">2d ago</time>
+          </li>
+        </ul>
+      </section>
+
+      <!-- 3. Run summary -->
+      <section aria-labelledby="summary-h" style="margin-top: 24px;">
+        <h2 id="summary-h" class="visually-hidden">Run summary</h2>
+        <div class="grid grid-4">
+          <a class="stat-card" href="runs.html" style="text-decoration: none; color: inherit;">
+            <div class="stat-label">Runs in progress</div>
+            <div class="stat-value is-info">2</div>
+            <div class="stat-note">Acme Billing · Orion CRM</div>
+          </a>
+          <a class="stat-card" href="runs.html" style="text-decoration: none; color: inherit;">
+            <div class="stat-label">Pass rate · 7 days</div>
+            <div class="stat-value is-success">87%</div>
+            <div class="stat-note">142 of 163 cases passed</div>
+          </a>
+          <a class="stat-card" href="run-detail.html" style="text-decoration: none; color: inherit;">
+            <div class="stat-label">Failed · 7 days</div>
+            <div class="stat-value is-danger">21</div>
+            <div class="stat-note">Across 4 runs</div>
+          </a>
+          <a class="stat-card" href="test-cases.html" style="text-decoration: none; color: inherit;">
+            <div class="stat-label">Never run</div>
+            <div class="stat-value">38</div>
+            <div class="stat-note">Cases waiting for a first run</div>
+          </a>
+        </div>
+      </section>
+
+      <!-- 4. Projects -->
+      <section aria-labelledby="projects-h" style="margin-top: 28px;">
+        <div class="card-header">
+          <h2 id="projects-h">Recent projects</h2>
+          <a class="btn btn-sm btn-ghost" href="project-overview.html">View all projects</a>
+        </div>
+
+        <div class="grid grid-3">
+          <article class="card">
+            <div class="card-header">
+              <h3><a href="project-overview.html" style="color: inherit;">Acme Billing Portal</a></h3>
+              <span class="badge badge-connected">Machine connected</span>
+            </div>
+            <dl class="kv">
+              <div><dt>Setup</dt><dd>Complete</dd></div>
+              <div><dt>Latest run</dt><dd><span class="badge badge-failed">3 failed</span></dd></div>
+              <div><dt>Test cases</dt><dd>64</dd></div>
+            </dl>
+            <a class="btn btn-secondary btn-block" style="margin-top: 14px;" href="run-detail.html">Review failed run</a>
+          </article>
+
+          <article class="card">
+            <div class="card-header">
+              <h3><a href="project-overview.html" style="color: inherit;">Orion CRM</a></h3>
+              <span class="badge badge-disconnected">Machine offline</span>
+            </div>
+            <dl class="kv">
+              <div><dt>Setup</dt><dd>Complete</dd></div>
+              <div><dt>Latest run</dt><dd><span class="badge badge-passed">All passed</span></dd></div>
+              <div><dt>Test cases</dt><dd>51</dd></div>
+            </dl>
+            <a class="btn btn-secondary btn-block" style="margin-top: 14px;" href="environment.html">Reconnect test machine</a>
+          </article>
+
+          <article class="card">
+            <div class="card-header">
+              <h3><a href="project-overview.html" style="color: inherit;">Mobile Checkout</a></h3>
+              <span class="badge badge-draft">Setup 2 of 5</span>
+            </div>
+            <dl class="kv">
+              <div><dt>Setup</dt><dd>
+                <div class="progress" style="width: 90px;" role="img" aria-label="Setup 40% complete"><span style="width: 40%;"></span></div>
+              </dd></div>
+              <div><dt>Latest run</dt><dd class="muted">No runs yet</dd></div>
+              <div><dt>Test cases</dt><dd>0</dd></div>
+            </dl>
+            <a class="btn btn-primary btn-block" style="margin-top: 14px;" href="onboarding-test-cases.html">Continue setup</a>
+          </article>
+        </div>
+      </section>
+
+      <!-- 5. Recent activity -->
+      <section aria-labelledby="activity-h" class="card" style="margin-top: 28px;">
+        <div class="card-header">
+          <h2 id="activity-h">Recent activity</h2>
+        </div>
+        <ul class="activity">
+          <li>
+            <span class="activity-icon" aria-hidden="true">▶</span>
+            <div><a href="run-detail.html">Smoke pass #43</a> started on Acme Billing Portal — 12 cases</div>
+            <time datetime="2026-09-04T08:45">45m ago</time>
+          </li>
+          <li>
+            <span class="activity-icon" aria-hidden="true">✕</span>
+            <div><a href="run-detail.html">Nightly regression #42</a> finished — 61 passed, 3 failed</div>
+            <time datetime="2026-09-04T03:10">6h ago</time>
+          </li>
+          <li>
+            <span class="activity-icon" aria-hidden="true">⇪</span>
+            <div>18 cases imported from TestRail into <a href="test-cases.html">Orion CRM</a></div>
+            <time datetime="2026-09-03T17:30">Yesterday</time>
+          </li>
+          <li>
+            <span class="activity-icon" aria-hidden="true">✓</span>
+            <div><a href="run-detail.html">Release check #41</a> finished on Orion CRM — all 51 cases passed</div>
+            <time datetime="2026-09-03T11:00">Yesterday</time>
+          </li>
+        </ul>
+      </section>
+
+    </main>
+  </div>
+</div>
+</body>
+</html>

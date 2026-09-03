@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>New project · Punk Hazard</title>
+  <link rel="stylesheet" href="assets/prototype.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="dashboard.html">
+      <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+      <span class="brand-name">Punk Hazard</span>
+    </a>
+
+    <nav class="nav" aria-label="Main navigation">
+      <a class="nav-link" href="dashboard.html">◈ Dashboard</a>
+      <a class="nav-link" href="project-overview.html" aria-current="page">▣ Projects</a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">AB</span>
+        <div>
+          <div style="font-weight: 650; font-size: 0.9rem;">Alex Barton</div>
+          <div class="muted small">alex@acme.dev</div>
+        </div>
+      </div>
+      <nav class="nav" aria-label="User menu">
+        <a class="nav-link" href="#account">Account</a>
+        <a class="nav-link" href="login.html">Sign out</a>
+      </nav>
+    </div>
+  </aside>
+
+  <div>
+    <header class="topbar">
+      <a class="brand" href="dashboard.html">
+        <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+        <span class="brand-name">Punk Hazard</span>
+      </a>
+      <details class="mobile-nav">
+        <summary aria-label="Open menu">☰ Menu</summary>
+        <nav class="nav" aria-label="Main navigation">
+          <a class="nav-link" href="dashboard.html">Dashboard</a>
+          <a class="nav-link" href="project-overview.html" aria-current="page">Projects</a>
+          <a class="nav-link" href="#account">Account</a>
+          <a class="nav-link" href="login.html">Sign out</a>
+        </nav>
+      </details>
+    </header>
+
+    <main class="main">
+      <div class="narrow">
+
+        <nav class="breadcrumbs" aria-label="Breadcrumb">
+          <a href="dashboard.html">Dashboard</a>
+          <span class="sep" aria-hidden="true">›</span>
+          <a href="project-overview.html">Projects</a>
+          <span class="sep" aria-hidden="true">›</span>
+          <span>Mobile Checkout</span>
+          <span class="sep" aria-hidden="true">›</span>
+          <span aria-current="page">Setup</span>
+        </nav>
+
+        <h1>Project details</h1>
+        <p class="subtitle">Name the project so you can find it later — this becomes the home for its application context, test cases, runs, and test machine.</p>
+
+        <ol class="steps">
+          <li class="step is-current" aria-current="step">
+            <span class="step-label">Project details</span>
+          </li>
+          <li class="step">
+            <span class="step-label">Application context</span>
+          </li>
+          <li class="step">
+            <span class="step-label">Test cases</span>
+          </li>
+          <li class="step">
+            <span class="step-label">Test machine</span>
+          </li>
+          <li class="step">
+            <span class="step-label">First run</span>
+          </li>
+        </ol>
+
+        <div class="alert alert-info">
+          <span class="alert-icon" aria-hidden="true">ℹ</span>
+          <div>
+            <strong>What a project represents</strong>
+            <p>A project is one application under test. It holds its application context, its test cases, every run of those cases, and the test machine that runs them.</p>
+          </div>
+        </div>
+
+        <div class="card">
+          <form action="#" method="post" novalidate>
+
+            <div class="field">
+              <label for="project-name">Project name</label>
+              <input class="input" id="project-name" name="project-name" type="text" value="Mobile Checkout" required>
+            </div>
+
+            <div class="field">
+              <label for="project-tags">Tags <span class="optional">(optional)</span></label>
+              <input class="input" id="project-tags" name="project-tags" type="text" placeholder="checkout, mobile, ios">
+              <p class="hint">Comma-separated. Use tags to group related projects on the dashboard.</p>
+            </div>
+
+          </form>
+        </div>
+
+        <div class="wizard-actions">
+          <a class="btn btn-ghost" href="dashboard.html">Finish later</a>
+          <div class="spacer"></div>
+          <a class="btn btn-primary" href="onboarding-context.html">Save and continue →</a>
+        </div>
+
+      </div>
+    </main>
+  </div>
+</div>
+</body>
+</html>

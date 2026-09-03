@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Environment · Acme Billing Portal · Punk Hazard</title>
+  <link rel="stylesheet" href="assets/prototype.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="dashboard.html">
+      <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+      <span class="brand-name">Punk Hazard</span>
+    </a>
+
+    <nav class="nav" aria-label="Main navigation">
+      <a class="nav-link" href="dashboard.html">◈ Dashboard</a>
+      <a class="nav-link" href="project-overview.html" aria-current="page">▣ Projects</a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">AB</span>
+        <div>
+          <div style="font-weight: 650; font-size: 0.9rem;">Alex Barton</div>
+          <div class="muted small">alex@acme.dev</div>
+        </div>
+      </div>
+      <nav class="nav" aria-label="User menu">
+        <a class="nav-link" href="#account">Account</a>
+        <a class="nav-link" href="login.html">Sign out</a>
+      </nav>
+    </div>
+  </aside>
+
+  <div>
+    <header class="topbar">
+      <a class="brand" href="dashboard.html">
+        <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+        <span class="brand-name">Punk Hazard</span>
+      </a>
+      <details class="mobile-nav">
+        <summary aria-label="Open menu">☰ Menu</summary>
+        <nav class="nav" aria-label="Main navigation">
+          <a class="nav-link" href="dashboard.html">Dashboard</a>
+          <a class="nav-link" href="project-overview.html" aria-current="page">Projects</a>
+          <a class="nav-link" href="#account">Account</a>
+          <a class="nav-link" href="login.html">Sign out</a>
+        </nav>
+      </details>
+    </header>
+
+    <main class="main">
+
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="dashboard.html">Dashboard</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <a href="project-overview.html">Projects</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <span aria-current="page">Acme Billing Portal</span>
+      </nav>
+
+      <div class="page-header">
+        <div>
+          <h1>Environment</h1>
+          <p class="subtitle">Acme Billing Portal — test machine connection and Test Runner setup.</p>
+        </div>
+      </div>
+
+      <nav class="tabs" aria-label="Project navigation">
+        <a class="tab" href="project-overview.html">Overview</a>
+        <a class="tab" href="test-cases.html">Test Cases</a>
+        <a class="tab" href="runs.html">Runs</a>
+        <a class="tab" href="environment.html" aria-current="page">Environment</a>
+        <a class="tab" href="#settings">Settings</a>
+      </nav>
+
+      <!-- Connection state -->
+      <section aria-labelledby="connection-h" class="card">
+        <div class="card-header">
+          <h2 id="connection-h">Connection</h2>
+          <span class="badge badge-connected">Test machine connected</span>
+        </div>
+        <p style="margin-top: -4px;">
+          <strong>WIN-ACME-01</strong> is online and ready to run tests.
+        </p>
+        <dl class="kv">
+          <div>
+            <dt>Last connected</dt>
+            <dd>Today, 08:12</dd>
+          </div>
+          <div>
+            <dt>Operating system</dt>
+            <dd>Windows 11</dd>
+          </div>
+          <div>
+            <dt>Test Runner version</dt>
+            <dd>1.4.2</dd>
+          </div>
+        </dl>
+        <div class="actions" style="margin-top: 16px;">
+          <button class="btn btn-danger" type="button">Disconnect test machine</button>
+        </div>
+      </section>
+
+      <!-- Set up on another machine -->
+      <section aria-labelledby="setup-h" class="card" style="margin-top: 16px;">
+        <div class="card-header">
+          <h2 id="setup-h">Set up on another machine</h2>
+        </div>
+        <p class="muted">Choose the operating system of the machine you want to connect, then download the Test Runner.</p>
+
+        <fieldset style="border: 0; padding: 0; margin: 0 0 18px;">
+          <legend class="visually-hidden">Operating system</legend>
+          <div class="grid grid-2">
+            <label class="radio-card selected" for="os-windows">
+              <input type="radio" id="os-windows" name="os" value="windows" checked>
+              <div>
+                <div class="radio-title">Windows</div>
+                <div class="muted small">Windows 10 or 11, 64-bit</div>
+              </div>
+            </label>
+            <label class="radio-card" for="os-macos">
+              <input type="radio" id="os-macos" name="os" value="macos">
+              <div>
+                <div class="radio-title">macOS</div>
+                <div class="muted small">macOS 13 Ventura or later</div>
+              </div>
+            </label>
+          </div>
+        </fieldset>
+
+        <a class="btn btn-primary" href="#" style="margin-bottom: 22px;">Download Test Runner for Windows</a>
+
+        <ol class="setup-steps">
+          <li>
+            <div class="step-title">Unzip the download</div>
+            <p class="muted small">Extract the Test Runner folder anywhere on the machine.</p>
+          </li>
+          <li>
+            <div class="step-title">Run the installer script</div>
+            <p class="muted small">Open a terminal in the extracted folder and run the install script.</p>
+          </li>
+          <li>
+            <div class="step-title">Paste your connection key</div>
+            <p class="muted small">Find the key under Advanced diagnostics below and paste it when prompted.</p>
+          </li>
+          <li>
+            <div class="step-title">Keep the window open</div>
+            <p class="muted small">Leave the Test Runner window running so this project can reach the machine.</p>
+          </li>
+        </ol>
+
+        <pre class="code-block">.\install-runner.ps1</pre>
+      </section>
+
+      <div class="divider">Example: disconnected state</div>
+
+      <section aria-labelledby="disconnected-h" class="card">
+        <div class="card-header">
+          <h2 id="disconnected-h" class="visually-hidden">Disconnected state example</h2>
+          <span class="badge badge-disconnected">Not connected</span>
+        </div>
+        <div class="alert alert-info" style="margin-bottom: 0;">
+          <span class="alert-icon" aria-hidden="true">ℹ</span>
+          <div>
+            <strong>Setup was completed on Aug 12.</strong>
+            <p>This project remembers its setup even while no machine is connected. Reconnect by opening the Test Runner on any previously set-up machine, or set up a new one above.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Advanced diagnostics -->
+      <details class="card" style="margin-top: 16px;">
+        <summary style="cursor: pointer; font-weight: 650;">Advanced diagnostics</summary>
+        <dl class="kv" style="margin-top: 14px;">
+          <div>
+            <dt>Runner version</dt>
+            <dd>1.4.2</dd>
+          </div>
+          <div>
+            <dt>Protocol capabilities</dt>
+            <dd>input, browser, screenshots, find-element</dd>
+          </div>
+          <div>
+            <dt>Visual engine status</dt>
+            <dd>Ready</dd>
+          </div>
+          <div>
+            <dt>Visual engine weights</dt>
+            <dd>Installed</dd>
+          </div>
+          <div>
+            <dt>Connection key</dt>
+            <dd>
+              <span style="margin-right: 8px;">••••••••-4f2a</span>
+              <button class="icon-btn" type="button" aria-label="Show connection key"><span aria-hidden="true">👁</span></button>
+              <a class="btn btn-sm btn-secondary" href="#">Regenerate</a>
+            </dd>
+          </div>
+        </dl>
+        <p class="hint">Only needed when support asks or when connecting a machine manually.</p>
+      </details>
+
+    </main>
+  </div>
+</div>
+</body>
+</html>
