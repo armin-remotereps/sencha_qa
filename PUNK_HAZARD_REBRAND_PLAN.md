@@ -157,9 +157,8 @@ The proposed four-step flow omits the machine connection required to execute tes
 
 4. **Connect a test machine**
    - Explain why the runner is needed in plain language
-   - Select operating system
-   - Download the Test Runner
-   - Show concise numbered setup instructions
+   - One download: the Test Runner is a single Python application for every platform, so there is no OS selection and no "recommended" platform
+   - Show numbered setup instructions with OS-specific commands (Linux/macOS, Windows CMD, Windows PowerShell) that mirror the real `setup.sh` / `setup.bat` / `setup.ps1` scripts; the ZIP ships a pre-configured `.env`, so there is no connection key to paste
    - Confirm connection with a clear live readiness state
    - Keep protocol and visual-engine details behind “Advanced diagnostics”
 
@@ -174,17 +173,11 @@ The proposed four-step flow omits the machine connection required to execute tes
 
 - Redirect newly created projects to the wizard rather than back to the project list.
 - Save each completed step before moving forward.
-- Make the wizard resumable from the dashboard and project overview.
-- Allow returning to completed steps without losing data.
+- The wizard is **not resumable**. There is no “Finish later” or “Continue setup” action anywhere. If the user leaves the wizard, they either restart it from step one (“Restart setup wizard” on the project overview) or change things directly on the relevant project page (Test Cases, Environment, application context).
+- Allow going back to earlier steps while inside the wizard without losing data.
 - Only allow skipping truly optional fields.
-- Provide a deliberate “Finish later” action.
-- Derive as much completion as possible from existing project data:
-  - Project details: project exists and has a name.
-  - Application context: `project_prompt` is not blank.
-  - Test cases: at least one test case exists.
-  - First run: at least one test run exists.
-- A machine being disconnected now must not erase the fact that setup was completed previously. If necessary, persist a `runner_setup_completed_at` timestamp after the first successful connection.
-- Existing projects must not be forced through the wizard. Show a non-blocking setup checklist based on their derived state.
+- No derived “setup progress” or setup checklist is shown on the dashboard, project list, or project overview. Projects surface machine state, test-case count, and latest run only; those drive the per-project primary action (e.g. “Import test cases” when a project has none).
+- Existing projects must not be forced through the wizard.
 
 ## Dashboard Definition
 
@@ -194,12 +187,10 @@ The dashboard must answer “What needs my attention?” and provide direct next
 
 1. **Welcome and primary action**
    - New project button
-   - Continue setup button when applicable
 
 2. **Attention required**
    - Failed recent runs
    - Disconnected test machines for projects with planned work
-   - Incomplete project setup
 
 3. **Run summary**
    - Runs in progress
@@ -209,7 +200,6 @@ The dashboard must answer “What needs my attention?” and provide direct next
 
 4. **Projects**
    - Recently accessed projects
-   - Setup completion
    - Runner state
    - Latest run result
    - One clear primary action per card
@@ -251,6 +241,7 @@ ui-prototype/
     prototype.css
   login.html
   dashboard.html
+  projects.html
   onboarding-project.html
   onboarding-context.html
   onboarding-test-cases.html
@@ -260,6 +251,7 @@ ui-prototype/
   test-cases.html
   runs.html
   run-detail.html
+  run-case-detail.html
   environment.html
 ```
 
@@ -284,24 +276,32 @@ Keep this prototype plain HTML and CSS. Use separate linked pages to demonstrate
 - Run summary
 - Recent projects
 - Recent activity
-- New project and continue-setup actions
+- New project action
+
+#### Projects list
+
+- Search and tag filter, “show archived” toggle
+- Table at desktop widths, stacked records on small screens
+- Per project: test machine state, test-case count, latest run, members
+- Edit (name/tags), Duplicate, Archive actions with confirmation dialogs; Restore for archived projects
+- Empty state leading into the wizard
 
 #### Onboarding pages
 
 - Shared five-step progress indicator
 - Clear title, explanation, and expected result for each step
-- Back, save-and-continue, and finish-later actions
+- Back and save-and-continue actions (no finish-later; the wizard cannot be resumed)
 - Completed, current, and upcoming visual states
 - Representative error, loading, empty, and success states
 
 #### Project overview
 
-- Setup progress
 - Test-machine status
 - Test-case count
 - Latest run summary
 - Clear recommended next action
 - Project navigation
+- “Restart setup wizard” secondary action
 
 #### Test cases
 
@@ -322,15 +322,21 @@ Keep this prototype plain HTML and CSS. Use separate linked pages to demonstrate
 
 - Readiness checklist for draft runs
 - Summary cards for completed/running runs
-- Case results
-- Screenshot preview
 - Human-readable result summary
-- Logs visually secondary to the result, not the first thing users must interpret
+- Case results table; each row opens the case page
+- No run-level logs or screenshots: both are recorded per test case (`TestRunTestCase.logs`, `TestRunScreenshot`)
+
+#### Run case detail
+
+- Case status, result summary, and the test case definition (steps, expected result)
+- Screenshot gallery with lightbox, in capture order
+- Execution log visually secondary to the result; streams live while the case runs
+- Running and not-started (draft run) states; edit / remove-from-run actions for draft runs
 
 #### Environment
 
 - Friendly connection state
-- OS-specific Test Runner setup
+- Single Test Runner download with OS-specific setup instructions (CSS-only tabs)
 - Last connected information
 - Advanced diagnostics collapsed conceptually into a secondary panel
 
