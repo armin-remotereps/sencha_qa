@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Export invoice as PDF · Nightly regression #42 · Punk Hazard</title>
+  <link rel="stylesheet" href="assets/prototype.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="dashboard.html">
+      <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+      <span class="brand-name">Punk Hazard</span>
+    </a>
+
+    <nav class="nav" aria-label="Main navigation">
+      <a class="nav-link" href="dashboard.html">◈ Dashboard</a>
+      <a class="nav-link" href="projects.html" aria-current="page">▣ Projects</a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">AB</span>
+        <div>
+          <div style="font-weight: 650; font-size: 0.9rem;">Alex Barton</div>
+          <div class="muted small">alex@acme.dev</div>
+        </div>
+      </div>
+      <nav class="nav" aria-label="User menu">
+        <a class="nav-link" href="#account">Account</a>
+        <a class="nav-link" href="login.html">Sign out</a>
+      </nav>
+    </div>
+  </aside>
+
+  <div>
+    <header class="topbar">
+      <a class="brand" href="dashboard.html">
+        <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+        <span class="brand-name">Punk Hazard</span>
+      </a>
+      <details class="mobile-nav">
+        <summary aria-label="Open menu">☰ Menu</summary>
+        <nav class="nav" aria-label="Main navigation">
+          <a class="nav-link" href="dashboard.html">Dashboard</a>
+          <a class="nav-link" href="projects.html" aria-current="page">Projects</a>
+          <a class="nav-link" href="#account">Account</a>
+          <a class="nav-link" href="login.html">Sign out</a>
+        </nav>
+      </details>
+    </header>
+
+    <main class="main">
+
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="dashboard.html">Dashboard</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <a href="projects.html">Projects</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <a href="project-overview.html">Acme Billing Portal</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <a href="runs.html">Runs</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <a href="run-detail.html">Nightly regression #42</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <span aria-current="page">Export invoice as PDF</span>
+      </nav>
+
+      <div class="page-header">
+        <div>
+          <h1>Export invoice as PDF <span class="badge badge-failed" style="vertical-align: middle; margin-left: 6px;">Failed</span></h1>
+          <p class="subtitle">Case 2 of 64 in Nightly regression #42 · ran today 03:05 – 03:07 · 2m 05s</p>
+        </div>
+        <div class="actions">
+          <a class="btn btn-secondary" href="#edit-case">Edit test case</a>
+          <a class="btn btn-ghost" href="run-detail.html">← Back to run</a>
+        </div>
+      </div>
+
+      <nav class="tabs" aria-label="Project navigation">
+        <a class="tab" href="project-overview.html">Overview</a>
+        <a class="tab" href="test-cases.html">Test Cases</a>
+        <a class="tab" href="runs.html" aria-current="page">Runs</a>
+        <a class="tab" href="environment.html">Environment</a>
+        <a class="tab" href="#settings">Settings</a>
+      </nav>
+
+      <!-- Section: Result summary (reads first; written by the agent in plain language) -->
+      <section aria-labelledby="result-h" class="card" style="border-color: rgba(239, 91, 98, 0.45);">
+        <div class="card-header">
+          <h2 id="result-h">Result</h2>
+          <span class="badge badge-failed">Failed</span>
+        </div>
+        <p style="margin: 0;">Timed out waiting for the export dialog to load. The invoice opened and the <strong>Export as PDF</strong> button was clicked, but no dialog appeared within 30 seconds. The page stayed on the invoice detail view, so the PDF was never generated. Steps 1–3 passed; step 4 failed and steps 5–6 were not attempted.</p>
+      </section>
+
+      <!-- Section: What the agent was asked to do -->
+      <section aria-labelledby="case-h" class="card" style="margin-top: 16px;">
+        <div class="card-header">
+          <h2 id="case-h">Test case</h2>
+          <a class="btn btn-sm btn-ghost" href="test-cases.html">Open in Test Cases</a>
+        </div>
+        <dl class="kv kv-stack">
+          <div>
+            <dt>Description</dt>
+            <dd>An invoice can be exported as a PDF from its detail page.</dd>
+          </div>
+          <div>
+            <dt>Preconditions</dt>
+            <dd>Signed in as a billing admin. Invoice #1042 exists and is finalised.</dd>
+          </div>
+          <div>
+            <dt>Steps</dt>
+            <dd>
+              <ol style="margin: 0; padding-left: 18px;">
+                <li>Open the Invoices list.</li>
+                <li>Open invoice #1042.</li>
+                <li>Click <strong>Export as PDF</strong>.</li>
+                <li>Wait for the export dialog.</li>
+                <li>Choose <strong>A4</strong> and confirm.</li>
+                <li>Verify the download starts.</li>
+              </ol>
+            </dd>
+          </div>
+          <div>
+            <dt>Expected result</dt>
+            <dd>A PDF named <code>invoice-1042.pdf</code> downloads and the dialog closes.</dd>
+          </div>
+        </dl>
+      </section>
+
+      <!-- Section: Screenshots (per case; every screenshot the agent captured, in order) -->
+      <section aria-labelledby="shots-h" class="card">
+        <div class="card-header">
+          <h2 id="shots-h">Screenshots <span class="muted small" style="font-weight: 500;">(5)</span></h2>
+        </div>
+        <p class="hint">Captured in order while the agent worked through the steps. Click one to view it full size.</p>
+        <div class="gallery">
+          <a class="shot" href="#lightbox">
+            <span class="shot-img" aria-hidden="true">🖥</span>
+            <span class="shot-caption">Invoices list · 03:05:12</span>
+          </a>
+          <a class="shot" href="#lightbox">
+            <span class="shot-img" aria-hidden="true">🖥</span>
+            <span class="shot-caption">Invoice #1042 opened · 03:05:40</span>
+          </a>
+          <a class="shot" href="#lightbox">
+            <span class="shot-img" aria-hidden="true">🖥</span>
+            <span class="shot-caption">Export button located · 03:06:02</span>
+          </a>
+          <a class="shot" href="#lightbox">
+            <span class="shot-img" aria-hidden="true">🖥</span>
+            <span class="shot-caption">After click, waiting · 03:06:33</span>
+          </a>
+          <a class="shot" href="#lightbox" style="border-color: var(--danger);">
+            <span class="shot-img" aria-hidden="true">🖥</span>
+            <span class="shot-caption">Failure snapshot · 03:07:03</span>
+          </a>
+        </div>
+      </section>
+
+      <!-- Section: Execution log (secondary to the result above; streams live while running) -->
+      <section aria-labelledby="log-h" class="card">
+        <div class="card-header">
+          <h2 id="log-h">Execution log</h2>
+          <div class="actions">
+            <a class="btn btn-sm btn-ghost" href="#">Copy log</a>
+          </div>
+        </div>
+        <p class="hint">The agent's step-by-step record for this case only. Warnings and errors are highlighted.</p>
+        <pre class="code-block log-stream"><span class="log-time">[03:05:10]</span> Starting case "Export invoice as PDF"
+<span class="log-time">[03:05:11]</span> Reading application context: billing.acme.dev, staging tenant
+<span class="log-time">[03:05:12]</span> Screenshot captured
+<span class="log-time">[03:05:14]</span> Step 1 — locating "Invoices" in the side navigation
+<span class="log-time">[03:05:16]</span> Clicked "Invoices" (x=112, y=304)
+<span class="log-time">[03:05:38]</span> Step 2 — locating row for invoice #1042
+<span class="log-time">[03:05:40]</span> Clicked "INV-1042" · screenshot captured
+<span class="log-time">[03:06:00]</span> Step 3 — locating "Export as PDF"
+<span class="log-time">[03:06:02]</span> Clicked "Export as PDF" (x=1180, y=212) · screenshot captured
+<span class="log-time">[03:06:03]</span> Step 4 — waiting for export dialog
+<span class="log-time">[03:06:33]</span> <span class="log-warn">WARN  Export dialog not visible after 30s, retrying once</span>
+<span class="log-time">[03:06:34]</span> Clicked "Export as PDF" again
+<span class="log-time">[03:07:03]</span> <span class="log-error">ERROR Timed out waiting for the export dialog to appear</span>
+<span class="log-time">[03:07:03]</span> Failure screenshot captured
+<span class="log-time">[03:07:05]</span> Case marked as failed · steps 5–6 skipped
+<span class="log-time">[03:07:05]</span> Resetting environment for the next case</pre>
+      </section>
+
+      <div class="divider">Example: case still running (log streams live)</div>
+      <section aria-label="Running case example" class="card">
+        <div class="page-header" style="margin-bottom: 8px;">
+          <div>
+            <h3 style="margin: 0;">Apply discount code <span class="badge badge-running" style="vertical-align: middle; margin-left: 6px;">Running</span></h3>
+            <p class="subtitle">Case 7 of 12 in Smoke pass #43 · started 09:41</p>
+          </div>
+          <div class="actions">
+            <a class="btn btn-danger" href="run-detail.html">Abort run</a>
+          </div>
+        </div>
+        <div class="card-header">
+          <h4 style="margin: 0;"><span class="live-dot" aria-hidden="true"></span>Live execution log</h4>
+          <span class="muted small">Updates as the agent works · result appears when the case finishes</span>
+        </div>
+        <pre class="code-block log-stream" style="margin-bottom: 12px;"><span class="log-time">[09:41:02]</span> Starting case "Apply discount code"
+<span class="log-time">[09:41:04]</span> Step 1 — opening the cart · screenshot captured
+<span class="log-time">[09:41:20]</span> Step 2 — locating "Have a code?" link
+<span class="log-time">[09:41:22]</span> Clicked "Have a code?" (x=942, y=610)
+<span class="log-time">[09:41:23]</span> Step 3 — typing "SAVE10"
+<span class="log-time">[09:41:25]</span> Screenshot captured · waiting for price to update…</pre>
+        <div class="skeleton skeleton-text" style="max-width: 320px;"></div>
+        <p class="hint" style="margin-top: 10px;">Screenshots appear here as they are taken. The result summary is written when the case finishes.</p>
+      </section>
+
+      <div class="divider">Example: case in a draft run (not started yet)</div>
+      <section aria-label="Draft case example" class="card">
+        <div class="page-header" style="margin-bottom: 8px;">
+          <div>
+            <h3 style="margin: 0;">Refund a paid invoice <span class="badge badge-draft" style="vertical-align: middle; margin-left: 6px;">Not started</span></h3>
+            <p class="subtitle">Case 4 of 18 in Payments deep pass · run has not started</p>
+          </div>
+          <div class="actions">
+            <a class="btn btn-secondary" href="#edit-case">Edit test case</a>
+            <a class="btn btn-danger" href="#remove-case">Remove from run</a>
+          </div>
+        </div>
+        <div class="alert alert-info" style="margin-bottom: 0;">
+          <span class="alert-icon" aria-hidden="true">ℹ</span>
+          <div>
+            <p style="margin: 0;">No result, log, or screenshots yet. Edits made here change the test case for this project, not just this run. <a href="run-detail.html">Start the run</a> when the readiness checks pass.</p>
+          </div>
+        </div>
+      </section>
+
+      <div class="divider">Example: screenshot lightbox</div>
+      <div class="dialog-demo">
+        <div class="dialog" role="dialog" aria-labelledby="lightbox-h" aria-modal="true" id="lightbox" style="max-width: 720px; width: 100%;">
+          <div class="card-header">
+            <h3 id="lightbox-h" style="margin: 0;">Failure snapshot · 03:07:03</h3>
+            <button class="icon-btn" type="button" aria-label="Close">✕</button>
+          </div>
+          <div class="shot-img" aria-hidden="true" style="aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; font-size: 2rem; background: linear-gradient(135deg, var(--surface-hover), var(--surface-raised)); border-radius: var(--radius-sm);">🖥</div>
+          <div class="dialog-actions" style="justify-content: space-between;">
+            <button class="btn btn-ghost" type="button">← Previous</button>
+            <span class="muted small">5 / 5</span>
+            <button class="btn btn-ghost" type="button" aria-disabled="true">Next →</button>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+</body>
+</html>

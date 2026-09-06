@@ -1741,3 +1741,125 @@ details.card[open] > summary,
   height: 1px;
   background: var(--border);
 }
+
+/* --------------------------------------------------------------------------
+   OS instruction tabs (CSS-only: radio inputs drive which panel is shown)
+   The download itself is one Python application for every platform; only
+   the setup commands differ, so the tabs switch instructions, not files.
+   -------------------------------------------------------------------------- */
+
+.os-tabs {
+  position: relative;
+}
+
+.os-tabs > input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.os-tabs > label {
+  display: inline-block;
+  padding: 8px 14px;
+  margin: 0 8px 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.os-tabs > label:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.os-tabs > input:checked + label {
+  color: var(--brand-navy);
+  background: var(--brand-cyan);
+  border-color: var(--brand-cyan);
+}
+
+.os-tabs > input:focus-visible + label {
+  outline: 2px solid var(--brand-cyan);
+  outline-offset: 2px;
+}
+
+.os-panels {
+  margin-top: 12px;
+}
+
+.os-panel {
+  display: none;
+}
+
+.os-tabs > input:nth-of-type(1):checked ~ .os-panels > .os-panel:nth-of-type(1),
+.os-tabs > input:nth-of-type(2):checked ~ .os-panels > .os-panel:nth-of-type(2),
+.os-tabs > input:nth-of-type(3):checked ~ .os-panels > .os-panel:nth-of-type(3) {
+  display: block;
+}
+
+.os-panel .code-block {
+  margin: 8px 0 6px;
+}
+
+/* --------------------------------------------------------------------------
+   Live log stream indicator (per-case execution log)
+   -------------------------------------------------------------------------- */
+
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--info);
+  margin-right: 6px;
+  vertical-align: middle;
+  animation: live-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot {
+    animation: none;
+  }
+}
+
+.log-stream {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.log-stream .log-warn {
+  color: var(--warning);
+}
+
+.log-stream .log-error {
+  color: var(--danger);
+}
+
+.log-stream .log-time {
+  color: var(--text-muted);
+}
+
+/* Stacked key/value list for long-form values (label above, left-aligned) */
+.kv-stack > div {
+  display: block;
+}
+
+.kv-stack dt {
+  margin-bottom: 4px;
+}
+
+.kv-stack dd {
+  text-align: left;
+  font-weight: 400;
+}

@@ -17,7 +17,7 @@
 
     <nav class="nav" aria-label="Main navigation">
       <a class="nav-link" href="dashboard.html">◈ Dashboard</a>
-      <a class="nav-link" href="project-overview.html" aria-current="page">▣ Projects</a>
+      <a class="nav-link" href="projects.html" aria-current="page">▣ Projects</a>
     </nav>
 
     <div class="sidebar-footer">
@@ -45,7 +45,7 @@
         <summary aria-label="Open menu">☰ Menu</summary>
         <nav class="nav" aria-label="Main navigation">
           <a class="nav-link" href="dashboard.html">Dashboard</a>
-          <a class="nav-link" href="project-overview.html" aria-current="page">Projects</a>
+          <a class="nav-link" href="projects.html" aria-current="page">Projects</a>
           <a class="nav-link" href="#account">Account</a>
           <a class="nav-link" href="login.html">Sign out</a>
         </nav>
@@ -57,7 +57,7 @@
       <nav class="breadcrumbs" aria-label="Breadcrumb">
         <a href="dashboard.html">Dashboard</a>
         <span class="sep" aria-hidden="true">›</span>
-        <a href="project-overview.html">Projects</a>
+        <a href="projects.html">Projects</a>
         <span class="sep" aria-hidden="true">›</span>
         <a href="project-overview.html">Acme Billing Portal</a>
         <span class="sep" aria-hidden="true">›</span>
@@ -118,6 +118,7 @@
         <div class="card-header">
           <h2>Case results</h2>
         </div>
+        <p class="hint" style="margin-top: -6px;">Logs and screenshots are recorded per case. Open a case to see its full execution log and every screenshot the agent took.</p>
         <div class="table-wrap">
           <table class="data-table">
             <thead>
@@ -126,112 +127,69 @@
                 <th scope="col">Result</th>
                 <th scope="col">Duration</th>
                 <th scope="col">Failure reason</th>
+                <th scope="col"><span class="visually-hidden">Details</span></th>
               </tr>
             </thead>
             <tbody>
               <tr>
-                <td data-label="Case" class="cell-primary"><a href="#case">Sign in with SSO</a></td>
+                <td data-label="Case" class="cell-primary"><a href="run-case-detail.html">Sign in with SSO</a></td>
                 <td data-label="Result"><span class="badge badge-failed">Failed</span></td>
                 <td data-label="Duration">1m 40s</td>
                 <td data-label="Failure reason" class="muted">Redirected to a blank page after the SAML callback.</td>
+                <td data-label="Details"><a class="btn btn-sm btn-ghost" href="run-case-detail.html">Logs &amp; screenshots</a></td>
               </tr>
               <tr>
-                <td data-label="Case" class="cell-primary"><a href="#case">Export invoice as PDF</a></td>
+                <td data-label="Case" class="cell-primary"><a href="run-case-detail.html">Export invoice as PDF</a></td>
                 <td data-label="Result"><span class="badge badge-failed">Failed</span></td>
                 <td data-label="Duration">2m 05s</td>
                 <td data-label="Failure reason" class="muted">Timed out waiting for the export dialog to load.</td>
+                <td data-label="Details"><a class="btn btn-sm btn-ghost" href="run-case-detail.html">Logs &amp; screenshots</a></td>
               </tr>
               <tr>
-                <td data-label="Case" class="cell-primary"><a href="#case">Preview invoice email before sending</a></td>
+                <td data-label="Case" class="cell-primary"><a href="run-case-detail.html">Preview invoice email before sending</a></td>
                 <td data-label="Result"><span class="badge badge-failed">Failed</span></td>
                 <td data-label="Duration">0m 52s</td>
                 <td data-label="Failure reason" class="muted">Preview pane never rendered the invoice HTML.</td>
+                <td data-label="Details"><a class="btn btn-sm btn-ghost" href="run-case-detail.html">Logs &amp; screenshots</a></td>
               </tr>
               <tr>
-                <td data-label="Case" class="cell-primary"><a href="#case">Sign in with valid credentials</a></td>
+                <td data-label="Case" class="cell-primary"><a href="run-case-detail.html">Sign in with valid credentials</a></td>
                 <td data-label="Result"><span class="badge badge-passed">Passed</span></td>
                 <td data-label="Duration">0m 18s</td>
                 <td data-label="Failure reason" class="muted">—</td>
+                <td data-label="Details"><a class="btn btn-sm btn-ghost" href="run-case-detail.html">Logs &amp; screenshots</a></td>
               </tr>
               <tr>
-                <td data-label="Case" class="cell-primary"><a href="#case">Apply discount code</a></td>
+                <td data-label="Case" class="cell-primary"><a href="run-case-detail.html">Apply discount code</a></td>
                 <td data-label="Result"><span class="badge badge-passed">Passed</span></td>
                 <td data-label="Duration">0m 41s</td>
                 <td data-label="Failure reason" class="muted">—</td>
+                <td data-label="Details"><a class="btn btn-sm btn-ghost" href="run-case-detail.html">Logs &amp; screenshots</a></td>
               </tr>
               <tr>
-                <td data-label="Case" class="cell-primary"><a href="#case">Update billing address</a></td>
+                <td data-label="Case" class="cell-primary"><a href="run-case-detail.html">Update billing address</a></td>
                 <td data-label="Result"><span class="badge badge-passed">Passed</span></td>
                 <td data-label="Duration">0m 33s</td>
                 <td data-label="Failure reason" class="muted">—</td>
+                <td data-label="Details"><a class="btn btn-sm btn-ghost" href="run-case-detail.html">Logs &amp; screenshots</a></td>
               </tr>
               <tr>
-                <td data-label="Case" class="cell-primary"><a href="#case">Export invoice as CSV</a></td>
+                <td data-label="Case" class="cell-primary"><a href="run-case-detail.html">Export invoice as CSV</a></td>
                 <td data-label="Result"><span class="badge badge-passed">Passed</span></td>
                 <td data-label="Duration">0m 27s</td>
                 <td data-label="Failure reason" class="muted">—</td>
+                <td data-label="Details"><a class="btn btn-sm btn-ghost" href="run-case-detail.html">Logs &amp; screenshots</a></td>
               </tr>
               <tr>
-                <td data-label="Case" class="cell-primary"><a href="#case">Sign out from account menu</a></td>
+                <td data-label="Case" class="cell-primary"><a href="run-case-detail.html">Sign out from account menu</a></td>
                 <td data-label="Result"><span class="badge badge-passed">Passed</span></td>
                 <td data-label="Duration">0m 12s</td>
                 <td data-label="Failure reason" class="muted">—</td>
+                <td data-label="Details"><a class="btn btn-sm btn-ghost" href="run-case-detail.html">Logs &amp; screenshots</a></td>
               </tr>
             </tbody>
           </table>
         </div>
-      </div>
-
-      <!-- Section: Screenshot preview -->
-      <div class="card">
-        <div class="card-header">
-          <h2>Screenshots</h2>
-        </div>
-        <p class="hint">Click a screenshot to view full size.</p>
-        <div class="gallery">
-          <a class="shot" href="#lightbox">
-            <span class="shot-img" aria-hidden="true">🖥</span>
-            <span class="shot-caption">Step 1 — dashboard loaded</span>
-          </a>
-          <a class="shot" href="#lightbox">
-            <span class="shot-img" aria-hidden="true">🖥</span>
-            <span class="shot-caption">Step 2 — SSO sign-in form</span>
-          </a>
-          <a class="shot" href="#lightbox">
-            <span class="shot-img" aria-hidden="true">🖥</span>
-            <span class="shot-caption">Step 3 — invoice list</span>
-          </a>
-          <a class="shot" href="#lightbox">
-            <span class="shot-img" aria-hidden="true">🖥</span>
-            <span class="shot-caption">Step 4 — export dialog</span>
-          </a>
-          <a class="shot" href="#lightbox">
-            <span class="shot-img" aria-hidden="true">🖥</span>
-            <span class="shot-caption">Step 4 — export dialog (timeout)</span>
-          </a>
-          <a class="shot" href="#lightbox">
-            <span class="shot-img" aria-hidden="true">🖥</span>
-            <span class="shot-caption">Step 5 — email preview pane</span>
-          </a>
-        </div>
-      </div>
-
-      <!-- Section: Logs, visually secondary to the result above -->
-      <div class="card">
-        <div class="card-header">
-          <h2>Logs</h2>
-        </div>
-        <details>
-          <summary>Execution log — Export invoice as PDF (failed)</summary>
-          <pre class="code-block">[03:07:02] INFO  Navigating to /invoices/1042
-[03:07:03] INFO  Clicking "Export as PDF"
-[03:07:03] INFO  Waiting for export dialog
-[03:07:33] WARN  Export dialog did not appear within 30s
-[03:07:33] ERROR Timeout waiting for selector ".export-dialog"
-[03:07:33] INFO  Capturing failure screenshot
-[03:07:34] INFO  Case marked as failed
-[03:07:34] INFO  Continuing to next case</pre>
-        </details>
       </div>
 
       <div class="divider">Example: draft run readiness</div>

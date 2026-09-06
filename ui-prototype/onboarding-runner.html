@@ -17,7 +17,7 @@
 
     <nav class="nav" aria-label="Main navigation">
       <a class="nav-link" href="dashboard.html">◈ Dashboard</a>
-      <a class="nav-link" href="project-overview.html" aria-current="page">▣ Projects</a>
+      <a class="nav-link" href="projects.html" aria-current="page">▣ Projects</a>
     </nav>
 
     <div class="sidebar-footer">
@@ -45,7 +45,7 @@
         <summary aria-label="Open menu">☰ Menu</summary>
         <nav class="nav" aria-label="Main navigation">
           <a class="nav-link" href="dashboard.html">Dashboard</a>
-          <a class="nav-link" href="project-overview.html" aria-current="page">Projects</a>
+          <a class="nav-link" href="projects.html" aria-current="page">Projects</a>
           <a class="nav-link" href="#account">Account</a>
           <a class="nav-link" href="login.html">Sign out</a>
         </nav>
@@ -58,7 +58,7 @@
         <nav class="breadcrumbs" aria-label="Breadcrumb">
           <a href="dashboard.html">Dashboard</a>
           <span class="sep" aria-hidden="true">›</span>
-          <a href="project-overview.html">Projects</a>
+          <a href="projects.html">Projects</a>
           <span class="sep" aria-hidden="true">›</span>
           <span>Mobile Checkout</span>
           <span class="sep" aria-hidden="true">›</span>
@@ -92,54 +92,107 @@
 
         <div class="card">
           <div class="card-header">
-            <h2>Choose your operating system</h2>
+            <h2>Download the Test Runner</h2>
           </div>
-
-          <fieldset style="border: 0; padding: 0; margin: 0 0 18px;">
-            <legend class="visually-hidden">Test machine operating system</legend>
-
-            <label class="radio-card selected" style="margin-bottom: 12px;">
-              <input type="radio" name="runner-os" value="windows" checked>
-              <span>
-                <span class="radio-title">Windows</span>
-                <span class="muted small">Recommended — required for driving Windows desktop applications.</span>
-              </span>
-            </label>
-
-            <label class="radio-card">
-              <input type="radio" name="runner-os" value="macos">
-              <span>
-                <span class="radio-title">macOS</span>
-                <span class="muted small">For testing web applications from a Mac.</span>
-              </span>
-            </label>
-          </fieldset>
-
-          <a class="btn btn-primary" href="#">⬇ Download Test Runner for Windows</a>
+          <p style="margin-top: -4px;">The Test Runner is one small Python application that runs on Windows, macOS, and Linux &mdash; there is nothing to choose. Download it once, then follow the setup steps for the test machine's operating system below.</p>
+          <div class="actions">
+            <a class="btn btn-primary" href="#">&#11015; Download Test Runner</a>
+          </div>
+          <p class="hint">ZIP archive, pre-configured for Mobile Checkout. The connection settings are already inside &mdash; there is no key to copy.</p>
+          <div class="alert alert-warning" style="margin-bottom: 0;">
+            <span class="alert-icon" aria-hidden="true">&#9888;</span>
+            <div>
+              <strong>Requires Python 3.13 or newer on the test machine.</strong>
+              <p>The setup script checks the version for you and tells you what to install if it is too old.</p>
+            </div>
+          </div>
         </div>
 
         <div class="card">
           <div class="card-header">
             <h2>Set it up</h2>
           </div>
-          <ol class="setup-steps">
-            <li>
-              <div class="step-title">Unzip the download</div>
-              <p class="muted small" style="margin: 0;">Extract the Test Runner folder anywhere on the test machine.</p>
-            </li>
-            <li>
-              <div class="step-title">Run the install script</div>
-              <p class="muted small" style="margin: 0;">Double-click <code>install.bat</code> and let it finish.</p>
-            </li>
-            <li>
-              <div class="step-title">Paste your connection key when prompted</div>
-              <p class="muted small" style="margin: 0;">This links the Test Runner to Mobile Checkout.</p>
-            </li>
-            <li>
-              <div class="step-title">Leave the window open</div>
-              <p class="muted small" style="margin: 0;">The Test Runner needs to stay running while tests execute.</p>
-            </li>
-          </ol>
+          <p class="muted" style="margin-top: -4px;">Pick the operating system of the test machine to see the matching commands.</p>
+
+          <div class="os-tabs">
+            <input type="radio" name="wizard-os" id="wizard-os-unix" checked>
+            <label for="wizard-os-unix">Linux / macOS</label>
+            <input type="radio" name="wizard-os" id="wizard-os-cmd">
+            <label for="wizard-os-cmd">Windows &middot; Command Prompt</label>
+            <input type="radio" name="wizard-os" id="wizard-os-ps">
+            <label for="wizard-os-ps">Windows &middot; PowerShell</label>
+
+            <div class="os-panels">
+              <section class="os-panel" aria-label="Linux and macOS setup">
+                <ol class="setup-steps">
+                  <li>
+                    <div class="step-title">Extract the ZIP and open a terminal in the extracted folder</div>
+
+                  </li>
+                  <li>
+                    <div class="step-title">Run the setup script</div>
+                    <pre class="code-block">bash controller_client/scripts/setup.sh</pre>
+                    <p class="muted small" style="margin: 0;">If your default <code>python3</code> is older than 3.13, point at a newer one:</p>
+                    <pre class="code-block">bash controller_client/scripts/setup.sh --python python3.13</pre>
+                  </li>
+                  <li>
+                    <div class="step-title">Start the Test Runner</div>
+                    <pre class="code-block">controller_client/.venv/bin/python -m controller_client.main</pre>
+                  </li>
+                  <li>
+                    <div class="step-title">Leave the window open</div>
+                    <p class="muted small" style="margin: 0;">The Test Runner has to stay running while tests execute. Its first start also downloads the visual engine, which can take a few minutes.</p>
+                  </li>
+                </ol>
+              </section>
+
+              <section class="os-panel" aria-label="Windows Command Prompt setup">
+                <ol class="setup-steps">
+                  <li>
+                    <div class="step-title">Extract the ZIP and open Command Prompt in the extracted folder</div>
+                    <p class="muted small" style="margin: 0;">Run it as Administrator if your tests need to drive installers, Task Manager, or anything behind a UAC prompt &mdash; Windows silently blocks input to those windows otherwise.</p>
+                  </li>
+                  <li>
+                    <div class="step-title">Run the setup script</div>
+                    <pre class="code-block">controller_client\scripts\setup.bat</pre>
+                    <p class="muted small" style="margin: 0;">If your default <code>python</code> is older than 3.13, point at a newer one:</p>
+                    <pre class="code-block">controller_client\scripts\setup.bat python3.13</pre>
+                  </li>
+                  <li>
+                    <div class="step-title">Start the Test Runner</div>
+                    <pre class="code-block">controller_client\.venv\Scripts\python -m controller_client.main</pre>
+                  </li>
+                  <li>
+                    <div class="step-title">Leave the window open</div>
+                    <p class="muted small" style="margin: 0;">The Test Runner has to stay running while tests execute. Its first start also downloads the visual engine, which can take a few minutes.</p>
+                  </li>
+                </ol>
+              </section>
+
+              <section class="os-panel" aria-label="Windows PowerShell setup">
+                <ol class="setup-steps">
+                  <li>
+                    <div class="step-title">Extract the ZIP and open PowerShell in the extracted folder</div>
+                    <p class="muted small" style="margin: 0;">Run it as Administrator if your tests need to drive installers, Task Manager, or anything behind a UAC prompt &mdash; Windows silently blocks input to those windows otherwise.</p>
+                  </li>
+                  <li>
+                    <div class="step-title">Run the setup script</div>
+                    <pre class="code-block">.\controller_client\scripts\setup.ps1</pre>
+                    <p class="muted small" style="margin: 0;">If your default <code>python</code> is older than 3.13, point at a newer one:</p>
+                    <pre class="code-block">.\controller_client\scripts\setup.ps1 -Python python3.13</pre>
+                  </li>
+                  <li>
+                    <div class="step-title">Start the Test Runner</div>
+                    <pre class="code-block">controller_client\.venv\Scripts\python -m controller_client.main</pre>
+                  </li>
+                  <li>
+                    <div class="step-title">Leave the window open</div>
+                    <p class="muted small" style="margin: 0;">The Test Runner has to stay running while tests execute. Its first start also downloads the visual engine, which can take a few minutes.</p>
+                  </li>
+                </ol>
+              </section>
+            </div>
+          </div>
         </div>
 
         <div class="card">
@@ -180,7 +233,7 @@
         <div class="wizard-actions">
           <a class="btn btn-secondary" href="onboarding-test-cases.html">← Back</a>
           <div class="spacer"></div>
-          <a class="btn btn-ghost" href="dashboard.html">Finish later</a>
+
           <a class="btn btn-primary" href="onboarding-first-run.html">Save and continue →</a>
         </div>
 

@@ -17,7 +17,7 @@
 
     <nav class="nav" aria-label="Main navigation">
       <a class="nav-link" href="dashboard.html" aria-current="page">◈ Dashboard</a>
-      <a class="nav-link" href="project-overview.html">▣ Projects</a>
+      <a class="nav-link" href="projects.html">▣ Projects</a>
     </nav>
 
     <div class="sidebar-footer">
@@ -45,7 +45,7 @@
         <summary aria-label="Open menu">☰ Menu</summary>
         <nav class="nav" aria-label="Main navigation">
           <a class="nav-link" href="dashboard.html" aria-current="page">Dashboard</a>
-          <a class="nav-link" href="project-overview.html">Projects</a>
+          <a class="nav-link" href="projects.html">Projects</a>
           <a class="nav-link" href="#account">Account</a>
           <a class="nav-link" href="login.html">Sign out</a>
         </nav>
@@ -61,7 +61,6 @@
           <p class="subtitle">2 runs in progress · 1 project needs attention</p>
         </div>
         <div class="actions">
-          <a class="btn btn-secondary" href="onboarding-test-cases.html">Continue setup: Mobile Checkout</a>
           <a class="btn btn-primary" href="onboarding-project.html">+ New project</a>
         </div>
       </div>
@@ -90,15 +89,6 @@
               <a class="btn btn-sm btn-secondary" style="margin-top: 8px;" href="environment.html">Reconnect machine</a>
             </div>
             <time datetime="2026-09-04T07:20">2h ago</time>
-          </li>
-          <li>
-            <span class="activity-icon" aria-hidden="true">…</span>
-            <div>
-              <strong>Setup incomplete</strong> — Mobile Checkout has no test cases yet
-              <div class="muted small">Import from TestRail or create cases manually to finish setup.</div>
-              <a class="btn btn-sm btn-secondary" style="margin-top: 8px;" href="onboarding-test-cases.html">Continue setup</a>
-            </div>
-            <time datetime="2026-09-02T15:00">2d ago</time>
           </li>
         </ul>
       </section>
@@ -134,7 +124,7 @@
       <section aria-labelledby="projects-h" style="margin-top: 28px;">
         <div class="card-header">
           <h2 id="projects-h">Recent projects</h2>
-          <a class="btn btn-sm btn-ghost" href="project-overview.html">View all projects</a>
+          <a class="btn btn-sm btn-ghost" href="projects.html">View all projects</a>
         </div>
 
         <div class="grid grid-3">
@@ -144,7 +134,6 @@
               <span class="badge badge-connected">Machine connected</span>
             </div>
             <dl class="kv">
-              <div><dt>Setup</dt><dd>Complete</dd></div>
               <div><dt>Latest run</dt><dd><span class="badge badge-failed">3 failed</span></dd></div>
               <div><dt>Test cases</dt><dd>64</dd></div>
             </dl>
@@ -157,7 +146,6 @@
               <span class="badge badge-disconnected">Machine offline</span>
             </div>
             <dl class="kv">
-              <div><dt>Setup</dt><dd>Complete</dd></div>
               <div><dt>Latest run</dt><dd><span class="badge badge-passed">All passed</span></dd></div>
               <div><dt>Test cases</dt><dd>51</dd></div>
             </dl>
@@ -167,16 +155,13 @@
           <article class="card">
             <div class="card-header">
               <h3><a href="project-overview.html" style="color: inherit;">Mobile Checkout</a></h3>
-              <span class="badge badge-draft">Setup 2 of 5</span>
+              <span class="badge badge-disconnected">No machine yet</span>
             </div>
             <dl class="kv">
-              <div><dt>Setup</dt><dd>
-                <div class="progress" style="width: 90px;" role="img" aria-label="Setup 40% complete"><span style="width: 40%;"></span></div>
-              </dd></div>
               <div><dt>Latest run</dt><dd class="muted">No runs yet</dd></div>
               <div><dt>Test cases</dt><dd>0</dd></div>
             </dl>
-            <a class="btn btn-primary btn-block" style="margin-top: 14px;" href="onboarding-test-cases.html">Continue setup</a>
+            <a class="btn btn-primary btn-block" style="margin-top: 14px;" href="test-cases.html">Import test cases</a>
           </article>
         </div>
       </section>

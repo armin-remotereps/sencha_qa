@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Projects · Punk Hazard</title>
+  <link rel="stylesheet" href="assets/prototype.css">
+</head>
+<body>
+<div class="app">
+
+  <aside class="sidebar">
+    <a class="brand" href="dashboard.html">
+      <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+      <span class="brand-name">Punk Hazard</span>
+    </a>
+
+    <nav class="nav" aria-label="Main navigation">
+      <a class="nav-link" href="dashboard.html">◈ Dashboard</a>
+      <a class="nav-link" href="projects.html" aria-current="page">▣ Projects</a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <span class="avatar" aria-hidden="true">AB</span>
+        <div>
+          <div style="font-weight: 650; font-size: 0.9rem;">Alex Barton</div>
+          <div class="muted small">alex@acme.dev</div>
+        </div>
+      </div>
+      <nav class="nav" aria-label="User menu">
+        <a class="nav-link" href="#account">Account</a>
+        <a class="nav-link" href="login.html">Sign out</a>
+      </nav>
+    </div>
+  </aside>
+
+  <div>
+    <header class="topbar">
+      <a class="brand" href="dashboard.html">
+        <img src="../static/branding/punk-hazard-mark.png" alt="Punk Hazard home">
+        <span class="brand-name">Punk Hazard</span>
+      </a>
+      <details class="mobile-nav">
+        <summary aria-label="Open menu">☰ Menu</summary>
+        <nav class="nav" aria-label="Main navigation">
+          <a class="nav-link" href="dashboard.html">Dashboard</a>
+          <a class="nav-link" href="projects.html" aria-current="page">Projects</a>
+          <a class="nav-link" href="#account">Account</a>
+          <a class="nav-link" href="login.html">Sign out</a>
+        </nav>
+      </details>
+    </header>
+
+    <main class="main">
+
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="dashboard.html">Dashboard</a>
+        <span class="sep" aria-hidden="true">›</span>
+        <span aria-current="page">Projects</span>
+      </nav>
+
+      <div class="page-header">
+        <div>
+          <h1>Projects</h1>
+          <p class="subtitle">3 active projects · 1 archived</p>
+        </div>
+        <div class="actions">
+          <a class="btn btn-primary" href="onboarding-project.html">+ New project</a>
+        </div>
+      </div>
+
+      <!-- Section: Search + filters -->
+      <form class="toolbar" action="#" method="get" role="search">
+        <div class="search">
+          <label class="visually-hidden" for="project-search">Search projects</label>
+          <input class="input" type="search" id="project-search" name="q" placeholder="Search projects…">
+        </div>
+        <div>
+          <label class="visually-hidden" for="project-tag-filter">Filter by tag</label>
+          <select class="select" id="project-tag-filter" name="tag">
+            <option value="">Any tag</option>
+            <option>billing</option>
+            <option>crm</option>
+            <option>mobile</option>
+            <option>web</option>
+          </select>
+        </div>
+        <label class="checkbox" for="show-archived">
+          <input type="checkbox" id="show-archived" name="archived">
+          <span>Show archived</span>
+        </label>
+      </form>
+
+      <!-- Section: Project table (desktop table / mobile stacked records) -->
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Project</th>
+              <th scope="col">Test machine</th>
+              <th scope="col">Test cases</th>
+              <th scope="col">Latest run</th>
+              <th scope="col">Members</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td data-label="Project" class="cell-primary">
+                <div>
+                  <a href="project-overview.html">Acme Billing Portal</a>
+                  <div class="muted small">billing, web</div>
+                </div>
+              </td>
+              <td data-label="Test machine"><span class="badge badge-connected">Connected</span></td>
+              <td data-label="Test cases"><a href="test-cases.html">64</a></td>
+              <td data-label="Latest run">
+                <div>
+                  <a href="run-detail.html">Nightly regression #42</a>
+                  <div class="small"><span class="badge badge-failed">3 failed</span> <span class="muted">6h ago</span></div>
+                </div>
+              </td>
+              <td data-label="Members">4</td>
+              <td data-label="Actions">
+                <div class="actions" style="flex-wrap: nowrap;">
+                  <a class="btn btn-sm btn-ghost" href="#edit-dialog">Edit</a>
+                  <a class="btn btn-sm btn-ghost" href="#duplicate-dialog">Duplicate</a>
+                  <a class="btn btn-sm btn-danger" href="#archive-dialog">Archive</a>
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td data-label="Project" class="cell-primary">
+                <div>
+                  <a href="project-overview.html">Orion CRM</a>
+                  <div class="muted small">crm, web</div>
+                </div>
+              </td>
+              <td data-label="Test machine"><span class="badge badge-disconnected">Offline</span></td>
+              <td data-label="Test cases"><a href="test-cases.html">51</a></td>
+              <td data-label="Latest run">
+                <div>
+                  <a href="run-detail.html">Release check #41</a>
+                  <div class="small"><span class="badge badge-passed">All passed</span> <span class="muted">Yesterday</span></div>
+                </div>
+              </td>
+              <td data-label="Members">2</td>
+              <td data-label="Actions">
+                <div class="actions" style="flex-wrap: nowrap;">
+                  <a class="btn btn-sm btn-ghost" href="#edit-dialog">Edit</a>
+                  <a class="btn btn-sm btn-ghost" href="#duplicate-dialog">Duplicate</a>
+                  <a class="btn btn-sm btn-danger" href="#archive-dialog">Archive</a>
+                </div>
+              </td>
+            </tr>
+            <tr>
+              <td data-label="Project" class="cell-primary">
+                <div>
+                  <a href="project-overview.html">Mobile Checkout</a>
+                  <div class="muted small">mobile</div>
+                </div>
+              </td>
+              <td data-label="Test machine"><span class="badge badge-disconnected">Not connected</span></td>
+              <td data-label="Test cases"><a href="test-cases.html">0</a></td>
+              <td data-label="Latest run" class="muted">No runs yet</td>
+              <td data-label="Members">1</td>
+              <td data-label="Actions">
+                <div class="actions" style="flex-wrap: nowrap;">
+                  <a class="btn btn-sm btn-ghost" href="#edit-dialog">Edit</a>
+                  <a class="btn btn-sm btn-ghost" href="#duplicate-dialog">Duplicate</a>
+                  <a class="btn btn-sm btn-danger" href="#archive-dialog">Archive</a>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <nav class="pagination" aria-label="Project pages">
+        <a class="page-link" href="#" aria-disabled="true">Prev</a>
+        <a class="page-link" href="#" aria-current="page">1</a>
+        <a class="page-link" href="#" aria-disabled="true">Next</a>
+      </nav>
+
+      <div class="divider">Example: archived project shown (filter on)</div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Project</th>
+              <th scope="col">Test machine</th>
+              <th scope="col">Test cases</th>
+              <th scope="col">Latest run</th>
+              <th scope="col">Members</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="muted">
+              <td data-label="Project" class="cell-primary">
+                <div>
+                  <a href="project-overview.html">Legacy Intranet</a>
+                  <span class="badge badge-draft" style="margin-left: 8px;">Archived</span>
+                  <div class="muted small">web</div>
+                </div>
+              </td>
+              <td data-label="Test machine">—</td>
+              <td data-label="Test cases">23</td>
+              <td data-label="Latest run">Final regression · Jun 2</td>
+              <td data-label="Members">3</td>
+              <td data-label="Actions">
+                <div class="actions" style="flex-wrap: nowrap;">
+                  <a class="btn btn-sm btn-ghost" href="#">Restore</a>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="divider">Example: empty state</div>
+      <div class="empty">
+        <div class="empty-icon" aria-hidden="true">▣</div>
+        <h3>No projects yet</h3>
+        <p>A project is one application under test. Create your first one and the setup wizard walks you through context, test cases, and connecting a test machine.</p>
+        <div class="actions" style="justify-content: center;">
+          <a class="btn btn-primary" href="onboarding-project.html">Create your first project</a>
+        </div>
+      </div>
+
+      <div class="divider">Example: edit project dialog</div>
+      <div class="dialog-demo">
+        <div class="dialog" role="dialog" aria-labelledby="edit-h" aria-modal="true" id="edit-dialog">
+          <h3 id="edit-h">Edit project</h3>
+          <form action="#" method="post" novalidate>
+            <div class="field">
+              <label for="edit-name">Project name</label>
+              <input class="input" id="edit-name" name="name" type="text" value="Acme Billing Portal" required>
+            </div>
+            <div class="field">
+              <label for="edit-tags">Tags <span class="optional">(optional)</span></label>
+              <input class="input" id="edit-tags" name="tags" type="text" value="billing, web">
+              <p class="hint">Comma-separated.</p>
+            </div>
+            <div class="dialog-actions">
+              <a class="btn btn-ghost" href="#">Cancel</a>
+              <button class="btn btn-primary" type="submit">Save changes</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="divider">Example: duplicate project dialog</div>
+      <div class="dialog-demo">
+        <div class="dialog" role="dialog" aria-labelledby="dup-h" aria-modal="true" id="duplicate-dialog">
+          <h3 id="dup-h">Duplicate project</h3>
+          <p>Copies the application context and all 64 test cases into a new project. Runs, results, and the test machine connection are not copied.</p>
+          <form action="#" method="post" novalidate>
+            <div class="field">
+              <label for="dup-name">New project name</label>
+              <input class="input" id="dup-name" name="name" type="text" value="Copy of Acme Billing Portal" required>
+            </div>
+            <div class="dialog-actions">
+              <a class="btn btn-ghost" href="#">Cancel</a>
+              <button class="btn btn-primary" type="submit">Duplicate</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div class="divider">Example: archive confirmation</div>
+      <div class="dialog-demo">
+        <div class="dialog" role="dialog" aria-labelledby="archive-h" aria-modal="true" id="archive-dialog">
+          <h3 id="archive-h">Archive Orion CRM?</h3>
+          <p>The project disappears from the list and its test machine is disconnected. Test cases, runs, and results are kept and you can restore it later.</p>
+          <div class="dialog-actions">
+            <a class="btn btn-ghost" href="#">Cancel</a>
+            <button class="btn btn-danger-solid" type="button">Archive project</button>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+</body>
+</html>
