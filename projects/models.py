@@ -57,6 +57,12 @@ class TestRunTestCaseStatus(models.TextChoices):
     CANCELLED = "cancelled", "Cancelled"
 
 
+class ApplicationPlatform(models.TextChoices):
+    WEB = "web", "Web application"
+    WINDOWS = "windows", "Windows desktop"
+    BOTH = "both", "Both"
+
+
 class Tag(models.Model):
     name = models.CharField(max_length=50, unique=True, db_index=True)
 
@@ -83,9 +89,25 @@ class Project(models.Model):
     agent_omniparser_status = models.JSONField(default=dict, blank=True)
     last_connected_at = models.DateTimeField(null=True, blank=True)
     project_prompt = models.TextField(blank=True, default="")
+    application_url = models.URLField(max_length=500, blank=True, default="")
+    application_platform = models.CharField(
+        max_length=16,
+        choices=ApplicationPlatform.choices,
+        blank=True,
+        default="",
+    )
 
     def __str__(self) -> str:
         return self.name
+
+    @property
+    def has_application_context(self) -> bool:
+        """Gates the "add application context" prompts on the dashboard and overview."""
+        return bool(
+            self.application_url
+            or self.application_platform
+            or self.project_prompt.strip()
+        )
 
 
 class TestCaseUpload(models.Model):
@@ -196,11 +218,19 @@ class TestRun(models.Model):
         db_index=True,
     )
     celery_task_id = models.CharField(max_length=255, blank=True, default="")
+    name = models.CharField(max_length=255, blank=True, default="")
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self) -> str:
         return f"TestRun #{self.pk} — {self.project.name}"
+
+    @property
+    def display_name(self) -> str:
+        """The run's name, falling back to a stable "Run #N" label."""
+        return self.name or f"Run #{self.pk}"
 
 
 class TestRunTestCase(models.Model):
@@ -218,6 +248,8 @@ class TestRunTestCase(models.Model):
     )
     result = models.TextField(blank=True, default="")
     logs = models.TextField(blank=True, default="")
+    started_at = models.DateTimeField(null=True, blank=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

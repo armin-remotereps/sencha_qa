@@ -21,16 +21,28 @@ from django.views.decorators.http import require_POST
 from accounts.models import CustomUser
 from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
-from projects.forms import ProjectForm, TestCaseForm
-from projects.models import Project
+from projects.forms import (
+    PROJECT_PROMPT_MAX_LENGTH,
+    ApplicationContextForm,
+    ProjectForm,
+    TestCaseForm,
+    TestRunCreateForm,
+    form_error_text,
+)
+from projects.models import Project, TestRun, TestRunStatus
 from projects.services import (
     STATUS_FILTER_CHOICES,
+    RunReadiness,
     abort_test_run,
     add_cases_to_test_run,
     archive_project,
+    build_run_narrative,
+    bulk_delete_test_cases,
     can_edit_test_case_in_run,
+    can_rerun_failed_cases,
     cancel_upload_processing,
     copy_test_cases_to_project,
+    count_test_cases,
     create_project,
     create_test_case,
     create_test_run_with_cases,
@@ -42,7 +54,15 @@ from projects.services import (
     force_disconnect_controller,
     generate_controller_client_zip,
     get_all_tags_for_user,
+    get_case_position,
+    get_latest_runs_by_project,
+    get_machine_state,
+    get_project_by_id,
     get_project_for_user,
+    get_project_overview,
+    get_project_tag_names,
+    get_run_case_picker,
+    get_run_readiness,
     get_test_case_for_project,
     get_test_run_case_detail,
     get_test_run_for_project,
@@ -50,6 +70,7 @@ from projects.services import (
     get_upload_for_project,
     is_valid_xml_filename,
     list_completed_uploads_for_project,
+    list_failed_case_titles,
     list_other_projects_for_user,
     list_projects_for_user,
     list_test_cases_for_project,
@@ -59,10 +80,14 @@ from projects.services import (
     list_waiting_test_runs_for_project,
     regenerate_api_key,
     remove_case_from_test_run,
+    rerun_failed_cases,
     reset_test_run,
+    save_application_context,
     save_project_prompt,
     start_test_run,
     start_upload_processing,
+    suggest_run_name,
+    unarchive_project,
     update_project,
     update_test_case,
     validate_testrail_xml,
@@ -72,7 +97,6 @@ from projects.tasks import refine_project_prompt_task
 ALLOWED_PER_PAGE = [10, 20, 50, 100]
 DEFAULT_PER_PAGE = 20
 PROJECTS_DEFAULT_PER_PAGE = 9
-PROJECT_PROMPT_MAX_LENGTH = 4000
 
 
 def _parse_per_page(request: HttpRequest, default: int = DEFAULT_PER_PAGE) -> int:
@@ -111,11 +135,27 @@ def _parse_test_case_ids(request: HttpRequest) -> list[int]:
     return [int(x) for x in raw_ids if x.isdigit()]
 
 
+def _next_or_default(request: HttpRequest, default_url: str) -> str:
+    """Resolve a validated `next` POST param, falling back to `default_url`."""
+    next_url = request.POST.get("next", "")
+    if next_url and url_has_allowed_host_and_scheme(
+        next_url, allowed_hosts={request.get_host()}
+    ):
+        return next_url
+    return default_url
+
+
+# ============================================================================
+# PROJECT LIST / CRUD VIEWS
+# ============================================================================
+
+
 @login_required
 def project_list(request: AuthenticatedRequest) -> HttpResponse:
     user = request.user
     search = request.GET.get("search", "").strip() or None
     tag_filter = request.GET.get("tag", "").strip() or None
+    show_archived = request.GET.get("archived") == "1"
     page = _parse_page(request)
     per_page = _parse_per_page(request, PROJECTS_DEFAULT_PER_PAGE)
 
@@ -125,39 +165,87 @@ def project_list(request: AuthenticatedRequest) -> HttpResponse:
         tag_filter=tag_filter,
         page=page,
         per_page=per_page,
+        include_archived=show_archived,
     )
     tags = get_all_tags_for_user(user)
     form = ProjectForm()
+    latest_runs = get_latest_runs_by_project(projects)
 
     return render(
         request,
         "projects/list.html",
         {
             "projects": projects,
+            "latest_runs": latest_runs,
             "tags": tags,
             "form": form,
             "search": search or "",
             "current_tag": tag_filter or "",
+            "show_archived": show_archived,
             "per_page": per_page,
             "allowed_per_page": ALLOWED_PER_PAGE,
             "elided_page_range": _get_elided_page_range(projects),
             "query_params": _build_query_params(request),
+            "active_nav": "projects",
+        },
+    )
+
+
+def _render_wizard_details(
+    request: HttpRequest, *, project: Project | None, form: ProjectForm
+) -> HttpResponse:
+    return render(
+        request,
+        "projects/wizard/step_details.html",
+        {
+            "project": project,
+            "form": form,
+            "wizard_step": 1,
+            "wizard_mode": "create" if project is None else "edit",
+            "active_nav": "projects",
         },
     )
 
 
 @login_required
-@require_POST
 def project_create(request: AuthenticatedRequest) -> HttpResponse:
-    user = request.user
+    """Wizard step 1 in create mode: name the project and start the wizard."""
+    if request.method == "GET":
+        return _render_wizard_details(request, project=None, form=ProjectForm())
+
     form = ProjectForm(request.POST)
-    if form.is_valid():
-        create_project(
-            user=user,
-            name=form.cleaned_data["name"],
-            tag_names=form.cleaned_data["tags"],
-        )
-    return redirect("projects:list")
+    if not form.is_valid():
+        return _render_wizard_details(request, project=None, form=form)
+
+    project = create_project(
+        user=request.user,
+        name=form.cleaned_data["name"],
+        tag_names=form.cleaned_data["tags"],
+    )
+    return redirect("projects:setup_context", project_id=project.id)
+
+
+@project_membership_required
+def setup_details(request: HttpRequest, project: Project) -> HttpResponse:
+    """Wizard step 1 in edit mode ("Restart setup wizard")."""
+    if request.method == "GET":
+        initial = {
+            "name": project.name,
+            "tags": ", ".join(get_project_tag_names(project)),
+        }
+        form = ProjectForm(initial=initial)
+        return _render_wizard_details(request, project=project, form=form)
+
+    form = ProjectForm(request.POST)
+    if not form.is_valid():
+        return _render_wizard_details(request, project=project, form=form)
+
+    update_project(
+        project=project,
+        name=form.cleaned_data["name"],
+        tag_names=form.cleaned_data["tags"],
+    )
+    return redirect("projects:setup_context", project_id=project.id)
 
 
 @login_required
@@ -169,12 +257,15 @@ def project_edit(request: AuthenticatedRequest, project_id: int) -> HttpResponse
         raise Http404
 
     form = ProjectForm(request.POST)
-    if form.is_valid():
-        update_project(
-            project=project,
-            name=form.cleaned_data["name"],
-            tag_names=form.cleaned_data["tags"],
-        )
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return redirect("projects:list")
+
+    update_project(
+        project=project,
+        name=form.cleaned_data["name"],
+        tag_names=form.cleaned_data["tags"],
+    )
     return redirect("projects:list")
 
 
@@ -192,6 +283,22 @@ def project_archive(request: AuthenticatedRequest, project_id: int) -> HttpRespo
 
 @login_required
 @require_POST
+def project_restore(request: AuthenticatedRequest, project_id: int) -> HttpResponse:
+    """Restore an archived project. Uses `get_project_by_id` since the normal
+    project lookup excludes archived projects."""
+    project = get_project_by_id(project_id, request.user)
+    if project is None:
+        raise Http404
+
+    unarchive_project(project)
+    messages.success(request, f'"{project.name}" restored.')
+    if request.POST.get("archived") == "1":
+        return redirect(f"{reverse('projects:list')}?archived=1")
+    return redirect("projects:list")
+
+
+@login_required
+@require_POST
 def project_duplicate(request: AuthenticatedRequest, project_id: int) -> HttpResponse:
     user: CustomUser = request.user
     project = get_project_for_user(project_id, user)
@@ -204,30 +311,136 @@ def project_duplicate(request: AuthenticatedRequest, project_id: int) -> HttpRes
     return redirect("projects:list")
 
 
+# ============================================================================
+# PROJECT OVERVIEW / ENVIRONMENT / APPLICATION CONTEXT VIEWS
+# ============================================================================
+
+
 @project_membership_required
-def project_detail(request: HttpRequest, project: Project) -> HttpResponse:
+def project_overview(request: HttpRequest, project: Project) -> HttpResponse:
+    overview = get_project_overview(project)
     return render(
         request,
-        "projects/detail.html",
+        "projects/overview.html",
         {
             "project": project,
-            "prompt_max_length": PROJECT_PROMPT_MAX_LENGTH,
+            "overview": overview,
+            "active_tab": "overview",
+            "active_nav": "projects",
         },
     )
+
+
+@project_membership_required
+def project_environment(request: HttpRequest, project: Project) -> HttpResponse:
+    machine_state = get_machine_state(project)
+    return render(
+        request,
+        "projects/environment.html",
+        {
+            "project": project,
+            "machine_state": machine_state,
+            "active_tab": "environment",
+            "active_nav": "projects",
+        },
+    )
+
+
+def _application_context_initial(project: Project) -> dict[str, str]:
+    return {
+        "application_url": project.application_url,
+        "application_platform": project.application_platform,
+        "project_prompt": project.project_prompt,
+    }
+
+
+def _save_application_context_from_form(
+    project: Project, form: ApplicationContextForm
+) -> None:
+    save_application_context(
+        project=project,
+        application_url=form.cleaned_data["application_url"],
+        application_platform=form.cleaned_data["application_platform"],
+        project_prompt=form.cleaned_data["project_prompt"],
+    )
+
+
+def _render_application_context_page(
+    request: HttpRequest, project: Project, form: ApplicationContextForm
+) -> HttpResponse:
+    return render(
+        request,
+        "projects/application_context.html",
+        {
+            "project": project,
+            "form": form,
+            "prompt_max_length": PROJECT_PROMPT_MAX_LENGTH,
+            "active_tab": "overview",
+            "active_nav": "projects",
+        },
+    )
+
+
+@project_membership_required
+def project_application_context(request: HttpRequest, project: Project) -> HttpResponse:
+    """Standalone application-context edit page, linked from the overview."""
+    if request.method == "GET":
+        form = ApplicationContextForm(initial=_application_context_initial(project))
+        return _render_application_context_page(request, project, form)
+
+    form = ApplicationContextForm(request.POST)
+    if not form.is_valid():
+        return _render_application_context_page(request, project, form)
+
+    _save_application_context_from_form(project, form)
+    messages.success(request, "Application context saved.")
+    return redirect("projects:detail", project_id=project.id)
+
+
+def _render_wizard_context(
+    request: HttpRequest, project: Project, form: ApplicationContextForm
+) -> HttpResponse:
+    return render(
+        request,
+        "projects/wizard/step_context.html",
+        {
+            "project": project,
+            "form": form,
+            "prompt_max_length": PROJECT_PROMPT_MAX_LENGTH,
+            "wizard_step": 2,
+            "wizard_mode": "edit",
+            "active_nav": "projects",
+        },
+    )
+
+
+@project_membership_required
+def setup_context(request: HttpRequest, project: Project) -> HttpResponse:
+    """Wizard step 2: application context."""
+    if request.method == "GET":
+        form = ApplicationContextForm(initial=_application_context_initial(project))
+        return _render_wizard_context(request, project, form)
+
+    form = ApplicationContextForm(request.POST)
+    if not form.is_valid():
+        return _render_wizard_context(request, project, form)
+
+    _save_application_context_from_form(project, form)
+    return redirect("projects:setup_cases", project_id=project.id)
 
 
 @project_membership_required
 @require_POST
 def project_regenerate_api_key(request: HttpRequest, project: Project) -> HttpResponse:
     regenerate_api_key(project)
-    messages.success(request, "API key regenerated successfully.")
-    return redirect("projects:detail", project_id=project.id)
+    messages.success(request, "Connection key regenerated successfully.")
+    return redirect("projects:environment", project_id=project.id)
 
 
 @project_membership_required
 @require_POST
 def download_controller_client(request: HttpRequest, project: Project) -> HttpResponse:
-    """Generate and download the controller client ZIP for the project."""
+    """Generate and download the Test Runner ZIP for the project."""
     zip_bytes = generate_controller_client_zip(project)
     response = HttpResponse(zip_bytes, content_type="application/zip")
     response["Content-Disposition"] = (
@@ -240,10 +453,10 @@ def download_controller_client(request: HttpRequest, project: Project) -> HttpRe
 @require_POST
 def project_force_disconnect(request: HttpRequest, project: Project) -> HttpResponse:
     if force_disconnect_controller(project):
-        messages.success(request, "Controller client disconnected.")
+        messages.success(request, "Test machine disconnected.")
     else:
-        messages.info(request, "No controller client is connected.")
-    return redirect("projects:detail", project_id=project.id)
+        messages.info(request, "No test machine is connected.")
+    return redirect("projects:environment", project_id=project.id)
 
 
 # ============================================================================
@@ -292,6 +505,8 @@ def test_case_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
             "allowed_per_page": ALLOWED_PER_PAGE,
             "elided_page_range": _get_elided_page_range(test_cases),
             "query_params": _build_query_params(request),
+            "active_tab": "test_cases",
+            "active_nav": "projects",
         },
     )
 
@@ -300,8 +515,10 @@ def test_case_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
 @require_POST
 def test_case_create(request: HttpRequest, project: Project) -> HttpResponse:
     form = TestCaseForm(request.POST)
-    if form.is_valid():
-        create_test_case(project=project, data=form.to_data())
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return redirect("projects:test_case_list", project_id=project.id)
+    create_test_case(project=project, data=form.to_data())
     return redirect("projects:test_case_list", project_id=project.id)
 
 
@@ -315,8 +532,10 @@ def test_case_edit(
         raise Http404
 
     form = TestCaseForm(request.POST)
-    if form.is_valid():
-        update_test_case(test_case=test_case, data=form.to_data())
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return redirect("projects:test_case_list", project_id=project.id)
+    update_test_case(test_case=test_case, data=form.to_data())
     return redirect("projects:test_case_list", project_id=project.id)
 
 
@@ -335,6 +554,15 @@ def test_case_delete(
 
 @project_membership_required
 @require_POST
+def test_case_bulk_delete(request: HttpRequest, project: Project) -> HttpResponse:
+    test_case_ids = _parse_test_case_ids(request)
+    count = bulk_delete_test_cases(project=project, test_case_ids=test_case_ids)
+    messages.success(request, f"Deleted {count} test cases.")
+    return redirect("projects:test_case_list", project_id=project.id)
+
+
+@project_membership_required
+@require_POST
 def test_case_copy_to_project(
     request: AuthenticatedRequest, project: Project
 ) -> HttpResponse:
@@ -348,6 +576,7 @@ def test_case_copy_to_project(
 
     test_case_ids = _parse_test_case_ids(request)
     if not test_case_ids:
+        messages.error(request, "Select at least one test case.")
         return redirect("projects:test_case_list", project_id=project.id)
 
     count = copy_test_cases_to_project(
@@ -360,20 +589,42 @@ def test_case_copy_to_project(
 
 
 # ============================================================================
-# UPLOAD VIEWS
+# UPLOAD / IMPORT VIEWS
 # ============================================================================
 
 
+def _handle_xml_upload(request: AuthenticatedRequest, project: Project) -> str | None:
+    """Validate and process an uploaded TestRail XML file.
+
+    Returns None on success, or a human-readable error message on failure.
+    """
+    file = request.FILES.get("file")
+    if not file:
+        return "No file selected."
+    if not is_valid_xml_filename(file.name or ""):
+        return "Only .xml files are accepted."
+
+    content = file.read().decode("utf-8", errors="replace")
+    is_valid, error = validate_testrail_xml(content)
+    if not is_valid:
+        return error
+
+    file.seek(0)
+    upload = create_upload(project=project, user=request.user, file=file)
+    start_upload_processing(upload)
+    return None
+
+
 @project_membership_required
-def upload_list(request: HttpRequest, project: Project) -> HttpResponse:
-    """Display paginated upload history with drag-drop upload zone."""
+def test_case_import(request: HttpRequest, project: Project) -> HttpResponse:
+    """Display paginated upload history with the "Import from TestRail" dropzone."""
     page = _parse_page(request)
     per_page = _parse_per_page(request)
     uploads = list_uploads_for_project(project=project, page=page, per_page=per_page)
     upload_create_url = reverse("projects:upload_create", args=[project.id])
     return render(
         request,
-        "projects/uploads.html",
+        "projects/import.html",
         {
             "project": project,
             "uploads": uploads,
@@ -382,6 +633,8 @@ def upload_list(request: HttpRequest, project: Project) -> HttpResponse:
             "allowed_per_page": ALLOWED_PER_PAGE,
             "elided_page_range": _get_elided_page_range(uploads),
             "query_params": _build_query_params(request),
+            "active_tab": "test_cases",
+            "active_nav": "projects",
         },
     )
 
@@ -389,24 +642,11 @@ def upload_list(request: HttpRequest, project: Project) -> HttpResponse:
 @project_membership_required
 @require_POST
 def upload_create(request: AuthenticatedRequest, project: Project) -> HttpResponse:
-    """Validate and process an uploaded TestRail XML file."""
-    file = request.FILES.get("file")
-    if not file:
-        return redirect("projects:upload_list", project_id=project.id)
-
-    if not is_valid_xml_filename(file.name or ""):
-        return redirect("projects:upload_list", project_id=project.id)
-
-    content = file.read().decode("utf-8", errors="replace")
-    is_valid, _error = validate_testrail_xml(content)
-    if not is_valid:
-        return redirect("projects:upload_list", project_id=project.id)
-
-    file.seek(0)
-    user = request.user
-    upload = create_upload(project=project, user=user, file=file)
-    start_upload_processing(upload)
-    return redirect("projects:upload_list", project_id=project.id)
+    error = _handle_xml_upload(request, project)
+    if error is not None:
+        messages.error(request, error)
+    default_url = reverse("projects:test_case_import", args=[project.id])
+    return redirect(_next_or_default(request, default_url))
 
 
 @project_membership_required
@@ -420,7 +660,7 @@ def upload_cancel(
         raise Http404
 
     cancel_upload_processing(upload)
-    return redirect("projects:upload_list", project_id=project.id)
+    return redirect("projects:test_case_import", project_id=project.id)
 
 
 @project_membership_required
@@ -434,7 +674,7 @@ def upload_delete(
         raise Http404
 
     delete_upload(upload)
-    return redirect("projects:upload_list", project_id=project.id)
+    return redirect("projects:test_case_import", project_id=project.id)
 
 
 # ============================================================================
@@ -459,6 +699,8 @@ def test_run_list(request: HttpRequest, project: Project) -> HttpResponse:
             "allowed_per_page": ALLOWED_PER_PAGE,
             "elided_page_range": _get_elided_page_range(test_runs),
             "query_params": _build_query_params(request),
+            "active_tab": "runs",
+            "active_nav": "projects",
         },
     )
 
@@ -466,10 +708,16 @@ def test_run_list(request: HttpRequest, project: Project) -> HttpResponse:
 @project_membership_required
 @require_POST
 def test_run_create(request: HttpRequest, project: Project) -> HttpResponse:
-    test_case_ids = _parse_test_case_ids(request)
-    if not test_case_ids:
+    form = TestRunCreateForm(project, request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
         return redirect("projects:test_case_list", project_id=project.id)
-    test_run = create_test_run_with_cases(project=project, test_case_ids=test_case_ids)
+
+    test_run = create_test_run_with_cases(
+        project=project,
+        test_case_ids=form.cleaned_data["test_case_ids"],
+        name=form.cleaned_data["name"],
+    )
     return redirect(
         "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
     )
@@ -576,37 +824,69 @@ def test_run_reset(
 
 
 @project_membership_required
+@require_POST
+def test_run_rerun_failed(
+    request: HttpRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    try:
+        new_run = rerun_failed_cases(test_run)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+        return redirect(
+            "projects:test_run_detail",
+            project_id=project.id,
+            test_run_id=test_run.id,
+        )
+    return redirect(
+        "projects:test_run_detail", project_id=project.id, test_run_id=new_run.id
+    )
+
+
+def _build_test_run_detail_context(
+    request: HttpRequest, project: Project, test_run: TestRun
+) -> dict[str, Any]:
+    page = _parse_page(request)
+    per_page = _parse_per_page(request)
+    cases = list_test_run_cases(test_run=test_run, page=page, per_page=per_page)
+    summary = get_test_run_summary(test_run)
+    failed_titles = list_failed_case_titles(test_run)
+    narrative = build_run_narrative(test_run, summary, failed_titles)
+    can_rerun_failed = can_rerun_failed_cases(test_run, summary["failed"])
+
+    context: dict[str, Any] = {
+        "project": project,
+        "test_run": test_run,
+        "cases": cases,
+        "summary": summary,
+        "per_page": per_page,
+        "allowed_per_page": ALLOWED_PER_PAGE,
+        "elided_page_range": _get_elided_page_range(cases),
+        "query_params": _build_query_params(request),
+        "form": TestCaseForm(),
+        "can_edit": can_edit_test_case_in_run(test_run),
+        "narrative": narrative,
+        "can_rerun_failed": can_rerun_failed,
+        "failed_titles": failed_titles,
+        "active_tab": "runs",
+        "active_nav": "projects",
+    }
+    if test_run.status == TestRunStatus.WAITING:
+        context["readiness"] = get_run_readiness(project, test_run=test_run)
+    return context
+
+
+@project_membership_required
 def test_run_detail(
     request: HttpRequest, project: Project, test_run_id: int
 ) -> HttpResponse:
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
         raise Http404
-    page = _parse_page(request)
-    per_page = _parse_per_page(request)
-    cases = list_test_run_cases(test_run=test_run, page=page, per_page=per_page)
-    for pivot in cases:
-        all_screenshots = list(pivot.screenshots.all())
-        pivot.last_screenshot = all_screenshots[-1] if all_screenshots else None  # type: ignore[attr-defined]
-    summary = get_test_run_summary(test_run)
-    form = TestCaseForm()
-    can_edit = can_edit_test_case_in_run(test_run)
-    return render(
-        request,
-        "projects/test_run_detail.html",
-        {
-            "project": project,
-            "test_run": test_run,
-            "cases": cases,
-            "summary": summary,
-            "per_page": per_page,
-            "allowed_per_page": ALLOWED_PER_PAGE,
-            "elided_page_range": _get_elided_page_range(cases),
-            "query_params": _build_query_params(request),
-            "form": form,
-            "can_edit": can_edit,
-        },
-    )
+    context = _build_test_run_detail_context(request, project, test_run)
+    return render(request, "projects/test_run_detail.html", context)
 
 
 @project_membership_required
@@ -619,6 +899,7 @@ def test_run_case_detail(
     screenshots = list(pivot.screenshots.all())
     form = TestCaseForm()
     can_edit = can_edit_test_case_in_run(pivot.test_run)
+    case_position, case_total = get_case_position(pivot)
     return render(
         request,
         "projects/test_run_case_detail.html",
@@ -629,6 +910,10 @@ def test_run_case_detail(
             "screenshots": screenshots,
             "form": form,
             "can_edit": can_edit,
+            "case_position": case_position,
+            "case_total": case_total,
+            "active_tab": "runs",
+            "active_nav": "projects",
         },
     )
 
@@ -655,17 +940,127 @@ def test_run_case_edit(
     if form.is_valid():
         update_test_case(test_case=test_case, data=form.to_data())
     else:
-        messages.error(request, "Invalid test case data. Please check your input.")
+        messages.error(request, form_error_text(form))
     fallback_url = reverse(
         "projects:test_run_detail",
         kwargs={"project_id": project.id, "test_run_id": test_run.id},
     )
-    next_url = request.POST.get("next", "")
-    if next_url and url_has_allowed_host_and_scheme(
-        next_url, allowed_hosts={request.get_host()}
-    ):
-        return redirect(next_url)
-    return redirect(fallback_url)
+    return redirect(_next_or_default(request, fallback_url))
+
+
+# ============================================================================
+# ONBOARDING WIZARD — STEPS 3-5
+# ============================================================================
+
+
+@project_membership_required
+def setup_cases(request: AuthenticatedRequest, project: Project) -> HttpResponse:
+    """Wizard step 3: import test cases."""
+    if request.method == "POST":
+        error = _handle_xml_upload(request, project)
+        if error is not None:
+            messages.error(request, error)
+        return redirect("projects:setup_cases", project_id=project.id)
+
+    uploads = list_uploads_for_project(project=project, page=1, per_page=5)
+    return render(
+        request,
+        "projects/wizard/step_cases.html",
+        {
+            "project": project,
+            "wizard_step": 3,
+            "wizard_mode": "edit",
+            "uploads": uploads,
+            "case_count": count_test_cases(project),
+            "active_nav": "projects",
+        },
+    )
+
+
+@project_membership_required
+def setup_machine(request: HttpRequest, project: Project) -> HttpResponse:
+    """Wizard step 4: connect a test machine."""
+    return render(
+        request,
+        "projects/wizard/step_machine.html",
+        {
+            "project": project,
+            "wizard_step": 4,
+            "wizard_mode": "edit",
+            "active_nav": "projects",
+        },
+    )
+
+
+def _render_wizard_run(
+    request: HttpRequest,
+    project: Project,
+    form: TestRunCreateForm,
+    readiness: RunReadiness,
+    selected_ids: frozenset[int] = frozenset(),
+) -> HttpResponse:
+    picker = get_run_case_picker(project)
+    return render(
+        request,
+        "projects/wizard/step_run.html",
+        {
+            "project": project,
+            "wizard_step": 5,
+            "wizard_mode": "edit",
+            "form": form,
+            "test_cases": picker.test_cases,
+            "total_case_count": picker.total_count,
+            "readiness": readiness,
+            "selected_ids": selected_ids,
+            "active_nav": "projects",
+        },
+    )
+
+
+RUN_BLOCKED_MESSAGE = "This run can't start yet — resolve the failed checks below."
+
+
+def _handle_setup_run_submit(request: HttpRequest, project: Project) -> HttpResponse:
+    form = TestRunCreateForm(project, request.POST)
+    selected_ids = frozenset(_parse_test_case_ids(request))
+    if not form.is_valid():
+        readiness = get_run_readiness(project, selected_count=len(selected_ids))
+        return _render_wizard_run(request, project, form, readiness, selected_ids)
+
+    test_case_ids: list[int] = form.cleaned_data["test_case_ids"]
+    readiness = get_run_readiness(project, selected_count=len(test_case_ids))
+    if readiness.blockers:
+        messages.error(request, RUN_BLOCKED_MESSAGE)
+        return _render_wizard_run(request, project, form, readiness, selected_ids)
+
+    test_run = create_test_run_with_cases(
+        project=project,
+        test_case_ids=test_case_ids,
+        name=form.cleaned_data["name"],
+    )
+    try:
+        start_test_run(test_run)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    return redirect(
+        "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
+    )
+
+
+@project_membership_required
+def setup_run(request: HttpRequest, project: Project) -> HttpResponse:
+    """Wizard step 5: pick cases, name the run, and start it."""
+    if request.method == "POST":
+        return _handle_setup_run_submit(request, project)
+
+    form = TestRunCreateForm(project, initial={"name": suggest_run_name(project)})
+    readiness = get_run_readiness(project, selected_count=0)
+    return _render_wizard_run(request, project, form, readiness)
+
+
+# ============================================================================
+# PROJECT PROMPT (LEGACY "REFINE WITH AI") VIEWS
+# ============================================================================
 
 
 @project_membership_required

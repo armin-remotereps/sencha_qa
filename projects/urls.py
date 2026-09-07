@@ -11,13 +11,54 @@ urlpatterns: list[URLPattern] = [
     path("create/", views.project_create, name="create"),
     path("<int:project_id>/edit/", views.project_edit, name="edit"),
     path("<int:project_id>/archive/", views.project_archive, name="archive"),
+    path("<int:project_id>/restore/", views.project_restore, name="restore"),
     path("<int:project_id>/duplicate/", views.project_duplicate, name="duplicate"),
+    path(
+        "<int:project_id>/setup/details/",
+        views.setup_details,
+        name="setup_details",
+    ),
+    path(
+        "<int:project_id>/setup/context/",
+        views.setup_context,
+        name="setup_context",
+    ),
+    path(
+        "<int:project_id>/setup/cases/",
+        views.setup_cases,
+        name="setup_cases",
+    ),
+    path(
+        "<int:project_id>/setup/machine/",
+        views.setup_machine,
+        name="setup_machine",
+    ),
+    path(
+        "<int:project_id>/setup/run/",
+        views.setup_run,
+        name="setup_run",
+    ),
     path(
         "<int:project_id>/test-cases/copy-to-project/",
         views.test_case_copy_to_project,
         name="test_case_copy_to_project",
     ),
-    path("<int:project_id>/", views.project_detail, name="detail"),
+    path(
+        "<int:project_id>/test-cases/bulk-delete/",
+        views.test_case_bulk_delete,
+        name="test_case_bulk_delete",
+    ),
+    path("<int:project_id>/", views.project_overview, name="detail"),
+    path(
+        "<int:project_id>/environment/",
+        views.project_environment,
+        name="environment",
+    ),
+    path(
+        "<int:project_id>/application-context/",
+        views.project_application_context,
+        name="application_context",
+    ),
     path(
         "<int:project_id>/regenerate-api-key/",
         views.project_regenerate_api_key,
@@ -54,6 +95,11 @@ urlpatterns: list[URLPattern] = [
         name="test_case_create",
     ),
     path(
+        "<int:project_id>/test-cases/import/",
+        views.test_case_import,
+        name="test_case_import",
+    ),
+    path(
         "<int:project_id>/test-cases/<int:test_case_id>/edit/",
         views.test_case_edit,
         name="test_case_edit",
@@ -62,11 +108,6 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-cases/<int:test_case_id>/delete/",
         views.test_case_delete,
         name="test_case_delete",
-    ),
-    path(
-        "<int:project_id>/uploads/",
-        views.upload_list,
-        name="upload_list",
     ),
     path(
         "<int:project_id>/uploads/create/",
@@ -113,6 +154,11 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-runs/<int:test_run_id>/abort/",
         views.test_run_abort,
         name="test_run_abort",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/rerun-failed/",
+        views.test_run_rerun_failed,
+        name="test_run_rerun_failed",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/add-cases/",

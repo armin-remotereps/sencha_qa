@@ -1,22 +1,24 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 from django import forms
+from django.core.exceptions import NON_FIELD_ERRORS
+from django.forms import BaseForm
+from django.http import QueryDict
 
-from accounts.forms import FIELD_CSS
-from projects.models import TestCaseData, TestCasePriority, TestCaseType
-
-TEXTAREA_CSS = (
-    "w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 "
-    "text-sm text-zinc-100 placeholder:text-zinc-400 "
-    "focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 "
-    "focus:ring-offset-zinc-950"
+from projects.models import (
+    ApplicationPlatform,
+    Project,
+    TestCaseData,
+    TestCasePriority,
+    TestCaseType,
 )
 
-SELECT_CSS = (
-    "flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 "
-    "text-sm text-zinc-100 "
-    "focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 "
-    "focus:ring-offset-zinc-950"
+PROJECT_PROMPT_MAX_LENGTH = 4000
+
+_APPLICATION_PLATFORM_CHOICES: list[tuple[str, str]] = [("", "Not specified")] + list(
+    ApplicationPlatform.choices
 )
 
 
@@ -25,7 +27,7 @@ class ProjectForm(forms.Form):
         max_length=255,
         widget=forms.TextInput(
             attrs={
-                "class": FIELD_CSS,
+                "class": "input",
                 "placeholder": "Project name",
             }
         ),
@@ -34,7 +36,7 @@ class ProjectForm(forms.Form):
         required=False,
         widget=forms.TextInput(
             attrs={
-                "class": FIELD_CSS,
+                "class": "input",
                 "placeholder": "e.g. python, django, api",
             }
         ),
@@ -52,7 +54,7 @@ class TestCaseForm(forms.Form):
         max_length=500,
         widget=forms.TextInput(
             attrs={
-                "class": FIELD_CSS,
+                "class": "input",
                 "placeholder": "Test case title",
             }
         ),
@@ -62,7 +64,7 @@ class TestCaseForm(forms.Form):
         required=False,
         widget=forms.TextInput(
             attrs={
-                "class": FIELD_CSS,
+                "class": "input",
                 "placeholder": "e.g. C12345",
             }
         ),
@@ -73,7 +75,7 @@ class TestCaseForm(forms.Form):
         initial="Test Case",
         widget=forms.TextInput(
             attrs={
-                "class": FIELD_CSS,
+                "class": "input",
                 "placeholder": "Template",
             }
         ),
@@ -81,19 +83,19 @@ class TestCaseForm(forms.Form):
     type = forms.ChoiceField(
         choices=TestCaseType.choices,
         initial=TestCaseType.FUNCTIONAL,
-        widget=forms.Select(attrs={"class": SELECT_CSS}),
+        widget=forms.Select(attrs={"class": "select"}),
     )
     priority = forms.ChoiceField(
         choices=TestCasePriority.choices,
         initial=TestCasePriority.MUST_TEST_HIGH,
-        widget=forms.Select(attrs={"class": SELECT_CSS}),
+        widget=forms.Select(attrs={"class": "select"}),
     )
     estimate = forms.CharField(
         max_length=50,
         required=False,
         widget=forms.TextInput(
             attrs={
-                "class": FIELD_CSS,
+                "class": "input",
                 "placeholder": "e.g. 30m, 1h",
             }
         ),
@@ -103,7 +105,7 @@ class TestCaseForm(forms.Form):
         required=False,
         widget=forms.TextInput(
             attrs={
-                "class": FIELD_CSS,
+                "class": "input",
                 "placeholder": "e.g. JIRA-123",
             }
         ),
@@ -112,7 +114,7 @@ class TestCaseForm(forms.Form):
         required=False,
         widget=forms.Textarea(
             attrs={
-                "class": TEXTAREA_CSS,
+                "class": "textarea",
                 "rows": 3,
                 "placeholder": "Preconditions...",
             }
@@ -122,7 +124,7 @@ class TestCaseForm(forms.Form):
         required=False,
         widget=forms.Textarea(
             attrs={
-                "class": TEXTAREA_CSS,
+                "class": "textarea",
                 "rows": 3,
                 "placeholder": "Steps...",
             }
@@ -132,7 +134,7 @@ class TestCaseForm(forms.Form):
         required=False,
         widget=forms.Textarea(
             attrs={
-                "class": TEXTAREA_CSS,
+                "class": "textarea",
                 "rows": 3,
                 "placeholder": "Expected result...",
             }
@@ -153,3 +155,107 @@ class TestCaseForm(forms.Form):
             steps=cd.get("steps", ""),
             expected=cd.get("expected", ""),
         )
+
+
+class ApplicationContextForm(forms.Form):
+    """Edits a project's application context — the standalone edit page and
+    the wizard's "Application context" step share this same form."""
+
+    application_url = forms.URLField(
+        label="Application URL",
+        required=False,
+        max_length=500,
+        widget=forms.URLInput(
+            attrs={
+                "class": "input",
+                "placeholder": "https://app.example.com",
+            }
+        ),
+    )
+    application_platform = forms.ChoiceField(
+        label="Platform / application type",
+        required=False,
+        choices=_APPLICATION_PLATFORM_CHOICES,
+        widget=forms.Select(attrs={"class": "select"}),
+    )
+    project_prompt = forms.CharField(
+        label="Notes",
+        required=False,
+        max_length=PROJECT_PROMPT_MAX_LENGTH,
+        widget=forms.Textarea(
+            attrs={
+                "class": "textarea",
+                "rows": 8,
+                "placeholder": (
+                    "Environment, navigation, authentication notes, test "
+                    "accounts — anything the AI agent should know about "
+                    "the application under test..."
+                ),
+            }
+        ),
+    )
+
+
+class TestRunCreateForm(forms.Form):
+    """Selects test cases and (optionally) names a new run.
+
+    Used both by the Test Cases page's "create run" dialog and the
+    onboarding wizard's final step. The `test_case_ids` choices double as
+    membership validation: an id outside the project is rejected.
+    """
+
+    name = forms.CharField(
+        max_length=255,
+        required=False,
+        widget=forms.TextInput(
+            attrs={
+                "class": "input",
+                "placeholder": "Run name",
+            }
+        ),
+    )
+    test_case_ids = forms.TypedMultipleChoiceField(
+        coerce=int,
+        choices=(),
+        required=True,
+        widget=forms.MultipleHiddenInput,
+        error_messages={"required": "Select at least one test case."},
+    )
+
+    def __init__(
+        self,
+        project: Project,
+        data: QueryDict | dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(data, **kwargs)
+        # django-stubs types `self.fields[...]` as the base `Field`, which has
+        # no `choices` attribute; this field is always the
+        # TypedMultipleChoiceField declared above.
+        test_case_ids_field = cast(
+            forms.TypedMultipleChoiceField, self.fields["test_case_ids"]
+        )
+        test_case_ids_field.choices = [
+            (case_id, str(case_id))
+            for case_id in project.test_cases.values_list("id", flat=True)
+        ]
+
+
+def _field_label(form: BaseForm, field_name: str) -> str:
+    if field_name == NON_FIELD_ERRORS:
+        return ""
+    field = form.fields.get(field_name)
+    if field is not None and field.label:
+        return str(field.label)
+    return field_name.replace("_", " ").title()
+
+
+def form_error_text(form: BaseForm) -> str:
+    """Join a form's field errors into one human-readable string for `messages`."""
+    parts: list[str] = []
+    for field_name, errors in form.errors.items():
+        label = _field_label(form, field_name)
+        for error in errors:
+            message = str(error)
+            parts.append(f"{label}: {message}" if label else message)
+    return " ".join(parts)

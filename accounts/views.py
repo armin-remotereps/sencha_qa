@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 from django.conf import settings
 from django.contrib.auth import logout
 from django.http import HttpRequest, HttpResponse, HttpResponseNotAllowed
 from django.shortcuts import redirect, render
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views import View
 
 from accounts.forms import LoginForm
@@ -32,15 +35,17 @@ class LoginView(View):
             )
 
         login_user(request, user)
-        next_url = self._get_redirect_url(request)
-        return redirect(next_url)
+        return redirect(self._get_redirect_url(request))
 
     def _get_redirect_url(self, request: HttpRequest) -> str:
-        return (
-            request.POST.get("next")
-            or request.GET.get("next")
-            or settings.LOGIN_REDIRECT_URL
-        )
+        candidate = request.POST.get("next") or request.GET.get("next") or ""
+        if candidate and url_has_allowed_host_and_scheme(
+            candidate,
+            allowed_hosts={request.get_host()},
+            require_https=request.is_secure(),
+        ):
+            return candidate
+        return str(settings.LOGIN_REDIRECT_URL)
 
 
 class LogoutView(View):

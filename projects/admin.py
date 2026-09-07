@@ -25,10 +25,29 @@ class TagAdmin(admin.ModelAdmin[Tag]):
 
 @admin.register(Project)
 class ProjectAdmin(admin.ModelAdmin[Project]):
-    list_display = ("name", "archived", "agent_connected", "created_at")
-    list_filter = ("archived", "agent_connected", "tags")
+    list_display = (
+        "name",
+        "archived",
+        "agent_connected",
+        "application_platform",
+        "created_at",
+    )
+    list_filter = ("archived", "agent_connected", "application_platform", "tags")
     filter_horizontal = ("tags", "members")
     readonly_fields = (
+        "api_key",
+        "agent_connected",
+        "agent_system_info",
+        "last_connected_at",
+    )
+    fields = (
+        "name",
+        "tags",
+        "members",
+        "archived",
+        "application_url",
+        "application_platform",
+        "project_prompt",
         "api_key",
         "agent_connected",
         "agent_system_info",
@@ -86,10 +105,22 @@ class TestRunTestCaseInline(admin.TabularInline[TestRunTestCase, TestRun]):
 
 @admin.register(TestRun)
 class TestRunAdmin(admin.ModelAdmin[TestRun]):
-    list_display = ("id", "project", "status", "created_at")
+    list_display = (
+        "id",
+        "display_name",
+        "project",
+        "status",
+        "started_at",
+        "finished_at",
+        "created_at",
+    )
     list_filter = ("status", "project")
     readonly_fields = ("status",)
     inlines = [TestRunTestCaseInline]
+
+    @admin.display(description="Name")
+    def display_name(self, obj: TestRun) -> str:
+        return obj.display_name
 
 
 class TestRunScreenshotInline(admin.TabularInline[TestRunScreenshot, TestRunTestCase]):
@@ -100,7 +131,15 @@ class TestRunScreenshotInline(admin.TabularInline[TestRunScreenshot, TestRunTest
 
 @admin.register(TestRunTestCase)
 class TestRunTestCaseAdmin(admin.ModelAdmin[TestRunTestCase]):
-    list_display = ("id", "test_run", "test_case", "status", "created_at")
+    list_display = (
+        "id",
+        "test_run",
+        "test_case",
+        "status",
+        "started_at",
+        "finished_at",
+        "created_at",
+    )
     list_filter = ("status",)
     readonly_fields = ("status", "result", "logs")
     inlines = [TestRunScreenshotInline]

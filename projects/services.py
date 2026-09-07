@@ -10,8 +10,10 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 import zipfile
-from collections.abc import Callable, Sequence
-from dataclasses import asdict
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import asdict, dataclass
+from datetime import timedelta
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -23,7 +25,20 @@ from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import UploadedFile
 from django.core.paginator import Page, Paginator
 from django.db import transaction
-from django.db.models import Count, OuterRef, Prefetch, Q, QuerySet, Subquery
+from django.db.models import (
+    Case,
+    Count,
+    F,
+    IntegerField,
+    OuterRef,
+    Prefetch,
+    Q,
+    QuerySet,
+    Subquery,
+    When,
+)
+from django.db.models.functions import Coalesce
+from django.urls import reverse
 from django.utils import dateformat, timezone
 
 from accounts.models import CustomUser
@@ -45,6 +60,7 @@ from controller_client.protocol import (
     parse_omniparser_status_payload,
 )
 from projects.models import (
+    ApplicationPlatform,
     ParsedTestCase,
     Project,
     Tag,
@@ -88,7 +104,7 @@ def archive_project(project: Project) -> None:
 
 def unarchive_project(project: Project) -> None:
     project.archived = False
-    project.save()
+    project.save(update_fields=["archived", "updated_at"])
 
 
 def _clone_test_case(*, source: TestCase, target_project: Project) -> TestCase:
@@ -164,6 +180,32 @@ def get_project_by_id(project_id: int, user: CustomUser) -> Project | None:
         return None
 
 
+def get_project_tag_names(project: Project) -> list[str]:
+    return list(project.tags.order_by("name").values_list("name", flat=True))
+
+
+def count_test_cases(project: Project) -> int:
+    return project.test_cases.count()
+
+
+RUN_CASE_PICKER_LIMIT = 200
+
+
+@dataclass(frozen=True)
+class RunCasePicker:
+    """Cases offered by the wizard's run-picker plus the project's full count."""
+
+    test_cases: list[TestCase]
+    total_count: int
+
+
+def get_run_case_picker(
+    project: Project, *, limit: int = RUN_CASE_PICKER_LIMIT
+) -> RunCasePicker:
+    cases = project.test_cases.order_by("title")
+    return RunCasePicker(test_cases=list(cases[:limit]), total_count=cases.count())
+
+
 def list_projects_for_user(
     *,
     user: CustomUser,
@@ -171,9 +213,26 @@ def list_projects_for_user(
     tag_filter: str | None,
     page: int,
     per_page: int,
+    include_archived: bool = False,
 ) -> Page[Project]:
+    latest_run_qs = TestRun.objects.filter(project=OuterRef("pk")).order_by(
+        "-created_at"
+    )
+    # Scope to the user's projects via an `id__in` subquery rather than a
+    # direct `members=user` join: a direct join would be reused by the
+    # `member_count` annotation below (both reference "members"), which
+    # would silently narrow that count down to the single matching row.
     qs: QuerySet[Project] = Project.objects.filter(
-        members=user, archived=False
+        id__in=Project.objects.filter(members=user).values("id")
+    ).prefetch_related("tags")
+    if not include_archived:
+        qs = qs.filter(archived=False)
+    qs = qs.annotate(
+        # `members` and `test_cases` are both joined in, so each must be
+        # counted `distinct` or the join fan-out inflates both counts.
+        case_count=Count("test_cases", distinct=True),
+        member_count=Count("members", distinct=True),
+        latest_run_id=Subquery(latest_run_qs.values("pk")[:1]),
     ).order_by("-created_at")
 
     if search:
@@ -184,6 +243,33 @@ def list_projects_for_user(
 
     paginator: Paginator[Project] = Paginator(qs, per_page)
     return paginator.get_page(page)
+
+
+def get_latest_runs_by_project(projects: Iterable[Project]) -> dict[int, TestRun]:
+    """Fetch each project's latest run, with pass/fail counts, in one query.
+
+    `projects` must come from a queryset annotated with `latest_run_id`
+    (see `list_projects_for_user`); the result is keyed by `project_id`.
+    """
+    latest_run_ids = [
+        run_id
+        for project in projects
+        if (run_id := project.latest_run_id) is not None  # type: ignore[attr-defined]  # annotate() field; django-stubs does not model dynamic query annotations
+    ]
+    if not latest_run_ids:
+        return {}
+
+    runs = TestRun.objects.filter(id__in=latest_run_ids).annotate(
+        success_count=Count(
+            "pivot_entries",
+            filter=Q(pivot_entries__status=TestRunTestCaseStatus.SUCCESS),
+        ),
+        failed_count=Count(
+            "pivot_entries",
+            filter=Q(pivot_entries__status=TestRunTestCaseStatus.FAILED),
+        ),
+    )
+    return {run.project_id: run for run in runs}
 
 
 def get_all_tags_for_user(user: CustomUser) -> QuerySet[Tag]:
@@ -213,6 +299,322 @@ def _sync_tags(project: Project, tag_names: list[str]) -> None:
 
 
 # ============================================================================
+# PROJECT OVERVIEW SERVICES
+# ============================================================================
+
+
+class MachineState(StrEnum):
+    """The test machine's connection/readiness state, as shown in the UI."""
+
+    DISCONNECTED = "disconnected"
+    STARTING = "starting"
+    READY = "ready"
+    FAILED = "failed"
+
+
+def get_machine_state(project: Project) -> MachineState:
+    """Derive one machine badge state from `agent_connected` and OmniParser status.
+
+    A freshly connected controller reports an empty OmniParser status
+    dict until its first status update arrives, which is treated as
+    STARTING rather than FAILED.
+    """
+    if not project.agent_connected:
+        return MachineState.DISCONNECTED
+    if not project.agent_omniparser_status:
+        return MachineState.STARTING
+
+    status = parse_omniparser_status_payload(project.agent_omniparser_status)
+    if status.state == OmniParserState.READY:
+        return MachineState.READY
+    if status.state == OmniParserState.FAILED:
+        return MachineState.FAILED
+    return MachineState.STARTING
+
+
+class PrimaryAction(StrEnum):
+    """The single most useful next step to suggest for a project."""
+
+    IMPORT_CASES = "import_cases"
+    CONNECT_MACHINE = "connect_machine"
+    CREATE_RUN = "create_run"
+    VIEW_ACTIVE_RUN = "view_active_run"
+    VIEW_LATEST_RUN = "view_latest_run"
+
+
+def resolve_primary_action(
+    *,
+    case_count: int,
+    machine_state: MachineState,
+    active_run: TestRun | None,
+    latest_run: TestRun | None,
+) -> PrimaryAction:
+    """Pick a project's primary action; shared by the overview and dashboard cards."""
+    if case_count == 0:
+        return PrimaryAction.IMPORT_CASES
+    if machine_state == MachineState.DISCONNECTED:
+        return PrimaryAction.CONNECT_MACHINE
+    if active_run is not None:
+        return PrimaryAction.VIEW_ACTIVE_RUN
+    if latest_run is not None:
+        return PrimaryAction.VIEW_LATEST_RUN
+    return PrimaryAction.CREATE_RUN
+
+
+@dataclass(frozen=True)
+class ProjectOverview:
+    """Everything the project overview page needs, gathered in one call."""
+
+    case_count: int
+    never_run_count: int
+    machine_state: MachineState
+    active_run: TestRun | None
+    latest_run: TestRun | None
+    latest_run_summary: dict[str, int] | None
+    draft_run_count: int
+    has_application_context: bool
+    primary_action: PrimaryAction
+    pass_rate_30d: int | None
+    recent_runs: list[TestRun]
+
+
+RECENT_RUNS_LIMIT = 5
+
+
+def _annotate_run_counts(qs: QuerySet[TestRun]) -> QuerySet[TestRun]:
+    """Annotate a `TestRun` queryset with its case/success/failure counts.
+
+    Shared by `list_test_runs_for_project` and `get_project_overview` so
+    both surfaces report the same numbers from the same query shape.
+    """
+    return qs.annotate(
+        case_count=Count("pivot_entries"),
+        success_count=Count(
+            "pivot_entries",
+            filter=Q(pivot_entries__status=TestRunTestCaseStatus.SUCCESS),
+        ),
+        failed_count=Count(
+            "pivot_entries",
+            filter=Q(pivot_entries__status=TestRunTestCaseStatus.FAILED),
+        ),
+    )
+
+
+def _compute_pass_rate_30d(project: Project) -> int | None:
+    """Pass rate over pivots that finished in the last 30 days, or None if none did."""
+    since = timezone.now() - timedelta(days=30)
+    result = TestRunTestCase.objects.filter(
+        test_run__project=project,
+        finished_at__gte=since,
+        status__in=[TestRunTestCaseStatus.SUCCESS, TestRunTestCaseStatus.FAILED],
+    ).aggregate(
+        total=Count("id"),
+        success=Count("id", filter=Q(status=TestRunTestCaseStatus.SUCCESS)),
+    )
+    total = result["total"] or 0
+    if total == 0:
+        return None
+    return round((result["success"] or 0) * 100 / total)
+
+
+def get_project_overview(project: Project) -> ProjectOverview:
+    """Gather the project overview page's data in a fixed, small number of queries."""
+    case_count = project.test_cases.count()
+    never_run_count = project.test_cases.filter(run_entries__isnull=True).count()
+    machine_state = get_machine_state(project)
+    active_run = TestRun.objects.filter(
+        project=project, status=TestRunStatus.STARTED
+    ).first()
+    latest_run = TestRun.objects.filter(project=project).order_by("-created_at").first()
+    latest_run_summary = (
+        get_test_run_summary(latest_run) if latest_run is not None else None
+    )
+    draft_run_count = TestRun.objects.filter(
+        project=project, status=TestRunStatus.WAITING
+    ).count()
+    primary_action = resolve_primary_action(
+        case_count=case_count,
+        machine_state=machine_state,
+        active_run=active_run,
+        latest_run=latest_run,
+    )
+    recent_runs = list(
+        _annotate_run_counts(TestRun.objects.filter(project=project)).order_by(
+            "-created_at"
+        )[:RECENT_RUNS_LIMIT]
+    )
+    return ProjectOverview(
+        case_count=case_count,
+        never_run_count=never_run_count,
+        machine_state=machine_state,
+        active_run=active_run,
+        latest_run=latest_run,
+        latest_run_summary=latest_run_summary,
+        draft_run_count=draft_run_count,
+        has_application_context=project.has_application_context,
+        primary_action=primary_action,
+        pass_rate_30d=_compute_pass_rate_30d(project),
+        recent_runs=recent_runs,
+    )
+
+
+@dataclass(frozen=True)
+class ReadinessCheck:
+    """One line item in the "Ready to run?" checklist."""
+
+    key: str
+    passed: bool
+    blocking: bool
+    title: str
+    help: str
+    link_url: str | None
+
+
+@dataclass(frozen=True)
+class RunReadiness:
+    """The full "Ready to run?" checklist for a project (and optionally a run)."""
+
+    checks: tuple[ReadinessCheck, ...]
+
+    @property
+    def ready(self) -> bool:
+        return all(check.passed for check in self.checks)
+
+    @property
+    def blockers(self) -> tuple[ReadinessCheck, ...]:
+        return tuple(
+            check for check in self.checks if check.blocking and not check.passed
+        )
+
+
+def _cases_selected_check(
+    test_run: TestRun | None, selected_count: int | None
+) -> ReadinessCheck:
+    if selected_count is not None:
+        count = selected_count
+    elif test_run is not None:
+        count = test_run.pivot_entries.count()
+    else:
+        count = 0
+    passed = count > 0
+    if passed:
+        title = f"{count} test case{'s' if count != 1 else ''} selected"
+        help_text = ""
+    else:
+        title = "No test cases selected"
+        help_text = "Select at least one test case to run."
+    return ReadinessCheck(
+        key="cases_selected",
+        passed=passed,
+        blocking=True,
+        title=title,
+        help=help_text,
+        link_url=None,
+    )
+
+
+def _machine_connected_check(
+    project: Project, machine_state: MachineState
+) -> ReadinessCheck:
+    passed = machine_state != MachineState.DISCONNECTED
+    if passed:
+        title = "Test machine connected"
+        help_text = ""
+    else:
+        title = "Test machine not connected"
+        help_text = "Runs need a connected test machine to execute steps."
+    return ReadinessCheck(
+        key="machine_connected",
+        passed=passed,
+        blocking=True,
+        title=title,
+        help=help_text,
+        link_url=reverse("projects:environment", args=[project.id]),
+    )
+
+
+def _visual_engine_ready_check(machine_state: MachineState) -> ReadinessCheck:
+    passed = machine_state == MachineState.READY
+    if passed:
+        title = "Visual engine ready"
+        help_text = ""
+    else:
+        title = "Visual engine not ready"
+        help_text = (
+            "The Test Runner is still starting its visual engine — this "
+            "usually takes a few minutes after it connects."
+        )
+    return ReadinessCheck(
+        key="visual_engine_ready",
+        passed=passed,
+        blocking=True,
+        title=title,
+        help=help_text,
+        link_url=None,
+    )
+
+
+def _no_active_run_check(project: Project, test_run: TestRun | None) -> ReadinessCheck:
+    active_runs = TestRun.objects.filter(project=project, status=TestRunStatus.STARTED)
+    if test_run is not None:
+        active_runs = active_runs.exclude(id=test_run.id)
+    passed = not active_runs.exists()
+    if passed:
+        title = "No other run active"
+        help_text = ""
+    else:
+        title = "Another run is in progress"
+        help_text = "Only one run can execute at a time for this project."
+    return ReadinessCheck(
+        key="no_active_run",
+        passed=passed,
+        blocking=True,
+        title=title,
+        help=help_text,
+        link_url=reverse("projects:test_run_list", args=[project.id]),
+    )
+
+
+def _application_context_check(project: Project) -> ReadinessCheck:
+    passed = project.has_application_context
+    if passed:
+        title = "Application context provided"
+        help_text = ""
+    else:
+        title = "No application context set"
+        help_text = (
+            "Add the application URL, platform, or notes so the AI agent "
+            "knows what it is testing."
+        )
+    return ReadinessCheck(
+        key="application_context",
+        passed=passed,
+        blocking=False,
+        title=title,
+        help=help_text,
+        link_url=reverse("projects:application_context", args=[project.id]),
+    )
+
+
+def get_run_readiness(
+    project: Project,
+    *,
+    test_run: TestRun | None = None,
+    selected_count: int | None = None,
+) -> RunReadiness:
+    """Compute the "Ready to run?" checklist shown before starting a run."""
+    machine_state = get_machine_state(project)
+    checks = (
+        _cases_selected_check(test_run, selected_count),
+        _machine_connected_check(project, machine_state),
+        _visual_engine_ready_check(machine_state),
+        _no_active_run_check(project, test_run),
+        _application_context_check(project),
+    )
+    return RunReadiness(checks=checks)
+
+
+# ============================================================================
 # CONTROLLER AGENT SERVICES
 # ============================================================================
 
@@ -239,6 +641,48 @@ def save_project_prompt(*, project: Project, prompt: str) -> Project:
     project.project_prompt = prompt
     project.save(update_fields=["project_prompt", "updated_at"])
     return project
+
+
+def save_application_context(
+    *,
+    project: Project,
+    application_url: str,
+    application_platform: str,
+    project_prompt: str,
+) -> Project:
+    """Persist the application context used to brief the AI agent."""
+    project.application_url = application_url
+    project.application_platform = application_platform
+    project.project_prompt = project_prompt
+    project.save(
+        update_fields=[
+            "application_url",
+            "application_platform",
+            "project_prompt",
+            "updated_at",
+        ]
+    )
+    return project
+
+
+def build_agent_project_context(project: Project) -> str | None:
+    """Build the context string handed to the agent as its `project_prompt`.
+
+    Combines the application URL, platform, and free-form notes into one
+    string. Returns None when there is nothing to tell the agent about the
+    application under test.
+    """
+    lines: list[str] = []
+    if project.application_url:
+        lines.append(f"Application URL: {project.application_url}")
+    if project.application_platform:
+        platform_label = ApplicationPlatform(project.application_platform).label
+        lines.append(f"Platform: {platform_label}")
+    if project.project_prompt.strip():
+        lines.append(project.project_prompt.strip())
+    if not lines:
+        return None
+    return "\n".join(lines)
 
 
 def check_controller_compatibility(
@@ -998,6 +1442,14 @@ def delete_test_case(test_case: TestCase) -> None:
     test_case.delete()
 
 
+def bulk_delete_test_cases(*, project: Project, test_case_ids: list[int]) -> int:
+    """Delete the given test cases (scoped to the project) and return how many."""
+    queryset = TestCase.objects.filter(id__in=test_case_ids, project=project)
+    count = queryset.count()
+    queryset.delete()
+    return count
+
+
 def get_test_case_for_project(test_case_id: int, project: Project) -> TestCase | None:
     try:
         return TestCase.objects.filter(id=test_case_id, project=project).get()
@@ -1035,6 +1487,10 @@ def list_test_cases_for_project(
             last_run_pivot_id=Subquery(latest_pivot.values("pk")[:1]),
             last_run_status=Subquery(latest_pivot.values("status")[:1]),
             last_run_test_run_id=Subquery(latest_pivot.values("test_run_id")[:1]),
+            last_run_at=Coalesce(
+                Subquery(latest_pivot.values("finished_at")[:1]),
+                Subquery(latest_pivot.values("created_at")[:1]),
+            ),
         )
         .order_by("-created_at")
     )
@@ -1307,13 +1763,19 @@ def _split_into_batches(
 
 @transaction.atomic
 def create_test_run_with_cases(
-    *, project: Project, test_case_ids: list[int]
+    *, project: Project, test_case_ids: list[int], name: str = ""
 ) -> TestRun:
-    test_run = TestRun.objects.create(project=project)
+    test_run = TestRun.objects.create(project=project, name=name)
     valid_cases = TestCase.objects.filter(id__in=test_case_ids, project=project)
     pivots = [TestRunTestCase(test_run=test_run, test_case=tc) for tc in valid_cases]
     TestRunTestCase.objects.bulk_create(pivots)
     return test_run
+
+
+def suggest_run_name(project: Project) -> str:
+    """Suggest "Run N" from the run count; a suggestion only, uniqueness is not guaranteed."""
+    existing_count = TestRun.objects.filter(project=project).count()
+    return f"Run {existing_count + 1}"
 
 
 @transaction.atomic
@@ -1336,10 +1798,8 @@ def add_cases_to_test_run(*, test_run: TestRun, test_case_ids: list[int]) -> int
 def list_test_runs_for_project(
     *, project: Project, page: int, per_page: int
 ) -> Page[TestRun]:
-    qs = (
-        TestRun.objects.filter(project=project)
-        .annotate(case_count=Count("pivot_entries"))
-        .order_by("-created_at")
+    qs = _annotate_run_counts(TestRun.objects.filter(project=project)).order_by(
+        "-created_at"
     )
     paginator: Paginator[TestRun] = Paginator(qs, per_page)
     return paginator.get_page(page)
@@ -1350,6 +1810,21 @@ def get_test_run_for_project(test_run_id: int, project: Project) -> TestRun | No
         return TestRun.objects.filter(id=test_run_id, project=project).get()
     except TestRun.DoesNotExist:
         return None
+
+
+def get_case_position(pivot: TestRunTestCase) -> tuple[int, int]:
+    """Return the pivot's 1-based position and total case count within its run.
+
+    Uses a stable `created_at, id` ordering rather than the failures-first
+    ordering `list_test_run_cases` uses for display, since that ordering
+    is not a stable position for a given pivot.
+    """
+    earlier_count = pivot.test_run.pivot_entries.filter(
+        Q(created_at__lt=pivot.created_at)
+        | Q(created_at=pivot.created_at, id__lt=pivot.id)
+    ).count()
+    total = pivot.test_run.pivot_entries.count()
+    return earlier_count + 1, total
 
 
 def get_test_run_case_detail(pivot_id: int, project: Project) -> TestRunTestCase | None:
@@ -1372,15 +1847,17 @@ def get_test_run_case_detail(pivot_id: int, project: Project) -> TestRunTestCase
 def list_test_run_cases(
     *, test_run: TestRun, page: int, per_page: int
 ) -> Page[TestRunTestCase]:
+    """List a run's cases with failures surfaced first, newest first otherwise."""
     qs = (
         test_run.pivot_entries.select_related("test_case")
-        .prefetch_related(
-            Prefetch(
-                "screenshots",
-                queryset=TestRunScreenshot.objects.order_by("created_at"),
+        .annotate(
+            _failure_priority=Case(
+                When(status=TestRunTestCaseStatus.FAILED, then=0),
+                default=1,
+                output_field=IntegerField(),
             )
         )
-        .order_by("-created_at")
+        .order_by("_failure_priority", "-created_at")
     )
     paginator: Paginator[TestRunTestCase] = Paginator(qs, per_page)
     return paginator.get_page(page)
@@ -1419,10 +1896,31 @@ def reset_test_run(test_run: TestRun) -> None:
         pivot.status = TestRunTestCaseStatus.CREATED
         pivot.result = ""
         pivot.logs = ""
-        pivot.save(update_fields=["status", "result", "logs", "updated_at"])
+        pivot.started_at = None
+        pivot.finished_at = None
+        pivot.save(
+            update_fields=[
+                "status",
+                "result",
+                "logs",
+                "started_at",
+                "finished_at",
+                "updated_at",
+            ]
+        )
     test_run.status = TestRunStatus.WAITING
     test_run.celery_task_id = ""
-    test_run.save(update_fields=["status", "celery_task_id", "updated_at"])
+    test_run.started_at = None
+    test_run.finished_at = None
+    test_run.save(
+        update_fields=[
+            "status",
+            "celery_task_id",
+            "started_at",
+            "finished_at",
+            "updated_at",
+        ]
+    )
 
 
 def _has_active_test_run(project: Project) -> bool:
@@ -1443,7 +1941,9 @@ def start_test_run(test_run: TestRun) -> None:
         raise ValueError("Another test run is already in progress for this project.")
 
     test_run.status = TestRunStatus.STARTED
-    test_run.save(update_fields=["status", "updated_at"])
+    test_run.started_at = timezone.now()
+    test_run.finished_at = None
+    test_run.save(update_fields=["status", "started_at", "finished_at", "updated_at"])
     _broadcast_test_run_status(test_run)
 
     result = chain(*[execute_test_run_case.si(pid) for pid in pivot_ids]).apply_async()
@@ -1461,6 +1961,90 @@ def get_test_run_summary(test_run: TestRun) -> dict[str, int]:
         cancelled=Count("id", filter=Q(status=TestRunTestCaseStatus.CANCELLED)),
     )
     return {k: v or 0 for k, v in result.items()}
+
+
+@transaction.atomic
+def can_rerun_failed_cases(test_run: TestRun, failed_count: int) -> bool:
+    """Single source of the rerun rule, shared by the UI gate and the service."""
+    return (
+        test_run.status in (TestRunStatus.DONE, TestRunStatus.CANCELLED)
+        and failed_count > 0
+    )
+
+
+def rerun_failed_cases(test_run: TestRun) -> TestRun:
+    """Create a new run containing only the failed cases from `test_run`.
+
+    Only DONE/CANCELLED runs qualify — a run still in progress has no
+    stable set of failures to copy yet.
+    """
+    failed_case_ids = list(
+        test_run.pivot_entries.filter(status=TestRunTestCaseStatus.FAILED).values_list(
+            "test_case_id", flat=True
+        )
+    )
+    if not can_rerun_failed_cases(test_run, len(failed_case_ids)):
+        raise ValueError(
+            "Only completed or cancelled runs with failed cases can be rerun."
+        )
+
+    new_run = TestRun.objects.create(
+        project=test_run.project,
+        name=f"{test_run.display_name} — failed rerun",
+    )
+    pivots = [
+        TestRunTestCase(test_run=new_run, test_case_id=case_id)
+        for case_id in failed_case_ids
+    ]
+    TestRunTestCase.objects.bulk_create(pivots)
+    return new_run
+
+
+def list_failed_case_titles(test_run: TestRun) -> list[str]:
+    """Titles of the failed cases in a run, for the "What happened" summary."""
+    return list(
+        test_run.pivot_entries.filter(status=TestRunTestCaseStatus.FAILED).values_list(
+            "test_case__title", flat=True
+        )
+    )
+
+
+def _build_narrative_for_active_run(test_run: TestRun, summary: dict[str, int]) -> str:
+    total = summary.get("total", 0)
+    finished = summary.get("success", 0) + summary.get("failed", 0)
+    if test_run.status == TestRunStatus.CANCELLED:
+        return f"Run cancelled after {finished} of {total} cases finished."
+    return f"{finished} of {total} cases finished so far."
+
+
+def _build_narrative_for_finished_run(
+    summary: dict[str, int], failed_titles: list[str]
+) -> str:
+    total = summary.get("total", 0)
+    success = summary.get("success", 0)
+    if total > 0 and success == total:
+        return f"All {total} cases passed."
+
+    sentence = f"{success} of {total} cases passed."
+    failed_count = summary.get("failed", 0)
+    if failed_count and failed_titles:
+        sentence += f" {failed_count} failed: {', '.join(failed_titles)}."
+    elif failed_count:
+        sentence += f" {failed_count} failed."
+    return sentence
+
+
+def build_run_narrative(
+    test_run: TestRun, summary: dict[str, int], failed_titles: list[str]
+) -> str:
+    """Build the deterministic "What happened" sentence for a run's page."""
+    if test_run.status == TestRunStatus.WAITING:
+        return (
+            f"{summary.get('total', 0)} cases selected. This run has not started yet."
+        )
+    if test_run.status in (TestRunStatus.STARTED, TestRunStatus.CANCELLED):
+        return _build_narrative_for_active_run(test_run, summary)
+    return _build_narrative_for_finished_run(summary, failed_titles)
 
 
 # ============================================================================
@@ -1711,14 +2295,16 @@ def execute_test_run_test_case(pivot_id: int) -> None:
             run_orchestrator,
         )
 
-        project.refresh_from_db(fields=["project_prompt"])
+        project.refresh_from_db(
+            fields=["project_prompt", "application_url", "application_platform"]
+        )
         result = run_orchestrator(
             task_description,
             project.id,
             on_log=on_log,
             on_screenshot=on_screenshot,
             system_info=project.agent_system_info or None,
-            project_prompt=project.project_prompt or None,
+            project_prompt=build_agent_project_context(project),
             cancellation_check=cancellation_check,
         )
         _finalize_pivot(pivot, result)
@@ -1752,13 +2338,15 @@ def _fetch_pivot(pivot_id: int) -> TestRunTestCase:
 
 def _mark_pivot_in_progress(pivot: TestRunTestCase) -> None:
     pivot.status = TestRunTestCaseStatus.IN_PROGRESS
-    pivot.save(update_fields=["status", "updated_at"])
+    pivot.started_at = timezone.now()
+    pivot.save(update_fields=["status", "started_at", "updated_at"])
 
     test_run = pivot.test_run
     status_changed = False
     if test_run.status == TestRunStatus.WAITING:
         test_run.status = TestRunStatus.STARTED
-        test_run.save(update_fields=["status", "updated_at"])
+        test_run.started_at = timezone.now()
+        test_run.save(update_fields=["status", "started_at", "updated_at"])
         status_changed = True
 
     _broadcast_pivot_status_to_run(pivot)
@@ -1828,7 +2416,8 @@ def _finalize_pivot(pivot: TestRunTestCase, result: AgentResult) -> None:
         pivot.status = TestRunTestCaseStatus.FAILED
 
     pivot.result = _extract_agent_summary(result)
-    pivot.save(update_fields=["status", "result", "updated_at"])
+    pivot.finished_at = timezone.now()
+    pivot.save(update_fields=["status", "result", "finished_at", "updated_at"])
     _broadcast_pivot_status_to_run(pivot)
     _broadcast_pivot_status_to_case(pivot)
 
@@ -1843,14 +2432,16 @@ def _extract_agent_summary(result: AgentResult) -> str:
 def _mark_pivot_failed(pivot: TestRunTestCase, error: str) -> None:
     pivot.status = TestRunTestCaseStatus.FAILED
     pivot.result = error
-    pivot.save(update_fields=["status", "result", "updated_at"])
+    pivot.finished_at = timezone.now()
+    pivot.save(update_fields=["status", "result", "finished_at", "updated_at"])
     _broadcast_pivot_status_to_run(pivot)
     _broadcast_pivot_status_to_case(pivot)
 
 
 def _mark_pivot_cancelled(pivot: TestRunTestCase) -> None:
     pivot.status = TestRunTestCaseStatus.CANCELLED
-    pivot.save(update_fields=["status", "updated_at"])
+    pivot.finished_at = timezone.now()
+    pivot.save(update_fields=["status", "finished_at", "updated_at"])
     _broadcast_pivot_status_to_run(pivot)
     _broadcast_pivot_status_to_case(pivot)
 
@@ -1861,7 +2452,8 @@ def abort_test_run(test_run: TestRun, reason: str = "Test run aborted") -> None:
         return
 
     test_run.status = TestRunStatus.CANCELLED
-    test_run.save(update_fields=["status", "updated_at"])
+    test_run.finished_at = timezone.now()
+    test_run.save(update_fields=["status", "finished_at", "updated_at"])
 
     for pivot in test_run.pivot_entries.filter(
         status=TestRunTestCaseStatus.IN_PROGRESS
@@ -1904,7 +2496,8 @@ def _update_test_run_status_if_needed(test_run: TestRun) -> None:
 
     if all_done:
         test_run.status = TestRunStatus.DONE
-        test_run.save(update_fields=["status", "updated_at"])
+        test_run.finished_at = timezone.now()
+        test_run.save(update_fields=["status", "finished_at", "updated_at"])
         _broadcast_test_run_status(test_run)
 
 
