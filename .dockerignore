@@ -22,3 +22,4 @@ docs/
 .mypy_cache/
 .pytest_cache/
 node_modules/
+ui-prototype/

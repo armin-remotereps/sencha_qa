@@ -33,7 +33,7 @@ isort .
 # Unit tests — always scope Django's test command to real Django apps (bare
 # `manage.py test` walks the whole project tree by default and will also try
 # to import controller_client/tests/, which needs its own separate venv)
-python manage.py test agents projects accounts dashboard
+python manage.py test agents projects accounts dashboard   # view/service tests hit Postgres: `docker compose up db redis -d` first
 controller_client/.venv/bin/python -m pytest controller_client/tests/
 
 # Infrastructure
@@ -89,9 +89,12 @@ Task routing is defined in `settings.CELERY_TASK_ROUTES`.
 
 ### Frontend
 
-- Django templates with Tailwind CSS (CDN) and Alpine.js (CDN)
-- Templates in `templates/` directory: `base.html` at root, app-specific templates in subdirectories
-- Alpine.js for WebSocket connections, dynamic UI interactions
+- User-facing brand is **Punk Hazard** (internal package names stay `auto_tester`). Brand assets in `static/branding/`; `brand_name`/`brand_tagline` come from `auto_tester/context_processors.py`
+- Own design system, no Tailwind: `static/css/punk-hazard.css` (dark-first tokens + component classes — `.btn-*`, `.badge-*`, `.card`, `.data-table` with `data-label` mobile records, `.dialog-backdrop`, `.steps`, `.checklist`, …) ported from the approved `ui-prototype/`. Add classes there rather than inline styles
+- Alpine.js 3.14 (pinned CDN, plus `@alpinejs/focus`) for dialogs, tabs, bulk selection and WebSocket components; shared `Alpine.data` components (`dialog`, `osTabs`, `bulkSelect`, `clipboard`, `mobileNav`, `dismissible`, `rowMenu`) and `punkHazard.wsUrl()` live in `static/js/punk-hazard.js`
+- Templates: `templates/base.html` → `templates/layouts/{app,auth,project}.html`; reusable includes in `templates/partials/` (contracts + dialog convention documented in `templates/partials/README.md`); page-private fragments in `templates/<app>/includes/`. Django `{# #}` comments are single-line — use `{% comment %}` for blocks
+- User-facing terminology: Test Runner (controller client), test machine, Visual engine (OmniParser, advanced diagnostics only), Application context (project prompt), Runs / Draft / Running / Passed, Import from TestRail, Connection key (API key)
+- Onboarding wizard (`projects:create` → `setup_*` views) is not resumable and stores no wizard state; every step reads real project state
 - No REST API — server-rendered HTML, data passed via template context
 
 ### Settings & Configuration
