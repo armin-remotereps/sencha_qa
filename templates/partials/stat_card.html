@@ -1,0 +1,21 @@
+{% comment %} Single stat tile (dashboard summary, project overview stats, …).
+
+   Context contract:
+     label — stat label, e.g. "Pass rate · 7 days"
+     value — the headline value, e.g. "87%"
+     note  — optional supporting text under the value
+     url   — optional link target; renders <a class="stat-card"> instead of <div>
+     tone  — optional "success" | "danger" | "info", colors the value {% endcomment %}
+{% if url %}
+<a class="stat-card" href="{{ url }}">
+{% else %}
+<div class="stat-card">
+{% endif %}
+  <div class="stat-label">{{ label }}</div>
+  <div class="stat-value{% if tone %} is-{{ tone }}{% endif %}">{{ value }}</div>
+  {% if note %}<div class="stat-note">{{ note }}</div>{% endif %}
+{% if url %}
+</a>
+{% else %}
+</div>
+{% endif %}

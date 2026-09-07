@@ -1,0 +1,29 @@
+{% comment %} Section: Needs your attention.
+
+   Context contract:
+     attention — list of dashboard.services.AttentionItem
+                 (kind, project, title, detail, url, occurred_at); kind is
+                 "failed_run" or "disconnected_machine". {% endcomment %}
+<section aria-labelledby="attention-h" class="card card-tone-warning">
+  <div class="card-header">
+    <h2 id="attention-h">Needs your attention</h2>
+  </div>
+
+  <ul class="activity">
+    {% for item in attention %}
+      <li>
+        <span class="activity-icon" aria-hidden="true">
+          {% if item.kind == "failed_run" %}✕{% elif item.kind == "disconnected_machine" %}⏻{% else %}•{% endif %}
+        </span>
+        <div>
+          <strong>{{ item.title }}</strong>
+          <div class="muted small">{{ item.detail }}</div>
+          <a class="btn btn-sm btn-secondary" href="{{ item.url }}">
+            {% if item.kind == "failed_run" %}Review failures{% else %}Reconnect machine{% endif %}
+          </a>
+        </div>
+        <time datetime="{{ item.occurred_at|date:'c' }}">{{ item.occurred_at|timesince }} ago</time>
+      </li>
+    {% endfor %}
+  </ul>
+</section>

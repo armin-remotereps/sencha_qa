@@ -1,0 +1,47 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Project-scoped page shell: breadcrumbs + project tabs, wrapping every
+   Overview/Test Cases/Runs/Environment/wizard page.
+
+   Context contract:
+     project    — the current Project
+     active_tab — "overview" | "test_cases" | "runs" | "environment"
+                  (omit/blank on pages not represented by a tab, e.g. the
+                  wizard steps or a run/case detail page)
+
+   Blocks for pages extending this layout:
+     breadcrumb_extra — everything after "Dashboard › Projects ›". Defaults
+                         to the project name as the current page. A page
+                         one or more levels below the project (run detail,
+                         case detail, …) overrides this ENTIRELY, starting
+                         with the project name as a link, e.g.:
+
+                           {% block breadcrumb_extra %}
+                             <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+                             <span class="sep" aria-hidden="true">›</span>
+                             <a href="{% url 'projects:test_run_list' project.id %}">Runs</a>
+                             <span class="sep" aria-hidden="true">›</span>
+                             <span aria-current="page">{{ test_run.display_name }}</span>
+                           {% endblock %}
+
+     page_header      — the page's own <div class="page-header">…</div>
+                         (title, subtitle, actions) — not pre-wrapped here,
+                         since its contents vary too much page to page.
+     project_content   — everything below the project tabs. {% endcomment %}
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="{% url 'dashboard:index' %}">Dashboard</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:list' %}">Projects</a>
+  <span class="sep" aria-hidden="true">›</span>
+  {% block breadcrumb_extra %}<span aria-current="page">{{ project.name }}</span>{% endblock %}
+</nav>
+{% endblock %}
+
+{% block page %}
+{% block page_header %}{% endblock %}
+
+{% include "partials/project_tabs.html" with project=project active_tab=active_tab only %}
+
+{% block project_content %}{% endblock %}
+{% endblock %}

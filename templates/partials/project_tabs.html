@@ -1,0 +1,11 @@
+{% comment %} Project-level tab navigation.
+
+   Context contract:
+     project    — the current Project
+     active_tab — "overview" | "test_cases" | "runs" | "environment" {% endcomment %}
+<nav class="tabs" aria-label="Project navigation">
+  <a class="tab" href="{% url 'projects:detail' project.id %}"{% if active_tab == "overview" %} aria-current="page"{% endif %}>Overview</a>
+  <a class="tab" href="{% url 'projects:test_case_list' project.id %}"{% if active_tab == "test_cases" %} aria-current="page"{% endif %}>Test Cases</a>
+  <a class="tab" href="{% url 'projects:test_run_list' project.id %}"{% if active_tab == "runs" %} aria-current="page"{% endif %}>Runs</a>
+  <a class="tab" href="{% url 'projects:environment' project.id %}"{% if active_tab == "environment" %} aria-current="page"{% endif %}>Environment</a>
+</nav>

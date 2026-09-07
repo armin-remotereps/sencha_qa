@@ -1,0 +1,110 @@
+{% extends "layouts/project.html" %}
+
+{% comment %}
+  Environment page: test machine connection state, download/setup
+  instructions, and advanced diagnostics.
+
+  Context contract (projects/views.py::project_environment):
+    project       — the current Project
+    machine_state — projects.services.MachineState (unused directly here —
+                    the connection card is fully live via environmentLive(),
+                    ported from the old templates/projects/detail.html
+                    WebSocket component)
+
+  The whole page body runs inside the environmentLive() Alpine scope so
+  partials/advanced_diagnostics.html (which reads clientVersion,
+  capabilities, omniparserStatus, systemInfo from an ancestor scope) works
+  without a fallback stub.
+{% endcomment %}
+
+{% block title %}Environment · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>Environment</h1>
+    <p class="subtitle">{{ project.name }} — test machine connection and Test Runner setup.</p>
+  </div>
+</div>
+{% endblock %}
+
+{% block project_content %}
+{{ project.agent_system_info|json_script:"env-system-info" }}
+{{ project.agent_capabilities|json_script:"env-capabilities" }}
+{{ project.agent_omniparser_status|json_script:"env-omniparser-status" }}
+<div x-data="environmentLive()">
+  {% include "projects/includes/_environment_connection.html" with project=project %}
+  {% include "projects/includes/_environment_visual_engine_failure.html" only %}
+
+  <section aria-labelledby="setup-h">
+    <h2 id="setup-h" class="visually-hidden">Set up the Test Runner on another machine</h2>
+    {% include "partials/runner_download_card.html" with project=project %}
+    <div class="card">
+      <div class="card-header">
+        <h2>Set it up</h2>
+      </div>
+      <p class="muted">Pick the operating system of the test machine to see the matching commands.</p>
+      {% include "partials/os_setup_tabs.html" %}
+    </div>
+  </section>
+
+  {% include "partials/advanced_diagnostics.html" with project=project %}
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('environmentLive', () => ({
+    agentConnected: {{ project.agent_connected|yesno:'true,false' }},
+    systemInfo: JSON.parse(document.getElementById('env-system-info').textContent),
+    lastConnectedAt: '{{ project.last_connected_at|date:"N j, Y, P"|default:"" }}',
+    clientVersion: '{{ project.agent_client_version|escapejs }}',
+    capabilities: JSON.parse(document.getElementById('env-capabilities').textContent),
+    omniparserStatus: JSON.parse(document.getElementById('env-omniparser-status').textContent),
+    ws: null,
+
+    init() {
+      this.ws = new WebSocket(window.punkHazard.wsUrl('/ws/projects/{{ project.id }}/agent-status/'));
+      this.ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'agent_status') {
+          this.agentConnected = data.agent_connected;
+          this.systemInfo = data.agent_system_info || {};
+          this.lastConnectedAt = data.last_connected_at || this.lastConnectedAt;
+          this.clientVersion = data.agent_client_version || '';
+          this.capabilities = data.agent_capabilities || [];
+          this.omniparserStatus = data.agent_omniparser_status || {};
+        }
+      };
+    },
+
+    get machineState() {
+      if (!this.agentConnected) return 'disconnected';
+      const state = this.omniparserStatus.state;
+      if (state === 'ready') return 'ready';
+      if (state === 'failed') return 'failed';
+      return 'starting';
+    },
+
+    get machineBadgeClass() {
+      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed' }[this.machineState];
+    },
+
+    get machineBadgeLabel() {
+      return {
+        disconnected: 'Not connected',
+        starting: 'Visual engine starting',
+        ready: 'Test machine connected',
+        failed: 'Visual engine failed',
+      }[this.machineState];
+    },
+
+    get osLabel() {
+      if (!this.systemInfo.os) return '—';
+      return this.systemInfo.os_version ? this.systemInfo.os + ' ' + this.systemInfo.os_version : this.systemInfo.os;
+    },
+  }));
+});
+</script>
+{% endblock %}

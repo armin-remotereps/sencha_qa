@@ -1,0 +1,37 @@
+{% comment %} Run readiness checklist ("Ready to run?").
+
+   Context contract:
+     readiness — object with a `.checks` iterable; each check has:
+                 key, passed (bool), blocking (bool), title, help,
+                 link_url (str|None)
+                 A non-blocking check that hasn't passed renders as
+                 "is-pending" rather than "is-fail" (it's advisory).
+
+   data-check="{key}" is set on each <li> so a live Alpine component can
+   flip an individual check's icon/class as machine/visual-engine state
+   changes, without re-rendering the whole list. {% endcomment %}
+<ul class="checklist">
+  {% for check in readiness.checks %}
+    <li data-check="{{ check.key }}">
+      {% if check.passed %}
+        <span class="check-icon is-pass" aria-hidden="true">✓</span>
+        <span class="visually-hidden">Passed check:</span>
+      {% elif check.blocking %}
+        <span class="check-icon is-fail" aria-hidden="true">✕</span>
+        <span class="visually-hidden">Failed check:</span>
+      {% else %}
+        <span class="check-icon is-pending" aria-hidden="true">•</span>
+        <span class="visually-hidden">Pending check:</span>
+      {% endif %}
+      <div>
+        <div class="check-title">{{ check.title }}</div>
+        {% if check.help %}
+          <p class="check-help">
+            {{ check.help }}
+            {% if check.link_url %}<a href="{{ check.link_url }}">Fix this</a>{% endif %}
+          </p>
+        {% endif %}
+      </div>
+    </li>
+  {% endfor %}
+</ul>

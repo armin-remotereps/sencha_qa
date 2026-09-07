@@ -1,0 +1,98 @@
+{% extends "layouts/project.html" %}
+
+{% comment %}
+  Project overview.
+
+  Context contract (projects/views.py::project_overview):
+    project  — the current Project
+    overview — projects.services.ProjectOverview
+
+  The "Test machine" stat card below is a live view: it's kept in an
+  ancestor Alpine scope (overviewLive(), extra_scripts) that opens the
+  agent-status WebSocket, ported from the old templates/projects/detail.html
+  (component A, L10-45), so the badge updates without a page reload.
+{% endcomment %}
+
+{% block title %}{{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>{{ project.name }}</h1>
+    <p class="subtitle">
+      {{ project.get_application_platform_display|default:"Application" }} ·
+      {{ overview.case_count }} test case{{ overview.case_count|pluralize }} ·
+      {% if overview.machine_state == "ready" %}test machine connected
+      {% elif overview.machine_state == "starting" %}visual engine starting
+      {% elif overview.machine_state == "failed" %}visual engine failed
+      {% else %}test machine not connected{% endif %}
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-ghost" href="{% url 'projects:setup_details' project.id %}">Restart setup wizard</a>
+    {% if overview.active_run %}
+      <a class="btn btn-primary" href="{% url 'projects:test_run_detail' project.id overview.active_run.id %}">View running tests</a>
+    {% else %}
+      <a class="btn btn-primary" href="{% url 'projects:test_case_list' project.id %}">Run tests</a>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
+
+{% block project_content %}
+{{ project.agent_system_info|json_script:"overview-system-info" }}
+{{ project.agent_omniparser_status|json_script:"overview-omniparser-status" }}
+<div x-data="overviewLive()">
+  {% include "projects/includes/_overview_alert.html" with project=project overview=overview only %}
+  {% include "projects/includes/_overview_stats.html" with project=project overview=overview only %}
+</div>
+
+{% include "projects/includes/_overview_context.html" with project=project only %}
+{% include "projects/includes/_overview_runs.html" with project=project overview=overview only %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('overviewLive', () => ({
+    agentConnected: {{ project.agent_connected|yesno:'true,false' }},
+    systemInfo: JSON.parse(document.getElementById('overview-system-info').textContent),
+    omniparserStatus: JSON.parse(document.getElementById('overview-omniparser-status').textContent),
+    ws: null,
+
+    init() {
+      this.ws = new WebSocket(window.punkHazard.wsUrl('/ws/projects/{{ project.id }}/agent-status/'));
+      this.ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type === 'agent_status') {
+          this.agentConnected = data.agent_connected;
+          this.systemInfo = data.agent_system_info || {};
+          this.omniparserStatus = data.agent_omniparser_status || {};
+        }
+      };
+    },
+
+    get machineState() {
+      if (!this.agentConnected) return 'disconnected';
+      const state = this.omniparserStatus.state;
+      if (state === 'ready') return 'ready';
+      if (state === 'failed') return 'failed';
+      return 'starting';
+    },
+
+    get machineBadgeClass() {
+      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed' }[this.machineState];
+    },
+
+    get machineBadgeLabel() {
+      return {
+        disconnected: 'Not connected',
+        starting: 'Visual engine starting',
+        ready: 'Connected',
+        failed: 'Visual engine failed',
+      }[this.machineState];
+    },
+  }));
+});
+</script>
+{% endblock %}

@@ -1,0 +1,48 @@
+{% comment %}
+  Connection state card. Must render inside the environmentLive() Alpine
+  scope declared in projects/environment.html.
+
+  Context contract:
+    project — the current Project (used for the disconnect form's action
+              URL and the "setup was completed on" fallback date)
+{% endcomment %}
+<section aria-labelledby="connection-h" class="card">
+  <div class="card-header">
+    <h2 id="connection-h">Connection</h2>
+    <span class="badge" :class="'badge-' + machineBadgeClass" x-text="machineBadgeLabel"></span>
+  </div>
+
+  <p x-show="agentConnected" x-cloak>
+    <strong x-text="systemInfo.hostname || 'The test machine'"></strong> is online and ready to run tests.
+  </p>
+
+  <div class="alert alert-info alert-flush" role="status" x-show="!agentConnected" x-cloak>
+    <span class="alert-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <strong>{% if project.last_connected_at %}Setup was completed on {{ project.last_connected_at|date:"M j, Y" }}.{% else %}No test machine has connected yet.{% endif %}</strong>
+      <p>This project remembers its setup even while no machine is connected. Reconnect by opening the Test Runner on a previously set-up machine, or set up a new one below.</p>
+    </div>
+  </div>
+
+  <dl class="kv">
+    <div>
+      <dt>Last connected</dt>
+      <dd x-text="lastConnectedAt || 'Never'"></dd>
+    </div>
+    <div>
+      <dt>Operating system</dt>
+      <dd x-text="osLabel"></dd>
+    </div>
+    <div>
+      <dt>Test Runner version</dt>
+      <dd x-text="clientVersion || '—'"></dd>
+    </div>
+  </dl>
+
+  <div class="actions" x-show="agentConnected" x-cloak>
+    <button class="btn btn-danger" type="button" @click="$dispatch('open-disconnect-machine')">Disconnect test machine</button>
+  </div>
+</section>
+
+{% url 'projects:force_disconnect' project.id as disconnect_url %}
+{% include "partials/confirm_dialog.html" with dialog_id="disconnect-machine" title="Disconnect the test machine?" body="The current connection is closed immediately. Any run in progress on it will be interrupted. You can reconnect at any time by starting the Test Runner again." confirm_label="Disconnect test machine" confirm_class="btn-danger-solid" action_url=disconnect_url %}

@@ -1,0 +1,71 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Onboarding wizard, step 1: project details.
+
+   Context contract (projects.views._render_wizard_details):
+     project     — the Project being edited, or None in create mode
+     form        — ProjectForm (name, tags)
+     wizard_step — always 1 here
+     wizard_mode — "create" | "edit"
+
+   Posts to projects:create in create mode, projects:setup_details in edit
+   mode ("Restart setup wizard", reached from the project overview). {% endcomment %}
+
+{% block title %}Project details · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="{% url 'dashboard:index' %}">Dashboard</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:list' %}">Projects</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span>{% if project %}{{ project.name }}{% else %}New project{% endif %}</span>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Setup</span>
+</nav>
+{% endblock %}
+
+{% block page %}
+<div class="narrow">
+
+  <h1>Project details</h1>
+  <p class="subtitle">Name the project so you can find it later &mdash; this becomes the home for its application context, test cases, runs, and test machine.</p>
+
+  {% include "partials/wizard_steps.html" with project=project wizard_step=wizard_step only %}
+
+  <div class="alert alert-info">
+    <span class="alert-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <strong>What a project represents</strong>
+      <p>A project is one application under test. It holds its application context, its test cases, every run of those cases, and the test machine that runs them.</p>
+    </div>
+  </div>
+
+  <form method="post" action="{% if project %}{% url 'projects:setup_details' project.id %}{% else %}{% url 'projects:create' %}{% endif %}" novalidate>
+    {% csrf_token %}
+
+    <div class="card">
+      <div class="field{% if form.name.errors %} has-error{% endif %}">
+        <label for="{{ form.name.id_for_label }}">Project name</label>
+        {{ form.name }}
+        {% if form.name.errors %}<p class="error-text">{{ form.name.errors.0 }}</p>{% endif %}
+      </div>
+
+      <div class="field{% if form.tags.errors %} has-error{% endif %}">
+        <label for="{{ form.tags.id_for_label }}">Tags <span class="optional">(optional)</span></label>
+        {{ form.tags }}
+        <p class="hint">Comma-separated. Use tags to group related projects on the dashboard.</p>
+        {% if form.tags.errors %}<p class="error-text">{{ form.tags.errors.0 }}</p>{% endif %}
+      </div>
+    </div>
+
+    {% if project %}
+      {% url 'projects:detail' project.id as back_url %}
+      {% include "partials/wizard_actions.html" with back_url=back_url only %}
+    {% else %}
+      {% include "partials/wizard_actions.html" only %}
+    {% endif %}
+  </form>
+
+</div>
+{% endblock %}

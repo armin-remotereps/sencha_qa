@@ -1,85 +1,36 @@
-{% extends "dashboard/base_dashboard.html" %}
+{% extends "layouts/project.html" %}
 
-{% block dashboard_content %}
-<div>
-  {# BREADCRUMB #}
-  <nav class="mb-4 text-sm text-zinc-400">
-    <a href="{% url 'projects:list' %}" class="hover:text-zinc-200">Projects</a>
-    <span class="mx-1">/</span>
-    <a href="{% url 'projects:test_case_list' project_id=project.id %}" class="hover:text-zinc-200">{{ project.name }}</a>
-    <span class="mx-1">/</span>
-    <span class="text-zinc-200">Test Runs</span>
-  </nav>
+{% comment %} Runs list: history table + empty state. Creating a run happens from the
+   Test Cases page (select cases → Add to run / Create new run), so this
+   page's only action is a link back there.
 
-  {# HEADER #}
-  <div class="mb-6 flex items-center justify-between">
-    <h1 class="text-2xl font-bold text-zinc-100">Test Runs</h1>
-    <a
-      href="{% url 'projects:test_case_list' project_id=project.id %}"
-      class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
-    >
-      Back to Test Cases
-    </a>
+   Context contract (projects.views.test_run_list):
+     project — current Project
+     test_runs — Page[TestRun], each row annotated case_count / success_count / failed_count
+     per_page / allowed_per_page / elided_page_range / query_params — pagination {% endcomment %}
+{% block title %}Runs · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>Runs</h1>
+    <p class="subtitle">{{ test_runs.paginator.count }} run{{ test_runs.paginator.count|pluralize }}</p>
   </div>
-
-  {# TABLE #}
-  {% if test_runs %}
-  <div class="overflow-x-auto rounded-lg border border-zinc-800">
-    <table class="w-full text-left text-sm">
-      <thead class="border-b border-zinc-800 bg-zinc-900 text-xs uppercase text-zinc-400">
-        <tr>
-          <th class="px-4 py-3">ID</th>
-          <th class="px-4 py-3">Status</th>
-          <th class="px-4 py-3">Cases</th>
-          <th class="px-4 py-3">Created</th>
-          <th class="px-4 py-3">Actions</th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-zinc-800">
-        {% for run in test_runs %}
-        <tr class="bg-zinc-950 hover:bg-zinc-900">
-          <td class="px-4 py-3 font-medium text-zinc-100">#{{ run.id }}</td>
-          <td class="px-4 py-3">
-            {% if run.status == "waiting" %}
-            <span class="rounded-full bg-yellow-900/50 px-2 py-0.5 text-xs text-yellow-400">Waiting</span>
-            {% elif run.status == "started" %}
-            <span class="rounded-full bg-blue-900/50 px-2 py-0.5 text-xs text-blue-400">Started</span>
-            {% elif run.status == "done" %}
-            <span class="rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-400">Done</span>
-            {% elif run.status == "cancelled" %}
-            <span class="rounded-full bg-orange-900/50 px-2 py-0.5 text-xs text-orange-400">Cancelled</span>
-            {% endif %}
-          </td>
-          <td class="px-4 py-3 text-zinc-400">{{ run.case_count }}</td>
-          <td class="px-4 py-3 text-zinc-400">{{ run.created_at|date:"M d, Y H:i" }}</td>
-          <td class="px-4 py-3 flex items-center gap-2">
-            <a
-              href="{% url 'projects:test_run_detail' project_id=project.id test_run_id=run.id %}"
-              class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
-            >
-              View
-            </a>
-            {% if run.status == "waiting" %}
-            <form method="post" action="{% url 'projects:test_run_delete' project_id=project.id test_run_id=run.id %}" onsubmit="return confirm('Delete this test run?')">
-              {% csrf_token %}
-              <button type="submit" class="rounded-md bg-red-900/50 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-900">
-                Delete
-              </button>
-            </form>
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="actions">
+    <a class="btn btn-primary" href="{% url 'projects:test_case_list' project.id %}">New run</a>
   </div>
-  {% else %}
-  <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-8 text-center">
-    <p class="text-zinc-400">No test runs found.</p>
-  </div>
-  {% endif %}
-
-  {# PAGINATION #}
-  {% include "components/pagination.html" with page_obj=test_runs %}
 </div>
+{% endblock %}
+
+{% block project_content %}
+{% if test_runs %}
+  {% include "projects/includes/_test_run_table.html" with project=project test_runs=test_runs only %}
+{% else %}
+  {% url 'projects:test_case_list' project.id as choose_cases_url %}
+  {% include "partials/empty_state.html" with icon="▶" title="No runs yet" body="Pick test cases to start your first run." primary_label="Choose test cases" primary_url=choose_cases_url only %}
+{% endif %}
+
+{% include "partials/pagination.html" with page_obj=test_runs per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range query_params=query_params %}
+
+{% include "projects/includes/_test_run_delete_dialog.html" with project=project %}
 {% endblock %}

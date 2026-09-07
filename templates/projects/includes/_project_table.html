@@ -1,0 +1,99 @@
+{% load project_extras %}
+{% comment %} Project table (desktop table / mobile stacked records via data-label).
+
+   Context contract:
+     projects      — Page of Project, annotated with case_count / member_count
+     show_archived — bool, whether archived rows are mixed in
+     latest_runs   — dict of project id -> latest TestRun (annotated
+                     success_count / failed_count), missing entries mean
+                     "no runs yet" {% endcomment %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th scope="col">Project</th>
+        <th scope="col">Test machine</th>
+        <th scope="col">Test cases</th>
+        <th scope="col">Latest run</th>
+        <th scope="col">Members</th>
+        <th scope="col"><span class="visually-hidden">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for project in projects %}
+        <tr{% if project.archived %} class="muted"{% endif %}>
+          <td data-label="Project" class="cell-primary">
+            <div>
+              <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+              {% if project.archived %}<span class="badge badge-draft">Archived</span>{% endif %}
+              {% with tag_names=project.tags.all %}
+                {% if tag_names %}<div class="muted small">{{ tag_names|join:", " }}</div>{% endif %}
+              {% endwith %}
+            </div>
+          </td>
+          <td data-label="Test machine">
+            {% if project.agent_connected %}
+              {% with omni_state=project.agent_omniparser_status.state %}
+                {% if omni_state == "ready" %}
+                  {% include "partials/badge_machine.html" with machine_state="ready" only %}
+                {% elif omni_state == "failed" %}
+                  {% include "partials/badge_machine.html" with machine_state="failed" only %}
+                {% else %}
+                  {% include "partials/badge_machine.html" with machine_state="starting" only %}
+                {% endif %}
+              {% endwith %}
+            {% else %}
+              {% include "partials/badge_machine.html" with machine_state="disconnected" only %}
+            {% endif %}
+          </td>
+          <td data-label="Test cases"><a href="{% url 'projects:test_case_list' project.id %}">{{ project.case_count }}</a></td>
+          <td data-label="Latest run">
+            {% with run=latest_runs|get_item:project.id %}
+              {% if run %}
+                <a href="{% url 'projects:test_run_detail' project.id run.id %}">{{ run.display_name }}</a>
+                {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count only %}
+                <div class="muted small">{{ run.created_at|timesince }} ago</div>
+              {% else %}
+                <span class="muted">No runs yet</span>
+              {% endif %}
+            {% endwith %}
+          </td>
+          <td data-label="Members">{{ project.member_count }}</td>
+          <td data-label="Actions" class="cell-actions">
+            <div class="actions">
+              {% if project.archived %}
+                <form method="post" action="{% url 'projects:restore' project.id %}">
+                  {% csrf_token %}
+                  {% if show_archived %}<input type="hidden" name="archived" value="1">{% endif %}
+                  <button type="submit" class="btn btn-sm btn-secondary">Restore</button>
+                </form>
+              {% else %}
+                <button
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  @click="$dispatch('open-edit-project', { id: {{ project.id }}, name: '{{ project.name|escapejs }}', tags: '{{ project.tags.all|join:", "|escapejs }}' })"
+                >
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-ghost"
+                  @click="$dispatch('open-duplicate-project', { id: {{ project.id }}, name: '{{ project.name|escapejs }}', caseCount: {{ project.case_count }} })"
+                >
+                  Duplicate
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-danger"
+                  @click="$dispatch('open-archive-project', { id: {{ project.id }}, name: '{{ project.name|escapejs }}' })"
+                >
+                  Archive
+                </button>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

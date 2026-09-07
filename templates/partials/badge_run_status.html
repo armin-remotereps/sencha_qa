@@ -1,0 +1,19 @@
+{% comment %} Status badge for a TestRun.
+
+   Context contract:
+     status       — TestRunStatus value: "waiting" | "started" | "done" | "cancelled"
+     failed_count — optional int; when status is "done" and failed_count > 0
+                    the badge reads "Failed" instead of "Passed" {% endcomment %}
+{% if status == "waiting" %}
+  <span class="badge badge-draft">Draft</span>
+{% elif status == "started" %}
+  <span class="badge badge-running">Running</span>
+{% elif status == "cancelled" %}
+  <span class="badge badge-cancelled">Cancelled</span>
+{% elif status == "done" %}
+  {% if failed_count %}
+    <span class="badge badge-failed">Failed</span>
+  {% else %}
+    <span class="badge badge-passed">Passed</span>
+  {% endif %}
+{% endif %}

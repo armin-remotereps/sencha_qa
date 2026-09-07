@@ -1,0 +1,144 @@
+{% comment %} OS-specific Test Runner setup instructions, as a proper ARIA tablist
+   driven by Alpine's osTabs() component (static/js/punk-hazard.js).
+   Commands mirror controller_client/scripts/setup.sh|.bat|.ps1 — keep the
+   two in sync if either changes.
+
+   No context variables required; the content is static across projects. {% endcomment %}
+<div class="os-tabs" x-data="osTabs('unix')">
+  <div class="visually-hidden" id="os-tabs-label">Test machine operating system</div>
+  <div role="tablist" aria-labelledby="os-tabs-label">
+    <button
+      type="button"
+      role="tab"
+      id="os-tab-unix"
+      class="os-tab"
+      x-ref="tab-unix"
+      :aria-selected="isActive('unix').toString()"
+      :tabindex="isActive('unix') ? 0 : -1"
+      aria-controls="os-panel-unix"
+      @click="select('unix')"
+      @keydown="onKeydown($event, ['unix', 'cmd', 'ps'])"
+    >
+      Linux / macOS
+    </button>
+    <button
+      type="button"
+      role="tab"
+      id="os-tab-cmd"
+      class="os-tab"
+      x-ref="tab-cmd"
+      :aria-selected="isActive('cmd').toString()"
+      :tabindex="isActive('cmd') ? 0 : -1"
+      aria-controls="os-panel-cmd"
+      @click="select('cmd')"
+      @keydown="onKeydown($event, ['unix', 'cmd', 'ps'])"
+    >
+      Windows &middot; Command Prompt
+    </button>
+    <button
+      type="button"
+      role="tab"
+      id="os-tab-ps"
+      class="os-tab"
+      x-ref="tab-ps"
+      :aria-selected="isActive('ps').toString()"
+      :tabindex="isActive('ps') ? 0 : -1"
+      aria-controls="os-panel-ps"
+      @click="select('ps')"
+      @keydown="onKeydown($event, ['unix', 'cmd', 'ps'])"
+    >
+      Windows &middot; PowerShell
+    </button>
+  </div>
+
+  <div class="os-panels">
+    <section
+      class="os-panel"
+      id="os-panel-unix"
+      role="tabpanel"
+      aria-labelledby="os-tab-unix"
+      x-show="isActive('unix')"
+      x-cloak
+    >
+      <ol class="setup-steps">
+        <li>
+          <div class="step-title">Extract the ZIP and open a terminal in the extracted folder.</div>
+        </li>
+        <li>
+          <div class="step-title">Run the setup script</div>
+          <pre class="code-block">bash controller_client/scripts/setup.sh</pre>
+          <p class="muted small">If your default <code>python3</code> is older than 3.13, point at a newer one:</p>
+          <pre class="code-block">bash controller_client/scripts/setup.sh --python python3.13</pre>
+        </li>
+        <li>
+          <div class="step-title">Start the Test Runner</div>
+          <pre class="code-block">controller_client/.venv/bin/python -m controller_client.main</pre>
+        </li>
+        <li>
+          <div class="step-title">Leave the window open</div>
+          <p class="muted small">The Test Runner has to stay running while tests execute. Its first start also downloads the visual engine, which can take a few minutes.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section
+      class="os-panel"
+      id="os-panel-cmd"
+      role="tabpanel"
+      aria-labelledby="os-tab-cmd"
+      x-show="isActive('cmd')"
+      x-cloak
+    >
+      <ol class="setup-steps">
+        <li>
+          <div class="step-title">Extract the ZIP and open Command Prompt in the extracted folder</div>
+          <p class="muted small">Run it as Administrator if your tests need to drive installers, Task Manager, or anything behind a UAC prompt &mdash; Windows silently blocks input to those windows otherwise.</p>
+        </li>
+        <li>
+          <div class="step-title">Run the setup script</div>
+          <pre class="code-block">controller_client\scripts\setup.bat</pre>
+          <p class="muted small">If your default <code>python</code> is older than 3.13, point at a newer one:</p>
+          <pre class="code-block">controller_client\scripts\setup.bat python3.13</pre>
+        </li>
+        <li>
+          <div class="step-title">Start the Test Runner</div>
+          <pre class="code-block">controller_client\.venv\Scripts\python -m controller_client.main</pre>
+        </li>
+        <li>
+          <div class="step-title">Leave the window open</div>
+          <p class="muted small">The Test Runner has to stay running while tests execute. Its first start also downloads the visual engine, which can take a few minutes.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section
+      class="os-panel"
+      id="os-panel-ps"
+      role="tabpanel"
+      aria-labelledby="os-tab-ps"
+      x-show="isActive('ps')"
+      x-cloak
+    >
+      <ol class="setup-steps">
+        <li>
+          <div class="step-title">Extract the ZIP and open PowerShell in the extracted folder</div>
+          <p class="muted small">Run it as Administrator if your tests need to drive installers, Task Manager, or anything behind a UAC prompt &mdash; Windows silently blocks input to those windows otherwise.</p>
+        </li>
+        <li>
+          <div class="step-title">Run the setup script</div>
+          <pre class="code-block">.\controller_client\scripts\setup.ps1</pre>
+          <p class="muted small">If your default <code>python</code> is older than 3.13, point at a newer one:</p>
+          <pre class="code-block">.\controller_client\scripts\setup.ps1 -Python python3.13</pre>
+        </li>
+        <li>
+          <div class="step-title">Start the Test Runner</div>
+          <pre class="code-block">controller_client\.venv\Scripts\python -m controller_client.main</pre>
+        </li>
+        <li>
+          <div class="step-title">Leave the window open</div>
+          <p class="muted small">The Test Runner has to stay running while tests execute. Its first start also downloads the visual engine, which can take a few minutes.</p>
+        </li>
+      </ol>
+    </section>
+  </div>
+</div>

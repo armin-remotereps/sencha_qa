@@ -1,0 +1,53 @@
+{% comment %}
+  Key stats grid. Must be rendered inside the overviewLive() Alpine scope
+  (see projects/overview.html) — the "Test machine" card reads its badge
+  class/label live from that component instead of the static
+  partials/badge_machine.html include.
+
+  Context contract:
+    project  — the current Project
+    overview — projects.services.ProjectOverview
+{% endcomment %}
+<section aria-labelledby="stats-h">
+  <h2 id="stats-h" class="visually-hidden">Project status</h2>
+  <div class="grid grid-4">
+
+    <a class="stat-card" href="{% url 'projects:environment' project.id %}">
+      <div class="stat-label">Test machine</div>
+      <div><span class="badge" :class="'badge-' + machineBadgeClass" x-text="machineBadgeLabel"></span></div>
+      <div class="stat-note" x-text="systemInfo.hostname || ''"></div>
+    </a>
+
+    <a class="stat-card" href="{% url 'projects:test_case_list' project.id %}">
+      <div class="stat-label">Test cases</div>
+      <div class="stat-value">{{ overview.case_count }}</div>
+      <div class="stat-note">{{ overview.never_run_count }} never run</div>
+    </a>
+
+    {% if overview.latest_run %}
+      <a class="stat-card" href="{% url 'projects:test_run_detail' project.id overview.latest_run.id %}">
+        <div class="stat-label">Latest run</div>
+        <div>{% include "partials/badge_run_status.html" with status=overview.latest_run.status failed_count=overview.latest_run_summary.failed only %}</div>
+        <div class="stat-note">{{ overview.latest_run.display_name }} · {% if overview.latest_run.started_at %}{{ overview.latest_run.finished_at|default:overview.latest_run.started_at|timesince }} ago{% else %}not started{% endif %}</div>
+      </a>
+    {% else %}
+      <div class="stat-card">
+        <div class="stat-label">Latest run</div>
+        <div class="muted">No runs yet</div>
+      </div>
+    {% endif %}
+
+    {% if overview.pass_rate_30d is not None %}
+      <a class="stat-card" href="{% url 'projects:test_run_list' project.id %}">
+        <div class="stat-label">Pass rate · 30 days</div>
+        <div class="stat-value is-success">{{ overview.pass_rate_30d|stringformat:"d%%" }}</div>
+      </a>
+    {% else %}
+      <div class="stat-card">
+        <div class="stat-label">Pass rate · 30 days</div>
+        <div class="stat-value">—</div>
+      </div>
+    {% endif %}
+
+  </div>
+</section>

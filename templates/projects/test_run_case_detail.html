@@ -1,317 +1,278 @@
-{% extends "dashboard/base_dashboard.html" %}
+{% extends "layouts/project.html" %}
 
-{% block dashboard_content %}
+{% comment %} Run case detail — live via testRunCaseLive, ported from the old
+   (Tailwind-era) test_run_case_detail.html: same WS URL, same message
+   types (current_state / log / screenshot / status), same DOM effects
+   (log auto-scroll, screenshot list growing in place).
+
+   The header badge and the "Edit test case" / "Remove from run" actions
+   need the same live status as the body cards, so — as with
+   test_run_detail.html — `block page` is overridden wholesale rather than
+   split across page_header/project_content, so everything shares one
+   `x-data="testRunCaseLive"` root.
+
+   Context contract (projects.views.test_run_case_detail):
+     project, test_run, pivot (TestRunTestCase, select_related test_case +
+     test_run, screenshots prefetched), screenshots (list, same queryset),
+     form (TestCaseForm, for the edit dialog's type/priority choices),
+     can_edit, case_position (1-based index of this case within the run),
+     case_total (total case count for the run). {% endcomment %}
+
+{% block title %}{{ pivot.test_case.title }} · {{ test_run.display_name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumb_extra %}
+  <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:test_run_list' project.id %}">Runs</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">{{ test_run.display_name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">{{ pivot.test_case.title }}</span>
+{% endblock %}
+
+{% block page %}
 <div x-data="testRunCaseLive">
-  {# BREADCRUMB #}
-  <nav class="mb-4 text-sm text-zinc-400">
-    <a href="{% url 'projects:list' %}" class="hover:text-zinc-200">Projects</a>
-    <span class="mx-1">/</span>
-    <a href="{% url 'projects:test_case_list' project_id=project.id %}" class="hover:text-zinc-200">{{ project.name }}</a>
-    <span class="mx-1">/</span>
-    <a href="{% url 'projects:test_run_list' project_id=project.id %}" class="hover:text-zinc-200">Test Runs</a>
-    <span class="mx-1">/</span>
-    <a href="{% url 'projects:test_run_detail' project_id=project.id test_run_id=test_run.id %}" class="hover:text-zinc-200">#{{ test_run.id }}</a>
-    <span class="mx-1">/</span>
-    <span class="text-zinc-200">{{ pivot.test_case.title }}</span>
-  </nav>
 
-  {# HEADER #}
-  <div class="mb-6 flex items-center justify-between">
-    <div class="flex items-center gap-3">
-      <h1 class="text-2xl font-bold text-zinc-100">{{ pivot.test_case.title }}</h1>
-      <span x-show="status === 'created'" class="rounded-full bg-zinc-800 px-3 py-1 text-sm text-zinc-400">Created</span>
-      <span x-show="status === 'in_progress'" class="rounded-full bg-blue-900/50 px-3 py-1 text-sm text-blue-400">In Progress</span>
-      <span x-show="status === 'success'" class="rounded-full bg-emerald-900/50 px-3 py-1 text-sm text-emerald-400">Success</span>
-      <span x-show="status === 'failed'" class="rounded-full bg-red-900/50 px-3 py-1 text-sm text-red-400">Failed</span>
+  {# Section: Header — title + live status badge, status-dependent actions #}
+  <div class="page-header">
+    <div>
+      <h1>
+        {{ pivot.test_case.title }}
+        <span
+          class="badge"
+          style="vertical-align: middle; margin-left: 6px;"
+          data-status="{{ pivot.status }}"
+          :class="badgeClass(status)"
+          x-text="badgeLabel(status)"
+        >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "cancelled" %}Cancelled{% endif %}</span>
+      </h1>
+      <p class="subtitle">
+        Case {{ case_position }} of {{ case_total }} in {{ test_run.display_name }}
+        {% if pivot.started_at %} · started <time datetime="{{ pivot.started_at|date:'c' }}">{{ pivot.started_at|date:"M j, H:i" }}</time>{% endif %}
+        {% if pivot.finished_at and pivot.started_at %} · {{ pivot.started_at|timesince:pivot.finished_at }}{% endif %}
+      </p>
     </div>
-    <div class="flex items-center gap-3">
+    <div class="actions">
       {% if can_edit %}
-      <button
-        x-show="testRunStatus !== 'started'"
-        @click="showEditModal = true"
-        class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
-      >
-        Edit Test Case
-      </button>
+      <button type="button" class="btn btn-secondary" x-show="testRunStatus !== 'started'" x-cloak @click="$dispatch('open-edit-case')">Edit test case</button>
       {% endif %}
-      <a
-        href="{% url 'projects:test_run_detail' project_id=project.id test_run_id=test_run.id %}"
-        class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
-      >
-        Back to Test Run
-      </a>
+      {% if test_run.status == "waiting" %}
+      <button type="button" class="btn btn-danger" @click="$dispatch('open-remove-case')">Remove from run</button>
+      {% endif %}
+      <a class="btn btn-ghost" href="{% url 'projects:test_run_detail' project.id test_run.id %}">&larr; Back to run</a>
     </div>
   </div>
 
-  {# TEST CASE INFO SECTION #}
-  <div class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
-    <h2 class="mb-4 text-lg font-semibold text-zinc-100">Test Case Information</h2>
-    <div class="space-y-4">
-      <div>
-        <p class="text-sm font-medium text-zinc-400">Title</p>
-        <p class="mt-1 text-sm text-zinc-200">{{ pivot.test_case.title }}</p>
-      </div>
-      <div class="grid grid-cols-2 gap-4">
+  {% include "partials/project_tabs.html" with project=project active_tab=active_tab only %}
+
+  {# Section: Result summary (reads first; written by the agent in plain language) #}
+  <section
+    aria-labelledby="result-h"
+    class="card"
+    :class="status === 'failed' ? 'card-tone-danger' : (status === 'success' ? 'card-tone-success' : '')"
+  >
+    <div class="card-header">
+      <h2 id="result-h">Result</h2>
+      <span class="badge" data-status="{{ pivot.status }}" :class="badgeClass(status)" x-text="badgeLabel(status)">{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "cancelled" %}Cancelled{% endif %}</span>
+    </div>
+    <template x-if="status === 'created' && testRunStatus === 'waiting'">
+      <div class="alert alert-info">
+        <span class="alert-icon" aria-hidden="true">ℹ</span>
         <div>
-          <p class="text-sm font-medium text-zinc-400">Type</p>
-          <p class="mt-1 text-sm text-zinc-200">{{ pivot.test_case.type }}</p>
-        </div>
-        <div>
-          <p class="text-sm font-medium text-zinc-400">Priority</p>
-          <p class="mt-1 text-sm text-zinc-200">{{ pivot.test_case.priority }}</p>
+          <p>No result, log, or screenshots yet. Edits made here change the test case for this project, not just this run. <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Start the run</a> when the readiness checks pass.</p>
         </div>
       </div>
+    </template>
+    <template x-if="!(status === 'created' && testRunStatus === 'waiting')">
+      <p class="pre-wrap" x-text="result || 'No result yet.'"></p>
+    </template>
+  </section>
+
+  {# Section: What the agent was asked to do #}
+  <section aria-labelledby="case-h" class="card">
+    <div class="card-header">
+      <h2 id="case-h">Test case</h2>
+      <a class="btn btn-sm btn-ghost" href="{% url 'projects:test_case_list' project.id %}?search={{ pivot.test_case.testrail_id|default:pivot.test_case.title|urlencode }}">Open in Test Cases</a>
+    </div>
+    {% if not pivot.test_case.preconditions and not pivot.test_case.steps and not pivot.test_case.expected %}
+    <p class="hint">This test case has no preconditions, steps, or expected result recorded — open it in Test Cases to add them.</p>
+    {% endif %}
+    <dl class="kv kv-stack">
       {% if pivot.test_case.preconditions %}
       <div>
-        <p class="text-sm font-medium text-zinc-400">Preconditions</p>
-        <p class="mt-1 whitespace-pre-wrap break-words text-sm text-zinc-200">{{ pivot.test_case.preconditions }}</p>
+        <dt>Preconditions</dt>
+        <dd class="pre-wrap">{{ pivot.test_case.preconditions }}</dd>
       </div>
       {% endif %}
       {% if pivot.test_case.steps %}
       <div>
-        <p class="text-sm font-medium text-zinc-400">Steps</p>
-        <p class="mt-1 whitespace-pre-wrap break-words text-sm text-zinc-200">{{ pivot.test_case.steps }}</p>
+        <dt>Steps</dt>
+        <dd class="pre-wrap">{{ pivot.test_case.steps }}</dd>
       </div>
       {% endif %}
       {% if pivot.test_case.expected %}
       <div>
-        <p class="text-sm font-medium text-zinc-400">Expected Result</p>
-        <p class="mt-1 whitespace-pre-wrap break-words text-sm text-zinc-200">{{ pivot.test_case.expected }}</p>
+        <dt>Expected result</dt>
+        <dd class="pre-wrap">{{ pivot.test_case.expected }}</dd>
       </div>
       {% endif %}
+    </dl>
+  </section>
+
+  {# Section: Screenshots — every screenshot the agent captured, in order #}
+  <section aria-labelledby="shots-h" class="card">
+    <div class="card-header">
+      <h2 id="shots-h">Screenshots <span class="muted small" style="font-weight: 500;">(<span x-text="screenshots.length"></span>)</span></h2>
     </div>
-  </div>
-
-  {# RESULT SECTION #}
-  <div x-show="result" x-cloak class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
-    <h2 class="mb-4 text-lg font-semibold text-zinc-100">Result</h2>
-    <p class="whitespace-pre-wrap break-words text-sm text-zinc-200" x-text="result"></p>
-  </div>
-
-  {# LOGS SECTION #}
-  <div x-show="logs" x-cloak class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
-    <h2 class="mb-4 text-lg font-semibold text-zinc-100">Logs</h2>
-    <pre x-ref="logsContainer" class="max-h-96 overflow-auto rounded-lg bg-zinc-950 p-4 text-sm text-zinc-300" x-text="logs"></pre>
-  </div>
-
-  {# SCREENSHOTS SECTION #}
-  <div x-show="screenshots.length > 0" x-cloak class="mb-6 rounded-lg border border-zinc-800 bg-zinc-900 p-6">
-    <h2 class="mb-4 text-lg font-semibold text-zinc-100">Screenshots (<span x-text="screenshots.length">{{ screenshots|length }}</span>)</h2>
-    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <p class="hint" x-show="screenshots.length > 0">Captured in order while the agent worked through the steps. Click one to view it full size.</p>
+    <p class="hint" x-show="screenshots.length === 0">Screenshots appear here as they are taken.</p>
+    <div class="gallery" x-show="screenshots.length > 0">
       <template x-for="(screenshot, index) in screenshots" :key="screenshot.screenshot_id">
-        <div class="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
-          <button
-            @click="lightboxIndex = index; showLightbox = true"
-            class="block w-full overflow-hidden rounded-md"
-          >
-            <img
-              :src="screenshot.image_url"
-              alt="Screenshot"
-              class="h-48 w-full object-cover transition-transform hover:scale-105"
-            >
-          </button>
-          <div class="mt-2 flex items-center justify-between">
-            <p class="text-xs text-zinc-400" x-text="screenshot.tool_name"></p>
-            <p class="text-xs text-zinc-500" x-text="screenshot.created_at"></p>
-          </div>
-        </div>
+        <button type="button" class="shot" @click="openLightbox(index)">
+          <img class="shot-img" :src="screenshot.image_url" alt="" loading="lazy">
+          <span class="shot-caption" x-text="screenshot.tool_name + ' · ' + screenshot.created_at"></span>
+        </button>
       </template>
     </div>
-  </div>
+  </section>
 
-  {# LIGHTBOX MODAL #}
+  {# Section: Execution log — streams live while the case is running #}
+  <section aria-labelledby="log-h" class="card">
+    <div class="card-header">
+      <h2 id="log-h">
+        <span class="live-dot" aria-hidden="true" x-show="status === 'in_progress'"></span>
+        <span x-text="status === 'in_progress' ? 'Live execution log' : 'Execution log'"></span>
+      </h2>
+      <div class="actions" x-data="clipboard()">
+        <button type="button" class="btn btn-sm btn-ghost" @click="copy(logs)">
+          <span x-show="!copied">Copy log</span>
+          <span x-show="copied" x-cloak>Copied!</span>
+        </button>
+      </div>
+    </div>
+    <p class="hint">The agent's step-by-step record for this case only. Warnings and errors are highlighted.</p>
+    <p class="hint" x-show="!logs" x-cloak>No log yet — the agent's steps stream here once the case starts.</p>
+    <pre class="code-block log-stream" x-ref="logsContainer" x-show="logs" x-html="renderLog(logs)"></pre>
+    <div class="skeleton skeleton-text" style="max-width: 320px;" x-show="status === 'in_progress'"></div>
+  </section>
+
+  {# Section: Screenshot lightbox #}
   <div
+    class="dialog-backdrop"
     x-show="showLightbox"
     x-cloak
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+    x-on:keydown.escape.window="showLightbox = false"
+    x-on:keydown.left.window="navigatePrev()"
+    x-on:keydown.right.window="navigateNext()"
+    x-trap.noscroll="showLightbox"
     @click.self="showLightbox = false"
-    @keydown.escape.window="showLightbox = false"
-    @keydown.left.window="if (showLightbox) navigatePrev()"
-    @keydown.right.window="if (showLightbox) navigateNext()"
   >
-    <button
-      @click="showLightbox = false"
-      class="absolute right-4 top-4 rounded-full bg-zinc-800/80 p-2 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
-    >
-      <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
-    </button>
-
-    <button
-      x-show="lightboxIndex > 0"
-      @click.stop="navigatePrev()"
-      class="absolute left-4 top-1/2 -translate-y-1/2 rounded-full bg-zinc-800/80 p-2 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
-    >
-      <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
-    </button>
-
-    <button
-      x-show="lightboxIndex < screenshots.length - 1"
-      @click.stop="navigateNext()"
-      class="absolute right-4 top-1/2 -translate-y-1/2 rounded-full bg-zinc-800/80 p-2 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
-    >
-      <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
-    </button>
-
-    <div class="flex flex-col items-center" @click.stop>
-      <img
-        :src="screenshots[lightboxIndex]?.image_url"
-        alt="Screenshot"
-        class="max-h-[85vh] max-w-[85vw] rounded-lg object-contain"
-      >
-      <div class="mt-3 flex items-center gap-3 text-sm text-zinc-400">
-        <span x-text="screenshots[lightboxIndex]?.tool_name"></span>
-        <span>&middot;</span>
-        <span x-text="(lightboxIndex + 1) + ' / ' + screenshots.length"></span>
+    <div class="dialog dialog-lg" role="dialog" aria-labelledby="lightbox-h" aria-modal="true">
+      <div class="card-header">
+        <h3 id="lightbox-h" x-text="screenshots[lightboxIndex] ? screenshots[lightboxIndex].tool_name + ' · ' + screenshots[lightboxIndex].created_at : ''"></h3>
+        <button class="icon-btn" type="button" aria-label="Close" @click="showLightbox = false">✕</button>
+      </div>
+      <img :src="screenshots[lightboxIndex] ? screenshots[lightboxIndex].image_url : ''" alt="" style="max-height: 70vh; width: 100%; object-fit: contain;">
+      <div class="dialog-actions" style="justify-content: space-between;">
+        <button class="btn btn-ghost" type="button" :aria-disabled="(lightboxIndex === 0).toString()" @click="navigatePrev()">&larr; Previous</button>
+        <span class="muted small" x-text="(lightboxIndex + 1) + ' / ' + screenshots.length"></span>
+        <button class="btn btn-ghost" type="button" :aria-disabled="(lightboxIndex >= screenshots.length - 1).toString()" @click="navigateNext()">Next &rarr;</button>
       </div>
     </div>
   </div>
 
-  {# EDIT TEST CASE MODAL #}
+  {# Section: Remove-from-run confirm #}
+  {% if test_run.status == "waiting" %}
+  {% url 'projects:test_run_remove_case' project.id test_run.id pivot.id as remove_case_url %}
+  {% include "partials/confirm_dialog.html" with dialog_id="remove-case" title="Remove this case from the run?" body="The test case itself is not deleted." confirm_label="Remove" action_url=remove_case_url %}
+  {% endif %}
+
+  {# Section: Edit test case dialog #}
   {% if can_edit %}
   <div
-    x-show="showEditModal"
+    class="dialog-backdrop"
+    x-data="dialog()"
+    x-show="open"
     x-cloak
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-    @click.self="showEditModal = false"
+    x-on:open-edit-case.window="show()"
+    x-on:keydown.escape.window="close()"
+    x-trap.noscroll="open"
+    @click.self="close()"
   >
-    <div
-      class="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900 p-6"
-      @click.stop
-    >
-      <h2 class="mb-4 text-lg font-semibold text-zinc-100">Edit Test Case</h2>
-      <form
-        method="post"
-        action="{% url 'projects:test_run_case_edit' project_id=project.id test_run_id=test_run.id test_case_id=pivot.test_case.id %}"
-      >
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="edit-case-title">
+      <div class="card-header">
+        <h3 id="edit-case-title">Edit test case</h3>
+        <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+      </div>
+
+      <form method="post" action="{% url 'projects:test_run_case_edit' project.id test_run.id pivot.test_case.id %}">
         {% csrf_token %}
-        <input
-          type="hidden"
-          name="next"
-          value="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=test_run.id pivot_id=pivot.id %}"
-        >
-        <div class="space-y-4">
+        <input type="hidden" name="next" value="{% url 'projects:test_run_case_detail' project.id test_run.id pivot.id %}">
 
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Title</label>
-            <input
-              type="text"
-              name="title"
-              value="{{ pivot.test_case.title|escape }}"
-              required
-              class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            >
-          </div>
-
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Type</label>
-              <select
-                name="type"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-                {% for value, label in form.fields.type.choices %}
-                <option value="{{ value }}" {% if value == pivot.test_case.type %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-              </select>
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Priority</label>
-              <select
-                name="priority"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-                {% for value, label in form.fields.priority.choices %}
-                <option value="{{ value }}" {% if value == pivot.test_case.priority %}selected{% endif %}>{{ label }}</option>
-                {% endfor %}
-              </select>
-            </div>
-          </div>
-
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">TestRail ID</label>
-              <input
-                type="text"
-                name="testrail_id"
-                value="{{ pivot.test_case.testrail_id|escape }}"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Template</label>
-              <input
-                type="text"
-                name="template"
-                value="{{ pivot.test_case.template|escape }}"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-            </div>
-          </div>
-
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Estimate</label>
-              <input
-                type="text"
-                name="estimate"
-                value="{{ pivot.test_case.estimate|escape }}"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">References</label>
-              <input
-                type="text"
-                name="references"
-                value="{{ pivot.test_case.references|escape }}"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-            </div>
-          </div>
-
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Preconditions</label>
-            <textarea
-              name="preconditions"
-              rows="3"
-              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            >{{ pivot.test_case.preconditions }}</textarea>
-          </div>
-
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Steps</label>
-            <textarea
-              name="steps"
-              rows="3"
-              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            >{{ pivot.test_case.steps }}</textarea>
-          </div>
-
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Expected Result</label>
-            <textarea
-              name="expected"
-              rows="3"
-              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            >{{ pivot.test_case.expected }}</textarea>
-          </div>
-
+        <div class="field">
+          <label class="label" for="edit-case-title-input">Title</label>
+          <input class="input" id="edit-case-title-input" type="text" name="title" value="{{ pivot.test_case.title|escape }}" required>
         </div>
 
-        <div class="mt-6 flex justify-end gap-3">
-          <button
-            type="button"
-            @click="showEditModal = false"
-            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-          >
-            Save
-          </button>
+        <div class="field-row">
+          <div class="field">
+            <label class="label" for="edit-case-type">Type</label>
+            <select class="select" id="edit-case-type" name="type">
+              {% for value, label in form.fields.type.choices %}
+              <option value="{{ value }}" {% if value == pivot.test_case.type %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label class="label" for="edit-case-priority">Priority</label>
+            <select class="select" id="edit-case-priority" name="priority">
+              {% for value, label in form.fields.priority.choices %}
+              <option value="{{ value }}" {% if value == pivot.test_case.priority %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label class="label" for="edit-case-testrail-id">TestRail ID</label>
+            <input class="input" id="edit-case-testrail-id" type="text" name="testrail_id" value="{{ pivot.test_case.testrail_id|escape }}">
+          </div>
+          <div class="field">
+            <label class="label" for="edit-case-template">Template</label>
+            <input class="input" id="edit-case-template" type="text" name="template" value="{{ pivot.test_case.template|escape }}">
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label class="label" for="edit-case-estimate">Estimate</label>
+            <input class="input" id="edit-case-estimate" type="text" name="estimate" value="{{ pivot.test_case.estimate|escape }}">
+          </div>
+          <div class="field">
+            <label class="label" for="edit-case-references">References</label>
+            <input class="input" id="edit-case-references" type="text" name="references" value="{{ pivot.test_case.references|escape }}">
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="label" for="edit-case-preconditions">Preconditions</label>
+          <textarea class="textarea" id="edit-case-preconditions" name="preconditions" rows="3">{{ pivot.test_case.preconditions }}</textarea>
+        </div>
+
+        <div class="field">
+          <label class="label" for="edit-case-steps">Steps</label>
+          <textarea class="textarea" id="edit-case-steps" name="steps" rows="3">{{ pivot.test_case.steps }}</textarea>
+        </div>
+
+        <div class="field">
+          <label class="label" for="edit-case-expected">Expected result</label>
+          <textarea class="textarea" id="edit-case-expected" name="expected" rows="3">{{ pivot.test_case.expected }}</textarea>
+        </div>
+
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
         </div>
       </form>
     </div>
@@ -329,34 +290,81 @@ document.addEventListener('alpine:init', () => {
   Alpine.data('testRunCaseLive', () => ({
     status: '{{ pivot.status }}',
     testRunStatus: '{{ test_run.status }}',
-    showEditModal: false,
-    showLightbox: false,
-    lightboxIndex: 0,
-
-    navigatePrev() {
-      if (this.lightboxIndex > 0) this.lightboxIndex--;
-    },
-    navigateNext() {
-      if (this.lightboxIndex < this.screenshots.length - 1) this.lightboxIndex++;
-    },
     result: JSON.parse(document.getElementById('initial-result').textContent),
     logs: JSON.parse(document.getElementById('initial-logs').textContent),
     screenshots: [
       {% for screenshot in screenshots %}
       {
         screenshot_id: {{ screenshot.id }},
-        image_url: '{{ screenshot.image.url }}',
+        image_url: '{{ screenshot.image.url|escapejs }}',
         tool_name: '{{ screenshot.tool_name|escapejs }}',
         created_at: '{{ screenshot.created_at|date:"M d, H:i" }}'
       }{% if not forloop.last %},{% endif %}
       {% endfor %}
     ],
+    showLightbox: false,
+    lightboxIndex: 0,
+
+    badgeClass(status) {
+      return {
+        created: 'badge-draft',
+        in_progress: 'badge-running',
+        success: 'badge-passed',
+        failed: 'badge-failed',
+        cancelled: 'badge-cancelled',
+      }[status] || 'badge-draft';
+    },
+
+    badgeLabel(status) {
+      return {
+        created: 'Not started',
+        in_progress: 'Running',
+        success: 'Passed',
+        failed: 'Failed',
+        cancelled: 'Cancelled',
+      }[status] || status;
+    },
+
+    openLightbox(index) {
+      this.lightboxIndex = index;
+      this.showLightbox = true;
+    },
+
+    navigatePrev() {
+      if (this.showLightbox && this.lightboxIndex > 0) this.lightboxIndex--;
+    },
+
+    navigateNext() {
+      if (this.showLightbox && this.lightboxIndex < this.screenshots.length - 1) this.lightboxIndex++;
+    },
+
+    // Escapes the raw log text, then tints WARN/ERROR lines and leading
+    // [HH:MM:SS] timestamps — mirrors the static markup in
+    // ui-prototype/run-case-detail.html's <pre class="log-stream">.
+    renderLog(text) {
+      const escaped = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      return escaped
+        .split('\n')
+        .map((line) => {
+          let tinted = line.replace(
+            /^(\[\d{2}:\d{2}:\d{2}\])/,
+            '<span class="log-time">$1</span>'
+          );
+          if (/\bERROR\b/.test(tinted)) {
+            tinted = '<span class="log-error">' + tinted + '</span>';
+          } else if (/\bWARN\b/.test(tinted)) {
+            tinted = '<span class="log-warn">' + tinted + '</span>';
+          }
+          return tinted;
+        })
+        .join('\n');
+    },
 
     init() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(
-        protocol + '//' + window.location.host + '/ws/projects/{{ project.id }}/test-runs/cases/{{ pivot.id }}/'
-      );
+      const ws = new WebSocket(punkHazard.wsUrl('/ws/projects/{{ project.id }}/test-runs/cases/{{ pivot.id }}/'));
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
@@ -384,7 +392,7 @@ document.addEventListener('alpine:init', () => {
             screenshot_id: data.screenshot_id,
             image_url: data.image_url,
             tool_name: data.tool_name,
-            created_at: data.created_at
+            created_at: data.created_at,
           });
           return;
         }
@@ -395,7 +403,7 @@ document.addEventListener('alpine:init', () => {
           return;
         }
       };
-    }
+    },
   }));
 });
 </script>

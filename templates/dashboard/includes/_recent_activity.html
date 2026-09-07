@@ -1,0 +1,24 @@
+{% comment %} Section: Recent activity feed.
+
+   Context contract:
+     activity — list of dashboard.services.ActivityItem (kind, project,
+                title, occurred_at, url, failed); kind is one of
+                "run_started", "run_finished", "import_completed". `failed`
+                is only meaningful for "run_finished" — a finished run with
+                at least one failed case. {% endcomment %}
+<section aria-labelledby="activity-h" class="card">
+  <div class="card-header">
+    <h2 id="activity-h">Recent activity</h2>
+  </div>
+  <ul class="activity">
+    {% for item in activity %}
+      <li>
+        <span class="activity-icon{% if item.kind == "run_finished" and item.failed %} is-danger{% endif %}" aria-hidden="true">
+          {% if item.kind == "run_started" %}▶{% elif item.kind == "run_finished" %}{% if item.failed %}✕{% else %}✓{% endif %}{% elif item.kind == "import_completed" %}⇪{% else %}•{% endif %}
+        </span>
+        <div><a href="{{ item.url }}">{{ item.title }}</a></div>
+        <time datetime="{{ item.occurred_at|date:"c" }}">{{ item.occurred_at|timesince }} ago</time>
+      </li>
+    {% endfor %}
+  </ul>
+</section>

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% comment %} App shell: sidebar (desktop) / topbar (mobile) + main content area.
+   Replaces the old dashboard/base_dashboard.html.
+
+   Context contract:
+     active_nav — "dashboard" | "projects", forwarded to the nav partials
+
+   Blocks for pages extending this layout directly (e.g. dashboard/index.html,
+   projects/list.html):
+     breadcrumbs — optional breadcrumb nav (layouts/project.html fills this
+                   in already; pages with no project context render their
+                   own via partials/breadcrumbs.html, or leave it empty)
+     page        — the page's own content {% endcomment %}
+{% block body %}
+<div class="app" x-data>
+  {% include "partials/sidebar.html" %}
+
+  <div>
+    {% include "partials/topbar.html" %}
+
+    <main class="main" id="main">
+      {% include "partials/messages.html" %}
+      {% block breadcrumbs %}{% endblock %}
+      {% block page %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% endblock %}

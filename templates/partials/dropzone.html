@@ -1,0 +1,37 @@
+{% comment %} TestRail XML dropzone. Must be included inside the page's upload <form>
+   (e.g. projects/import.html) — dropping or choosing a file submits that
+   form immediately; there is no separate "Upload" button.
+
+   No context variables required. {% endcomment %}
+<div
+  class="dropzone"
+  x-data="{
+    dragging: false,
+    fileName: '',
+    submitFile(files) {
+      if (!files.length) return;
+      this.$refs.testrailFile.files = files;
+      this.fileName = files[0].name;
+      this.$el.closest('form').requestSubmit();
+    },
+  }"
+  :class="dragging ? 'is-active' : ''"
+  @dragover.prevent="dragging = true"
+  @dragleave.prevent="dragging = false"
+  @drop.prevent="dragging = false; submitFile($event.dataTransfer.files)"
+>
+  <label class="visually-hidden" for="testrail-file">TestRail export file</label>
+  <input
+    class="visually-hidden"
+    type="file"
+    id="testrail-file"
+    name="file"
+    accept=".xml"
+    x-ref="testrailFile"
+    @change="submitFile($event.target.files)"
+  >
+  <p><strong>Drag and drop your TestRail export here</strong></p>
+  <p class="muted small">or</p>
+  <label class="btn btn-secondary" for="testrail-file">Choose file</label>
+  <p class="hint" x-show="fileName" x-cloak x-text="'Selected: ' + fileName"></p>
+</div>

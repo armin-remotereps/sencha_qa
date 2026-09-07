@@ -1,0 +1,15 @@
+{% comment %} Breadcrumb trail.
+
+   Context contract:
+     crumbs — list of dicts, each {"label": str, "url": str|None}.
+              The last item is normally url=None (it is the current page). {% endcomment %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  {% for crumb in crumbs %}
+    {% if not forloop.first %}<span class="sep" aria-hidden="true">›</span>{% endif %}
+    {% if crumb.url and not forloop.last %}
+      <a href="{{ crumb.url }}">{{ crumb.label }}</a>
+    {% else %}
+      <span aria-current="page">{{ crumb.label }}</span>
+    {% endif %}
+  {% endfor %}
+</nav>

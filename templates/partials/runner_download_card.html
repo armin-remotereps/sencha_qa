@@ -1,0 +1,31 @@
+{% comment %} "Set up on another machine" download card.
+
+   Context contract:
+     project — the current Project {% endcomment %}
+<div class="card">
+  <div class="card-header">
+    <h2>Download the Test Runner</h2>
+  </div>
+  <p class="muted">
+    The Test Runner is one small Python application that runs on Windows, macOS, and
+    Linux &mdash; there is nothing to choose. Download it once, then follow the setup
+    steps for the test machine's operating system below.
+  </p>
+  <form method="post" action="{% url 'projects:download_controller_client' project.id %}">
+    {% csrf_token %}
+    <div class="actions">
+      <button class="btn btn-primary" type="submit">&#11015; Download Test Runner</button>
+    </div>
+  </form>
+  <p class="hint">
+    ZIP archive, pre-configured for {{ project.name }}. The connection settings are
+    already inside &mdash; there is no key to copy.
+  </p>
+  <div class="alert alert-warning alert-flush">
+    <span class="alert-icon" aria-hidden="true">&#9888;</span>
+    <div>
+      <strong>Requires Python 3.13 or newer on the test machine.</strong>
+      <p>The setup script checks the version for you and tells you what to install if it is too old.</p>
+    </div>
+  </div>
+</div>

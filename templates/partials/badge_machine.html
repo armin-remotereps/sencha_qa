@@ -1,0 +1,13 @@
+{% comment %} Status badge for a project's test machine / visual engine connection.
+
+   Context contract:
+     machine_state — "disconnected" | "starting" | "ready" | "failed" {% endcomment %}
+{% if machine_state == "disconnected" %}
+  <span class="badge badge-disconnected">Not connected</span>
+{% elif machine_state == "starting" %}
+  <span class="badge badge-starting">Visual engine starting</span>
+{% elif machine_state == "ready" %}
+  <span class="badge badge-connected">Connected</span>
+{% elif machine_state == "failed" %}
+  <span class="badge badge-failed">Visual engine failed</span>
+{% endif %}

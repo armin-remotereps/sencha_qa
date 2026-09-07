@@ -1,0 +1,42 @@
+{% comment %} Onboarding wizard progress (5 steps).
+
+   Context contract:
+     project     — the current Project
+     wizard_step — current step number, 1..5
+
+   Steps before wizard_step are "done" and link back to their step (e.g. to
+   revisit "Restart setup wizard"); the current step gets aria-current="step";
+   steps after it are plain upcoming labels, not links. {% endcomment %}
+<ol class="steps">
+  <li class="step{% if wizard_step > 1 %} is-done{% elif wizard_step == 1 %} is-current{% endif %}"{% if wizard_step == 1 %} aria-current="step"{% endif %}>
+    {% if wizard_step > 1 %}
+      <a href="{% url 'projects:setup_details' project.id %}"><span class="step-label">Project details</span></a>
+    {% else %}
+      <span class="step-label">Project details</span>
+    {% endif %}
+  </li>
+  <li class="step{% if wizard_step > 2 %} is-done{% elif wizard_step == 2 %} is-current{% endif %}"{% if wizard_step == 2 %} aria-current="step"{% endif %}>
+    {% if wizard_step > 2 %}
+      <a href="{% url 'projects:setup_context' project.id %}"><span class="step-label">Application context</span></a>
+    {% else %}
+      <span class="step-label">Application context</span>
+    {% endif %}
+  </li>
+  <li class="step{% if wizard_step > 3 %} is-done{% elif wizard_step == 3 %} is-current{% endif %}"{% if wizard_step == 3 %} aria-current="step"{% endif %}>
+    {% if wizard_step > 3 %}
+      <a href="{% url 'projects:setup_cases' project.id %}"><span class="step-label">Test cases</span></a>
+    {% else %}
+      <span class="step-label">Test cases</span>
+    {% endif %}
+  </li>
+  <li class="step{% if wizard_step > 4 %} is-done{% elif wizard_step == 4 %} is-current{% endif %}"{% if wizard_step == 4 %} aria-current="step"{% endif %}>
+    {% if wizard_step > 4 %}
+      <a href="{% url 'projects:setup_machine' project.id %}"><span class="step-label">Test machine</span></a>
+    {% else %}
+      <span class="step-label">Test machine</span>
+    {% endif %}
+  </li>
+  <li class="step{% if wizard_step == 5 %} is-current{% endif %}"{% if wizard_step == 5 %} aria-current="step"{% endif %}>
+    <span class="step-label">First run</span>
+  </li>
+</ol>

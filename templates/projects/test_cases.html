@@ -1,580 +1,93 @@
-{% extends "dashboard/base_dashboard.html" %}
+{% extends "layouts/project.html" %}
 
-{% block dashboard_content %}
+{% comment %} Test Cases page: search/filter toolbar, bulk-selectable table, create/edit
+   dialogs, and the bulk "add to run" / "copy to project" / "delete" dialogs.
+
+   Context contract (projects.views.test_case_list):
+     project            — current Project
+     test_cases         — Page[TestCase], each row annotated
+                           last_run_pivot_id / last_run_status /
+                           last_run_test_run_id / last_run_at
+     form               — TestCaseForm (create dialog)
+     search             — current "q" filter value ("" if none)
+     uploads            — completed TestCaseUpload queryset, for the Import filter
+     current_upload     — currently selected upload id, or ""
+     current_status     — currently selected status_filter value, or ""
+     status_choices      — STATUS_FILTER_CHOICES (value, label) pairs
+     waiting_test_runs   — draft TestRuns this project can add cases to
+     other_projects      — other projects this user belongs to (Copy to project)
+     per_page / allowed_per_page / elided_page_range / query_params — pagination {% endcomment %}
+{% block title %}Test Cases · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>Test Cases</h1>
+    <p class="subtitle">{{ test_cases.paginator.count }} test case{{ test_cases.paginator.count|pluralize }}</p>
+  </div>
+  <div class="actions">
+    <button type="button" class="btn btn-secondary" @click="$dispatch('open-create-case')">Create test case</button>
+    <a class="btn btn-primary" href="{% url 'projects:test_case_import' project.id %}">Import from TestRail</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block project_content %}
+{% url 'projects:test_case_import' project.id as import_case_url %}
 <div
-  x-data="{
-    showCreateModal: false,
-    showEditModal: false,
-    showCopyToProjectModal: false,
-    editId: 0,
-    editTitle: '',
-    editTestrailId: '',
-    editTemplate: '',
-    editType: '',
-    editPriority: '',
-    editEstimate: '',
-    editReferences: '',
-    editPreconditions: '',
-    editSteps: '',
-    editExpected: '',
-    selectedIds: [],
-    showAddToRunModal: false,
-    selectAll: false,
-    openEditModal(el) {
-      this.editId = el.dataset.id;
-      this.editTitle = el.dataset.title;
-      this.editTestrailId = el.dataset.testrailId;
-      this.editTemplate = el.dataset.template;
-      this.editType = el.dataset.type;
-      this.editPriority = el.dataset.priority;
-      this.editEstimate = el.dataset.estimate;
-      this.editReferences = el.dataset.references;
-      this.editPreconditions = el.dataset.preconditions;
-      this.editSteps = el.dataset.steps;
-      this.editExpected = el.dataset.expected;
-      this.showEditModal = true;
-    },
-    toggleSelect(id) {
-      const idx = this.selectedIds.indexOf(id);
-      if (idx > -1) this.selectedIds.splice(idx, 1);
-      else this.selectedIds.push(id);
-    },
-    toggleSelectAll(ids) {
-      if (this.selectAll) this.selectedIds = [...ids];
-      else this.selectedIds = [];
-    }
-  }"
+  x-data="bulkSelect([{% for tc in test_cases %}{{ tc.id }}{% if not forloop.last %},{% endif %}{% endfor %}])"
 >
 
-  {# BREADCRUMB #}
-  <nav class="mb-4 text-sm text-zinc-400">
-    <a href="{% url 'projects:list' %}" class="hover:text-zinc-200">Projects</a>
-    <span class="mx-1">/</span>
-    <span class="text-zinc-200">{{ project.name }}</span>
-    <span class="mx-1">/</span>
-    <span class="text-zinc-200">Test Cases</span>
-  </nav>
-
-  {# HEADER: Title + action buttons #}
-  <div class="mb-6 flex items-center justify-between">
-    <h1 class="text-2xl font-bold text-zinc-100">Test Cases</h1>
-    <div class="flex gap-3">
-      <a
-        href="{% url 'projects:test_run_list' project_id=project.id %}"
-        class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
-      >
-        Test Runs
-      </a>
-      <a
-        href="{% url 'projects:upload_list' project_id=project.id %}"
-        class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
-      >
-        Upload XML
-      </a>
-      <button
-        @click="showCreateModal = true"
-        class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-      >
-        New Test Case
-      </button>
+  {# Section: Search + filters #}
+  <form class="toolbar" action="{% url 'projects:test_case_list' project.id %}" method="get" role="search">
+    <div class="search">
+      <label class="visually-hidden" for="case-search">Search test cases</label>
+      <input class="input" type="search" id="case-search" name="q" value="{{ search }}" placeholder="Search test cases…">
     </div>
-  </div>
-
-  {# SEARCH + UPLOAD FILTER #}
-  <form method="get" action="{% url 'projects:test_case_list' project_id=project.id %}" class="mb-6 flex gap-3">
-    <input
-      type="text"
-      name="search"
-      value="{{ search }}"
-      placeholder="Search test cases..."
-      class="flex h-10 w-full max-w-xs rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-    >
-    <select
-      name="upload"
-      class="h-10 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-      onchange="this.form.submit()"
-    >
-      <option value="">All Uploads</option>
-      {% for upload in uploads %}
-      <option
-        value="{{ upload.id }}"
-        {% if current_upload|stringformat:"s" == upload.id|stringformat:"s" %}selected{% endif %}
-      >
-        {{ upload.original_filename }}
-      </option>
-      {% endfor %}
-    </select>
-    <select
-      name="status"
-      class="h-10 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-      onchange="this.form.submit()"
-    >
-      {% for value, label in status_choices %}
-      <option
-        value="{{ value }}"
-        {% if current_status == value %}selected{% endif %}
-      >
-        {{ label }}
-      </option>
-      {% endfor %}
-    </select>
-    <button
-      type="submit"
-      class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
-    >
-      Search
-    </button>
+    <div>
+      <label class="visually-hidden" for="upload-filter">Filter by import</label>
+      <select class="select" id="upload-filter" name="upload" onchange="this.form.requestSubmit()">
+        <option value="">Import: All</option>
+        {% for upload in uploads %}
+          <option value="{{ upload.id }}" {% if current_upload == upload.id %}selected{% endif %}>{{ upload.original_filename }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="visually-hidden" for="status-filter">Filter by last result</label>
+      <select class="select" id="status-filter" name="status" onchange="this.form.requestSubmit()">
+        {% for value, label in status_choices %}
+          <option value="{{ value }}" {% if current_status == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="btn btn-secondary">Search</button>
   </form>
 
-  {# TEST CASES TABLE #}
+  {# Section: Bulk selection state #}
+  <div class="bulk-bar" x-show="count > 0" x-cloak>
+    <span x-text="count + ' selected'"></span>
+    <button type="button" class="btn btn-sm btn-secondary" @click="$dispatch('open-add-to-run')">Add to run</button>
+    {% if other_projects %}
+      <button type="button" class="btn btn-sm btn-secondary" @click="$dispatch('open-copy-to-project')">Copy to project</button>
+    {% endif %}
+    <button type="button" class="btn btn-sm btn-danger" @click="$dispatch('open-bulk-delete-cases')">Delete</button>
+    <button type="button" class="btn btn-sm btn-ghost" @click="clear()">Clear</button>
+  </div>
+
   {% if test_cases %}
-  <div class="overflow-x-auto rounded-lg border border-zinc-800">
-    <table class="w-full text-left text-sm">
-      <thead class="border-b border-zinc-800 bg-zinc-900 text-xs uppercase text-zinc-400">
-        <tr>
-          <th class="px-4 py-3">
-            <input
-              type="checkbox"
-              x-model="selectAll"
-              @change="toggleSelectAll([{% for tc in test_cases %}{{ tc.id }}{% if not forloop.last %},{% endif %}{% endfor %}])"
-              class="h-4 w-4 rounded border-zinc-700 bg-zinc-900 text-emerald-600 focus:ring-2 focus:ring-emerald-500"
-            >
-          </th>
-          <th class="px-4 py-3">TestRail ID</th>
-          <th class="px-4 py-3">Title</th>
-          <th class="px-4 py-3">Type</th>
-          <th class="px-4 py-3">Priority</th>
-          <th class="px-4 py-3">Converted</th>
-          <th class="px-4 py-3">Last Run</th>
-          <th class="px-4 py-3">Actions</th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-zinc-800">
-        {% for tc in test_cases %}
-        <tr class="bg-zinc-950 hover:bg-zinc-900">
-          <td class="px-4 py-3">
-            <input
-              type="checkbox"
-              @change="toggleSelect({{ tc.id }})"
-              :checked="selectedIds.includes({{ tc.id }})"
-              class="h-4 w-4 rounded border-zinc-700 bg-zinc-900 text-emerald-600 focus:ring-2 focus:ring-emerald-500"
-            >
-          </td>
-          <td class="px-4 py-3 font-mono text-sm text-zinc-400">{% if tc.testrail_id %}{{ tc.testrail_id }}{% else %}--{% endif %}</td>
-          <td class="px-4 py-3 font-medium text-zinc-100">{{ tc.title }}</td>
-          <td class="px-4 py-3 text-zinc-400">{{ tc.type }}</td>
-          <td class="px-4 py-3 text-zinc-400">{{ tc.priority }}</td>
-          <td class="px-4 py-3">
-            {% if tc.is_converted %}
-            <span class="rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-400">Yes</span>
-            {% else %}
-            <span class="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">No</span>
-            {% endif %}
-          </td>
-          <td class="px-4 py-3">
-            {% if tc.last_run_status == "success" %}
-            <a href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=tc.last_run_test_run_id pivot_id=tc.last_run_pivot_id %}" class="rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs text-emerald-400 hover:bg-emerald-900">Success</a>
-            {% elif tc.last_run_status == "failed" %}
-            <a href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=tc.last_run_test_run_id pivot_id=tc.last_run_pivot_id %}" class="rounded-full bg-red-900/50 px-2 py-0.5 text-xs text-red-400 hover:bg-red-900">Failed</a>
-            {% elif tc.last_run_status == "in_progress" %}
-            <a href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=tc.last_run_test_run_id pivot_id=tc.last_run_pivot_id %}" class="rounded-full bg-blue-900/50 px-2 py-0.5 text-xs text-blue-400 hover:bg-blue-900">In Progress</a>
-            {% elif tc.last_run_status == "created" %}
-            <a href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=tc.last_run_test_run_id pivot_id=tc.last_run_pivot_id %}" class="rounded-full bg-zinc-700 px-2 py-0.5 text-xs text-zinc-300 hover:bg-zinc-600">Created</a>
-            {% elif tc.last_run_status == "cancelled" %}
-            <a href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=tc.last_run_test_run_id pivot_id=tc.last_run_pivot_id %}" class="rounded-full bg-orange-900/50 px-2 py-0.5 text-xs text-orange-400 hover:bg-orange-900">Cancelled</a>
-            {% else %}
-            <span class="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-500 whitespace-nowrap">Never Run</span>
-            {% endif %}
-          </td>
-          <td class="px-4 py-3">
-            <div class="flex gap-2">
-              <button
-                @click="openEditModal($el)"
-                data-id="{{ tc.id }}"
-                data-title="{{ tc.title|escape }}"
-                data-testrail-id="{{ tc.testrail_id|escape }}"
-                data-template="{{ tc.template|escape }}"
-                data-type="{{ tc.type|escape }}"
-                data-priority="{{ tc.priority|escape }}"
-                data-estimate="{{ tc.estimate|escape }}"
-                data-references="{{ tc.references|escape }}"
-                data-preconditions="{{ tc.preconditions|escape }}"
-                data-steps="{{ tc.steps|escape }}"
-                data-expected="{{ tc.expected|escape }}"
-                class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
-              >
-                Edit
-              </button>
-              <form method="post" action="{% url 'projects:test_case_delete' project_id=project.id test_case_id=tc.id %}">
-                {% csrf_token %}
-                <button
-                  type="submit"
-                  class="rounded-md bg-red-900/50 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-900"
-                >
-                  Delete
-                </button>
-              </form>
-            </div>
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
+    {% include "projects/includes/_test_case_table.html" with project=project test_cases=test_cases only %}
+  {% elif search or current_upload or current_status %}
+    {% include "partials/empty_state.html" with icon="▣" title="No matching test cases" body="Try a different search term or clear the filters above." only %}
   {% else %}
-  <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-8 text-center">
-    <p class="text-zinc-400">No test cases found.</p>
-  </div>
+    {% include "partials/empty_state.html" with icon="▣" title="No test cases yet" body="Import your existing suite from TestRail, or create cases manually to get started." primary_label="Import from TestRail" primary_url=import_case_url secondary_label="Create manually" secondary_url="#" only %}
   {% endif %}
 
-  {# PAGINATION #}
-  {% include "components/pagination.html" with page_obj=test_cases %}
+  {% include "partials/pagination.html" with page_obj=test_cases per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range query_params=query_params %}
 
-  {# CREATE MODAL #}
-  <div
-    x-show="showCreateModal"
-    x-cloak
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-    @click.self="showCreateModal = false"
-  >
-    <div
-      class="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900 p-6"
-      @click.stop
-    >
-      <h2 class="mb-4 text-lg font-semibold text-zinc-100">New Test Case</h2>
-      <form method="post" action="{% url 'projects:test_case_create' project_id=project.id %}">
-        {% csrf_token %}
-        <div class="space-y-4">
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Title</label>
-            {{ form.title }}
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Type</label>
-              {{ form.type }}
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Priority</label>
-              {{ form.priority }}
-            </div>
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">TestRail ID</label>
-              {{ form.testrail_id }}
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Template</label>
-              {{ form.template }}
-            </div>
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Estimate</label>
-              {{ form.estimate }}
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">References</label>
-              {{ form.references }}
-            </div>
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Preconditions</label>
-            {{ form.preconditions }}
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Steps</label>
-            {{ form.steps }}
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Expected Result</label>
-            {{ form.expected }}
-          </div>
-        </div>
-        <div class="mt-6 flex justify-end gap-3">
-          <button
-            type="button"
-            @click="showCreateModal = false"
-            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-          >
-            Create
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  {# EDIT MODAL #}
-  <div
-    x-show="showEditModal"
-    x-cloak
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-    @click.self="showEditModal = false"
-  >
-    <div
-      class="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900 p-6"
-      @click.stop
-    >
-      <h2 class="mb-4 text-lg font-semibold text-zinc-100">Edit Test Case</h2>
-      <form method="post" :action="'{% url 'projects:test_case_edit' project_id=project.id test_case_id=0 %}'.replace('/0/', '/' + editId + '/')">
-        {% csrf_token %}
-        <div class="space-y-4">
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Title</label>
-            <input
-              type="text"
-              name="title"
-              x-model="editTitle"
-              class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            >
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Type</label>
-              <select
-                name="type"
-                x-model="editType"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-                {% for value, label in form.fields.type.choices %}
-                <option value="{{ value }}">{{ label }}</option>
-                {% endfor %}
-              </select>
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Priority</label>
-              <select
-                name="priority"
-                x-model="editPriority"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-                {% for value, label in form.fields.priority.choices %}
-                <option value="{{ value }}">{{ label }}</option>
-                {% endfor %}
-              </select>
-            </div>
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">TestRail ID</label>
-              <input
-                type="text"
-                name="testrail_id"
-                x-model="editTestrailId"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Template</label>
-              <input
-                type="text"
-                name="template"
-                x-model="editTemplate"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-            </div>
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Estimate</label>
-              <input
-                type="text"
-                name="estimate"
-                x-model="editEstimate"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">References</label>
-              <input
-                type="text"
-                name="references"
-                x-model="editReferences"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-            </div>
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Preconditions</label>
-            <textarea
-              name="preconditions"
-              x-model="editPreconditions"
-              rows="3"
-              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            ></textarea>
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Steps</label>
-            <textarea
-              name="steps"
-              x-model="editSteps"
-              rows="3"
-              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            ></textarea>
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Expected Result</label>
-            <textarea
-              name="expected"
-              x-model="editExpected"
-              rows="3"
-              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            ></textarea>
-          </div>
-        </div>
-        <div class="mt-6 flex justify-end gap-3">
-          <button
-            type="button"
-            @click="showEditModal = false"
-            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-          >
-            Save
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  {# FLOATING ACTION BAR #}
-  <div
-    x-show="selectedIds.length > 0"
-    x-cloak
-    class="fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-lg border border-zinc-700 bg-zinc-900 px-4 py-3 shadow-xl"
-  >
-    <span class="text-sm text-zinc-300" x-text="selectedIds.length + ' selected'"></span>
-    <form method="post" action="{% url 'projects:test_run_create' project_id=project.id %}">
-      {% csrf_token %}
-      <template x-for="id in selectedIds" :key="id">
-        <input type="hidden" name="test_case_ids" :value="id">
-      </template>
-      <button
-        type="submit"
-        class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-      >
-        Create Test Run
-      </button>
-    </form>
-    <button
-      @click="showAddToRunModal = true"
-      class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
-    >
-      Add to Existing
-    </button>
-    {% if other_projects %}
-    <button
-      @click="showCopyToProjectModal = true"
-      class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
-    >
-      Copy to Project
-    </button>
-    {% endif %}
-    <button
-      @click="selectedIds = []; selectAll = false"
-      class="rounded-md bg-zinc-800 px-3 py-2 text-sm text-zinc-400 hover:bg-zinc-700"
-    >
-      Clear
-    </button>
-  </div>
-
-  {# ADD TO EXISTING TEST RUN MODAL #}
-  <div
-    x-show="showAddToRunModal"
-    x-cloak
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-    @click.self="showAddToRunModal = false"
-  >
-    <div
-      class="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-6"
-      @click.stop
-    >
-      <h2 class="mb-4 text-lg font-semibold text-zinc-100">Add to Existing Test Run</h2>
-      {% if waiting_test_runs %}
-      <div class="space-y-2">
-        {% for run in waiting_test_runs %}
-        <form method="post" action="{% url 'projects:test_run_add_cases' project_id=project.id test_run_id=run.id %}">
-          {% csrf_token %}
-          <template x-for="id in selectedIds" :key="id">
-            <input type="hidden" name="test_case_ids" :value="id">
-          </template>
-          <button
-            type="submit"
-            class="w-full rounded-md border border-zinc-700 bg-zinc-800 px-4 py-3 text-left text-sm text-zinc-100 hover:bg-zinc-700"
-          >
-            Test Run #{{ run.id }} <span class="text-zinc-400">— {{ run.created_at|date:"M d, Y H:i" }}</span>
-          </button>
-        </form>
-        {% endfor %}
-      </div>
-      {% else %}
-      <p class="text-sm text-zinc-400">No waiting test runs available.</p>
-      {% endif %}
-      <div class="mt-4 flex justify-end">
-        <button
-          @click="showAddToRunModal = false"
-          class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
-  </div>
-
-  {# COPY TO PROJECT MODAL #}
-  <div
-    x-show="showCopyToProjectModal"
-    x-cloak
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-    @click.self="showCopyToProjectModal = false"
-  >
-    <div
-      class="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-6"
-      @click.stop
-    >
-      <h2 class="mb-4 text-lg font-semibold text-zinc-100">Copy to Project</h2>
-      {% if other_projects %}
-      <div class="space-y-2">
-        {% for proj in other_projects %}
-        <form method="post" action="{% url 'projects:test_case_copy_to_project' project_id=project.id %}">
-          {% csrf_token %}
-          <input type="hidden" name="target_project_id" value="{{ proj.id }}">
-          <template x-for="id in selectedIds" :key="id">
-            <input type="hidden" name="test_case_ids" :value="id">
-          </template>
-          <button
-            type="submit"
-            class="w-full rounded-md border border-zinc-700 bg-zinc-800 px-4 py-3 text-left text-sm text-zinc-100 hover:bg-zinc-700"
-          >
-            {{ proj.name }}
-          </button>
-        </form>
-        {% endfor %}
-      </div>
-      {% else %}
-      <p class="text-sm text-zinc-400">No other projects available.</p>
-      {% endif %}
-      <div class="mt-4 flex justify-end">
-        <button
-          @click="showCopyToProjectModal = false"
-          class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
-        >
-          Cancel
-        </button>
-      </div>
-    </div>
-  </div>
-
+  {% include "projects/includes/_test_case_create_dialog.html" with project=project form=form %}
+  {% include "projects/includes/_test_case_edit_dialog.html" with project=project form=form %}
+  {% include "projects/includes/_test_case_bulk_dialogs.html" with project=project waiting_test_runs=waiting_test_runs other_projects=other_projects %}
+  {% include "projects/includes/_test_case_delete_dialog.html" with project=project %}
 </div>
 {% endblock %}

@@ -1,0 +1,104 @@
+{% comment %} "Edit test case" dialog — one dialog shared by every row's ⋯ menu.
+   A row's "Edit" menu item dispatches open-edit-case with its data-*
+   attributes (see _test_case_table.html), which seed the `case` object
+   below; the form action is then rewritten to point at that case's id.
+
+   Context contract:
+     project — current Project
+     form    — TestCaseForm (only used here for its type/priority choices,
+               since the fields themselves are plain inputs bound with
+               x-model rather than server-rendered widgets) {% endcomment %}
+<div
+  class="dialog-backdrop"
+  x-data="{
+    ...dialog(),
+    editing: {
+      id: 0, title: '', testrailId: '', template: '', type: '',
+      priority: '', estimate: '', references: '', preconditions: '',
+      steps: '', expected: '',
+    },
+  }"
+  x-show="open"
+  x-cloak
+  x-on:open-edit-case.window="show(); editing = { ...$event.detail }"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog dialog-lg" role="dialog" aria-modal="true" aria-labelledby="edit-case-title">
+    <div class="card-header">
+      <h3 id="edit-case-title">Edit test case</h3>
+      <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+    </div>
+
+    <form method="post" :action="'{% url 'projects:test_case_edit' project.id 0 %}'.replace('/0/', '/' + editing.id + '/')">
+      {% csrf_token %}
+
+      <div class="field">
+        <label for="edit-case-title-field">Title</label>
+        <input class="input" type="text" id="edit-case-title-field" name="title" x-model="editing.title">
+      </div>
+
+      <div class="grid grid-2">
+        <div class="field">
+          <label for="edit-case-type">Type</label>
+          <select class="select" id="edit-case-type" name="type" x-model="editing.type">
+            {% for value, label in form.fields.type.choices %}
+              <option value="{{ value }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="edit-case-priority">Priority</label>
+          <select class="select" id="edit-case-priority" name="priority" x-model="editing.priority">
+            {% for value, label in form.fields.priority.choices %}
+              <option value="{{ value }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="field">
+          <label for="edit-case-testrail-id">TestRail ID</label>
+          <input class="input" type="text" id="edit-case-testrail-id" name="testrail_id" x-model="editing.testrailId">
+        </div>
+        <div class="field">
+          <label for="edit-case-template">Template</label>
+          <input class="input" type="text" id="edit-case-template" name="template" x-model="editing.template">
+        </div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="field">
+          <label for="edit-case-estimate">Estimate</label>
+          <input class="input" type="text" id="edit-case-estimate" name="estimate" x-model="editing.estimate">
+        </div>
+        <div class="field">
+          <label for="edit-case-references">References</label>
+          <input class="input" type="text" id="edit-case-references" name="references" x-model="editing.references">
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="edit-case-preconditions">Preconditions</label>
+        <textarea class="textarea" id="edit-case-preconditions" name="preconditions" rows="3" x-model="editing.preconditions"></textarea>
+      </div>
+
+      <div class="field">
+        <label for="edit-case-steps">Steps</label>
+        <textarea class="textarea" id="edit-case-steps" name="steps" rows="3" x-model="editing.steps"></textarea>
+      </div>
+
+      <div class="field">
+        <label for="edit-case-expected">Expected result</label>
+        <textarea class="textarea" id="edit-case-expected" name="expected" rows="3" x-model="editing.expected"></textarea>
+      </div>
+
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </div>
+    </form>
+  </div>
+</div>

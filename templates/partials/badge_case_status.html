@@ -1,0 +1,20 @@
+{% comment %} Status badge for a TestRunTestCase. Also carries data-status so a live
+   Alpine component (testRunLive / testRunCaseLive in the page templates)
+   can swap the class in place without a full re-render.
+
+   Context contract:
+     status    — TestRunTestCaseStatus value:
+                 "created" | "in_progress" | "success" | "failed" | "cancelled"
+     never_run — optional bool; when status is "created" and never_run is
+                 true, the badge reads "Never run" instead of "Not started" {% endcomment %}
+{% if status == "created" %}
+  <span class="badge badge-draft" data-status="{{ status }}">{% if never_run %}Never run{% else %}Not started{% endif %}</span>
+{% elif status == "in_progress" %}
+  <span class="badge badge-running" data-status="{{ status }}">Running</span>
+{% elif status == "success" %}
+  <span class="badge badge-passed" data-status="{{ status }}">Passed</span>
+{% elif status == "failed" %}
+  <span class="badge badge-failed" data-status="{{ status }}">Failed</span>
+{% elif status == "cancelled" %}
+  <span class="badge badge-cancelled" data-status="{{ status }}">Cancelled</span>
+{% endif %}

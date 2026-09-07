@@ -1,0 +1,38 @@
+{% comment %} Per-row "Delete test case?" confirm dialog — one instance shared by
+   every row's ⋯ menu. The row's "Delete" menu item dispatches
+   open-delete-case with the case id as the event detail; the form action
+   is rewritten to point at that case.
+
+   Cannot use partials/confirm_dialog.html here since its action_url is
+   static — this dialog's action depends on which row triggered it.
+
+   Context contract:
+     project — current Project {% endcomment %}
+<div
+  class="dialog-backdrop"
+  x-data="{ ...dialog(), caseId: 0 }"
+  x-show="open"
+  x-cloak
+  x-on:open-delete-case.window="show(); caseId = $event.detail"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div
+    class="dialog"
+    role="alertdialog"
+    aria-modal="true"
+    aria-labelledby="delete-case-title"
+    aria-describedby="delete-case-desc"
+  >
+    <h3 id="delete-case-title">Delete test case?</h3>
+    <p id="delete-case-desc">This can't be undone. Deleting removes this case from future runs — results from past runs are kept.</p>
+    <form method="post" :action="'{% url 'projects:test_case_delete' project.id 0 %}'.replace('/0/', '/' + caseId + '/')">
+      {% csrf_token %}
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-danger-solid">Delete</button>
+      </div>
+    </form>
+  </div>
+</div>

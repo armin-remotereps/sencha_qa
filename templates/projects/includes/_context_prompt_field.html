@@ -1,0 +1,42 @@
+{% comment %}
+  The "Notes" field — merges the prototype's separate environment /
+  navigation / authentication textareas into the single project_prompt
+  field the form actually has, with a live character counter and the
+  "Refine with AI" action (applicationContextPrompt(), extra_scripts in
+  application_context.html).
+
+  Context contract:
+    form               — ApplicationContextForm
+    project            — the current Project
+    prompt_max_length  — int
+{% endcomment %}
+<div class="field{% if form.project_prompt.errors %} has-error{% endif %}" x-data="applicationContextPrompt()">
+  <label for="{{ form.project_prompt.id_for_label }}">Notes <span class="optional">(optional)</span></label>
+  <textarea
+    class="textarea"
+    id="{{ form.project_prompt.id_for_label }}"
+    name="project_prompt"
+    maxlength="{{ prompt_max_length }}"
+    rows="8"
+    placeholder="Environment notes, navigation hints, authentication notes — anything the AI agent should know about the application under test..."
+    x-model="prompt"
+  ></textarea>
+  <p class="hint" x-text="prompt.length + ' / {{ prompt_max_length }}'"></p>
+  {% for error in form.project_prompt.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+
+  <div class="alert alert-warning" role="alert">
+    <span class="alert-icon" aria-hidden="true">⚠</span>
+    <div>
+      <strong>Use a dedicated test account</strong>
+      <p>Don't paste real production passwords here. Create a dedicated test account for the AI test runner to use instead.</p>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button class="btn btn-secondary" type="button" @click="refineWithAI()" :disabled="refining || !prompt.trim()">
+      <span x-show="!refining">Refine with AI (optional)</span>
+      <span x-show="refining" x-cloak>Refining…</span>
+    </button>
+    <span class="hint" x-show="statusMsg" x-cloak :class="{ 'error-text': statusError }" x-text="statusMsg"></span>
+  </div>
+</div>

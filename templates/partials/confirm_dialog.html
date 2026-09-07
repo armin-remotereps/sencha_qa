@@ -1,0 +1,44 @@
+{% comment %} Reusable confirm / destructive-action dialog. See templates/partials/README.md
+   for the dialog-opening convention this implements.
+
+   Context contract:
+     dialog_id     — unique id for this dialog on the current page, e.g. "archive-project-3"
+     title         — dialog heading
+     body          — supporting paragraph
+     confirm_label — submit button text, e.g. "Delete 3 cases"
+     confirm_class — optional submit button class (default "btn-danger-solid")
+     action_url    — form action (the POST endpoint that performs the action)
+     next          — optional value for a hidden "next" field
+
+   Open it from anywhere within the same x-data root (the .app shell
+   already has one) with:
+     <button type="button" @click="$dispatch('open-{{ dialog_id }}')">…</button> {% endcomment %}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-{{ dialog_id }}.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div
+    class="dialog"
+    role="alertdialog"
+    aria-modal="true"
+    aria-labelledby="{{ dialog_id }}-title"
+    aria-describedby="{{ dialog_id }}-desc"
+  >
+    <h3 id="{{ dialog_id }}-title">{{ title }}</h3>
+    <p id="{{ dialog_id }}-desc">{{ body }}</p>
+    <form method="post" action="{{ action_url }}">
+      {% csrf_token %}
+      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn {{ confirm_class|default:'btn-danger-solid' }}">{{ confirm_label }}</button>
+      </div>
+    </form>
+  </div>
+</div>

@@ -1,0 +1,86 @@
+{% comment %} "Create test case" dialog. Opened from the page header's
+   $dispatch('open-create-case') button.
+
+   Context contract:
+     project — current Project
+     form    — TestCaseForm (unbound; widgets already carry input/select/
+               textarea classes, see projects/forms.py) {% endcomment %}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-create-case.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog dialog-lg" role="dialog" aria-modal="true" aria-labelledby="create-case-title">
+    <div class="card-header">
+      <h3 id="create-case-title">Create test case</h3>
+      <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+    </div>
+
+    <form method="post" action="{% url 'projects:test_case_create' project.id %}">
+      {% csrf_token %}
+
+      <div class="field">
+        <label for="{{ form.title.id_for_label }}">Title</label>
+        {{ form.title }}
+      </div>
+
+      <div class="grid grid-2">
+        <div class="field">
+          <label for="{{ form.type.id_for_label }}">Type</label>
+          {{ form.type }}
+        </div>
+        <div class="field">
+          <label for="{{ form.priority.id_for_label }}">Priority</label>
+          {{ form.priority }}
+        </div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="field">
+          <label for="{{ form.testrail_id.id_for_label }}">TestRail ID</label>
+          {{ form.testrail_id }}
+        </div>
+        <div class="field">
+          <label for="{{ form.template.id_for_label }}">Template</label>
+          {{ form.template }}
+        </div>
+      </div>
+
+      <div class="grid grid-2">
+        <div class="field">
+          <label for="{{ form.estimate.id_for_label }}">Estimate</label>
+          {{ form.estimate }}
+        </div>
+        <div class="field">
+          <label for="{{ form.references.id_for_label }}">References</label>
+          {{ form.references }}
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="{{ form.preconditions.id_for_label }}">Preconditions</label>
+        {{ form.preconditions }}
+      </div>
+
+      <div class="field">
+        <label for="{{ form.steps.id_for_label }}">Steps</label>
+        {{ form.steps }}
+      </div>
+
+      <div class="field">
+        <label for="{{ form.expected.id_for_label }}">Expected result</label>
+        {{ form.expected }}
+      </div>
+
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create</button>
+      </div>
+    </form>
+  </div>
+</div>

@@ -1,0 +1,180 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Onboarding wizard, step 3: add test cases.
+
+   Context contract (projects.views.setup_cases):
+     project     — current Project
+     uploads     — Page[TestCaseUpload], newest first, 5 per page (recent
+                   imports shown below the dropzone; live progress for
+                   them arrives over the uploads WS)
+     case_count  — project.test_cases.count(), gates "Continue"
+     wizard_step  — always 3 here
+     wizard_mode  — always "edit"
+
+   Uploading a file is a real (non-AJAX) POST to this same view, which
+   redirects back to itself — so a freshly created upload always arrives
+   via a full page reload (its filename included), and the WS is only
+   needed for that upload's later pending → processing → completed/failed
+   transitions. That's also why the WS handler below only *updates*
+   uploads already in the initial list rather than fabricating new rows
+   from WS data (which carries no filename — see projects/consumers.py's
+   UploadProgressConsumer). {% endcomment %}
+
+{% block title %}Add test cases · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="{% url 'dashboard:index' %}">Dashboard</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:list' %}">Projects</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span>{{ project.name }}</span>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Setup</span>
+</nav>
+{% endblock %}
+
+{% block page %}
+<div class="narrow" x-data="caseSetupWizard">
+
+  <h1>Add test cases</h1>
+  <p class="subtitle">Bring in the cases Punk Hazard will run &mdash; import an existing TestRail suite or start from scratch.</p>
+
+  {% include "partials/wizard_steps.html" with project=project wizard_step=wizard_step only %}
+
+  <div class="card">
+    <fieldset style="border: 0; padding: 0; margin: 0 0 20px;">
+      <legend class="visually-hidden">How would you like to add test cases?</legend>
+
+      <label class="radio-card" :class="{ selected: mode === 'import' }" style="margin-bottom: 12px;">
+        <input type="radio" name="case-source" value="import" x-model="mode">
+        <span>
+          <span class="radio-title">Import from TestRail</span>
+          <span class="muted small">Upload a TestRail XML export and Punk Hazard will parse each case.</span>
+        </span>
+      </label>
+
+      <label class="radio-card" :class="{ selected: mode === 'manual' }">
+        <input type="radio" name="case-source" value="manual" x-model="mode">
+        <span>
+          <span class="radio-title">Create manually</span>
+          <span class="muted small">Add test cases one at a time from the Test Cases page after setup.</span>
+        </span>
+      </label>
+    </fieldset>
+
+    <template x-if="mode === 'import'">
+      <div>
+        <p class="hint">File requirements: TestRail XML export (<code>.xml</code>), up to 10 MB.</p>
+
+        <form method="post" enctype="multipart/form-data" action="{% url 'projects:setup_cases' project.id %}">
+          {% csrf_token %}
+          {% include "partials/dropzone.html" %}
+        </form>
+
+        <template x-for="upload in uploads" :key="upload.upload_id">
+          <div class="card card-raised" style="margin-top: 12px;">
+            <template x-if="upload.status === 'pending' || upload.status === 'processing'">
+              <div>
+                <div class="skeleton skeleton-title"></div>
+                <div class="skeleton skeleton-text" style="width: 90%;"></div>
+                <p class="muted small" x-text="'Importing ' + upload.filename + '…'"></p>
+              </div>
+            </template>
+            <template x-if="upload.status === 'failed'">
+              <div class="alert alert-danger" style="margin: 0;">
+                <span class="alert-icon" aria-hidden="true">⚠</span>
+                <div>
+                  <strong>Import failed</strong>
+                  <p x-text="upload.error_message"></p>
+                </div>
+              </div>
+            </template>
+            <template x-if="upload.status === 'completed'">
+              <div class="alert alert-success" style="margin: 0;">
+                <span class="alert-icon" aria-hidden="true">✓</span>
+                <div>
+                  <p x-text="'Import complete — ' + upload.total_cases + ' test case' + (upload.total_cases === 1 ? '' : 's') + ' imported.'"></p>
+                </div>
+              </div>
+            </template>
+            <template x-if="upload.status === 'cancelled'">
+              <p class="muted small" style="margin: 0;">Import cancelled.</p>
+            </template>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <template x-if="mode === 'manual'">
+      <p class="muted" style="margin: 0;">Add test cases one at a time from the Test Cases page after setup.</p>
+    </template>
+  </div>
+
+  {% comment %} wizard_actions.html assumes a submit button; "Continue" here is a
+     conditionally-enabled link (gated on live case_count / chosen mode),
+     so this step's footer is written out by hand instead of through that
+     partial. {% endcomment %}
+  <div class="wizard-actions">
+    <a class="btn btn-secondary" href="{% url 'projects:setup_context' project.id %}">&larr; Back</a>
+    <span class="spacer"></span>
+    <a
+      class="btn btn-primary"
+      href="{% url 'projects:setup_machine' project.id %}"
+      :aria-disabled="(!canContinue).toString()"
+      @click="if (!canContinue) $event.preventDefault()"
+    >Continue &rarr;</a>
+  </div>
+  <p class="hint" x-show="!canContinue" x-cloak>Import at least one test case, or choose &ldquo;Create manually&rdquo;, to continue.</p>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('caseSetupWizard', () => ({
+    mode: 'import',
+    caseCount: {{ case_count }},
+    uploads: [
+      {% for upload in uploads %}
+      {
+        upload_id: {{ upload.id }},
+        filename: '{{ upload.original_filename|escapejs }}',
+        status: '{{ upload.status }}',
+        total_cases: {{ upload.total_cases }},
+        processed_cases: {{ upload.processed_cases }},
+        error_message: '{{ upload.error_message|escapejs }}'
+      }{% if not forloop.last %},{% endif %}
+      {% endfor %}
+    ],
+    _countedUploadIds: new Set([
+      {% for upload in uploads %}{% if upload.status == "completed" %}{{ upload.id }}{% if not forloop.last %},{% endif %}{% endif %}{% endfor %}
+    ]),
+
+    get canContinue() {
+      return this.caseCount > 0 || this.mode === 'manual';
+    },
+
+    init() {
+      const ws = new WebSocket(punkHazard.wsUrl('/ws/projects/{{ project.id }}/uploads/'));
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        const upload = this.uploads.find((u) => u.upload_id === data.upload_id);
+        if (!upload) return;
+
+        upload.status = data.status;
+        upload.total_cases = data.total_cases;
+        upload.processed_cases = data.processed_cases;
+        upload.error_message = data.error_message;
+
+        if (data.status === 'completed' && !this._countedUploadIds.has(data.upload_id)) {
+          this._countedUploadIds.add(data.upload_id);
+          this.caseCount += data.total_cases;
+        }
+      };
+    },
+  }));
+});
+</script>
+{% endblock %}

@@ -1,0 +1,17 @@
+{% comment %} Renders django.contrib.messages as dismissible .alert blocks.
+
+   Tag mapping: error → danger, success → success, warning → warning,
+   anything else (info, debug, …) → info.
+   danger/warning use role="alert" (assertive); success/info use
+   role="status" (polite) since they aren't blocking problems. {% endcomment %}
+{% for message in messages %}
+  {% if message.tags == "error" %}
+    {% with alert_class="alert-danger" alert_role="alert" %}{% include "partials/_message_alert.html" with message=message alert_class=alert_class alert_role=alert_role only %}{% endwith %}
+  {% elif message.tags == "success" %}
+    {% with alert_class="alert-success" alert_role="status" %}{% include "partials/_message_alert.html" with message=message alert_class=alert_class alert_role=alert_role only %}{% endwith %}
+  {% elif message.tags == "warning" %}
+    {% with alert_class="alert-warning" alert_role="alert" %}{% include "partials/_message_alert.html" with message=message alert_class=alert_class alert_role=alert_role only %}{% endwith %}
+  {% else %}
+    {% with alert_class="alert-info" alert_role="status" %}{% include "partials/_message_alert.html" with message=message alert_class=alert_class alert_role=alert_role only %}{% endwith %}
+  {% endif %}
+{% endfor %}

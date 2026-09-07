@@ -1,0 +1,72 @@
+{% comment %} Upload history table. Each row carries data-upload-id so the page's
+   uploadManager() WebSocket component (see import.html's extra_scripts)
+   can find and update it in place as processing progresses.
+
+   Context contract:
+     project — current Project
+     uploads — Page[TestCaseUpload], newest first {% endcomment %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th scope="col">File</th>
+        <th scope="col">Status</th>
+        <th scope="col">Cases</th>
+        <th scope="col">Imported</th>
+        <th scope="col"><span class="visually-hidden">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for upload in uploads %}
+        <tr data-upload-id="{{ upload.id }}">
+          <td data-label="File" class="cell-primary">{{ upload.original_filename }}</td>
+
+          <td data-label="Status">
+            {% if upload.status == "pending" or upload.status == "processing" %}
+              <span class="badge badge-running" data-status="{{ upload.status }}">Importing&hellip;</span>
+            {% elif upload.status == "completed" %}
+              <span class="badge badge-passed" data-status="{{ upload.status }}">Imported</span>
+            {% elif upload.status == "failed" %}
+              <span class="badge badge-failed" data-status="{{ upload.status }}">Failed</span>
+            {% elif upload.status == "cancelled" %}
+              <span class="badge badge-cancelled" data-status="{{ upload.status }}">Cancelled</span>
+            {% endif %}
+            {% if upload.status == "failed" and upload.error_message %}
+              <p class="error-text" data-error>{{ upload.error_message }}</p>
+            {% else %}
+              <p class="error-text" data-error hidden></p>
+            {% endif %}
+          </td>
+
+          <td data-label="Cases">
+            <div class="progress">
+              <span data-progress-bar style="width: {% if upload.total_cases %}{% widthratio upload.processed_cases upload.total_cases 100 %}{% else %}0{% endif %}%;"></span>
+            </div>
+            <p class="muted small" data-progress>{{ upload.processed_cases }} / {{ upload.total_cases }}</p>
+          </td>
+
+          <td data-label="Imported" class="muted">{{ upload.created_at|date:"M j, Y H:i" }}</td>
+
+          <td data-label="" class="cell-actions">
+            <div class="actions">
+              {% if upload.status == "completed" %}
+                <a class="btn btn-sm btn-secondary" href="{% url 'projects:test_case_list' project.id %}?upload={{ upload.id }}">View test cases</a>
+              {% endif %}
+              {% if upload.status == "pending" or upload.status == "processing" %}
+                <form method="post" action="{% url 'projects:upload_cancel' project.id upload.id %}">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-sm btn-secondary">Cancel</button>
+                </form>
+              {% endif %}
+              <button
+                type="button"
+                class="btn btn-sm btn-danger"
+                @click="$dispatch('open-delete-upload', { id: {{ upload.id }}, name: '{{ upload.original_filename|escapejs }}' })"
+              >Delete</button>
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

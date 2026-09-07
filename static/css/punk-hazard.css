@@ -1,0 +1,2132 @@
+/* ==========================================================================
+   Punk Hazard — Stage 2 app stylesheet
+   Dark-first. Tokens from PUNK_HAZARD_REBRAND_PLAN.md.
+   Contrast rules: navy text on cyan/orange actions; semantic colors for
+   test states (never brand orange for errors).
+
+   Ported from ui-prototype/assets/prototype.css and kept byte-compatible
+   wherever possible so page templates can be transliterated from the
+   prototype 1:1. Additions made for the Django + Alpine.js integration are
+   called out in comments near each change.
+   ========================================================================== */
+
+:root {
+  --brand-navy: #131d28;
+  --brand-cyan: #2ecae4;
+  --brand-orange: #fd5229;
+  --brand-white: #fdfdfd;
+
+  --page: #0b1118;
+  --surface: #131d28;
+  --surface-raised: #1a2733;
+  --surface-hover: #223240;
+  --border: #2d3d4b;
+  --border-strong: #3d5060;
+  --text: #f5f8fa;
+  --text-muted: #9baab6;
+
+  --success: #2fbf71;
+  --success-soft: rgba(47, 191, 113, 0.14);
+  --warning: #f2b84b;
+  --warning-soft: rgba(242, 184, 75, 0.14);
+  --danger: #ef5b62;
+  --danger-soft: rgba(239, 91, 98, 0.14);
+  --info: #4da3ff;
+  --info-soft: rgba(77, 163, 255, 0.14);
+  --cyan-soft: rgba(46, 202, 228, 0.14);
+  --orange-soft: rgba(253, 82, 41, 0.14);
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --sidebar-w: 264px;
+
+  /* Hover / one-off colors that were hard-coded in the prototype, tokenised
+     so a future palette change only touches :root. */
+  --brand-cyan-hover: #55d6ea;
+  --brand-orange-hover: #fd6b47;
+  --danger-hover: #f3767c;
+  --danger-solid-text: #12070a;
+  --placeholder-color: #6d7d8a;
+  --code-bg: #0a0f15;
+  --code-text: #c8d6e0;
+
+  --dialog-backdrop: rgba(0, 0, 0, 0.6);
+  --z-dialog: 100;
+  --z-menu: 40;
+}
+
+/* Elements gated on Alpine.js finishing its first render (e.g. anything
+   shown via x-show) must stay hidden until then, or they flash open. */
+[x-cloak] {
+  display: none !important;
+}
+
+/* --------------------------------------------------------------------------
+   Reset / base
+   -------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--text);
+  background: var(--page);
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0 0 0.4em;
+  line-height: 1.25;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+
+h1 {
+  font-size: 1.6rem;
+}
+
+h2 {
+  font-size: 1.2rem;
+}
+
+h3 {
+  font-size: 1rem;
+}
+
+p {
+  margin: 0 0 0.9em;
+}
+
+a {
+  color: var(--brand-cyan);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: 2px solid var(--brand-cyan);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::placeholder {
+  color: var(--placeholder-color);
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.small {
+  font-size: 0.85rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* --------------------------------------------------------------------------
+   App shell: sidebar + main (desktop), topbar + <details> nav (mobile)
+   -------------------------------------------------------------------------- */
+
+.app {
+  min-height: 100vh;
+}
+
+.sidebar {
+  display: none;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.topbar .brand {
+  margin-right: auto;
+}
+
+/* Mobile nav, opened by Alpine's mobileNav() component (see
+   static/js/punk-hazard.js) rather than a native <details> element, so it
+   can be closed on Escape / click-outside. The toggle button keeps the
+   exact look of the prototype's <summary>; the panel keeps the look of
+   its popover, now driven by x-show instead of [open]. */
+.mobile-nav {
+  position: relative;
+}
+
+.mobile-nav-toggle {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.mobile-nav-toggle[aria-expanded="true"] {
+  background: var(--surface-hover);
+}
+
+.mobile-nav-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  min-width: 230px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 8px;
+  z-index: 30;
+}
+
+.main {
+  padding: 20px 16px 56px;
+  max-width: 1160px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+@media (min-width: 1024px) {
+  .app {
+    display: grid;
+    grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  }
+
+  .topbar {
+    display: none;
+  }
+
+  .sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding: 20px 14px;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+
+  .main {
+    padding: 32px 36px 72px;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Brand lockups
+   -------------------------------------------------------------------------- */
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-decoration: none;
+}
+
+.brand:hover {
+  text-decoration: none;
+}
+
+.brand img {
+  width: 34px;
+  height: 34px;
+}
+
+.brand .brand-name {
+  font-size: 1rem;
+  text-transform: uppercase;
+}
+
+/* Light plate that keeps the navy wordmark of the full lockup legible
+   on dark surfaces (sign-in). */
+.brand-plate {
+  background: var(--brand-white);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  display: inline-flex;
+  justify-content: center;
+}
+
+.brand-plate img {
+  width: 180px;
+  height: 180px;
+}
+
+/* --------------------------------------------------------------------------
+   Navigation
+   -------------------------------------------------------------------------- */
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-section {
+  margin: 14px 10px 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.nav-link,
+.nav-link-button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-weight: 550;
+  text-decoration: none;
+}
+
+.nav-link:hover,
+.nav-link-button:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.nav-link[aria-current="page"] {
+  background: var(--cyan-soft);
+  color: var(--brand-cyan);
+}
+
+/* Sign-out is a POSTed form, not a link — .nav-link-button gives its
+   <button> the exact look of a .nav-link with the browser chrome reset. */
+.nav-link-button {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+
+.user-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+}
+
+.user-chip .user-name {
+  font-weight: 650;
+  font-size: 0.9rem;
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--surface-hover);
+  border: 1px solid var(--border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--brand-cyan);
+  flex: none;
+}
+
+/* Project tab navigation (Overview / Test Cases / Runs / Environment / Settings) */
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 24px;
+  overflow-x: auto;
+}
+
+.tab {
+  padding: 10px 14px;
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.92rem;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  text-decoration: none;
+}
+
+.tab:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.tab[aria-current="page"] {
+  color: var(--brand-cyan);
+  border-bottom-color: var(--brand-cyan);
+}
+
+/* Breadcrumbs */
+.breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.breadcrumbs a {
+  color: var(--text-muted);
+}
+
+.breadcrumbs a:hover {
+  color: var(--brand-cyan);
+}
+
+.breadcrumbs .sep {
+  color: var(--border-strong);
+}
+
+/* --------------------------------------------------------------------------
+   Page header
+   -------------------------------------------------------------------------- */
+
+.page-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.page-header .subtitle {
+  color: var(--text-muted);
+  margin: 2px 0 0;
+  max-width: 60ch;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+/* Centered action row, e.g. under an .empty state's message. */
+.actions-center {
+  justify-content: center;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons
+   -------------------------------------------------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-family: inherit;
+  font-size: 0.92rem;
+  font-weight: 650;
+  line-height: 1.2;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+.btn:hover {
+  text-decoration: none;
+}
+
+/* Primary: cyan background, navy text (8.66:1) */
+.btn-primary {
+  background: var(--brand-cyan);
+  color: var(--brand-navy);
+}
+
+.btn-primary:hover {
+  background: var(--brand-cyan-hover);
+}
+
+/* Accent: orange background, navy text (5.20:1). Secondary emphasis only. */
+.btn-accent {
+  background: var(--brand-orange);
+  color: var(--brand-navy);
+}
+
+.btn-accent:hover {
+  background: var(--brand-orange-hover);
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.btn-secondary:hover {
+  background: var(--surface-hover);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.btn-ghost:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* Destructive: semantic red, visually distinct from brand orange */
+.btn-danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: rgba(239, 91, 98, 0.5);
+}
+
+.btn-danger:hover {
+  background: var(--danger-soft);
+}
+
+.btn-danger-solid {
+  background: var(--danger);
+  color: var(--danger-solid-text);
+}
+
+.btn-danger-solid:hover {
+  background: var(--danger-hover);
+}
+
+.btn-lg {
+  padding: 12px 22px;
+  font-size: 1rem;
+}
+
+.btn-sm {
+  padding: 6px 11px;
+  font-size: 0.83rem;
+}
+
+.btn[disabled],
+.btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.btn-block {
+  width: 100%;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.icon-btn:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+/* --------------------------------------------------------------------------
+   Forms
+   -------------------------------------------------------------------------- */
+
+.field {
+  margin-bottom: 18px;
+}
+
+.field > label {
+  display: block;
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 6px;
+}
+
+.field .optional {
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 0.82rem;
+}
+
+.input,
+.select,
+.textarea {
+  width: 100%;
+  padding: 9px 12px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  color: var(--text);
+  background: var(--page);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.input:focus-visible,
+.select:focus-visible,
+.textarea:focus-visible {
+  outline: 2px solid var(--brand-cyan);
+  outline-offset: 0;
+  border-color: var(--brand-cyan);
+}
+
+.textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+
+.select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position: calc(100% - 18px) 55%, calc(100% - 13px) 55%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 34px;
+}
+
+.hint {
+  margin: 6px 0 0;
+  font-size: 0.83rem;
+  color: var(--text-muted);
+}
+
+.field.has-error .input,
+.field.has-error .select,
+.field.has-error .textarea {
+  border-color: var(--danger);
+}
+
+.error-text {
+  display: flex;
+  gap: 6px;
+  margin: 6px 0 0;
+  font-size: 0.83rem;
+  color: var(--danger);
+  font-weight: 550;
+}
+
+.checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+
+.checkbox input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  margin: 2px 0 0;
+  accent-color: var(--brand-cyan);
+  flex: none;
+}
+
+.radio-card {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  background: var(--surface);
+}
+
+.radio-card:hover {
+  background: var(--surface-hover);
+}
+
+.radio-card input[type="radio"] {
+  margin-top: 3px;
+  accent-color: var(--brand-cyan);
+  flex: none;
+}
+
+.radio-card.selected {
+  border-color: var(--brand-cyan);
+  background: var(--cyan-soft);
+}
+
+.radio-card .radio-title {
+  font-weight: 650;
+  margin-bottom: 2px;
+}
+
+/* File upload dropzone (visual only in prototype) */
+.dropzone {
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 30px 20px;
+  text-align: center;
+  color: var(--text-muted);
+  background: var(--surface);
+}
+
+.dropzone strong {
+  color: var(--text);
+}
+
+.dropzone.is-active {
+  border-color: var(--brand-cyan);
+  background: var(--cyan-soft);
+}
+
+/* --------------------------------------------------------------------------
+   Cards
+   -------------------------------------------------------------------------- */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+
+.card + .card {
+  margin-top: 16px;
+}
+
+.card-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+/* Tinted border variants — a card's border reads as the semantic color of
+   whatever it's reporting on (a failed result, a warning that needs
+   attention, …) without changing its background. */
+.card-tone-danger {
+  border-color: var(--danger);
+}
+
+.card-tone-success {
+  border-color: var(--success);
+}
+
+.card-tone-warning {
+  border-color: rgba(242, 184, 75, 0.45);
+}
+
+.card-tone-info {
+  border-color: var(--info);
+}
+
+.card-header h2,
+.card-header h3 {
+  margin: 0;
+}
+
+.card-raised {
+  background: var(--surface-raised);
+}
+
+.stat-card {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+}
+
+/* Linked stat cards (partials/stat_card.html with a url) read as tiles,
+   not as text links. */
+a.stat-card,
+a.stat-card:hover {
+  color: inherit;
+  text-decoration: none;
+}
+
+a.stat-card:hover {
+  border-color: var(--border-strong);
+}
+
+.stat-card .stat-label {
+  font-size: 0.8rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.stat-card .stat-value {
+  font-size: 1.7rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.stat-card .stat-note {
+  font-size: 0.83rem;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.stat-value.is-success {
+  color: var(--success);
+}
+
+.stat-value.is-danger {
+  color: var(--danger);
+}
+
+.stat-value.is-info {
+  color: var(--info);
+}
+
+/* Layout grids */
+.grid {
+  display: grid;
+  gap: 16px;
+}
+
+.grid-2 {
+  grid-template-columns: 1fr;
+}
+
+.grid-3 {
+  grid-template-columns: 1fr;
+}
+
+.grid-4 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+@media (min-width: 768px) {
+  .grid-2 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .grid-3 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .grid-4 {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Status badges — dot + text, never color alone
+   -------------------------------------------------------------------------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.badge::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.badge-passed {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: rgba(47, 191, 113, 0.35);
+}
+
+.badge-failed {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(239, 91, 98, 0.35);
+}
+
+.badge-running {
+  color: var(--info);
+  background: var(--info-soft);
+  border-color: rgba(77, 163, 255, 0.35);
+}
+
+.badge-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: rgba(242, 184, 75, 0.35);
+}
+
+.badge-draft {
+  color: var(--text-muted);
+  background: rgba(155, 170, 182, 0.12);
+  border-color: rgba(155, 170, 182, 0.3);
+}
+
+.badge-ready {
+  color: var(--brand-cyan);
+  background: var(--cyan-soft);
+  border-color: rgba(46, 202, 228, 0.35);
+}
+
+.badge-connected {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: rgba(47, 191, 113, 0.35);
+}
+
+.badge-disconnected {
+  color: var(--text-muted);
+  background: rgba(155, 170, 182, 0.12);
+  border-color: rgba(155, 170, 182, 0.3);
+}
+
+/* Cancelled runs/cases — neutral, distinct from the "not started yet" muted
+   tone of badge-draft so a cancelled result never reads as a pending one. */
+.badge-cancelled {
+  color: var(--text-muted);
+  background: rgba(155, 170, 182, 0.12);
+  border-color: rgba(155, 170, 182, 0.3);
+}
+
+/* Visual engine starting up — warning-tinted, not yet a failure. */
+.badge-starting {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: rgba(242, 184, 75, 0.35);
+}
+
+.badge-starting::before {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* Live/pulsing indicator for running states */
+.badge-running::before {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Tables + mobile record strategy
+   Desktop: real table (inside .table-wrap for narrow overflow safety).
+   < 768px: rows become stacked records using data-label.
+   -------------------------------------------------------------------------- */
+
+.table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92rem;
+}
+
+.data-table th {
+  text-align: left;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.data-table td {
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.data-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.data-table tbody tr:hover {
+  background: var(--surface-hover);
+}
+
+.data-table .cell-primary {
+  font-weight: 650;
+  color: var(--text);
+}
+
+.data-table .cell-primary a {
+  color: var(--text);
+}
+
+.data-table .cell-primary a:hover {
+  color: var(--brand-cyan);
+}
+
+.data-table .cell-check {
+  width: 36px;
+}
+
+.data-table .cell-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+  .data-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+
+  .data-table,
+  .data-table tbody,
+  .data-table tr,
+  .data-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .data-table tr {
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .data-table tr:last-child {
+    border-bottom: 0;
+  }
+
+  .data-table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 16px;
+    border-bottom: 0;
+    text-align: right;
+  }
+
+  .data-table td::before {
+    content: attr(data-label);
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    text-align: left;
+  }
+
+  .data-table td[data-label=""]::before {
+    content: none;
+  }
+
+  .data-table .cell-actions {
+    justify-content: flex-end;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Empty states
+   -------------------------------------------------------------------------- */
+
+.empty {
+  text-align: center;
+  padding: 48px 24px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.empty .empty-icon {
+  font-size: 1.9rem;
+  margin-bottom: 10px;
+}
+
+.empty h3 {
+  margin-bottom: 6px;
+}
+
+.empty p {
+  color: var(--text-muted);
+  max-width: 46ch;
+  margin: 0 auto 18px;
+}
+
+/* --------------------------------------------------------------------------
+   Alerts and inline validation
+   -------------------------------------------------------------------------- */
+
+.alert {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 13px 16px;
+  border-radius: var(--radius);
+  border: 1px solid;
+  font-size: 0.92rem;
+  margin-bottom: 16px;
+}
+
+.alert .alert-icon {
+  flex: none;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.alert strong {
+  display: block;
+  margin-bottom: 2px;
+}
+
+.alert p:last-child {
+  margin-bottom: 0;
+}
+
+/* Dismiss control for messages.html alerts (Alpine dismissible() component).
+   Room is reserved on the right so it never overlaps alert text. */
+.alert:has(.toast-dismiss) {
+  padding-right: 40px;
+}
+
+.toast-dismiss {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.toast-dismiss:hover {
+  opacity: 1;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.alert-info {
+  background: var(--info-soft);
+  border-color: rgba(77, 163, 255, 0.35);
+}
+
+.alert-success {
+  background: var(--success-soft);
+  border-color: rgba(47, 191, 113, 0.35);
+}
+
+.alert-warning {
+  background: var(--warning-soft);
+  border-color: rgba(242, 184, 75, 0.35);
+}
+
+.alert-danger {
+  background: var(--danger-soft);
+  border-color: rgba(239, 91, 98, 0.35);
+}
+
+/* Drop the default bottom margin when an alert is the last element in its
+   container (e.g. the last card in runner_download_card.html). */
+.alert-flush {
+  margin-bottom: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Onboarding progress steps (5 steps)
+   -------------------------------------------------------------------------- */
+
+.steps {
+  display: flex;
+  gap: 0;
+  list-style: none;
+  margin: 0 0 28px;
+  padding: 0;
+  counter-reset: step;
+}
+
+.step {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  text-align: center;
+  padding-top: 34px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.step::before {
+  counter-increment: step;
+  content: counter(step);
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+  font-weight: 700;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
+  z-index: 1;
+}
+
+/* Connector line */
+.step::after {
+  content: "";
+  position: absolute;
+  top: 13px;
+  left: calc(50% + 15px);
+  right: calc(-50% + 15px);
+  height: 1px;
+  background: var(--border-strong);
+}
+
+.step:last-child::after {
+  content: none;
+}
+
+.step.is-done {
+  color: var(--text);
+}
+
+.step.is-done::before {
+  content: "✓";
+  background: var(--success-soft);
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.step.is-done::after {
+  background: var(--success);
+}
+
+.step.is-current {
+  color: var(--brand-cyan);
+}
+
+.step.is-current::before {
+  background: var(--brand-cyan);
+  border-color: var(--brand-cyan);
+  color: var(--brand-navy);
+}
+
+.step a {
+  color: inherit;
+}
+
+@media (max-width: 767px) {
+  .step .step-label {
+    display: none;
+  }
+
+  .step.is-current .step-label {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .step {
+    padding-top: 32px;
+  }
+}
+
+/* Wizard footer actions */
+.wizard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 26px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.wizard-actions .spacer {
+  flex: 1;
+}
+
+/* Narrower content column for wizard/auth pages */
+.narrow {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+/* --------------------------------------------------------------------------
+   Readiness checklist
+   -------------------------------------------------------------------------- */
+
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.checklist li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.checklist li:last-child {
+  border-bottom: 0;
+}
+
+.check-icon {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.check-icon.is-pass {
+  background: var(--success-soft);
+  color: var(--success);
+  border: 1px solid var(--success);
+}
+
+.check-icon.is-fail {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border: 1px solid var(--danger);
+}
+
+.check-icon.is-pending {
+  background: rgba(155, 170, 182, 0.12);
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+}
+
+.checklist .check-title {
+  font-weight: 650;
+}
+
+.checklist .check-help {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin: 2px 0 0;
+}
+
+/* --------------------------------------------------------------------------
+   Dialog — real modal overlay (see templates/partials/README.md for the
+   Alpine convention every dialog on the site follows).
+   -------------------------------------------------------------------------- */
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--dialog-backdrop);
+  z-index: var(--z-dialog);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.dialog {
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  max-width: 440px;
+  width: 100%;
+  max-height: 90vh;
+  overflow: auto;
+  padding: 22px;
+}
+
+/* Wider variant for content-heavy dialogs, e.g. the screenshot lightbox. */
+.dialog-lg {
+  max-width: 760px;
+}
+
+.dialog h3 {
+  margin-bottom: 8px;
+}
+
+.dialog p {
+  color: var(--text-muted);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+/* --------------------------------------------------------------------------
+   Pagination
+   -------------------------------------------------------------------------- */
+
+/* Wraps the "Showing X–Y of Z" count, the page-link nav, and the
+   per-page select on one row (partials/pagination.html). */
+.pagination-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.pagination-bar .pagination {
+  margin-top: 0;
+}
+
+.per-page-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.per-page-form .select {
+  width: auto;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+
+.page-link {
+  min-width: 34px;
+  height: 34px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.page-link:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.page-link[aria-current="page"] {
+  background: var(--brand-cyan);
+  border-color: var(--brand-cyan);
+  color: var(--brand-navy);
+}
+
+.page-link[aria-disabled="true"] {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* --------------------------------------------------------------------------
+   Screenshot gallery
+   -------------------------------------------------------------------------- */
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+}
+
+.shot {
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface-raised);
+  text-decoration: none;
+  color: var(--text-muted);
+}
+
+.shot:hover {
+  border-color: var(--brand-cyan);
+  text-decoration: none;
+}
+
+/* Mock screenshot placeholder — prototype has no real screenshots */
+.shot .shot-img {
+  aspect-ratio: 16 / 10;
+  background: linear-gradient(135deg, var(--surface-hover), var(--surface-raised));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3rem;
+}
+
+.shot .shot-caption {
+  padding: 7px 10px;
+  font-size: 0.78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --------------------------------------------------------------------------
+   Code / instruction blocks
+   -------------------------------------------------------------------------- */
+
+.code-block {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 13px 16px;
+  font-family: var(--mono);
+  font-size: 0.84rem;
+  line-height: 1.6;
+  color: var(--code-text);
+  overflow-x: auto;
+  margin: 0 0 14px;
+  white-space: pre;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.setup-steps {
+  margin: 0;
+  padding: 0 0 0 4px;
+  list-style: none;
+  counter-reset: setup;
+}
+
+.setup-steps > li {
+  counter-increment: setup;
+  position: relative;
+  padding: 0 0 20px 42px;
+}
+
+.setup-steps > li::before {
+  content: counter(setup);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  border: 1px solid var(--border-strong);
+  color: var(--brand-cyan);
+  font-weight: 700;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.setup-steps > li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 31px;
+  bottom: 2px;
+  width: 1px;
+  background: var(--border);
+}
+
+.setup-steps .step-title {
+  font-weight: 650;
+  margin-bottom: 3px;
+}
+
+.setup-steps p {
+  margin: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Skeleton / loading placeholders
+   -------------------------------------------------------------------------- */
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--surface-raised) 25%,
+    var(--surface-hover) 50%,
+    var(--surface-raised) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+  border-radius: var(--radius-sm);
+  min-height: 14px;
+}
+
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+
+.skeleton-text {
+  height: 14px;
+  margin-bottom: 10px;
+}
+
+.skeleton-title {
+  height: 22px;
+  width: 45%;
+  margin-bottom: 14px;
+}
+
+/* --------------------------------------------------------------------------
+   Auth (sign-in) layout
+   -------------------------------------------------------------------------- */
+
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px 16px;
+  background: radial-gradient(
+      900px 500px at 85% -10%,
+      rgba(46, 202, 228, 0.08),
+      transparent 60%
+    ),
+    radial-gradient(700px 420px at 0% 110%, rgba(253, 82, 41, 0.07), transparent 60%),
+    var(--page);
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  text-align: center;
+}
+
+.auth-card .card {
+  text-align: left;
+  padding: 26px;
+}
+
+.auth-tagline {
+  color: var(--text-muted);
+  margin: 14px 0 26px;
+  font-size: 1rem;
+}
+
+/* --------------------------------------------------------------------------
+   Misc components used across pages
+   -------------------------------------------------------------------------- */
+
+/* Activity feed */
+.activity {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.activity li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.92rem;
+}
+
+.activity li:last-child {
+  border-bottom: 0;
+}
+
+.activity .activity-icon {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.85rem;
+}
+
+.activity .activity-icon.is-danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: rgba(239, 91, 98, 0.35);
+}
+
+.activity time {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+  margin-left: auto;
+  padding-left: 10px;
+}
+
+/* Simple key/value definition rows */
+.kv {
+  margin: 0;
+}
+
+.kv > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  justify-content: space-between;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.92rem;
+}
+
+.kv > div:last-child {
+  border-bottom: 0;
+}
+
+.kv dt {
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.kv dd {
+  margin: 0;
+  font-weight: 550;
+  text-align: right;
+}
+
+/* Setup progress meter */
+.progress {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  overflow: hidden;
+}
+
+.progress > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--brand-cyan);
+}
+
+/* Toolbar row above tables: search + filters + bulk actions */
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.toolbar .input,
+.toolbar .select {
+  width: auto;
+}
+
+.toolbar .search {
+  flex: 1;
+  min-width: 180px;
+}
+
+.bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid rgba(46, 202, 228, 0.35);
+  background: var(--cyan-soft);
+  border-radius: var(--radius-sm);
+  margin-bottom: 14px;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+/* Disclosure (details/summary) treatment, e.g. Advanced diagnostics */
+details.card > summary,
+.card details > summary {
+  cursor: pointer;
+  font-weight: 650;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+details.card > summary::-webkit-details-marker,
+.card details > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.card > summary::before,
+.card details > summary::before {
+  content: "▸";
+  color: var(--text-muted);
+  font-size: 0.85em;
+  transition: transform 120ms ease;
+}
+
+details.card[open] > summary::before,
+.card details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+details.card[open] > summary,
+.card details[open] > summary {
+  margin-bottom: 14px;
+}
+
+/* Divider with label */
+.divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 22px 0;
+}
+
+.divider::before,
+.divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+/* --------------------------------------------------------------------------
+   OS instruction tabs — role="tablist" of .os-tab buttons driven by
+   Alpine's osTabs() component. The download itself is one Python
+   application for every platform; only the setup commands differ, so the
+   tabs switch instructions, not files. [aria-selected="true"] carries the
+   same look the prototype gave its :checked radio label.
+   -------------------------------------------------------------------------- */
+
+.os-tabs {
+  position: relative;
+}
+
+.os-tab {
+  display: inline-block;
+  padding: 8px 14px;
+  margin: 0 8px 8px 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 0.88rem;
+  cursor: pointer;
+}
+
+.os-tab:hover {
+  color: var(--text);
+  background: var(--surface-hover);
+}
+
+.os-tab[aria-selected="true"] {
+  color: var(--brand-navy);
+  background: var(--brand-cyan);
+  border-color: var(--brand-cyan);
+}
+
+.os-panels {
+  margin-top: 12px;
+}
+
+.os-panel .code-block {
+  margin: 8px 0 6px;
+}
+
+/* --------------------------------------------------------------------------
+   Live log stream indicator (per-case execution log)
+   -------------------------------------------------------------------------- */
+
+.live-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--info);
+  margin-right: 6px;
+  vertical-align: middle;
+  animation: live-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-dot {
+    animation: none;
+  }
+}
+
+.log-stream {
+  max-height: 420px;
+  overflow: auto;
+}
+
+.log-stream .log-warn {
+  color: var(--warning);
+}
+
+.log-stream .log-error {
+  color: var(--danger);
+}
+
+.log-stream .log-time {
+  color: var(--text-muted);
+}
+
+/* Long-form text that must keep the author's line breaks (log results,
+   test case steps/preconditions/expected) without overflowing its card. */
+.pre-wrap {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Stacked key/value list for long-form values (label above, left-aligned) */
+.kv-stack > div {
+  display: block;
+}
+
+.kv-stack dt {
+  margin-bottom: 4px;
+}
+
+.kv-stack dd {
+  text-align: left;
+  font-weight: 400;
+}
+
+/* --------------------------------------------------------------------------
+   Chip — small neutral pill for test-case type/priority (distinct from
+   .badge, which always carries a status dot and a semantic color).
+   -------------------------------------------------------------------------- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.chip + .chip {
+  margin-left: 4px;
+}
+
+/* --------------------------------------------------------------------------
+   Row menu — Alpine dropdown anchored to a row's ⋯ icon button
+   (rowMenu() component in static/js/punk-hazard.js).
+   -------------------------------------------------------------------------- */
+
+.row-menu {
+  position: relative;
+  display: inline-block;
+}
+
+.row-menu .menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 170px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 6px;
+  z-index: var(--z-menu);
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 0.88rem;
+  font-weight: 550;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.menu-item:hover {
+  background: var(--surface-hover);
+  text-decoration: none;
+}
+
+.menu-item.is-danger {
+  color: var(--danger);
+}
+
+.menu-item.is-danger:hover {
+  background: var(--danger-soft);
+}
+
+/* Wizard run picker: long case lists scroll inside the card so the readiness
+   checklist and the Start button stay within reach. */
+.case-picker {
+  max-height: 360px;
+  overflow: auto;
+  padding: 4px 8px 4px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.case-picker .checkbox { margin-bottom: 10px; }
+.case-picker .checkbox:last-child { margin-bottom: 0; }
+
+/* Sibling cards inside a grid are laid out by the grid gap, not by the
+   stacked-card margin. */
+.grid > .card + .card { margin-top: 0; }
+
+/* Vertical rhythm for pages that mix cards, grids and section headers. */
+.stack > * + * { margin-top: 16px; }
+.stack > .card + .card { margin-top: 16px; }

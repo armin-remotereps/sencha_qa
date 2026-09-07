@@ -1,0 +1,21 @@
+{% comment %} Wizard footer actions. Must be included inside the step's <form> — the
+   "next" control is a submit button, not a link.
+
+   Context contract:
+     back_url    — optional URL for a "← Back" link
+     skip_url    — optional URL for a ghost "Skip" link
+     skip_label  — label for the skip link (default "Skip for now")
+     next_label  — submit button label (default "Save and continue →")
+     next_large  — optional bool; renders the submit button as btn-lg {% endcomment %}
+<div class="wizard-actions">
+  {% if back_url %}
+    <a class="btn btn-ghost" href="{{ back_url }}">&larr; Back</a>
+  {% endif %}
+  <span class="spacer"></span>
+  {% if skip_url %}
+    <a class="btn btn-ghost" href="{{ skip_url }}">{{ skip_label|default:"Skip for now" }}</a>
+  {% endif %}
+  <button class="btn btn-primary{% if next_large %} btn-lg{% endif %}" type="submit">
+    {{ next_label|default:"Save and continue →" }}
+  </button>
+</div>

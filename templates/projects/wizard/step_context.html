@@ -1,0 +1,164 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Onboarding wizard, step 2: application context.
+
+   Context contract (projects.views._render_wizard_context / setup_context):
+     project           — current Project
+     form              — ApplicationContextForm (application_url,
+                          application_platform, project_prompt)
+     prompt_max_length — PROJECT_PROMPT_MAX_LENGTH, for the char counter
+     wizard_step        — always 2 here
+     wizard_mode         — always "edit" (this step only exists once a
+                          project exists)
+
+   "Refine with AI" is a port of the `projectPrompt` Alpine component from
+   the old templates/projects/detail.html (L451-516): POST the current
+   notes to projects:refine_prompt, then wait for a `prompt_refined`
+   message on the agent-status WS (same one the wizard's later "Test
+   machine" step also listens on) and replace the textarea's value. There
+   is no separate "save" step here — the whole form (including whatever
+   the refine call replaced the textarea with) is saved by the wizard's
+   own "Save and continue" submit. {% endcomment %}
+
+{% block title %}Application context · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="{% url 'dashboard:index' %}">Dashboard</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:list' %}">Projects</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span>{{ project.name }}</span>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Setup</span>
+</nav>
+{% endblock %}
+
+{% block page %}
+<div class="narrow" x-data="applicationContextPrompt">
+
+  <h1>Application context</h1>
+  <p class="subtitle">Describe how {{ project.name }} works so the AI test runner understands the app before it starts clicking around.</p>
+
+  {% include "partials/wizard_steps.html" with project=project wizard_step=wizard_step only %}
+
+  <form method="post" action="{% url 'projects:setup_context' project.id %}" novalidate>
+    {% csrf_token %}
+
+    <div class="card">
+      <div class="field{% if form.application_url.errors %} has-error{% endif %}">
+        <label for="{{ form.application_url.id_for_label }}">Application URL</label>
+        {{ form.application_url }}
+        {% if form.application_url.errors %}<p class="error-text">{{ form.application_url.errors.0 }}</p>{% endif %}
+      </div>
+
+      <div class="field{% if form.application_platform.errors %} has-error{% endif %}">
+        <label for="{{ form.application_platform.id_for_label }}">Platform / application type</label>
+        {{ form.application_platform }}
+        {% if form.application_platform.errors %}<p class="error-text">{{ form.application_platform.errors.0 }}</p>{% endif %}
+      </div>
+
+      <div class="field{% if form.project_prompt.errors %} has-error{% endif %}">
+        <div class="card-header">
+          <label for="{{ form.project_prompt.id_for_label }}">Notes <span class="optional">(optional)</span></label>
+          <span class="muted small" x-text="prompt.length + ' / {{ prompt_max_length }}'"></span>
+        </div>
+        <textarea
+          class="textarea"
+          id="{{ form.project_prompt.id_for_label }}"
+          name="project_prompt"
+          maxlength="{{ prompt_max_length }}"
+          rows="8"
+          x-model="prompt"
+          placeholder="Environment: staging, seeded with 40 demo products.&#10;Navigation: cart icon is top-right, checkout is a 3-step flow.&#10;Authentication: sign in with the test account below. No SSO required."
+        ></textarea>
+        {% if form.project_prompt.errors %}<p class="error-text">{{ form.project_prompt.errors.0 }}</p>{% endif %}
+
+        <div class="alert alert-warning">
+          <span class="alert-icon" aria-hidden="true">⚠</span>
+          <div>
+            <strong>Use a dedicated test account</strong>
+            <p>Don't paste real production passwords here. Create a dedicated test account for the AI test runner to use instead.</p>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button type="button" class="btn btn-secondary" :disabled="refining || !prompt.trim()" @click="refineWithAI()">
+            <span x-show="!refining">Refine with AI (optional)</span>
+            <span x-show="refining" x-cloak>Refining&hellip;</span>
+          </button>
+          <span class="small" :style="statusError ? 'color: var(--danger)' : 'color: var(--text-muted)'" x-text="statusMsg"></span>
+        </div>
+      </div>
+    </div>
+
+    {% url 'projects:setup_details' project.id as back_url %}
+    {% include "partials/wizard_actions.html" with back_url=back_url only %}
+  </form>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('applicationContextPrompt', () => ({
+    prompt: '{{ form.project_prompt.value|default:""|escapejs }}',
+    refining: false,
+    statusMsg: '',
+    statusError: false,
+    _refineTimeout: null,
+
+    init() {
+      const ws = new WebSocket(punkHazard.wsUrl('/ws/projects/{{ project.id }}/agent-status/'));
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type !== 'prompt_refined' || !this.refining) return;
+        clearTimeout(this._refineTimeout);
+        this.refining = false;
+        if (data.error) {
+          this.statusMsg = data.error;
+          this.statusError = true;
+        } else {
+          this.prompt = data.refined_prompt;
+          this.statusMsg = 'Refined — review before continuing.';
+          this.statusError = false;
+        }
+      };
+    },
+
+    async refineWithAI() {
+      this.refining = true;
+      this.statusMsg = '';
+      this.statusError = false;
+      try {
+        const csrfToken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+        const resp = await fetch('{% url "projects:refine_prompt" project.id %}', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrfToken },
+          body: JSON.stringify({ prompt: this.prompt }),
+        });
+        if (resp.status === 202) {
+          this._refineTimeout = setTimeout(() => {
+            if (this.refining) {
+              this.refining = false;
+              this.statusMsg = 'Refinement timed out. Please try again.';
+              this.statusError = true;
+            }
+          }, 120000);
+          return;
+        }
+        const data = await resp.json();
+        this.statusMsg = data.error || 'Refinement failed.';
+        this.statusError = true;
+        this.refining = false;
+      } catch (err) {
+        this.statusMsg = 'Could not reach the server.';
+        this.statusError = true;
+        this.refining = false;
+      }
+    },
+  }));
+});
+</script>
+{% endblock %}

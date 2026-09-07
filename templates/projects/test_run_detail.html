@@ -1,356 +1,345 @@
-{% extends "dashboard/base_dashboard.html" %}
+{% extends "layouts/project.html" %}
 
-{% block dashboard_content %}
+{% comment %} Run detail — live via testRunLive, ported from the old (Tailwind-era)
+   test_run_detail.html: same WS URL, same message types
+   (current_state / pivot_status / test_run_status), same DOM effects
+   (reload 1.5s after a done/cancelled transition so the server-rendered
+   duration + "What happened" narrative catch up).
+
+   The whole page body (header actions, stat cards, case table) shares one
+   `x-data="testRunLive"` root, so header actions can react to the run's
+   live status — this means `block page` is overridden wholesale instead
+   of the usual page_header/project_content split (those blocks are
+   siblings in layouts/project.html and can't share one Alpine scope).
+
+   Context contract (projects.views._build_test_run_detail_context):
+     project, test_run, cases (Page[TestRunTestCase], failures first),
+     summary {total, created, in_progress, success, failed, cancelled},
+     readiness (RunReadiness — present only while test_run.status == "waiting"),
+     narrative, can_rerun_failed, failed_titles (unused directly here —
+     narrative already folds them in), form (TestCaseForm, for the shared
+     edit-case dialog's type/priority choices), can_edit, per_page,
+     allowed_per_page, elided_page_range, query_params.
+
+   Known gap: `readiness` is computed once at page load. If another tab
+   resets this run while this page is open, the WS flips testRunStatus
+   back to "waiting" but the readiness checklist card won't have anything
+   to render (no readiness payload rides the WS message) — reloading the
+   page recomputes it correctly. Not worth solving here since a Reset
+   triggered from *this* tab already gets a fresh server-rendered page. {% endcomment %}
+
+{% block title %}{{ test_run.display_name }} · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumb_extra %}
+  <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:test_run_list' project.id %}">Runs</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">{{ test_run.display_name }}</span>
+{% endblock %}
+
+{% block page %}
+{% url 'projects:test_run_delete' project.id test_run.id as test_run_delete_url %}
+{% url 'projects:test_run_abort' project.id test_run.id as test_run_abort_url %}
+{% url 'projects:test_run_reset' project.id test_run.id as test_run_reset_url %}
+{% url 'projects:test_case_list' project.id as test_case_list_url %}
 <div x-data="testRunLive">
-  {# BREADCRUMB #}
-  <nav class="mb-4 text-sm text-zinc-400">
-    <a href="{% url 'projects:list' %}" class="hover:text-zinc-200">Projects</a>
-    <span class="mx-1">/</span>
-    <a href="{% url 'projects:test_case_list' project_id=project.id %}" class="hover:text-zinc-200">{{ project.name }}</a>
-    <span class="mx-1">/</span>
-    <a href="{% url 'projects:test_run_list' project_id=project.id %}" class="hover:text-zinc-200">Test Runs</a>
-    <span class="mx-1">/</span>
-    <span class="text-zinc-200">#{{ test_run.id }}</span>
-  </nav>
 
-  {# HEADER #}
-  <div class="mb-6 flex items-center justify-between">
-    <div class="flex items-center gap-3">
-      <h1 class="text-2xl font-bold text-zinc-100">Test Run #{{ test_run.id }}</h1>
-      <span x-show="testRunStatus === 'waiting'" class="rounded-full bg-yellow-900/50 px-3 py-1 text-sm text-yellow-400">Waiting</span>
-      <span x-show="testRunStatus === 'started'" class="rounded-full bg-blue-900/50 px-3 py-1 text-sm text-blue-400">Started</span>
-      <span x-show="testRunStatus === 'done'" class="rounded-full bg-emerald-900/50 px-3 py-1 text-sm text-emerald-400">Done</span>
-      <span x-show="testRunStatus === 'cancelled'" class="rounded-full bg-orange-900/50 px-3 py-1 text-sm text-orange-400">Cancelled</span>
+  {# Section: Header — title, live subtitle, status-dependent actions #}
+  <div class="page-header">
+    <div>
+      <h1>{{ test_run.display_name }}</h1>
+      <p class="subtitle">
+        <template x-if="testRunStatus === 'waiting'">
+          <span>Draft · <span x-text="summary.total"></span> case<span x-text="summary.total === 1 ? '' : 's'"></span> selected</span>
+        </template>
+        <template x-if="testRunStatus === 'started'">
+          <span>Running since <time datetime="{{ test_run.started_at|date:'c' }}">{{ test_run.started_at|date:"M j, H:i" }}</time> · <span x-text="summary.total"></span> cases</span>
+        </template>
+        <template x-if="testRunStatus === 'done' || testRunStatus === 'cancelled'">
+          <span>Finished <time datetime="{{ test_run.finished_at|date:'c' }}">{{ test_run.finished_at|date:"M j, H:i" }}</time>{% if test_run.finished_at and test_run.started_at %} · {{ test_run.started_at|timesince:test_run.finished_at }}{% endif %} · <span x-text="summary.total"></span> cases</span>
+        </template>
+      </p>
     </div>
-    <div class="flex items-center gap-3">
-      {% if test_run.status == "waiting" and summary.total > 0 %}
-      <form method="post" action="{% url 'projects:test_run_start' project_id=project.id test_run_id=test_run.id %}">
+    <div class="actions">
+      <a class="btn btn-secondary" x-show="testRunStatus === 'waiting'" x-cloak href="{% url 'projects:test_case_list' project.id %}">Add cases</a>
+
+      <button type="button" class="btn btn-danger" x-show="testRunStatus === 'waiting'" x-cloak @click="$dispatch('open-delete-run')">Delete run</button>
+
+      <button type="button" class="btn btn-danger" x-show="testRunStatus === 'started'" x-cloak @click="$dispatch('open-abort-run')">Abort run</button>
+
+      {% if can_rerun_failed %}
+      <form method="post" action="{% url 'projects:test_run_rerun_failed' project.id test_run.id %}" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak>
         {% csrf_token %}
-        <button
-          type="submit"
-          class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500"
-        >
-          Start Run
-        </button>
+        <button type="submit" class="btn btn-secondary">Re-run failed</button>
       </form>
       {% endif %}
-      {% if test_run.status == "started" %}
-      <form
-        method="post"
-        action="{% url 'projects:test_run_abort' project_id=project.id test_run_id=test_run.id %}"
-        onsubmit="return confirm('Abort this test run? In-progress cases will be marked as failed and pending cases as cancelled.')"
-      >
-        {% csrf_token %}
-        <button
-          type="submit"
-          class="rounded-md bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-500"
-        >
-          Abort Run
-        </button>
-      </form>
-      {% endif %}
-      {% if test_run.status == "done" or test_run.status == "cancelled" %}
-      <form method="post" action="{% url 'projects:test_run_reset' project_id=project.id test_run_id=test_run.id %}" onsubmit="return confirm('Reset this test run? All results, logs, and screenshots will be cleared.')">
-        {% csrf_token %}
-        <button
-          type="submit"
-          class="rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500"
-        >
-          Reset Run
-        </button>
-      </form>
-      {% endif %}
-      {% if test_run.status == "waiting" %}
-      <form method="post" action="{% url 'projects:test_run_delete' project_id=project.id test_run_id=test_run.id %}" onsubmit="return confirm('Delete this test run and all its cases?')">
-        {% csrf_token %}
-        <button
-          type="submit"
-          class="rounded-md bg-red-900/50 px-4 py-2 text-sm font-medium text-red-400 hover:bg-red-900"
-        >
-          Delete Run
-        </button>
-      </form>
-      {% endif %}
-      <a
-        href="{% url 'projects:test_run_list' project_id=project.id %}"
-        class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
-      >
-        Back to Test Runs
-      </a>
+
+      <button type="button" class="btn btn-danger" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak @click="$dispatch('open-reset-run')">Reset run</button>
     </div>
   </div>
 
-  {# SUMMARY CARDS #}
-  <div class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-6">
-    <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
-      <p class="text-sm text-zinc-400">Total</p>
-      <p class="mt-1 text-2xl font-bold text-zinc-100" x-text="summary.total">{{ summary.total }}</p>
-    </div>
-    <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-4">
-      <p class="text-sm text-zinc-400">Created</p>
-      <p class="mt-1 text-2xl font-bold text-zinc-300" x-text="summary.created">{{ summary.created }}</p>
-    </div>
-    <div class="rounded-lg border border-blue-900 bg-blue-950/30 p-4">
-      <p class="text-sm text-blue-400">In Progress</p>
-      <p class="mt-1 text-2xl font-bold text-blue-300" x-text="summary.in_progress">{{ summary.in_progress }}</p>
-    </div>
-    <div class="rounded-lg border border-emerald-900 bg-emerald-950/30 p-4">
-      <p class="text-sm text-emerald-400">Success</p>
-      <p class="mt-1 text-2xl font-bold text-emerald-300" x-text="summary.success">{{ summary.success }}</p>
-    </div>
-    <div class="rounded-lg border border-red-900 bg-red-950/30 p-4">
-      <p class="text-sm text-red-400">Failed</p>
-      <p class="mt-1 text-2xl font-bold text-red-300" x-text="summary.failed">{{ summary.failed }}</p>
-    </div>
-    <div class="rounded-lg border border-orange-900 bg-orange-950/30 p-4">
-      <p class="text-sm text-orange-400">Cancelled</p>
-      <p class="mt-1 text-2xl font-bold text-orange-300" x-text="summary.cancelled">{{ summary.cancelled }}</p>
-    </div>
-  </div>
+  {% include "partials/project_tabs.html" with project=project active_tab=active_tab only %}
 
-  {# TEST CASES TABLE #}
-  {% if cases %}
-  <div class="overflow-x-auto rounded-lg border border-zinc-800">
-    <table class="w-full text-left text-sm">
-      <thead class="border-b border-zinc-800 bg-zinc-900 text-xs uppercase text-zinc-400">
-        <tr>
-          <th class="px-4 py-3">Test Case</th>
-          <th class="px-4 py-3">Status</th>
-          <th class="px-4 py-3">Screenshot</th>
-          <th class="px-4 py-3">Created</th>
-          <th class="px-4 py-3">Actions</th>
-        </tr>
-      </thead>
-      <tbody class="divide-y divide-zinc-800">
-        {% for pivot in cases %}
-        <tr class="bg-zinc-950 hover:bg-zinc-900" data-pivot-id="{{ pivot.id }}">
-          <td class="px-4 py-3 font-medium text-zinc-100">{{ pivot.test_case.title }}</td>
-          <td class="px-4 py-3">
-            <span
-              :class="getPivotBadgeClass(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
-              x-text="getPivotLabel(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
-            >{{ pivot.get_status_display }}</span>
-          </td>
-          <td class="px-4 py-3">
-            {% if pivot.last_screenshot %}
-            <a href="{{ pivot.last_screenshot.image.url }}" target="_blank">
-              <img src="{{ pivot.last_screenshot.image.url }}" loading="lazy" alt="Last screenshot" class="h-[60px] w-[80px] rounded border border-zinc-700 object-cover transition-opacity hover:opacity-80">
-            </a>
-            {% else %}
-            <span class="text-xs text-zinc-600">--</span>
-            {% endif %}
-          </td>
-          <td class="px-4 py-3 text-zinc-400">{{ pivot.created_at|date:"M d, Y H:i" }}</td>
-          <td class="px-4 py-3 flex items-center gap-2">
+  {# Section: Draft readiness — checklist + the actual Start run action #}
+  <template x-if="testRunStatus === 'waiting'">
+    <div class="card">
+      <div class="card-header">
+        <h2>Ready to run?</h2>
+      </div>
+      {% include "partials/readiness_checklist.html" with readiness=readiness only %}
+      <form method="post" action="{% url 'projects:test_run_start' project.id test_run.id %}" class="actions" style="margin-top: 16px;">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-primary"{% if readiness.blockers %} disabled aria-disabled="true"{% endif %}>Start run</button>
+      </form>
+      {% if readiness.blockers %}<p class="hint">Resolve the items above to start this run.</p>{% endif %}
+    </div>
+  </template>
+
+  {# Section: Result summary — stat cards + human-readable narrative #}
+  <template x-if="testRunStatus !== 'waiting'">
+    <div>
+      <div class="grid grid-4">
+        <div class="stat-card">
+          <div class="stat-label">Passed</div>
+          <div class="stat-value is-success" x-text="summary.success"></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Failed</div>
+          <div class="stat-value is-danger" x-text="summary.failed"></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Duration</div>
+          <div class="stat-value">{% if test_run.finished_at and test_run.started_at %}{{ test_run.started_at|timesince:test_run.finished_at }}{% elif test_run.started_at %}Running…{% else %}—{% endif %}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Pass rate</div>
+          <div class="stat-value" x-text="summary.total > 0 ? Math.round((summary.success / summary.total) * 100) + '%' : '—'"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h2>What happened</h2>
+        </div>
+        <p>{{ narrative }}</p>
+      </div>
+    </div>
+  </template>
+
+  {# Section: Case-level results, failures first #}
+  <div class="card">
+    <div class="card-header">
+      <h2>Case results</h2>
+    </div>
+    <p class="hint">Logs and screenshots are recorded per case. Open a case to see its full execution log and every screenshot the agent took.</p>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th scope="col">Case</th>
+            <th scope="col">Result</th>
+            <th scope="col">Duration</th>
+            <th scope="col">Failure reason</th>
+            {% if can_edit %}<th scope="col" x-show="testRunStatus === 'waiting'" x-cloak><span class="visually-hidden">Edit / remove</span></th>{% endif %}
+            <th scope="col"><span class="visually-hidden">Details</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for pivot in cases %}
+          <tr data-pivot-id="{{ pivot.id }}">
+            <td data-label="Case" class="cell-primary">
+              <a href="{% url 'projects:test_run_case_detail' project.id test_run.id pivot.id %}">{{ pivot.test_case.title }}</a>
+              {% if pivot.test_case.testrail_id %}<div class="muted small">{{ pivot.test_case.testrail_id }}</div>{% endif %}
+            </td>
+            <td data-label="Result">
+              <span
+                class="badge"
+                data-status="{{ pivot.status }}"
+                :class="pivotBadgeClass(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
+                x-text="pivotBadgeLabel(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
+              >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "cancelled" %}Cancelled{% endif %}</span>
+            </td>
+            <td data-label="Duration">{% if pivot.finished_at and pivot.started_at %}{{ pivot.started_at|timesince:pivot.finished_at }}{% else %}—{% endif %}</td>
+            <td data-label="Failure reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% else %}—{% endif %}</td>
             {% if can_edit %}
-            <button
-              x-show="testRunStatus !== 'started'"
-              @click="openEditModal($el)"
-              data-id="{{ pivot.test_case.id }}"
-              data-title="{{ pivot.test_case.title|escape }}"
-              data-testrail-id="{{ pivot.test_case.testrail_id|escape }}"
-              data-template="{{ pivot.test_case.template|escape }}"
-              data-type="{{ pivot.test_case.type|escape }}"
-              data-priority="{{ pivot.test_case.priority|escape }}"
-              data-estimate="{{ pivot.test_case.estimate|escape }}"
-              data-references="{{ pivot.test_case.references|escape }}"
-              data-preconditions="{{ pivot.test_case.preconditions|escape }}"
-              data-steps="{{ pivot.test_case.steps|escape }}"
-              data-expected="{{ pivot.test_case.expected|escape }}"
-              class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
-            >
-              Edit
-            </button>
+            <td data-label="" x-show="testRunStatus === 'waiting'" x-cloak>
+              <div class="actions">
+                <button
+                  type="button"
+                  class="btn btn-sm btn-secondary"
+                  data-id="{{ pivot.test_case.id }}"
+                  data-title="{{ pivot.test_case.title|escape }}"
+                  data-testrail-id="{{ pivot.test_case.testrail_id|escape }}"
+                  data-template="{{ pivot.test_case.template|escape }}"
+                  data-type="{{ pivot.test_case.type|escape }}"
+                  data-priority="{{ pivot.test_case.priority|escape }}"
+                  data-estimate="{{ pivot.test_case.estimate|escape }}"
+                  data-references="{{ pivot.test_case.references|escape }}"
+                  data-preconditions="{{ pivot.test_case.preconditions|escape }}"
+                  data-steps="{{ pivot.test_case.steps|escape }}"
+                  data-expected="{{ pivot.test_case.expected|escape }}"
+                  @click="$dispatch('open-edit-run-case', {...$el.dataset})"
+                >Edit</button>
+                <button type="button" class="btn btn-sm btn-danger" @click="$dispatch('open-remove-case-{{ pivot.id }}')">Remove</button>
+              </div>
+            </td>
             {% endif %}
-            <a
-              href="{% url 'projects:test_run_case_detail' project_id=project.id test_run_id=test_run.id pivot_id=pivot.id %}"
-              class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
-            >
-              View
-            </a>
-            {% if test_run.status == "waiting" %}
-            <form method="post" action="{% url 'projects:test_run_remove_case' project_id=project.id test_run_id=test_run.id pivot_id=pivot.id %}" onsubmit="return confirm('Remove this case from the run?')">
-              {% csrf_token %}
-              <button type="submit" class="rounded-md bg-red-900/50 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-900">
-                Remove
-              </button>
-            </form>
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+            <td data-label="Details"><a class="btn btn-sm btn-ghost" href="{% url 'projects:test_run_case_detail' project.id test_run.id pivot.id %}">Logs &amp; screenshots</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if not cases %}
+      {% include "partials/empty_state.html" with icon="▤" title="No cases in this run" body="Add test cases to this draft run before starting it." primary_label="Add cases" primary_url=test_case_list_url only %}
+    {% endif %}
   </div>
-  {% else %}
-  <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-8 text-center">
-    <p class="text-zinc-400">No test cases in this run.</p>
+
+  {% include "partials/pagination.html" with page_obj=cases per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range query_params=query_params %}
+
+  {# Section: Destructive-action confirm dialogs #}
+  {% include "partials/confirm_dialog.html" with dialog_id="delete-run" title="Delete this run?" body="This permanently deletes the run and all of its case results, logs, and screenshots." confirm_label="Delete run" action_url=test_run_delete_url %}
+  {% include "partials/confirm_dialog.html" with dialog_id="abort-run" title="Abort this run?" body="In-progress cases will be marked as failed and any cases still pending will be marked as cancelled." confirm_label="Abort run" action_url=test_run_abort_url %}
+  {% include "partials/confirm_dialog.html" with dialog_id="reset-run" title="Reset this run?" body="All results, logs, and screenshots will be cleared and the run returns to draft." confirm_label="Reset run" action_url=test_run_reset_url %}
+
+  {% if can_edit %}
+  {% for pivot in cases %}
+  <div
+    class="dialog-backdrop"
+    x-data="dialog()"
+    x-show="open"
+    x-cloak
+    x-on:open-remove-case-{{ pivot.id }}.window="show()"
+    x-on:keydown.escape.window="close()"
+    x-trap.noscroll="open"
+    @click.self="close()"
+  >
+    <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="remove-case-{{ pivot.id }}-title">
+      <h3 id="remove-case-{{ pivot.id }}-title">Remove this case from the run?</h3>
+      <p>&ldquo;{{ pivot.test_case.title }}&rdquo; will be removed from this run. The test case itself is not deleted.</p>
+      <form method="post" action="{% url 'projects:test_run_remove_case' project.id test_run.id pivot.id %}">
+        {% csrf_token %}
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-danger-solid">Remove</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+
+  {% comment %} Shared edit-case dialog — one instance, populated from whichever row's
+     Edit button dispatched `open-edit-run-case` with its dataset as detail. {% endcomment %}
+  <div
+    class="dialog-backdrop"
+    x-data="{
+      open: false,
+      id: 0, title: '', testrailId: '', template: '', type: '', priority: '',
+      estimate: '', references: '', preconditions: '', steps: '', expected: '',
+      show(detail) {
+        this.id = detail.id;
+        this.title = detail.title;
+        this.testrailId = detail.testrailId;
+        this.template = detail.template;
+        this.type = detail.type;
+        this.priority = detail.priority;
+        this.estimate = detail.estimate;
+        this.references = detail.references;
+        this.preconditions = detail.preconditions;
+        this.steps = detail.steps;
+        this.expected = detail.expected;
+        this.open = true;
+      },
+      close() { this.open = false; },
+    }"
+    x-show="open"
+    x-cloak
+    x-on:open-edit-run-case.window="show($event.detail)"
+    x-on:keydown.escape.window="close()"
+    x-trap.noscroll="open"
+    @click.self="close()"
+  >
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="edit-run-case-title">
+      <div class="card-header">
+        <h3 id="edit-run-case-title">Edit test case</h3>
+        <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+      </div>
+
+      <form method="post" :action="'{% url 'projects:test_run_case_edit' project.id test_run.id 0 %}'.replace('/0/', '/' + id + '/')">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{% url 'projects:test_run_detail' project.id test_run.id %}">
+
+        <div class="field">
+          <label class="label" for="edit-run-case-title-input">Title</label>
+          <input class="input" id="edit-run-case-title-input" type="text" name="title" x-model="title" required>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label class="label" for="edit-run-case-type">Type</label>
+            <select class="select" id="edit-run-case-type" name="type" x-model="type">
+              {% for value, label in form.fields.type.choices %}
+              <option value="{{ value }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label class="label" for="edit-run-case-priority">Priority</label>
+            <select class="select" id="edit-run-case-priority" name="priority" x-model="priority">
+              {% for value, label in form.fields.priority.choices %}
+              <option value="{{ value }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label class="label" for="edit-run-case-testrail-id">TestRail ID</label>
+            <input class="input" id="edit-run-case-testrail-id" type="text" name="testrail_id" x-model="testrailId">
+          </div>
+          <div class="field">
+            <label class="label" for="edit-run-case-template">Template</label>
+            <input class="input" id="edit-run-case-template" type="text" name="template" x-model="template">
+          </div>
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label class="label" for="edit-run-case-estimate">Estimate</label>
+            <input class="input" id="edit-run-case-estimate" type="text" name="estimate" x-model="estimate">
+          </div>
+          <div class="field">
+            <label class="label" for="edit-run-case-references">References</label>
+            <input class="input" id="edit-run-case-references" type="text" name="references" x-model="references">
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="label" for="edit-run-case-preconditions">Preconditions</label>
+          <textarea class="textarea" id="edit-run-case-preconditions" name="preconditions" rows="3" x-model="preconditions"></textarea>
+        </div>
+
+        <div class="field">
+          <label class="label" for="edit-run-case-steps">Steps</label>
+          <textarea class="textarea" id="edit-run-case-steps" name="steps" rows="3" x-model="steps"></textarea>
+        </div>
+
+        <div class="field">
+          <label class="label" for="edit-run-case-expected">Expected result</label>
+          <textarea class="textarea" id="edit-run-case-expected" name="expected" rows="3" x-model="expected"></textarea>
+        </div>
+
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
   </div>
   {% endif %}
 
-  {# PAGINATION #}
-  {% include "components/pagination.html" with page_obj=cases %}
-
-  {# EDIT MODAL #}
-  <div
-    x-show="showEditModal"
-    x-cloak
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-    @click.self="showEditModal = false"
-  >
-    <div
-      class="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900 p-6"
-      @click.stop
-    >
-      <h2 class="mb-4 text-lg font-semibold text-zinc-100">Edit Test Case</h2>
-      <form
-        method="post"
-        :action="'{% url 'projects:test_run_case_edit' project_id=project.id test_run_id=test_run.id test_case_id=0 %}'.replace('/0/', '/' + editId + '/')"
-      >
-        {% csrf_token %}
-        <input
-          type="hidden"
-          name="next"
-          value="{% url 'projects:test_run_detail' project_id=project.id test_run_id=test_run.id %}"
-        >
-        <div class="space-y-4">
-
-          {# Title #}
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Title</label>
-            <input
-              type="text"
-              name="title"
-              x-model="editTitle"
-              required
-              class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            >
-          </div>
-
-          {# Type + Priority #}
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Type</label>
-              <select
-                name="type"
-                x-model="editType"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-                {% for value, label in form.fields.type.choices %}
-                <option value="{{ value }}">{{ label }}</option>
-                {% endfor %}
-              </select>
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Priority</label>
-              <select
-                name="priority"
-                x-model="editPriority"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-                {% for value, label in form.fields.priority.choices %}
-                <option value="{{ value }}">{{ label }}</option>
-                {% endfor %}
-              </select>
-            </div>
-          </div>
-
-          {# TestRail ID + Template #}
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">TestRail ID</label>
-              <input
-                type="text"
-                name="testrail_id"
-                x-model="editTestrailId"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Template</label>
-              <input
-                type="text"
-                name="template"
-                x-model="editTemplate"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-            </div>
-          </div>
-
-          {# Estimate + References #}
-          <div class="grid grid-cols-2 gap-4">
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">Estimate</label>
-              <input
-                type="text"
-                name="estimate"
-                x-model="editEstimate"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-            </div>
-            <div>
-              <label class="mb-1 block text-sm font-medium text-zinc-300">References</label>
-              <input
-                type="text"
-                name="references"
-                x-model="editReferences"
-                class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-              >
-            </div>
-          </div>
-
-          {# Preconditions #}
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Preconditions</label>
-            <textarea
-              name="preconditions"
-              x-model="editPreconditions"
-              rows="3"
-              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            ></textarea>
-          </div>
-
-          {# Steps #}
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Steps</label>
-            <textarea
-              name="steps"
-              x-model="editSteps"
-              rows="3"
-              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            ></textarea>
-          </div>
-
-          {# Expected Result #}
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Expected Result</label>
-            <textarea
-              name="expected"
-              x-model="editExpected"
-              rows="3"
-              class="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            ></textarea>
-          </div>
-
-        </div>
-        <div class="mt-6 flex justify-end gap-3">
-          <button
-            type="button"
-            @click="showEditModal = false"
-            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-          >
-            Save
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
 </div>
 {% endblock %}
 
@@ -373,62 +362,28 @@ document.addEventListener('alpine:init', () => {
       {% endfor %}
     },
 
-    showEditModal: false,
-    editId: 0,
-    editTitle: '',
-    editTestrailId: '',
-    editTemplate: '',
-    editType: '',
-    editPriority: '',
-    editEstimate: '',
-    editReferences: '',
-    editPreconditions: '',
-    editSteps: '',
-    editExpected: '',
-
-    openEditModal(el) {
-      this.editId = el.dataset.id;
-      this.editTitle = el.dataset.title;
-      this.editTestrailId = el.dataset.testrailId;
-      this.editTemplate = el.dataset.template;
-      this.editType = el.dataset.type;
-      this.editPriority = el.dataset.priority;
-      this.editEstimate = el.dataset.estimate;
-      this.editReferences = el.dataset.references;
-      this.editPreconditions = el.dataset.preconditions;
-      this.editSteps = el.dataset.steps;
-      this.editExpected = el.dataset.expected;
-      this.showEditModal = true;
+    pivotBadgeClass(status) {
+      return {
+        created: 'badge-draft',
+        in_progress: 'badge-running',
+        success: 'badge-passed',
+        failed: 'badge-failed',
+        cancelled: 'badge-cancelled',
+      }[status] || 'badge-draft';
     },
 
-    getPivotBadgeClass(status) {
-      const base = 'rounded-full px-2 py-0.5 text-xs';
-      switch(status) {
-        case 'created': return base + ' bg-zinc-800 text-zinc-400';
-        case 'in_progress': return base + ' bg-blue-900/50 text-blue-400';
-        case 'success': return base + ' bg-emerald-900/50 text-emerald-400';
-        case 'failed': return base + ' bg-red-900/50 text-red-400';
-        case 'cancelled': return base + ' bg-orange-900/50 text-orange-400';
-        default: return base + ' bg-zinc-800 text-zinc-400';
-      }
-    },
-
-    getPivotLabel(status) {
-      switch(status) {
-        case 'created': return 'Created';
-        case 'in_progress': return 'In Progress';
-        case 'success': return 'Success';
-        case 'failed': return 'Failed';
-        case 'cancelled': return 'Cancelled';
-        default: return status;
-      }
+    pivotBadgeLabel(status) {
+      return {
+        created: 'Not started',
+        in_progress: 'Running',
+        success: 'Passed',
+        failed: 'Failed',
+        cancelled: 'Cancelled',
+      }[status] || status;
     },
 
     init() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(
-        protocol + '//' + window.location.host + '/ws/projects/{{ project.id }}/test-runs/{{ test_run.id }}/'
-      );
+      const ws = new WebSocket(punkHazard.wsUrl('/ws/projects/{{ project.id }}/test-runs/{{ test_run.id }}/'));
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
@@ -437,7 +392,7 @@ document.addEventListener('alpine:init', () => {
           this.testRunStatus = data.test_run_status;
           this.summary = data.summary;
           this.pivotStatuses = Object.fromEntries(
-            data.pivots.map(p => [p.pivot_id, p.status])
+            data.pivots.map((p) => [p.pivot_id, p.status])
           );
           return;
         }
@@ -449,16 +404,19 @@ document.addEventListener('alpine:init', () => {
         }
 
         if (data.type === 'test_run_status') {
-          const prev = this.testRunStatus;
+          const previousStatus = this.testRunStatus;
           this.testRunStatus = data.test_run_status;
           this.summary = data.summary;
-          if ((data.test_run_status === 'done' || data.test_run_status === 'cancelled') && prev !== data.test_run_status) {
+          const justFinished = data.test_run_status === 'done' || data.test_run_status === 'cancelled';
+          if (justFinished && previousStatus !== data.test_run_status) {
+            // The finished/duration text and "What happened" narrative are
+            // server-rendered — reload once to pick them up.
             setTimeout(() => window.location.reload(), 1500);
           }
           return;
         }
       };
-    }
+    },
   }));
 });
 </script>

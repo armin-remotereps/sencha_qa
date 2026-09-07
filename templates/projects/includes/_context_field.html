@@ -1,0 +1,19 @@
+{% comment %}
+  Renders one ApplicationContextForm field: label, widget, hint, errors.
+  Local to this page (not a shared partial) since only this template uses
+  it today — worth promoting to partials/_form_field.html if the wizard's
+  step_context.html (same form, owned by another page-template pass)
+  wants the identical markup.
+
+  Context contract:
+    field — a Django BoundField
+{% endcomment %}
+<div class="field{% if field.errors %} has-error{% endif %}">
+  <label for="{{ field.id_for_label }}">
+    {{ field.label }}
+    {% if not field.field.required %}<span class="optional">(optional)</span>{% endif %}
+  </label>
+  {{ field }}
+  {% if field.help_text %}<p class="hint">{{ field.help_text }}</p>{% endif %}
+  {% for error in field.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+</div>

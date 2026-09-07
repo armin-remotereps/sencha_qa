@@ -1,14 +1,50 @@
-{% extends "dashboard/base_dashboard.html" %}
+{% extends "layouts/app.html" %}
 
-{% block title %}Dashboard — Auto Tester{% endblock %}
+{% comment %} Dashboard home.
 
-{% block dashboard_content %}
-<div>
-  <h1 class="text-2xl font-bold text-zinc-100">
-    Welcome, {{ request.user.first_name }}!
-  </h1>
-  <p class="mt-2 text-zinc-400">
-    Select an option from the sidebar to get started.
-  </p>
+   Context contract (dashboard/services.py):
+     dashboard — DashboardData (has_projects, summary, attention, projects, activity) {% endcomment %}
+
+{% block title %}Dashboard · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page %}
+{# Section: Welcome + primary action #}
+{% now "G" as current_hour %}
+{% with hour=current_hour|add:0 in_progress=dashboard.summary.runs_in_progress attention_count=dashboard.attention|length %}
+<div class="page-header">
+  <div>
+    <h1>
+      {% if hour < 12 %}Good morning{% elif hour < 18 %}Good afternoon{% else %}Good evening{% endif %},
+      {{ user.first_name|default:user.email }}
+    </h1>
+    {% if in_progress or attention_count %}
+      <p class="subtitle">
+        {% if in_progress %}{{ in_progress }} run{{ in_progress|pluralize }} in progress{% endif %}
+        {% if in_progress and attention_count %} · {% endif %}
+        {% if attention_count %}{{ attention_count }} item{{ attention_count|pluralize }} need{{ attention_count|pluralize:"s," }} attention{% endif %}
+      </p>
+    {% endif %}
+  </div>
+  <div class="actions">
+    <a class="btn btn-primary" href="{% url 'projects:create' %}">+ New project</a>
+  </div>
 </div>
+{% endwith %}
+
+{% if not dashboard.has_projects %}
+  {% url 'projects:create' as create_url %}
+  {% include "partials/empty_state.html" with icon="▣" title="No projects yet" body="A project is one application under test. Create your first one and the setup wizard walks you through context, test cases, and connecting a test machine." primary_label="Create your first project" primary_url=create_url only %}
+{% else %}
+<div class="stack">
+  {% if dashboard.attention %}
+    {% include "dashboard/includes/_attention.html" with attention=dashboard.attention only %}
+  {% endif %}
+
+  {% include "dashboard/includes/_run_summary.html" with summary=dashboard.summary only %}
+
+  {% include "dashboard/includes/_recent_projects.html" with projects=dashboard.projects only %}
+
+  {% include "dashboard/includes/_recent_activity.html" with activity=dashboard.activity only %}
+</div>
+{% endif %}
 {% endblock %}

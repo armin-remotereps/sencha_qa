@@ -1,0 +1,32 @@
+{% load static %}
+{% comment %} Desktop sidebar (hidden below 1024px — see .sidebar in punk-hazard.css).
+
+   Context contract:
+     active_nav — "dashboard" | "projects", forwarded to partials/nav_links.html
+     user       — the logged-in CustomUser (from django.contrib.auth) {% endcomment %}
+<aside class="sidebar">
+  <a class="brand" href="{% url 'dashboard:index' %}">
+    <img src="{% static 'branding/punk-hazard-mark.png' %}" alt="Punk Hazard home">
+    <span class="brand-name">{{ brand_name|default:"Punk Hazard" }}</span>
+  </a>
+
+  <nav class="nav" aria-label="Main navigation">
+    {% include "partials/nav_links.html" with active_nav=active_nav only %}
+  </nav>
+
+  <div class="sidebar-footer">
+    <div class="user-chip">
+      <span class="avatar" aria-hidden="true">{% if user.first_name %}{{ user.first_name|first|upper }}{{ user.last_name|first|upper }}{% else %}{{ user.email|first|upper }}{% endif %}</span>
+      <div>
+        <div class="user-name">{{ user.get_full_name|default:user.email }}</div>
+        <div class="muted small">{{ user.email }}</div>
+      </div>
+    </div>
+    <nav class="nav" aria-label="User menu">
+      <form method="post" action="{% url 'accounts:logout' %}">
+        {% csrf_token %}
+        <button type="submit" class="nav-link-button">Sign out</button>
+      </form>
+    </nav>
+  </div>
+</aside>

@@ -1,0 +1,49 @@
+{% comment %}
+  Latest runs card.
+
+  Context contract:
+    project  — the current Project
+    overview — projects.services.ProjectOverview, whose recent_runs is a
+               list of the most recent TestRuns (newest first), each
+               annotated case_count / success_count / failed_count
+{% endcomment %}
+<section aria-labelledby="latest-runs-h" class="card">
+  <div class="card-header">
+    <h2 id="latest-runs-h">Latest runs</h2>
+    <a class="btn btn-sm btn-ghost" href="{% url 'projects:test_run_list' project.id %}">View all runs</a>
+  </div>
+  {% if overview.recent_runs %}
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th scope="col">Run</th>
+            <th scope="col">Date</th>
+            <th scope="col">Result</th>
+            <th scope="col">Cases</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for run in overview.recent_runs %}
+            <tr>
+              <td data-label="Run" class="cell-primary">
+                <a href="{% url 'projects:test_run_detail' project.id run.id %}">{{ run.display_name }}</a>
+              </td>
+              <td data-label="Date">
+                <time datetime="{{ run.finished_at|default:run.started_at|date:"c" }}">
+                  {{ run.finished_at|default:run.started_at|date:"M j, H:i" }}
+                </time>
+              </td>
+              <td data-label="Result">
+                {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count only %}
+              </td>
+              <td data-label="Cases">{{ run.case_count }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No runs yet.</p>
+  {% endif %}
+</section>

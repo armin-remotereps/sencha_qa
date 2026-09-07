@@ -1,0 +1,23 @@
+{% comment %} Internal helper for partials/messages.html — one dismissible alert.
+   Context contract: message, alert_class, alert_role {% endcomment %}
+<div
+  class="alert {{ alert_class }}"
+  role="{{ alert_role }}"
+  x-data="dismissible()"
+  x-show="shown"
+>
+  <span class="alert-icon" aria-hidden="true">
+    {% if alert_class == "alert-danger" %}⚠{% elif alert_class == "alert-success" %}✓{% elif alert_class == "alert-warning" %}⚠{% else %}ℹ{% endif %}
+  </span>
+  <div>
+    <p>{{ message }}</p>
+  </div>
+  <button
+    type="button"
+    class="toast-dismiss"
+    @click="dismiss()"
+    aria-label="Dismiss this message"
+  >
+    ✕
+  </button>
+</div>

@@ -1,0 +1,115 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Onboarding wizard, step 4: connect a test machine.
+
+   Context contract (projects.views.setup_machine): project, wizard_step
+   (always 4), wizard_mode (always "edit"). Everything else (connection
+   state) is read straight off `project` at load time and kept live over
+   the agent-status WS — same fields/shape as the connection-status
+   component in the old templates/projects/detail.html (L10-45), and the
+   scope partials/advanced_diagnostics.html expects (see that partial's
+   docstring). {% endcomment %}
+
+{% block title %}Connect a test machine · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="{% url 'dashboard:index' %}">Dashboard</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:list' %}">Projects</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span>{{ project.name }}</span>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Setup</span>
+</nav>
+{% endblock %}
+
+{% block page %}
+{% comment %} Controller-reported values are untrusted: json_script escapes them,
+   JSON.parse reads them back — same pattern as the old detail.html. {% endcomment %}
+{{ project.agent_system_info|json_script:"agent-system-info" }}
+{{ project.agent_capabilities|json_script:"agent-capabilities" }}
+{{ project.agent_omniparser_status|json_script:"agent-omniparser-status" }}
+<div
+  class="narrow"
+  x-data="{
+    agentConnected: {{ project.agent_connected|yesno:'true,false' }},
+    systemInfo: JSON.parse(document.getElementById('agent-system-info').textContent),
+    lastConnectedAt: '{{ project.last_connected_at|date:'N j, Y, P'|default:'' }}',
+    clientVersion: '{{ project.agent_client_version|escapejs }}',
+    capabilities: JSON.parse(document.getElementById('agent-capabilities').textContent),
+    omniparserStatus: JSON.parse(document.getElementById('agent-omniparser-status').textContent),
+
+    init() {
+      const ws = new WebSocket(punkHazard.wsUrl('/ws/projects/{{ project.id }}/agent-status/'));
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type !== 'agent_status') return;
+        this.agentConnected = data.agent_connected;
+        this.systemInfo = data.agent_system_info || {};
+        this.lastConnectedAt = data.last_connected_at || '';
+        this.clientVersion = data.agent_client_version || '';
+        this.capabilities = data.agent_capabilities || [];
+        this.omniparserStatus = data.agent_omniparser_status || {};
+      };
+    },
+  }"
+>
+
+  <h1>Connect a test machine</h1>
+  <p class="subtitle">Install the Test Runner on a machine you control so Punk Hazard has somewhere to actually run your tests.</p>
+
+  {% include "partials/wizard_steps.html" with project=project wizard_step=wizard_step only %}
+
+  <div class="card">
+    <p>Punk Hazard doesn&rsquo;t run tests in the cloud &mdash; it drives a real machine you control, the same way a person would: clicking, typing, and taking screenshots. The <strong>Test Runner</strong> is a small program you install on that machine so Punk Hazard can connect to it.</p>
+  </div>
+
+  {% include "partials/runner_download_card.html" with project=project %}
+
+  <div class="card">
+    <div class="card-header">
+      <h2>Set it up</h2>
+    </div>
+    <p class="muted">Pick the operating system of the test machine to see the matching commands.</p>
+    {% include "partials/os_setup_tabs.html" %}
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <h2>Connection status</h2>
+    </div>
+
+    <template x-if="!agentConnected">
+      <div>
+        <p><span class="badge badge-draft">Waiting for connection&hellip;</span></p>
+        <div class="skeleton skeleton-text" style="width: 60%;"></div>
+      </div>
+    </template>
+
+    <template x-if="agentConnected">
+      <div>
+        <p><span class="badge badge-connected">Test machine connected</span></p>
+        <div class="alert alert-success" style="margin: 0;">
+          <span class="alert-icon" aria-hidden="true">✓</span>
+          <div>
+            <p
+              x-text="(systemInfo.hostname || 'The test machine') + (omniparserStatus.state === 'ready' ? ' is connected and ready.' : ' is connected — visual engine starting.')"
+            ></p>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  {% include "partials/advanced_diagnostics.html" with project=project %}
+
+  {% url 'projects:setup_cases' project.id as back_url %}
+  <div class="wizard-actions">
+    <a class="btn btn-secondary" href="{{ back_url }}">&larr; Back</a>
+    <span class="spacer"></span>
+    <a class="btn btn-primary" href="{% url 'projects:setup_run' project.id %}">Continue &rarr;</a>
+  </div>
+
+</div>
+{% endblock %}

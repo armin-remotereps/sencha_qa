@@ -1,0 +1,145 @@
+{% extends "layouts/project.html" %}
+
+{% comment %} Import from TestRail: dropzone + upload history with live progress.
+   Replaces the old templates/projects/uploads.html.
+
+   Context contract (projects.views.test_case_import):
+     project           — current Project
+     uploads           — Page[TestCaseUpload], newest first
+     upload_create_url — POST target for the dropzone form
+     per_page / allowed_per_page / elided_page_range / query_params — pagination {% endcomment %}
+{% block title %}Import · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumb_extra %}
+  <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:test_case_list' project.id %}">Test Cases</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Import</span>
+{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>Import from TestRail</h1>
+    <p class="subtitle">Upload a TestRail XML export and Punk Hazard will parse each case.</p>
+  </div>
+</div>
+{% endblock %}
+
+{% block project_content %}
+<div class="card">
+  <p class="hint">File requirements: TestRail XML export (<code>.xml</code>), up to 10 MB.</p>
+
+  <form method="post" action="{{ upload_create_url }}" enctype="multipart/form-data">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ request.get_full_path }}">
+    {% include "partials/dropzone.html" %}
+  </form>
+</div>
+
+<div class="card" x-data="uploadManager()">
+  <div class="card-header">
+    <h3>Import history</h3>
+  </div>
+
+  {% if uploads %}
+    {% include "projects/includes/_import_history_table.html" with project=project uploads=uploads %}
+  {% else %}
+    {% include "partials/empty_state.html" with icon="⇪" title="No imports yet" body="Uploaded TestRail exports and their progress will show up here." only %}
+  {% endif %}
+
+  {% include "partials/pagination.html" with page_obj=uploads per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range query_params=query_params %}
+</div>
+
+{% include "projects/includes/_upload_delete_dialog.html" with project=project %}
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('alpine:init', () => {
+  /**
+   * Live progress for the upload history table. Ported from the old
+   * templates/projects/uploads.html uploadManager: one WebSocket updates
+   * each row's badge / progress bar / error text in place by upload_id,
+   * then reloads the page once a row reaches a terminal status so the
+   * server-rendered actions column (Cancel disappearing, "View test
+   * cases" appearing, …) catches up.
+   */
+  Alpine.data('uploadManager', () => ({
+    statusBadgeClass(status) {
+      switch (status) {
+        case 'pending':
+        case 'processing':
+          return 'badge badge-running';
+        case 'completed':
+          return 'badge badge-passed';
+        case 'failed':
+          return 'badge badge-failed';
+        case 'cancelled':
+          return 'badge badge-cancelled';
+        default:
+          return 'badge badge-draft';
+      }
+    },
+
+    statusLabel(status) {
+      switch (status) {
+        case 'pending':
+        case 'processing':
+          return 'Importing…';
+        case 'completed':
+          return 'Imported';
+        case 'failed':
+          return 'Failed';
+        case 'cancelled':
+          return 'Cancelled';
+        default:
+          return status;
+      }
+    },
+
+    init() {
+      const ws = new WebSocket(window.punkHazard.wsUrl('/ws/projects/{{ project.id }}/uploads/'));
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        const row = document.querySelector('[data-upload-id="' + data.upload_id + '"]');
+        if (!row) {
+          return;
+        }
+
+        const badge = row.querySelector('[data-status]');
+        const previousStatus = badge ? badge.dataset.status : '';
+        if (badge) {
+          badge.className = this.statusBadgeClass(data.status);
+          badge.textContent = this.statusLabel(data.status);
+          badge.dataset.status = data.status;
+        }
+
+        const progressText = row.querySelector('[data-progress]');
+        if (progressText) {
+          progressText.textContent = data.processed_cases + ' / ' + data.total_cases;
+        }
+
+        const progressBar = row.querySelector('[data-progress-bar]');
+        if (progressBar && data.total_cases > 0) {
+          const pct = Math.round((data.processed_cases / data.total_cases) * 100);
+          progressBar.style.width = pct + '%';
+        }
+
+        const errorText = row.querySelector('[data-error]');
+        if (errorText) {
+          errorText.textContent = data.error_message || '';
+          errorText.hidden = !data.error_message;
+        }
+
+        const isTerminal = ['completed', 'failed', 'cancelled'].includes(data.status);
+        if (isTerminal && previousStatus !== data.status) {
+          setTimeout(() => window.location.reload(), 1000);
+        }
+      };
+    },
+  }));
+});
+</script>
+{% endblock %}

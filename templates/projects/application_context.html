@@ -1,0 +1,121 @@
+{% extends "layouts/project.html" %}
+
+{% comment %}
+  Application context — standalone edit page (linked from the overview's
+  "Edit context" button, and reachable from Restart setup wizard's step 2
+  target too).
+
+  Context contract (projects/views.py::project_application_context):
+    project           — the current Project
+    form              — ApplicationContextForm
+    prompt_max_length — int, mirrors PROJECT_PROMPT_MAX_LENGTH
+
+  "Refine with AI" is applicationContextPrompt() below, ported from the
+  old templates/projects/detail.html projectPrompt() component: it POSTs
+  to refine_prompt and listens for the async "prompt_refined" message on
+  this project's agent-status WebSocket.
+{% endcomment %}
+
+{% block title %}Application context · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumb_extra %}
+<a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+<span class="sep" aria-hidden="true">›</span>
+<span aria-current="page">Application context</span>
+{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>Application context</h1>
+    <p class="subtitle">
+      Describe how {{ project.name }} works so the AI test runner understands the app before it
+      starts clicking around.
+    </p>
+  </div>
+</div>
+{% endblock %}
+
+{% block project_content %}
+<div class="card">
+  <form method="post" action="{% url 'projects:application_context' project.id %}" novalidate>
+    {% csrf_token %}
+
+    {% include "projects/includes/_context_field.html" with field=form.application_url only %}
+    {% include "projects/includes/_context_field.html" with field=form.application_platform only %}
+    {% include "projects/includes/_context_prompt_field.html" with form=form project=project prompt_max_length=prompt_max_length only %}
+
+    <div class="dialog-actions">
+      <a class="btn btn-ghost" href="{% url 'projects:detail' project.id %}">Cancel</a>
+      <button class="btn btn-primary" type="submit">Save context</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('applicationContextPrompt', () => ({
+    prompt: '{{ form.project_prompt.value|default:""|escapejs }}',
+    refining: false,
+    statusMsg: '',
+    statusError: false,
+    ws: null,
+    refineTimeout: null,
+
+    init() {
+      this.ws = new WebSocket(window.punkHazard.wsUrl('/ws/projects/{{ project.id }}/agent-status/'));
+      this.ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (data.type !== 'prompt_refined' || !this.refining) return;
+        clearTimeout(this.refineTimeout);
+        this.refining = false;
+        if (data.error) {
+          this.statusMsg = data.error;
+          this.statusError = true;
+        } else {
+          this.prompt = data.refined_prompt;
+          this.statusMsg = 'Refined successfully — review and save.';
+          this.statusError = false;
+        }
+      };
+    },
+
+    async refineWithAI() {
+      this.refining = true;
+      this.statusMsg = '';
+      this.statusError = false;
+      try {
+        const resp = await fetch('{% url "projects:refine_prompt" project.id %}', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-CSRFToken': '{{ csrf_token|escapejs }}',
+          },
+          body: JSON.stringify({ prompt: this.prompt }),
+        });
+        if (resp.status === 202) {
+          this.refineTimeout = setTimeout(() => {
+            if (this.refining) {
+              this.refining = false;
+              this.statusMsg = 'Refinement timed out. Please try again.';
+              this.statusError = true;
+            }
+          }, 120000);
+          return;
+        }
+        const data = await resp.json();
+        this.statusMsg = data.error || 'Refinement failed.';
+        this.statusError = true;
+        this.refining = false;
+      } catch (err) {
+        this.statusMsg = 'Could not reach the server.';
+        this.statusError = true;
+        this.refining = false;
+      }
+    },
+  }));
+});
+</script>
+{% endblock %}

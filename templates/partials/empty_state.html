@@ -1,0 +1,19 @@
+{% comment %} Empty-state block (no projects yet, no test cases yet, …).
+
+   Context contract:
+     icon           — decorative glyph, e.g. "▣"
+     title          — heading text
+     body           — supporting paragraph
+     primary_label / primary_url     — optional primary action button
+     secondary_label / secondary_url — optional secondary action button {% endcomment %}
+<div class="empty">
+  <div class="empty-icon" aria-hidden="true">{{ icon }}</div>
+  <h3>{{ title }}</h3>
+  <p>{{ body }}</p>
+  {% if primary_label or secondary_label %}
+    <div class="actions actions-center">
+      {% if primary_label %}<a class="btn btn-primary" href="{{ primary_url }}">{{ primary_label }}</a>{% endif %}
+      {% if secondary_label %}<a class="btn btn-secondary" href="{{ secondary_url }}">{{ secondary_label }}</a>{% endif %}
+    </div>
+  {% endif %}
+</div>

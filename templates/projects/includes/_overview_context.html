@@ -1,0 +1,38 @@
+{% comment %}
+  Application context summary card.
+
+  Context contract:
+    project — the current Project
+{% endcomment %}
+<section aria-labelledby="context-h" class="card">
+  <div class="card-header">
+    <h2 id="context-h">Application context</h2>
+    <a class="btn btn-secondary" href="{% url 'projects:application_context' project.id %}">Edit context</a>
+  </div>
+  <dl class="kv">
+    <div>
+      <dt>Application URL</dt>
+      <dd>
+        {% if project.application_url %}
+          <a href="{{ project.application_url }}" target="_blank" rel="noopener">{{ project.application_url }}</a>
+        {% else %}
+          <span class="muted">Not set</span>
+        {% endif %}
+      </dd>
+    </div>
+    <div>
+      <dt>Platform</dt>
+      <dd>{{ project.get_application_platform_display|default:"Not specified" }}</dd>
+    </div>
+    <div>
+      <dt>Notes</dt>
+      <dd>
+        {% if project.project_prompt %}
+          {{ project.project_prompt|truncatechars:200 }}
+        {% else %}
+          <span class="muted">No notes yet</span>
+        {% endif %}
+      </dd>
+    </div>
+  </dl>
+</section>

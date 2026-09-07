@@ -1,296 +1,81 @@
-{% extends "dashboard/base_dashboard.html" %}
+{% extends "layouts/app.html" %}
 
-{% block dashboard_content %}
-<div
-  x-data="{
-    showCreateModal: false,
-    showEditModal: false,
-    editProjectId: 0,
-    editProjectName: '',
-    editProjectTags: '',
-    openEditModal(id, name, tags) {
-      this.editProjectId = id;
-      this.editProjectName = name;
-      this.editProjectTags = tags;
-      this.showEditModal = true;
-    },
-    showDuplicateModal: false,
-    duplicateProjectId: 0,
-    duplicateProjectName: '',
-    openDuplicateModal(id, name) {
-      this.duplicateProjectId = id;
-      this.duplicateProjectName = 'Copy of ' + name;
-      this.showDuplicateModal = true;
-    }
-  }"
->
+{% comment %} Projects list.
 
-  {# HEADER: Title + New Project button #}
-  <div class="mb-6 flex items-center justify-between">
-    <h1 class="text-2xl font-bold text-zinc-100">Projects</h1>
-    <button
-      @click="showCreateModal = true"
-      class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-    >
-      New Project
-    </button>
+   Context contract (projects/views.py::project_list):
+     projects           — Page of Project, annotated with case_count / member_count
+     latest_runs        — dict of project id -> latest TestRun (annotated
+                          success_count / failed_count), for _project_table.html
+     tags               — all tags visible to this user
+     search             — current search string ("" when none)
+     current_tag        — current tag filter ("" when none)
+     show_archived      — bool, whether archived projects are included
+     per_page           — current page size
+     allowed_per_page    — allowed page-size choices
+     elided_page_range   — Paginator.get_elided_page_range() for pagination
+     query_params       — extra querystring for pagination links
+     form               — ProjectForm (unused by the edit/duplicate
+                           dialogs below, which read/write plain fields
+                           driven by Alpine state instead — see the
+                           report note on this file) {% endcomment %}
+
+{% block title %}Projects · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="{% url 'dashboard:index' %}">Dashboard</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Projects</span>
+</nav>
+{% endblock %}
+
+{% block page %}
+{% url 'projects:create' as create_url %}
+<div class="page-header">
+  <div>
+    <h1>Projects</h1>
+    <p class="subtitle">
+      {{ projects.paginator.count }} project{{ projects.paginator.count|pluralize }}{% if show_archived %} (including archived){% endif %}
+    </p>
   </div>
+  <div class="actions">
+    <a class="btn btn-primary" href="{% url 'projects:create' %}">+ New project</a>
+  </div>
+</div>
 
-  {# SEARCH + TAG FILTER #}
-  <form method="get" action="{% url 'projects:list' %}" class="mb-6 flex gap-3">
-    <input
-      type="text"
-      name="search"
-      value="{{ search }}"
-      placeholder="Search projects..."
-      class="flex h-10 w-full max-w-xs rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-    >
-    <select
-      name="tag"
-      class="h-10 rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-    >
-      <option value="">All Tags</option>
+{# Section: Search + filters #}
+<form class="toolbar" action="{% url 'projects:list' %}" method="get" role="search">
+  <div class="search">
+    <label class="visually-hidden" for="project-search">Search projects</label>
+    <input class="input" type="search" id="project-search" name="search" value="{{ search }}" placeholder="Search projects…">
+  </div>
+  <div>
+    <label class="visually-hidden" for="project-tag-filter">Filter by tag</label>
+    <select class="select" id="project-tag-filter" name="tag" onchange="this.form.requestSubmit()">
+      <option value="">Any tag</option>
       {% for tag in tags %}
-        <option value="{{ tag.name }}" {% if current_tag == tag.name %}selected{% endif %}>
-          {{ tag.name }}
-        </option>
+        <option value="{{ tag.name }}"{% if current_tag == tag.name %} selected{% endif %}>{{ tag.name }}</option>
       {% endfor %}
     </select>
-    <button
-      type="submit"
-      class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-100 hover:bg-zinc-600"
-    >
-      Filter
-    </button>
-  </form>
-
-  {# PROJECT CARDS GRID #}
-  {% if projects %}
-  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-    {% for project in projects %}
-    <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-5">
-      <div class="flex items-center">
-        <h3 class="text-lg font-semibold text-zinc-100">{{ project.name }}</h3>
-        {% if project.agent_connected %}
-        <span class="ml-2 inline-flex items-center rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs font-medium text-emerald-400">Connected</span>
-        {% with omniparser_state=project.agent_omniparser_status.state %}
-          {% if omniparser_state == 'ready' %}
-          <span class="ml-2 inline-flex items-center rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs font-medium text-emerald-400">OmniParser ready</span>
-          {% elif omniparser_state == 'loading' %}
-          <span class="ml-2 inline-flex items-center rounded-full bg-amber-900/50 px-2 py-0.5 text-xs font-medium text-amber-400">OmniParser loading</span>
-          {% elif omniparser_state == 'failed' %}
-          <span class="ml-2 inline-flex items-center rounded-full bg-red-900/50 px-2 py-0.5 text-xs font-medium text-red-400">OmniParser failed</span>
-          {% endif %}
-        {% endwith %}
-        {% else %}
-        <span class="ml-2 inline-flex items-center rounded-full bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-500">Offline</span>
-        {% endif %}
-      </div>
-
-      {# Tag badges #}
-      <div class="mt-2 flex flex-wrap gap-1">
-        {% for tag in project.tags.all %}
-        <span class="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
-          {{ tag.name }}
-        </span>
-        {% endfor %}
-      </div>
-
-      {# Action buttons #}
-      <div class="mt-4 flex gap-2">
-        <a
-          href="{% url 'projects:detail' project_id=project.id %}"
-          class="rounded-md bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-600"
-        >
-          Details
-        </a>
-        <a
-          href="{% url 'projects:test_case_list' project_id=project.id %}"
-          class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
-        >
-          Test Cases
-        </a>
-        <a
-          href="{% url 'projects:test_run_list' project_id=project.id %}"
-          class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
-        >
-          Test Runs
-        </a>
-        <button
-          @click="openEditModal({{ project.id }}, '{{ project.name|escapejs }}', '{% for tag in project.tags.all %}{{ tag.name|escapejs }}{% if not forloop.last %}, {% endif %}{% endfor %}')"
-          class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
-        >
-          Edit
-        </button>
-        <button
-          @click="openDuplicateModal({{ project.id }}, '{{ project.name|escapejs }}')"
-          class="rounded-md bg-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-100 hover:bg-zinc-600"
-        >
-          Duplicate
-        </button>
-        <form method="post" action="{% url 'projects:archive' project.id %}">
-          {% csrf_token %}
-          <button
-            type="submit"
-            class="rounded-md bg-red-900/50 px-3 py-1.5 text-xs font-medium text-red-400 hover:bg-red-900"
-          >
-            Archive
-          </button>
-        </form>
-      </div>
-    </div>
-    {% endfor %}
   </div>
-  {% else %}
-  <div class="rounded-lg border border-zinc-800 bg-zinc-900 p-8 text-center">
-    <p class="text-zinc-400">No projects found.</p>
-  </div>
-  {% endif %}
+  <label class="checkbox" for="show-archived">
+    <input type="checkbox" id="show-archived" name="archived" value="1"{% if show_archived %} checked{% endif %} onchange="this.form.requestSubmit()">
+    <span>Show archived</span>
+  </label>
+  <button type="submit" class="btn btn-sm btn-secondary">Search</button>
+</form>
 
-  {# PAGINATION #}
-  {% include "components/pagination.html" with page_obj=projects %}
+{% if not projects.object_list and not search and not current_tag and not show_archived %}
+  {% include "partials/empty_state.html" with icon="▣" title="No projects yet" body="A project is one application under test. Create your first one and the setup wizard walks you through context, test cases, and connecting a test machine." primary_label="Create your first project" primary_url=create_url only %}
+{% elif not projects.object_list %}
+  {% include "partials/empty_state.html" with icon="▣" title="No matching projects" body="No project matches the current search and filters. Try clearing them." only %}
+{% else %}
+  {% include "projects/includes/_project_table.html" with projects=projects show_archived=show_archived latest_runs=latest_runs %}
+  {% comment %} `request` is passed explicitly: pagination.html's per-page form reads
+     request.GET to preserve the current filters as hidden fields, but
+     `only` strips every context-processor variable, `request` included. {% endcomment %}
+  {% include "partials/pagination.html" with page_obj=projects query_params=query_params per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range request=request %}
+{% endif %}
 
-  {# CREATE MODAL #}
-  <div
-    x-show="showCreateModal"
-    x-cloak
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-    @click.self="showCreateModal = false"
-  >
-    <div
-      class="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-6"
-      @click.stop
-    >
-      <h2 class="mb-4 text-lg font-semibold text-zinc-100">New Project</h2>
-      <form method="post" action="{% url 'projects:create' %}">
-        {% csrf_token %}
-        <div class="space-y-4">
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Name</label>
-            {{ form.name }}
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Tags</label>
-            {{ form.tags }}
-            <p class="mt-1 text-xs text-zinc-500">Comma-separated (e.g. python, django)</p>
-          </div>
-        </div>
-        <div class="mt-6 flex justify-end gap-3">
-          <button
-            type="button"
-            @click="showCreateModal = false"
-            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-          >
-            Create
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  {# EDIT MODAL #}
-  <div
-    x-show="showEditModal"
-    x-cloak
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-    @click.self="showEditModal = false"
-  >
-    <div
-      class="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-6"
-      @click.stop
-    >
-      <h2 class="mb-4 text-lg font-semibold text-zinc-100">Edit Project</h2>
-      <form method="post" :action="'/projects/' + editProjectId + '/edit/'">
-        {% csrf_token %}
-        <div class="space-y-4">
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Name</label>
-            <input
-              type="text"
-              name="name"
-              x-model="editProjectName"
-              class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            >
-          </div>
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Tags</label>
-            <input
-              type="text"
-              name="tags"
-              x-model="editProjectTags"
-              class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            >
-            <p class="mt-1 text-xs text-zinc-500">Comma-separated (e.g. python, django)</p>
-          </div>
-        </div>
-        <div class="mt-6 flex justify-end gap-3">
-          <button
-            type="button"
-            @click="showEditModal = false"
-            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-          >
-            Save
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-  {# DUPLICATE MODAL #}
-  <div
-    x-show="showDuplicateModal"
-    x-cloak
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
-    @click.self="showDuplicateModal = false"
-  >
-    <div
-      class="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-6"
-      @click.stop
-    >
-      <h2 class="mb-4 text-lg font-semibold text-zinc-100">Duplicate Project</h2>
-      <form method="post" :action="'/projects/' + duplicateProjectId + '/duplicate/'">
-        {% csrf_token %}
-        <div class="space-y-4">
-          <div>
-            <label class="mb-1 block text-sm font-medium text-zinc-300">Project Name</label>
-            <input
-              type="text"
-              name="name"
-              x-model="duplicateProjectName"
-              class="flex h-10 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-            >
-          </div>
-        </div>
-        <div class="mt-6 flex justify-end gap-3">
-          <button
-            type="button"
-            @click="showDuplicateModal = false"
-            class="rounded-md bg-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-600"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            class="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-          >
-            Duplicate
-          </button>
-        </div>
-      </form>
-    </div>
-  </div>
-
-</div>
+{% include "projects/includes/_project_dialogs.html" %}
 {% endblock %}

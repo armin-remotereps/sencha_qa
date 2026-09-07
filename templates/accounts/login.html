@@ -1,56 +1,56 @@
-{% extends "base.html" %}
+{% extends "layouts/auth.html" %}
+{% load static %}
 
-{% block title %}Login — Auto Tester{% endblock %}
+{% block title %}Sign in · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
-{% block content %}
-<div class="flex min-h-screen items-center justify-center bg-zinc-950 p-4">
-  <div class="w-full max-w-md rounded-lg border border-zinc-800 bg-zinc-900 p-8 shadow-xl">
-    {# Header Section #}
-    <div class="mb-6 text-center">
-      <h1 class="text-2xl font-bold text-zinc-100">Auto Tester</h1>
-      <p class="mt-1 text-sm text-zinc-400">Sign in to your account</p>
+{% block auth %}
+<div class="auth-card">
+
+  <div class="brand-plate">
+    <img src="{% static 'branding/punk-hazard-logo.png' %}" alt="Punk Hazard">
+  </div>
+  <p class="auth-tagline">{{ brand_tagline|default:"AI testing on real applications." }}</p>
+
+  {% if error %}
+    <div class="alert alert-danger" role="alert">
+      <span class="alert-icon" aria-hidden="true">⚠</span>
+      <div>
+        <strong>We couldn't sign you in.</strong>
+        <p>Check your email and password.</p>
+      </div>
     </div>
+  {% endif %}
 
-    {# Error Display #}
-    {% if error %}
-    <div class="mb-4 rounded-md border border-red-800 bg-red-950 px-4 py-3 text-sm text-red-400">
-      {{ error }}
-    </div>
-    {% endif %}
-
-    {# Login Form #}
-    <form
-      method="post"
-      action="{% url 'accounts:login' %}{% if request.GET.next %}?next={{ request.GET.next }}{% endif %}"
-      class="space-y-4"
-    >
+  <div class="card">
+    <form method="post" action="{% url 'accounts:login' %}">
       {% csrf_token %}
       <input type="hidden" name="next" value="{{ request.GET.next }}">
 
-      {# Email Field #}
-      <div>
-        <label for="id_email" class="mb-1 block text-sm font-medium text-zinc-300">
-          Email
-        </label>
+      <div class="field{% if form.email.errors %} has-error{% endif %}">
+        <label for="{{ form.email.id_for_label }}">Email address</label>
         {{ form.email }}
+        {% if form.email.errors %}
+          <p class="error-text" id="{{ form.email.id_for_label }}-error">
+            <span aria-hidden="true">⚠</span>
+            {{ form.email.errors.0 }}
+          </p>
+        {% endif %}
       </div>
 
-      {# Password Field #}
-      <div>
-        <label for="id_password" class="mb-1 block text-sm font-medium text-zinc-300">
-          Password
-        </label>
+      <div class="field{% if form.password.errors %} has-error{% endif %}">
+        <label for="{{ form.password.id_for_label }}">Password</label>
         {{ form.password }}
+        {% if form.password.errors %}
+          <p class="error-text" id="{{ form.password.id_for_label }}-error">
+            <span aria-hidden="true">⚠</span>
+            {{ form.password.errors.0 }}
+          </p>
+        {% endif %}
       </div>
 
-      {# Submit Button #}
-      <button
-        type="submit"
-        class="inline-flex h-10 w-full items-center justify-center rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 focus:ring-offset-zinc-950"
-      >
-        Sign in
-      </button>
+      <button class="btn btn-primary btn-block" type="submit">Sign in</button>
     </form>
   </div>
+
 </div>
 {% endblock %}

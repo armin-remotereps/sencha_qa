@@ -2,15 +2,22 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Auto Tester{% endblock %}</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    {% block extra_head %}{% endblock %}
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}{{ brand_name|default:"Punk Hazard" }}{% endblock %}</title>
+
+  <link rel="stylesheet" href="{% static 'css/punk-hazard.css' %}">
+  <link rel="icon" type="image/png" href="{% static 'branding/punk-hazard-mark.png' %}">
+
+  {# Order matters: the focus plugin and our alpine:init registrations must run before Alpine core starts. #}
+  <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/focus@3.14.9/dist/cdn.min.js"></script>
+  <script defer src="{% static 'js/punk-hazard.js' %}"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.9/dist/cdn.min.js"></script>
+
+  {% block extra_head %}{% endblock %}
 </head>
-<body class="min-h-screen bg-background text-foreground antialiased">
-    {% block content %}{% endblock %}
-    {% block extra_scripts %}{% endblock %}
+<body>
+{% block body %}{% endblock %}
+{% block extra_scripts %}{% endblock %}
 </body>
 </html>

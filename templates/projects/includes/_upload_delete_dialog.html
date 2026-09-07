@@ -1,0 +1,37 @@
+{% comment %} "Delete import?" confirm dialog — one instance shared by every history
+   row's Delete button. Dispatched with {id, name}; the form action is
+   rewritten to point at that upload.
+
+   Context contract:
+     project — current Project {% endcomment %}
+<div
+  class="dialog-backdrop"
+  x-data="{ ...dialog(), uploadId: 0, uploadName: '' }"
+  x-show="open"
+  x-cloak
+  x-on:open-delete-upload.window="show(); uploadId = $event.detail.id; uploadName = $event.detail.name"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div
+    class="dialog"
+    role="alertdialog"
+    aria-modal="true"
+    aria-labelledby="delete-upload-title"
+    aria-describedby="delete-upload-desc"
+  >
+    <h3 id="delete-upload-title">Delete import?</h3>
+    <p id="delete-upload-desc">
+      Delete <strong x-text="uploadName"></strong>? This also permanently deletes every test case it imported —
+      results from past runs of those cases are kept, but the cases themselves are gone.
+    </p>
+    <form method="post" :action="'{% url 'projects:upload_delete' project.id 0 %}'.replace('/0/', '/' + uploadId + '/')">
+      {% csrf_token %}
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-danger-solid">Delete</button>
+      </div>
+    </form>
+  </div>
+</div>

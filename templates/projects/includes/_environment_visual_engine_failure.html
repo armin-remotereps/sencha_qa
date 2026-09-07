@@ -1,0 +1,16 @@
+{% comment %}
+  Visual engine failure panel — shown only while the connected Test
+  Runner's OmniParser status is "failed". Must render inside the
+  environmentLive() Alpine scope declared in projects/environment.html.
+  Ported from the old templates/projects/detail.html OmniParser failure
+  panel (L111-122), reworded into plain language per the terminology table
+  (OmniParser → "visual engine").
+{% endcomment %}
+<div class="alert alert-danger" role="alert" x-show="machineState === 'failed'" x-cloak>
+  <span class="alert-icon" aria-hidden="true">✕</span>
+  <div>
+    <strong>The visual engine failed to start on the test machine</strong>
+    <p x-text="omniparserStatus.message"></p>
+    <p class="hint">Restart the Test Runner to try again.</p>
+  </div>
+</div>

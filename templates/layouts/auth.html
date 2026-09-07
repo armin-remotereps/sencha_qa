@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+
+{# Unauthenticated pages (currently just login). No sidebar/topbar. #}
+{% block body %}
+<main class="auth-page">
+  {% block auth %}{% endblock %}
+</main>
+{% endblock %}

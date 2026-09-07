@@ -1,0 +1,17 @@
+{% comment %} Section: Run summary — 4 headline stat cards.
+
+   Context contract:
+     summary — dashboard.services.RunSummary {% endcomment %}
+<section aria-labelledby="summary-h">
+  <h2 id="summary-h" class="visually-hidden">Run summary</h2>
+  <div class="grid grid-4">
+    {% include "partials/stat_card.html" with label="Runs in progress" value=summary.runs_in_progress tone="info" only %}
+    {% if summary.pass_rate_7d is not None %}
+      {% include "partials/stat_card.html" with label="Pass rate · 7 days" value=summary.pass_rate_7d|stringformat:"d%%" tone="success" only %}
+    {% else %}
+      {% include "partials/stat_card.html" with label="Pass rate · 7 days" value="—" only %}
+    {% endif %}
+    {% include "partials/stat_card.html" with label="Failed · 7 days" value=summary.failed_7d tone="danger" only %}
+    {% include "partials/stat_card.html" with label="Never run" value=summary.never_run_cases note="Cases waiting for a first run" only %}
+  </div>
+</section>

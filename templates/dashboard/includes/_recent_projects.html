@@ -1,0 +1,40 @@
+{% comment %} Section: Recent projects — up to 3 cards, each with one suggested next action.
+
+   Context contract:
+     projects — list of dashboard.services.ProjectCard {% endcomment %}
+<section aria-labelledby="projects-h">
+  <div class="card-header">
+    <h2 id="projects-h">Recent projects</h2>
+    <a class="btn btn-sm btn-ghost" href="{% url 'projects:list' %}">View all projects</a>
+  </div>
+
+  <div class="grid grid-3">
+    {% for card in projects %}
+      <article class="card">
+        <div class="card-header">
+          <h3><a href="{% url 'projects:detail' card.project.id %}">{{ card.project.name }}</a></h3>
+          {% include "partials/badge_machine.html" with machine_state=card.machine_state only %}
+        </div>
+        <dl class="kv">
+          <div>
+            <dt>Latest run</dt>
+            <dd>
+              {% if card.latest_run %}
+                {% include "partials/badge_run_status.html" with status=card.latest_run.status failed_count=card.latest_run_summary.failed only %}
+              {% else %}
+                <span class="muted">No runs yet</span>
+              {% endif %}
+            </dd>
+          </div>
+          <div><dt>Test cases</dt><dd>{{ card.case_count }}</dd></div>
+        </dl>
+        <a
+          class="btn btn-block {% if card.primary_action == "import_cases" or card.primary_action == "create_run" %}btn-primary{% else %}btn-secondary{% endif %}"
+          href="{{ card.primary_action_url }}"
+        >
+          {{ card.primary_action_label }}
+        </a>
+      </article>
+    {% endfor %}
+  </div>
+</section>

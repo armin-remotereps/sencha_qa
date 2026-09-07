@@ -1,0 +1,61 @@
+{% comment %}
+  Recommended-next-action alert, derived from overview.primary_action.
+
+  Context contract:
+    project  — the current Project
+    overview — projects.services.ProjectOverview
+{% endcomment %}
+{% if overview.primary_action == "import_cases" %}
+  <div class="alert alert-info" role="status">
+    <span class="alert-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <strong>Import your test cases to get started</strong>
+      <p>This project has no test cases yet.</p>
+      <a class="btn btn-sm btn-secondary" href="{% url 'projects:test_case_import' project.id %}">Import test cases</a>
+    </div>
+  </div>
+{% elif overview.primary_action == "connect_machine" %}
+  <div class="alert alert-warning" role="alert">
+    <span class="alert-icon" aria-hidden="true">⚠</span>
+    <div>
+      <strong>Connect a test machine</strong>
+      <p>Runs need a connected test machine to execute steps.</p>
+      <a class="btn btn-sm btn-secondary" href="{% url 'projects:environment' project.id %}">Connect a test machine</a>
+    </div>
+  </div>
+{% elif overview.primary_action == "view_active_run" %}
+  <div class="alert alert-info" role="status">
+    <span class="alert-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <strong>{{ overview.active_run.display_name }} is running</strong>
+      <a class="btn btn-sm btn-secondary" href="{% url 'projects:test_run_detail' project.id overview.active_run.id %}">View run</a>
+    </div>
+  </div>
+{% elif overview.primary_action == "view_latest_run" %}
+  {% if overview.latest_run_summary.failed %}
+    <div class="alert alert-warning" role="alert">
+      <span class="alert-icon" aria-hidden="true">⚠</span>
+      <div>
+        <strong>{{ overview.latest_run_summary.failed }} case{{ overview.latest_run_summary.failed|pluralize }} failed in {{ overview.latest_run.display_name }}</strong>
+        <a class="btn btn-sm btn-secondary" href="{% url 'projects:test_run_detail' project.id overview.latest_run.id %}">Review failures</a>
+      </div>
+    </div>
+  {% else %}
+    <div class="alert alert-info" role="status">
+      <span class="alert-icon" aria-hidden="true">ℹ</span>
+      <div>
+        <strong>{{ overview.latest_run.display_name }} passed</strong>
+        <a class="btn btn-sm btn-secondary" href="{% url 'projects:test_run_detail' project.id overview.latest_run.id %}">View results</a>
+      </div>
+    </div>
+  {% endif %}
+{% elif overview.primary_action == "create_run" %}
+  <div class="alert alert-info" role="status">
+    <span class="alert-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <strong>Ready for a run</strong>
+      <p>This project has test cases and a connected test machine — start the first run.</p>
+      <a class="btn btn-sm btn-secondary" href="{% url 'projects:test_case_list' project.id %}">Run tests</a>
+    </div>
+  </div>
+{% endif %}

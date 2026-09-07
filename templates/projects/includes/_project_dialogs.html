@@ -1,0 +1,112 @@
+{% comment %} Edit / Duplicate / Archive dialogs shared by every row in
+   _project_table.html. Each is opened with row-specific data carried on
+   the dispatched event's `detail` (an extension of the plain
+   dialog()-only convention in partials/README.md — these three need the
+   row's id/name/tags, not just an open/close boolean), and posts to the
+   real view with the `{% url %}` + '0'.replace(...) pattern used
+   elsewhere on this page for per-row actions behind one shared dialog. {% endcomment %}
+
+{# --- Edit project --- #}
+{% url 'projects:edit' 0 as edit_project_url_template %}
+<div
+  class="dialog-backdrop"
+  x-data="{ ...dialog(), edit: { id: null, name: '', tags: '' } }"
+  x-show="open"
+  x-cloak
+  x-on:open-edit-project.window="edit = $event.detail; show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="edit-project-title">
+    <div class="card-header">
+      <h3 id="edit-project-title">Edit project</h3>
+      <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+    </div>
+    <form method="post" :action="'{{ edit_project_url_template }}'.replace('/0/', '/' + edit.id + '/')">
+      {% csrf_token %}
+      <div class="field">
+        <label for="edit-project-name">Project name</label>
+        <input class="input" id="edit-project-name" name="name" type="text" x-model="edit.name" required>
+      </div>
+      <div class="field">
+        <label for="edit-project-tags">Tags <span class="optional">(optional)</span></label>
+        <input class="input" id="edit-project-tags" name="tags" type="text" x-model="edit.tags">
+        <p class="hint">Comma-separated.</p>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# --- Duplicate project --- #}
+{% url 'projects:duplicate' 0 as duplicate_project_url_template %}
+<div
+  class="dialog-backdrop"
+  x-data="{ ...dialog(), dup: { id: null, name: '', caseCount: 0 } }"
+  x-show="open"
+  x-cloak
+  x-on:open-duplicate-project.window="dup = { id: $event.detail.id, name: 'Copy of ' + $event.detail.name, caseCount: $event.detail.caseCount }; show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="duplicate-project-title">
+    <div class="card-header">
+      <h3 id="duplicate-project-title">Duplicate project</h3>
+      <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+    </div>
+    <p>
+      Copies the application context and all <span x-text="dup.caseCount"></span> test case(s) into
+      a new project. Runs, results, and the test machine connection are not copied.
+    </p>
+    <form method="post" :action="'{{ duplicate_project_url_template }}'.replace('/0/', '/' + dup.id + '/')">
+      {% csrf_token %}
+      <div class="field">
+        <label for="duplicate-project-name">New project name</label>
+        <input class="input" id="duplicate-project-name" name="name" type="text" x-model="dup.name" required>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Duplicate</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# --- Archive project (confirm) --- #}
+{% url 'projects:archive' 0 as archive_project_url_template %}
+<div
+  class="dialog-backdrop"
+  x-data="{ ...dialog(), archive: { id: null, name: '' } }"
+  x-show="open"
+  x-cloak
+  x-on:open-archive-project.window="archive = $event.detail; show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div
+    class="dialog"
+    role="alertdialog"
+    aria-modal="true"
+    aria-labelledby="archive-project-title"
+    aria-describedby="archive-project-desc"
+  >
+    <h3 id="archive-project-title">Archive <span x-text="archive.name"></span>?</h3>
+    <p id="archive-project-desc">
+      The project disappears from the list and its test machine is disconnected. Test cases,
+      runs, and results are kept and you can restore it later.
+    </p>
+    <form method="post" :action="'{{ archive_project_url_template }}'.replace('/0/', '/' + archive.id + '/')">
+      {% csrf_token %}
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-danger-solid">Archive project</button>
+      </div>
+    </form>
+  </div>
+</div>

@@ -1,0 +1,60 @@
+{% comment %} Advanced diagnostics disclosure (Environment page).
+
+   Context contract:
+     project — the current Project (used for the connection key and the
+               regenerate-key form action)
+
+   This partial reads clientVersion / capabilities / omniparserStatus from
+   an ANCESTOR Alpine scope — it declares no x-data of its own for those.
+   See the "advanced_diagnostics.html — expected Alpine scope" section in
+   templates/partials/README.md for the full shape and a fallback scope to
+   use until the agent-status WS component exists. {% endcomment %}
+<details class="card">
+  <summary>Advanced diagnostics</summary>
+  <dl class="kv">
+    <div>
+      <dt>Runner version</dt>
+      <dd x-text="clientVersion || '—'"></dd>
+    </div>
+    <div>
+      <dt>Protocol capabilities</dt>
+      <dd x-text="capabilities.join(', ') || '—'"></dd>
+    </div>
+    <div>
+      <dt>Visual engine status</dt>
+      <dd x-text="(omniparserStatus.phase || omniparserStatus.state || '—') + (omniparserStatus.message ? ' — ' + omniparserStatus.message : '')"></dd>
+    </div>
+    <div>
+      <dt>Visual engine device</dt>
+      <dd x-text="omniparserStatus.device || '—'"></dd>
+    </div>
+    <div>
+      <dt>Connection key</dt>
+      <dd>
+        <span x-data="{ revealed: false }">
+          <span x-show="!revealed">••••••••</span>
+          <span x-show="revealed" x-cloak>{{ project.api_key }}</span>
+          <button
+            class="icon-btn"
+            type="button"
+            @click="revealed = !revealed"
+            :aria-label="revealed ? 'Hide connection key' : 'Show connection key'"
+          >
+            <span aria-hidden="true">👁</span>
+          </button>
+        </span>
+        <span x-data="clipboard()">
+          <button class="btn btn-sm btn-secondary" type="button" @click="copy('{{ project.api_key|escapejs }}')">
+            <span x-show="!copied">Copy</span>
+            <span x-show="copied" x-cloak>Copied!</span>
+          </button>
+        </span>
+        <button class="btn btn-sm btn-secondary" type="button" @click="$dispatch('open-regenerate-key')">Regenerate</button>
+      </dd>
+    </div>
+  </dl>
+  <p class="hint">Only needed when support asks or when connecting a machine manually.</p>
+</details>
+
+{% url 'projects:regenerate_api_key' project.id as regenerate_key_url %}
+{% include "partials/confirm_dialog.html" with dialog_id="regenerate-key" title="Regenerate the connection key?" body="The current key stops working immediately. Any test machine still using it will need to be set up again with the new key." confirm_label="Regenerate" confirm_class="btn-danger-solid" action_url=regenerate_key_url %}

@@ -1,0 +1,133 @@
+{% comment %} Dialogs opened from the bulk-selection bar in test_cases.html. Rendered
+   inside that page's bulkSelect() scope, so `selected` and `count` are
+   already in scope here — each dialog only adds its own dialog() state.
+
+   Context contract:
+     project           — current Project
+     waiting_test_runs — draft TestRuns cases can be added to
+     other_projects    — other projects this user belongs to (Copy to
+                         project is only offered when this is non-empty) {% endcomment %}
+
+{# ---- Add to run: existing draft run, or create a new one ---- #}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-add-to-run.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="add-to-run-title">
+    <div class="card-header">
+      <h3 id="add-to-run-title">Add to run</h3>
+      <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+    </div>
+
+    {% if waiting_test_runs %}
+      <p><strong>Add to a draft run</strong></p>
+      <div class="grid">
+        {% for run in waiting_test_runs %}
+          <form method="post" action="{% url 'projects:test_run_add_cases' project.id run.id %}">
+            {% csrf_token %}
+            <template x-for="id in selected" :key="id">
+              <input type="hidden" name="test_case_ids" :value="id">
+            </template>
+            <button type="submit" class="btn btn-secondary btn-block">
+              {{ run.display_name }} <span class="muted small">&mdash; {{ run.created_at|date:"M d, Y H:i" }}</span>
+            </button>
+          </form>
+        {% endfor %}
+      </div>
+      <div class="divider">or</div>
+    {% endif %}
+
+    <p><strong>Create a new run</strong></p>
+    <form method="post" action="{% url 'projects:test_run_create' project.id %}">
+      {% csrf_token %}
+      <template x-for="id in selected" :key="id">
+        <input type="hidden" name="test_case_ids" :value="id">
+      </template>
+      <div class="field">
+        <label class="visually-hidden" for="new-run-name">Run name</label>
+        <input class="input" type="text" id="new-run-name" name="name" placeholder="Run name (optional)">
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Create run</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ---- Copy to project ---- #}
+{% if other_projects %}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-copy-to-project.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="copy-to-project-title">
+    <div class="card-header">
+      <h3 id="copy-to-project-title">Copy to project</h3>
+      <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+    </div>
+
+    <div class="grid">
+      {% for other_project in other_projects %}
+        <form method="post" action="{% url 'projects:test_case_copy_to_project' project.id %}">
+          {% csrf_token %}
+          <input type="hidden" name="target_project_id" value="{{ other_project.id }}">
+          <template x-for="id in selected" :key="id">
+            <input type="hidden" name="test_case_ids" :value="id">
+          </template>
+          <button type="submit" class="btn btn-secondary btn-block">{{ other_project.name }}</button>
+        </form>
+      {% endfor %}
+    </div>
+
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ---- Bulk delete confirm ---- #}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-bulk-delete-cases.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div
+    class="dialog"
+    role="alertdialog"
+    aria-modal="true"
+    aria-labelledby="bulk-delete-cases-title"
+    aria-describedby="bulk-delete-cases-desc"
+  >
+    <h3 id="bulk-delete-cases-title" x-text="'Delete ' + count + ' test case' + (count === 1 ? '' : 's') + '?'"></h3>
+    <p id="bulk-delete-cases-desc">This can't be undone. Deleting removes these cases from future runs — results from past runs are kept.</p>
+    <form method="post" action="{% url 'projects:test_case_bulk_delete' project.id %}">
+      {% csrf_token %}
+      <template x-for="id in selected" :key="id">
+        <input type="hidden" name="test_case_ids" :value="id">
+      </template>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-danger-solid" x-text="'Delete ' + count + ' case' + (count === 1 ? '' : 's')"></button>
+      </div>
+    </form>
+  </div>
+</div>

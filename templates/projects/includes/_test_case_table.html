@@ -1,0 +1,88 @@
+{% comment %} Test case table (desktop table / mobile stacked records via data-label).
+   Rendered inside test_cases.html's bulkSelect() scope, so `toggle`,
+   `selected`, `toggleAll` and `allSelected` are all in scope here.
+
+   Context contract:
+     project    — current Project
+     test_cases — Page[TestCase], each row annotated last_run_pivot_id /
+                  last_run_status / last_run_test_run_id / last_run_at {% endcomment %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th scope="col" class="cell-check">
+          <input type="checkbox" aria-label="Select all" :checked="allSelected" @change="toggleAll()">
+        </th>
+        <th scope="col">Case</th>
+        <th scope="col">Type</th>
+        <th scope="col">Priority</th>
+        <th scope="col">Last result</th>
+        <th scope="col">Last run</th>
+        <th scope="col"><span class="visually-hidden">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for tc in test_cases %}
+        <tr>
+          <td data-label="">
+            <input type="checkbox" aria-label="Select {{ tc.title }}" :checked="selected.includes({{ tc.id }})" @change="toggle({{ tc.id }})">
+          </td>
+          <td data-label="Case" class="cell-primary">
+            <a href="#">{{ tc.title }}</a>
+            {% if tc.testrail_id %}<div class="muted small">{{ tc.testrail_id }}</div>{% endif %}
+          </td>
+          <td data-label="Type"><span class="chip">{{ tc.type }}</span></td>
+          <td data-label="Priority"><span class="chip">{{ tc.priority }}</span></td>
+          <td data-label="Last result">
+            {% if tc.last_run_status %}
+              <a href="{% url 'projects:test_run_case_detail' project.id tc.last_run_test_run_id tc.last_run_pivot_id %}">
+                {% include "partials/badge_case_status.html" with status=tc.last_run_status only %}
+              </a>
+            {% else %}
+              {% include "partials/badge_case_status.html" with status="created" never_run=True only %}
+            {% endif %}
+          </td>
+          <td data-label="Last run" class="muted">
+            {% if tc.last_run_at %}{{ tc.last_run_at|date:"M j, Y" }}{% else %}&mdash;{% endif %}
+          </td>
+          <td data-label="" class="cell-actions">
+            <div class="row-menu" x-data="rowMenu()" @click.outside="close()">
+              <button
+                type="button"
+                class="icon-btn"
+                @click="toggle()"
+                :aria-expanded="open.toString()"
+                aria-label="More actions for {{ tc.title }}"
+              >⋯</button>
+              <div class="menu" x-show="open" x-cloak role="menu">
+                <button
+                  type="button"
+                  class="menu-item"
+                  role="menuitem"
+                  data-id="{{ tc.id }}"
+                  data-title="{{ tc.title }}"
+                  data-testrail-id="{{ tc.testrail_id }}"
+                  data-template="{{ tc.template }}"
+                  data-type="{{ tc.type }}"
+                  data-priority="{{ tc.priority }}"
+                  data-estimate="{{ tc.estimate }}"
+                  data-references="{{ tc.references }}"
+                  data-preconditions="{{ tc.preconditions }}"
+                  data-steps="{{ tc.steps }}"
+                  data-expected="{{ tc.expected }}"
+                  @click="close(); $dispatch('open-edit-case', {...$el.dataset})"
+                >Edit</button>
+                <button
+                  type="button"
+                  class="menu-item"
+                  role="menuitem"
+                  @click="close(); $dispatch('open-delete-case', {{ tc.id }})"
+                >Delete</button>
+              </div>
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

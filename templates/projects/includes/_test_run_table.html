@@ -1,0 +1,75 @@
+{% comment %} Run history table (desktop table / mobile stacked records via data-label).
+
+   Context contract:
+     project   — current Project
+     test_runs — Page[TestRun], each row annotated case_count / success_count / failed_count {% endcomment %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th scope="col">Run</th>
+        <th scope="col">Started</th>
+        <th scope="col">Status</th>
+        <th scope="col">Cases</th>
+        <th scope="col">Result</th>
+        <th scope="col">Duration</th>
+        <th scope="col"><span class="visually-hidden">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in test_runs %}
+        <tr>
+          <td data-label="Run" class="cell-primary">
+            <a href="{% url 'projects:test_run_detail' project.id run.id %}">{{ run.display_name }}</a>
+          </td>
+
+          <td data-label="Started" {% if not run.started_at %}class="muted"{% endif %}>
+            {% if run.started_at %}{{ run.started_at|date:"M j, H:i" }}{% else %}Not started{% endif %}
+          </td>
+
+          <td data-label="Status">
+            {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count only %}
+          </td>
+
+          <td data-label="Cases">{{ run.case_count }} case{{ run.case_count|pluralize }}</td>
+
+          <td data-label="Result" {% if run.status == "waiting" or run.status == "started" %}class="muted"{% endif %}>
+            {% if run.status == "done" %}
+              {% if run.failed_count %}
+                {{ run.success_count }} passed &middot; {{ run.failed_count }} failed
+              {% else %}
+                {{ run.success_count }} passed
+              {% endif %}
+            {% elif run.status == "started" %}
+              In progress
+            {% elif run.status == "waiting" %}
+              {{ run.case_count }} case{{ run.case_count|pluralize }} selected
+            {% elif run.status == "cancelled" %}
+              Cancelled
+            {% endif %}
+          </td>
+
+          <td data-label="Duration" {% if not run.started_at %}class="muted"{% endif %}>
+            {% if run.started_at and run.finished_at %}
+              {{ run.started_at|timesince:run.finished_at }}
+            {% elif run.started_at %}
+              Running {{ run.started_at|timesince }}
+            {% else %}
+              &mdash;
+            {% endif %}
+          </td>
+
+          <td data-label="" class="cell-actions">
+            {% if run.status == "waiting" %}
+              <button
+                type="button"
+                class="btn btn-sm btn-danger"
+                @click="$dispatch('open-delete-run', { id: {{ run.id }}, name: '{{ run.display_name|escapejs }}' })"
+              >Delete</button>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

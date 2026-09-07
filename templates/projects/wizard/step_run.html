@@ -1,0 +1,134 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Onboarding wizard, step 5: first run.
+
+   Context contract (projects.views._render_wizard_run / setup_run):
+     project          — current Project
+     form             — TestRunCreateForm (name, test_case_ids — rendered
+                         by hand below rather than through the form's own
+                         MultipleHiddenInput widget, per the plan)
+     test_cases       — project.test_cases.order_by("title")[:200]
+     total_case_count — project.test_cases.count(), for the "showing first
+                        200" note
+     wizard_step       — always 5 here
+     wizard_mode       — always "edit"
+     readiness         — RunReadiness computed with selected_count=0 (no
+                        boxes are pre-checked — this is a brand-new run),
+                        so it matches the checkboxes' initial state exactly
+
+   The "cases_selected" readiness check is the one line item that can
+   change without a round trip (as cases are (un)checked), so it's kept
+   in sync client-side — see updateCasesSelectedCheck() below. {% endcomment %}
+
+{% block title %}First run · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="{% url 'dashboard:index' %}">Dashboard</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:list' %}">Projects</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span>{{ project.name }}</span>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Setup</span>
+</nav>
+{% endblock %}
+
+{% block page %}
+<div
+  class="narrow"
+  x-data="{
+    selectedCount: {{ selected_ids|length }},
+
+    toggleAll(checked) {
+      this.$refs.caseList.querySelectorAll('input[type=checkbox]').forEach((cb) => { cb.checked = checked; });
+      this.selectedCount = checked ? {{ test_cases|length }} : 0;
+      this.updateCasesSelectedCheck();
+    },
+
+    onToggle(checked) {
+      this.selectedCount += checked ? 1 : -1;
+      this.updateCasesSelectedCheck();
+    },
+
+    updateCasesSelectedCheck() {
+      const li = this.$root.querySelector('li[data-check=cases_selected]');
+      if (!li) return;
+      const icon = li.querySelector('.check-icon');
+      const srLabel = li.querySelector('.visually-hidden');
+      const title = li.querySelector('.check-title');
+      const help = li.querySelector('.check-help');
+      const passed = this.selectedCount > 0;
+
+      icon.className = passed ? 'check-icon is-pass' : 'check-icon is-fail';
+      icon.textContent = passed ? '✓' : '✕';
+      if (srLabel) srLabel.textContent = passed ? 'Passed check:' : 'Failed check:';
+      title.textContent = passed
+        ? this.selectedCount + ' test case' + (this.selectedCount === 1 ? '' : 's') + ' selected'
+        : 'No test cases selected';
+
+      if (passed && help) {
+        help.remove();
+      } else if (!passed && !help) {
+        const p = document.createElement('p');
+        p.className = 'check-help';
+        p.textContent = 'Select at least one test case to run.';
+        title.insertAdjacentElement('afterend', p);
+      }
+    },
+  }"
+>
+
+  <h1>Your first run</h1>
+  <p class="subtitle">Pick the cases to run and name the run &mdash; once every check below passes, Punk Hazard can start executing on your test machine.</p>
+
+  {% include "partials/wizard_steps.html" with project=project wizard_step=wizard_step only %}
+
+  <form method="post" action="{% url 'projects:setup_run' project.id %}" novalidate>
+    {% csrf_token %}
+
+    <div class="card">
+      <div class="field{% if form.name.errors %} has-error{% endif %}">
+        <label for="{{ form.name.id_for_label }}">Run name</label>
+        {{ form.name }}
+        {% if form.name.errors %}<p class="error-text">{{ form.name.errors.0 }}</p>{% endif %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Select test cases</h2>
+        <button type="button" class="btn btn-sm btn-ghost" @click="toggleAll(selectedCount < {{ test_cases|length }})">
+          <span x-text="selectedCount < {{ test_cases|length }} ? '{{ test_cases|length }} cases available — select all' : '{{ test_cases|length }} cases available — clear all'"></span>
+        </button>
+      </div>
+
+      {% if total_case_count > 200 %}
+        <p class="hint">Showing first 200 &mdash; use <a href="{% url 'projects:test_case_list' project.id %}">Test Cases</a> for more.</p>
+      {% endif %}
+
+      {% if form.test_case_ids.errors %}<p class="error-text">{{ form.test_case_ids.errors.0 }}</p>{% endif %}
+
+      <div class="case-picker" x-ref="caseList">
+        {% for tc in test_cases %}
+        <label class="checkbox">
+          <input type="checkbox" name="test_case_ids" value="{{ tc.id }}" {% if tc.id in selected_ids %}checked{% endif %} @change="onToggle($event.target.checked)">
+          <span>{{ tc.title }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Ready to run?</h2>
+      </div>
+      {% include "partials/readiness_checklist.html" with readiness=readiness only %}
+    </div>
+
+    {% url 'projects:setup_machine' project.id as back_url %}
+    {% include "partials/wizard_actions.html" with back_url=back_url next_label="Start run" next_large=True only %}
+  </form>
+
+</div>
+{% endblock %}

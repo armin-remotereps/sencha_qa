@@ -1,0 +1,46 @@
+{% load static %}
+{% comment %} Mobile-only header (hidden at 1024px+ — see .topbar in punk-hazard.css).
+   The hamburger menu is Alpine's mobileNav() component, not a native
+   <details>, so it can close on Escape and click-outside.
+
+   Context contract:
+     active_nav — "dashboard" | "projects", forwarded to partials/nav_links.html {% endcomment %}
+<header class="topbar">
+  <a class="brand" href="{% url 'dashboard:index' %}">
+    <img src="{% static 'branding/punk-hazard-mark.png' %}" alt="Punk Hazard home">
+    <span class="brand-name">{{ brand_name|default:"Punk Hazard" }}</span>
+  </a>
+
+  <div
+    class="mobile-nav"
+    x-data="mobileNav()"
+    @keydown.escape.window="close()"
+    @click.outside="close()"
+  >
+    <button
+      type="button"
+      class="mobile-nav-toggle"
+      @click="toggle()"
+      :aria-expanded="open.toString()"
+      aria-controls="mobile-nav-panel"
+      aria-label="Open menu"
+    >
+      ☰ Menu
+    </button>
+
+    <div
+      id="mobile-nav-panel"
+      class="mobile-nav-panel nav"
+      x-show="open"
+      x-cloak
+      x-trap.noscroll="open"
+      aria-label="Main navigation"
+    >
+      {% include "partials/nav_links.html" with active_nav=active_nav only %}
+      <form method="post" action="{% url 'accounts:logout' %}">
+        {% csrf_token %}
+        <button type="submit" class="nav-link-button">Sign out</button>
+      </form>
+    </div>
+  </div>
+</header>
