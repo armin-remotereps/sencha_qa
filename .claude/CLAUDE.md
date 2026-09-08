@@ -85,6 +85,8 @@ Task routing is defined in `settings.CELERY_TASK_ROUTES`.
 
 **AI Agent Loop** (`agents/services/agent_loop.py`): Observe-think-act loop that uses OpenAI for reasoning and vision. Tools are registered via `tool_registry.py` and defined in `tool_definitions.py`. The agent takes screenshots, analyzes them, and executes actions on the remote machine.
 
+**Verified desktop actions** (`agents/services/verified_element_actions.py`): `click`/`hover`/`drag` confirm the OmniParser candidate with the vision model before acting and (click always, hover/drag when `expected_result` is given) compare before/after screenshots afterwards, retrying up to 10 candidates per call and returning an error with the attempt history when none can be confirmed.
+
 **Authorization**: `@project_membership_required` decorator in `projects/decorators.py` handles both `@login_required` and project membership checks. Views receive a resolved `project` kwarg.
 
 ### Frontend
