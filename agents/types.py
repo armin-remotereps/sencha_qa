@@ -192,3 +192,20 @@ class PixelParseResult:
     elements: tuple[PixelUIElement, ...]
     image_width: int
     image_height: int
+
+
+@dataclass(frozen=True)
+class Verdict:
+    accepted: bool
+    reason: str
+
+
+@dataclass(frozen=True)
+class RejectedCandidate:
+    attempt: int
+    index: int
+    center_x: int
+    center_y: int
+    content: str
+    stage: Literal["candidate", "outcome"]
+    reason: str

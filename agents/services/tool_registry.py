@@ -78,6 +78,11 @@ def _handle_take_screenshot(
     )
 
 
+def _read_expected_result(arguments: dict[str, object]) -> str:
+    raw_expected_result = arguments.get("expected_result")
+    return str(raw_expected_result) if raw_expected_result else ""
+
+
 def _handle_click(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     description = str(arguments.get("description", ""))
     if context.vision_config is None:
@@ -87,8 +92,11 @@ def _handle_click(context: ToolContext, arguments: dict[str, object]) -> ToolRes
     return tools_controller.click(
         context.project_id,
         description=description,
+        expected_result=_read_expected_result(arguments),
         vision_config=context.vision_config,
         on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
     )
 
 
@@ -111,8 +119,11 @@ def _handle_hover(context: ToolContext, arguments: dict[str, object]) -> ToolRes
     return tools_controller.hover(
         context.project_id,
         description=description,
+        expected_result=_read_expected_result(arguments),
         vision_config=context.vision_config,
         on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
     )
 
 
@@ -127,8 +138,11 @@ def _handle_drag(context: ToolContext, arguments: dict[str, object]) -> ToolResu
         context.project_id,
         start_description=start_description,
         end_description=end_description,
+        expected_result=_read_expected_result(arguments),
         vision_config=context.vision_config,
         on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
     )
 
 

@@ -91,7 +91,12 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
         ),
         ToolDefinition(
             name="click",
-            description="Click an element on the desktop found by vision-based natural-language description.",
+            description=(
+                "Click an element on the desktop found by vision-based natural-language description. "
+                "The target element is verified by vision before clicking and the result is checked "
+                "afterwards; the tool retries automatically with other candidates (up to 10) and "
+                "returns an error if it cannot confirm the element."
+            ),
             category=ToolCategory.CONTROLLER,
             parameters=(
                 ToolParameter(
@@ -99,6 +104,16 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     type="string",
                     description="Natural language description of the element to click.",
                     required=True,
+                ),
+                ToolParameter(
+                    name="expected_result",
+                    type="string",
+                    description=(
+                        "Optional. What the screen should show after the click "
+                        "(e.g. 'the Settings dialog opens'). The tool verifies the click "
+                        "against it and retries other candidates when it does not match."
+                    ),
+                    required=False,
                 ),
             ),
         ),
@@ -130,7 +145,12 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
         ),
         ToolDefinition(
             name="hover",
-            description="Hover over an element on the desktop found by vision-based natural-language description.",
+            description=(
+                "Hover over an element on the desktop found by vision-based natural-language description. "
+                "The target element is verified by vision before hovering; the tool retries "
+                "automatically with other candidates (up to 10) and returns an error if it "
+                "cannot confirm the element."
+            ),
             category=ToolCategory.CONTROLLER,
             parameters=(
                 ToolParameter(
@@ -139,11 +159,26 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     description="Natural language description of the element to hover over.",
                     required=True,
                 ),
+                ToolParameter(
+                    name="expected_result",
+                    type="string",
+                    description=(
+                        "Optional. What the screen should show after hovering "
+                        "(e.g. 'a tooltip with the file size appears'). The post-hover check "
+                        "runs only when this is given; on a mismatch the tool retries other candidates."
+                    ),
+                    required=False,
+                ),
             ),
         ),
         ToolDefinition(
             name="drag",
-            description="Drag from one element to another on the desktop, both found by vision-based description.",
+            description=(
+                "Drag from one element to another on the desktop, both found by vision-based description. "
+                "Both elements are verified by vision before dragging; the tool retries "
+                "automatically with other candidates (up to 10 in total) and returns an error "
+                "if it cannot confirm them."
+            ),
             category=ToolCategory.CONTROLLER,
             parameters=(
                 ToolParameter(
@@ -157,6 +192,16 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     type="string",
                     description="Natural language description of the element to drag to.",
                     required=True,
+                ),
+                ToolParameter(
+                    name="expected_result",
+                    type="string",
+                    description=(
+                        "Optional. What the screen should show after the drag "
+                        "(e.g. 'the file appears inside the Archive folder'). The post-drag check "
+                        "runs only when this is given; on a mismatch the tool retries other candidates."
+                    ),
+                    required=False,
                 ),
             ),
         ),

@@ -4,11 +4,12 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
-from agents.exceptions import ElementNotFoundError
+from agents.exceptions import ElementNotFoundError, RejectedElementChosenError
 from agents.services.controller_element_finder import (
     _build_element_list,
     _parse_match_response,
     find_element_coordinates,
+    match_element,
 )
 from agents.types import (
     ChatMessage,
@@ -17,6 +18,7 @@ from agents.types import (
     PixelBBox,
     PixelParseResult,
     PixelUIElement,
+    TextContent,
 )
 
 _LLM_CONFIG = LLMConfig(
@@ -123,3 +125,55 @@ class FindElementCoordinatesTests(SimpleTestCase):
 
         self.assertEqual((x, y), (42, 99))
         self.assertEqual(screenshots, [("annotated-base64", "controller_omniparser")])
+
+
+class MatchElementTests(SimpleTestCase):
+    _FINDER = "agents.services.controller_element_finder"
+
+    def _parse(self) -> PixelParseResult:
+        return PixelParseResult(
+            annotated_image="IMG",
+            elements=(_element(0, "Save", 10, 20), _element(1, "Cancel", 30, 40)),
+            image_width=100,
+            image_height=100,
+        )
+
+    def test_excluded_elements_are_listed_as_ruled_out_in_the_prompt(self) -> None:
+        with patch(
+            f"{self._FINDER}.send_chat_completion", return_value=_llm_response("1")
+        ) as sent:
+            matched = match_element(
+                self._parse(),
+                "Cancel",
+                _LLM_CONFIG,
+                is_excluded=lambda el: el.index == 0,
+            )
+
+        self.assertEqual(matched.index, 1)
+        content = sent.call_args.args[1][1].content
+        assert isinstance(content, tuple)
+        text = "\n".join(p.text for p in content if isinstance(p, TextContent))
+        self.assertNotIn('[0] type=icon, content="Save"', text)
+        self.assertIn("Already ruled out, do not choose: [0]", text)
+
+    def test_choosing_a_ruled_out_element_raises_rejected_element_error(self) -> None:
+        with patch(
+            f"{self._FINDER}.send_chat_completion", return_value=_llm_response("0")
+        ):
+            with self.assertRaises(RejectedElementChosenError) as ctx:
+                match_element(
+                    self._parse(),
+                    "Cancel",
+                    _LLM_CONFIG,
+                    is_excluded=lambda el: el.index == 0,
+                )
+
+        self.assertEqual(ctx.exception.element.index, 0)
+
+    def test_all_elements_excluded_raises_element_not_found(self) -> None:
+        with self.assertRaises(ElementNotFoundError) as ctx:
+            match_element(
+                self._parse(), "Cancel", _LLM_CONFIG, is_excluded=lambda el: True
+            )
+
+        self.assertIn("already rejected", str(ctx.exception))

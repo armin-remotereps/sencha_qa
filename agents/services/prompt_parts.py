@@ -150,9 +150,15 @@ def build_desktop_tool_examples() -> str:
         "DESKTOP TOOLS (for native desktop interactions):\n"
         "- Vision-based tools (click, hover, drag) use natural-language descriptions "
         "to find elements on the screen via AI vision.\n"
-        '- click(description="the Login button") — describe what to click\n'
+        "- click, hover and drag verify the target element before acting and confirm the "
+        "result afterwards, trying up to 10 candidates on their own. Pass expected_result "
+        "to tell them what the screen should show once the action worked.\n"
+        "- When click, hover or drag returns an error, the element could not be confirmed: "
+        "re-describe it more precisely or use take_screenshot to understand the screen "
+        "instead of repeating the same call.\n"
+        '- click(description="the Login button", expected_result="the login form opens") — describe what to click and what should happen\n'
         '- hover(description="the Settings menu") — describe what to hover\n'
-        '- drag(start_description="file icon", end_description="trash icon") — describe start and end\n'
+        '- drag(start_description="file icon", end_description="trash icon", expected_result="the file disappears from the desktop") — describe start, end and outcome\n'
         '- type_text(text="hello") — type text using the keyboard\n'
         '- key_press(keys="Return") — press a key or key combination\n'
         '- take_screenshot(question="What is on screen?") — capture desktop and ask about it\n'

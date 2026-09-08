@@ -1,10 +1,26 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from agents.services.browser_element_finder import find_element_index
-from agents.services.controller_element_finder import find_element_coordinates
 from agents.services.tool_utils import safe_tool_call
+from agents.services.verified_element_actions import (
+    VerificationBudget,
+    confirm_action,
+    default_click_expectation,
+    format_verified_message,
+    resolve_verified_element,
+    take_before_screenshot,
+)
 from agents.services.vision_qa import answer_screenshot_question
-from agents.types import LLMConfig, LogCallback, ScreenshotCallback, ToolResult
+from agents.types import (
+    CancellationCheck,
+    LLMConfig,
+    LogCallback,
+    PixelUIElement,
+    ScreenshotCallback,
+    ToolResult,
+)
 from projects.services import (
     ActionResult,
     ControllerActionError,
@@ -138,25 +154,101 @@ def take_screenshot(
     return safe_tool_call("take_screenshot", _do)
 
 
+_AttemptFunc = Callable[[VerificationBudget], ToolResult | None]
+
+
+def _run_verified_action(
+    operation: str,
+    attempt: _AttemptFunc,
+    *,
+    cancellation_check: CancellationCheck | None,
+    deadline: float | None,
+) -> ToolResult:
+    def _do() -> ToolResult:
+        budget = VerificationBudget(
+            deadline=deadline, cancellation_check=cancellation_check
+        )
+        while True:
+            result = attempt(budget)
+            if result is not None:
+                return result
+
+    return safe_tool_call(operation, _do)
+
+
+def _confirm_or_finish(
+    project_id: int,
+    vision_config: LLMConfig,
+    budget: VerificationBudget,
+    *,
+    acted_on: tuple[PixelUIElement, ...],
+    before_image_base64: str,
+    action_summary: str,
+    expected_result: str,
+    tool_name: str,
+    success_message: str,
+    on_screenshot: ScreenshotCallback | None,
+) -> ToolResult | None:
+    if expected_result:
+        verdict = confirm_action(
+            project_id,
+            vision_config,
+            budget,
+            acted_on=acted_on,
+            before_image_base64=before_image_base64,
+            action_summary=action_summary,
+            expected_result=expected_result,
+            tool_name=tool_name,
+            on_screenshot=on_screenshot,
+        )
+        if not verdict.accepted:
+            return None
+    return ToolResult(
+        tool_call_id="",
+        content=format_verified_message(success_message, budget),
+        is_error=False,
+    )
+
+
+def _before_image_if_confirming(project_id: int, expected_result: str) -> str:
+    return take_before_screenshot(project_id) if expected_result else ""
+
+
 def click(
     project_id: int,
     *,
     description: str,
     vision_config: LLMConfig,
+    expected_result: str = "",
     on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
+    deadline: float | None = None,
 ) -> ToolResult:
-    def _do() -> ToolResult:
-        x, y = find_element_coordinates(
-            project_id, description, vision_config, on_screenshot=on_screenshot
+    effective_expectation = expected_result or default_click_expectation(description)
+
+    def _attempt(budget: VerificationBudget) -> ToolResult | None:
+        element = resolve_verified_element(
+            project_id, description, vision_config, budget, on_screenshot=on_screenshot
         )
+        x, y = element.center_x, element.center_y
+        before_image = take_before_screenshot(project_id)
         _ensure_action_succeeded(controller_click(project_id, x, y))
-        return ToolResult(
-            tool_call_id="",
-            content=f"Clicked element at ({x}, {y}): {description}",
-            is_error=False,
+        return _confirm_or_finish(
+            project_id,
+            vision_config,
+            budget,
+            acted_on=(element,),
+            before_image_base64=before_image,
+            action_summary=f"clicked '{description}' at ({x}, {y})",
+            expected_result=effective_expectation,
+            tool_name="click",
+            success_message=f"Clicked element at ({x}, {y}): {description}",
+            on_screenshot=on_screenshot,
         )
 
-    return safe_tool_call("click", _do)
+    return _run_verified_action(
+        "click", _attempt, cancellation_check=cancellation_check, deadline=deadline
+    )
 
 
 def type_text(project_id: int, *, text: str) -> ToolResult:
@@ -184,20 +276,34 @@ def hover(
     *,
     description: str,
     vision_config: LLMConfig,
+    expected_result: str = "",
     on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
+    deadline: float | None = None,
 ) -> ToolResult:
-    def _do() -> ToolResult:
-        x, y = find_element_coordinates(
-            project_id, description, vision_config, on_screenshot=on_screenshot
+    def _attempt(budget: VerificationBudget) -> ToolResult | None:
+        element = resolve_verified_element(
+            project_id, description, vision_config, budget, on_screenshot=on_screenshot
         )
+        x, y = element.center_x, element.center_y
+        before_image = _before_image_if_confirming(project_id, expected_result)
         _ensure_action_succeeded(controller_hover(project_id, x, y))
-        return ToolResult(
-            tool_call_id="",
-            content=f"Hovered over element at ({x}, {y}): {description}",
-            is_error=False,
+        return _confirm_or_finish(
+            project_id,
+            vision_config,
+            budget,
+            acted_on=(element,),
+            before_image_base64=before_image,
+            action_summary=f"hovered over '{description}' at ({x}, {y})",
+            expected_result=expected_result,
+            tool_name="hover",
+            success_message=f"Hovered over element at ({x}, {y}): {description}",
+            on_screenshot=on_screenshot,
         )
 
-    return safe_tool_call("hover", _do)
+    return _run_verified_action(
+        "hover", _attempt, cancellation_check=cancellation_check, deadline=deadline
+    )
 
 
 def drag(
@@ -206,29 +312,48 @@ def drag(
     start_description: str,
     end_description: str,
     vision_config: LLMConfig,
+    expected_result: str = "",
     on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
+    deadline: float | None = None,
 ) -> ToolResult:
-    def _do() -> ToolResult:
-        sx, sy = find_element_coordinates(
+    def _attempt(budget: VerificationBudget) -> ToolResult | None:
+        start = resolve_verified_element(
             project_id,
             start_description,
             vision_config,
+            budget,
             on_screenshot=on_screenshot,
         )
-        ex, ey = find_element_coordinates(
+        end = resolve_verified_element(
             project_id,
             end_description,
             vision_config,
+            budget,
             on_screenshot=on_screenshot,
         )
+        sx, sy, ex, ey = start.center_x, start.center_y, end.center_x, end.center_y
+        before_image = _before_image_if_confirming(project_id, expected_result)
         _ensure_action_succeeded(controller_drag(project_id, sx, sy, ex, ey))
-        return ToolResult(
-            tool_call_id="",
-            content=f"Dragged from ({sx}, {sy}) to ({ex}, {ey})",
-            is_error=False,
+        return _confirm_or_finish(
+            project_id,
+            vision_config,
+            budget,
+            acted_on=(start, end),
+            before_image_base64=before_image,
+            action_summary=(
+                f"dragged '{start_description}' at ({sx}, {sy}) onto "
+                f"'{end_description}' at ({ex}, {ey})"
+            ),
+            expected_result=expected_result,
+            tool_name="drag",
+            success_message=f"Dragged from ({sx}, {sy}) to ({ex}, {ey})",
+            on_screenshot=on_screenshot,
         )
 
-    return safe_tool_call("drag", _do)
+    return _run_verified_action(
+        "drag", _attempt, cancellation_check=cancellation_check, deadline=deadline
+    )
 
 
 def launch_app(project_id: int, *, app_name: str) -> ToolResult:
