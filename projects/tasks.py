@@ -12,8 +12,16 @@ from django.db import transaction
 from projects.models import Project, TestCaseUpload, UploadStatus
 from projects.prompt_refiner import refine_project_prompt
 from projects.services import _agent_status_group, save_project_prompt
+from projects.testrail_client import TestRailError
+from projects.testrail_mapping import TestRailFieldMapper
+from projects.testrail_services import (
+    build_testrail_client,
+    upsert_test_cases_from_testrail,
+)
 
 logger: logging.Logger = logging.getLogger(__name__)
+
+GENERIC_UPLOAD_FAILURE_MESSAGE = "An error occurred while processing the upload."
 
 
 def _send_upload_progress(upload: TestCaseUpload) -> None:
@@ -79,10 +87,12 @@ def _mark_completed(upload: TestCaseUpload) -> None:
     _send_upload_progress(upload)
 
 
-def _handle_failure(upload: TestCaseUpload) -> None:
+def _handle_failure(
+    upload: TestCaseUpload, message: str = GENERIC_UPLOAD_FAILURE_MESSAGE
+) -> None:
     upload.refresh_from_db()
     upload.status = UploadStatus.FAILED
-    upload.error_message = "An error occurred while processing the upload."
+    upload.error_message = message
     upload.save(update_fields=["status", "error_message", "updated_at"])
 
     with transaction.atomic():
@@ -131,6 +141,94 @@ def process_xml_upload(self: Task[[int], None], upload_id: int) -> None:
     except Exception:
         logger.exception(
             "process_xml_upload failed: task_id=%s upload_id=%s",
+            self.request.id,
+            upload_id,
+        )
+        _handle_failure(upload)
+
+
+def _run_testrail_import(upload: TestCaseUpload) -> None:
+    if upload.testrail_project_id is None or upload.testrail_suite_id is None:
+        raise TestRailError(
+            "Import row is missing its TestRail project or suite id.", 0
+        )
+
+    with build_testrail_client(upload.project) as client:
+        mapper = TestRailFieldMapper.from_vocabularies(
+            client.get_case_types(), client.get_priorities()
+        )
+        cases = list(
+            client.iter_cases(upload.testrail_project_id, upload.testrail_suite_id)
+        )
+
+    upload.total_cases = len(cases)
+    upload.save(update_fields=["total_cases", "updated_at"])
+    _send_upload_progress(upload)
+
+    def on_batch_processed(processed: int, updated: int) -> None:
+        upload.processed_cases = processed
+        upload.updated_cases = updated
+        upload.save(update_fields=["processed_cases", "updated_cases", "updated_at"])
+        _send_upload_progress(upload)
+
+    upsert_test_cases_from_testrail(
+        upload=upload,
+        project=upload.project,
+        cases=cases,
+        mapper=mapper,
+        batch_size=50,
+        progress_callback=on_batch_processed,
+    )
+
+
+@shared_task(
+    bind=True,
+    name="projects.tasks.import_testrail_cases",
+    queue="upload",
+    max_retries=0,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=600,
+    time_limit=660,
+)
+def import_testrail_cases(self: Task[[int], None], upload_id: int) -> None:
+    logger.info(
+        "import_testrail_cases started: task_id=%s upload_id=%s",
+        self.request.id,
+        upload_id,
+    )
+    upload = _fetch_upload(upload_id)
+    if upload is None:
+        logger.error(
+            "TestCaseUpload id=%s does not exist; aborting task_id=%s",
+            upload_id,
+            self.request.id,
+        )
+        return
+
+    _mark_processing(upload)
+    try:
+        _run_testrail_import(upload)
+        _mark_completed(upload)
+        logger.info(
+            "import_testrail_cases completed: task_id=%s upload_id=%s total=%s updated=%s",
+            self.request.id,
+            upload_id,
+            upload.total_cases,
+            upload.updated_cases,
+        )
+    except TestRailError as exc:
+        logger.warning(
+            "import_testrail_cases failed (TestRail): task_id=%s upload_id=%s status=%s message=%s",
+            self.request.id,
+            upload_id,
+            exc.status_code,
+            exc.message,
+        )
+        _handle_failure(upload, exc.message)
+    except Exception:
+        logger.exception(
+            "import_testrail_cases failed: task_id=%s upload_id=%s",
             self.request.id,
             upload_id,
         )
