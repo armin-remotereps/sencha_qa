@@ -70,15 +70,17 @@ class TestRailCase:
     steps_separated: tuple[TestRailStep, ...]
 
 
-def _str(value: Any) -> str:
+def _str(value: Any) -> str:  # raw JSON field value, type varies by payload
     return "" if value is None else str(value)
 
 
-def _optional_int(value: Any) -> int | None:
+def _optional_int(value: Any) -> int | None:  # raw JSON field, type varies by payload
     return None if value is None else int(value)
 
 
-def _parse_steps_separated(raw: Any) -> tuple[TestRailStep, ...]:
+def _parse_steps_separated(
+    raw: Any,  # raw JSON field, expected to be a list of step dicts
+) -> tuple[TestRailStep, ...]:
     if not isinstance(raw, list):
         return ()
     return tuple(
@@ -90,7 +92,7 @@ def _parse_steps_separated(raw: Any) -> tuple[TestRailStep, ...]:
     )
 
 
-def _parse_case(raw: dict[str, Any]) -> TestRailCase:
+def _parse_case(raw: dict[str, Any]) -> TestRailCase:  # raw JSON case object
     return TestRailCase(
         id=int(raw["id"]),
         title=_str(raw.get("title")),
@@ -181,7 +183,9 @@ class TestRailClient:
 
     # -- transport helpers ---------------------------------------------------
 
-    def _paginate(self, method: str, key: str) -> Iterator[dict[str, Any]]:
+    def _paginate(
+        self, method: str, key: str
+    ) -> Iterator[dict[str, Any]]:  # yields raw JSON objects, one per page item
         next_method: str | None = method
         while next_method is not None:
             page = self._get_dict(next_method)
@@ -196,7 +200,7 @@ class TestRailClient:
             next_method = self._next_method(page)
 
     @staticmethod
-    def _next_method(page: dict[str, Any]) -> str | None:
+    def _next_method(page: dict[str, Any]) -> str | None:  # raw JSON page envelope
         links = page.get("_links")
         if not isinstance(links, dict):
             return None
@@ -205,13 +209,17 @@ class TestRailClient:
             return None
         return next_link.removeprefix("/api/v2/")
 
-    def _get_dict(self, method: str) -> dict[str, Any]:
+    def _get_dict(
+        self, method: str
+    ) -> dict[str, Any]:  # raw JSON object, keys vary by endpoint
         data = self._get_json(method)
         if not isinstance(data, dict):
             raise TestRailError("TestRail returned an unexpected response shape.", 200)
         return data
 
-    def _get_list(self, method: str) -> list[dict[str, Any]]:
+    def _get_list(
+        self, method: str
+    ) -> list[dict[str, Any]]:  # raw JSON objects, keys vary by endpoint
         data = self._get_json(method)
         if not isinstance(data, list):
             raise TestRailError("TestRail returned an unexpected response shape.", 200)
