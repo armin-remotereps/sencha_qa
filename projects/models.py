@@ -42,6 +42,11 @@ class UploadStatus(models.TextChoices):
     CANCELLED = "cancelled", "Cancelled"
 
 
+class UploadSource(models.TextChoices):
+    XML = "xml", "TestRail XML export"
+    TESTRAIL_API = "testrail_api", "TestRail account"
+
+
 class TestRunStatus(models.TextChoices):
     WAITING = "waiting", "Waiting"
     STARTED = "started", "Started"
@@ -96,6 +101,9 @@ class Project(models.Model):
         blank=True,
         default="",
     )
+    testrail_url = models.URLField(max_length=500, blank=True, default="")
+    testrail_email = models.EmailField(blank=True, default="")
+    testrail_api_key_encrypted = models.TextField(blank=True, default="")
 
     def __str__(self) -> str:
         return self.name
@@ -109,6 +117,15 @@ class Project(models.Model):
             or self.project_prompt.strip()
         )
 
+    @property
+    def has_testrail_settings(self) -> bool:
+        """True when URL, email and an encrypted API key are all stored."""
+        return bool(
+            self.testrail_url
+            and self.testrail_email
+            and self.testrail_api_key_encrypted
+        )
+
 
 class TestCaseUpload(models.Model):
     project = models.ForeignKey(
@@ -118,7 +135,15 @@ class TestCaseUpload(models.Model):
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="uploads"
     )
     original_filename = models.CharField(max_length=255)
-    file = models.FileField(upload_to="uploads/testrail_xml/")
+    file = models.FileField(upload_to="uploads/testrail_xml/", blank=True)
+    source = models.CharField(
+        max_length=20,
+        choices=UploadSource.choices,
+        default=UploadSource.XML,
+        db_index=True,
+    )
+    testrail_project_id = models.PositiveIntegerField(null=True, blank=True)
+    testrail_suite_id = models.PositiveIntegerField(null=True, blank=True)
     status = models.CharField(
         max_length=20,
         choices=UploadStatus.choices,
@@ -128,12 +153,22 @@ class TestCaseUpload(models.Model):
     celery_task_id = models.CharField(max_length=255, blank=True, default="")
     total_cases = models.PositiveIntegerField(default=0)
     processed_cases = models.PositiveIntegerField(default=0)
+    updated_cases = models.PositiveIntegerField(default=0)
     error_message = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self) -> str:
         return self.original_filename
+
+    @property
+    def is_testrail_api(self) -> bool:
+        return self.source == UploadSource.TESTRAIL_API
+
+    @property
+    def created_cases(self) -> int:
+        """Cases this import created (processed counts created + updated)."""
+        return max(self.processed_cases - self.updated_cases, 0)
 
 
 @dataclass

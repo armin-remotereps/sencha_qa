@@ -48,6 +48,8 @@ class ProjectAdmin(admin.ModelAdmin[Project]):
         "application_url",
         "application_platform",
         "project_prompt",
+        "testrail_url",
+        "testrail_email",
         "api_key",
         "agent_connected",
         "agent_system_info",
@@ -86,6 +88,7 @@ class TestCaseAdmin(admin.ModelAdmin[TestCase]):
 class TestCaseUploadAdmin(admin.ModelAdmin[TestCaseUpload]):
     list_display = (
         "original_filename",
+        "source",
         "project",
         "uploaded_by",
         "status",
@@ -93,7 +96,7 @@ class TestCaseUploadAdmin(admin.ModelAdmin[TestCaseUpload]):
         "processed_cases",
         "created_at",
     )
-    list_filter = ("status", "project")
+    list_filter = ("status", "source", "project")
     search_fields = ("original_filename",)
 
 
