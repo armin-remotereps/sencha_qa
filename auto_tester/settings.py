@@ -13,6 +13,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Security
 SECRET_KEY: str = config("SECRET_KEY", cast=str)
+# Fernet key (urlsafe base64, 32 bytes) used to encrypt per-project secrets
+# such as TestRail API keys at rest. Generate one with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+FIELD_ENCRYPTION_KEY: str = config("FIELD_ENCRYPTION_KEY", cast=str)
 DEBUG: bool = config("DEBUG", default=False, cast=bool)
 ALLOWED_HOSTS: list[str] = config(
     "ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv()
