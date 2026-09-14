@@ -1,0 +1,74 @@
+{% extends "layouts/project.html" %}
+
+{% comment %} Project settings tab. Today it holds one card: the TestRail
+   integration used by "Import from TestRail account" on the Import page.
+
+   Context contract (projects.testrail_views.project_settings):
+     project      — current Project
+     form         — TestRailSettingsForm (api key never pre-filled)
+     api_key_hint — last characters of the stored API key, "" when none {% endcomment %}
+{% block title %}Settings · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>Settings</h1>
+    <p class="subtitle">{{ project.name }} — integrations and project-level configuration.</p>
+  </div>
+</div>
+{% endblock %}
+
+{% block project_content %}
+<div class="card">
+  <div class="card-header">
+    <h2>TestRail integration</h2>
+    {% if project.has_testrail_settings %}
+      <span class="badge badge-passed">Configured</span>
+    {% else %}
+      <span class="badge badge-draft">Not configured</span>
+    {% endif %}
+  </div>
+  <p class="muted">
+    Connect a TestRail account to import test cases directly from its projects.
+    Only read access is used; Punk Hazard never writes to TestRail.
+  </p>
+
+  <form method="post" action="{% url 'projects:settings' project.id %}" novalidate>
+    {% csrf_token %}
+    {% include "projects/includes/_context_field.html" with field=form.testrail_url only %}
+    {% include "projects/includes/_context_field.html" with field=form.testrail_email only %}
+
+    <div class="field{% if form.testrail_api_key.errors %} has-error{% endif %}">
+      <label for="{{ form.testrail_api_key.id_for_label }}">API key</label>
+      {{ form.testrail_api_key }}
+      {% if api_key_hint %}
+        <p class="hint">A key is saved (ends in …{{ api_key_hint }}). Leave blank to keep it, or paste a new key to replace it.</p>
+      {% else %}
+        <p class="hint">Generate one in TestRail under My Settings › API Keys, then click Save Settings there.</p>
+      {% endif %}
+      {% for error in form.testrail_api_key.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+    </div>
+
+    <div class="dialog-actions">
+      {% if project.has_testrail_settings %}
+        <button type="button" class="btn btn-ghost" @click="$dispatch('open-clear-testrail')">Clear settings</button>
+      {% endif %}
+      <button class="btn btn-primary" type="submit">Save</button>
+    </div>
+  </form>
+
+  {% if project.has_testrail_settings %}
+    <form method="post" action="{% url 'projects:settings_testrail_test' project.id %}">
+      {% csrf_token %}
+      <div class="dialog-actions">
+        <button class="btn btn-secondary" type="submit">Test connection</button>
+      </div>
+    </form>
+  {% endif %}
+</div>
+
+{% if project.has_testrail_settings %}
+  {% url 'projects:settings_testrail_clear' project.id as clear_url %}
+  {% include "partials/confirm_dialog.html" with dialog_id="clear-testrail" title="Clear TestRail settings?" body="The URL, email and API key are removed from this project. Imported test cases are kept." confirm_label="Clear settings" action_url=clear_url only %}
+{% endif %}
+{% endblock %}

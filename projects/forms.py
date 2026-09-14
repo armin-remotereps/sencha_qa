@@ -259,3 +259,54 @@ def form_error_text(form: BaseForm) -> str:
             message = str(error)
             parts.append(f"{label}: {message}" if label else message)
     return " ".join(parts)
+
+
+class TestRailSettingsForm(forms.Form):
+    """Settings tab: TestRail URL, account email, and API key.
+
+    The API key is never pre-filled (see `has_stored_key` below) — once a
+    key is stored, leaving the field blank on a later save keeps it.
+    """
+
+    testrail_url = forms.URLField(
+        label="TestRail URL",
+        max_length=500,
+        assume_scheme="https",
+        widget=forms.URLInput(
+            attrs={"class": "input", "placeholder": "https://yourteam.testrail.com"}
+        ),
+    )
+    testrail_email = forms.EmailField(
+        label="Account email",
+        widget=forms.EmailInput(
+            attrs={"class": "input", "placeholder": "you@company.com"}
+        ),
+    )
+    testrail_api_key = forms.CharField(
+        label="API key",
+        required=False,
+        widget=forms.PasswordInput(
+            attrs={"class": "input", "autocomplete": "off"}, render_value=False
+        ),
+    )
+
+    def __init__(self, *args: Any, has_stored_key: bool = False, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.has_stored_key = has_stored_key
+
+    def clean_testrail_url(self) -> str:
+        url: str = self.cleaned_data["testrail_url"].strip()
+        if not url.lower().startswith(("https://", "http://")):
+            raise forms.ValidationError(
+                "Enter a valid URL starting with https:// or http://."
+            )
+        return url.rstrip("/")
+
+    def clean_testrail_api_key(self) -> str | None:
+        """Empty means "keep the stored key" once one exists; required otherwise."""
+        raw: str = self.cleaned_data.get("testrail_api_key", "").strip()
+        if raw:
+            return raw
+        if self.has_stored_key:
+            return None
+        raise forms.ValidationError("API key is required.")

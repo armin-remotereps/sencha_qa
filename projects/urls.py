@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.urls import URLPattern, path
 
-from projects import views
+from projects import testrail_views, views
 
 app_name = "projects"
 
@@ -53,6 +53,21 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/environment/",
         views.project_environment,
         name="environment",
+    ),
+    path(
+        "<int:project_id>/settings/",
+        testrail_views.project_settings,
+        name="settings",
+    ),
+    path(
+        "<int:project_id>/settings/testrail/test/",
+        testrail_views.settings_testrail_test,
+        name="settings_testrail_test",
+    ),
+    path(
+        "<int:project_id>/settings/testrail/clear/",
+        testrail_views.settings_testrail_clear,
+        name="settings_testrail_clear",
     ),
     path(
         "<int:project_id>/application-context/",
