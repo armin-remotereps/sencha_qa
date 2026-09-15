@@ -93,6 +93,7 @@ from projects.services import (
     validate_testrail_xml,
 )
 from projects.tasks import refine_project_prompt_task
+from projects.testrail_services import get_testrail_picker_state
 
 ALLOWED_PER_PAGE = [10, 20, 50, 100]
 DEFAULT_PER_PAGE = 20
@@ -633,6 +634,7 @@ def test_case_import(request: HttpRequest, project: Project) -> HttpResponse:
             "allowed_per_page": ALLOWED_PER_PAGE,
             "elided_page_range": _get_elided_page_range(uploads),
             "query_params": _build_query_params(request),
+            "testrail_picker": get_testrail_picker_state(project),
             "active_tab": "test_cases",
             "active_nav": "projects",
         },

@@ -1,0 +1,37 @@
+{% comment %} "Import from TestRail account" card on the Import page.
+
+   Context contract:
+     project        — current Project
+     testrail_picker — projects.testrail_services.TestRailPickerState {% endcomment %}
+<div class="card">
+  <div class="card-header">
+    <h3>Import from TestRail account</h3>
+    <a class="btn btn-sm btn-ghost" href="{% url 'projects:settings' project.id %}">TestRail settings</a>
+  </div>
+
+  {% if not testrail_picker.configured %}
+    <p class="muted">
+      Connect a TestRail account under
+      <a href="{% url 'projects:settings' project.id %}">Settings</a>
+      to import test cases directly, without exporting XML.
+    </p>
+  {% elif testrail_picker.error %}
+    <p class="error-text">⚠ {{ testrail_picker.error }}</p>
+    <p class="hint">Check the URL, email and API key under <a href="{% url 'projects:settings' project.id %}">Settings</a> and try again.</p>
+  {% else %}
+    <p class="hint">Pick the TestRail project to import. Multi-suite projects ask for a suite next. Cases already in this project (same TestRail ID) are updated in place.</p>
+    <form method="post" action="{% url 'projects:testrail_import_start' project.id %}" class="toolbar">
+      {% csrf_token %}
+      <div>
+        <label class="visually-hidden" for="testrail-project">TestRail project</label>
+        <select class="select" id="testrail-project" name="testrail_project_id" required>
+          <option value="">Choose a TestRail project…</option>
+          {% for tr_project in testrail_picker.projects %}
+            <option value="{{ tr_project.id }}">{{ tr_project.name }}{% if tr_project.is_completed %} (completed){% endif %}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary">Continue</button>
+    </form>
+  {% endif %}
+</div>

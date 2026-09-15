@@ -7,7 +7,8 @@
      project           — current Project
      uploads           — Page[TestCaseUpload], newest first
      upload_create_url — POST target for the dropzone form
-     per_page / allowed_per_page / elided_page_range / query_params — pagination {% endcomment %}
+     per_page / allowed_per_page / elided_page_range / query_params — pagination
+     testrail_picker   — projects.testrail_services.TestRailPickerState {% endcomment %}
 {% block title %}Import · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
 {% block breadcrumb_extra %}
@@ -22,13 +23,18 @@
 <div class="page-header">
   <div>
     <h1>Import from TestRail</h1>
-    <p class="subtitle">Upload a TestRail XML export and Punk Hazard will parse each case.</p>
+    <p class="subtitle">Bring cases in from a connected TestRail account, or upload a TestRail XML export.</p>
   </div>
 </div>
 {% endblock %}
 
 {% block project_content %}
+{% include "projects/includes/_testrail_import_card.html" with project=project testrail_picker=testrail_picker only %}
+
 <div class="card">
+  <div class="card-header">
+    <h3>Upload a TestRail XML export</h3>
+  </div>
   <p class="hint">File requirements: TestRail XML export (<code>.xml</code>), up to 10 MB.</p>
 
   <form method="post" action="{{ upload_create_url }}" enctype="multipart/form-data">

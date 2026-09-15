@@ -7,8 +7,13 @@ from django.contrib.messages import get_messages
 from django.test import Client, TestCase, override_settings
 from django.urls import reverse
 
+from projects.models import TestCaseUpload, UploadSource
+from projects.testrail_client import TestRailError, TestRailProject, TestRailSuite
 from projects.testrail_services import (
     TestRailConnectionResult,
+    TestRailImportResolution,
+    TestRailImportTarget,
+    TestRailPickerState,
     get_testrail_api_key_hint,
     save_testrail_settings,
 )
@@ -166,3 +171,148 @@ class ClearSettingsViewTests(TestCase):
         self.assertRedirects(response, reverse("projects:settings", args=[project.id]))
         project.refresh_from_db()
         self.assertFalse(project.has_testrail_settings)
+
+
+@override_settings(FIELD_ENCRYPTION_KEY=TEST_KEY, CACHES=LOCMEM_CACHE)
+class ImportPageCardTests(TestCase):
+    def setUp(self) -> None:
+        self.user = make_user()
+        self.project = make_project(user=self.user)
+        self.client = Client()
+        self.client.force_login(self.user)
+        self.url = reverse("projects:test_case_import", args=[self.project.id])
+
+    def test_unconfigured_card_links_to_settings(self) -> None:
+        response = self.client.get(self.url)
+        self.assertContains(
+            response, reverse("projects:settings", args=[self.project.id])
+        )
+        self.assertContains(response, "Import from TestRail account")
+
+    def test_configured_card_lists_projects(self) -> None:
+        state = TestRailPickerState(
+            configured=True,
+            projects=[
+                TestRailProject(15, "ExtJS 6", 3, False),
+                TestRailProject(2, "Old", 1, True),
+            ],
+        )
+        with patch("projects.views.get_testrail_picker_state", return_value=state):
+            response = self.client.get(self.url)
+        self.assertContains(response, '<option value="15">ExtJS 6</option>', html=True)
+        self.assertContains(
+            response, '<option value="2">Old (completed)</option>', html=True
+        )
+
+    def test_error_shown_inline(self) -> None:
+        state = TestRailPickerState(
+            configured=True, projects=[], error="Authentication failed: bad key"
+        )
+        with patch("projects.views.get_testrail_picker_state", return_value=state):
+            response = self.client.get(self.url)
+        self.assertContains(response, "Authentication failed: bad key")
+
+    def test_history_row_shows_new_and_updated_for_api_imports(self) -> None:
+        TestCaseUpload.objects.create(
+            project=self.project,
+            uploaded_by=self.user,
+            original_filename="TestRail: P / S",
+            source=UploadSource.TESTRAIL_API,
+            status="completed",
+            total_cases=10,
+            processed_cases=10,
+            updated_cases=3,
+        )
+        response = self.client.get(self.url)
+        self.assertContains(response, "7 new")
+        self.assertContains(response, "3 updated")
+
+
+@override_settings(FIELD_ENCRYPTION_KEY=TEST_KEY, CACHES=LOCMEM_CACHE)
+class ImportStartViewTests(TestCase):
+    def setUp(self) -> None:
+        self.user = make_user()
+        self.project = make_project(user=self.user)
+        self.client = Client()
+        self.client.force_login(self.user)
+        self.start_url = reverse(
+            "projects:testrail_import_start", args=[self.project.id]
+        )
+        self.import_url = reverse("projects:test_case_import", args=[self.project.id])
+        self.multi = TestRailProject(15, "ExtJS 6", 3, False)
+        self.single = TestRailProject(164, "Ext JS 8.1", 1, False)
+
+    def test_get_not_allowed(self) -> None:
+        self.assertEqual(self.client.get(self.start_url).status_code, 405)
+
+    def test_invalid_form_redirects_with_error(self) -> None:
+        response = self.client.post(self.start_url, {"testrail_project_id": "abc"})
+        self.assertRedirects(response, self.import_url)
+        messages = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any("TestRail project" in m for m in messages))
+
+    def test_single_suite_starts_import_immediately(self) -> None:
+        master = TestRailSuite(6546, "Master", True)
+        resolution = TestRailImportResolution(
+            testrail_project=self.single, suites=[master]
+        )
+        with patch(
+            "projects.testrail_views.resolve_testrail_import", return_value=resolution
+        ), patch("projects.testrail_views.start_testrail_import") as start:
+            response = self.client.post(self.start_url, {"testrail_project_id": "164"})
+        self.assertRedirects(response, self.import_url)
+        start.assert_called_once()
+        self.assertEqual(
+            start.call_args.kwargs["target"], TestRailImportTarget(self.single, master)
+        )
+
+    def test_multi_suite_renders_picker(self) -> None:
+        suites = [
+            TestRailSuite(20, "Features", False),
+            TestRailSuite(22, "Regression", False),
+        ]
+        resolution = TestRailImportResolution(
+            testrail_project=self.multi, suites=suites
+        )
+        with patch(
+            "projects.testrail_views.resolve_testrail_import", return_value=resolution
+        ):
+            response = self.client.post(self.start_url, {"testrail_project_id": "15"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(
+            response, '<option value="22">Regression</option>', html=True
+        )
+        self.assertContains(
+            response,
+            reverse("projects:testrail_import_suite", args=[self.project.id, 15]),
+        )
+
+    def test_testrail_error_redirects_with_message(self) -> None:
+        with patch(
+            "projects.testrail_views.resolve_testrail_import",
+            side_effect=TestRailError("Authentication failed: bad key", 401),
+        ):
+            response = self.client.post(self.start_url, {"testrail_project_id": "15"})
+        self.assertRedirects(response, self.import_url)
+        messages = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertIn("Authentication failed: bad key", messages)
+
+    def test_suite_post_starts_import(self) -> None:
+        target = TestRailImportTarget(self.multi, TestRailSuite(20, "Features", False))
+        suite_url = reverse(
+            "projects:testrail_import_suite", args=[self.project.id, 15]
+        )
+        with patch(
+            "projects.testrail_views.resolve_testrail_import_suite", return_value=target
+        ) as resolve, patch("projects.testrail_views.start_testrail_import") as start:
+            response = self.client.post(suite_url, {"testrail_suite_id": "20"})
+        self.assertRedirects(response, self.import_url)
+        resolve.assert_called_once_with(self.project, 15, 20)
+        self.assertEqual(start.call_args.kwargs["target"], target)
+
+    def test_suite_post_invalid_redirects(self) -> None:
+        suite_url = reverse(
+            "projects:testrail_import_suite", args=[self.project.id, 15]
+        )
+        response = self.client.post(suite_url, {"testrail_suite_id": ""})
+        self.assertRedirects(response, self.import_url)

@@ -1,0 +1,50 @@
+{% extends "layouts/project.html" %}
+
+{% comment %} Step 2 of "Import from TestRail account" for multi-suite TestRail
+   projects: choose which suite to import.
+
+   Context contract (projects.testrail_views.testrail_import_start):
+     project          — current Project
+     testrail_project — projects.testrail_client.TestRailProject
+     suites           — list[TestRailSuite] {% endcomment %}
+{% block title %}Choose a suite · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumb_extra %}
+  <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:test_case_list' project.id %}">Test Cases</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:test_case_import' project.id %}">Import</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Choose a suite</span>
+{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>Choose a suite</h1>
+    <p class="subtitle">“{{ testrail_project.name }}” has {{ suites|length }} suites. Pick the one to import.</p>
+  </div>
+</div>
+{% endblock %}
+
+{% block project_content %}
+<div class="card">
+  <form method="post" action="{% url 'projects:testrail_import_suite' project.id testrail_project.id %}">
+    {% csrf_token %}
+    <div class="field">
+      <label for="testrail-suite">Suite</label>
+      <select class="select" id="testrail-suite" name="testrail_suite_id" required>
+        <option value="">Choose a suite…</option>
+        {% for suite in suites %}
+          <option value="{{ suite.id }}">{{ suite.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="dialog-actions">
+      <a class="btn btn-ghost" href="{% url 'projects:test_case_import' project.id %}">Cancel</a>
+      <button class="btn btn-primary" type="submit">Import</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

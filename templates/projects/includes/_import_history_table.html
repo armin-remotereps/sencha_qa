@@ -9,7 +9,7 @@
   <table class="data-table">
     <thead>
       <tr>
-        <th scope="col">File</th>
+        <th scope="col">Source</th>
         <th scope="col">Status</th>
         <th scope="col">Cases</th>
         <th scope="col">Imported</th>
@@ -19,7 +19,7 @@
     <tbody>
       {% for upload in uploads %}
         <tr data-upload-id="{{ upload.id }}">
-          <td data-label="File" class="cell-primary">{{ upload.original_filename }}</td>
+          <td data-label="Source" class="cell-primary">{{ upload.original_filename }}</td>
 
           <td data-label="Status">
             {% if upload.status == "pending" or upload.status == "processing" %}
@@ -43,6 +43,9 @@
               <span data-progress-bar style="width: {% if upload.total_cases %}{% widthratio upload.processed_cases upload.total_cases 100 %}{% else %}0{% endif %}%;"></span>
             </div>
             <p class="muted small" data-progress>{{ upload.processed_cases }} / {{ upload.total_cases }}</p>
+            {% if upload.is_testrail_api and upload.status == "completed" %}
+              <p class="muted small">{{ upload.created_cases }} new · {{ upload.updated_cases }} updated</p>
+            {% endif %}
           </td>
 
           <td data-label="Imported" class="muted">{{ upload.created_at|date:"M j, Y H:i" }}</td>

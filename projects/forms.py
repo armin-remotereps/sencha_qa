@@ -310,3 +310,11 @@ class TestRailSettingsForm(forms.Form):
         if self.has_stored_key:
             return None
         raise forms.ValidationError("API key is required.")
+
+
+class TestRailImportStartForm(forms.Form):
+    testrail_project_id = forms.IntegerField(min_value=1)
+
+
+class TestRailSuiteForm(forms.Form):
+    testrail_suite_id = forms.IntegerField(min_value=1)
