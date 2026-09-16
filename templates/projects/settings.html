@@ -35,8 +35,8 @@
 
   <form method="post" action="{% url 'projects:settings' project.id %}" novalidate>
     {% csrf_token %}
-    {% include "projects/includes/_context_field.html" with field=form.testrail_url only %}
-    {% include "projects/includes/_context_field.html" with field=form.testrail_email only %}
+    {% include "partials/form_field.html" with field=form.testrail_url only %}
+    {% include "partials/form_field.html" with field=form.testrail_email only %}
 
     <div class="field{% if form.testrail_api_key.errors %} has-error{% endif %}">
       <label for="{{ form.testrail_api_key.id_for_label }}">API key</label>

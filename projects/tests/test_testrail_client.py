@@ -209,3 +209,17 @@ class ErrorTests(SimpleTestCase):
             _client(transport, sleeps).get_projects()
         self.assertEqual(ctx.exception.status_code, 429)
         self.assertEqual(len(sleeps), 3)
+
+    def test_retry_after_is_capped_at_ceiling(self) -> None:
+        sleeps: list[float] = []
+        ok = _json(200, _paged("projects", [], None))
+        transport = RecordingTransport(
+            {
+                "get_projects": [
+                    _json(429, {"error": "slow down"}, {"Retry-After": "300"}),
+                    ok,
+                ]
+            }
+        )
+        _client(transport, sleeps).get_projects()
+        self.assertEqual(sleeps, [30.0])

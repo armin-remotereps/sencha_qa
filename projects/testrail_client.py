@@ -9,6 +9,7 @@ import httpx
 
 TESTRAIL_PAGE_SIZE = 250
 TESTRAIL_MAX_RATE_LIMIT_RETRIES = 3
+TESTRAIL_MAX_RETRY_AFTER_SECONDS = 30.0
 _DEFAULT_RETRY_AFTER_SECONDS = 5.0
 _API_PREFIX = "/index.php?/api/v2/"
 
@@ -256,9 +257,10 @@ class TestRailClient:
     def _retry_after_seconds(response: httpx.Response) -> float:
         header = response.headers.get("Retry-After")
         try:
-            return float(header) if header else _DEFAULT_RETRY_AFTER_SECONDS
+            parsed = float(header) if header else _DEFAULT_RETRY_AFTER_SECONDS
         except ValueError:
             return _DEFAULT_RETRY_AFTER_SECONDS
+        return min(parsed, TESTRAIL_MAX_RETRY_AFTER_SECONDS)
 
     @staticmethod
     def _error_message(response: httpx.Response) -> str:

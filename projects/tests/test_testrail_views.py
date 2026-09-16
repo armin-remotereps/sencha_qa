@@ -103,6 +103,18 @@ class SettingsPageTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Enter a valid URL")
 
+    def test_rejects_credentials_in_url(self) -> None:
+        response = self.client.post(
+            self.url,
+            {
+                "testrail_url": "https://user:pw@sencha.testrail.com",
+                "testrail_email": "a@b.com",
+                "testrail_api_key": "k",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Do not put credentials in the URL")
+
     def test_form_never_echoes_key(self) -> None:
         save_testrail_settings(
             project=self.project,
@@ -316,3 +328,13 @@ class ImportStartViewTests(TestCase):
         )
         response = self.client.post(suite_url, {"testrail_suite_id": ""})
         self.assertRedirects(response, self.import_url)
+
+    def test_unconfigured_project_redirects_with_message(self) -> None:
+        # No TestRail settings saved on self.project — build_testrail_client
+        # (reached via resolve_testrail_import) should raise
+        # TestRailNotConfiguredError, which the view must catch alongside
+        # TestRailError instead of letting it escape as a 500.
+        response = self.client.post(self.start_url, {"testrail_project_id": "15"})
+        self.assertRedirects(response, self.import_url)
+        messages = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any("not configured" in m for m in messages))

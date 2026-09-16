@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, cast
+from urllib.parse import urlsplit
 
 from django import forms
 from django.core.exceptions import NON_FIELD_ERRORS
@@ -299,6 +300,11 @@ class TestRailSettingsForm(forms.Form):
         if not url.lower().startswith(("https://", "http://")):
             raise forms.ValidationError(
                 "Enter a valid URL starting with https:// or http://."
+            )
+        parsed = urlsplit(url)
+        if parsed.username or parsed.password:
+            raise forms.ValidationError(
+                "Do not put credentials in the URL; use the email and API key fields."
             )
         return url.rstrip("/")
 

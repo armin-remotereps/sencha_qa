@@ -15,6 +15,7 @@ from projects.services import _agent_status_group, save_project_prompt
 from projects.testrail_client import TestRailError
 from projects.testrail_mapping import TestRailFieldMapper
 from projects.testrail_services import (
+    TestRailNotConfiguredError,
     build_testrail_client,
     upsert_test_cases_from_testrail,
 )
@@ -217,12 +218,13 @@ def import_testrail_cases(self: Task[[int], None], upload_id: int) -> None:
             upload.total_cases,
             upload.updated_cases,
         )
-    except TestRailError as exc:
+    except (TestRailError, TestRailNotConfiguredError) as exc:
+        status_code = exc.status_code if isinstance(exc, TestRailError) else 0
         logger.warning(
             "import_testrail_cases failed (TestRail): task_id=%s upload_id=%s status=%s message=%s",
             self.request.id,
             upload_id,
-            exc.status_code,
+            status_code,
             exc.message,
         )
         _handle_failure(upload, exc.message)

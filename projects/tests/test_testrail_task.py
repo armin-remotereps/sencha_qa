@@ -15,7 +15,7 @@ from projects.testrail_client import (
     TestRailError,
     TestRailPriority,
 )
-from projects.testrail_services import save_testrail_settings
+from projects.testrail_services import clear_testrail_settings, save_testrail_settings
 from projects.tests.helpers import make_project, make_user
 
 TEST_KEY = Fernet.generate_key().decode("ascii")
@@ -121,3 +121,10 @@ class ImportTestRailCasesTaskTests(TestCase):
     def test_missing_upload_is_a_noop(self) -> None:
         import_testrail_cases.apply(args=(999_999,))
         self.progress.assert_not_called()
+
+    def test_not_configured_marks_failed_with_actionable_message(self) -> None:
+        clear_testrail_settings(self.project)
+        import_testrail_cases.apply(args=(self.upload.id,))
+        self.upload.refresh_from_db()
+        self.assertEqual(self.upload.status, UploadStatus.FAILED)
+        self.assertIn("not configured", self.upload.error_message)

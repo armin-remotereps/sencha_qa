@@ -31,15 +31,29 @@ from projects.testrail_mapping import TestRailFieldMapper
 logger = logging.getLogger(__name__)
 
 TESTRAIL_PROJECTS_CACHE_TTL = 300
+TESTRAIL_PROJECTS_ERROR_CACHE_TTL = 60
 _API_KEY_HINT_LENGTH = 3
 
 
 class TestRailNotConfiguredError(Exception):
     """Raised when a TestRail operation runs on a project without settings."""
 
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
 
 def testrail_projects_cache_key(project_id: int) -> str:
     return f"testrail_projects:{project_id}"
+
+
+def testrail_projects_error_cache_key(project_id: int) -> str:
+    return f"testrail_projects_error:{project_id}"
+
+
+def _invalidate_picker_cache(project: Project) -> None:
+    cache.delete(testrail_projects_cache_key(project.id))
+    cache.delete(testrail_projects_error_cache_key(project.id))
 
 
 # ============================================================================
@@ -58,7 +72,7 @@ def save_testrail_settings(
         project.testrail_api_key_encrypted = encrypt_secret(api_key)
         update_fields.append("testrail_api_key_encrypted")
     project.save(update_fields=update_fields)
-    cache.delete(testrail_projects_cache_key(project.id))
+    _invalidate_picker_cache(project)
     return project
 
 
@@ -74,7 +88,7 @@ def clear_testrail_settings(project: Project) -> None:
             "updated_at",
         ]
     )
-    cache.delete(testrail_projects_cache_key(project.id))
+    _invalidate_picker_cache(project)
 
 
 def _decrypt_api_key(project: Project) -> str:
@@ -150,7 +164,11 @@ def _fetch_testrail_projects(project: Project) -> list[TestRailProject]:
     key = testrail_projects_cache_key(project.id)
     cached = cache.get(key)
     if isinstance(cached, list):
-        return [TestRailProject(**item) for item in cached]
+        try:
+            return [TestRailProject(**item) for item in cached]
+        except TypeError:
+            # The cached shape can lag a deploy that changes the dataclass.
+            cache.delete(key)
     with build_testrail_client(project) as client:
         projects = sorted(client.get_projects(), key=_picker_sort_key)
     cache.set(key, [asdict(item) for item in projects], TESTRAIL_PROJECTS_CACHE_TTL)
@@ -160,11 +178,16 @@ def _fetch_testrail_projects(project: Project) -> list[TestRailProject]:
 def get_testrail_picker_state(project: Project) -> TestRailPickerState:
     if not project.has_testrail_settings:
         return TestRailPickerState(configured=False, projects=[])
+    error_key = testrail_projects_error_cache_key(project.id)
+    cached_error = cache.get(error_key)
+    if isinstance(cached_error, str) and cached_error:
+        return TestRailPickerState(configured=True, projects=[], error=cached_error)
     try:
         return TestRailPickerState(
             configured=True, projects=_fetch_testrail_projects(project)
         )
     except (TestRailError, TestRailNotConfiguredError) as exc:
+        cache.set(error_key, str(exc), TESTRAIL_PROJECTS_ERROR_CACHE_TTL)
         return TestRailPickerState(configured=True, projects=[], error=str(exc))
 
 
@@ -228,10 +251,26 @@ def resolve_testrail_import_suite(
     )
 
 
+# Matches TestCaseUpload.original_filename (CharField max_length=255) — the
+# label is stored there.
+_IMPORT_LABEL_MAX = 255
+_IMPORT_LABEL_PREFIX = "TestRail: "
+_IMPORT_LABEL_SEPARATOR = " / "
+
+
 def build_testrail_import_label(
     testrail_project: TestRailProject, suite: TestRailSuite
 ) -> str:
-    return f"TestRail: {testrail_project.name} / {suite.name}"
+    budget = (
+        _IMPORT_LABEL_MAX - len(_IMPORT_LABEL_PREFIX) - len(_IMPORT_LABEL_SEPARATOR)
+    )
+    project_budget = (budget + 1) // 2  # larger half on odd remainders
+    suite_budget = budget - project_budget
+    project_name = testrail_project.name[:project_budget]
+    suite_name = suite.name[:suite_budget]
+    label = f"{_IMPORT_LABEL_PREFIX}{project_name}{_IMPORT_LABEL_SEPARATOR}{suite_name}"
+    assert len(label) <= _IMPORT_LABEL_MAX  # true by construction of the budgets above
+    return label
 
 
 # ============================================================================
@@ -282,8 +321,15 @@ _UPSERT_FIELDS = (
 
 
 def _apply_data(test_case: TestCase, data: TestCaseData) -> None:
-    for field in _UPSERT_FIELDS:
-        setattr(test_case, field, getattr(data, field))
+    test_case.title = data.title
+    test_case.template = data.template
+    test_case.type = data.type
+    test_case.priority = data.priority
+    test_case.estimate = data.estimate
+    test_case.references = data.references
+    test_case.preconditions = data.preconditions
+    test_case.steps = data.steps
+    test_case.expected = data.expected
     # bulk_update does not apply auto_now, so stamp it explicitly.
     test_case.updated_at = timezone.now()
 

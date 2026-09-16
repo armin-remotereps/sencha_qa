@@ -33,6 +33,7 @@ from projects.testrail_services import (
     save_testrail_settings,
     start_testrail_import,
     testrail_projects_cache_key,
+    testrail_projects_error_cache_key,
     upsert_test_cases_from_testrail,
 )
 from projects.tests.helpers import make_project, make_user
@@ -161,6 +162,19 @@ class SaveTestRailSettingsTests(TestCase):
         )
         self.assertIsInstance(build_testrail_client(self.project), TestRailClient)
 
+    def test_undecryptable_key_behaves_as_unset(self) -> None:
+        save_testrail_settings(
+            project=self.project,
+            url="https://a.testrail.com",
+            email="a@b.com",
+            api_key="k",
+        )
+        self.project.testrail_api_key_encrypted = "garbage"
+        self.project.save(update_fields=["testrail_api_key_encrypted"])
+        self.assertEqual(get_testrail_api_key_hint(self.project), "")
+        with self.assertRaises(TestRailNotConfiguredError):
+            build_testrail_client(self.project)
+
 
 @override_settings(FIELD_ENCRYPTION_KEY=TEST_KEY, CACHES=LOCMEM_CACHE)
 class CheckConnectionTests(TestCase):
@@ -267,6 +281,51 @@ class PickerStateTests(TestCase):
         self.assertTrue(state.configured)
         self.assertEqual(state.error, "nope")
 
+    def test_error_is_negatively_cached_and_not_refetched(self) -> None:
+        save_testrail_settings(
+            project=self.project,
+            url="https://a.testrail.com",
+            email="a@b.com",
+            api_key="k",
+        )
+        with patch.object(
+            TestRailClient, "get_projects", side_effect=TestRailError("nope", 401)
+        ) as mocked:
+            first = get_testrail_picker_state(self.project)
+            second = get_testrail_picker_state(self.project)
+        self.assertEqual(mocked.call_count, 1)
+        self.assertTrue(second.configured)
+        self.assertEqual(second.error, "nope")
+        self.assertEqual(first.error, second.error)
+
+    def test_save_clears_the_negative_error_cache(self) -> None:
+        cache.set(testrail_projects_error_cache_key(self.project.id), "nope", 60)
+        save_testrail_settings(
+            project=self.project,
+            url="https://a.testrail.com",
+            email="a@b.com",
+            api_key="k",
+        )
+        self.assertIsNone(cache.get(testrail_projects_error_cache_key(self.project.id)))
+
+    def test_stale_cache_shape_is_dropped_and_refetched(self) -> None:
+        save_testrail_settings(
+            project=self.project,
+            url="https://a.testrail.com",
+            email="a@b.com",
+            api_key="k",
+        )
+        cache.set(
+            testrail_projects_cache_key(self.project.id),
+            [{"id": 1, "bogus": True}],
+            300,
+        )
+        fresh = [TestRailProject(1, "Fresh", 1, False)]
+        with patch.object(TestRailClient, "get_projects", return_value=fresh) as mocked:
+            state = get_testrail_picker_state(self.project)
+        self.assertEqual(state.projects, fresh)
+        self.assertEqual(mocked.call_count, 1)
+
 
 @override_settings(FIELD_ENCRYPTION_KEY=TEST_KEY, CACHES=LOCMEM_CACHE)
 class ResolveImportTests(TestCase):
@@ -327,6 +386,13 @@ class ResolveImportTests(TestCase):
             ),
             "TestRail: ExtJS 6 / Features",
         )
+
+    def test_label_is_bounded_to_255_chars_and_keeps_suite_tail(self) -> None:
+        long_project = TestRailProject(1, "P" * 300, 1, False)
+        long_suite = TestRailSuite(2, "S" * 300, False)
+        label = build_testrail_import_label(long_project, long_suite)
+        self.assertLessEqual(len(label), 255)
+        self.assertTrue(label.endswith("S"))
 
 
 @override_settings(FIELD_ENCRYPTION_KEY=TEST_KEY, CACHES=LOCMEM_CACHE)

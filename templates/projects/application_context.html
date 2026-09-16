@@ -41,8 +41,8 @@
   <form method="post" action="{% url 'projects:application_context' project.id %}" novalidate>
     {% csrf_token %}
 
-    {% include "projects/includes/_context_field.html" with field=form.application_url only %}
-    {% include "projects/includes/_context_field.html" with field=form.application_platform only %}
+    {% include "partials/form_field.html" with field=form.application_url only %}
+    {% include "partials/form_field.html" with field=form.application_platform only %}
     {% include "projects/includes/_context_prompt_field.html" with form=form project=project prompt_max_length=prompt_max_length only %}
 
     <div class="dialog-actions">

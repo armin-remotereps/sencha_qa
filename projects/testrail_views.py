@@ -17,6 +17,7 @@ from projects.testrail_client import TestRailError
 from projects.testrail_services import (
     TestRailImportResolution,
     TestRailImportTarget,
+    TestRailNotConfiguredError,
     check_testrail_connection,
     clear_testrail_settings,
     get_testrail_api_key_hint,
@@ -141,7 +142,7 @@ def testrail_import_start(
         resolution = resolve_testrail_import(
             project, form.cleaned_data["testrail_project_id"]
         )
-    except TestRailError as exc:
+    except (TestRailError, TestRailNotConfiguredError) as exc:
         messages.error(request, exc.message)
         return _redirect_to_import(project)
 
@@ -170,7 +171,7 @@ def testrail_import_suite(
         target = resolve_testrail_import_suite(
             project, testrail_project_id, form.cleaned_data["testrail_suite_id"]
         )
-    except TestRailError as exc:
+    except (TestRailError, TestRailNotConfiguredError) as exc:
         messages.error(request, exc.message)
         return _redirect_to_import(project)
     return _start_and_notify(request, project, target)

@@ -23,8 +23,9 @@
   >
     <h3 id="delete-upload-title">Delete import?</h3>
     <p id="delete-upload-desc">
-      Delete <strong x-text="uploadName"></strong>? This also permanently deletes every test case it imported —
-      results from past runs of those cases are kept, but the cases themselves are gone.
+      Delete <strong x-text="uploadName"></strong>? This also permanently deletes every test case this import
+      created, including cases that later imports have since refreshed in place — results from past runs of those
+      cases are kept, but the cases themselves are gone.
     </p>
     <form method="post" :action="'{% url 'projects:upload_delete' project.id 0 %}'.replace('/0/', '/' + uploadId + '/')">
       {% csrf_token %}

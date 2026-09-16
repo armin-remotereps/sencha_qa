@@ -1,9 +1,6 @@
 {% comment %}
-  Renders one ApplicationContextForm field: label, widget, hint, errors.
-  Local to this page (not a shared partial) since only this template uses
-  it today — worth promoting to partials/_form_field.html if the wizard's
-  step_context.html (same form, owned by another page-template pass)
-  wants the identical markup.
+  Renders one form field: label, widget, hint, errors. Shared across any
+  page that needs the standard field markup for a Django BoundField.
 
   Context contract:
     field — a Django BoundField

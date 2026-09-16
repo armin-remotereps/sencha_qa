@@ -33,7 +33,7 @@ isort .
 # Unit tests — always scope Django's test command to real Django apps (bare
 # `manage.py test` walks the whole project tree by default and will also try
 # to import controller_client/tests/, which needs its own separate venv)
-python manage.py test agents projects accounts dashboard   # view/service tests hit Postgres: `docker compose up db redis -d` first
+python manage.py test agents projects accounts dashboard auto_tester   # view/service tests hit Postgres: `docker compose up db redis -d` first
 controller_client/.venv/bin/python -m pytest controller_client/tests/
 
 # Infrastructure
