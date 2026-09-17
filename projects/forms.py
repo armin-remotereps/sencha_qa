@@ -324,3 +324,13 @@ class TestRailImportStartForm(forms.Form):
 
 class TestRailSuiteForm(forms.Form):
     testrail_suite_id = forms.IntegerField(min_value=1)
+
+
+class TestRailPushStartForm(forms.Form):
+    """Step 1 of pushing a run's results to TestRail.
+
+    A blank `testrail_project_id` means "push using the run's existing
+    TestRail target"; a value means "the user just picked a project".
+    """
+
+    testrail_project_id = forms.IntegerField(required=False, min_value=1)

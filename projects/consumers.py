@@ -135,6 +135,7 @@ class TestRunConsumer(AuthenticatedConsumer):
                     "pivots": [
                         {"pivot_id": pid, "status": status} for pid, status in pivots
                     ],
+                    "testrail_push_status": test_run.testrail_push_status,
                 }
             )
         )
@@ -158,6 +159,16 @@ class TestRunConsumer(AuthenticatedConsumer):
                     "type": "test_run_status",
                     "test_run_status": event["test_run_status"],
                     "summary": event["summary"],
+                }
+            )
+        )
+
+    async def test_run_testrail_push(self, event: dict[str, Any]) -> None:
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "testrail_push",
+                    "push_status": event["push_status"],
                 }
             )
         )

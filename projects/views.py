@@ -93,6 +93,7 @@ from projects.services import (
     validate_testrail_xml,
 )
 from projects.tasks import refine_project_prompt_task
+from projects.testrail_results_services import get_testrail_push_panel
 from projects.testrail_services import get_testrail_picker_state
 
 ALLOWED_PER_PAGE = [10, 20, 50, 100]
@@ -872,6 +873,9 @@ def _build_test_run_detail_context(
         "narrative": narrative,
         "can_rerun_failed": can_rerun_failed,
         "failed_titles": failed_titles,
+        "testrail_push": get_testrail_push_panel(
+            test_run, links_base_url=request.build_absolute_uri("/")
+        ),
         "active_tab": "runs",
         "active_nav": "projects",
     }

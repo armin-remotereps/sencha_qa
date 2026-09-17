@@ -186,6 +186,16 @@ urlpatterns: list[URLPattern] = [
         name="test_run_rerun_failed",
     ),
     path(
+        "<int:project_id>/test-runs/<int:test_run_id>/testrail/push/",
+        testrail_views.testrail_push_start,
+        name="testrail_push_start",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/testrail/push/<int:testrail_project_id>/",
+        testrail_views.testrail_push_suite,
+        name="testrail_push_suite",
+    ),
+    path(
         "<int:project_id>/test-runs/<int:test_run_id>/add-cases/",
         views.test_run_add_cases,
         name="test_run_add_cases",
