@@ -30,7 +30,8 @@
   </div>
   <p class="muted">
     Connect a TestRail account to import test cases directly from its projects.
-    Only read access is used; Punk Hazard never writes to TestRail.
+    Punk Hazard reads cases from TestRail for imports and writes results into
+    TestRail runs when you push a finished run.
   </p>
 
   <form method="post" action="{% url 'projects:settings' project.id %}" novalidate>

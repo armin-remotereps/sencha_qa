@@ -1,0 +1,53 @@
+{% comment %} "Push to TestRail" — choose a TestRail project dialog, shown the first
+   time a finished run is pushed (it has no TestRail project/suite yet).
+   Opened via `$dispatch('open-push-testrail-target')` from the run's
+   header actions.
+
+   Context contract:
+     project       — current Project
+     test_run      — current TestRun
+     testrail_push — projects.testrail_results_services.TestRailPushPanel
+                     (used here: .picker.error, .picker.projects, .suggested_project_id) {% endcomment %}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-push-testrail-target.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="push-testrail-target-title">
+    <div class="card-header">
+      <h3 id="push-testrail-target-title">Push results to TestRail</h3>
+      <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+    </div>
+
+    {% if testrail_push.picker.error %}
+      <p class="error-text">⚠ {{ testrail_push.picker.error }}</p>
+      <p class="hint">Check the URL, email and API key under <a href="{% url 'projects:settings' project.id %}">Settings</a> and try again.</p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Close</button>
+      </div>
+    {% else %}
+      <form method="post" action="{% url 'projects:testrail_push_start' project.id test_run.id %}">
+        {% csrf_token %}
+        <div class="field">
+          <label for="push-testrail-project">TestRail project</label>
+          <select class="select" id="push-testrail-project" name="testrail_project_id" required>
+            <option value="">Choose a TestRail project…</option>
+            {% for tr_project in testrail_push.picker.projects %}
+              <option value="{{ tr_project.id }}"{% if tr_project.id == testrail_push.suggested_project_id %} selected{% endif %}>{{ tr_project.name }}{% if tr_project.is_completed %} (completed){% endif %}</option>
+            {% endfor %}
+          </select>
+          <p class="hint">Multi-suite projects ask for a suite next. A TestRail run named after this run is created on first push.</p>
+        </div>
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Continue</button>
+        </div>
+      </form>
+    {% endif %}
+  </div>
+</div>

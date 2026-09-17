@@ -1,4 +1,5 @@
 {% extends "layouts/project.html" %}
+{% load i18n %}
 
 {% comment %} Run detail — live via testRunLive, ported from the old (Tailwind-era)
    test_run_detail.html: same WS URL, same message types
@@ -19,7 +20,11 @@
      narrative, can_rerun_failed, failed_titles (unused directly here —
      narrative already folds them in), form (TestCaseForm, for the shared
      edit-case dialog's type/priority choices), can_edit, per_page,
-     allowed_per_page, elided_page_range, query_params.
+     allowed_per_page, elided_page_range, query_params,
+     testrail_push (projects.testrail_results_services.TestRailPushPanel).
+
+     test_run also carries testrail_run_id, testrail_push_status,
+     testrail_pushed_at, testrail_push_error, testrail_push_summary.
 
    Known gap: `readiness` is computed once at page load. If another tab
    resets this run while this page is open, the WS flips testRunStatus
@@ -43,6 +48,13 @@
 {% url 'projects:test_run_abort' project.id test_run.id as test_run_abort_url %}
 {% url 'projects:test_run_reset' project.id test_run.id as test_run_reset_url %}
 {% url 'projects:test_case_list' project.id as test_case_list_url %}
+{% url 'projects:testrail_push_start' project.id test_run.id as testrail_push_start_url %}
+{% url 'projects:settings' project.id as project_settings_url %}
+{% blocktranslate asvar testrail_push_body count counter=testrail_push.pending_count trimmed %}
+{{ counter }} changed result will be added to TestRail run R{{ test_run.testrail_run_id }}. Unchanged results are skipped.
+{% plural %}
+{{ counter }} changed results will be added to TestRail run R{{ test_run.testrail_run_id }}. Unchanged results are skipped.
+{% endblocktranslate %}
 <div x-data="testRunLive">
 
   {# Section: Header — title, live subtitle, status-dependent actions #}
@@ -75,9 +87,72 @@
       </form>
       {% endif %}
 
+      {% if testrail_push.configured %}
+      {% if testrail_push.has_target %}
+      {% comment %} Nothing pending: plain disabled button. Otherwise Alpine owns the
+         disabled state so the button locks while a push is in flight and the
+         page reloads (via the WS handler) once it settles. {% endcomment %}
+      {% if testrail_push.pending_count == 0 %}
+      <button
+        type="button"
+        class="btn btn-secondary"
+        x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'"
+        x-cloak
+        disabled
+        aria-disabled="true"
+        title="Nothing changed since the last push"
+      >Push to TestRail</button>
+      {% else %}
+      <button
+        type="button"
+        class="btn btn-secondary"
+        x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'"
+        x-cloak
+        :disabled="testrailPushStatus === 'pushing'"
+        :title="testrailPushStatus === 'pushing' ? 'A push is already in progress' : null"
+        @click="$dispatch('open-push-testrail')"
+      >Push to TestRail</button>
+      {% endif %}
+      {% else %}
+      <button
+        type="button"
+        class="btn btn-secondary"
+        x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'"
+        x-cloak
+        @click="$dispatch('open-push-testrail-target')"
+      >Push to TestRail</button>
+      {% endif %}
+      {% endif %}
+
       <button type="button" class="btn btn-danger" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak @click="$dispatch('open-reset-run')">Reset run</button>
     </div>
   </div>
+
+  {# Section: TestRail push status — mirrors the header's finished-run visibility #}
+  <p x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak>
+    {% if not testrail_push.configured %}
+      <span class="muted">Connect TestRail under <a href="{{ project_settings_url }}">Settings</a> to push results.</span>
+    {% else %}
+      <template x-if="testrailPushStatus === 'pushing'">
+        <span class="badge badge-running">Pushing to TestRail&hellip;</span>
+      </template>
+      <template x-if="testrailPushStatus !== 'pushing'">
+        <span>
+          {% if test_run.testrail_push_status == "pushed" %}
+            <span class="badge badge-passed">Pushed to TestRail</span>
+            {{ test_run.testrail_pushed_at|date:"M j, H:i" }} &middot; {{ test_run.testrail_push_summary }}
+            {% if testrail_push.run_url %} &middot; <a href="{{ testrail_push.run_url }}" target="_blank" rel="noopener">Open run R{{ test_run.testrail_run_id }}</a>{% endif %}
+          {% elif test_run.testrail_push_status == "failed" %}
+            <span class="badge badge-failed">Push failed</span>
+            <span class="error-text">{{ test_run.testrail_push_error }}</span>
+            {% if testrail_push.run_url %} <a href="{{ testrail_push.run_url }}" target="_blank" rel="noopener">Open run R{{ test_run.testrail_run_id }}</a>{% endif %}
+          {% elif testrail_push.has_target %}
+            <span class="muted">Linked to TestRail run R{{ test_run.testrail_run_id }}, not pushed yet{% if testrail_push.run_url %} &middot; <a href="{{ testrail_push.run_url }}" target="_blank" rel="noopener">Open run</a>{% endif %}</span>
+          {% endif %}
+        </span>
+      </template>
+    {% endif %}
+  </p>
 
   {% include "partials/project_tabs.html" with project=project active_tab=active_tab only %}
 
@@ -202,6 +277,14 @@
   {% include "partials/confirm_dialog.html" with dialog_id="delete-run" title="Delete this run?" body="This permanently deletes the run and all of its case results, logs, and screenshots." confirm_label="Delete run" action_url=test_run_delete_url %}
   {% include "partials/confirm_dialog.html" with dialog_id="abort-run" title="Abort this run?" body="In-progress cases will be marked as failed and any cases still pending will be marked as cancelled." confirm_label="Abort run" action_url=test_run_abort_url %}
   {% include "partials/confirm_dialog.html" with dialog_id="reset-run" title="Reset this run?" body="All results, logs, and screenshots will be cleared and the run returns to draft." confirm_label="Reset run" action_url=test_run_reset_url %}
+
+  {% if testrail_push.configured %}
+  {% if testrail_push.has_target %}
+    {% include "partials/confirm_dialog.html" with dialog_id="push-testrail" title="Push results to TestRail?" body=testrail_push_body confirm_label="Push results" confirm_class="btn-primary" action_url=testrail_push_start_url %}
+  {% else %}
+    {% include "projects/includes/_testrail_push_dialog.html" with project=project test_run=test_run testrail_push=testrail_push only %}
+  {% endif %}
+  {% endif %}
 
   {% if can_edit %}
   {% for pivot in cases %}
@@ -348,6 +431,7 @@
 document.addEventListener('alpine:init', () => {
   Alpine.data('testRunLive', () => ({
     testRunStatus: '{{ test_run.status }}',
+    testrailPushStatus: '{{ test_run.testrail_push_status }}',
     summary: {
       total: {{ summary.total }},
       created: {{ summary.created }},
@@ -394,6 +478,21 @@ document.addEventListener('alpine:init', () => {
           this.pivotStatuses = Object.fromEntries(
             data.pivots.map((p) => [p.pivot_id, p.status])
           );
+          if (data.testrail_push_status) {
+            this.testrailPushStatus = data.testrail_push_status;
+          }
+          return;
+        }
+
+        if (data.type === 'testrail_push') {
+          const previousPushStatus = this.testrailPushStatus;
+          this.testrailPushStatus = data.push_status;
+          const justSettled = data.push_status === 'pushed' || data.push_status === 'failed';
+          if (justSettled && previousPushStatus !== data.push_status) {
+            // The pushed-at timestamp, summary/error text, and TestRail run
+            // link are server-rendered — reload once to pick them up.
+            setTimeout(() => window.location.reload(), 1000);
+          }
           return;
         }
 
