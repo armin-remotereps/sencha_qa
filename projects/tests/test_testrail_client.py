@@ -11,6 +11,9 @@ from projects.testrail_client import (
     TestRailClient,
     TestRailError,
     TestRailProject,
+    TestRailResult,
+    TestRailResultInput,
+    TestRailRun,
     TestRailSuite,
 )
 
@@ -223,3 +226,179 @@ class ErrorTests(SimpleTestCase):
         )
         _client(transport, sleeps).get_projects()
         self.assertEqual(sleeps, [30.0])
+
+
+class RunTests(SimpleTestCase):
+    def test_get_run_maps_fields(self) -> None:
+        payload = {
+            "id": 42,
+            "name": "Punk Hazard: Nightly",
+            "is_completed": False,
+            "url": "https://sencha.testrail.com/index.php?/runs/view/42",
+        }
+        client = _client(RecordingTransport({"get_run/42": [_json(200, payload)]}))
+        self.assertEqual(
+            client.get_run(42),
+            TestRailRun(
+                id=42,
+                name="Punk Hazard: Nightly",
+                is_completed=False,
+                url="https://sencha.testrail.com/index.php?/runs/view/42",
+            ),
+        )
+
+    def test_get_run_404_raises_testrail_error(self) -> None:
+        payload = {"error": "Field :run_id is not a valid test run."}
+        client = _client(RecordingTransport({"get_run/999": [_json(404, payload)]}))
+        with self.assertRaises(TestRailError) as ctx:
+            client.get_run(999)
+        self.assertEqual(ctx.exception.status_code, 404)
+        self.assertIn("not a valid test run", ctx.exception.message)
+
+    def test_add_run_posts_expected_body_and_parses_run(self) -> None:
+        response_payload = {
+            "id": 7,
+            "name": "Punk Hazard: Run 1",
+            "is_completed": False,
+            "url": "https://sencha.testrail.com/index.php?/runs/view/7",
+        }
+        transport = RecordingTransport({"add_run/3": [_json(200, response_payload)]})
+        client = _client(transport)
+        run = client.add_run(
+            3,
+            suite_id=12,
+            name="Punk Hazard: Run 1",
+            description="Run for project X",
+            case_ids=[101, 102],
+        )
+        request = transport.requests[0]
+        self.assertEqual(request.method, "POST")
+        body = json.loads(request.content)
+        self.assertEqual(
+            body,
+            {
+                "suite_id": 12,
+                "name": "Punk Hazard: Run 1",
+                "description": "Run for project X",
+                "include_all": False,
+                "case_ids": [101, 102],
+            },
+        )
+        self.assertEqual(
+            run,
+            TestRailRun(
+                id=7,
+                name="Punk Hazard: Run 1",
+                is_completed=False,
+                url="https://sencha.testrail.com/index.php?/runs/view/7",
+            ),
+        )
+
+    def test_update_run_posts_expected_body(self) -> None:
+        response_payload = {
+            "id": 7,
+            "name": "Punk Hazard: Run 1",
+            "is_completed": False,
+            "url": "",
+        }
+        transport = RecordingTransport({"update_run/7": [_json(200, response_payload)]})
+        client = _client(transport)
+        client.update_run(7, case_ids=[101, 102, 103])
+        request = transport.requests[0]
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(
+            json.loads(request.content),
+            {"include_all": False, "case_ids": [101, 102, 103]},
+        )
+
+
+class AddResultsForCasesTests(SimpleTestCase):
+    def test_posts_batch_omitting_elapsed_when_empty(self) -> None:
+        response_payload = [
+            {"id": 1, "status_id": 1},
+            {"id": 2, "status_id": 5},
+        ]
+        transport = RecordingTransport(
+            {"add_results_for_cases/9": [_json(200, response_payload)]}
+        )
+        client = _client(transport)
+        results = client.add_results_for_cases(
+            9,
+            [
+                TestRailResultInput(
+                    case_id=101, status_id=1, comment="Passed.", elapsed=""
+                ),
+                TestRailResultInput(
+                    case_id=102, status_id=5, comment="Failed.", elapsed="1h 2m 3s"
+                ),
+            ],
+        )
+        request = transport.requests[0]
+        self.assertEqual(request.method, "POST")
+        body = json.loads(request.content)
+        self.assertEqual(
+            body["results"],
+            [
+                {"case_id": 101, "status_id": 1, "comment": "Passed."},
+                {
+                    "case_id": 102,
+                    "status_id": 5,
+                    "comment": "Failed.",
+                    "elapsed": "1h 2m 3s",
+                },
+            ],
+        )
+        self.assertNotIn("elapsed", body["results"][0])
+        self.assertEqual(
+            results,
+            [TestRailResult(id=1, status_id=1), TestRailResult(id=2, status_id=5)],
+        )
+
+    def test_raises_when_response_length_differs_from_request(self) -> None:
+        transport = RecordingTransport(
+            {"add_results_for_cases/9": [_json(200, [{"id": 1, "status_id": 1}])]}
+        )
+        client = _client(transport)
+        with self.assertRaises(TestRailError) as ctx:
+            client.add_results_for_cases(
+                9,
+                [
+                    TestRailResultInput(case_id=101, status_id=1, comment="Passed."),
+                    TestRailResultInput(case_id=102, status_id=5, comment="Failed."),
+                ],
+            )
+        self.assertEqual(ctx.exception.status_code, 200)
+        self.assertIn("1 results", ctx.exception.message)
+        self.assertIn("2 cases", ctx.exception.message)
+
+    def test_empty_results_returns_empty_list_without_a_request(self) -> None:
+        transport = RecordingTransport({})
+        client = _client(transport)
+        self.assertEqual(client.add_results_for_cases(9, []), [])
+        self.assertEqual(transport.requests, [])
+
+
+class PostTransportTests(SimpleTestCase):
+    def test_post_429_is_retried_with_retry_after_then_succeeds(self) -> None:
+        sleeps: list[float] = []
+        ok = _json(200, {"id": 7, "name": "R", "is_completed": False, "url": ""})
+        transport = RecordingTransport(
+            {
+                "update_run/7": [
+                    _json(429, {"error": "slow down"}, {"Retry-After": "3"}),
+                    ok,
+                ]
+            }
+        )
+        _client(transport, sleeps).update_run(7, case_ids=[1])
+        self.assertEqual(sleeps, [3.0])
+        self.assertEqual(len(transport.requests), 2)
+
+    def test_post_400_surfaces_error_envelope_message(self) -> None:
+        payload = {"error": "Field :case_ids is not a valid test case."}
+        transport = RecordingTransport({"update_run/7": [_json(400, payload)]})
+        client = _client(transport)
+        with self.assertRaises(TestRailError) as ctx:
+            client.update_run(7, case_ids=[1])
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("not a valid test case", ctx.exception.message)

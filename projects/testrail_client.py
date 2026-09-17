@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -71,6 +71,28 @@ class TestRailCase:
     steps_separated: tuple[TestRailStep, ...]
 
 
+@dataclass(frozen=True)
+class TestRailRun:
+    id: int
+    name: str
+    is_completed: bool
+    url: str
+
+
+@dataclass(frozen=True)
+class TestRailResultInput:
+    case_id: int
+    status_id: int
+    comment: str
+    elapsed: str = ""
+
+
+@dataclass(frozen=True)
+class TestRailResult:
+    id: int
+    status_id: int
+
+
 def _str(value: Any) -> str:  # raw JSON field value, type varies by payload
     return "" if value is None else str(value)
 
@@ -109,8 +131,41 @@ def _parse_case(raw: dict[str, Any]) -> TestRailCase:  # raw JSON case object
     )
 
 
+def _parse_run(raw: dict[str, Any]) -> TestRailRun:  # raw JSON run object
+    return TestRailRun(
+        id=int(raw["id"]),
+        name=_str(raw.get("name")),
+        is_completed=bool(raw.get("is_completed")),
+        url=_str(raw.get("url")),
+    )
+
+
+def _parse_result(raw: dict[str, Any]) -> TestRailResult:  # raw JSON result object
+    return TestRailResult(
+        id=int(raw["id"]),
+        status_id=int(raw.get("status_id") or 0),
+    )
+
+
+def _result_input_payload(
+    result: TestRailResultInput,
+) -> dict[str, Any]:  # request body fragment, TestRail expects untyped JSON
+    payload: dict[str, Any] = {
+        "case_id": result.case_id,
+        "status_id": result.status_id,
+        "comment": result.comment,
+    }
+    if result.elapsed:
+        payload["elapsed"] = result.elapsed
+    return payload
+
+
 class TestRailClient:
-    """Read-only TestRail API v2 client. Only GET methods exist on purpose."""
+    """Typed TestRail API v2 client.
+
+    GET methods support importing projects, suites and cases. POST methods
+    support pushing a Punk Hazard test run's results back to a TestRail run.
+    """
 
     def __init__(
         self,
@@ -182,6 +237,56 @@ class TestRailClient:
             for raw in self._get_list("get_priorities")
         ]
 
+    # -- public write methods -------------------------------------------------
+
+    def get_run(self, run_id: int) -> TestRailRun:
+        """Fetch a single TestRail run, e.g. to check whether it is still open."""
+        return _parse_run(self._get_dict(f"get_run/{run_id}"))
+
+    def add_run(
+        self,
+        project_id: int,
+        *,
+        suite_id: int,
+        name: str,
+        description: str,
+        case_ids: Sequence[int],
+    ) -> TestRailRun:
+        """Create a new TestRail run scoped to the given case ids."""
+        body: dict[str, Any] = {  # request body, TestRail expects untyped JSON
+            "suite_id": suite_id,
+            "name": name,
+            "description": description,
+            "include_all": False,
+            "case_ids": list(case_ids),
+        }
+        return _parse_run(self._post_dict(f"add_run/{project_id}", body))
+
+    def update_run(self, run_id: int, *, case_ids: Sequence[int]) -> TestRailRun:
+        """Replace the case set of an existing TestRail run."""
+        body: dict[str, Any] = {  # request body, TestRail expects untyped JSON
+            "include_all": False,
+            "case_ids": list(case_ids),
+        }
+        return _parse_run(self._post_dict(f"update_run/{run_id}", body))
+
+    def add_results_for_cases(
+        self, run_id: int, results: Sequence[TestRailResultInput]
+    ) -> list[TestRailResult]:
+        """Append results for cases in a run. Results are immutable in TestRail:
+        every call adds new results rather than updating existing ones."""
+        if not results:
+            return []
+        body = {"results": [_result_input_payload(result) for result in results]}
+        raw_results = self._post_list(f"add_results_for_cases/{run_id}", body)
+        if len(raw_results) != len(results):
+            raise TestRailError(
+                f"TestRail returned {len(raw_results)} results "
+                f"for {len(results)} cases.",
+                200,
+            )
+        return [_parse_result(raw) for raw in raw_results]
+
     # -- transport helpers ---------------------------------------------------
 
     def _paginate(
@@ -226,8 +331,35 @@ class TestRailClient:
             raise TestRailError("TestRail returned an unexpected response shape.", 200)
         return [item for item in data if isinstance(item, dict)]
 
+    def _post_dict(
+        self, method: str, body: dict[str, Any]
+    ) -> dict[str, Any]:  # raw JSON object, keys vary by endpoint
+        data = self._post_json(method, body)
+        if not isinstance(data, dict):
+            raise TestRailError("TestRail returned an unexpected response shape.", 200)
+        return data
+
+    def _post_list(
+        self, method: str, body: dict[str, Any]
+    ) -> list[dict[str, Any]]:  # raw JSON objects, keys vary by endpoint
+        data = self._post_json(method, body)
+        if not isinstance(data, list):
+            raise TestRailError("TestRail returned an unexpected response shape.", 200)
+        return [item for item in data if isinstance(item, dict)]
+
     def _get_json(self, method: str) -> Any:  # JSON payloads are untyped by nature
-        response = self._request_with_rate_limit_retry(method)
+        return self._parse_json_response(self._request_with_rate_limit_retry(method))
+
+    def _post_json(
+        self, method: str, body: dict[str, Any]
+    ) -> Any:  # JSON payloads are untyped by nature
+        return self._parse_json_response(
+            self._request_with_rate_limit_retry(method, body)
+        )
+
+    def _parse_json_response(
+        self, response: httpx.Response
+    ) -> Any:  # JSON payloads are untyped by nature
         if response.status_code >= 400:
             raise TestRailError(self._error_message(response), response.status_code)
         try:
@@ -237,12 +369,14 @@ class TestRailClient:
                 "TestRail returned a non-JSON response.", response.status_code
             ) from exc
 
-    def _request_with_rate_limit_retry(self, method: str) -> httpx.Response:
+    def _request_with_rate_limit_retry(
+        self, method: str, json_body: dict[str, Any] | None = None
+    ) -> httpx.Response:
         url = f"{self._base_url}{_API_PREFIX}{method}"
         attempts = 0
         while True:
             try:
-                response = self._http.get(url)
+                response = self._send_request(url, json_body)
             except httpx.HTTPError as exc:
                 raise TestRailError(f"Could not reach TestRail: {exc}", 0) from exc
             if (
@@ -252,6 +386,13 @@ class TestRailClient:
                 return response
             attempts += 1
             self._sleep(self._retry_after_seconds(response))
+
+    def _send_request(
+        self, url: str, json_body: dict[str, Any] | None
+    ) -> httpx.Response:
+        if json_body is None:
+            return self._http.get(url)
+        return self._http.post(url, json=json_body)
 
     @staticmethod
     def _retry_after_seconds(response: httpx.Response) -> float:
