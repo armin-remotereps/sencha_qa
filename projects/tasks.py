@@ -9,11 +9,18 @@ from celery.app.task import Task
 from channels.layers import get_channel_layer
 from django.db import transaction
 
-from projects.models import Project, TestCaseUpload, UploadStatus
+from projects.models import Project, TestCaseUpload, TestRun, UploadStatus
 from projects.prompt_refiner import refine_project_prompt
 from projects.services import _agent_status_group, save_project_prompt
 from projects.testrail_client import TestRailError
 from projects.testrail_mapping import TestRailFieldMapper
+from projects.testrail_results_services import (
+    mark_testrail_push_failed,
+    mark_testrail_push_succeeded,
+)
+from projects.testrail_results_services import (
+    push_test_run_results as push_results_to_testrail,
+)
 from projects.testrail_services import (
     TestRailNotConfiguredError,
     build_testrail_client,
@@ -23,6 +30,7 @@ from projects.testrail_services import (
 logger: logging.Logger = logging.getLogger(__name__)
 
 GENERIC_UPLOAD_FAILURE_MESSAGE = "An error occurred while processing the upload."
+GENERIC_PUSH_FAILURE_MESSAGE = "An error occurred while pushing results to TestRail."
 
 
 def _send_upload_progress(upload: TestCaseUpload) -> None:
@@ -319,3 +327,70 @@ def refine_project_prompt_task(
             project_id,
         )
         _send_prompt_refined(project_id, error="Refinement service unavailable.")
+
+
+def _fetch_test_run(test_run_id: int) -> TestRun | None:
+    try:
+        return TestRun.objects.get(id=test_run_id)
+    except TestRun.DoesNotExist:
+        return None
+
+
+@shared_task(
+    bind=True,
+    name="projects.tasks.push_test_run_results",
+    queue="upload",
+    max_retries=0,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=600,
+    time_limit=660,
+)
+def push_test_run_results(
+    self: Task[[int, str], None], test_run_id: int, links_base_url: str
+) -> None:
+    logger.info(
+        "push_test_run_results started: task_id=%s test_run_id=%s",
+        self.request.id,
+        test_run_id,
+    )
+
+    test_run = _fetch_test_run(test_run_id)
+    if test_run is None:
+        logger.error(
+            "TestRun id=%s does not exist; aborting task_id=%s",
+            test_run_id,
+            self.request.id,
+        )
+        return
+
+    try:
+        outcome = push_results_to_testrail(test_run, links_base_url=links_base_url)
+        mark_testrail_push_succeeded(test_run, outcome)
+        logger.info(
+            "push_test_run_results completed: task_id=%s test_run_id=%s "
+            "pushed=%s unchanged=%s skipped_no_case_id=%s testrail_run_id=%s",
+            self.request.id,
+            test_run_id,
+            outcome.pushed,
+            outcome.unchanged,
+            outcome.skipped_no_case_id,
+            outcome.testrail_run_id,
+        )
+    except (TestRailError, TestRailNotConfiguredError) as exc:
+        status_code = exc.status_code if isinstance(exc, TestRailError) else 0
+        logger.warning(
+            "push_test_run_results failed (TestRail): task_id=%s test_run_id=%s status=%s message=%s",
+            self.request.id,
+            test_run_id,
+            status_code,
+            exc.message,
+        )
+        mark_testrail_push_failed(test_run, exc.message)
+    except Exception:
+        logger.exception(
+            "push_test_run_results failed: task_id=%s test_run_id=%s",
+            self.request.id,
+            test_run_id,
+        )
+        mark_testrail_push_failed(test_run, GENERIC_PUSH_FAILURE_MESSAGE)
