@@ -116,6 +116,18 @@ class SettingsPageTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Do not put credentials in the URL")
 
+    def test_rejects_query_string_in_url(self) -> None:
+        response = self.client.post(
+            self.url,
+            {
+                "testrail_url": "http://host.docker.internal:8888/search?q=x&junk=",
+                "testrail_email": "a@b.com",
+                "testrail_api_key": "k",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "without a query string or fragment")
+
     def test_form_never_echoes_key(self) -> None:
         save_testrail_settings(
             project=self.project,

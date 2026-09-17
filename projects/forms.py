@@ -306,6 +306,13 @@ class TestRailSettingsForm(forms.Form):
             raise forms.ValidationError(
                 "Do not put credentials in the URL; use the email and API key fields."
             )
+        # The client appends "/index.php?/api/v2/..." to this base. A query or
+        # fragment here would turn that fixed API path into query noise and let
+        # the stored URL point requests at an arbitrary path on the host.
+        if parsed.query or parsed.fragment:
+            raise forms.ValidationError(
+                "Enter the TestRail base URL only, without a query string or fragment."
+            )
         return url.rstrip("/")
 
     def clean_testrail_api_key(self) -> str | None:
