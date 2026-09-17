@@ -38,9 +38,11 @@ from projects.testrail_client import (
 from projects.testrail_mapping import (
     build_result_comment,
     comment_hash,
+    format_push_confirm_body,
     format_testrail_elapsed,
     map_pivot_status_to_testrail,
     parse_testrail_case_id,
+    pluralize_count,
     testrail_outcome_label,
 )
 from projects.testrail_services import (
@@ -485,13 +487,9 @@ def push_test_run_results(
 # ============================================================================
 
 
-def _pluralize(count: int, singular: str, plural: str) -> str:
-    return f"{count} {singular if count == 1 else plural}"
-
-
 def _build_push_summary(outcome: TestRailPushOutcome) -> str:
     """e.g. "12 results pushed · 3 unchanged · 1 without a TestRail ID"."""
-    parts = [f"{_pluralize(outcome.pushed, 'result', 'results')} pushed"]
+    parts = [f"{pluralize_count(outcome.pushed, 'result', 'results')} pushed"]
     if outcome.unchanged:
         parts.append(f"{outcome.unchanged} unchanged")
     if outcome.skipped_no_case_id:

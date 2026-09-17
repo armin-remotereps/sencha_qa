@@ -93,6 +93,7 @@ from projects.services import (
     validate_testrail_xml,
 )
 from projects.tasks import refine_project_prompt_task
+from projects.testrail_mapping import format_push_confirm_body
 from projects.testrail_results_services import get_testrail_push_panel
 from projects.testrail_services import get_testrail_picker_state
 
@@ -858,6 +859,9 @@ def _build_test_run_detail_context(
     failed_titles = list_failed_case_titles(test_run)
     narrative = build_run_narrative(test_run, summary, failed_titles)
     can_rerun_failed = can_rerun_failed_cases(test_run, summary["failed"])
+    testrail_push = get_testrail_push_panel(
+        test_run, links_base_url=request.build_absolute_uri("/")
+    )
 
     context: dict[str, Any] = {
         "project": project,
@@ -873,8 +877,9 @@ def _build_test_run_detail_context(
         "narrative": narrative,
         "can_rerun_failed": can_rerun_failed,
         "failed_titles": failed_titles,
-        "testrail_push": get_testrail_push_panel(
-            test_run, links_base_url=request.build_absolute_uri("/")
+        "testrail_push": testrail_push,
+        "testrail_push_confirm_body": format_push_confirm_body(
+            testrail_push.pending_count, test_run.testrail_run_id or 0
         ),
         "active_tab": "runs",
         "active_nav": "projects",

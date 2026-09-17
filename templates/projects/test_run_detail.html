@@ -1,5 +1,4 @@
 {% extends "layouts/project.html" %}
-{% load i18n %}
 
 {% comment %} Run detail — live via testRunLive, ported from the old (Tailwind-era)
    test_run_detail.html: same WS URL, same message types
@@ -21,7 +20,8 @@
      narrative already folds them in), form (TestCaseForm, for the shared
      edit-case dialog's type/priority choices), can_edit, per_page,
      allowed_per_page, elided_page_range, query_params,
-     testrail_push (projects.testrail_results_services.TestRailPushPanel).
+     testrail_push (projects.testrail_results_services.TestRailPushPanel),
+     testrail_push_confirm_body (str, the push confirm dialog's body text).
 
      test_run also carries testrail_run_id, testrail_push_status,
      testrail_pushed_at, testrail_push_error, testrail_push_summary.
@@ -50,11 +50,6 @@
 {% url 'projects:test_case_list' project.id as test_case_list_url %}
 {% url 'projects:testrail_push_start' project.id test_run.id as testrail_push_start_url %}
 {% url 'projects:settings' project.id as project_settings_url %}
-{% blocktranslate asvar testrail_push_body count counter=testrail_push.pending_count trimmed %}
-{{ counter }} changed result will be added to TestRail run R{{ test_run.testrail_run_id }}. Unchanged results are skipped.
-{% plural %}
-{{ counter }} changed results will be added to TestRail run R{{ test_run.testrail_run_id }}. Unchanged results are skipped.
-{% endblocktranslate %}
 <div x-data="testRunLive">
 
   {# Section: Header — title, live subtitle, status-dependent actions #}
@@ -280,7 +275,7 @@
 
   {% if testrail_push.configured %}
   {% if testrail_push.has_target %}
-    {% include "partials/confirm_dialog.html" with dialog_id="push-testrail" title="Push results to TestRail?" body=testrail_push_body confirm_label="Push results" confirm_class="btn-primary" action_url=testrail_push_start_url %}
+    {% include "partials/confirm_dialog.html" with dialog_id="push-testrail" title="Push results to TestRail?" body=testrail_push_confirm_body confirm_label="Push results" confirm_class="btn-primary" action_url=testrail_push_start_url %}
   {% else %}
     {% include "projects/includes/_testrail_push_dialog.html" with project=project test_run=test_run testrail_push=testrail_push only %}
   {% endif %}

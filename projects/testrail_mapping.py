@@ -174,6 +174,20 @@ def testrail_outcome_label(status_id: int) -> str:
     return _TESTRAIL_STATUS_TO_LABEL.get(status_id, "Result")
 
 
+def pluralize_count(count: int, singular: str, plural: str) -> str:
+    """Render as "1 result" or "3 results" depending on the count."""
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def format_push_confirm_body(pending_count: int, testrail_run_id: int) -> str:
+    """Body text for the "push to TestRail" confirmation dialog."""
+    changed = pluralize_count(pending_count, "result", "results")
+    return (
+        f"{changed} will be added to TestRail run R{testrail_run_id}. "
+        "Unchanged results are skipped."
+    )
+
+
 def build_result_comment(
     *, outcome_label: str, run_name: str, result_text: str, case_url: str
 ) -> str:
