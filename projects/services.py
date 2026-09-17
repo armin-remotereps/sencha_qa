@@ -67,6 +67,7 @@ from projects.models import (
     TestCase,
     TestCaseData,
     TestCaseUpload,
+    TestRailPushStatus,
     TestRun,
     TestRunScreenshot,
     TestRunStatus,
@@ -1912,12 +1913,20 @@ def reset_test_run(test_run: TestRun) -> None:
     test_run.celery_task_id = ""
     test_run.started_at = None
     test_run.finished_at = None
+    test_run.testrail_push_status = TestRailPushStatus.NOT_PUSHED
+    test_run.testrail_pushed_at = None
+    test_run.testrail_push_error = ""
+    test_run.testrail_push_summary = ""
     test_run.save(
         update_fields=[
             "status",
             "celery_task_id",
             "started_at",
             "finished_at",
+            "testrail_push_status",
+            "testrail_pushed_at",
+            "testrail_push_error",
+            "testrail_push_summary",
             "updated_at",
         ]
     )

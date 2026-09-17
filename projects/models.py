@@ -68,6 +68,13 @@ class ApplicationPlatform(models.TextChoices):
     BOTH = "both", "Both"
 
 
+class TestRailPushStatus(models.TextChoices):
+    NOT_PUSHED = "not_pushed", "Not pushed"
+    PUSHING = "pushing", "Pushing"
+    PUSHED = "pushed", "Pushed"
+    FAILED = "failed", "Failed"
+
+
 class Tag(models.Model):
     name = models.CharField(max_length=50, unique=True, db_index=True)
 
@@ -265,6 +272,17 @@ class TestRun(models.Model):
     finished_at = models.DateTimeField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    testrail_project_id = models.PositiveIntegerField(null=True, blank=True)
+    testrail_suite_id = models.PositiveIntegerField(null=True, blank=True)
+    testrail_run_id = models.PositiveIntegerField(null=True, blank=True)
+    testrail_push_status = models.CharField(
+        max_length=20,
+        choices=TestRailPushStatus.choices,
+        default=TestRailPushStatus.NOT_PUSHED,
+    )
+    testrail_pushed_at = models.DateTimeField(null=True, blank=True)
+    testrail_push_error = models.TextField(blank=True, default="")
+    testrail_push_summary = models.CharField(max_length=255, blank=True, default="")
 
     def __str__(self) -> str:
         return f"TestRun #{self.pk} — {self.project.name}"
@@ -273,6 +291,13 @@ class TestRun(models.Model):
     def display_name(self) -> str:
         """The run's name, falling back to a stable "Run #N" label."""
         return self.name or f"Run #{self.pk}"
+
+    @property
+    def has_testrail_target(self) -> bool:
+        """True once both the TestRail project and suite have been chosen."""
+        return (
+            self.testrail_project_id is not None and self.testrail_suite_id is not None
+        )
 
 
 class TestRunTestCase(models.Model):
@@ -294,6 +319,12 @@ class TestRunTestCase(models.Model):
     finished_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+    testrail_result_id = models.PositiveIntegerField(null=True, blank=True)
+    testrail_pushed_status_id = models.PositiveSmallIntegerField(null=True, blank=True)
+    testrail_pushed_comment_hash = models.CharField(
+        max_length=64, blank=True, default=""
+    )
+    testrail_pushed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ("test_run", "test_case")
