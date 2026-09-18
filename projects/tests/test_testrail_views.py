@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import re
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 from django.contrib.messages import get_messages
 from django.test import Client, TestCase, override_settings
+from django.test.client import _MonkeyPatchedWSGIResponse
 from django.urls import reverse
 
 from projects.models import TestCaseUpload, TestRunStatus, UploadSource
@@ -22,6 +24,16 @@ from projects.tests.helpers import make_project, make_run, make_user
 
 TEST_KEY = Fernet.generate_key().decode("ascii")
 LOCMEM_CACHE = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+
+
+def form_posting_to(response: _MonkeyPatchedWSGIResponse, action_url: str) -> str:
+    """Return the markup of the <form> whose action is ``action_url``."""
+    html = response.content.decode()
+    match = re.search(
+        rf'<form[^>]*action="{re.escape(action_url)}"[^>]*>.*?</form>', html, re.S
+    )
+    assert match is not None, f"no form posting to {action_url}"
+    return match.group(0)
 
 
 @override_settings(FIELD_ENCRYPTION_KEY=TEST_KEY, CACHES=LOCMEM_CACHE)
@@ -128,6 +140,17 @@ class SettingsPageTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "without a query string or fragment")
 
+    def test_clear_settings_dialog_form_carries_csrf_token(self) -> None:
+        save_testrail_settings(
+            project=self.project,
+            url="https://a.testrail.com",
+            email="a@b.com",
+            api_key="secret",
+        )
+        response = self.client.get(self.url)
+        clear_url = reverse("projects:settings_testrail_clear", args=[self.project.id])
+        self.assertIn("csrfmiddlewaretoken", form_posting_to(response, clear_url))
+
     def test_form_never_echoes_key(self) -> None:
         save_testrail_settings(
             project=self.project,
@@ -228,6 +251,15 @@ class ImportPageCardTests(TestCase):
         self.assertContains(
             response, '<option value="2">Old (completed)</option>', html=True
         )
+
+    def test_project_picker_form_carries_csrf_token(self) -> None:
+        state = TestRailPickerState(
+            configured=True, projects=[TestRailProject(15, "ExtJS 6", 3, False)]
+        )
+        with patch("projects.views.get_testrail_picker_state", return_value=state):
+            response = self.client.get(self.url)
+        start_url = reverse("projects:testrail_import_start", args=[self.project.id])
+        self.assertIn("csrfmiddlewaretoken", form_posting_to(response, start_url))
 
     def test_error_shown_inline(self) -> None:
         state = TestRailPickerState(
@@ -554,3 +586,29 @@ class RunDetailTestRailPanelTests(TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["testrail_push"], panel)
+
+    def test_push_target_dialog_form_carries_csrf_token(self) -> None:
+        user = make_user()
+        project = make_project(user=user)
+        test_run = make_run(project=project)
+        client = Client()
+        client.force_login(user)
+        panel = TestRailPushPanel(
+            configured=True,
+            can_push=True,
+            has_target=False,
+            picker=TestRailPickerState(
+                configured=True, projects=[TestRailProject(15, "ExtJS 6", 3, False)]
+            ),
+            suggested_project_id=None,
+            pending_count=0,
+            run_url="",
+        )
+        with patch("projects.views.get_testrail_push_panel", return_value=panel):
+            response = client.get(
+                reverse("projects:test_run_detail", args=[project.id, test_run.id])
+            )
+        push_url = reverse(
+            "projects:testrail_push_start", args=[project.id, test_run.id]
+        )
+        self.assertIn("csrfmiddlewaretoken", form_posting_to(response, push_url))

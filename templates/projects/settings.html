@@ -70,6 +70,6 @@
 
 {% if project.has_testrail_settings %}
   {% url 'projects:settings_testrail_clear' project.id as clear_url %}
-  {% include "partials/confirm_dialog.html" with dialog_id="clear-testrail" title="Clear TestRail settings?" body="The URL, email and API key are removed from this project. Imported test cases are kept." confirm_label="Clear settings" action_url=clear_url only %}
+  {% include "partials/confirm_dialog.html" with dialog_id="clear-testrail" title="Clear TestRail settings?" body="The URL, email and API key are removed from this project. Imported test cases are kept." confirm_label="Clear settings" action_url=clear_url csrf_token=csrf_token only %}
 {% endif %}
 {% endblock %}

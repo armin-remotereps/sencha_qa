@@ -29,7 +29,7 @@
 {% endblock %}
 
 {% block project_content %}
-{% include "projects/includes/_testrail_import_card.html" with project=project testrail_picker=testrail_picker only %}
+{% include "projects/includes/_testrail_import_card.html" with project=project testrail_picker=testrail_picker csrf_token=csrf_token only %}
 
 <div class="card">
   <div class="card-header">

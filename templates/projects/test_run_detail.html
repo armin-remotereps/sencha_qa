@@ -277,7 +277,7 @@
   {% if testrail_push.has_target %}
     {% include "partials/confirm_dialog.html" with dialog_id="push-testrail" title="Push results to TestRail?" body=testrail_push_confirm_body confirm_label="Push results" confirm_class="btn-primary" action_url=testrail_push_start_url %}
   {% else %}
-    {% include "projects/includes/_testrail_push_dialog.html" with project=project test_run=test_run testrail_push=testrail_push only %}
+    {% include "projects/includes/_testrail_push_dialog.html" with project=project test_run=test_run testrail_push=testrail_push csrf_token=csrf_token only %}
   {% endif %}
   {% endif %}
 
