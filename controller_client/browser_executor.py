@@ -5,10 +5,20 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
-from playwright.sync_api import Browser, BrowserContext, Download, Page, Playwright
+from playwright.sync_api import (
+    Browser,
+    BrowserContext,
+    Download,
+    Frame,
+    Page,
+    Playwright,
+)
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import (
+    sync_playwright,
+)
 
 from controller_client.exceptions import ExecutionError
 from controller_client.protocol import (
@@ -72,11 +82,30 @@ def _handle_download_timeout(page: Page) -> None:
 
 
 _COLLECT_ELEMENTS_JS = """
-() => {
-    const selectors = 'a, button, input, select, textarea, [role], [onclick], [tabindex]';
-    const elements = Array.from(document.querySelectorAll(selectors));
+(startIndex) => {
+    const SELECTORS = 'a, button, input, select, textarea, [role], [onclick], [tabindex]';
 
-    const visible = elements.filter(el => {
+    // Walk into open shadow roots too: overlay close buttons are routinely
+    // rendered inside a custom element, where querySelectorAll cannot see them.
+    const candidates = [];
+    const walk = (root) => {
+        root.querySelectorAll('*').forEach(el => {
+            // Drop the index stamped by an earlier collection, so a stale
+            // attribute can never satisfy a selector meant for this one.
+            if (el.hasAttribute('data-at-idx')) {
+                el.removeAttribute('data-at-idx');
+            }
+            if (el.matches(SELECTORS)) {
+                candidates.push(el);
+            }
+            if (el.shadowRoot) {
+                walk(el.shadowRoot);
+            }
+        });
+    };
+    walk(document);
+
+    const visible = candidates.filter(el => {
         const style = window.getComputedStyle(el);
         const rect = el.getBoundingClientRect();
         return style.display !== 'none'
@@ -87,7 +116,8 @@ _COLLECT_ELEMENTS_JS = """
     });
 
     const result = [];
-    visible.forEach((el, idx) => {
+    visible.forEach((el, offset) => {
+        const idx = startIndex + offset;
         el.setAttribute('data-at-idx', String(idx));
 
         const info = {
@@ -133,6 +163,7 @@ class BrowserSession:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._element_frames: dict[int, Frame] = {}
         self._downloads: list[DownloadRecord] = []
         self._downloads_lock: threading.Lock = threading.Lock()
 
@@ -157,7 +188,15 @@ class BrowserSession:
 
         self._page = self._context.new_page()
         self._page.on("download", self._on_download)
+        self._element_frames = {}
         return self._page
+
+    def set_element_frames(self, mapping: dict[int, Frame]) -> None:
+        """Remember which frame each element index was stamped in."""
+        self._element_frames = mapping
+
+    def frame_for_index(self, element_index: int) -> Frame | None:
+        return self._element_frames.get(element_index)
 
     def close(self) -> None:
         if self._context is not None:
@@ -182,6 +221,7 @@ class BrowserSession:
             self._playwright = None
 
         self._page = None
+        self._element_frames = {}
         self.clear_downloads()
 
     def clear_downloads(self) -> None:
@@ -242,14 +282,31 @@ def execute_browser_navigate(
     )
 
 
+def _element_frame(session: BrowserSession, element_index: int) -> Frame:
+    """Return the frame an element index was stamped in.
+
+    Indices are handed out across every frame on the page, so an index from an
+    ad or consent iframe cannot be acted on through the main frame. Falling
+    back to the main frame keeps an index from before the last collection
+    behaving as it always did.
+    """
+    frame = session.frame_for_index(element_index)
+    if frame is not None and not frame.is_detached():
+        return frame
+    return session.ensure_page().main_frame
+
+
+def _element_selector(element_index: int) -> str:
+    return f'[data-at-idx="{element_index}"]'
+
+
 def execute_browser_click(
     session: BrowserSession, payload: BrowserClickPayload
 ) -> ActionResultPayload:
     start = time.monotonic()
     try:
-        page = session.ensure_page()
-        selector = f'[data-at-idx="{payload.element_index}"]'
-        page.click(selector)
+        frame = _element_frame(session, payload.element_index)
+        frame.click(_element_selector(payload.element_index))
     except Exception as e:
         raise ExecutionError(f"Browser click failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -265,9 +322,8 @@ def execute_browser_type(
 ) -> ActionResultPayload:
     start = time.monotonic()
     try:
-        page = session.ensure_page()
-        selector = f'[data-at-idx="{payload.element_index}"]'
-        page.fill(selector, payload.text)
+        frame = _element_frame(session, payload.element_index)
+        frame.fill(_element_selector(payload.element_index), payload.text)
     except Exception as e:
         raise ExecutionError(f"Browser type failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -283,9 +339,8 @@ def execute_browser_hover(
 ) -> ActionResultPayload:
     start = time.monotonic()
     try:
-        page = session.ensure_page()
-        selector = f'[data-at-idx="{payload.element_index}"]'
-        page.hover(selector)
+        frame = _element_frame(session, payload.element_index)
+        frame.hover(_element_selector(payload.element_index))
     except Exception as e:
         raise ExecutionError(f"Browser hover failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -296,16 +351,52 @@ def execute_browser_hover(
     )
 
 
+def _collect_frame_elements(frame: Frame, start_index: int) -> list[object]:
+    try:
+        raw_elements = frame.evaluate(_COLLECT_ELEMENTS_JS, start_index)
+    except Exception:
+        # Frames detach, navigate or die mid-collection, especially ad frames.
+        # One unreachable frame must not cost us the rest of the page.
+        logger.debug(
+            "Skipped element collection for frame %s", frame.url, exc_info=True
+        )
+        return []
+    if not isinstance(raw_elements, list):
+        return []
+    return raw_elements
+
+
+def _frame_label(frame: Frame, main_frame: Frame) -> str:
+    if frame is main_frame:
+        return ""
+    host = urlparse(frame.url).netloc
+    return f"iframe:{host}" if host else "iframe"
+
+
 def execute_browser_get_elements(
     session: BrowserSession,
 ) -> BrowserContentResultPayload:
     start = time.monotonic()
     try:
         page = session.ensure_page()
-        raw_elements = page.evaluate(_COLLECT_ELEMENTS_JS)
-        if not isinstance(raw_elements, list):
-            raw_elements = []
-        content = _build_element_list(raw_elements)
+        collected: list[object] = []
+        index_frames: dict[int, Frame] = {}
+
+        for frame in page.frames:
+            elements = _collect_frame_elements(frame, len(collected))
+            label = _frame_label(frame, page.main_frame)
+            for element in elements:
+                if not isinstance(element, dict):
+                    continue
+                index = element.get("idx")
+                if isinstance(index, int):
+                    index_frames[index] = frame
+                if label:
+                    element["frame"] = label
+            collected.extend(elements)
+
+        session.set_element_frames(index_frames)
+        content = _build_element_list(collected)
     except Exception as e:
         raise ExecutionError(f"Browser get elements failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -466,6 +557,7 @@ def _build_element_list(elements: list[object]) -> str:
         name = item.get("name", "")
         el_id = item.get("id", "")
         href = item.get("href", "")
+        frame_label = item.get("frame", "")
 
         parts = [f"[{idx}] <{tag}>"]
         if text:
@@ -484,6 +576,8 @@ def _build_element_list(elements: list[object]) -> str:
             parts.append(f'id="{el_id}"')
         if href:
             parts.append(f'href="{href}"')
+        if frame_label:
+            parts.append(f'frame="{frame_label}"')
 
         lines.append(" ".join(parts))
     return "\n".join(lines)
