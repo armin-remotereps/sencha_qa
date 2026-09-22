@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from controller_client.exceptions import EnvironmentCheckError
+from controller_client.screen_capture import describe_screen_capture_failure
 
-_REMEDIATION = (
-    "pip install --force-reinstall --no-cache-dir certifi requests urllib3"
-)
+_REMEDIATION = "pip install --force-reinstall --no-cache-dir certifi requests urllib3"
 
 
 def verify_environment() -> None:
@@ -27,3 +26,17 @@ def verify_environment() -> None:
             "certifi is broken in this environment "
             f"({exc!r}). Fix it by running, inside this venv: {_REMEDIATION}"
         ) from exc
+
+
+def verify_screen_capture() -> None:
+    """Raise EnvironmentCheckError if this machine will not let us grab the screen.
+
+    Every desktop tool the agent has -- the screenshot tool and the OmniParser
+    element finder alike -- starts by capturing the screen, so a refused
+    capture disables all of them at once. Probing here reports it against the
+    controller at startup rather than mid-run against whichever tool happened
+    to ask first.
+    """
+    failure = describe_screen_capture_failure()
+    if failure is not None:
+        raise EnvironmentCheckError(f"Screen capture is unavailable: {failure}")

@@ -26,6 +26,10 @@ class EnvironmentCheckError(ControllerError):
     pass
 
 
+class ScreenCaptureError(ExecutionError):
+    """The screen could not be captured, with the OS-level reason attached."""
+
+
 class InputBlockedError(ExecutionError):
     """Synthesized input would be discarded by the OS before reaching the screen."""
 

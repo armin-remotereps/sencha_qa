@@ -5,7 +5,7 @@ import sys
 
 from controller_client.client import ControllerClient
 from controller_client.config import load_config, setup_logging
-from controller_client.env_check import verify_environment
+from controller_client.env_check import verify_environment, verify_screen_capture
 from controller_client.exceptions import EnvironmentCheckError
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,13 @@ def main(argv: list[str] | None = None) -> None:
     except EnvironmentCheckError as exc:
         logger.error("%s", exc)
         sys.exit(1)
+
+    # Not fatal: browser tools keep working without it, and the desktop tools
+    # now fail with this same explanation, so the run is still diagnosable.
+    try:
+        verify_screen_capture()
+    except EnvironmentCheckError as exc:
+        logger.warning("%s", exc)
 
     logger.info("Starting controller client, connecting to %s", config.ws_url)
 

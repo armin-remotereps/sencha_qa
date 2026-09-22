@@ -9,7 +9,7 @@ from collections.abc import Callable
 import pyautogui
 from PIL import Image
 
-from controller_client.exceptions import ExecutionError
+from controller_client.exceptions import ExecutionError, ScreenCaptureError
 from controller_client.input_guard import ensure_input_not_blocked
 from controller_client.interactive_session import InteractiveSessionManager
 from controller_client.process_tracker import ProcessTracker
@@ -30,6 +30,7 @@ from controller_client.protocol import (
     TypeTextPayload,
     WaitForCommandPayload,
 )
+from controller_client.screen_capture import capture_screen
 
 pyautogui.FAILSAFE = False
 
@@ -271,11 +272,14 @@ def execute_command_streaming(
 def execute_screenshot() -> ScreenshotResponsePayload:
     start = time.monotonic()
     try:
-        screenshot: Image.Image = pyautogui.screenshot()
+        screenshot: Image.Image = capture_screen()
         buffer = io.BytesIO()
         screenshot.save(buffer, format="PNG")
         image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
         width, height = screenshot.size
+    except ScreenCaptureError:
+        # Already carries the OS-level reason and how to fix it.
+        raise
     except Exception as e:
         raise ExecutionError(f"Screenshot failed: {e}") from e
     return ScreenshotResponsePayload(
