@@ -880,6 +880,32 @@ def _get_channel_layer_or_raise() -> Any:
     return layer
 
 
+_ERROR_REPLY_TYPE = "error.result"
+
+
+def _raise_for_error_reply(reply: dict[str, Any], event_type: str) -> None:
+    """Turn a controller error reply into an exception.
+
+    ``ReplyTracker.send_error`` answers a failed action with an
+    ``error.result`` message that carries no ``success`` flag and none of the
+    action's own fields. Without this check every caller would read those
+    missing fields as their defaults -- an empty screenshot, a zero duration --
+    and carry on, so the real controller failure only resurfaced later as an
+    unrelated error somewhere downstream.
+    """
+    if reply.get("type") != _ERROR_REPLY_TYPE:
+        return
+
+    message = reply.get("message") or f"Controller failed to handle {event_type}"
+    code = reply.get("code", "")
+    details = reply.get("details", "")
+    if code:
+        message = f"{message} [{code}]"
+    if details:
+        message = f"{message} ({details})"
+    raise ControllerActionError(message)
+
+
 def _dispatch_controller_action(
     project_id: int,
     event_type: str,
@@ -902,12 +928,14 @@ def _dispatch_controller_action(
         result: dict[str, Any] = async_to_sync(asyncio.wait_for)(
             layer.receive(reply_channel), timeout=reply_timeout
         )
-        return result
     except asyncio.TimeoutError as exc:
         raise ControllerActionError(
             f"Timed out waiting for controller reply to {event_type} "
             f"after {reply_timeout}s"
         ) from exc
+
+    _raise_for_error_reply(result, event_type)
+    return result
 
 
 def _build_action_result(reply: dict[str, Any]) -> ActionResult:
@@ -990,18 +1018,36 @@ def controller_key_press(
     return _build_action_result(reply)
 
 
+def _build_screenshot_result(reply: dict[str, Any], action: str) -> ScreenshotResult:
+    """Build a screenshot result, refusing to hand back an empty image.
+
+    An image-less screenshot used to travel on until the vision model was
+    asked about a zero-byte data URL, which the provider rejected as a 400 --
+    an error that named the LLM endpoint instead of the controller.
+    """
+    if not reply.get("success", False):
+        message = reply.get("message") or f"Controller failed to {action}"
+        raise ControllerActionError(message)
+
+    image_base64 = reply.get("image_base64", "")
+    if not image_base64:
+        raise ControllerActionError(f"Controller returned an empty image for {action}")
+
+    return ScreenshotResult(
+        success=True,
+        image_base64=image_base64,
+        width=reply.get("width", 0),
+        height=reply.get("height", 0),
+        format=reply.get("format", "png"),
+    )
+
+
 def controller_screenshot(
     project_id: int,
     timeout: float = 30.0,
 ) -> ScreenshotResult:
     reply = _dispatch_controller_action(project_id, "controller.screenshot", timeout)
-    return ScreenshotResult(
-        success=reply.get("success", False),
-        image_base64=reply.get("image_base64", ""),
-        width=reply.get("width", 0),
-        height=reply.get("height", 0),
-        format=reply.get("format", "png"),
-    )
+    return _build_screenshot_result(reply, "take a screenshot")
 
 
 def _build_pixel_element(data: dict[str, Any]) -> PixelUIElement:
@@ -1121,6 +1167,8 @@ def _receive_streaming_command_result(
             raise ControllerActionError(
                 f"Timed out waiting for command result after {timeout}s"
             ) from exc
+
+        _raise_for_error_reply(reply, "controller.run_command")
 
         msg_type = reply.get("type", "")
         if msg_type == "command.output":
@@ -1410,13 +1458,7 @@ def controller_browser_take_screenshot(
     reply = _dispatch_controller_action(
         project_id, "controller.browser_take_screenshot", timeout
     )
-    return ScreenshotResult(
-        success=reply.get("success", False),
-        image_base64=reply.get("image_base64", ""),
-        width=reply.get("width", 0),
-        height=reply.get("height", 0),
-        format=reply.get("format", "png"),
-    )
+    return _build_screenshot_result(reply, "take a browser screenshot")
 
 
 # ============================================================================

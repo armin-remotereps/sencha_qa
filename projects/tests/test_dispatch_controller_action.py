@@ -75,3 +75,64 @@ class DispatchControllerActionTests(SimpleTestCase):
                 "controller.find_element after 0.01s",
             ):
                 _dispatch_controller_action(1, "controller.find_element", 0.01)
+
+
+class _ErrorReplyChannelLayer(_FakeChannelLayer):
+    """A channel layer answering with the error shape ReplyTracker sends."""
+
+    def __init__(self, reply: dict[str, Any]) -> None:
+        super().__init__()
+        self._reply = reply
+
+    async def receive(self, channel: str) -> dict[str, Any]:
+        return self._reply
+
+
+class ErrorReplyTests(SimpleTestCase):
+    def _dispatch(self, reply: dict[str, Any]) -> None:
+        layer = _ErrorReplyChannelLayer(reply)
+        with patch("projects.services._get_channel_layer_or_raise", return_value=layer):
+            _dispatch_controller_action(1, "controller.screenshot", 5.0)
+
+    def test_error_reply_raises_instead_of_returning_a_blank_result(self) -> None:
+        with self.assertRaises(ControllerActionError):
+            self._dispatch(
+                {
+                    "type": "error.result",
+                    "request_id": "abc",
+                    "code": "screenshot_failed",
+                    "message": "Screenshot failed: screen capture refused",
+                    "details": "",
+                }
+            )
+
+    def test_error_reply_keeps_the_controller_message_code_and_details(self) -> None:
+        with self.assertRaises(ControllerActionError) as ctx:
+            self._dispatch(
+                {
+                    "type": "error.result",
+                    "request_id": "abc",
+                    "code": "find_element_failed",
+                    "message": "Find element failed during screenshot",
+                    "details": "phase=screenshot; device=mps",
+                }
+            )
+
+        message = str(ctx.exception)
+        self.assertIn("Find element failed during screenshot", message)
+        self.assertIn("find_element_failed", message)
+        self.assertIn("phase=screenshot; device=mps", message)
+
+    def test_error_reply_without_a_message_names_the_action(self) -> None:
+        with self.assertRaises(ControllerActionError) as ctx:
+            self._dispatch({"type": "error.result", "request_id": "abc"})
+
+        self.assertIn("controller.screenshot", str(ctx.exception))
+
+    def test_successful_reply_is_returned_unchanged(self) -> None:
+        layer = _FakeChannelLayer()
+
+        with patch("projects.services._get_channel_layer_or_raise", return_value=layer):
+            reply = _dispatch_controller_action(1, "controller.click", 5.0)
+
+        self.assertEqual(reply, {"success": True})
