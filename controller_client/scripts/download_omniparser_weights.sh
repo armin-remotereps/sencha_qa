@@ -15,9 +15,14 @@ fi
 echo "Downloading OmniParser V2 weights to $WEIGHTS_DIR ..."
 "$HF_BIN" download microsoft/OmniParser-v2.0 --local-dir "$WEIGHTS_DIR"
 
-if [ -d "$WEIGHTS_DIR/icon_caption" ] && [ ! -d "$WEIGHTS_DIR/icon_caption_florence" ]; then
-    mv "$WEIGHTS_DIR/icon_caption" "$WEIGHTS_DIR/icon_caption_florence"
-    echo "Renamed icon_caption -> icon_caption_florence"
+# The repo ships the caption model as icon_caption, the loader reads
+# icon_caption_florence. omniparser_weights.py owns that rename (and repairs a
+# folder left behind by an interrupted download) for every setup script, then
+# fails loudly if anything is still missing.
+PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
+if [ ! -x "$PYTHON_BIN" ]; then
+    PYTHON_BIN="python3"
 fi
+"$PYTHON_BIN" "$PROJECT_DIR/omniparser_weights.py" "$WEIGHTS_DIR"
 
 echo "Done. Weights saved to $WEIGHTS_DIR"

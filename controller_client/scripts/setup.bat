@@ -88,8 +88,14 @@ echo [4/8] Installing Playwright browsers...
 :: separate late pip install that could drag it past transformers' <1.0 ceiling)
 echo [5/8] Downloading OmniParser model weights (this may take a while, ~1.5GB)...
 "%PROJECT_DIR%\.venv\Scripts\hf" download microsoft/OmniParser-v2.0 --local-dir "%PROJECT_DIR%\omniparser\weights"
-if exist "%PROJECT_DIR%\omniparser\weights\icon_caption" if not exist "%PROJECT_DIR%\omniparser\weights\icon_caption_florence" (
-    ren "%PROJECT_DIR%\omniparser\weights\icon_caption" icon_caption_florence
+:: The repo ships the caption model as icon_caption, the loader reads
+:: icon_caption_florence. omniparser_weights.py owns that rename (and repairs a
+:: folder left behind by an interrupted download) for every setup script, then
+:: fails loudly if anything is still missing.
+"%PROJECT_DIR%\.venv\Scripts\python" "%PROJECT_DIR%\omniparser_weights.py" "%PROJECT_DIR%\omniparser\weights"
+if errorlevel 1 (
+    echo Error: the OmniParser weights download is incomplete.
+    exit /b 1
 )
 
 :: Pre-warm the OCR engines' own model downloads (EasyOCR/PaddleOCR construct

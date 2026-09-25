@@ -71,6 +71,7 @@ def weights_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "icon_detect").mkdir()
     (tmp_path / "icon_detect" / "model.pt").write_bytes(b"weights")
     (tmp_path / "icon_caption_florence").mkdir()
+    (tmp_path / "icon_caption_florence" / "model.safetensors").write_bytes(b"caption")
     monkeypatch.setattr(f"{EXECUTOR}.omniparser_weights_dir", lambda: str(tmp_path))
     return tmp_path
 
@@ -194,7 +195,9 @@ def test_load_fails_in_weights_phase_when_weights_missing(
     missing = tmp_path / "does-not-exist"
     monkeypatch.setattr(f"{EXECUTOR}.omniparser_weights_dir", lambda: str(missing))
 
-    with pytest.raises(OmniParserError, match="OmniParser weights not found") as info:
+    with pytest.raises(
+        OmniParserError, match="OmniParser detector weights not found"
+    ) as info:
         load_omniparser_model()
 
     assert info.value.phase == LOAD_PHASE_WEIGHTS

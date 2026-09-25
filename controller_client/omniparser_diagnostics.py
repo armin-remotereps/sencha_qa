@@ -104,15 +104,14 @@ def check_weights_dir() -> str:
 
 
 def check_weight_files() -> str:
-    try:
-        weights = resolve_omniparser_weights(omniparser_weights_dir())
-    except FileNotFoundError as e:
-        raise RuntimeError(f"{e} {WEIGHTS_HINT}") from e
+    # resolve_omniparser_weights already names the missing file and how to
+    # download it again, so re-wrapping it here would only duplicate the hint.
+    weights = resolve_omniparser_weights(omniparser_weights_dir())
     detector_bytes = weights.som_model_path.stat().st_size
-    caption_files = sum(1 for p in weights.caption_model_path.iterdir() if p.is_file())
+    caption_bytes = weights.caption_checkpoint_path.stat().st_size
     return (
         f"{weights.som_model_path} ({detector_bytes} bytes), "
-        f"{weights.caption_model_path} ({caption_files} files)"
+        f"{weights.caption_checkpoint_path} ({caption_bytes} bytes)"
     )
 
 

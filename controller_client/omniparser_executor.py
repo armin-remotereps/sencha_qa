@@ -26,6 +26,10 @@ from controller_client.omniparser_config import (
     omniparser_max_result_bytes,
     omniparser_weights_dir,
 )
+from controller_client.omniparser_weights import OmniParserWeights
+from controller_client.omniparser_weights import (
+    resolve_omniparser_weights as resolve_weights_layout,
+)
 from controller_client.protocol import (
     ErrorCode,
     FindElementPayload,
@@ -100,13 +104,6 @@ class OmniParserReadiness:
 
 
 @dataclass(frozen=True)
-class OmniParserWeights:
-    weights_dir: str
-    som_model_path: Path
-    caption_model_path: Path
-
-
-@dataclass(frozen=True)
 class _PhaseTimings:
     ocr_seconds: float
     som_seconds: float
@@ -127,26 +124,8 @@ def _ensure_omniparser_on_path() -> None:
 
 
 def resolve_omniparser_weights(weights_dir: str) -> OmniParserWeights:
-    """Locate the detector and caption weights, failing loudly when absent.
-
-    A missing weights path is not just a normal file-not-found: the vendored
-    YOLO loader treats an unrecognized local path as a Hugging Face Hub model
-    ID and silently starts downloading it instead of raising.
-    """
-    som_model_path = Path(weights_dir) / "icon_detect" / "model.pt"
-    caption_model_path = Path(weights_dir) / "icon_caption_florence"
-    if not som_model_path.is_file() or not caption_model_path.is_dir():
-        raise FileNotFoundError(
-            f"OmniParser weights not found at {weights_dir!r} "
-            f"(expected {som_model_path} and {caption_model_path}). "
-            "Run controller_client/scripts/setup.sh (or the weights "
-            "download step) before using find_element."
-        )
-    return OmniParserWeights(
-        weights_dir=weights_dir,
-        som_model_path=som_model_path,
-        caption_model_path=caption_model_path,
-    )
+    """Repair a half-renamed caption folder, then verify every weights file."""
+    return resolve_weights_layout(weights_dir)
 
 
 def _import_omniparser_class() -> Any:
