@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import json
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 from websockets.asyncio.client import ClientConnection
 
 from controller_client.client import ControllerClient
 from controller_client.config import ClientConfig
-from controller_client.exceptions import AuthenticationError, OmniParserError
+from controller_client.exceptions import (
+    AuthenticationError,
+    BrowserElementNotFoundError,
+    OmniParserError,
+)
 from controller_client.omniparser_executor import (
     OmniParserLoadResult,
     OmniParserReadiness,
@@ -393,3 +398,30 @@ async def test_connect_disables_client_keepalive_pings(
 
     assert "ping_interval" in fake_connect.kwargs
     assert fake_connect.kwargs["ping_interval"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message_type", "executor", "fields"),
+    [
+        ("browser_click", "execute_browser_click", {}),
+        ("browser_type", "execute_browser_type", {"text": "hi"}),
+        ("browser_hover", "execute_browser_hover", {}),
+    ],
+)
+async def test_missing_browser_element_gets_element_not_found_reply(
+    message_type: str, executor: str, fields: dict[str, object]
+) -> None:
+    connection = FakeConnection(
+        [_message(message_type, "r1", element_index=5, **fields)]
+    )
+    client = _client_with(connection)
+    missing = BrowserElementNotFoundError("Element [5] was not found on the page")
+
+    with patch(f"{CLIENT}.{executor}", side_effect=missing):
+        await client._message_loop(cast(ClientConnection, connection))
+
+    assert connection.sent[0]["type"] == "error"
+    assert connection.sent[0]["request_id"] == "r1"
+    assert connection.sent[0]["code"] == "ELEMENT_NOT_FOUND"
+    assert connection.sent[0]["message"] == "Element [5] was not found on the page"

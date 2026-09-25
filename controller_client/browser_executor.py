@@ -12,6 +12,7 @@ from playwright.sync_api import (
     BrowserContext,
     Download,
     Frame,
+    Locator,
     Page,
     Playwright,
 )
@@ -20,7 +21,7 @@ from playwright.sync_api import (
     sync_playwright,
 )
 
-from controller_client.exceptions import ExecutionError
+from controller_client.exceptions import BrowserElementNotFoundError, ExecutionError
 from controller_client.protocol import (
     ActionResultPayload,
     BrowserClickPayload,
@@ -48,6 +49,9 @@ _LOGIN_INDICATORS: tuple[str, ...] = (
 )
 
 _DOWNLOAD_TIMEOUT_MS: int = 15000
+# Well under the server's 30 s reply timeout, so a stuck action is reported
+# back as a failure instead of the server giving up on the reply first.
+_ACTION_TIMEOUT_MS: int = 10000
 
 
 def _has_login_in_url(page: Page) -> bool:
@@ -300,13 +304,46 @@ def _element_selector(element_index: int) -> str:
     return f'[data-at-idx="{element_index}"]'
 
 
+def _locate_element(session: BrowserSession, element_index: int) -> Locator:
+    """Resolve an element index, failing at once when it is not on the page.
+
+    Playwright would otherwise wait out its 30 s default for the selector to
+    appear, which is as long as the server waits for our reply, so the agent
+    saw a bare timeout instead of learning the element was gone.
+    """
+    locator = _element_frame(session, element_index).locator(
+        _element_selector(element_index)
+    )
+    if locator.count() == 0:
+        raise BrowserElementNotFoundError(
+            f"Element [{element_index}] was not found on the page; the page "
+            "may have changed since the elements were listed"
+        )
+    return locator
+
+
+def _not_actionable_message(action: str, element_index: int) -> str:
+    return (
+        f"Element [{element_index}] is on the page but could not be {action} "
+        f"within {_ACTION_TIMEOUT_MS // 1000}s; it may be hidden, disabled, "
+        "or covered by another element"
+    )
+
+
 def execute_browser_click(
     session: BrowserSession, payload: BrowserClickPayload
 ) -> ActionResultPayload:
     start = time.monotonic()
     try:
-        frame = _element_frame(session, payload.element_index)
-        frame.click(_element_selector(payload.element_index))
+        _locate_element(session, payload.element_index).click(
+            timeout=_ACTION_TIMEOUT_MS
+        )
+    except BrowserElementNotFoundError:
+        raise
+    except PlaywrightTimeoutError as e:
+        raise ExecutionError(
+            _not_actionable_message("clicked", payload.element_index)
+        ) from e
     except Exception as e:
         raise ExecutionError(f"Browser click failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -322,8 +359,15 @@ def execute_browser_type(
 ) -> ActionResultPayload:
     start = time.monotonic()
     try:
-        frame = _element_frame(session, payload.element_index)
-        frame.fill(_element_selector(payload.element_index), payload.text)
+        _locate_element(session, payload.element_index).fill(
+            payload.text, timeout=_ACTION_TIMEOUT_MS
+        )
+    except BrowserElementNotFoundError:
+        raise
+    except PlaywrightTimeoutError as e:
+        raise ExecutionError(
+            _not_actionable_message("typed into", payload.element_index)
+        ) from e
     except Exception as e:
         raise ExecutionError(f"Browser type failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -339,8 +383,15 @@ def execute_browser_hover(
 ) -> ActionResultPayload:
     start = time.monotonic()
     try:
-        frame = _element_frame(session, payload.element_index)
-        frame.hover(_element_selector(payload.element_index))
+        _locate_element(session, payload.element_index).hover(
+            timeout=_ACTION_TIMEOUT_MS
+        )
+    except BrowserElementNotFoundError:
+        raise
+    except PlaywrightTimeoutError as e:
+        raise ExecutionError(
+            _not_actionable_message("hovered", payload.element_index)
+        ) from e
     except Exception as e:
         raise ExecutionError(f"Browser hover failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000

@@ -26,6 +26,7 @@ from controller_client.cleanup import execute_cleanup
 from controller_client.config import ClientConfig
 from controller_client.exceptions import (
     AuthenticationError,
+    BrowserElementNotFoundError,
     ExecutionError,
     OmniParserError,
     ProtocolError,
@@ -543,6 +544,8 @@ class ControllerClient:
                 execute_browser_click, self._browser_session, payload
             )
             await self._send_action_result(request_id, result)
+        except BrowserElementNotFoundError as e:
+            await self._send_error(request_id, ErrorCode.ELEMENT_NOT_FOUND, str(e))
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
 
@@ -555,6 +558,8 @@ class ControllerClient:
                 execute_browser_type, self._browser_session, payload
             )
             await self._send_action_result(request_id, result)
+        except BrowserElementNotFoundError as e:
+            await self._send_error(request_id, ErrorCode.ELEMENT_NOT_FOUND, str(e))
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
 
@@ -567,6 +572,8 @@ class ControllerClient:
                 execute_browser_hover, self._browser_session, payload
             )
             await self._send_action_result(request_id, result)
+        except BrowserElementNotFoundError as e:
+            await self._send_error(request_id, ErrorCode.ELEMENT_NOT_FOUND, str(e))
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
 

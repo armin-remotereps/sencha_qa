@@ -30,6 +30,10 @@ class ScreenCaptureError(ExecutionError):
     """The screen could not be captured, with the OS-level reason attached."""
 
 
+class BrowserElementNotFoundError(ExecutionError):
+    """The element index being acted on is not present on the page."""
+
+
 class InputBlockedError(ExecutionError):
     """Synthesized input would be discarded by the OS before reaching the screen."""
 
