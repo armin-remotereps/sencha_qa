@@ -95,7 +95,8 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                 "Click an element on the desktop found by vision-based natural-language description. "
                 "The target element is verified by vision before clicking and the result is checked "
                 "afterwards; the tool retries automatically with other candidates (up to 10) and "
-                "returns an error if it cannot confirm the element."
+                "returns an error if it cannot confirm the element, or an 'element not found' "
+                "error once 3 candidates on the current screen have been rejected."
             ),
             category=ToolCategory.CONTROLLER,
             parameters=(

@@ -153,6 +153,8 @@ def build_desktop_tool_examples() -> str:
         "- click, hover and drag verify the target element before acting and confirm the "
         "result afterwards, trying up to 10 candidates on their own. Pass expected_result "
         "to tell them what the screen should show once the action worked.\n"
+        "- If the element is not on the screen they stop early and report that it was not "
+        "found instead of trying every candidate.\n"
         "- When click, hover or drag returns an error, the element could not be confirmed: "
         "re-describe it more precisely or use take_screenshot to understand the screen "
         "instead of repeating the same call.\n"

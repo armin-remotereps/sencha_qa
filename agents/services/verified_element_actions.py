@@ -5,7 +5,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Final, Literal
 
-from agents.exceptions import ActionVerificationError, RejectedElementChosenError
+from agents.exceptions import (
+    ActionVerificationError,
+    ElementNotFoundError,
+    RejectedElementChosenError,
+)
 from agents.services.action_verifier import verify_action_outcome, verify_candidate
 from agents.services.controller_element_finder import match_element, parse_screen
 from agents.types import (
@@ -20,6 +24,9 @@ from agents.types import (
 from projects.services import controller_screenshot
 
 MAX_VERIFY_ATTEMPTS: Final = 10
+# Rejected candidates on one screen parse before the target is reported as not
+# on screen; without it a missing element burns the whole attempt budget.
+MAX_CANDIDATE_REJECTIONS_PER_PARSE: Final = 3
 POST_ACTION_SETTLE_SECONDS: Final = 1.0
 _POSITION_TOLERANCE_PX: Final = 10
 _MIN_REMAINING_SECONDS: Final = 5.0
@@ -75,8 +82,18 @@ class VerificationBudget:
             return False
         return (self.deadline - time.monotonic()) < _MIN_REMAINING_SECONDS
 
+    def not_found_message(self, description: str, checked: int) -> str:
+        header = (
+            f"element '{description}' was not found on screen: {checked} "
+            "candidates were checked and none matched:"
+        )
+        return self._with_history(header)
+
     def _exhausted_message(self, description: str) -> str:
         header = f"could not verify '{description}' after {self.used} attempts:"
+        return self._with_history(header)
+
+    def _with_history(self, header: str) -> str:
         lines = self.history_lines()
         if not lines:
             return header
@@ -118,12 +135,21 @@ def resolve_verified_element(
     *,
     on_screenshot: ScreenshotCallback | None = None,
 ) -> PixelUIElement:
-    """Parse the screen once and retry candidate matching until one is verified."""
+    """Parse the screen once and retry candidate matching until one is verified.
+
+    Raises ElementNotFoundError once MAX_CANDIDATE_REJECTIONS_PER_PARSE
+    candidates on this screen have been rejected.
+    """
     budget.raise_if_cancelled()
     parse_result = parse_screen(project_id, on_screenshot=on_screenshot)
     rejected_indices: set[int] = set()
+    rejected_count = 0
 
     while True:
+        if rejected_count >= MAX_CANDIDATE_REJECTIONS_PER_PARSE:
+            raise ElementNotFoundError(
+                budget.not_found_message(description, rejected_count)
+            )
         budget.consume(description)
         try:
             element = match_element(
@@ -135,12 +161,14 @@ def resolve_verified_element(
         except RejectedElementChosenError as exc:
             budget.reject(exc.element, "candidate", _MATCHER_REPEAT_REASON)
             rejected_indices.add(exc.element.index)
+            rejected_count += 1
             continue
         verdict = verify_candidate(vision_config, parse_result, element, description)
         if verdict.accepted:
             return element
         budget.reject(element, "candidate", verdict.reason)
         rejected_indices.add(element.index)
+        rejected_count += 1
 
 
 def _build_exclusion_check(

@@ -11,6 +11,7 @@ from agents.exceptions import (
     RejectedElementChosenError,
 )
 from agents.services.verified_element_actions import (
+    MAX_CANDIDATE_REJECTIONS_PER_PARSE,
     MAX_VERIFY_ATTEMPTS,
     VerificationBudget,
     confirm_action,
@@ -210,8 +211,49 @@ class ResolveVerifiedElementTests(SimpleTestCase):
 
         self.assertEqual(element, _CANCEL)
 
-    def test_gives_up_after_ten_rejections(self) -> None:
+    def test_reports_not_found_after_three_rejected_candidates(self) -> None:
         budget = VerificationBudget()
+        with (
+            patch(f"{_ACTIONS}.parse_screen", return_value=_PARSE) as parse,
+            patch(f"{_ACTIONS}.match_element", return_value=_CANCEL),
+            patch(
+                f"{_ACTIONS}.verify_candidate", return_value=_reject("that is Cancel")
+            ) as verify,
+        ):
+            with self.assertRaises(ElementNotFoundError) as ctx:
+                resolve_verified_element(7, "Save", _LLM_CONFIG, budget)
+
+        self.assertEqual(verify.call_count, MAX_CANDIDATE_REJECTIONS_PER_PARSE)
+        self.assertEqual(budget.used, MAX_CANDIDATE_REJECTIONS_PER_PARSE)
+        parse.assert_called_once()
+        message = str(ctx.exception)
+        self.assertIn(
+            "element 'Save' was not found on screen: 3 candidates were checked",
+            message,
+        )
+        self.assertIn("attempt 3: candidate [1] 'Cancel'", message)
+
+    def test_matcher_repeats_count_towards_not_found(self) -> None:
+        budget = VerificationBudget()
+        with (
+            patch(f"{_ACTIONS}.parse_screen", return_value=_PARSE),
+            patch(
+                f"{_ACTIONS}.match_element",
+                side_effect=[
+                    _CANCEL,
+                    RejectedElementChosenError(_CANCEL, "Save"),
+                    RejectedElementChosenError(_CANCEL, "Save"),
+                ],
+            ),
+            patch(f"{_ACTIONS}.verify_candidate", return_value=_reject()) as verify,
+        ):
+            with self.assertRaises(ElementNotFoundError):
+                resolve_verified_element(7, "Save", _LLM_CONFIG, budget)
+
+        self.assertEqual(verify.call_count, 1)
+
+    def test_attempt_cap_still_applies_before_not_found(self) -> None:
+        budget = VerificationBudget(max_attempts=2)
         with (
             patch(f"{_ACTIONS}.parse_screen", return_value=_PARSE),
             patch(f"{_ACTIONS}.match_element", return_value=_CANCEL),
@@ -220,8 +262,25 @@ class ResolveVerifiedElementTests(SimpleTestCase):
             with self.assertRaises(ActionVerificationError) as ctx:
                 resolve_verified_element(7, "Save", _LLM_CONFIG, budget)
 
-        self.assertEqual(verify.call_count, 10)
-        self.assertIn("after 10 attempts", str(ctx.exception))
+        self.assertEqual(verify.call_count, 2)
+        self.assertIn("after 2 attempts", str(ctx.exception))
+
+    def test_rejection_count_resets_on_each_parse(self) -> None:
+        budget = VerificationBudget()
+        with (
+            patch(f"{_ACTIONS}.parse_screen", return_value=_PARSE) as parse,
+            patch(f"{_ACTIONS}.match_element", return_value=_SAVE),
+            patch(
+                f"{_ACTIONS}.verify_candidate",
+                side_effect=[_reject(), _reject(), _accept()] * 2,
+            ),
+        ):
+            first = resolve_verified_element(7, "Save", _LLM_CONFIG, budget)
+            second = resolve_verified_element(7, "Save", _LLM_CONFIG, budget)
+
+        self.assertEqual((first, second), (_SAVE, _SAVE))
+        self.assertEqual(parse.call_count, 2)
+        self.assertEqual(budget.used, 6)
 
     def test_matcher_repeating_a_ruled_out_element_counts_as_rejection(self) -> None:
         budget = VerificationBudget()

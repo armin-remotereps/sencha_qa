@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase
 
+from agents.exceptions import ElementNotFoundError
 from agents.services.tools_controller import click, drag, hover, key_press, type_text
 from agents.services.verified_element_actions import VerificationBudget
 from agents.types import (
@@ -204,6 +205,24 @@ class ClickToolTests(SimpleTestCase):
 
         self.assertTrue(result.is_error)
         self.assertIn("Controller reported the action failed", result.content)
+
+    def test_missing_element_is_reported_without_clicking(self) -> None:
+        not_found = ElementNotFoundError(
+            "element 'the ^ button' was not found on screen: 3 candidates were "
+            "checked and none matched:"
+        )
+        with (
+            patch(f"{_TOOLS}.resolve_verified_element", side_effect=not_found),
+            patch(f"{_TOOLS}.controller_click") as sent,
+        ):
+            result = click(7, description="the ^ button", vision_config=_LLM_CONFIG)
+
+        self.assertTrue(result.is_error)
+        self.assertIn(
+            "click error: element 'the ^ button' was not found on screen",
+            result.content,
+        )
+        sent.assert_not_called()
 
     def test_cancellation_propagates_out_of_the_tool(self) -> None:
         with self.assertRaises(AgentCancelledError):
