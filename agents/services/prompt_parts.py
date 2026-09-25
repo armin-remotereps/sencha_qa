@@ -172,7 +172,7 @@ def build_desktop_tool_examples() -> str:
 
 def build_browser_tool_examples() -> str:
     return (
-        "BROWSER TOOLS (for web page interactions — preferred for web testing):\n"
+        "BROWSER TOOLS (for web page interactions — required for anything inside a web page):\n"
         '- browser_navigate(url="https://example.com") — open a URL in the browser\n'
         '- browser_click(description="the Login button") — click a web page element\n'
         '- browser_type(description="the email input", text="user@example.com") — type into a web element\n'
@@ -188,24 +188,29 @@ def build_browser_tool_examples() -> str:
 def build_tool_selection_rules() -> str:
     return (
         "WHEN TO USE WHICH:\n"
-        "- For web testing, prefer browser_* tools. They are faster and more reliable than "
-        "desktop tools for web interactions.\n"
+        "- WEB PAGES: Anything inside a web page opened with browser_navigate MUST be done "
+        "with browser_* tools: browser_click (not click), browser_type (not click + type_text), "
+        "browser_hover (not hover), browser_take_screenshot (not take_screenshot) and "
+        "browser_get_page_content to read the page. Desktop tools cannot see the Playwright "
+        "page reliably and are NOT a substitute for browser tools on a web page.\n"
+        "- Desktop tools are only for things OUTSIDE the web page: native OS dialogs the "
+        "browser opens (file pickers, print dialogs, OS permission prompts), native apps, "
+        "and key presses that have no browser_* equivalent (key_press).\n"
         "- For downloading files from a direct URL, prefer browser_download. It handles "
         "cookie-gated and auth-gated downloads that curl/wget cannot.\n"
         "- For downloading software from a website where you need to find the download link, "
         "use browser_navigate + browser_click to locate and trigger the download.\n"
         "- Use desktop tools (click, type_text, key_press) for ANY native GUI interaction: "
         "installation wizards, setup dialogs, confirmation popups, file managers, system "
-        "preferences, or any visible desktop element.\n"
+        "preferences, or any other native desktop element outside the web page.\n"
         "- Use execute_command for shell operations. It handles both interactive and non-interactive "
         "commands automatically. If a CLI install fails, switch to the browser download approach.\n"
-        "- DESKTOP FALLBACK: If a browser tool fails or times out for ANY reason after 2 attempts, "
-        "escalate with these steps:\n"
-        "  1. STOP retrying the browser tool.\n"
-        "  2. Use take_screenshot to DIAGNOSE what is visible on screen (overlays, popups, "
-        "cookie banners, login forms, etc.).\n"
-        "  3. Use desktop click to dismiss overlays or interact with visible elements directly.\n"
-        "  4. After clearing blockers, retry browser tools if needed.\n"
+        "- BROWSER TOOL FAILURES: If a browser tool fails twice, STOP repeating it. Use "
+        "browser_take_screenshot or browser_get_page_content to DIAGNOSE the page (overlays, "
+        "cookie banners, popups, login forms), dismiss blockers with browser_click, then "
+        "re-describe the element more precisely. Do NOT switch to desktop click or "
+        "take_screenshot for elements inside the web page; if browser tools still cannot "
+        "reach the element, FAIL the test with what you observed.\n"
         "- INSTALLATION LOOKUP: Before installing software, use web_search to look up the "
         "correct install command for the current OS. This avoids guessing wrong package names "
         "or using the wrong package manager."

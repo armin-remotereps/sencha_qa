@@ -93,9 +93,11 @@ def _build_task_section(task_description: str) -> str:
     return (
         "IMPORTANT:\n"
         "- For web tasks, use browser_navigate to open URLs — no need to launch a browser manually\n"
-        "- Use browser_click/browser_type for web page interactions\n"
+        "- Use browser_click/browser_type/browser_hover/browser_take_screenshot for anything "
+        "inside a web page — never desktop click/take_screenshot for web page content\n"
         "- Use execute_command for shell operations\n"
-        "- Use take_screenshot or browser_take_screenshot with specific questions to observe the environment\n"
+        "- Use browser_take_screenshot (web pages) or take_screenshot (desktop) with specific "
+        "questions to observe the environment\n"
         "- Use click/hover with descriptive element names for native desktop GUI interactions\n"
         "- Always check tool output and use screenshots to verify results\n"
         "- If a tool fails, try to diagnose and fix the issue\n\n"

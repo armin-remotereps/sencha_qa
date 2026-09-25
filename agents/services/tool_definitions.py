@@ -78,7 +78,10 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
         ),
         ToolDefinition(
             name="take_screenshot",
-            description="Take a screenshot of the desktop and answer a question about it using vision AI.",
+            description=(
+                "Take a screenshot of the desktop and answer a question about it using vision AI."
+                " Not for web pages opened with browser_navigate — use browser_take_screenshot for those."
+            ),
             category=ToolCategory.CONTROLLER,
             parameters=(
                 ToolParameter(
@@ -97,6 +100,7 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                 "afterwards; the tool retries automatically with other candidates (up to 10) and "
                 "returns an error if it cannot confirm the element, or an 'element not found' "
                 "error once 3 candidates on the current screen have been rejected."
+                " Not for web pages opened with browser_navigate — use browser_click for those."
             ),
             category=ToolCategory.CONTROLLER,
             parameters=(
@@ -120,7 +124,10 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
         ),
         ToolDefinition(
             name="type_text",
-            description="Type text using the keyboard.",
+            description=(
+                "Type text using the keyboard."
+                " To fill a field on a web page opened with browser_navigate, use browser_type instead."
+            ),
             category=ToolCategory.CONTROLLER,
             parameters=(
                 ToolParameter(
@@ -151,6 +158,7 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                 "The target element is verified by vision before hovering; the tool retries "
                 "automatically with other candidates (up to 10) and returns an error if it "
                 "cannot confirm the element."
+                " Not for web pages opened with browser_navigate — use browser_hover for those."
             ),
             category=ToolCategory.CONTROLLER,
             parameters=(
