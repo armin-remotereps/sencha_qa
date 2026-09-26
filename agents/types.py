@@ -82,7 +82,7 @@ class LLMConfig:
     model: str
     api_key: str
     endpoint_url: str
-    temperature: float
+    temperature: float | None
     max_tokens: int
 
 

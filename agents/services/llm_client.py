@@ -32,9 +32,11 @@ def _build_payload(
     payload: dict[str, object] = {
         "model": config.model,
         "messages": _serialize_messages(messages),
-        "temperature": config.temperature,
         "max_completion_tokens": config.max_tokens,
     }
+
+    if config.temperature is not None:
+        payload["temperature"] = config.temperature
 
     if tools:
         payload["tools"] = _serialize_tools(tools)

@@ -5,7 +5,9 @@ from django.conf import settings
 from agents.types import LLMConfig
 
 
-def _build_config(*, model: str, temperature: float, max_tokens: int) -> LLMConfig:
+def _build_config(
+    *, model: str, temperature: float | None, max_tokens: int
+) -> LLMConfig:
     return LLMConfig(
         model=model,
         temperature=temperature,
@@ -42,7 +44,7 @@ def build_sub_agent_config(*, model: str | None = None) -> LLMConfig:
 def build_summarizer_config(*, model: str | None = None) -> LLMConfig:
     return _build_config(
         model=model or settings.OPENAI_SUMMARIZER_MODEL,
-        temperature=0.0,
+        temperature=settings.SUMMARIZER_TEMPERATURE,
         max_tokens=1024,
     )
 
@@ -50,7 +52,7 @@ def build_summarizer_config(*, model: str | None = None) -> LLMConfig:
 def build_refiner_config(*, model: str | None = None) -> LLMConfig:
     return _build_config(
         model=model or settings.OPENAI_REFINER_MODEL,
-        temperature=0.3,
+        temperature=settings.REFINER_TEMPERATURE,
         max_tokens=2048,
     )
 

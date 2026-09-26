@@ -8,6 +8,7 @@ from pathlib import Path
 from decouple import Csv, config
 
 from auto_tester.encryption_key import validate_fernet_key
+from auto_tester.env_casts import optional_float
 
 load_dotenv()
 
@@ -232,7 +233,12 @@ OPENAI_BASE_URL: str = config(
     cast=str,
 )
 OPENAI_VISION_MODEL: str = config("OPENAI_VISION_MODEL", default="gpt-4o", cast=str)
-OPENAI_TEMPERATURE: float = config("OPENAI_TEMPERATURE", default=0.1, cast=float)
+# Temperatures are optional: leave the env value empty to omit `temperature` from
+# the request, which reasoning models (gpt-5 family) require — they reject any
+# value other than their default.
+OPENAI_TEMPERATURE: float | None = config(
+    "OPENAI_TEMPERATURE", default="0.1", cast=optional_float
+)
 OPENAI_MAX_TOKENS: int = config("OPENAI_MAX_TOKENS", default=4096, cast=int)
 OPENAI_REQUEST_TIMEOUT: int = config("OPENAI_REQUEST_TIMEOUT", default=120, cast=int)
 
@@ -249,6 +255,12 @@ OPENAI_SUMMARIZER_MODEL: str = config(
 )
 OPENAI_REFINER_MODEL: str = config(
     "OPENAI_REFINER_MODEL", default="gpt-4o-mini", cast=str
+)
+SUMMARIZER_TEMPERATURE: float | None = config(
+    "SUMMARIZER_TEMPERATURE", default="0.0", cast=optional_float
+)
+REFINER_TEMPERATURE: float | None = config(
+    "REFINER_TEMPERATURE", default="0.3", cast=optional_float
 )
 
 # Agent
@@ -313,8 +325,8 @@ CONTEXT_SUMMARIZE_CHUNK_SIZE: int = config(
 
 # Orchestrator (sub-agent architecture)
 ORCHESTRATOR_MAX_TOKENS: int = config("ORCHESTRATOR_MAX_TOKENS", default=4096, cast=int)
-ORCHESTRATOR_TEMPERATURE: float = config(
-    "ORCHESTRATOR_TEMPERATURE", default=0.1, cast=float
+ORCHESTRATOR_TEMPERATURE: float | None = config(
+    "ORCHESTRATOR_TEMPERATURE", default="0.1", cast=optional_float
 )
 ORCHESTRATOR_MAX_SUBTASKS: int = config(
     "ORCHESTRATOR_MAX_SUBTASKS", default=30, cast=int
@@ -325,7 +337,9 @@ ORCHESTRATOR_MAX_RECOVERY_ATTEMPTS: int = config(
 
 # Sub-Agent
 SUB_AGENT_MAX_TOKENS: int = config("SUB_AGENT_MAX_TOKENS", default=2048, cast=int)
-SUB_AGENT_TEMPERATURE: float = config("SUB_AGENT_TEMPERATURE", default=0.1, cast=float)
+SUB_AGENT_TEMPERATURE: float | None = config(
+    "SUB_AGENT_TEMPERATURE", default="0.1", cast=optional_float
+)
 SUB_AGENT_MAX_ITERATIONS: int = config("SUB_AGENT_MAX_ITERATIONS", default=15, cast=int)
 SUB_AGENT_TIMEOUT_SECONDS: int = config(
     "SUB_AGENT_TIMEOUT_SECONDS", default=180, cast=int
