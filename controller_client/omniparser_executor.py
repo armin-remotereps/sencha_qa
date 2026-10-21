@@ -346,13 +346,6 @@ class _OmniParserModel:
         self._failure: OmniParserError | None = None
         self._readiness = _not_started_readiness()
 
-    def reset(self) -> None:
-        with self._model_lock, self._state_lock:
-            self._parser = None
-            self._load_result = None
-            self._failure = None
-            self._readiness = _not_started_readiness()
-
     def readiness(self) -> OmniParserReadiness:
         with self._state_lock:
             return self._readiness
@@ -592,11 +585,6 @@ def load_omniparser_model() -> OmniParserLoadResult:
 
 def get_omniparser_readiness() -> OmniParserReadiness:
     return _model.readiness()
-
-
-def reset_omniparser_model() -> None:
-    """Forget any loaded models and failures; intended for tests."""
-    _model.reset()
 
 
 def execute_find_element(payload: FindElementPayload) -> FindElementResultPayload:
