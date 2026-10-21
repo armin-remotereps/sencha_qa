@@ -22,6 +22,8 @@ from agents.services.orchestrator_prompts import (
     build_evaluate_system_prompt,
     build_plan_system_prompt,
     build_verdict_prompt,
+    final_step_indices,
+    format_attempt_lines,
 )
 from agents.services.sub_agent import run_sub_agent
 from agents.services.sub_task_budget import (
@@ -42,6 +44,7 @@ from agents.types import (
     OrchestratorResult,
     ScreenshotCallback,
     SubTask,
+    SubTaskAttempt,
     SubTaskResult,
 )
 
@@ -214,7 +217,7 @@ def _execute_sub_tasks(
     on_log: LogCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
 ) -> OrchestratorResult:
-    results: list[SubTaskResult] = []
+    attempts: list[SubTaskAttempt] = []
     state_lines: list[str] = []
     total_iterations = 0
     recovery_counts: dict[int, int] = {}
@@ -247,7 +250,7 @@ def _execute_sub_tasks(
             project_prompt=project_prompt,
         )
         total_iterations += result.iterations
-        results.append(result)
+        attempts.append(SubTaskAttempt(step_num=step_num, kind="step", result=result))
 
         _log(
             on_log,
@@ -285,7 +288,7 @@ def _execute_sub_tasks(
             sub_agent_config=sub_agent_config,
             system_info=system_info,
             project_prompt=project_prompt,
-            results=results,
+            attempts=attempts,
             state_lines=state_lines,
             recovery_counts=recovery_counts,
             max_recovery=max_recovery,
@@ -300,7 +303,7 @@ def _execute_sub_tasks(
         state_lines.append(f"Step {step_num}: FAILED (stopped) — {result.summary}")
         break
 
-    return _build_verdict(orchestrator_llm, results, total_iterations)
+    return _build_verdict(orchestrator_llm, attempts, total, total_iterations)
 
 
 def _attempt_recovery(
@@ -313,7 +316,7 @@ def _attempt_recovery(
     sub_agent_config: AgentConfig,
     system_info: dict[str, object] | None,
     project_prompt: str | None,
-    results: list[SubTaskResult],
+    attempts: list[SubTaskAttempt],
     state_lines: list[str],
     recovery_counts: dict[int, int],
     max_recovery: int,
@@ -322,8 +325,8 @@ def _attempt_recovery(
     if decision.action != "recover":
         return None
 
-    attempts = recovery_counts.get(step_index, 0)
-    if attempts >= max_recovery:
+    recoveries = recovery_counts.get(step_index, 0)
+    if recoveries >= max_recovery:
         _log(on_log, "[Orchestrator]   Max recovery attempts reached — stopping test.")
         return None
 
@@ -334,7 +337,7 @@ def _attempt_recovery(
         )
         return None
 
-    recovery_counts[step_index] = attempts + 1
+    recovery_counts[step_index] = recoveries + 1
 
     _log(
         on_log,
@@ -349,7 +352,9 @@ def _attempt_recovery(
         system_info=system_info,
         project_prompt=project_prompt,
     )
-    results.append(recovery_result)
+    attempts.append(
+        SubTaskAttempt(step_num=step_num, kind="recovery", result=recovery_result)
+    )
 
     _log(
         on_log,
@@ -367,13 +372,22 @@ def _attempt_recovery(
 
 def _build_verdict(
     orchestrator_llm: LLMConfig,
-    results: list[SubTaskResult],
+    attempts: list[SubTaskAttempt],
+    planned_steps: int,
     total_iterations: int,
 ) -> OrchestratorResult:
-    all_passed = all(r.status == "pass" for r in results)
+    # A step that failed, was recovered and then passed on retry counts as passed:
+    # only each planned step's final attempt decides, recoveries never do.
+    finals = _final_step_results(attempts)
+    all_passed = len(finals) == planned_steps and all(
+        r.status == "pass" for r in finals.values()
+    )
     overall_status: Literal["pass", "fail"] = "pass" if all_passed else "fail"
+    failed_steps = [num for num, r in finals.items() if r.status == "fail"]
+    error = finals[max(failed_steps)].summary if failed_steps else None
 
-    verdict_prompt = build_verdict_prompt(tuple(results))
+    attempts_tuple = tuple(attempts)
+    verdict_prompt = build_verdict_prompt(attempts_tuple, overall_status, planned_steps)
     verdict_messages = (
         ChatMessage(role="system", content="Summarize the test case execution."),
         ChatMessage(role="user", content=verdict_prompt),
@@ -387,27 +401,34 @@ def _build_verdict(
         logger.warning(
             "Verdict summary failed (%s), using deterministic summary", exc.kind
         )
-        summary = _deterministic_summary(results, overall_status)
+        summary = _deterministic_summary(attempts_tuple, overall_status, planned_steps)
 
     return OrchestratorResult(
         status=overall_status,
         summary=summary,
-        sub_task_results=tuple(results),
+        attempts=attempts_tuple,
         total_iterations=total_iterations,
+        error=error,
     )
 
 
+def _final_step_results(attempts: list[SubTaskAttempt]) -> dict[int, SubTaskResult]:
+    return {
+        step_num: attempts[index].result
+        for step_num, index in final_step_indices(attempts).items()
+    }
+
+
 def _deterministic_summary(
-    results: list[SubTaskResult],
+    attempts: tuple[SubTaskAttempt, ...],
     overall_status: Literal["pass", "fail"],
+    planned_steps: int,
 ) -> str:
     lines = [
         f"Test {'passed' if overall_status == 'pass' else 'failed'} "
         f"(AI summary unavailable)."
     ]
-    lines.extend(
-        f"Step {i}: {r.status.upper()} — {r.summary}" for i, r in enumerate(results, 1)
-    )
+    lines.extend(format_attempt_lines(attempts, planned_steps))
     return "\n".join(lines)
 
 
@@ -471,17 +492,11 @@ def _to_agent_result(orchestrator_result: OrchestratorResult) -> AgentResult:
 
     messages = (ChatMessage(role="assistant", content=orchestrator_result.summary),)
 
-    error: str | None = None
-    if orchestrator_result.status == "fail":
-        failed = [r for r in orchestrator_result.sub_task_results if r.status == "fail"]
-        if failed:
-            error = failed[-1].summary
-
     return AgentResult(
         stop_reason=stop_reason,
         iterations=orchestrator_result.total_iterations,
         messages=messages,
-        error=error,
+        error=orchestrator_result.error,
     )
 
 

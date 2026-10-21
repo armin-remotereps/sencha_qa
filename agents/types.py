@@ -141,6 +141,14 @@ class SubTaskResult:
 
 
 @dataclass(frozen=True)
+class SubTaskAttempt:
+    # 1-based planned step; a recovery carries the number of the step it recovers.
+    step_num: int
+    kind: Literal["step", "recovery"]
+    result: SubTaskResult
+
+
+@dataclass(frozen=True)
 class OrchestratorDecision:
     action: Literal["continue", "recover", "stop"]
     reason: str
@@ -151,8 +159,9 @@ class OrchestratorDecision:
 class OrchestratorResult:
     status: Literal["pass", "fail"]
     summary: str
-    sub_task_results: tuple[SubTaskResult, ...]
+    attempts: tuple[SubTaskAttempt, ...]
     total_iterations: int
+    error: str | None = None
 
 
 @dataclass(frozen=True)

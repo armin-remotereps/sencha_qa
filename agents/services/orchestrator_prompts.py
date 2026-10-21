@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from agents.types import SubTask, SubTaskResult
+from collections.abc import Sequence
+from typing import Literal
+
+from agents.types import SubTask, SubTaskAttempt, SubTaskResult
 
 
 def build_plan_system_prompt(
@@ -125,15 +128,68 @@ def build_evaluate_prompt(
     )
 
 
-def build_verdict_prompt(sub_task_results: tuple[SubTaskResult, ...]) -> str:
-    lines: list[str] = []
-    for i, result in enumerate(sub_task_results, 1):
-        error_part = f" | Error: {result.error}" if result.error else ""
-        lines.append(f"  {i}. [{result.status.upper()}] {result.summary}{error_part}")
-    results_text = "\n".join(lines)
-    return (
-        f"All sub-tasks have been executed. Results:\n{results_text}\n\n"
-        "Provide a final summary of the test case execution in 2-4 sentences. "
-        "State whether the test case PASSED or FAILED overall, and highlight "
-        "any key observations."
+def build_verdict_prompt(
+    attempts: tuple[SubTaskAttempt, ...],
+    overall_status: Literal["pass", "fail"],
+    planned_steps: int,
+) -> str:
+    results_text = "\n".join(
+        f"  {line}" for line in format_attempt_lines(attempts, planned_steps)
     )
+    outcome = "PASSED" if overall_status == "pass" else "FAILED"
+    return (
+        f"Sub-task execution finished. Results:\n{results_text}\n\n"
+        "Provide a final summary of the test case execution in 2-4 sentences. "
+        f"The overall result is {outcome}. It is decided from the final attempt of "
+        "each step, and recovery steps do not count. State that result and do not "
+        "contradict it. Highlight any key observations, including recoveries."
+    )
+
+
+def format_attempt_lines(
+    attempts: tuple[SubTaskAttempt, ...], planned_steps: int
+) -> list[str]:
+    final_index = final_step_indices(attempts)
+    step_attempt_counts: dict[int, int] = {}
+    lines: list[str] = []
+    for index, attempt in enumerate(attempts):
+        if attempt.kind == "recovery":
+            label = f"Recovery for step {attempt.step_num}"
+        else:
+            count = step_attempt_counts.get(attempt.step_num, 0) + 1
+            step_attempt_counts[attempt.step_num] = count
+            if final_index[attempt.step_num] != index:
+                label = (
+                    f"Step {attempt.step_num} (attempt {count}, superseded by retry)"
+                )
+            elif count > 1:
+                label = f"Step {attempt.step_num} (attempt {count}, final)"
+            else:
+                label = f"Step {attempt.step_num}"
+        lines.append(_format_result_line(label, attempt.result))
+
+    # Steps run in order from step 1, so the unrun ones are the tail of the plan.
+    ran_steps = len(final_index)
+    if ran_steps < planned_steps:
+        first_unrun = ran_steps + 1
+        unrun = (
+            f"Step {first_unrun}"
+            if first_unrun == planned_steps
+            else f"Steps {first_unrun}-{planned_steps}"
+        )
+        lines.append(f"{unrun}: not run")
+    return lines
+
+
+def final_step_indices(attempts: Sequence[SubTaskAttempt]) -> dict[int, int]:
+    """Map each planned step to the index of its final (last) step attempt."""
+    return {
+        attempt.step_num: index
+        for index, attempt in enumerate(attempts)
+        if attempt.kind == "step"
+    }
+
+
+def _format_result_line(label: str, result: SubTaskResult) -> str:
+    error_part = f" | Error: {result.error}" if result.error else ""
+    return f"{label} [{result.status.upper()}] {result.summary}{error_part}"
