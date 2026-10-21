@@ -7,7 +7,9 @@
      form             — TestRunCreateForm (name, test_case_ids — rendered
                          by hand below rather than through the form's own
                          MultipleHiddenInput widget, per the plan)
-     test_cases       — project.test_cases.order_by("title")[:200]
+     test_cases       — project.test_cases.order_by(*PICKER_CASE_ORDERING)[:200]:
+                        TestRail suite, then TestRail position (nulls
+                        last), then title
      total_case_count — project.test_cases.count(), for the "showing first
                         200" note
      wizard_step       — always 5 here

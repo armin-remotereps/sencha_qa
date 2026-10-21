@@ -28,6 +28,7 @@ from projects.testrail_run_import_services import (
 from projects.testrail_services import (
     TestRailNotConfiguredError,
     build_testrail_client,
+    rank_suite_cases,
     upsert_test_cases_from_testrail,
 )
 
@@ -101,6 +102,12 @@ def _run_testrail_import(upload: TestCaseUpload) -> None:
         cases = list(
             client.iter_cases(upload.testrail_project_id, upload.testrail_suite_id)
         )
+        positions = rank_suite_cases(
+            client,
+            project_id=upload.testrail_project_id,
+            suite_id=upload.testrail_suite_id,
+            cases=cases,
+        )
 
     upload.total_cases = len(cases)
     upload.save(update_fields=["total_cases", "updated_at"])
@@ -117,6 +124,8 @@ def _run_testrail_import(upload: TestCaseUpload) -> None:
         project=upload.project,
         cases=cases,
         mapper=mapper,
+        suite_id=upload.testrail_suite_id,
+        positions=positions,
         batch_size=50,
         progress_callback=on_batch_processed,
     )

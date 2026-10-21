@@ -92,6 +92,7 @@ from projects.models import (
     TestRunTestCaseStatus,
     UploadStatus,
 )
+from projects.run_case_order import PICKER_CASE_ORDERING, RUN_CASE_ORDERING
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,8 @@ def _clone_test_case(*, source: TestCase, target_project: Project) -> TestCase:
         steps=source.steps,
         expected=source.expected,
         is_converted=source.is_converted,
+        testrail_suite_id=source.testrail_suite_id,
+        testrail_position=source.testrail_position,
     )
 
 
@@ -219,7 +222,7 @@ class RunCasePicker:
 def get_run_case_picker(
     project: Project, *, limit: int = RUN_CASE_PICKER_LIMIT
 ) -> RunCasePicker:
-    cases = project.test_cases.order_by("title")
+    cases = project.test_cases.order_by(*PICKER_CASE_ORDERING)
     return RunCasePicker(test_cases=list(cases[:limit]), total_count=cases.count())
 
 
@@ -2011,16 +2014,17 @@ def get_test_run_for_project(test_run_id: int, project: Project) -> TestRun | No
 def get_case_position(pivot: TestRunTestCase) -> tuple[int, int]:
     """Return the pivot's 1-based position and total case count within its run.
 
-    Uses a stable `created_at, id` ordering rather than the failures-first
-    ordering `list_test_run_cases` uses for display, since that ordering
-    is not a stable position for a given pivot.
+    Uses the run order (`RUN_CASE_ORDERING`, the order cases execute in)
+    rather than the failures-first ordering `list_test_run_cases` uses for
+    display, since that ordering is not a stable position for a given pivot.
+    One query: a run holds at most a few hundred pivot IDs.
     """
-    earlier_count = pivot.test_run.pivot_entries.filter(
-        Q(created_at__lt=pivot.created_at)
-        | Q(created_at=pivot.created_at, id__lt=pivot.id)
-    ).count()
-    total = pivot.test_run.pivot_entries.count()
-    return earlier_count + 1, total
+    ordered_ids = list(
+        TestRunTestCase.objects.filter(test_run_id=pivot.test_run_id)
+        .order_by(*RUN_CASE_ORDERING)
+        .values_list("id", flat=True)
+    )
+    return ordered_ids.index(pivot.id) + 1, len(ordered_ids)
 
 
 def get_test_run_case_detail(pivot_id: int, project: Project) -> TestRunTestCase | None:
@@ -2043,7 +2047,10 @@ def get_test_run_case_detail(pivot_id: int, project: Project) -> TestRunTestCase
 def list_test_run_cases(
     *, test_run: TestRun, page: int, per_page: int
 ) -> Page[TestRunTestCase]:
-    """List a run's cases: failed, then blocked, then the rest; newest first within."""
+    """List a run's cases: failed, then blocked, then the rest.
+
+    TestRail order within each group.
+    """
     qs = (
         test_run.pivot_entries.select_related("test_case")
         .annotate(
@@ -2054,7 +2061,7 @@ def list_test_run_cases(
                 output_field=IntegerField(),
             )
         )
-        .order_by("_failure_priority", "-created_at")
+        .order_by("_failure_priority", *RUN_CASE_ORDERING)
     )
     paginator: Paginator[TestRunTestCase] = Paginator(qs, per_page)
     return paginator.get_page(page)
@@ -2139,7 +2146,9 @@ def _has_active_test_run(project: Project) -> bool:
 def start_test_run(test_run: TestRun) -> None:
     from projects.tasks import execute_test_run_case
 
-    pivot_ids = list(test_run.pivot_entries.values_list("id", flat=True))
+    pivot_ids = list(
+        test_run.pivot_entries.order_by(*RUN_CASE_ORDERING).values_list("id", flat=True)
+    )
     if not pivot_ids:
         raise ValueError("Cannot start a test run with no test cases.")
     if test_run.status != TestRunStatus.WAITING:
@@ -2237,7 +2246,7 @@ def list_failed_case_titles(test_run: TestRun) -> list[str]:
     """First failed case titles of a run, for the "What happened" summary."""
     return list(
         test_run.pivot_entries.filter(status=TestRunTestCaseStatus.FAILED)
-        .order_by("id")
+        .order_by(*RUN_CASE_ORDERING)
         .values_list("test_case__title", flat=True)[:NARRATIVE_TITLE_LIMIT]
     )
 
@@ -2246,7 +2255,7 @@ def list_blocked_case_titles(test_run: TestRun) -> list[str]:
     """First blocked case titles of a run, for the "What happened" summary."""
     return list(
         test_run.pivot_entries.filter(status=TestRunTestCaseStatus.BLOCKED)
-        .order_by("id")
+        .order_by(*RUN_CASE_ORDERING)
         .values_list("test_case__title", flat=True)[:NARRATIVE_TITLE_LIMIT]
     )
 

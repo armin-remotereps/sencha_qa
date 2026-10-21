@@ -28,6 +28,7 @@ from projects.models import (
     TestRunTestCase,
     TestRunTestCaseStatus,
 )
+from projects.run_case_order import RUN_CASE_ORDERING
 from projects.services import _test_run_group
 from projects.testrail_client import (
     TestRailClient,
@@ -153,7 +154,9 @@ def _is_changed(result: PlannedResult) -> bool:
 
 def plan_testrail_push(test_run: TestRun, *, links_base_url: str) -> TestRailPushPlan:
     """Build the push plan for a run: one query over its pivots and cases."""
-    pivots = test_run.pivot_entries.select_related("test_case").order_by("id")
+    pivots = test_run.pivot_entries.select_related("test_case").order_by(
+        *RUN_CASE_ORDERING
+    )
     outcomes = [
         _plan_pivot(pivot, test_run=test_run, links_base_url=links_base_url)
         for pivot in pivots

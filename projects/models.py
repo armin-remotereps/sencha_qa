@@ -229,6 +229,9 @@ class TestCase(models.Model):
         related_name="test_cases",
     )
     testrail_id = models.CharField(max_length=50, blank=True, default="")
+    # TestRail suite order, written by imports only (never by TestCaseData).
+    testrail_suite_id = models.PositiveIntegerField(null=True, blank=True)
+    testrail_position = models.PositiveIntegerField(null=True, blank=True)
     title = models.CharField(max_length=500)
     template = models.CharField(max_length=100, default="Test Case")
     type = models.CharField(

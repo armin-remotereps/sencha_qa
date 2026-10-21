@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable
 from urllib.parse import SplitResult, urlsplit
@@ -15,14 +16,18 @@ from projects.exceptions import (
     TestRailRunReferenceError,
 )
 from projects.models import Project, TestCaseUpload, UploadSource, UploadStatus
+from projects.testrail_case_order import append_unranked
 from projects.testrail_client import TestRailCase, TestRailError, TestRailRun
 from projects.testrail_mapping import TestRailFieldMapper
 from projects.testrail_services import (
     TestRailNotConfiguredError,
     TestRailUpsertCounts,
     build_testrail_client,
+    fetch_testrail_case_ranks,
     upsert_test_cases_from_testrail,
 )
+
+logger = logging.getLogger(__name__)
 
 IMPORT_TESTRAIL_RUN_CASES_TASK = "projects.tasks.import_testrail_run_cases"
 
@@ -240,9 +245,28 @@ def import_testrail_run_cases(
             client.get_case_types(), client.get_priorities()
         )
         cases = _unique_by_case_id(list(client.iter_run_cases(run_id)))
-
-    if not cases:
-        raise TestRailError(f"TestRail run R{run_id} has no tests.", 0)
+        if not cases:
+            raise TestRailError(f"TestRail run R{run_id} has no tests.", 0)
+        # The run's cases take their *suite* ranks; get_tests order is the
+        # fallback for cases the suite listing does not return.
+        suite_ranks: dict[int, int] = {}
+        if upload.testrail_project_id is not None:
+            try:
+                suite_ranks = fetch_testrail_case_ranks(
+                    client,
+                    project_id=upload.testrail_project_id,
+                    suite_id=upload.testrail_suite_id,
+                )
+            except TestRailError:
+                # Without a suite id a multi-suite project rejects the listing;
+                # import anyway and keep get_tests order rather than fail.
+                if upload.testrail_suite_id is not None:
+                    raise
+                logger.warning(
+                    "TestRail run R%s has no suite id; keeping get_tests order.",
+                    run_id,
+                )
+        positions = append_unranked(suite_ranks, [case.id for case in cases])
 
     upload.total_cases = len(cases)
     upload.save(update_fields=["total_cases", "updated_at"])
@@ -259,6 +283,8 @@ def import_testrail_run_cases(
         project=upload.project,
         cases=cases,
         mapper=mapper,
+        suite_id=upload.testrail_suite_id,
+        positions=positions,
         batch_size=50,
         progress_callback=on_batch_processed,
     )

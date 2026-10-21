@@ -51,6 +51,13 @@ class TestRailPriority:
 
 
 @dataclass(frozen=True)
+class TestRailSection:
+    id: int
+    parent_id: int | None
+    display_order: int
+
+
+@dataclass(frozen=True)
 class TestRailStep:
     content: str
     expected: str
@@ -69,6 +76,8 @@ class TestRailCase:
     steps: str
     expected: str
     steps_separated: tuple[TestRailStep, ...]
+    section_id: int | None
+    display_order: int | None
 
 
 @dataclass(frozen=True)
@@ -102,6 +111,14 @@ def _str(value: Any) -> str:  # raw JSON field value, type varies by payload
 
 def _optional_int(value: Any) -> int | None:  # raw JSON field, type varies by payload
     return None if value is None else int(value)
+
+
+def _order_int(value: Any) -> int | None:  # raw JSON field, only used for ordering
+    """Like `_optional_int`, but a malformed value means "no order", not a failure."""
+    try:
+        return _optional_int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _parse_steps_separated(
@@ -144,7 +161,22 @@ def _case_from_fields(
         steps=_str(raw.get("custom_steps")),
         expected=_str(raw.get("custom_expected")),
         steps_separated=_parse_steps_separated(raw.get("custom_steps_separated")),
+        section_id=_order_int(raw.get("section_id")),
+        display_order=_order_int(raw.get("display_order")),
     )
+
+
+def _parse_section(raw: dict[str, Any]) -> TestRailSection:  # raw JSON section object
+    return TestRailSection(
+        id=int(raw["id"]),
+        parent_id=_order_int(raw.get("parent_id")),
+        display_order=_order_int(raw.get("display_order")) or 0,
+    )
+
+
+def _suite_filter(suite_id: int | None) -> str:
+    """The `&suite_id=` query part; omitted for single-suite-mode projects."""
+    return "" if suite_id is None else f"&suite_id={suite_id}"
 
 
 def _parse_run(raw: dict[str, Any]) -> TestRailRun:  # raw JSON run object
@@ -237,12 +269,24 @@ class TestRailClient:
             for raw in self._paginate(f"get_suites/{project_id}", "suites")
         ]
 
-    def iter_cases(self, project_id: int, suite_id: int) -> Iterator[TestRailCase]:
+    def iter_cases(
+        self, project_id: int, suite_id: int | None
+    ) -> Iterator[TestRailCase]:
         method = (
-            f"get_cases/{project_id}&suite_id={suite_id}&limit={TESTRAIL_PAGE_SIZE}"
+            f"get_cases/{project_id}{_suite_filter(suite_id)}"
+            f"&limit={TESTRAIL_PAGE_SIZE}"
         )
         for raw in self._paginate(method, "cases"):
             yield _parse_case(raw)
+
+    def get_sections(
+        self, project_id: int, suite_id: int | None
+    ) -> list[TestRailSection]:
+        method = (
+            f"get_sections/{project_id}{_suite_filter(suite_id)}"
+            f"&limit={TESTRAIL_PAGE_SIZE}"
+        )
+        return [_parse_section(raw) for raw in self._paginate(method, "sections")]
 
     def iter_run_cases(self, run_id: int) -> Iterator[TestRailCase]:
         """Yield the case behind each test in a run; tests carry the case fields."""
