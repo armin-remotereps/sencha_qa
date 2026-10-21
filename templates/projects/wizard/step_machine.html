@@ -102,7 +102,7 @@
     </template>
   </div>
 
-  {% include "partials/advanced_diagnostics.html" with project=project %}
+  {% include "partials/advanced_diagnostics.html" %}
 
   {% url 'projects:setup_cases' project.id as back_url %}
   <div class="wizard-actions">

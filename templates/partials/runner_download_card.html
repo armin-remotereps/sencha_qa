@@ -19,7 +19,9 @@
   </form>
   <p class="hint">
     ZIP archive, pre-configured for {{ project.name }}. The connection settings are
-    already inside &mdash; there is no key to copy.
+    already inside. Already have a Test Runner installed for another project? Switch it
+    with the Connection key card on the <a href="{% url 'projects:environment' project.id %}">Environment page</a>
+    instead of downloading again.
   </p>
   <div class="alert alert-warning alert-flush">
     <span class="alert-icon" aria-hidden="true">&#9888;</span>
