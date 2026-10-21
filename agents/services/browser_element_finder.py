@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from agents.exceptions import ElementNotFoundError
 from agents.services.llm_client import send_chat_completion
 from agents.types import ChatMessage, LLMConfig
+from controller_client.protocol import BrowserName
 from projects.services import controller_browser_get_elements
 
 logger = logging.getLogger(__name__)
@@ -22,8 +23,10 @@ def find_element_index(
     project_id: int,
     description: str,
     vision_config: LLMConfig,
+    *,
+    browser: BrowserName,
 ) -> int:
-    result = controller_browser_get_elements(project_id)
+    result = controller_browser_get_elements(project_id, browser=browser)
     element_list = result["content"]
 
     if not element_list.strip():

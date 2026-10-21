@@ -7,6 +7,7 @@ from agents.services.prompt_parts import (
     build_tool_guidelines,
     build_tool_taxonomy,
 )
+from controller_client.protocol import BROWSER_DISPLAY_NAMES, BrowserName
 
 
 def build_sub_agent_system_prompt(
@@ -15,6 +16,7 @@ def build_sub_agent_system_prompt(
     state_description: str,
     *,
     timeout_seconds: int,
+    current_browser: BrowserName,
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
 ) -> str:
@@ -24,6 +26,7 @@ def build_sub_agent_system_prompt(
         build_tool_taxonomy(),
         build_environment_context(system_info=system_info),
         build_tool_guidelines(),
+        _build_current_browser_section(current_browser),
         _build_time_budget_section(timeout_seconds),
         _build_result_format_instructions(),
     ]
@@ -42,6 +45,14 @@ def _build_sub_agent_persona(
         system_info=system_info,
         role="a strict QA step executor",
         job="execute ONE test step exactly as described and report the result honestly",
+    )
+
+
+def _build_current_browser_section(current_browser: BrowserName) -> str:
+    return (
+        f"Current browser for this case: {BROWSER_DISPLAY_NAMES[current_browser]} "
+        f"({current_browser.value}). Browser tools keep using it; do not pick a "
+        "different browser unless this step explicitly asks for one."
     )
 
 

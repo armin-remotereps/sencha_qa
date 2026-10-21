@@ -28,6 +28,7 @@ from controller_client.config import ClientConfig
 from controller_client.exceptions import (
     AuthenticationError,
     BrowserElementNotFoundError,
+    BrowserNotInstalledError,
     ConnectionTerminatedError,
     ExecutionError,
     HandshakeError,
@@ -76,6 +77,7 @@ from controller_client.protocol import (
     parse_browser_download_payload,
     parse_browser_hover_payload,
     parse_browser_navigate_payload,
+    parse_browser_target_payload,
     parse_browser_type_payload,
     parse_check_app_installed_payload,
     parse_click_payload,
@@ -120,6 +122,15 @@ _MAX_BACKOFF_EXPONENT: Final[int] = 16
 MessageHandler: TypeAlias = Callable[
     [str, dict[str, object]], Coroutine[Any, Any, None]
 ]
+
+
+def _browser_error_code(exc: Exception, fallback: ErrorCode) -> ErrorCode:
+    """Map a browser action failure to the error code the server acts on."""
+    if isinstance(exc, BrowserNotInstalledError):
+        return ErrorCode.BROWSER_NOT_INSTALLED
+    if isinstance(exc, BrowserElementNotFoundError):
+        return ErrorCode.ELEMENT_NOT_FOUND
+    return fallback
 
 
 class ControllerClient:
@@ -689,7 +700,9 @@ class ControllerClient:
             )
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _browser_error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_browser_click(
         self, request_id: str, data: dict[str, object]
@@ -700,10 +713,10 @@ class ControllerClient:
                 execute_browser_click, self._browser_session, payload
             )
             await self._send_action_result(request_id, result)
-        except BrowserElementNotFoundError as e:
-            await self._send_error(request_id, ErrorCode.ELEMENT_NOT_FOUND, str(e))
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _browser_error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_browser_type(
         self, request_id: str, data: dict[str, object]
@@ -714,10 +727,10 @@ class ControllerClient:
                 execute_browser_type, self._browser_session, payload
             )
             await self._send_action_result(request_id, result)
-        except BrowserElementNotFoundError as e:
-            await self._send_error(request_id, ErrorCode.ELEMENT_NOT_FOUND, str(e))
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _browser_error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_browser_hover(
         self, request_id: str, data: dict[str, object]
@@ -728,54 +741,66 @@ class ControllerClient:
                 execute_browser_hover, self._browser_session, payload
             )
             await self._send_action_result(request_id, result)
-        except BrowserElementNotFoundError as e:
-            await self._send_error(request_id, ErrorCode.ELEMENT_NOT_FOUND, str(e))
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _browser_error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_browser_get_elements(
         self, request_id: str, data: dict[str, object]
     ) -> None:
+        payload = parse_browser_target_payload(data)
         try:
             result = await asyncio.to_thread(
-                execute_browser_get_elements, self._browser_session
+                execute_browser_get_elements, self._browser_session, payload
             )
             await self._send_browser_content_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _browser_error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_browser_get_page_content(
         self, request_id: str, data: dict[str, object]
     ) -> None:
+        payload = parse_browser_target_payload(data)
         try:
             result = await asyncio.to_thread(
-                execute_browser_get_page_content, self._browser_session
+                execute_browser_get_page_content, self._browser_session, payload
             )
             await self._send_browser_content_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _browser_error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_browser_get_url(
         self, request_id: str, data: dict[str, object]
     ) -> None:
+        payload = parse_browser_target_payload(data)
         try:
             result = await asyncio.to_thread(
-                execute_browser_get_url, self._browser_session
+                execute_browser_get_url, self._browser_session, payload
             )
             await self._send_browser_content_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _browser_error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_browser_take_screenshot(
         self, request_id: str, data: dict[str, object]
     ) -> None:
+        payload = parse_browser_target_payload(data)
         try:
             result = await asyncio.to_thread(
-                execute_browser_take_screenshot, self._browser_session
+                execute_browser_take_screenshot, self._browser_session, payload
             )
             await self._send_screenshot_response(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.SCREENSHOT_FAILED, str(e))
+            await self._send_error(
+                request_id, _browser_error_code(e, ErrorCode.SCREENSHOT_FAILED), str(e)
+            )
 
     async def _handle_browser_download(
         self, request_id: str, data: dict[str, object]
@@ -787,7 +812,9 @@ class ControllerClient:
             )
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _browser_error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_browser_list_downloads(
         self, request_id: str, data: dict[str, object]

@@ -36,6 +36,7 @@ from agents.types import (
     AgentConfig,
     AgentResult,
     AgentStopReason,
+    BrowserSelection,
     CancellationCheck,
     ChatMessage,
     LLMConfig,
@@ -91,12 +92,17 @@ def run_orchestrator(
     sub_agent_config = _build_sub_agent_execution_config(
         sub_agent_llm, vision_llm, on_log, on_screenshot, cancellation_check
     )
+    # One selection per case (one run_orchestrator call per case), shared by
+    # every sub-agent and recovery sub-agent, so the browser the case asked for
+    # on its first navigate stays selected and the next case starts on Chromium.
+    browser_selection = BrowserSelection()
 
     orchestrator_result = _execute_sub_tasks(
         orchestrator_llm=orchestrator_llm,
         sub_tasks=sub_tasks,
         project_id=project_id,
         sub_agent_config=sub_agent_config,
+        browser_selection=browser_selection,
         bounds=bounds,
         system_info=system_info,
         project_prompt=project_prompt,
@@ -211,6 +217,7 @@ def _execute_sub_tasks(
     sub_tasks: tuple[SubTask, ...],
     project_id: int,
     sub_agent_config: AgentConfig,
+    browser_selection: BrowserSelection,
     bounds: TimeoutBounds,
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
@@ -246,6 +253,7 @@ def _execute_sub_tasks(
             state_description,
             project_id,
             config=_config_for_sub_task(sub_agent_config, sub_task),
+            browser_selection=browser_selection,
             system_info=system_info,
             project_prompt=project_prompt,
         )
@@ -286,6 +294,7 @@ def _execute_sub_tasks(
             state_description=state_description,
             project_id=project_id,
             sub_agent_config=sub_agent_config,
+            browser_selection=browser_selection,
             system_info=system_info,
             project_prompt=project_prompt,
             attempts=attempts,
@@ -314,6 +323,7 @@ def _attempt_recovery(
     state_description: str,
     project_id: int,
     sub_agent_config: AgentConfig,
+    browser_selection: BrowserSelection,
     system_info: dict[str, object] | None,
     project_prompt: str | None,
     attempts: list[SubTaskAttempt],
@@ -349,6 +359,7 @@ def _attempt_recovery(
         state_description,
         project_id,
         config=_config_for_sub_task(sub_agent_config, decision.recovery_task),
+        browser_selection=browser_selection,
         system_info=system_info,
         project_prompt=project_prompt,
     )

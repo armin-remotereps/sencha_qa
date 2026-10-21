@@ -37,6 +37,9 @@ def build_plan_system_prompt(
         "run...' NOT just 'Run...'). If a prior step opened an application, subsequent steps "
         "must reference that application explicitly (e.g., 'In the already-open VS Code "
         "window, ...').\n"
+        "- If the test case names a browser (e.g. 'in Firefox', 'using Edge', 'in "
+        "Safari'), keep that browser name in the description of the first sub-task that "
+        "opens a web page.\n"
     )
 
     if project_prompt:

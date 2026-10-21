@@ -57,5 +57,18 @@ class TestRunnerUnresponsiveError(TestRunnerUnavailableError):
     """A runner-local action got no reply while the runner still held the connection."""
 
 
+class BrowserUnavailableError(InfrastructureError):
+    """The browser a case asked for cannot be driven on the test machine.
+
+    ``safe_message`` is shown in the UI and pushed to TestRail; ``detail`` holds
+    the runner's own text (local paths, OS user name) for the server log only.
+    """
+
+    def __init__(self, safe_message: str, *, detail: str = "") -> None:
+        super().__init__(safe_message)
+        self.safe_message = safe_message
+        self.detail = detail
+
+
 class VisualEngineError(ControllerActionError, InfrastructureError):
     """The visual engine (OmniParser) failed or is not ready."""

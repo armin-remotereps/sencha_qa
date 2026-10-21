@@ -13,6 +13,7 @@ from agents.types import (
     ToolContext,
     ToolResult,
 )
+from controller_client.protocol import BrowserName
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +165,24 @@ def _handle_browser_navigate(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
     url = str(arguments.get("url", ""))
-    return tools_controller.browser_navigate(context.project_id, url=url)
+    raw_browser = arguments.get("browser")
+    browser: BrowserName | None = None
+    if raw_browser is not None and raw_browser != "":
+        try:
+            browser = BrowserName(str(raw_browser))
+        except ValueError:
+            allowed = ", ".join(b.value for b in BrowserName)
+            return ToolResult(
+                tool_call_id="",
+                content=f"Invalid browser '{raw_browser}'. Allowed values: {allowed}.",
+                is_error=True,
+            )
+    return tools_controller.browser_navigate(
+        context.project_id,
+        url=url,
+        browser=browser,
+        selection=context.browser_selection,
+    )
 
 
 def _handle_browser_click(
@@ -178,6 +196,7 @@ def _handle_browser_click(
     return tools_controller.browser_click(
         context.project_id,
         description=description,
+        selection=context.browser_selection,
         vision_config=context.vision_config,
     )
 
@@ -194,6 +213,7 @@ def _handle_browser_type(
     return tools_controller.browser_type(
         context.project_id,
         description=description,
+        selection=context.browser_selection,
         text=text,
         vision_config=context.vision_config,
     )
@@ -210,6 +230,7 @@ def _handle_browser_hover(
     return tools_controller.browser_hover(
         context.project_id,
         description=description,
+        selection=context.browser_selection,
         vision_config=context.vision_config,
     )
 
@@ -217,13 +238,17 @@ def _handle_browser_hover(
 def _handle_browser_get_page_content(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
-    return tools_controller.browser_get_page_content(context.project_id)
+    return tools_controller.browser_get_page_content(
+        context.project_id, selection=context.browser_selection
+    )
 
 
 def _handle_browser_get_url(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
-    return tools_controller.browser_get_url(context.project_id)
+    return tools_controller.browser_get_url(
+        context.project_id, selection=context.browser_selection
+    )
 
 
 def _handle_browser_download(
@@ -232,7 +257,10 @@ def _handle_browser_download(
     url = str(arguments.get("url", ""))
     save_path = str(arguments.get("save_path", ""))
     return tools_controller.browser_download(
-        context.project_id, url=url, save_path=save_path
+        context.project_id,
+        url=url,
+        save_path=save_path,
+        selection=context.browser_selection,
     )
 
 
@@ -253,6 +281,7 @@ def _handle_browser_take_screenshot(
     return tools_controller.browser_take_screenshot(
         context.project_id,
         question=question,
+        selection=context.browser_selection,
         vision_config=context.vision_config,
         on_screenshot=context.on_screenshot,
     )

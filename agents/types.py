@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Literal, Protocol
 
+from controller_client.protocol import DEFAULT_BROWSER, BrowserName
+
 
 class ToolCategory(Enum):
     CONTROLLER = "controller"
@@ -164,9 +166,21 @@ class OrchestratorResult:
     error: str | None = None
 
 
+@dataclass
+class BrowserSelection:
+    """The browser a case drives; mutable on purpose.
+
+    One instance per test case, shared by every sub-agent's ``ToolContext`` so
+    a browser picked on the first navigate stays selected for the whole case.
+    """
+
+    current: BrowserName = DEFAULT_BROWSER
+
+
 @dataclass(frozen=True)
 class ToolContext:
     project_id: int
+    browser_selection: BrowserSelection
     summarizer_config: LLMConfig | None = None
     vision_config: LLMConfig | None = None
     on_screenshot: ScreenshotCallback | None = None

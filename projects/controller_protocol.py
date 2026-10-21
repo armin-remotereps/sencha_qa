@@ -50,40 +50,45 @@ class RunCommandActionEvent(BaseActionEvent):
 
 class BrowserNavigateActionEvent(BaseActionEvent):
     url: str
+    browser: str
 
 
 class BrowserClickActionEvent(BaseActionEvent):
     element_index: int
+    browser: str
 
 
 class BrowserTypeActionEvent(BaseActionEvent):
     element_index: int
     text: str
+    browser: str
 
 
 class BrowserHoverActionEvent(BaseActionEvent):
     element_index: int
+    browser: str
 
 
 class BrowserGetElementsActionEvent(BaseActionEvent):
-    pass
+    browser: str
 
 
 class BrowserGetPageContentActionEvent(BaseActionEvent):
-    pass
+    browser: str
 
 
 class BrowserGetUrlActionEvent(BaseActionEvent):
-    pass
+    browser: str
 
 
 class BrowserTakeScreenshotActionEvent(BaseActionEvent):
-    pass
+    browser: str
 
 
 class BrowserDownloadActionEvent(BaseActionEvent):
     url: str
     save_path: str
+    browser: str
 
 
 class BrowserListDownloadsActionEvent(BaseActionEvent):
@@ -168,15 +173,15 @@ class ActionTypeRegistry:
         "controller.key_press": ("keys",),
         "controller.screenshot": (),
         "controller.run_command": ("command",),
-        "controller.browser_navigate": ("url",),
-        "controller.browser_click": ("element_index",),
-        "controller.browser_type": ("element_index", "text"),
-        "controller.browser_hover": ("element_index",),
-        "controller.browser_get_elements": (),
-        "controller.browser_get_page_content": (),
-        "controller.browser_get_url": (),
-        "controller.browser_take_screenshot": (),
-        "controller.browser_download": ("url", "save_path"),
+        "controller.browser_navigate": ("url", "browser"),
+        "controller.browser_click": ("element_index", "browser"),
+        "controller.browser_type": ("element_index", "text", "browser"),
+        "controller.browser_hover": ("element_index", "browser"),
+        "controller.browser_get_elements": ("browser",),
+        "controller.browser_get_page_content": ("browser",),
+        "controller.browser_get_url": ("browser",),
+        "controller.browser_take_screenshot": ("browser",),
+        "controller.browser_download": ("url", "save_path", "browser"),
         "controller.browser_list_downloads": (),
         "controller.start_interactive_cmd": ("command",),
         "controller.send_input": ("session_id", "input_text"),

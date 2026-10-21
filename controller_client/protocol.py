@@ -11,7 +11,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.3.0"
+CLIENT_VERSION: Final[str] = "0.4.0"
 
 
 class CloseCode(IntEnum):
@@ -73,17 +73,64 @@ class ClientCapability(StrEnum):
     INTERACTIVE_COMMANDS_V1 = "interactive_commands_v1"
     CLEANUP_ENVIRONMENT_V1 = "cleanup_environment_v1"
     OMNIPARSER_STATUS_V1 = "omniparser_status_v1"
+    # Optional: browser actions carry a ``browser`` field naming the browser to
+    # drive. Older controllers ignore the field and always launch Chromium.
+    BROWSER_SELECTION_V1 = "browser_selection_v1"
 
 
 # What this client advertises in its handshake.
 CLIENT_CAPABILITIES: Final[tuple[ClientCapability, ...]] = tuple(ClientCapability)
 
 # What the server insists on; a controller missing any of them would
-# authenticate fine and then silently time out on first use. Identical to
-# CLIENT_CAPABILITIES today; they diverge once a capability becomes optional.
+# authenticate fine and then silently time out on first use. Optional
+# capabilities (BROWSER_SELECTION_V1) are checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
-    ClientCapability
+    {
+        ClientCapability.FIND_ELEMENT_LOCAL_V1,
+        ClientCapability.INTERACTIVE_COMMANDS_V1,
+        ClientCapability.CLEANUP_ENVIRONMENT_V1,
+        ClientCapability.OMNIPARSER_STATUS_V1,
+    }
 )
+
+
+class BrowserName(StrEnum):
+    """Browsers the controller can drive; values are Playwright's own names.
+
+    ``chrome`` and ``msedge`` are Playwright channels of the Chromium engine
+    and use the browser installed on the test machine.
+    """
+
+    CHROMIUM = "chromium"
+    FIREFOX = "firefox"
+    WEBKIT = "webkit"
+    CHROME = "chrome"
+    MSEDGE = "msedge"
+
+
+class BrowserEngine(StrEnum):
+    CHROMIUM = "chromium"
+    FIREFOX = "firefox"
+    WEBKIT = "webkit"
+
+
+BROWSER_ENGINES: Final[dict[BrowserName, BrowserEngine]] = {
+    BrowserName.CHROMIUM: BrowserEngine.CHROMIUM,
+    BrowserName.FIREFOX: BrowserEngine.FIREFOX,
+    BrowserName.WEBKIT: BrowserEngine.WEBKIT,
+    BrowserName.CHROME: BrowserEngine.CHROMIUM,
+    BrowserName.MSEDGE: BrowserEngine.CHROMIUM,
+}
+
+BROWSER_DISPLAY_NAMES: Final[dict[BrowserName, str]] = {
+    BrowserName.CHROMIUM: "Chromium",
+    BrowserName.FIREFOX: "Firefox",
+    BrowserName.WEBKIT: "WebKit (Safari engine)",
+    BrowserName.CHROME: "Google Chrome",
+    BrowserName.MSEDGE: "Microsoft Edge",
+}
+
+DEFAULT_BROWSER: Final[BrowserName] = BrowserName.CHROMIUM
 
 
 class OmniParserState(StrEnum):
@@ -116,6 +163,8 @@ class ErrorCode(StrEnum):
     # Sent by the server to an action waiter when the controller socket dropped
     # before the reply arrived.
     CONTROLLER_DISCONNECTED = "CONTROLLER_DISCONNECTED"
+    # The requested browser is not installed on the controller machine.
+    BROWSER_NOT_INSTALLED = "BROWSER_NOT_INSTALLED"
 
 
 @dataclass(frozen=True)
@@ -224,28 +273,40 @@ class CommandResultPayload:
 @dataclass(frozen=True)
 class BrowserNavigatePayload:
     url: str
+    browser: BrowserName
 
 
 @dataclass(frozen=True)
 class BrowserClickPayload:
     element_index: int
+    browser: BrowserName
 
 
 @dataclass(frozen=True)
 class BrowserTypePayload:
     element_index: int
     text: str
+    browser: BrowserName
 
 
 @dataclass(frozen=True)
 class BrowserHoverPayload:
     element_index: int
+    browser: BrowserName
 
 
 @dataclass(frozen=True)
 class BrowserDownloadPayload:
     url: str
     save_path: str
+    browser: BrowserName
+
+
+@dataclass(frozen=True)
+class BrowserTargetPayload:
+    """Payload of the browser actions that only need to know which browser."""
+
+    browser: BrowserName
 
 
 @dataclass(frozen=True)
@@ -503,15 +564,26 @@ def parse_run_command_payload(data: dict[str, object]) -> RunCommandPayload:
     )
 
 
+def _extract_browser(data: dict[str, object]) -> BrowserName:
+    # A server older than this controller sends no browser: keep Chromium.
+    raw = _extract_str(data, "browser", default=DEFAULT_BROWSER.value)
+    try:
+        return BrowserName(raw)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown browser: {raw}") from e
+
+
 def parse_browser_navigate_payload(data: dict[str, object]) -> BrowserNavigatePayload:
     return BrowserNavigatePayload(
         url=_extract_str(data, "url"),
+        browser=_extract_browser(data),
     )
 
 
 def parse_browser_click_payload(data: dict[str, object]) -> BrowserClickPayload:
     return BrowserClickPayload(
         element_index=_extract_int(data, "element_index"),
+        browser=_extract_browser(data),
     )
 
 
@@ -519,12 +591,14 @@ def parse_browser_type_payload(data: dict[str, object]) -> BrowserTypePayload:
     return BrowserTypePayload(
         element_index=_extract_int(data, "element_index"),
         text=_extract_str(data, "text"),
+        browser=_extract_browser(data),
     )
 
 
 def parse_browser_hover_payload(data: dict[str, object]) -> BrowserHoverPayload:
     return BrowserHoverPayload(
         element_index=_extract_int(data, "element_index"),
+        browser=_extract_browser(data),
     )
 
 
@@ -532,7 +606,12 @@ def parse_browser_download_payload(data: dict[str, object]) -> BrowserDownloadPa
     return BrowserDownloadPayload(
         url=_extract_str(data, "url"),
         save_path=_extract_str(data, "save_path", default=""),
+        browser=_extract_browser(data),
     )
+
+
+def parse_browser_target_payload(data: dict[str, object]) -> BrowserTargetPayload:
+    return BrowserTargetPayload(browser=_extract_browser(data))
 
 
 def _extract_bool(

@@ -1,5 +1,6 @@
 import base64
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass, field
@@ -21,14 +22,23 @@ from playwright.sync_api import (
     sync_playwright,
 )
 
-from controller_client.exceptions import BrowserElementNotFoundError, ExecutionError
+from controller_client.exceptions import (
+    BrowserElementNotFoundError,
+    BrowserNotInstalledError,
+    ExecutionError,
+)
 from controller_client.protocol import (
+    BROWSER_DISPLAY_NAMES,
+    BROWSER_ENGINES,
     ActionResultPayload,
     BrowserClickPayload,
     BrowserContentResultPayload,
     BrowserDownloadPayload,
+    BrowserEngine,
     BrowserHoverPayload,
+    BrowserName,
     BrowserNavigatePayload,
+    BrowserTargetPayload,
     BrowserTypePayload,
     ScreenshotResponsePayload,
 )
@@ -147,6 +157,75 @@ _COLLECT_ELEMENTS_JS = """
 
 _LIST_DOWNLOADS_WAIT_S: float = 300.0
 
+# Playwright 1.50 launch errors that mean the browser is simply not on this
+# machine: a bundled engine never downloaded ("Executable doesn't exist at"),
+# a system channel not installed ("Chromium distribution 'msedge' is not found
+# at"), or a browser this OS has no build of ("... is not supported on").
+# Re-check these on every Playwright bump.
+_NOT_INSTALLED_PATTERN: re.Pattern[str] = re.compile(
+    r"Executable doesn't exist"
+    r"|distribution '[^']*' is not found"
+    r"|is not supported on"
+)
+
+
+# Channels of the Chromium engine that Playwright finds at the browser's normal
+# system install path; `playwright install` would reinstall the system browser.
+_SYSTEM_BROWSERS: frozenset[BrowserName] = frozenset(
+    {BrowserName.CHROME, BrowserName.MSEDGE}
+)
+
+
+def browser_install_hint(browser: BrowserName) -> str:
+    if browser in _SYSTEM_BROWSERS:
+        return (
+            f"Install {BROWSER_DISPLAY_NAMES[browser]} on the test machine the "
+            "normal way; the Test Runner uses the system install."
+        )
+    return f"Run `playwright install {browser.value}` inside the Test Runner venv."
+
+
+def launch_browser(
+    playwright: Playwright,
+    browser: BrowserName,
+    *,
+    headless: bool,
+    channel: str | None = None,
+) -> Browser:
+    """Launch one of the supported browsers.
+
+    ``chrome`` and ``msedge`` are channels of the Chromium engine. ``channel``
+    overrides the channel for the bundled engines (diagnostics pass
+    ``chromium`` so headless checks the same binary as a headed run).
+
+    Raises BrowserNotInstalledError when the browser is missing; any other
+    launch error is raised unchanged.
+    """
+    engine = BROWSER_ENGINES[browser]
+    if engine is BrowserEngine.CHROMIUM:
+        browser_type = playwright.chromium
+        # Playwright already adds --no-sandbox (chromium_sandbox is off).
+        args: list[str] | None = ["--disable-gpu"]
+        if browser in _SYSTEM_BROWSERS:
+            channel = browser.value
+    elif engine is BrowserEngine.FIREFOX:
+        browser_type = playwright.firefox
+        args = None
+    else:
+        browser_type = playwright.webkit
+        args = None
+    try:
+        return browser_type.launch(headless=headless, channel=channel, args=args)
+    except Exception as e:
+        reason = str(e)
+        if _NOT_INSTALLED_PATTERN.search(reason) is None:
+            raise
+        first_line = reason.strip().splitlines()[0] if reason.strip() else ""
+        raise BrowserNotInstalledError(
+            f"{BROWSER_DISPLAY_NAMES[browser]} is not installed on this test "
+            f"machine ({first_line}). {browser_install_hint(browser)}"
+        ) from e
+
 
 @dataclass
 class DownloadRecord:
@@ -167,22 +246,30 @@ class BrowserSession:
         self._browser: Browser | None = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._browser_name: BrowserName | None = None
         self._element_frames: dict[int, Frame] = {}
         self._downloads: list[DownloadRecord] = []
         self._downloads_lock: threading.Lock = threading.Lock()
 
-    def ensure_page(self) -> Page:
+    def ensure_page(self, browser: BrowserName) -> Page:
+        if self._browser_name is not None and self._browser_name is not browser:
+            # Switching browser drops the old one with its page state; the
+            # Playwright driver stays up for the new launch.
+            self._close_browser()
+
         if self._page is not None and not self._page.is_closed():
             return self._page
 
         if self._playwright is None:
             self._playwright = sync_playwright().start()
 
-        if self._browser is None or not self._browser.is_connected():
-            self._browser = self._playwright.chromium.launch(
-                headless=False,
-                args=["--no-sandbox", "--disable-gpu"],
-            )
+        if self._browser is not None and not self._browser.is_connected():
+            # Crashed or closed by hand: its context is dead too.
+            self._close_browser()
+
+        if self._browser is None:
+            self._browser = launch_browser(self._playwright, browser, headless=False)
+            self._browser_name = browser
 
         if self._context is None:
             self._context = self._browser.new_context(
@@ -203,6 +290,17 @@ class BrowserSession:
         return self._element_frames.get(element_index)
 
     def close(self) -> None:
+        self._close_browser()
+        self.clear_downloads()
+
+        if self._playwright is not None:
+            try:
+                self._playwright.stop()
+            except Exception:
+                logger.debug("Failed to stop playwright", exc_info=True)
+            self._playwright = None
+
+    def _close_browser(self) -> None:
         if self._context is not None:
             try:
                 self._context.close()
@@ -217,16 +315,9 @@ class BrowserSession:
                 logger.debug("Failed to close browser", exc_info=True)
             self._browser = None
 
-        if self._playwright is not None:
-            try:
-                self._playwright.stop()
-            except Exception:
-                logger.debug("Failed to stop playwright", exc_info=True)
-            self._playwright = None
-
+        self._browser_name = None
         self._page = None
         self._element_frames = {}
-        self.clear_downloads()
 
     def clear_downloads(self) -> None:
         with self._downloads_lock:
@@ -274,8 +365,10 @@ def execute_browser_navigate(
 ) -> ActionResultPayload:
     start = time.monotonic()
     try:
-        page = session.ensure_page()
+        page = session.ensure_page(payload.browser)
         page.goto(payload.url, wait_until="domcontentloaded")
+    except ExecutionError:
+        raise
     except Exception as e:
         raise ExecutionError(f"Browser navigate failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -286,7 +379,9 @@ def execute_browser_navigate(
     )
 
 
-def _element_frame(session: BrowserSession, element_index: int) -> Frame:
+def _element_frame(
+    session: BrowserSession, browser: BrowserName, element_index: int
+) -> Frame:
     """Return the frame an element index was stamped in.
 
     Indices are handed out across every frame on the page, so an index from an
@@ -297,21 +392,23 @@ def _element_frame(session: BrowserSession, element_index: int) -> Frame:
     frame = session.frame_for_index(element_index)
     if frame is not None and not frame.is_detached():
         return frame
-    return session.ensure_page().main_frame
+    return session.ensure_page(browser).main_frame
 
 
 def _element_selector(element_index: int) -> str:
     return f'[data-at-idx="{element_index}"]'
 
 
-def _locate_element(session: BrowserSession, element_index: int) -> Locator:
+def _locate_element(
+    session: BrowserSession, browser: BrowserName, element_index: int
+) -> Locator:
     """Resolve an element index, failing at once when it is not on the page.
 
     Playwright would otherwise wait out its 30 s default for the selector to
     appear, which is as long as the server waits for our reply, so the agent
     saw a bare timeout instead of learning the element was gone.
     """
-    locator = _element_frame(session, element_index).locator(
+    locator = _element_frame(session, browser, element_index).locator(
         _element_selector(element_index)
     )
     if locator.count() == 0:
@@ -335,10 +432,10 @@ def execute_browser_click(
 ) -> ActionResultPayload:
     start = time.monotonic()
     try:
-        _locate_element(session, payload.element_index).click(
+        _locate_element(session, payload.browser, payload.element_index).click(
             timeout=_ACTION_TIMEOUT_MS
         )
-    except BrowserElementNotFoundError:
+    except ExecutionError:
         raise
     except PlaywrightTimeoutError as e:
         raise ExecutionError(
@@ -359,10 +456,10 @@ def execute_browser_type(
 ) -> ActionResultPayload:
     start = time.monotonic()
     try:
-        _locate_element(session, payload.element_index).fill(
+        _locate_element(session, payload.browser, payload.element_index).fill(
             payload.text, timeout=_ACTION_TIMEOUT_MS
         )
-    except BrowserElementNotFoundError:
+    except ExecutionError:
         raise
     except PlaywrightTimeoutError as e:
         raise ExecutionError(
@@ -383,10 +480,10 @@ def execute_browser_hover(
 ) -> ActionResultPayload:
     start = time.monotonic()
     try:
-        _locate_element(session, payload.element_index).hover(
+        _locate_element(session, payload.browser, payload.element_index).hover(
             timeout=_ACTION_TIMEOUT_MS
         )
-    except BrowserElementNotFoundError:
+    except ExecutionError:
         raise
     except PlaywrightTimeoutError as e:
         raise ExecutionError(
@@ -425,11 +522,11 @@ def _frame_label(frame: Frame, main_frame: Frame) -> str:
 
 
 def execute_browser_get_elements(
-    session: BrowserSession,
+    session: BrowserSession, payload: BrowserTargetPayload
 ) -> BrowserContentResultPayload:
     start = time.monotonic()
     try:
-        page = session.ensure_page()
+        page = session.ensure_page(payload.browser)
         collected: list[object] = []
         index_frames: dict[int, Frame] = {}
 
@@ -448,6 +545,8 @@ def execute_browser_get_elements(
 
         session.set_element_frames(index_frames)
         content = _build_element_list(collected)
+    except ExecutionError:
+        raise
     except Exception as e:
         raise ExecutionError(f"Browser get elements failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -459,12 +558,14 @@ def execute_browser_get_elements(
 
 
 def execute_browser_get_page_content(
-    session: BrowserSession,
+    session: BrowserSession, payload: BrowserTargetPayload
 ) -> BrowserContentResultPayload:
     start = time.monotonic()
     try:
-        page = session.ensure_page()
+        page = session.ensure_page(payload.browser)
         content = page.inner_text("body")
+    except ExecutionError:
+        raise
     except Exception as e:
         raise ExecutionError(f"Browser get page content failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -476,12 +577,14 @@ def execute_browser_get_page_content(
 
 
 def execute_browser_get_url(
-    session: BrowserSession,
+    session: BrowserSession, payload: BrowserTargetPayload
 ) -> BrowserContentResultPayload:
     start = time.monotonic()
     try:
-        page = session.ensure_page()
+        page = session.ensure_page(payload.browser)
         content = page.url
+    except ExecutionError:
+        raise
     except Exception as e:
         raise ExecutionError(f"Browser get URL failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -493,16 +596,18 @@ def execute_browser_get_url(
 
 
 def execute_browser_take_screenshot(
-    session: BrowserSession,
+    session: BrowserSession, payload: BrowserTargetPayload
 ) -> ScreenshotResponsePayload:
     start = time.monotonic()
     try:
-        page = session.ensure_page()
+        page = session.ensure_page(payload.browser)
         screenshot_bytes = page.screenshot(type="png")
         image_base64 = base64.b64encode(screenshot_bytes).decode("utf-8")
         viewport = page.viewport_size
         width = viewport["width"] if viewport else 1280
         height = viewport["height"] if viewport else 720
+    except ExecutionError:
+        raise
     except Exception as e:
         raise ExecutionError(f"Browser screenshot failed: {e}") from e
     return ScreenshotResponsePayload(
@@ -518,8 +623,15 @@ def execute_browser_download(
     session: BrowserSession, payload: BrowserDownloadPayload
 ) -> ActionResultPayload:
     start = time.monotonic()
+    # Kept out of the download try: a launch timeout must not reach
+    # _handle_download_timeout, which needs the page.
     try:
-        page = session.ensure_page()
+        page = session.ensure_page(payload.browser)
+    except ExecutionError:
+        raise
+    except Exception as e:
+        raise ExecutionError(f"Browser download failed: {e}") from e
+    try:
         with page.expect_download(timeout=_DOWNLOAD_TIMEOUT_MS) as download_info:
             page.goto(payload.url)
         download = download_info.value

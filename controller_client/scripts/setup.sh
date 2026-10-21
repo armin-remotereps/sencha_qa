@@ -102,7 +102,9 @@ fi
 echo "[4/9] Installing remaining dependencies..."
 "$PROJECT_DIR/.venv/bin/pip" install --quiet -r "$PROJECT_DIR/requirements.txt"
 
-# Install Playwright browsers
+# Install Playwright browsers. The default set covers Chromium, Firefox and
+# WebKit; Google Chrome and Microsoft Edge are used from their normal system
+# install, so install those the usual way if test cases need them.
 echo "[5/9] Installing Playwright browsers..."
 "$PROJECT_DIR/.venv/bin/playwright" install --with-deps
 
@@ -156,3 +158,7 @@ echo "  controller_client/.venv/bin/python -m controller_client.main"
 echo ""
 echo "To check the OmniParser setup end to end (dependencies, weights, screenshot, model load, one inference):"
 echo "  controller_client/.venv/bin/python -m controller_client.diagnose"
+echo ""
+echo "Chromium, Firefox and WebKit are installed. For Google Chrome or Microsoft Edge, install them normally."
+echo "To check which browsers the Test Runner can launch:"
+echo "  controller_client/.venv/bin/python -m controller_client.diagnose --browsers"

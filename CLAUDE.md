@@ -82,6 +82,7 @@ scripts/verify_server_image.sh          # build the server image and assert it c
 # Controller client diagnostics (run on the controller machine, inside its venv,
 # from the directory that contains controller_client/)
 python -m controller_client.diagnose    # imports, weights, screenshot, device, model load, one inference, payload size
+python -m controller_client.diagnose --browsers   # launch each browser (or --browsers firefox,msedge) and report what is missing
 
 # Formatting and typing — same checks pre-commit runs
 pre-commit run --all-files

@@ -11,6 +11,7 @@ from agents.types import (
     AgentConfig,
     AgentResult,
     AgentStopReason,
+    BrowserSelection,
     SubTask,
     SubTaskResult,
     ToolContext,
@@ -30,6 +31,7 @@ def run_sub_agent(
     project_id: int,
     *,
     config: AgentConfig,
+    browser_selection: BrowserSelection,
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
 ) -> SubTaskResult:
@@ -38,6 +40,7 @@ def run_sub_agent(
         sub_task.expected_result,
         state_description,
         timeout_seconds=config.timeout_seconds,
+        current_browser=browser_selection.current,
         system_info=system_info,
         project_prompt=project_prompt,
     )
@@ -46,6 +49,7 @@ def run_sub_agent(
 
     context = ToolContext(
         project_id=project_id,
+        browser_selection=browser_selection,
         summarizer_config=summarizer_config,
         vision_config=config.vision_llm,
         on_screenshot=config.on_screenshot,

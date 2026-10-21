@@ -71,6 +71,10 @@ class BlockedReason(models.TextChoices):
     VISUAL_ENGINE = "visual_engine", "Visual engine unavailable"
     AI_SERVICE = "ai_service", "AI service error"
     TIME_LIMIT = "time_limit", "Case time limit reached"
+    BROWSER_UNAVAILABLE = (
+        "browser_unavailable",
+        "Browser unavailable on the test machine",
+    )
     INTERNAL_ERROR = "internal_error", "Internal error"
 
 

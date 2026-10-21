@@ -23,6 +23,19 @@
     with the Connection key card on the <a href="{% url 'projects:environment' project.id %}">Environment page</a>
     instead of downloading again.
   </p>
+  <div class="alert alert-info">
+    <span class="alert-icon" aria-hidden="true">&#9432;</span>
+    <div>
+      <strong>Browsers</strong>
+      <p>
+        Chromium, Firefox, and WebKit come with the Test Runner. Google Chrome and
+        Microsoft Edge must be installed normally on the test machine (Edge ships with
+        Windows). Cases run in Chromium unless the test case names a browser, for example
+        &ldquo;Open the app in Firefox&rdquo;.
+      </p>
+      <p>Run <code>python -m controller_client.diagnose --browsers</code> on the test machine to check them.</p>
+    </div>
+  </div>
   <div class="alert alert-warning alert-flush">
     <span class="alert-icon" aria-hidden="true">&#9888;</span>
     <div>

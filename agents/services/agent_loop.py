@@ -24,6 +24,7 @@ from agents.types import (
     AgentConfig,
     AgentResult,
     AgentStopReason,
+    BrowserSelection,
     CancellationCheck,
     ChatMessage,
     LLMConfig,
@@ -128,6 +129,8 @@ def run_agent(
 
     context = ToolContext(
         project_id=project_id,
+        # Outside a test run there is no case to share a selection with.
+        browser_selection=BrowserSelection(),
         summarizer_config=summarizer_config,
         vision_config=config.vision_llm,
         on_screenshot=config.on_screenshot,

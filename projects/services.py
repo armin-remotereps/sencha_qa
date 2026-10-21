@@ -53,6 +53,7 @@ from auto_tester.celery import app as celery_app
 from controller_client.protocol import (
     CLIENT_VERSION,
     REQUIRED_CLIENT_CAPABILITIES,
+    BrowserName,
     ErrorCode,
     OmniParserState,
     OmniParserStatusPayload,
@@ -67,6 +68,7 @@ from projects.controller_reconnect_services import (
     wait_for_controller,
 )
 from projects.exceptions import (
+    BrowserUnavailableError,
     ControllerActionError,
     ControllerNotConnectedError,
     ControllerReconnectTimeoutError,
@@ -952,6 +954,13 @@ _VISUAL_ENGINE_ERROR_CODES = frozenset(
     {ErrorCode.FIND_ELEMENT_FAILED, ErrorCode.OMNIPARSER_NOT_READY}
 )
 
+_BROWSER_NOT_INSTALLED_MESSAGE = (
+    "The browser this case asked for is not installed on the test machine. "
+    "Install it (Chrome/Edge: install normally; Firefox/WebKit: "
+    "`playwright install firefox webkit` in the Test Runner venv), or run "
+    "`python -m controller_client.diagnose --browsers` there."
+)
+
 
 def _raise_for_error_reply(reply: dict[str, Any], event_type: str) -> None:
     """Turn a controller error reply into an exception.
@@ -975,6 +984,10 @@ def _raise_for_error_reply(reply: dict[str, Any], event_type: str) -> None:
         message = f"{message} ({details})"
     if code in _VISUAL_ENGINE_ERROR_CODES:
         raise VisualEngineError(message)
+    if code == ErrorCode.BROWSER_NOT_INSTALLED:
+        # The runner's text can carry local paths; it stays in the server log.
+        logger.warning("Controller could not launch a browser: %s", message)
+        raise BrowserUnavailableError(_BROWSER_NOT_INSTALLED_MESSAGE, detail=message)
     raise ControllerActionError(message)
 
 
@@ -1559,10 +1572,16 @@ def _build_browser_content_result(reply: dict[str, Any]) -> BrowserContentResult
 def controller_browser_navigate(
     project_id: int,
     url: str,
+    *,
+    browser: BrowserName,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.browser_navigate", timeout, url=url
+        project_id,
+        "controller.browser_navigate",
+        timeout,
+        url=url,
+        browser=browser.value,
     )
     return _build_action_result(reply)
 
@@ -1570,6 +1589,8 @@ def controller_browser_navigate(
 def controller_browser_click(
     project_id: int,
     element_index: int,
+    *,
+    browser: BrowserName,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
@@ -1577,6 +1598,7 @@ def controller_browser_click(
         "controller.browser_click",
         timeout,
         element_index=element_index,
+        browser=browser.value,
     )
     return _build_action_result(reply)
 
@@ -1585,6 +1607,8 @@ def controller_browser_type(
     project_id: int,
     element_index: int,
     text: str,
+    *,
+    browser: BrowserName,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
@@ -1593,6 +1617,7 @@ def controller_browser_type(
         timeout,
         element_index=element_index,
         text=text,
+        browser=browser.value,
     )
     return _build_action_result(reply)
 
@@ -1600,6 +1625,8 @@ def controller_browser_type(
 def controller_browser_hover(
     project_id: int,
     element_index: int,
+    *,
+    browser: BrowserName,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
@@ -1607,36 +1634,52 @@ def controller_browser_hover(
         "controller.browser_hover",
         timeout,
         element_index=element_index,
+        browser=browser.value,
     )
     return _build_action_result(reply)
 
 
 def controller_browser_get_elements(
     project_id: int,
+    *,
+    browser: BrowserName,
     timeout: float = 30.0,
 ) -> BrowserContentResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.browser_get_elements", timeout
+        project_id,
+        "controller.browser_get_elements",
+        timeout,
+        browser=browser.value,
     )
     return _build_browser_content_result(reply)
 
 
 def controller_browser_get_page_content(
     project_id: int,
+    *,
+    browser: BrowserName,
     timeout: float = 30.0,
 ) -> BrowserContentResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.browser_get_page_content", timeout
+        project_id,
+        "controller.browser_get_page_content",
+        timeout,
+        browser=browser.value,
     )
     return _build_browser_content_result(reply)
 
 
 def controller_browser_get_url(
     project_id: int,
+    *,
+    browser: BrowserName,
     timeout: float = 30.0,
 ) -> BrowserContentResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.browser_get_url", timeout
+        project_id,
+        "controller.browser_get_url",
+        timeout,
+        browser=browser.value,
     )
     return _build_browser_content_result(reply)
 
@@ -1645,10 +1688,17 @@ def controller_browser_download(
     project_id: int,
     url: str,
     save_path: str = "",
+    *,
+    browser: BrowserName,
     timeout: float = 120.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.browser_download", timeout, url=url, save_path=save_path
+        project_id,
+        "controller.browser_download",
+        timeout,
+        url=url,
+        save_path=save_path,
+        browser=browser.value,
     )
     return _build_action_result(reply)
 
@@ -1747,10 +1797,15 @@ def _safe_cleanup(project_id: int, *, wait_for_runner: bool) -> None:
 
 def controller_browser_take_screenshot(
     project_id: int,
+    *,
+    browser: BrowserName,
     timeout: float = 30.0,
 ) -> ScreenshotResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.browser_take_screenshot", timeout
+        project_id,
+        "controller.browser_take_screenshot",
+        timeout,
+        browser=browser.value,
     )
     return _build_screenshot_result(reply, "take a browser screenshot")
 

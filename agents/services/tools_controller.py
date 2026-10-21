@@ -14,6 +14,7 @@ from agents.services.verified_element_actions import (
 )
 from agents.services.vision_qa import answer_screenshot_question
 from agents.types import (
+    BrowserSelection,
     CancellationCheck,
     LLMConfig,
     LogCallback,
@@ -21,6 +22,8 @@ from agents.types import (
     ScreenshotCallback,
     ToolResult,
 )
+from controller_client.protocol import BROWSER_DISPLAY_NAMES, BrowserName
+from projects.browser_selection_services import ensure_runner_supports_browser
 from projects.exceptions import ControllerActionError
 from projects.services import (
     ActionResult,
@@ -385,12 +388,27 @@ def check_app_installed(project_id: int, *, app_name: str) -> ToolResult:
 # ============================================================================
 
 
-def browser_navigate(project_id: int, *, url: str) -> ToolResult:
+def browser_navigate(
+    project_id: int,
+    *,
+    url: str,
+    browser: BrowserName | None,
+    selection: BrowserSelection,
+) -> ToolResult:
     def _do() -> ToolResult:
-        controller_browser_navigate(project_id, url)
+        if browser is not None and browser != selection.current:
+            # Raises BrowserUnavailableError (an InfrastructureError, so
+            # safe_tool_call re-raises it and the case ends Blocked) when the
+            # Test Runner is too old to drive anything but Chromium. The
+            # selection is updated before the dispatch: a browser that turns
+            # out not to be installed blocks the case too, so nothing needs
+            # rolling back.
+            ensure_runner_supports_browser(project_id, browser)
+            selection.current = browser
+        controller_browser_navigate(project_id, url, browser=selection.current)
         return ToolResult(
             tool_call_id="",
-            content=f"Navigated browser to {url}",
+            content=f"Navigated {BROWSER_DISPLAY_NAMES[selection.current]} to {url}",
             is_error=False,
         )
 
@@ -402,10 +420,13 @@ def browser_click(
     *,
     description: str,
     vision_config: LLMConfig,
+    selection: BrowserSelection,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        idx = find_element_index(project_id, description, vision_config)
-        controller_browser_click(project_id, idx)
+        idx = find_element_index(
+            project_id, description, vision_config, browser=selection.current
+        )
+        controller_browser_click(project_id, idx, browser=selection.current)
         return ToolResult(
             tool_call_id="",
             content=f"Clicked browser element [{idx}]: {description}",
@@ -421,10 +442,13 @@ def browser_type(
     description: str,
     text: str,
     vision_config: LLMConfig,
+    selection: BrowserSelection,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        idx = find_element_index(project_id, description, vision_config)
-        controller_browser_type(project_id, idx, text)
+        idx = find_element_index(
+            project_id, description, vision_config, browser=selection.current
+        )
+        controller_browser_type(project_id, idx, text, browser=selection.current)
         return ToolResult(
             tool_call_id="",
             content=f"Typed '{text}' into browser element [{idx}]: {description}",
@@ -439,10 +463,13 @@ def browser_hover(
     *,
     description: str,
     vision_config: LLMConfig,
+    selection: BrowserSelection,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        idx = find_element_index(project_id, description, vision_config)
-        controller_browser_hover(project_id, idx)
+        idx = find_element_index(
+            project_id, description, vision_config, browser=selection.current
+        )
+        controller_browser_hover(project_id, idx, browser=selection.current)
         return ToolResult(
             tool_call_id="",
             content=f"Hovered browser element [{idx}]: {description}",
@@ -452,9 +479,13 @@ def browser_hover(
     return safe_tool_call("browser_hover", _do)
 
 
-def browser_get_page_content(project_id: int) -> ToolResult:
+def browser_get_page_content(
+    project_id: int, *, selection: BrowserSelection
+) -> ToolResult:
     def _do() -> ToolResult:
-        result = controller_browser_get_page_content(project_id)
+        result = controller_browser_get_page_content(
+            project_id, browser=selection.current
+        )
         return ToolResult(
             tool_call_id="",
             content=result["content"],
@@ -464,9 +495,9 @@ def browser_get_page_content(project_id: int) -> ToolResult:
     return safe_tool_call("browser_get_page_content", _do)
 
 
-def browser_get_url(project_id: int) -> ToolResult:
+def browser_get_url(project_id: int, *, selection: BrowserSelection) -> ToolResult:
     def _do() -> ToolResult:
-        result = controller_browser_get_url(project_id)
+        result = controller_browser_get_url(project_id, browser=selection.current)
         return ToolResult(
             tool_call_id="",
             content=result["content"],
@@ -476,9 +507,17 @@ def browser_get_url(project_id: int) -> ToolResult:
     return safe_tool_call("browser_get_url", _do)
 
 
-def browser_download(project_id: int, *, url: str, save_path: str = "") -> ToolResult:
+def browser_download(
+    project_id: int,
+    *,
+    url: str,
+    save_path: str = "",
+    selection: BrowserSelection,
+) -> ToolResult:
     def _do() -> ToolResult:
-        result = controller_browser_download(project_id, url, save_path)
+        result = controller_browser_download(
+            project_id, url, save_path, browser=selection.current
+        )
         return ToolResult(
             tool_call_id="",
             content=result["message"],
@@ -505,10 +544,13 @@ def browser_take_screenshot(
     *,
     question: str,
     vision_config: LLMConfig,
+    selection: BrowserSelection,
     on_screenshot: ScreenshotCallback | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        result = controller_browser_take_screenshot(project_id)
+        result = controller_browser_take_screenshot(
+            project_id, browser=selection.current
+        )
         image_base64 = result["image_base64"]
         if on_screenshot is not None:
             on_screenshot(image_base64, "browser_take_screenshot")

@@ -10,6 +10,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 
 from agents.exceptions import AIServiceError
 from projects.exceptions import (
+    BrowserUnavailableError,
     ControllerReconnectTimeoutError,
     TestRunnerDisconnectedError,
     TestRunnerUnresponsiveError,
@@ -24,6 +25,7 @@ _REASON_BY_TYPE: tuple[tuple[type[BaseException], BlockedReason], ...] = (
     (TestRunnerDisconnectedError, BlockedReason.RUNNER_DISCONNECTED),
     (TestRunnerUnresponsiveError, BlockedReason.RUNNER_UNRESPONSIVE),
     (VisualEngineError, BlockedReason.VISUAL_ENGINE),
+    (BrowserUnavailableError, BlockedReason.BROWSER_UNAVAILABLE),
     (AIServiceError, BlockedReason.AI_SERVICE),
     (SoftTimeLimitExceeded, BlockedReason.TIME_LIMIT),
 )
@@ -42,6 +44,7 @@ def blocked_message(exc: BaseException, reason: BlockedReason) -> str:
     ``AIServiceError.message`` is built by the LLM client without URLs, headers
     or keys. Visual-engine and unexpected errors show fixed text, never the
     exception's, which may contain local paths or anything else.
+    ``BrowserUnavailableError.safe_message`` is built by the server.
     """
     if reason == BlockedReason.TIME_LIMIT:
         text = "The case ran past its time limit before the agent reached a verdict."
@@ -51,6 +54,9 @@ def blocked_message(exc: BaseException, reason: BlockedReason) -> str:
             "The visual engine on the test machine failed or was not ready. "
             "Check Advanced diagnostics on the Environment page."
         )
+    elif isinstance(exc, BrowserUnavailableError):
+        # ``safe_message`` is fixed server text; the runner's ``detail`` is log-only.
+        text = exc.safe_message
     elif reason == BlockedReason.INTERNAL_ERROR:
         text = f"Unexpected server error ({type(exc).__name__}). See the server log."
     elif isinstance(exc, AIServiceError):

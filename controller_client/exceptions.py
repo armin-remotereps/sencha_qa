@@ -46,6 +46,10 @@ class BrowserElementNotFoundError(ExecutionError):
     """The element index being acted on is not present on the page."""
 
 
+class BrowserNotInstalledError(ExecutionError):
+    """The requested browser is not installed on this machine."""
+
+
 class InputBlockedError(ExecutionError):
     """Synthesized input would be discarded by the OS before reaching the screen."""
 

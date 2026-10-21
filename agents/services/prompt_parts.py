@@ -83,7 +83,8 @@ def build_environment_context(
         return (
             "ENVIRONMENT:\n"
             "- This is a macOS system.\n"
-            "- Chromium browser is available via browser tools (Playwright). "
+            "- A browser is available via browser tools (Playwright): chromium (default), "
+            "firefox, webkit, chrome (Google Chrome), msedge (Microsoft Edge). "
             "Use browser_navigate to open a URL.\n"
             "- Package manager: Use `brew` for CLI packages. GUI apps are typically "
             "in /Applications/ and can be installed via .dmg or `brew install --cask`.\n"
@@ -99,7 +100,8 @@ def build_environment_context(
         return (
             "ENVIRONMENT:\n"
             "- This is a Windows system.\n"
-            "- Chromium browser is available via browser tools (Playwright). "
+            "- A browser is available via browser tools (Playwright): chromium (default), "
+            "firefox, webkit, chrome (Google Chrome), msedge (Microsoft Edge). "
             "Use browser_navigate to open a URL.\n"
             "- Package manager: Use `winget` or `choco` if available. Programs are "
             "typically installed via .exe or .msi installers.\n"
@@ -114,7 +116,8 @@ def build_environment_context(
     return (
         "ENVIRONMENT:\n"
         "- The desktop (XFCE4) is already running on display :0\n"
-        "- Chromium browser is available via browser tools (Playwright). "
+        "- A browser is available via browser tools (Playwright): chromium (default), "
+        "firefox, webkit, chrome (Google Chrome), msedge (Microsoft Edge). "
         "Use browser_navigate to open a URL — no need to launch a browser manually.\n"
         "- Before running privileged commands, check your user with `whoami` and "
         "whether `sudo` is available. Adapt your commands accordingly.\n"
@@ -131,6 +134,7 @@ def build_tool_guidelines() -> str:
             "TOOL USAGE:",
             build_desktop_tool_examples(),
             build_browser_tool_examples(),
+            build_browser_selection_rule(),
             build_tool_selection_rules(),
             build_search_tool_examples(),
             build_utility_tool_examples(),
@@ -174,6 +178,7 @@ def build_browser_tool_examples() -> str:
     return (
         "BROWSER TOOLS (for web page interactions — required for anything inside a web page):\n"
         '- browser_navigate(url="https://example.com") — open a URL in the browser\n'
+        '- browser_navigate(url="https://example.com", browser="firefox") — open a URL in Firefox, only when the test case names that browser\n'
         '- browser_click(description="the Login button") — click a web page element\n'
         '- browser_type(description="the email input", text="user@example.com") — type into a web element\n'
         '- browser_hover(description="the Settings menu") — hover over a web element\n'
@@ -182,6 +187,19 @@ def build_browser_tool_examples() -> str:
         '- browser_take_screenshot(question="What does the page show?") — capture browser and ask about it\n'
         '- browser_download(url="https://example.com/file.exe") — download a file from a direct URL\n'
         '- browser_download(url="https://example.com/file.exe", save_path="/home/user/file.exe") — download to a specific path'
+    )
+
+
+def build_browser_selection_rule() -> str:
+    return (
+        "BROWSER SELECTION:\n"
+        "- If the test case names a browser (e.g. 'in Firefox', 'using Edge', 'Safari' "
+        "means webkit), pass browser=... on your first browser_navigate and keep using "
+        "it; it stays selected for the rest of the case. Otherwise omit it to use "
+        "Chromium.\n"
+        "- Do not switch browser unless the test case says so.\n"
+        "- If the test case names a browser that is not in the list (chromium, firefox, "
+        "webkit, chrome, msedge), stay on Chromium and mention that in your summary."
     )
 
 

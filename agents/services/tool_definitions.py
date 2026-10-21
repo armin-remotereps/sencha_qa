@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agents.types import ToolCategory, ToolDefinition, ToolParameter
+from controller_client.protocol import BrowserName
 
 
 def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
@@ -265,6 +266,18 @@ def get_browser_tool_definitions() -> tuple[ToolDefinition, ...]:
                     type="string",
                     description="The URL to navigate to.",
                     required=True,
+                ),
+                ToolParameter(
+                    name="browser",
+                    type="string",
+                    description=(
+                        "Browser to open the page in. Only set this when the test "
+                        "case names a browser; otherwise omit (Chromium). Changing "
+                        "it closes the current browser, its page state and any "
+                        "download still in progress."
+                    ),
+                    required=False,
+                    enum=tuple(browser.value for browser in BrowserName),
                 ),
             ),
         ),
