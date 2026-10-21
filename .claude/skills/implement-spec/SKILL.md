@@ -1,4 +1,11 @@
-## Task implementation flow:
+---
+name: implement-spec
+description: Use when the user hands over a spec from docs/specs/ (a file, or a directory for big features) to plan and implement.
+---
+
+# Implementing a spec
+
+Feature specs live in `docs/specs/`, implementation docs in `docs/impl/`.
 
 1. I will provide you a task, feature, or a bug. It is on a file (or directory for big features) on directory docs/specs
 2. You will plan it using plan mode, will ask any technical or business questions from me (I'm a staff engineer so I can answer all your questions)

@@ -26,10 +26,6 @@ celery -A auto_tester beat -l info --scheduler django_celery_beat.schedulers:Dat
 mypy .                                  # runs with strict=True, excludes venv|migrations|controller_client
 controller_client/.venv/bin/mypy --config-file controller_client/setup.cfg controller_client/  # separate venv/config
 
-# Formatting
-black .
-isort .
-
 # Unit tests — always scope Django's test command to real Django apps (bare
 # `manage.py test` walks the whole project tree by default and will also try
 # to import controller_client/tests/, which needs its own separate venv)
@@ -45,9 +41,7 @@ scripts/verify_server_image.sh          # build the server image and assert it c
 # from the directory that contains controller_client/)
 python -m controller_client.diagnose    # imports, weights, screenshot, device, model load, one inference, payload size
 
-# Migrations (use /migrate skill for the full workflow)
-python manage.py makemigrations
-python manage.py migrate
+# Migrations: use the /migrate skill for the full workflow
 
 # Dependencies — NEVER use pip freeze. Find on PyPI, add to requirements.txt as x~=1.0.1, then:
 pip install -r requirements.txt
@@ -55,37 +49,15 @@ pip install -r requirements.txt
 
 ## Architecture
 
-### Django Apps
+### controller_client
 
-- **auto_tester/** — Django project config (settings, celery, asgi, urls)
-- **accounts/** — Custom user model (`CustomUser`, email-based auth, no username), login/logout views, `EmailBackend`
-- **projects/** — Core domain: Projects, TestCases, TestCaseUploads, TestRuns, TestRunTestCases, TestRunScreenshots. Contains views, services, tasks, models, consumers, forms, controller protocol
-- **agents/** — AI agent system: agent loop, tool definitions, tool registry, LLM client, vision QA, OmniParser integration, context/output summarizers, search tools
-- **dashboard/** — Landing/home page
 - **controller_client/** — Standalone Python client that runs on target machines. Connects to the server via WebSocket, receives action commands (click, type, screenshot, browser actions), and replies with results. Also runs OmniParser locally in-process (own venv/dependencies, own strict mypy config) to parse screenshots for element-finding — no central OmniParser service exists; the server dispatches a `find_element` action to the controller over the same WebSocket connection. The handshake carries `client_version` + a typed capability list (`controller_client/protocol.py`: `CLIENT_VERSION`, `ClientCapability`, `REQUIRED_CLIENT_CAPABILITIES`); the server rejects controllers missing a required capability before marking the project connected. After the handshake the controller preloads OmniParser in the background and reports `omniparser_status` (loading/ready/failed) which the server stores on `Project.agent_omniparser_status` and gates test-run execution on. The tracked `controller_client/` source must stay inside the server Docker image (shared protocol import + ZIP download); only its venv/weights are `.dockerignore`d. On Windows, input actions (click/hover/drag/type/key) first run `controller_client/input_guard.py`: UIPI makes Windows silently drop injected input while an elevated window (Task Manager, installers, anything past a UAC prompt) is in the foreground, and pyautogui never notices — the guard raises `InputBlockedError` instead so the agent sees a failure rather than a phantom "Clicked". Run the controller as Administrator when tests need to drive elevated apps
 
 ### Key Patterns
 
 **Service Layer**: All business logic lives in `services.py` files. Views and Celery tasks are thin — they call service functions, never implement logic directly.
 
-**Celery Queues**: Two dedicated queues:
-- `upload` — XML file parsing (`process_xml_upload`)
-- `execution` — AI test execution (`execute_test_run_case`)
-
-Task routing is defined in `settings.CELERY_TASK_ROUTES`.
-
-**WebSocket Consumers** (Django Channels): Real-time updates via `projects/consumers.py` and `projects/routing.py`:
-- Upload progress (`ws/projects/<id>/uploads/`)
-- Test run status (`ws/projects/<id>/test-runs/<id>/`)
-- Test case live logs/screenshots (`ws/projects/<id>/test-runs/cases/<id>/`)
-- Agent connection status (`ws/projects/<id>/agent-status/`)
-- Controller protocol (`ws/controller/`) — agent machine connects here
-
 **Controller Protocol**: The controller client on the target machine connects via WebSocket. The server dispatches actions (click, type, screenshot, browser commands) through the channel layer and waits for replies. All controller actions are in `projects/services.py` (functions prefixed `controller_*`).
-
-**AI Agent Loop** (`agents/services/agent_loop.py`): Observe-think-act loop that uses OpenAI for reasoning and vision. Tools are registered via `tool_registry.py` and defined in `tool_definitions.py`. The agent takes screenshots, analyzes them, and executes actions on the remote machine.
-
-**Verified desktop actions** (`agents/services/verified_element_actions.py`): `click`/`hover`/`drag` confirm the OmniParser candidate with the vision model before acting and (click always, hover/drag when `expected_result` is given) compare before/after screenshots afterwards, retrying up to 10 candidates per call and returning an error with the attempt history when none can be confirmed. After 3 rejected candidates on one screen parse (`MAX_CANDIDATE_REJECTIONS_PER_PARSE`) it raises `ElementNotFoundError` straight away instead of spending the rest of the budget on an element that is not on screen. Browser actions (`browser_click`/`browser_type`/`browser_hover`) check the element index exists before acting and reply `ELEMENT_NOT_FOUND` straight away, with Playwright actions capped at 10s so they finish before the server’s 30s reply timeout.
 
 **Authorization**: `@project_membership_required` decorator in `projects/decorators.py` handles both `@login_required` and project membership checks. Views receive a resolved `project` kwarg.
 
@@ -102,31 +74,7 @@ Task routing is defined in `settings.CELERY_TASK_ROUTES`.
 ### Settings & Configuration
 
 - All env vars read via `python-decouple` in `settings.py` — never import `decouple` directly elsewhere
-- `.env` file at project root (see `example.env` for all variables)
-- Custom stubs in `stubs/` directory for mypy
-- `setup.cfg` contains mypy, isort, and pytest configuration
-
-### Database
-
-- PostgreSQL 17 (`psycopg` driver)
-- Redis for cache, Celery broker, and Django Channels layer
-
-### Models Hierarchy
-
-```
-Project → TestCaseUpload → TestCase
-Project → TestRun → TestRunTestCase (pivot) → TestRunScreenshot
-Project has: members (M2M CustomUser), tags (M2M Tag), api_key, agent_connected
-```
-
-## Testing
-
-Verify new logic with unit tests (pytest / Django's test framework) rather than standing up the real running system. The user runs end-to-end/manual verification themselves — don't dispatch `nightmare-tester`/`logic-tester` against the live system unless explicitly asked.
 
 ## Parallel Development
 
 This project uses git worktrees for parallel development. Each worktree must use a unique port when running the Django dev server to avoid conflicts (e.g., `runserver 8001`, `daphne -p 8001`).
-
-## Spec-Driven Development
-
-Feature specs live in `docs/specs/`, implementation docs in `docs/impl/`. When implementing a spec (e.g., `docs/specs/001.User Management.md`), create corresponding `docs/impl/001.User Management-impl.md` after completion.

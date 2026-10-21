@@ -61,3 +61,4 @@ controller_client/omniparser/weights/
 
 # Generated test reports
 *_TEST_REPORT.md
+.claude/settings.local.json
