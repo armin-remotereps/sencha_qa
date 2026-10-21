@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from agents.services.llm_client import send_chat_completion
-from agents.services.llm_config import build_refiner_config
+from agents.services.llm_config import build_llm_config
 from agents.types import ChatMessage
 
 _REFINER_SYSTEM_PROMPT = (
@@ -28,7 +28,7 @@ _REFINER_SYSTEM_PROMPT = (
 
 
 def refine_project_prompt(raw_prompt: str) -> str:
-    config = build_refiner_config()
+    config = build_llm_config()
     messages = (
         ChatMessage(role="system", content=_REFINER_SYSTEM_PROMPT),
         ChatMessage(role="user", content=raw_prompt),

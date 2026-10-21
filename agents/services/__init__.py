@@ -6,7 +6,7 @@ from agents.services.agent_loop import (
 from agents.services.context_summarizer import summarize_context_if_needed
 from agents.services.controller_element_finder import find_element_coordinates
 from agents.services.llm_client import send_chat_completion
-from agents.services.llm_config import build_llm_config, build_vision_config
+from agents.services.llm_config import build_llm_config
 from agents.services.tool_registry import dispatch_tool_call, get_all_tool_definitions
 from agents.services.tools_controller import (
     click,
@@ -24,7 +24,6 @@ __all__ = [
     "build_agent_config",
     "build_llm_config",
     "build_system_prompt",
-    "build_vision_config",
     "click",
     "dispatch_tool_call",
     "drag",

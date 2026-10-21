@@ -20,7 +20,6 @@ _LLM = LLMConfig(
     model="m",
     api_key="k",
     endpoint_url="http://llm.test",
-    temperature=0.0,
     max_tokens=10,
 )
 

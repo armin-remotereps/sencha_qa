@@ -35,9 +35,6 @@ def _build_payload(
         "max_completion_tokens": config.max_tokens,
     }
 
-    if config.temperature is not None:
-        payload["temperature"] = config.temperature
-
     if tools:
         payload["tools"] = _serialize_tools(tools)
         payload["tool_choice"] = "auto"

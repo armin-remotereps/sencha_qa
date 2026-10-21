@@ -26,7 +26,6 @@ _LLM_CONFIG = LLMConfig(
     model="gpt-test",
     api_key="test-key",
     endpoint_url="https://example.test/v1",
-    temperature=0.0,
     max_tokens=100,
 )
 

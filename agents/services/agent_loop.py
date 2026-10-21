@@ -10,8 +10,6 @@ from agents.services.context_summarizer import summarize_context_if_needed
 from agents.services.llm_client import send_chat_completion
 from agents.services.llm_config import (
     build_llm_config,
-    build_summarizer_config,
-    build_vision_config,
 )
 from agents.services.output_summarizer import summarize_output
 from agents.services.prompt_parts import (
@@ -105,16 +103,11 @@ def _build_task_section(task_description: str) -> str:
     )
 
 
-def build_agent_config(
-    *,
-    model: str | None = None,
-    vision_model: str | None = None,
-) -> AgentConfig:
-    llm_config = build_llm_config(model=model)
-    vision_config = build_vision_config(model=vision_model)
+def build_agent_config() -> AgentConfig:
+    llm_config = build_llm_config()
     return AgentConfig(
         llm=llm_config,
-        vision_llm=vision_config,
+        vision_llm=llm_config,
         max_iterations=settings.AGENT_MAX_ITERATIONS,
         timeout_seconds=settings.AGENT_TIMEOUT_SECONDS,
     )
@@ -131,7 +124,7 @@ def run_agent(
     if config is None:
         config = build_agent_config()
 
-    summarizer_config = build_summarizer_config()
+    summarizer_config = build_llm_config()
 
     context = ToolContext(
         project_id=project_id,

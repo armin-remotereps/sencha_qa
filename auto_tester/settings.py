@@ -8,7 +8,6 @@ from pathlib import Path
 from decouple import Csv, config
 
 from auto_tester.encryption_key import validate_fernet_key
-from auto_tester.env_casts import optional_float
 
 load_dotenv()
 
@@ -232,36 +231,15 @@ OPENAI_BASE_URL: str = config(
     default="https://api.openai.com/v1/chat/completions",
     cast=str,
 )
-OPENAI_VISION_MODEL: str = config("OPENAI_VISION_MODEL", default="gpt-4o", cast=str)
-# Temperatures are optional: leave the env value empty to omit `temperature` from
-# the request, which reasoning models (gpt-5 family) require — they reject any
-# value other than their default.
-OPENAI_TEMPERATURE: float | None = config(
-    "OPENAI_TEMPERATURE", default="0.1", cast=optional_float
-)
-OPENAI_MAX_TOKENS: int = config("OPENAI_MAX_TOKENS", default=4096, cast=int)
-OPENAI_REQUEST_TIMEOUT: int = config("OPENAI_REQUEST_TIMEOUT", default=120, cast=int)
-
-# Per-role OpenAI models
-OPENAI_AGENT_MODEL: str = config("OPENAI_AGENT_MODEL", default="gpt-4o", cast=str)
-OPENAI_ORCHESTRATOR_MODEL: str = config(
-    "OPENAI_ORCHESTRATOR_MODEL", default="gpt-4o", cast=str
-)
-OPENAI_SUB_AGENT_MODEL: str = config(
-    "OPENAI_SUB_AGENT_MODEL", default="gpt-4o", cast=str
-)
-OPENAI_SUMMARIZER_MODEL: str = config(
-    "OPENAI_SUMMARIZER_MODEL", default="gpt-4o-mini", cast=str
-)
-OPENAI_REFINER_MODEL: str = config(
-    "OPENAI_REFINER_MODEL", default="gpt-4o-mini", cast=str
-)
-SUMMARIZER_TEMPERATURE: float | None = config(
-    "SUMMARIZER_TEMPERATURE", default="0.0", cast=optional_float
-)
-REFINER_TEMPERATURE: float | None = config(
-    "REFINER_TEMPERATURE", default="0.3", cast=optional_float
-)
+# Every LLM role — agent, orchestrator, sub-agent, summarizer, refiner and
+# vision — runs on this one model. Output ceilings live beside the request
+# builder in agents/services/llm_config.py, and `temperature` is never sent at
+# all: the gpt-5 family rejects any value other than its own default.
+OPENAI_MODEL: str = config("OPENAI_MODEL", default="gpt-5.6-sol", cast=str)
+# A reasoning model spends unbounded hidden thinking time before the first
+# visible token and may then emit up to MAX_OUTPUT_TOKENS, so the per-request
+# timeout is deliberately generous.
+OPENAI_REQUEST_TIMEOUT: int = config("OPENAI_REQUEST_TIMEOUT", default=900, cast=int)
 
 # Agent
 AGENT_MAX_ITERATIONS: int = config("AGENT_MAX_ITERATIONS", default=30, cast=int)
@@ -324,10 +302,6 @@ CONTEXT_SUMMARIZE_CHUNK_SIZE: int = config(
 )
 
 # Orchestrator (sub-agent architecture)
-ORCHESTRATOR_MAX_TOKENS: int = config("ORCHESTRATOR_MAX_TOKENS", default=4096, cast=int)
-ORCHESTRATOR_TEMPERATURE: float | None = config(
-    "ORCHESTRATOR_TEMPERATURE", default="0.1", cast=optional_float
-)
 ORCHESTRATOR_MAX_SUBTASKS: int = config(
     "ORCHESTRATOR_MAX_SUBTASKS", default=30, cast=int
 )
@@ -336,10 +310,6 @@ ORCHESTRATOR_MAX_RECOVERY_ATTEMPTS: int = config(
 )
 
 # Sub-Agent
-SUB_AGENT_MAX_TOKENS: int = config("SUB_AGENT_MAX_TOKENS", default=2048, cast=int)
-SUB_AGENT_TEMPERATURE: float | None = config(
-    "SUB_AGENT_TEMPERATURE", default="0.1", cast=optional_float
-)
 SUB_AGENT_MAX_ITERATIONS: int = config("SUB_AGENT_MAX_ITERATIONS", default=15, cast=int)
 SUB_AGENT_TIMEOUT_SECONDS: int = config(
     "SUB_AGENT_TIMEOUT_SECONDS", default=180, cast=int

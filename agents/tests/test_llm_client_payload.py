@@ -3,43 +3,37 @@ from __future__ import annotations
 from django.test import SimpleTestCase, override_settings
 
 from agents.services.llm_client import _build_payload
-from agents.services.llm_config import build_refiner_config, build_summarizer_config
+from agents.services.llm_config import MAX_OUTPUT_TOKENS, build_llm_config
 from agents.types import ChatMessage, LLMConfig
-
-
-def _config(temperature: float | None) -> LLMConfig:
-    return LLMConfig(
-        model="gpt-test",
-        api_key="test-key",
-        endpoint_url="https://example.test/v1",
-        temperature=temperature,
-        max_tokens=100,
-    )
-
 
 _MESSAGES = (ChatMessage(role="user", content="hi"),)
 
 
-class BuildPayloadTemperatureTests(SimpleTestCase):
-    def test_temperature_sent_when_configured(self) -> None:
-        payload = _build_payload(_config(0.1), _MESSAGES, ())
-        self.assertEqual(payload["temperature"], 0.1)
+def _config() -> LLMConfig:
+    return LLMConfig(
+        model="gpt-test",
+        api_key="test-key",
+        endpoint_url="https://example.test/v1",
+        max_tokens=100,
+    )
 
-    def test_zero_temperature_is_still_sent(self) -> None:
-        payload = _build_payload(_config(0.0), _MESSAGES, ())
-        self.assertEqual(payload["temperature"], 0.0)
 
-    def test_temperature_omitted_when_unset(self) -> None:
-        payload = _build_payload(_config(None), _MESSAGES, ())
+class BuildPayloadTests(SimpleTestCase):
+    def test_temperature_is_never_sent(self) -> None:
+        payload = _build_payload(_config(), _MESSAGES, ())
         self.assertNotIn("temperature", payload)
+
+    def test_budget_uses_the_reasoning_model_token_field(self) -> None:
+        payload = _build_payload(_config(), _MESSAGES, ())
         self.assertEqual(payload["max_completion_tokens"], 100)
+        self.assertNotIn("max_tokens", payload)
 
 
-class RoleTemperatureSettingsTests(SimpleTestCase):
-    @override_settings(SUMMARIZER_TEMPERATURE=None)
-    def test_summarizer_reads_temperature_from_settings(self) -> None:
-        self.assertIsNone(build_summarizer_config().temperature)
+class LLMConfigTests(SimpleTestCase):
+    @override_settings(OPENAI_MODEL="gpt-5.6-sol")
+    def test_model_comes_from_the_one_setting(self) -> None:
+        self.assertEqual(build_llm_config().model, "gpt-5.6-sol")
 
-    @override_settings(REFINER_TEMPERATURE=None)
-    def test_refiner_reads_temperature_from_settings(self) -> None:
-        self.assertIsNone(build_refiner_config().temperature)
+    def test_every_role_asks_for_the_full_output_ceiling(self) -> None:
+        self.assertEqual(build_llm_config().max_tokens, MAX_OUTPUT_TOKENS)
+        self.assertEqual(MAX_OUTPUT_TOKENS, 128_000)

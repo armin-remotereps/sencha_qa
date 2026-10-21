@@ -10,9 +10,7 @@ from django.conf import settings
 
 from agents.services.llm_client import send_chat_completion
 from agents.services.llm_config import (
-    build_orchestrator_config,
-    build_sub_agent_config,
-    build_vision_config,
+    build_llm_config,
 )
 from agents.services.orchestrator_prompts import (
     build_evaluate_prompt,
@@ -65,15 +63,13 @@ def run_orchestrator(
     project_prompt: str | None = None,
     cancellation_check: CancellationCheck | None = None,
 ) -> AgentResult:
-    orchestrator_llm = build_orchestrator_config()
-    sub_agent_llm = build_sub_agent_config()
-    vision_llm = build_vision_config()
+    # One model serves every role. The distinct names keep the call sites below
+    # readable and make a future per-role split a one-line change.
+    orchestrator_llm = build_llm_config()
+    sub_agent_llm = orchestrator_llm
+    vision_llm = orchestrator_llm
 
-    _log(
-        on_log,
-        f"[Orchestrator] Models: orchestrator={orchestrator_llm.model}, "
-        f"sub_agent={sub_agent_llm.model}, vision={vision_llm.model}",
-    )
+    _log(on_log, f"[Orchestrator] Model: {orchestrator_llm.model}")
     _log(on_log, "[Orchestrator] Planning: decomposing test case into sub-tasks...")
 
     bounds = build_timeout_bounds()
