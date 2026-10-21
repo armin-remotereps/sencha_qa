@@ -1,0 +1,42 @@
+{% comment %} "Import a TestRail run" card: paste a run URL or ID to import its cases.
+   Used on the Import page and the onboarding wizard's cases step.
+
+   Context contract:
+     project    — current Project (configured state read from has_testrail_settings)
+     csrf_token — the request's CSRF token (pass it explicitly when included with `only`)
+     next_url   — optional; same-host URL to return to after submitting {% endcomment %}
+<div class="card">
+  <div class="card-header">
+    <h3>Import a TestRail run</h3>
+  </div>
+
+  {% if not project.has_testrail_settings %}
+    <p class="muted">
+      Connect a TestRail account under
+      <a href="{% url 'projects:settings' project.id %}">Settings</a>
+      to import the cases of a TestRail run.
+    </p>
+  {% else %}
+    <form method="post" action="{% url 'projects:testrail_run_import' project.id %}" class="toolbar">
+      {% csrf_token %}
+      {% if next_url %}
+        <input type="hidden" name="next" value="{{ next_url }}">
+      {% endif %}
+      <div>
+        <label class="visually-hidden" for="testrail-run-reference">TestRail run URL or ID</label>
+        <input
+          class="input"
+          type="text"
+          id="testrail-run-reference"
+          name="run_reference"
+          maxlength="2000"
+          autocomplete="off"
+          required
+          placeholder="{{ project.testrail_url }}/index.php?/runs/view/123"
+        >
+      </div>
+      <button type="submit" class="btn btn-primary">Import run</button>
+    </form>
+    <p class="hint">Paste a run link from TestRail, or an ID like R123. Cases already in this project (same TestRail ID) are updated in place.</p>
+  {% endif %}
+</div>

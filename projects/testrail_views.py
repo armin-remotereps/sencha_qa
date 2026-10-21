@@ -4,13 +4,16 @@ from django.contrib import messages
 from django.http import Http404, HttpRequest, HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
+from projects.exceptions import TestRailRunImportError
 from projects.forms import (
     TestRailImportStartForm,
     TestRailPushStartForm,
+    TestRailRunImportForm,
     TestRailSettingsForm,
     TestRailSuiteForm,
 )
@@ -22,6 +25,7 @@ from projects.testrail_results_services import (
     start_testrail_results_push,
     suggest_testrail_target,
 )
+from projects.testrail_run_import_services import start_testrail_run_import
 from projects.testrail_services import (
     TestRailImportResolution,
     TestRailImportTarget,
@@ -231,6 +235,52 @@ def testrail_import_suite(
         messages.error(request, exc.message)
         return _redirect_to_import(project)
     return _start_and_notify(request, project, target)
+
+
+def _safe_next(request: HttpRequest, next_url: str, default: str) -> str:
+    """Return `next_url` when it stays on this host, else `default`."""
+    if next_url and url_has_allowed_host_and_scheme(
+        next_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return next_url
+    return default
+
+
+@project_membership_required
+@require_POST
+def testrail_run_import(
+    request: AuthenticatedRequest, project: Project
+) -> HttpResponse:
+    """Import the cases of one TestRail run, pasted as a run URL or ID."""
+    form = TestRailRunImportForm(request.POST)
+    is_valid = form.is_valid()
+    target_url = _safe_next(
+        request,
+        form.cleaned_data.get("next", ""),
+        reverse("projects:test_case_import", args=[project.id]),
+    )
+    if not is_valid:
+        messages.error(request, "Paste a TestRail run URL or ID.")
+        return redirect(target_url)
+
+    try:
+        upload = start_testrail_run_import(
+            project=project,
+            user=request.user,
+            raw_reference=form.cleaned_data["run_reference"],
+        )
+    except (
+        TestRailNotConfiguredError,
+        TestRailRunImportError,
+        TestRailError,
+    ) as exc:
+        messages.error(request, exc.message)
+        return redirect(target_url)
+
+    messages.success(request, f"Importing {upload.original_filename}.")
+    return redirect(target_url)
 
 
 def _redirect_to_run(project: Project, test_run: TestRun) -> HttpResponse:

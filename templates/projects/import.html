@@ -1,12 +1,11 @@
 {% extends "layouts/project.html" %}
 
-{% comment %} Import from TestRail: dropzone + upload history with live progress.
-   Replaces the old templates/projects/uploads.html.
+{% comment %} Import from TestRail: suite picker, run import, and upload history
+   with live progress. Replaces the old templates/projects/uploads.html.
 
    Context contract (projects.views.test_case_import):
      project           — current Project
      uploads           — Page[TestCaseUpload], newest first
-     upload_create_url — POST target for the dropzone form
      per_page / allowed_per_page / elided_page_range / query_params — pagination
      testrail_picker   — projects.testrail_services.TestRailPickerState {% endcomment %}
 {% block title %}Import · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
@@ -23,7 +22,7 @@
 <div class="page-header">
   <div>
     <h1>Import from TestRail</h1>
-    <p class="subtitle">Bring cases in from a connected TestRail account, or upload a TestRail XML export.</p>
+    <p class="subtitle">Bring cases in from a connected TestRail account: a whole suite, or just the cases in one run.</p>
   </div>
 </div>
 {% endblock %}
@@ -31,18 +30,7 @@
 {% block project_content %}
 {% include "projects/includes/_testrail_import_card.html" with project=project testrail_picker=testrail_picker csrf_token=csrf_token only %}
 
-<div class="card">
-  <div class="card-header">
-    <h3>Upload a TestRail XML export</h3>
-  </div>
-  <p class="hint">File requirements: TestRail XML export (<code>.xml</code>), up to 10 MB.</p>
-
-  <form method="post" action="{{ upload_create_url }}" enctype="multipart/form-data">
-    {% csrf_token %}
-    <input type="hidden" name="next" value="{{ request.get_full_path }}">
-    {% include "partials/dropzone.html" %}
-  </form>
-</div>
+{% include "projects/includes/_testrail_run_import_card.html" with project=project csrf_token=csrf_token only %}
 
 <div class="card" x-data="uploadManager()">
   <div class="card-header">
@@ -52,7 +40,7 @@
   {% if uploads %}
     {% include "projects/includes/_import_history_table.html" with project=project uploads=uploads %}
   {% else %}
-    {% include "partials/empty_state.html" with icon="⇪" title="No imports yet" body="Uploaded TestRail exports and their progress will show up here." only %}
+    {% include "partials/empty_state.html" with icon="⇪" title="No imports yet" body="TestRail imports and their progress will show up here." only %}
   {% endif %}
 
   {% include "partials/pagination.html" with page_obj=uploads per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range query_params=query_params %}

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Sencha QA (Auto Tester) — an AI-powered QA automation platform. Users create projects, upload TestRail XML test cases, and run them through an AI agent that controls a remote machine (via a WebSocket-connected controller client) to execute tests against real applications.
+Sencha QA (Auto Tester) — an AI-powered QA automation platform. Users create projects, import test cases from TestRail (a whole suite or a single run) and run them through an AI agent that controls a remote machine (via a WebSocket-connected controller client) to execute tests against real applications.
 
 ## Session start
 

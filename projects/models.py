@@ -151,6 +151,7 @@ class TestCaseUpload(models.Model):
     )
     testrail_project_id = models.PositiveIntegerField(null=True, blank=True)
     testrail_suite_id = models.PositiveIntegerField(null=True, blank=True)
+    testrail_run_id = models.PositiveIntegerField(null=True, blank=True)
     status = models.CharField(
         max_length=20,
         choices=UploadStatus.choices,
@@ -173,24 +174,13 @@ class TestCaseUpload(models.Model):
         return self.source == UploadSource.TESTRAIL_API
 
     @property
+    def is_testrail_run_import(self) -> bool:
+        return self.testrail_run_id is not None
+
+    @property
     def created_cases(self) -> int:
         """Cases this import created (processed counts created + updated)."""
         return max(self.processed_cases - self.updated_cases, 0)
-
-
-@dataclass
-class ParsedTestCase:
-    title: str
-    testrail_id: str = ""
-    template: str = "Test Case"
-    type: str = ""
-    priority: str = ""
-    estimate: str = ""
-    references: str = ""
-    preconditions: str = ""
-    steps: str = ""
-    expected: str = ""
-    is_converted: bool = False
 
 
 @dataclass

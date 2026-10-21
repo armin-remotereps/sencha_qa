@@ -744,25 +744,6 @@ a:hover {
   margin-bottom: 2px;
 }
 
-/* File upload dropzone (visual only in prototype) */
-.dropzone {
-  border: 2px dashed var(--border-strong);
-  border-radius: var(--radius);
-  padding: 30px 20px;
-  text-align: center;
-  color: var(--text-muted);
-  background: var(--surface);
-}
-
-.dropzone strong {
-  color: var(--text);
-}
-
-.dropzone.is-active {
-  border-color: var(--brand-cyan);
-  background: var(--cyan-soft);
-}
-
 /* --------------------------------------------------------------------------
    Cards
    -------------------------------------------------------------------------- */

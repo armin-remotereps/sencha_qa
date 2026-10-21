@@ -5,19 +5,19 @@
    Context contract (projects.views.setup_cases):
      project     — current Project
      uploads     — Page[TestCaseUpload], newest first, 5 per page (recent
-                   imports shown below the dropzone; live progress for
-                   them arrives over the uploads WS)
+                   imports shown below the run-import card; live progress
+                   for them arrives over the uploads WS)
      case_count  — project.test_cases.count(), gates "Continue"
      wizard_step  — always 3 here
      wizard_mode  — always "edit"
 
-   Uploading a file is a real (non-AJAX) POST to this same view, which
-   redirects back to itself — so a freshly created upload always arrives
-   via a full page reload (its filename included), and the WS is only
-   needed for that upload's later pending → processing → completed/failed
-   transitions. That's also why the WS handler below only *updates*
-   uploads already in the initial list rather than fabricating new rows
-   from WS data (which carries no filename — see projects/consumers.py's
+   Importing a run is a real (non-AJAX) POST to projects:testrail_run_import,
+   which redirects back here through its `next` field — so a freshly created
+   upload always arrives via a full page reload (its label included), and the
+   WS is only needed for that upload's later pending → processing →
+   completed/failed transitions. That's also why the WS handler below only
+   *updates* uploads already in the initial list rather than fabricating new
+   rows from WS data (which carries no label — see projects/consumers.py's
    UploadProgressConsumer). {% endcomment %}
 
 {% block title %}Add test cases · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
@@ -50,7 +50,7 @@
         <input type="radio" name="case-source" value="import" x-model="mode">
         <span>
           <span class="radio-title">Import from TestRail</span>
-          <span class="muted small">Upload a TestRail XML export and Punk Hazard will parse each case.</span>
+          <span class="muted small">Paste a TestRail run link and Punk Hazard imports its cases.</span>
         </span>
       </label>
 
@@ -65,12 +65,8 @@
 
     <template x-if="mode === 'import'">
       <div>
-        <p class="hint">File requirements: TestRail XML export (<code>.xml</code>), up to 10 MB.</p>
-
-        <form method="post" enctype="multipart/form-data" action="{% url 'projects:setup_cases' project.id %}">
-          {% csrf_token %}
-          {% include "partials/dropzone.html" %}
-        </form>
+        {% include "projects/includes/_testrail_run_import_card.html" with project=project csrf_token=csrf_token next_url=request.get_full_path only %}
+        <p class="hint"><a href="{% url 'projects:test_case_import' project.id %}">Import a whole suite instead</a></p>
 
         <template x-for="upload in uploads" :key="upload.upload_id">
           <div class="card card-raised" style="margin-top: 12px;">

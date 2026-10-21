@@ -120,6 +120,11 @@ urlpatterns: list[URLPattern] = [
         name="testrail_import_start",
     ),
     path(
+        "<int:project_id>/test-cases/import/testrail/run/",
+        testrail_views.testrail_run_import,
+        name="testrail_run_import",
+    ),
+    path(
         "<int:project_id>/test-cases/import/testrail/<int:testrail_project_id>/",
         testrail_views.testrail_import_suite,
         name="testrail_import_suite",
@@ -133,11 +138,6 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-cases/<int:test_case_id>/delete/",
         views.test_case_delete,
         name="test_case_delete",
-    ),
-    path(
-        "<int:project_id>/uploads/create/",
-        views.upload_create,
-        name="upload_create",
     ),
     path(
         "<int:project_id>/uploads/<int:upload_id>/cancel/",

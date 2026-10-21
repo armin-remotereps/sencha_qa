@@ -19,7 +19,12 @@
     <tbody>
       {% for upload in uploads %}
         <tr data-upload-id="{{ upload.id }}">
-          <td data-label="Source" class="cell-primary">{{ upload.original_filename }}</td>
+          <td data-label="Source" class="cell-primary">
+            {{ upload.original_filename }}
+            {% if upload.is_testrail_run_import and project.testrail_url %}
+              <p class="muted small"><a href="{{ project.testrail_url }}/index.php?/runs/view/{{ upload.testrail_run_id }}" target="_blank" rel="noopener noreferrer">Open in TestRail</a></p>
+            {% endif %}
+          </td>
 
           <td data-label="Status">
             {% if upload.status == "pending" or upload.status == "processing" %}

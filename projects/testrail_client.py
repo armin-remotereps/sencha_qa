@@ -75,6 +75,9 @@ class TestRailCase:
 class TestRailRun:
     id: int
     name: str
+    project_id: int | None
+    suite_id: int | None
+    plan_id: int | None
     is_completed: bool
     url: str
 
@@ -116,8 +119,21 @@ def _parse_steps_separated(
 
 
 def _parse_case(raw: dict[str, Any]) -> TestRailCase:  # raw JSON case object
+    return _case_from_fields(int(raw["id"]), raw)
+
+
+def _parse_test_as_case(
+    raw: dict[str, Any],  # raw JSON test object; carries its case's fields
+) -> TestRailCase:
+    return _case_from_fields(int(raw["case_id"]), raw)
+
+
+def _case_from_fields(
+    case_id: int,
+    raw: dict[str, Any],  # raw JSON case or test object
+) -> TestRailCase:
     return TestRailCase(
-        id=int(raw["id"]),
+        id=case_id,
         title=_str(raw.get("title")),
         template_id=int(raw.get("template_id") or 0),
         type_id=_optional_int(raw.get("type_id")),
@@ -135,6 +151,9 @@ def _parse_run(raw: dict[str, Any]) -> TestRailRun:  # raw JSON run object
     return TestRailRun(
         id=int(raw["id"]),
         name=_str(raw.get("name")),
+        project_id=_optional_int(raw.get("project_id")),
+        suite_id=_optional_int(raw.get("suite_id")),
+        plan_id=_optional_int(raw.get("plan_id")),
         is_completed=bool(raw.get("is_completed")),
         url=_str(raw.get("url")),
     )
@@ -224,6 +243,13 @@ class TestRailClient:
         )
         for raw in self._paginate(method, "cases"):
             yield _parse_case(raw)
+
+    def iter_run_cases(self, run_id: int) -> Iterator[TestRailCase]:
+        """Yield the case behind each test in a run; tests carry the case fields."""
+        method = f"get_tests/{run_id}&limit={TESTRAIL_PAGE_SIZE}"
+        for raw in self._paginate(method, "tests"):
+            if raw.get("case_id") is not None:
+                yield _parse_test_as_case(raw)
 
     def get_case_types(self) -> list[TestRailCaseType]:
         return [

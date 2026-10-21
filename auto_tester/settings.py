@@ -159,10 +159,10 @@ CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
-    "projects.tasks.process_xml_upload": {"queue": "upload"},
     "projects.tasks.execute_test_run_case": {"queue": "execution"},
     "projects.tasks.refine_project_prompt_task": {"queue": "upload"},
     "projects.tasks.import_testrail_cases": {"queue": "upload"},
+    "projects.tasks.import_testrail_run_cases": {"queue": "upload"},
     "projects.tasks.push_test_run_results": {"queue": "upload"},
 }
 

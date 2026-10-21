@@ -333,6 +333,13 @@ class TestRailSuiteForm(forms.Form):
     testrail_suite_id = forms.IntegerField(min_value=1)
 
 
+class TestRailRunImportForm(forms.Form):
+    """Import the cases of one TestRail run, pasted as a run URL or ID."""
+
+    run_reference = forms.CharField(max_length=2000, strip=True)
+    next = forms.CharField(required=False, max_length=2000, widget=forms.HiddenInput)
+
+
 class TestRailPushStartForm(forms.Form):
     """Step 1 of pushing a run's results to TestRail.
 

@@ -94,6 +94,7 @@ class TestCaseUploadAdmin(admin.ModelAdmin[TestCaseUpload]):
         "status",
         "total_cases",
         "processed_cases",
+        "testrail_run_id",
         "created_at",
     )
     list_filter = ("status", "source", "project")

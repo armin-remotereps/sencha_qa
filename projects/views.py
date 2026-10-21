@@ -16,7 +16,7 @@ from django.http import (
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
-from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_GET, require_POST
 
 from accounts.models import CustomUser
 from accounts.types import AuthenticatedRequest
@@ -46,7 +46,6 @@ from projects.services import (
     create_project,
     create_test_case,
     create_test_run_with_cases,
-    create_upload,
     delete_test_case,
     delete_test_run,
     delete_upload,
@@ -68,7 +67,6 @@ from projects.services import (
     get_test_run_for_project,
     get_test_run_summary,
     get_upload_for_project,
-    is_valid_xml_filename,
     list_completed_uploads_for_project,
     list_failed_case_titles,
     list_other_projects_for_user,
@@ -85,12 +83,10 @@ from projects.services import (
     save_application_context,
     save_project_prompt,
     start_test_run,
-    start_upload_processing,
     suggest_run_name,
     unarchive_project,
     update_project,
     update_test_case,
-    validate_testrail_xml,
 )
 from projects.tasks import refine_project_prompt_task
 from projects.testrail_mapping import format_push_confirm_body
@@ -596,42 +592,18 @@ def test_case_copy_to_project(
 # ============================================================================
 
 
-def _handle_xml_upload(request: AuthenticatedRequest, project: Project) -> str | None:
-    """Validate and process an uploaded TestRail XML file.
-
-    Returns None on success, or a human-readable error message on failure.
-    """
-    file = request.FILES.get("file")
-    if not file:
-        return "No file selected."
-    if not is_valid_xml_filename(file.name or ""):
-        return "Only .xml files are accepted."
-
-    content = file.read().decode("utf-8", errors="replace")
-    is_valid, error = validate_testrail_xml(content)
-    if not is_valid:
-        return error
-
-    file.seek(0)
-    upload = create_upload(project=project, user=request.user, file=file)
-    start_upload_processing(upload)
-    return None
-
-
 @project_membership_required
 def test_case_import(request: HttpRequest, project: Project) -> HttpResponse:
-    """Display paginated upload history with the "Import from TestRail" dropzone."""
+    """Display the TestRail import cards and the paginated upload history."""
     page = _parse_page(request)
     per_page = _parse_per_page(request)
     uploads = list_uploads_for_project(project=project, page=page, per_page=per_page)
-    upload_create_url = reverse("projects:upload_create", args=[project.id])
     return render(
         request,
         "projects/import.html",
         {
             "project": project,
             "uploads": uploads,
-            "upload_create_url": upload_create_url,
             "per_page": per_page,
             "allowed_per_page": ALLOWED_PER_PAGE,
             "elided_page_range": _get_elided_page_range(uploads),
@@ -641,16 +613,6 @@ def test_case_import(request: HttpRequest, project: Project) -> HttpResponse:
             "active_nav": "projects",
         },
     )
-
-
-@project_membership_required
-@require_POST
-def upload_create(request: AuthenticatedRequest, project: Project) -> HttpResponse:
-    error = _handle_xml_upload(request, project)
-    if error is not None:
-        messages.error(request, error)
-    default_url = reverse("projects:test_case_import", args=[project.id])
-    return redirect(_next_or_default(request, default_url))
 
 
 @project_membership_required
@@ -965,14 +927,9 @@ def test_run_case_edit(
 
 
 @project_membership_required
+@require_GET
 def setup_cases(request: AuthenticatedRequest, project: Project) -> HttpResponse:
     """Wizard step 3: import test cases."""
-    if request.method == "POST":
-        error = _handle_xml_upload(request, project)
-        if error is not None:
-            messages.error(request, error)
-        return redirect("projects:setup_cases", project_id=project.id)
-
     uploads = list_uploads_for_project(project=project, page=1, per_page=5)
     return render(
         request,
