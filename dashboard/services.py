@@ -37,6 +37,7 @@ class RunSummary:
     runs_in_progress: int
     passed_7d: int
     failed_7d: int
+    blocked_7d: int
     pass_rate_7d: int | None
     never_run_cases: int
 
@@ -76,6 +77,7 @@ class ActivityItem:
     title: str
     occurred_at: datetime
     failed: bool
+    blocked: bool
     url: str
 
 
@@ -97,6 +99,7 @@ def _empty_dashboard_data() -> DashboardData:
             runs_in_progress=0,
             passed_7d=0,
             failed_7d=0,
+            blocked_7d=0,
             pass_rate_7d=None,
             never_run_cases=0,
         ),
@@ -114,13 +117,20 @@ def _build_run_summary(project_ids: list[int], since: datetime) -> RunSummary:
     finished_counts = TestRunTestCase.objects.filter(
         test_run__project_id__in=project_ids,
         finished_at__gte=since,
-        status__in=[TestRunTestCaseStatus.SUCCESS, TestRunTestCaseStatus.FAILED],
+        status__in=[
+            TestRunTestCaseStatus.SUCCESS,
+            TestRunTestCaseStatus.FAILED,
+            TestRunTestCaseStatus.BLOCKED,
+        ],
     ).aggregate(
         passed=Count("id", filter=Q(status=TestRunTestCaseStatus.SUCCESS)),
         failed=Count("id", filter=Q(status=TestRunTestCaseStatus.FAILED)),
+        blocked=Count("id", filter=Q(status=TestRunTestCaseStatus.BLOCKED)),
     )
     passed = finished_counts["passed"] or 0
     failed = finished_counts["failed"] or 0
+    blocked = finished_counts["blocked"] or 0
+    # Blocked cases were never judged, so they stay out of the pass rate.
     total = passed + failed
     pass_rate = round(passed * 100 / total) if total else None
 
@@ -132,14 +142,20 @@ def _build_run_summary(project_ids: list[int], since: datetime) -> RunSummary:
         runs_in_progress=runs_in_progress,
         passed_7d=passed,
         failed_7d=failed,
+        blocked_7d=blocked,
         pass_rate_7d=pass_rate,
         never_run_cases=never_run_cases,
     )
 
 
-def _failed_run_attention_items(
+def _finished_run_attention_items(
     project_ids: list[int], since: datetime
 ) -> list[AttentionItem]:
+    """Recently finished runs with failed or blocked cases, in one query.
+
+    A run with any failure is listed once, as ``failed_run``; a run whose
+    only problems are blocked cases is listed as ``blocked_run``.
+    """
     runs = (
         TestRun.objects.filter(
             project_id__in=project_ids,
@@ -150,24 +166,40 @@ def _failed_run_attention_items(
             failed_count=Count(
                 "pivot_entries",
                 filter=Q(pivot_entries__status=TestRunTestCaseStatus.FAILED),
-            )
+            ),
+            blocked_count=Count(
+                "pivot_entries",
+                filter=Q(pivot_entries__status=TestRunTestCaseStatus.BLOCKED),
+            ),
         )
-        .filter(failed_count__gt=0)
+        .filter(Q(failed_count__gt=0) | Q(blocked_count__gt=0))
         .select_related("project")
         .order_by("-finished_at")[:ATTENTION_LIMIT]
     )
-    return [_failed_run_attention_item(run) for run in runs]
+    return [_finished_run_attention_item(run) for run in runs]
 
 
-def _failed_run_attention_item(run: TestRun) -> AttentionItem:
+def _finished_run_attention_item(run: TestRun) -> AttentionItem:
     failed_count: int = run.failed_count  # type: ignore[attr-defined]  # annotate() field; django-stubs does not model dynamic query annotations
+    blocked_count: int = run.blocked_count  # type: ignore[attr-defined]  # annotate() field; django-stubs does not model dynamic query annotations
+    occurred_at = run.finished_at or run.updated_at
+    url = reverse("projects:test_run_detail", args=[run.project_id, run.id])
+    if failed_count > 0:
+        return AttentionItem(
+            kind="failed_run",
+            project=run.project,
+            title=f"{run.display_name} had failures",
+            detail=f"{failed_count} case(s) failed in {run.project.name}.",
+            occurred_at=occurred_at,
+            url=url,
+        )
     return AttentionItem(
-        kind="failed_run",
+        kind="blocked_run",
         project=run.project,
-        title=f"{run.display_name} had failures",
-        detail=f"{failed_count} case(s) failed in {run.project.name}.",
-        occurred_at=run.finished_at or run.updated_at,
-        url=reverse("projects:test_run_detail", args=[run.project_id, run.id]),
+        title=f"{run.display_name} has blocked cases",
+        detail=f"{blocked_count} case(s) could not be run in {run.project.name}.",
+        occurred_at=occurred_at,
+        url=url,
     )
 
 
@@ -244,10 +276,15 @@ def _summaries_for_runs(run_ids: set[int]) -> dict[int, dict[str, int]]:
         .annotate(
             success=Count("id", filter=Q(status=TestRunTestCaseStatus.SUCCESS)),
             failed=Count("id", filter=Q(status=TestRunTestCaseStatus.FAILED)),
+            blocked=Count("id", filter=Q(status=TestRunTestCaseStatus.BLOCKED)),
         )
     )
     return {
-        row["test_run_id"]: {"success": row["success"], "failed": row["failed"]}
+        row["test_run_id"]: {
+            "success": row["success"],
+            "failed": row["failed"],
+            "blocked": row["blocked"],
+        }
         for row in rows
     }
 
@@ -338,12 +375,14 @@ def _upload_activity_item(upload: TestCaseUpload) -> ActivityItem:
         ),
         occurred_at=upload.updated_at,
         failed=False,
+        blocked=False,
         url=reverse("projects:test_case_import", args=[upload.project_id]),
     )
 
 
 def _run_activity_item(run: TestRun) -> ActivityItem:
     failed_count: int = run.failed_count  # type: ignore[attr-defined]  # annotate() field; django-stubs does not model dynamic query annotations
+    blocked_count: int = run.blocked_count  # type: ignore[attr-defined]  # annotate() field; django-stubs does not model dynamic query annotations
     if run.finished_at is not None:
         return ActivityItem(
             kind="run_finished",
@@ -351,6 +390,7 @@ def _run_activity_item(run: TestRun) -> ActivityItem:
             title=f"{run.display_name} finished",
             occurred_at=run.finished_at,
             failed=failed_count > 0,
+            blocked=blocked_count > 0,
             url=reverse("projects:test_run_detail", args=[run.project_id, run.id]),
         )
     occurred_at = run.started_at or run.created_at
@@ -360,6 +400,7 @@ def _run_activity_item(run: TestRun) -> ActivityItem:
         title=f"{run.display_name} started",
         occurred_at=occurred_at,
         failed=False,
+        blocked=False,
         url=reverse("projects:test_run_detail", args=[run.project_id, run.id]),
     )
 
@@ -379,7 +420,11 @@ def _build_activity_items(project_ids: list[int]) -> list[ActivityItem]:
             failed_count=Count(
                 "pivot_entries",
                 filter=Q(pivot_entries__status=TestRunTestCaseStatus.FAILED),
-            )
+            ),
+            blocked_count=Count(
+                "pivot_entries",
+                filter=Q(pivot_entries__status=TestRunTestCaseStatus.BLOCKED),
+            ),
         )
         .select_related("project")
         .order_by("-updated_at")[:ACTIVITY_LIMIT]
@@ -414,7 +459,7 @@ def get_dashboard_data(
         return _empty_dashboard_data()
 
     summary = _build_run_summary(project_ids, since)
-    attention = _failed_run_attention_items(
+    attention = _finished_run_attention_items(
         project_ids, since
     ) + _disconnected_machine_attention_items(project_ids)
     projects = _build_project_cards(project_ids)

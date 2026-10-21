@@ -2,7 +2,7 @@
 
    Context contract:
      project   — current Project
-     test_runs — Page[TestRun], each row annotated case_count / success_count / failed_count {% endcomment %}
+     test_runs — Page[TestRun], each row annotated case_count / success_count / failed_count / blocked_count {% endcomment %}
 <div class="table-wrap">
   <table class="data-table">
     <thead>
@@ -28,18 +28,14 @@
           </td>
 
           <td data-label="Status">
-            {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count only %}
+            {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count blocked_count=run.blocked_count only %}
           </td>
 
           <td data-label="Cases">{{ run.case_count }} case{{ run.case_count|pluralize }}</td>
 
           <td data-label="Result" {% if run.status == "waiting" or run.status == "started" %}class="muted"{% endif %}>
             {% if run.status == "done" %}
-              {% if run.failed_count %}
-                {{ run.success_count }} passed &middot; {{ run.failed_count }} failed
-              {% else %}
-                {{ run.success_count }} passed
-              {% endif %}
+              {{ run.success_count }} passed{% if run.failed_count %} &middot; {{ run.failed_count }} failed{% endif %}{% if run.blocked_count %} &middot; {{ run.blocked_count }} blocked{% endif %}
             {% elif run.status == "started" %}
               In progress
             {% elif run.status == "waiting" %}

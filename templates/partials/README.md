@@ -99,3 +99,24 @@ agent-status WebSocket component (ported from the current
 Until that component exists, wrap `{% include "partials/advanced_diagnostics.html" %}`
 in a scope providing at least empty defaults (`x-data="{ clientVersion: '', capabilities: [], omniparserStatus: {} }"`)
 so the `x-text` bindings don't error against `undefined`.
+
+## Status badges and the Blocked result
+
+`badge_case_status.html` and `badge_run_status.html` are the only places that
+turn a status into a badge on server-rendered pages; the live Alpine maps in
+`projects/test_run_detail.html` (`pivotBadgeClass` / `pivotBadgeLabel`) and
+`projects/test_run_case_detail.html` (`badgeClass` / `badgeLabel`) must list
+the same statuses. Case statuses: `created`, `in_progress`, `success`,
+`failed`, `blocked`, `cancelled`.
+
+**Blocked** (`.badge-blocked`, warning palette) means an infrastructure fault
+stopped the case before a verdict. It is neither passed nor failed and never
+counts toward a pass rate (`success / (success + failed)`).
+
+A finished run's badge resolves in a fixed order: `failed_count` > 0 reads
+Failed, else `blocked_count` > 0 reads Blocked, else Passed. Every include of
+`badge_run_status.html` passes both counts, so a run with blocked cases never
+reads Passed.
+
+`stat_card.html` tones: `success`, `danger`, `warning`, `info` (each maps to a
+`.stat-value.is-<tone>` class); Blocked counts use `warning`.

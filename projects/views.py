@@ -32,6 +32,7 @@ from projects.forms import (
 from projects.models import Project, TestRun, TestRunStatus
 from projects.services import (
     STATUS_FILTER_CHOICES,
+    RerunScope,
     RunReadiness,
     abort_test_run,
     add_cases_to_test_run,
@@ -39,7 +40,7 @@ from projects.services import (
     build_run_narrative,
     bulk_delete_test_cases,
     can_edit_test_case_in_run,
-    can_rerun_failed_cases,
+    can_rerun_cases,
     cancel_upload_processing,
     copy_test_cases_to_project,
     count_test_cases,
@@ -67,6 +68,7 @@ from projects.services import (
     get_test_run_for_project,
     get_test_run_summary,
     get_upload_for_project,
+    list_blocked_case_titles,
     list_completed_uploads_for_project,
     list_failed_case_titles,
     list_other_projects_for_user,
@@ -78,7 +80,7 @@ from projects.services import (
     list_waiting_test_runs_for_project,
     regenerate_api_key,
     remove_case_from_test_run,
-    rerun_failed_cases,
+    rerun_cases,
     reset_test_run,
     save_application_context,
     save_project_prompt,
@@ -794,11 +796,25 @@ def test_run_reset(
 def test_run_rerun_failed(
     request: HttpRequest, project: Project, test_run_id: int
 ) -> HttpResponse:
+    return _rerun_test_run_cases(request, project, test_run_id, RerunScope.FAILED)
+
+
+@project_membership_required
+@require_POST
+def test_run_rerun_blocked(
+    request: HttpRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    return _rerun_test_run_cases(request, project, test_run_id, RerunScope.BLOCKED)
+
+
+def _rerun_test_run_cases(
+    request: HttpRequest, project: Project, test_run_id: int, scope: RerunScope
+) -> HttpResponse:
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
         raise Http404
     try:
-        new_run = rerun_failed_cases(test_run)
+        new_run = rerun_cases(test_run, scope)
     except ValueError as exc:
         messages.error(request, str(exc))
         return redirect(
@@ -818,9 +834,9 @@ def _build_test_run_detail_context(
     per_page = _parse_per_page(request)
     cases = list_test_run_cases(test_run=test_run, page=page, per_page=per_page)
     summary = get_test_run_summary(test_run)
-    failed_titles = list_failed_case_titles(test_run)
-    narrative = build_run_narrative(test_run, summary, failed_titles)
-    can_rerun_failed = can_rerun_failed_cases(test_run, summary["failed"])
+    failed_titles = list_failed_case_titles(test_run) if summary["failed"] else []
+    blocked_titles = list_blocked_case_titles(test_run) if summary["blocked"] else []
+    narrative = build_run_narrative(test_run, summary, failed_titles, blocked_titles)
     testrail_push = get_testrail_push_panel(
         test_run, links_base_url=request.build_absolute_uri("/")
     )
@@ -837,7 +853,8 @@ def _build_test_run_detail_context(
         "form": TestCaseForm(),
         "can_edit": can_edit_test_case_in_run(test_run),
         "narrative": narrative,
-        "can_rerun_failed": can_rerun_failed,
+        "can_rerun_failed": can_rerun_cases(test_run, summary["failed"]),
+        "can_rerun_blocked": can_rerun_cases(test_run, summary["blocked"]),
         "failed_titles": failed_titles,
         "testrail_push": testrail_push,
         "testrail_push_confirm_body": format_push_confirm_body(

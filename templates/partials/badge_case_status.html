@@ -4,7 +4,7 @@
 
    Context contract:
      status    — TestRunTestCaseStatus value:
-                 "created" | "in_progress" | "success" | "failed" | "cancelled"
+                 "created" | "in_progress" | "success" | "failed" | "blocked" | "cancelled"
      never_run — optional bool; when status is "created" and never_run is
                  true, the badge reads "Never run" instead of "Not started" {% endcomment %}
 {% if status == "created" %}
@@ -15,6 +15,8 @@
   <span class="badge badge-passed" data-status="{{ status }}">Passed</span>
 {% elif status == "failed" %}
   <span class="badge badge-failed" data-status="{{ status }}">Failed</span>
+{% elif status == "blocked" %}
+  <span class="badge badge-blocked" data-status="{{ status }}">Blocked</span>
 {% elif status == "cancelled" %}
   <span class="badge badge-cancelled" data-status="{{ status }}">Cancelled</span>
 {% endif %}

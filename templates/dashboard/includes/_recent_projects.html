@@ -20,7 +20,7 @@
             <dt>Latest run</dt>
             <dd>
               {% if card.latest_run %}
-                {% include "partials/badge_run_status.html" with status=card.latest_run.status failed_count=card.latest_run_summary.failed only %}
+                {% include "partials/badge_run_status.html" with status=card.latest_run.status failed_count=card.latest_run_summary.failed blocked_count=card.latest_run_summary.blocked only %}
               {% else %}
                 <span class="muted">No runs yet</span>
               {% endif %}

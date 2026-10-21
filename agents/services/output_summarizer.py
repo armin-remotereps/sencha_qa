@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 
 from agents.services.llm_client import send_chat_completion
@@ -65,7 +66,13 @@ def _summarize_with_fallback(
             )
             logger.info("[Summarizer] AI summary produced (%d chars)", len(result))
             return result
+        except SoftTimeLimitExceeded:
+            # The case hit its time limit; it must end as Blocked, not carry on
+            # with a truncated summary.
+            raise
         except Exception:
+            # Includes AIServiceError: a summary is not a verdict, so a provider
+            # fault here falls back to truncation instead of blocking the case.
             logger.warning(
                 "[Summarizer] AI summarization failed, falling back to truncation",
                 exc_info=True,

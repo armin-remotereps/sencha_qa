@@ -16,7 +16,12 @@
      test_run, screenshots prefetched), screenshots (list, same queryset),
      form (TestCaseForm, for the edit dialog's type/priority choices),
      can_edit, case_position (1-based index of this case within the run),
-     case_total (total case count for the run). {% endcomment %}
+     case_total (total case count for the run).
+
+     pivot.blocked_reason / pivot.get_blocked_reason_display are set only when
+     status is "blocked"; the blocked message itself is pivot.result. The case
+     WS `status` / `current_state` events carry blocked_reason and
+     blocked_reason_label (empty unless blocked). {% endcomment %}
 
 {% block title %}{{ pivot.test_case.title }} · {{ test_run.display_name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -44,7 +49,7 @@
           data-status="{{ pivot.status }}"
           :class="badgeClass(status)"
           x-text="badgeLabel(status)"
-        >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "cancelled" %}Cancelled{% endif %}</span>
+        >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% endif %}</span>
       </h1>
       <p class="subtitle">
         Case {{ case_position }} of {{ case_total }} in {{ test_run.display_name }}
@@ -69,11 +74,11 @@
   <section
     aria-labelledby="result-h"
     class="card"
-    :class="status === 'failed' ? 'card-tone-danger' : (status === 'success' ? 'card-tone-success' : '')"
+    :class="status === 'failed' ? 'card-tone-danger' : (status === 'success' ? 'card-tone-success' : (status === 'blocked' ? 'card-tone-warning' : ''))"
   >
     <div class="card-header">
       <h2 id="result-h">Result</h2>
-      <span class="badge" data-status="{{ pivot.status }}" :class="badgeClass(status)" x-text="badgeLabel(status)">{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "cancelled" %}Cancelled{% endif %}</span>
+      <span class="badge" data-status="{{ pivot.status }}" :class="badgeClass(status)" x-text="badgeLabel(status)">{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% endif %}</span>
     </div>
     <template x-if="status === 'created' && testRunStatus === 'waiting'">
       <div class="alert alert-info">
@@ -86,6 +91,16 @@
     <template x-if="!(status === 'created' && testRunStatus === 'waiting')">
       <p class="pre-wrap" x-text="result || 'No result yet.'"></p>
     </template>
+  </section>
+
+  {# Section: Why this case was blocked — only for status "blocked" #}
+  <section aria-labelledby="blocked-h" class="card card-tone-warning" x-show="status === 'blocked'" x-cloak>
+    <div class="card-header">
+      <h2 id="blocked-h">Why this case was blocked</h2>
+      <span class="badge badge-blocked" x-text="blockedReasonLabel || 'Blocked'">{{ pivot.get_blocked_reason_display|default:"Blocked" }}</span>
+    </div>
+    <p class="pre-wrap" x-text="result || 'No details were recorded.'"></p>
+    <p class="hint">This case was not judged: an infrastructure problem stopped it before the agent could reach a verdict, so it counts as neither passed nor failed. Fix the problem, then use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked</a> on the run to try it again.</p>
   </section>
 
   {# Section: What the agent was asked to do #}
@@ -291,6 +306,7 @@ document.addEventListener('alpine:init', () => {
     status: '{{ pivot.status }}',
     testRunStatus: '{{ test_run.status }}',
     result: JSON.parse(document.getElementById('initial-result').textContent),
+    blockedReasonLabel: '{{ pivot.get_blocked_reason_display|escapejs }}',
     logs: JSON.parse(document.getElementById('initial-logs').textContent),
     screenshots: [
       {% for screenshot in screenshots %}
@@ -311,6 +327,7 @@ document.addEventListener('alpine:init', () => {
         in_progress: 'badge-running',
         success: 'badge-passed',
         failed: 'badge-failed',
+        blocked: 'badge-blocked',
         cancelled: 'badge-cancelled',
       }[status] || 'badge-draft';
     },
@@ -321,6 +338,7 @@ document.addEventListener('alpine:init', () => {
         in_progress: 'Running',
         success: 'Passed',
         failed: 'Failed',
+        blocked: 'Blocked',
         cancelled: 'Cancelled',
       }[status] || status;
     },
@@ -372,6 +390,7 @@ document.addEventListener('alpine:init', () => {
         if (data.type === 'current_state') {
           this.status = data.status;
           this.result = data.result;
+          this.blockedReasonLabel = data.blocked_reason_label || '';
           this.logs = data.logs;
           this.screenshots = data.screenshots;
           return;
@@ -400,6 +419,7 @@ document.addEventListener('alpine:init', () => {
         if (data.type === 'status') {
           this.status = data.status;
           this.result = data.result;
+          this.blockedReasonLabel = data.blocked_reason_label || '';
           return;
         }
       };

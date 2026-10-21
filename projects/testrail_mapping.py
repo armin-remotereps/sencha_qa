@@ -27,6 +27,7 @@ _REFERENCES_MAX = 500
 _ESTIMATE_MAX = 50
 
 TESTRAIL_STATUS_PASSED: Final = 1
+TESTRAIL_STATUS_BLOCKED: Final = 2
 TESTRAIL_STATUS_FAILED: Final = 5
 
 RESULT_COMMENT_TEXT_MAX: Final = 4000
@@ -34,11 +35,13 @@ RESULT_COMMENT_TEXT_MAX: Final = 4000
 _PIVOT_STATUS_TO_TESTRAIL: Mapping[str, int] = {
     TestRunTestCaseStatus.SUCCESS: TESTRAIL_STATUS_PASSED,
     TestRunTestCaseStatus.FAILED: TESTRAIL_STATUS_FAILED,
+    TestRunTestCaseStatus.BLOCKED: TESTRAIL_STATUS_BLOCKED,
 }
 
 _TESTRAIL_STATUS_TO_LABEL: Mapping[int, str] = {
     TESTRAIL_STATUS_PASSED: "Passed",
     TESTRAIL_STATUS_FAILED: "Failed",
+    TESTRAIL_STATUS_BLOCKED: "Blocked",
 }
 
 # TestRail spells the lowest priority differently from our choice label.
@@ -122,8 +125,8 @@ class TestRailFieldMapper:
 def map_pivot_status_to_testrail(status: str) -> int | None:
     """Map a TestRunTestCase status to the TestRail result status id.
 
-    Only "success" and "failed" are pushable; every other status (created,
-    in progress, cancelled) has no meaningful TestRail equivalent.
+    Only "success", "failed" and "blocked" are pushable; every other status
+    (created, in progress, cancelled) has no meaningful TestRail equivalent.
     """
     return _PIVOT_STATUS_TO_TESTRAIL.get(status)
 
@@ -186,6 +189,18 @@ def format_push_confirm_body(pending_count: int, testrail_run_id: int) -> str:
         f"{changed} will be added to TestRail run R{testrail_run_id}. "
         "Unchanged results are skipped."
     )
+
+
+def format_blocked_result_text(reason_label: str, result_text: str) -> str:
+    """Prefix a blocked case's result with its reason, as "<reason>: <result>".
+
+    Either part may be empty; the separator is only added when both exist.
+    """
+    reason = reason_label.strip()
+    text = result_text.strip()
+    if reason and text:
+        return f"{reason}: {text}"
+    return reason or text
 
 
 def build_result_comment(

@@ -849,6 +849,10 @@ a.stat-card:hover {
   color: var(--info);
 }
 
+.stat-value.is-warning {
+  color: var(--warning);
+}
+
 /* Layout grids */
 .grid {
   display: grid;
@@ -867,6 +871,12 @@ a.stat-card:hover {
   grid-template-columns: repeat(2, 1fr);
 }
 
+/* Five tiles (run detail stats): 2 columns on phones, 3 on tablets, one
+   row on wide screens. */
+.grid-5 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
 @media (min-width: 768px) {
   .grid-2 {
     grid-template-columns: repeat(2, 1fr);
@@ -878,6 +888,16 @@ a.stat-card:hover {
 
   .grid-4 {
     grid-template-columns: repeat(4, 1fr);
+  }
+
+  .grid-5 {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 1024px) {
+  .grid-5 {
+    grid-template-columns: repeat(5, 1fr);
   }
 }
 
@@ -961,6 +981,14 @@ a.stat-card:hover {
   color: var(--text-muted);
   background: rgba(155, 170, 182, 0.12);
   border-color: rgba(155, 170, 182, 0.3);
+}
+
+/* Blocked cases/runs — an infrastructure fault stopped the case before a
+   verdict; warning-tinted so it never reads as Passed or Failed. */
+.badge-blocked {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: rgba(242, 184, 75, 0.35);
 }
 
 /* Visual engine starting up — warning-tinted, not yet a failure. */
@@ -1764,6 +1792,12 @@ code {
   color: var(--danger);
   background: var(--danger-soft);
   border-color: rgba(239, 91, 98, 0.35);
+}
+
+.activity .activity-icon.is-warning {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: rgba(242, 184, 75, 0.35);
 }
 
 .activity time {

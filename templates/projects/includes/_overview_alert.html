@@ -40,6 +40,15 @@
         <a class="btn btn-sm btn-secondary" href="{% url 'projects:test_run_detail' project.id overview.latest_run.id %}">Review failures</a>
       </div>
     </div>
+  {% elif overview.latest_run_summary.blocked %}
+    <div class="alert alert-warning" role="alert">
+      <span class="alert-icon" aria-hidden="true">⚠</span>
+      <div>
+        <strong>{{ overview.latest_run_summary.blocked }} case{{ overview.latest_run_summary.blocked|pluralize }} blocked in {{ overview.latest_run.display_name }}</strong>
+        <p>A test machine, Visual engine or AI service problem stopped {{ overview.latest_run_summary.blocked|pluralize:"it,them" }} before a verdict. Re-run the blocked cases once the problem is fixed.</p>
+        <a class="btn btn-sm btn-secondary" href="{% url 'projects:test_run_detail' project.id overview.latest_run.id %}">Review blocked cases</a>
+      </div>
+    </div>
   {% else %}
     <div class="alert alert-info" role="status">
       <span class="alert-icon" aria-hidden="true">ℹ</span>

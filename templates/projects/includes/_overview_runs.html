@@ -5,7 +5,7 @@
     project  — the current Project
     overview — projects.services.ProjectOverview, whose recent_runs is a
                list of the most recent TestRuns (newest first), each
-               annotated case_count / success_count / failed_count
+               annotated case_count / success_count / failed_count / blocked_count
 {% endcomment %}
 <section aria-labelledby="latest-runs-h" class="card">
   <div class="card-header">
@@ -35,7 +35,7 @@
                 </time>
               </td>
               <td data-label="Result">
-                {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count only %}
+                {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count blocked_count=run.blocked_count only %}
               </td>
               <td data-label="Cases">{{ run.case_count }}</td>
             </tr>

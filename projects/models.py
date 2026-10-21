@@ -60,6 +60,18 @@ class TestRunTestCaseStatus(models.TextChoices):
     SUCCESS = "success", "Success"
     FAILED = "failed", "Failed"
     CANCELLED = "cancelled", "Cancelled"
+    BLOCKED = "blocked", "Blocked"
+
+
+class BlockedReason(models.TextChoices):
+    """Why a case could not be executed or judged; never a verdict on the app."""
+
+    RUNNER_DISCONNECTED = "runner_disconnected", "Test Runner disconnected"
+    RUNNER_UNRESPONSIVE = "runner_unresponsive", "Test Runner stopped responding"
+    VISUAL_ENGINE = "visual_engine", "Visual engine unavailable"
+    AI_SERVICE = "ai_service", "AI service error"
+    TIME_LIMIT = "time_limit", "Case time limit reached"
+    INTERNAL_ERROR = "internal_error", "Internal error"
 
 
 class ApplicationPlatform(models.TextChoices):
@@ -308,6 +320,10 @@ class TestRunTestCase(models.Model):
         db_index=True,
     )
     result = models.TextField(blank=True, default="")
+    # Set only when status is BLOCKED.
+    blocked_reason = models.CharField(
+        max_length=32, choices=BlockedReason.choices, blank=True, default=""
+    )
     logs = models.TextField(blank=True, default="")
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)

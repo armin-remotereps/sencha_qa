@@ -17,6 +17,7 @@ from typing import Any, NoReturn, TypedDict, TypeVar
 
 from asgiref.sync import async_to_sync
 from celery import chain
+from celery.exceptions import SoftTimeLimitExceeded
 from channels.layers import get_channel_layer
 from django.conf import settings
 from django.core.files.base import ContentFile
@@ -57,6 +58,7 @@ from controller_client.protocol import (
     OmniParserStatusPayload,
     parse_omniparser_status_payload,
 )
+from projects.case_blocking import blocked_message, classify_case_exception
 from projects.controller_outage_clock import agent_monotonic, reset_outage_clock
 from projects.controller_reconnect_services import (
     CONTROLLER_POLL_INTERVAL_SECONDS,
@@ -65,11 +67,16 @@ from projects.controller_reconnect_services import (
     wait_for_controller,
 )
 from projects.exceptions import (
+    ControllerActionError,
     ControllerNotConnectedError,
     ControllerReconnectTimeoutError,
+    TestRunnerDisconnectedError,
+    TestRunnerUnresponsiveError,
+    VisualEngineError,
 )
 from projects.models import (
     ApplicationPlatform,
+    BlockedReason,
     Project,
     Tag,
     TestCase,
@@ -254,7 +261,7 @@ def list_projects_for_user(
 
 
 def get_latest_runs_by_project(projects: Iterable[Project]) -> dict[int, TestRun]:
-    """Fetch each project's latest run, with pass/fail counts, in one query.
+    """Fetch each project's latest run, with pass/fail/blocked counts, in one query.
 
     `projects` must come from a queryset annotated with `latest_run_id`
     (see `list_projects_for_user`); the result is keyed by `project_id`.
@@ -275,6 +282,10 @@ def get_latest_runs_by_project(projects: Iterable[Project]) -> dict[int, TestRun
         failed_count=Count(
             "pivot_entries",
             filter=Q(pivot_entries__status=TestRunTestCaseStatus.FAILED),
+        ),
+        blocked_count=Count(
+            "pivot_entries",
+            filter=Q(pivot_entries__status=TestRunTestCaseStatus.BLOCKED),
         ),
     )
     return {run.project_id: run for run in runs}
@@ -390,7 +401,7 @@ RECENT_RUNS_LIMIT = 5
 
 
 def _annotate_run_counts(qs: QuerySet[TestRun]) -> QuerySet[TestRun]:
-    """Annotate a `TestRun` queryset with its case/success/failure counts.
+    """Annotate a `TestRun` queryset with its case/success/failure/blocked counts.
 
     Shared by `list_test_runs_for_project` and `get_project_overview` so
     both surfaces report the same numbers from the same query shape.
@@ -404,6 +415,10 @@ def _annotate_run_counts(qs: QuerySet[TestRun]) -> QuerySet[TestRun]:
         failed_count=Count(
             "pivot_entries",
             filter=Q(pivot_entries__status=TestRunTestCaseStatus.FAILED),
+        ),
+        blocked_count=Count(
+            "pivot_entries",
+            filter=Q(pivot_entries__status=TestRunTestCaseStatus.BLOCKED),
         ),
     )
 
@@ -898,10 +913,6 @@ def force_disconnect_controller(project: Project) -> bool:
 # ============================================================================
 
 
-class ControllerActionError(Exception):
-    pass
-
-
 class ActionResult(TypedDict):
     success: bool
     message: str
@@ -936,6 +947,10 @@ def _get_channel_layer_or_raise() -> Any:
 
 
 _ERROR_REPLY_TYPE = "error.result"
+# Error codes meaning the visual engine (OmniParser), not the app, failed.
+_VISUAL_ENGINE_ERROR_CODES = frozenset(
+    {ErrorCode.FIND_ELEMENT_FAILED, ErrorCode.OMNIPARSER_NOT_READY}
+)
 
 
 def _raise_for_error_reply(reply: dict[str, Any], event_type: str) -> None:
@@ -958,6 +973,8 @@ def _raise_for_error_reply(reply: dict[str, Any], event_type: str) -> None:
         message = f"{message} [{code}]"
     if details:
         message = f"{message} ({details})"
+    if code in _VISUAL_ENGINE_ERROR_CODES:
+        raise VisualEngineError(message)
     raise ControllerActionError(message)
 
 
@@ -1011,7 +1028,7 @@ def _run_with_reconnect_retry(
     try:
         return attempt(owner)
     except _ConnectionLost as exc:
-        raise ControllerActionError(
+        raise TestRunnerDisconnectedError(
             f"Test Runner connection was lost again while running {event_type}; "
             "giving up on this action"
         ) from exc
@@ -1047,11 +1064,24 @@ def _is_stray_disconnect_reply(
 
 
 def _raise_reply_timeout(
-    project_id: int, owner: str, message: str, cause: BaseException | None
+    project_id: int,
+    owner: str,
+    message: str,
+    cause: BaseException | None,
+    *,
+    runner_local: bool = False,
 ) -> NoReturn:
-    """Raise ``_ConnectionLost`` if the owner changed, else a plain timeout error."""
+    """Raise ``_ConnectionLost`` if the owner changed, else a timeout error.
+
+    ``runner_local`` marks actions whose duration does not depend on the
+    application under test (input, screenshot, find_element, cleanup, ...):
+    their silence means the Test Runner itself stopped responding, which blocks
+    the case. Other timeouts stay plain so the agent can judge a hung app.
+    """
     if controller_connection_lost(project_id, owner):
         raise _ConnectionLost(message) from cause
+    if runner_local:
+        raise TestRunnerUnresponsiveError(message) from cause
     raise ControllerActionError(message) from cause
 
 
@@ -1061,13 +1091,20 @@ def _dispatch_controller_action(
     reply_timeout: float,
     *,
     resend_on_reconnect: bool = True,
+    runner_local: bool = False,
     **payload: Any,
 ) -> dict[str, Any]:
     layer = _get_channel_layer_or_raise()
 
     def _attempt(owner: str) -> dict[str, Any]:
         return _send_controller_action_once(
-            layer, project_id, owner, event_type, reply_timeout, payload
+            layer,
+            project_id,
+            owner,
+            event_type,
+            reply_timeout,
+            payload,
+            runner_local=runner_local,
         )
 
     return _run_with_reconnect_retry(
@@ -1082,6 +1119,8 @@ def _send_controller_action_once(
     event_type: str,
     reply_timeout: float,
     payload: dict[str, Any],
+    *,
+    runner_local: bool,
 ) -> dict[str, Any]:
     reply_channel: str = async_to_sync(layer.new_channel)()
     request_id = str(uuid.uuid4())
@@ -1102,14 +1141,18 @@ def _send_controller_action_once(
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            _raise_reply_timeout(project_id, owner, timeout_message, None)
+            _raise_reply_timeout(
+                project_id, owner, timeout_message, None, runner_local=runner_local
+            )
 
         try:
             result: dict[str, Any] = async_to_sync(asyncio.wait_for)(
                 layer.receive(reply_channel), timeout=remaining
             )
         except asyncio.TimeoutError as exc:
-            _raise_reply_timeout(project_id, owner, timeout_message, exc)
+            _raise_reply_timeout(
+                project_id, owner, timeout_message, exc, runner_local=runner_local
+            )
 
         if _is_stray_disconnect_reply(result, project_id, owner):
             continue
@@ -1133,7 +1176,13 @@ def controller_click(
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.click", timeout, x=x, y=y, button=button
+        project_id,
+        "controller.click",
+        timeout,
+        x=x,
+        y=y,
+        button=button,
+        runner_local=True,
     )
     return _build_action_result(reply)
 
@@ -1145,7 +1194,12 @@ def controller_hover(
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.hover", timeout, x=x, y=y
+        project_id,
+        "controller.hover",
+        timeout,
+        x=x,
+        y=y,
+        runner_local=True,
     )
     return _build_action_result(reply)
 
@@ -1164,6 +1218,7 @@ def controller_drag(
         project_id,
         "controller.drag",
         timeout,
+        runner_local=True,
         start_x=start_x,
         start_y=start_y,
         end_x=end_x,
@@ -1181,7 +1236,12 @@ def controller_type_text(
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.type_text", timeout, text=text, interval=interval
+        project_id,
+        "controller.type_text",
+        timeout,
+        text=text,
+        interval=interval,
+        runner_local=True,
     )
     return _build_action_result(reply)
 
@@ -1192,7 +1252,11 @@ def controller_key_press(
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.key_press", timeout, keys=keys
+        project_id,
+        "controller.key_press",
+        timeout,
+        keys=keys,
+        runner_local=True,
     )
     return _build_action_result(reply)
 
@@ -1225,7 +1289,9 @@ def controller_screenshot(
     project_id: int,
     timeout: float = 30.0,
 ) -> ScreenshotResult:
-    reply = _dispatch_controller_action(project_id, "controller.screenshot", timeout)
+    reply = _dispatch_controller_action(
+        project_id, "controller.screenshot", timeout, runner_local=True
+    )
     return _build_screenshot_result(reply, "take a screenshot")
 
 
@@ -1255,7 +1321,7 @@ def _raise_for_find_element_failure(reply: dict[str, Any]) -> None:
     details = reply.get("details", "")
     if details:
         message = f"{message} ({details})"
-    raise ControllerActionError(message)
+    raise VisualEngineError(message)
 
 
 def controller_find_elements(
@@ -1271,6 +1337,7 @@ def controller_find_elements(
         project_id,
         "controller.find_element",
         resolved_timeout,
+        runner_local=True,
         box_threshold=box_threshold,
         iou_threshold=iou_threshold,
     )
@@ -1613,7 +1680,11 @@ def controller_check_app_installed(
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.check_app_installed", timeout, app_name=app_name
+        project_id,
+        "controller.check_app_installed",
+        timeout,
+        app_name=app_name,
+        runner_local=True,
     )
     return _build_action_result(reply)
 
@@ -1629,6 +1700,7 @@ def controller_cleanup_environment(
         "controller.cleanup_environment",
         timeout,
         resend_on_reconnect=resend_on_reconnect,
+        runner_local=True,
     )
     return _build_action_result(reply)
 
@@ -1660,6 +1732,7 @@ def _safe_cleanup(project_id: int, *, wait_for_runner: bool) -> None:
         ControllerReconnectTimeoutError,
         AgentCancelledError,
         ControllerNotConnectedError,
+        SoftTimeLimitExceeded,
     ):
         if wait_for_runner:
             raise
@@ -1915,13 +1988,14 @@ def get_test_run_case_detail(pivot_id: int, project: Project) -> TestRunTestCase
 def list_test_run_cases(
     *, test_run: TestRun, page: int, per_page: int
 ) -> Page[TestRunTestCase]:
-    """List a run's cases with failures surfaced first, newest first otherwise."""
+    """List a run's cases: failed, then blocked, then the rest; newest first within."""
     qs = (
         test_run.pivot_entries.select_related("test_case")
         .annotate(
             _failure_priority=Case(
                 When(status=TestRunTestCaseStatus.FAILED, then=0),
-                default=1,
+                When(status=TestRunTestCaseStatus.BLOCKED, then=1),
+                default=2,
                 output_field=IntegerField(),
             )
         )
@@ -1962,6 +2036,7 @@ def reset_test_run(test_run: TestRun) -> None:
             screenshot.image.delete(save=False)
         pivot.screenshots.all().delete()
         pivot.status = TestRunTestCaseStatus.CREATED
+        pivot.blocked_reason = ""
         pivot.result = ""
         pivot.logs = ""
         pivot.started_at = None
@@ -1969,6 +2044,7 @@ def reset_test_run(test_run: TestRun) -> None:
         pivot.save(
             update_fields=[
                 "status",
+                "blocked_reason",
                 "result",
                 "logs",
                 "started_at",
@@ -2034,67 +2110,104 @@ def get_test_run_summary(test_run: TestRun) -> dict[str, int]:
         in_progress=Count("id", filter=Q(status=TestRunTestCaseStatus.IN_PROGRESS)),
         success=Count("id", filter=Q(status=TestRunTestCaseStatus.SUCCESS)),
         failed=Count("id", filter=Q(status=TestRunTestCaseStatus.FAILED)),
+        blocked=Count("id", filter=Q(status=TestRunTestCaseStatus.BLOCKED)),
         cancelled=Count("id", filter=Q(status=TestRunTestCaseStatus.CANCELLED)),
     )
     return {k: v or 0 for k, v in result.items()}
 
 
-@transaction.atomic
-def can_rerun_failed_cases(test_run: TestRun, failed_count: int) -> bool:
+class RerunScope(StrEnum):
+    """Which cases of a finished run a re-run copies."""
+
+    FAILED = "failed"
+    BLOCKED = "blocked"
+
+
+_RERUN_SCOPE_STATUS: dict[RerunScope, TestRunTestCaseStatus] = {
+    RerunScope.FAILED: TestRunTestCaseStatus.FAILED,
+    RerunScope.BLOCKED: TestRunTestCaseStatus.BLOCKED,
+}
+
+
+def can_rerun_cases(test_run: TestRun, count: int) -> bool:
     """Single source of the rerun rule, shared by the UI gate and the service."""
     return (
-        test_run.status in (TestRunStatus.DONE, TestRunStatus.CANCELLED)
-        and failed_count > 0
+        test_run.status in (TestRunStatus.DONE, TestRunStatus.CANCELLED) and count > 0
     )
 
 
-def rerun_failed_cases(test_run: TestRun) -> TestRun:
-    """Create a new run containing only the failed cases from `test_run`.
+@transaction.atomic
+def rerun_cases(test_run: TestRun, scope: RerunScope) -> TestRun:
+    """Create a new run containing only the `scope` cases from `test_run`.
 
-    Only DONE/CANCELLED runs qualify — a run still in progress has no
-    stable set of failures to copy yet.
+    Only DONE/CANCELLED runs qualify — a run still in progress has no stable
+    set of cases to copy yet. The TestRail target is copied so pushing the new
+    run adds its verdicts to the same TestRail run.
     """
-    failed_case_ids = list(
-        test_run.pivot_entries.filter(status=TestRunTestCaseStatus.FAILED).values_list(
+    case_ids = list(
+        test_run.pivot_entries.filter(status=_RERUN_SCOPE_STATUS[scope]).values_list(
             "test_case_id", flat=True
         )
     )
-    if not can_rerun_failed_cases(test_run, len(failed_case_ids)):
+    if not can_rerun_cases(test_run, len(case_ids)):
         raise ValueError(
-            "Only completed or cancelled runs with failed cases can be rerun."
+            f"Only completed or cancelled runs with {scope.value} cases can be rerun."
         )
 
     new_run = TestRun.objects.create(
         project=test_run.project,
-        name=f"{test_run.display_name} — failed rerun",
+        name=f"{test_run.display_name} — {scope.value} rerun",
+        testrail_project_id=test_run.testrail_project_id,
+        testrail_suite_id=test_run.testrail_suite_id,
+        testrail_run_id=test_run.testrail_run_id,
     )
     pivots = [
-        TestRunTestCase(test_run=new_run, test_case_id=case_id)
-        for case_id in failed_case_ids
+        TestRunTestCase(test_run=new_run, test_case_id=case_id) for case_id in case_ids
     ]
     TestRunTestCase.objects.bulk_create(pivots)
     return new_run
 
 
+NARRATIVE_TITLE_LIMIT = 10
+
+
+def _join_titles(titles: list[str], count: int) -> str:
+    joined = ", ".join(titles)
+    if count > len(titles):
+        joined += f" and {count - len(titles)} more"
+    return joined
+
+
 def list_failed_case_titles(test_run: TestRun) -> list[str]:
-    """Titles of the failed cases in a run, for the "What happened" summary."""
+    """First failed case titles of a run, for the "What happened" summary."""
     return list(
-        test_run.pivot_entries.filter(status=TestRunTestCaseStatus.FAILED).values_list(
-            "test_case__title", flat=True
-        )
+        test_run.pivot_entries.filter(status=TestRunTestCaseStatus.FAILED)
+        .order_by("id")
+        .values_list("test_case__title", flat=True)[:NARRATIVE_TITLE_LIMIT]
+    )
+
+
+def list_blocked_case_titles(test_run: TestRun) -> list[str]:
+    """First blocked case titles of a run, for the "What happened" summary."""
+    return list(
+        test_run.pivot_entries.filter(status=TestRunTestCaseStatus.BLOCKED)
+        .order_by("id")
+        .values_list("test_case__title", flat=True)[:NARRATIVE_TITLE_LIMIT]
     )
 
 
 def _build_narrative_for_active_run(test_run: TestRun, summary: dict[str, int]) -> str:
     total = summary.get("total", 0)
-    finished = summary.get("success", 0) + summary.get("failed", 0)
+    finished = (
+        summary.get("success", 0) + summary.get("failed", 0) + summary.get("blocked", 0)
+    )
     if test_run.status == TestRunStatus.CANCELLED:
         return f"Run cancelled after {finished} of {total} cases finished."
     return f"{finished} of {total} cases finished so far."
 
 
 def _build_narrative_for_finished_run(
-    summary: dict[str, int], failed_titles: list[str]
+    summary: dict[str, int], failed_titles: list[str], blocked_titles: list[str]
 ) -> str:
     total = summary.get("total", 0)
     success = summary.get("success", 0)
@@ -2104,14 +2217,27 @@ def _build_narrative_for_finished_run(
     sentence = f"{success} of {total} cases passed."
     failed_count = summary.get("failed", 0)
     if failed_count and failed_titles:
-        sentence += f" {failed_count} failed: {', '.join(failed_titles)}."
+        sentence += (
+            f" {failed_count} failed: {_join_titles(failed_titles, failed_count)}."
+        )
     elif failed_count:
         sentence += f" {failed_count} failed."
+    blocked_count = summary.get("blocked", 0)
+    if blocked_count and blocked_titles:
+        sentence += (
+            f" {blocked_count} blocked (not judged): "
+            f"{_join_titles(blocked_titles, blocked_count)}."
+        )
+    elif blocked_count:
+        sentence += f" {blocked_count} blocked (not judged)."
     return sentence
 
 
 def build_run_narrative(
-    test_run: TestRun, summary: dict[str, int], failed_titles: list[str]
+    test_run: TestRun,
+    summary: dict[str, int],
+    failed_titles: list[str],
+    blocked_titles: list[str],
 ) -> str:
     """Build the deterministic "What happened" sentence for a run's page."""
     if test_run.status == TestRunStatus.WAITING:
@@ -2120,7 +2246,7 @@ def build_run_narrative(
         )
     if test_run.status in (TestRunStatus.STARTED, TestRunStatus.CANCELLED):
         return _build_narrative_for_active_run(test_run, summary)
-    return _build_narrative_for_finished_run(summary, failed_titles)
+    return _build_narrative_for_finished_run(summary, failed_titles, blocked_titles)
 
 
 # ============================================================================
@@ -2147,6 +2273,8 @@ class CaseStatusEvent(TypedDict):
     type: str
     status: str
     result: str
+    blocked_reason: str
+    blocked_reason_label: str
 
 
 class TestRunStatusEvent(TypedDict):
@@ -2187,12 +2315,22 @@ def _broadcast_pivot_status_to_case(pivot: TestRunTestCase) -> None:
     if layer is None:
         return
 
+    blocked_reason, blocked_reason_label = get_blocked_reason_fields(pivot)
     event: CaseStatusEvent = {
         "type": "test_run_case.status",
         "status": pivot.status,
         "result": pivot.result,
+        "blocked_reason": blocked_reason,
+        "blocked_reason_label": blocked_reason_label,
     }
     async_to_sync(layer.group_send)(_test_run_case_group(pivot.id), event)
+
+
+def get_blocked_reason_fields(pivot: TestRunTestCase) -> tuple[str, str]:
+    """The case's blocked reason code and label; both empty unless it is blocked."""
+    if pivot.status != TestRunTestCaseStatus.BLOCKED or not pivot.blocked_reason:
+        return "", ""
+    return pivot.blocked_reason, BlockedReason(pivot.blocked_reason).label
 
 
 def _broadcast_test_run_status(test_run: TestRun) -> None:
@@ -2296,7 +2434,7 @@ def _wait_for_omniparser_ready(
         if last_state == OmniParserState.READY:
             return
         time.sleep(CONTROLLER_POLL_INTERVAL_SECONDS)
-    raise TimeoutError(
+    raise VisualEngineError(
         f"OmniParser did not become ready within {timeout}s for project "
         f"{project.id} (last observed state: {last_state or 'unknown'})"
     )
@@ -2316,7 +2454,7 @@ def _raise_for_omniparser_failure(project: Project) -> str:
     if status.state is not OmniParserState.FAILED:
         return status.state.value
 
-    raise ControllerActionError(
+    raise VisualEngineError(
         "OmniParser failed to initialize on the controller: "
         f"{status.message} (phase={status.phase}, device={status.device}, "
         f"weights_dir={status.weights_dir})"
@@ -2370,36 +2508,70 @@ def execute_test_run_test_case(pivot_id: int) -> None:
             _mark_pivot_cancelled(pivot)
     except ControllerReconnectTimeoutError as exc:
         logger.warning("Aborting test run for pivot %d: %s", pivot_id, exc)
-        _abort_run_after_reconnect_timeout(pivot, str(exc))
+        _abort_run_after_reconnect_timeout(pivot, exc)
     except Exception as exc:
-        logger.exception("execute_test_run_test_case failed for pivot %d", pivot_id)
-        _mark_pivot_failed(pivot, str(exc))
-        raise
+        # Infrastructure faults, the soft time limit and bugs are never a
+        # verdict on the app: block the case and let the chain continue.
+        _settle_pivot_after_error(pivot, exc)
     except BaseException as exc:
         logger.critical(
             "execute_test_run_test_case hit BaseException for pivot %d: %s",
             pivot_id,
             exc,
         )
-        _mark_pivot_failed(pivot, str(exc))
+        _settle_pivot_after_error(pivot, exc)
         raise
     finally:
         _safe_cleanup(project.id, wait_for_runner=False)
         _update_test_run_status_if_needed(pivot.test_run)
 
 
-def _abort_run_after_reconnect_timeout(pivot: TestRunTestCase, reason: str) -> None:
-    """Cancel the whole run without revoking this task, and record why on the case."""
+def _abort_run_after_reconnect_timeout(
+    pivot: TestRunTestCase, exc: ControllerReconnectTimeoutError
+) -> None:
+    """Block this case, then cancel the rest of the run without revoking this task."""
+    pivot.refresh_from_db(fields=["status"])
+    if pivot.status == TestRunTestCaseStatus.IN_PROGRESS:
+        reason = BlockedReason.RUNNER_DISCONNECTED
+        _mark_pivot_blocked(pivot, reason, blocked_message(exc, reason))
+
     test_run = pivot.test_run
     test_run.refresh_from_db(fields=["status"])
     # This task may be the chain's last one (celery_task_id); revoking it would
-    # SIGTERM itself mid-cleanup. Later tasks early-exit on CANCELLED.
-    abort_test_run(test_run, reason=reason, revoke_task=False)
+    # SIGTERM itself mid-cleanup. Later tasks early-exit on CANCELLED. Only
+    # pending and in-progress cases are touched, so this one stays Blocked.
+    abort_test_run(test_run, reason=str(exc), revoke_task=False)
 
-    pivot.refresh_from_db(fields=["result", "logs"])
-    pivot.result = reason
-    pivot.save(update_fields=["result", "updated_at"])
-    _build_log_callback(pivot)(reason)
+
+def _settle_pivot_after_error(pivot: TestRunTestCase, exc: BaseException) -> None:
+    """Record an execution error on a case that has no verdict yet.
+
+    A case the run's abort already settled is left alone; a run cancelled in
+    the meantime cancels the case; anything else blocks it.
+    """
+    pivot.refresh_from_db(fields=["status"])
+    if pivot.status != TestRunTestCaseStatus.IN_PROGRESS:
+        logger.warning(
+            "Execution error for pivot %d after it reached %s: %r",
+            pivot.id,
+            pivot.status,
+            exc,
+        )
+        return
+
+    test_run = pivot.test_run
+    test_run.refresh_from_db(fields=["status"])
+    if test_run.status == TestRunStatus.CANCELLED:
+        logger.info("Test run cancelled for pivot %d (%r)", pivot.id, exc)
+        _mark_pivot_cancelled(pivot)
+        return
+
+    reason = classify_case_exception(exc)
+    if reason == BlockedReason.INTERNAL_ERROR:
+        logger.exception("Blocking pivot %d after an unexpected error", pivot.id)
+    else:
+        logger.warning("Blocking pivot %d (%s): %s", pivot.id, reason.value, exc)
+    _mark_pivot_blocked(pivot, reason, blocked_message(exc, reason))
 
 
 def _fetch_pivot(pivot_id: int) -> TestRunTestCase:
@@ -2501,11 +2673,27 @@ def _extract_agent_summary(result: AgentResult) -> str:
     return result.error or ""
 
 
-def _mark_pivot_failed(pivot: TestRunTestCase, error: str) -> None:
-    pivot.status = TestRunTestCaseStatus.FAILED
-    pivot.result = error
+def _mark_pivot_blocked(
+    pivot: TestRunTestCase, reason: BlockedReason, message: str
+) -> None:
+    """Mark a case Blocked: it could not be executed or judged, no verdict."""
+    log_line = f"[Blocked: {reason.label}] {message}"
+    pivot.logs += log_line + "\n"
+    pivot.status = TestRunTestCaseStatus.BLOCKED
+    pivot.blocked_reason = reason
+    pivot.result = message
     pivot.finished_at = timezone.now()
-    pivot.save(update_fields=["status", "result", "finished_at", "updated_at"])
+    pivot.save(
+        update_fields=[
+            "status",
+            "blocked_reason",
+            "result",
+            "finished_at",
+            "logs",
+            "updated_at",
+        ]
+    )
+    _broadcast_log(pivot, log_line)
     _broadcast_pivot_status_to_run(pivot)
     _broadcast_pivot_status_to_case(pivot)
 

@@ -14,10 +14,10 @@
 
    Context contract (projects.views._build_test_run_detail_context):
      project, test_run, cases (Page[TestRunTestCase], failures first),
-     summary {total, created, in_progress, success, failed, cancelled},
+     summary {total, created, in_progress, success, failed, blocked, cancelled},
      readiness (RunReadiness — present only while test_run.status == "waiting"),
      narrative, can_rerun_failed, failed_titles (unused directly here —
-     narrative already folds them in), form (TestCaseForm, for the shared
+     narrative already folds them in), can_rerun_blocked, form (TestCaseForm, for the shared
      edit-case dialog's type/priority choices), can_edit, per_page,
      allowed_per_page, elided_page_range, query_params,
      testrail_push (projects.testrail_results_services.TestRailPushPanel),
@@ -79,6 +79,13 @@
       <form method="post" action="{% url 'projects:test_run_rerun_failed' project.id test_run.id %}" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak>
         {% csrf_token %}
         <button type="submit" class="btn btn-secondary">Re-run failed</button>
+      </form>
+      {% endif %}
+
+      {% if can_rerun_blocked %}
+      <form method="post" action="{% url 'projects:test_run_rerun_blocked' project.id test_run.id %}" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak>
+        {% csrf_token %}
+        <button type="submit" class="btn btn-secondary">Re-run blocked</button>
       </form>
       {% endif %}
 
@@ -169,7 +176,7 @@
   {# Section: Result summary — stat cards + human-readable narrative #}
   <template x-if="testRunStatus !== 'waiting'">
     <div>
-      <div class="grid grid-4">
+      <div class="grid grid-5">
         <div class="stat-card">
           <div class="stat-label">Passed</div>
           <div class="stat-value is-success" x-text="summary.success"></div>
@@ -179,12 +186,16 @@
           <div class="stat-value is-danger" x-text="summary.failed"></div>
         </div>
         <div class="stat-card">
+          <div class="stat-label">Blocked</div>
+          <div class="stat-value is-warning" x-text="summary.blocked"></div>
+        </div>
+        <div class="stat-card">
           <div class="stat-label">Duration</div>
           <div class="stat-value">{% if test_run.finished_at and test_run.started_at %}{{ test_run.started_at|timesince:test_run.finished_at }}{% elif test_run.started_at %}Running…{% else %}—{% endif %}</div>
         </div>
         <div class="stat-card">
           <div class="stat-label">Pass rate</div>
-          <div class="stat-value" x-text="summary.total > 0 ? Math.round((summary.success / summary.total) * 100) + '%' : '—'"></div>
+          <div class="stat-value" x-text="(summary.success + summary.failed) > 0 ? Math.round((summary.success / (summary.success + summary.failed)) * 100) + '%' : '—'"></div>
         </div>
       </div>
 
@@ -210,7 +221,7 @@
             <th scope="col">Case</th>
             <th scope="col">Result</th>
             <th scope="col">Duration</th>
-            <th scope="col">Failure reason</th>
+            <th scope="col">Reason</th>
             {% if can_edit %}<th scope="col" x-show="testRunStatus === 'waiting'" x-cloak><span class="visually-hidden">Edit / remove</span></th>{% endif %}
             <th scope="col"><span class="visually-hidden">Details</span></th>
           </tr>
@@ -228,10 +239,10 @@
                 data-status="{{ pivot.status }}"
                 :class="pivotBadgeClass(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
                 x-text="pivotBadgeLabel(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
-              >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "cancelled" %}Cancelled{% endif %}</span>
+              >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% endif %}</span>
             </td>
             <td data-label="Duration">{% if pivot.finished_at and pivot.started_at %}{{ pivot.started_at|timesince:pivot.finished_at }}{% else %}—{% endif %}</td>
-            <td data-label="Failure reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% else %}—{% endif %}</td>
+            <td data-label="Reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
             {% if can_edit %}
             <td data-label="" x-show="testRunStatus === 'waiting'" x-cloak>
               <div class="actions">
@@ -270,7 +281,7 @@
 
   {# Section: Destructive-action confirm dialogs #}
   {% include "partials/confirm_dialog.html" with dialog_id="delete-run" title="Delete this run?" body="This permanently deletes the run and all of its case results, logs, and screenshots." confirm_label="Delete run" action_url=test_run_delete_url %}
-  {% include "partials/confirm_dialog.html" with dialog_id="abort-run" title="Abort this run?" body="In-progress cases will be marked as failed and any cases still pending will be marked as cancelled." confirm_label="Abort run" action_url=test_run_abort_url %}
+  {% include "partials/confirm_dialog.html" with dialog_id="abort-run" title="Abort this run?" body="In-progress and pending cases will be marked as cancelled. Cases that already finished keep their result." confirm_label="Abort run" action_url=test_run_abort_url %}
   {% include "partials/confirm_dialog.html" with dialog_id="reset-run" title="Reset this run?" body="All results, logs, and screenshots will be cleared and the run returns to draft." confirm_label="Reset run" action_url=test_run_reset_url %}
 
   {% if testrail_push.configured %}
@@ -433,6 +444,7 @@ document.addEventListener('alpine:init', () => {
       in_progress: {{ summary.in_progress }},
       success: {{ summary.success }},
       failed: {{ summary.failed }},
+      blocked: {{ summary.blocked }},
       cancelled: {{ summary.cancelled }}
     },
     pivotStatuses: {
@@ -447,6 +459,7 @@ document.addEventListener('alpine:init', () => {
         in_progress: 'badge-running',
         success: 'badge-passed',
         failed: 'badge-failed',
+        blocked: 'badge-blocked',
         cancelled: 'badge-cancelled',
       }[status] || 'badge-draft';
     },
@@ -457,6 +470,7 @@ document.addEventListener('alpine:init', () => {
         in_progress: 'Running',
         success: 'Passed',
         failed: 'Failed',
+        blocked: 'Blocked',
         cancelled: 'Cancelled',
       }[status] || status;
     },

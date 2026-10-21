@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from agents.exceptions import InfrastructureError
+
 
 class TestRailRunImportError(Exception):
     """Base for run-import failures; ``message`` is safe to show the user."""
@@ -29,7 +31,7 @@ class ControllerNotConnectedError(Exception):
     """No Test Runner is connected and no active run is waiting for one."""
 
 
-class ControllerReconnectTimeoutError(Exception):
+class ControllerReconnectTimeoutError(InfrastructureError):
     """The Test Runner did not reconnect within the grace period of an active run."""
 
     def __init__(self, grace_seconds: int) -> None:
@@ -37,3 +39,23 @@ class ControllerReconnectTimeoutError(Exception):
             f"Test Runner did not reconnect within {grace_seconds}s; run aborted"
         )
         self.grace_seconds = grace_seconds
+
+
+class ControllerActionError(Exception):
+    pass
+
+
+class TestRunnerUnavailableError(ControllerActionError, InfrastructureError):
+    """The Test Runner could not carry out an action; the app was not judged."""
+
+
+class TestRunnerDisconnectedError(TestRunnerUnavailableError):
+    """The connection dropped again while an interrupted action was re-sent."""
+
+
+class TestRunnerUnresponsiveError(TestRunnerUnavailableError):
+    """A runner-local action got no reply while the runner still held the connection."""
+
+
+class VisualEngineError(ControllerActionError, InfrastructureError):
+    """The visual engine (OmniParser) failed or is not ready."""

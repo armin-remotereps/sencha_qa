@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
+from celery.exceptions import SoftTimeLimitExceeded
+
+from agents.exceptions import InfrastructureError
 from agents.types import AgentCancelledError, ToolResult
-from projects.exceptions import ControllerReconnectTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +17,12 @@ def safe_tool_call(
 ) -> ToolResult:
     try:
         return fn()
-    except (AgentCancelledError, ControllerReconnectTimeoutError):
-        # Cancellation and a lost Test Runner must stop the whole agent loop,
-        # not just this tool call (mirrors how
+    except (AgentCancelledError, InfrastructureError, SoftTimeLimitExceeded):
+        # Cancellation, infrastructure faults (lost or unresponsive Test Runner,
+        # Visual engine, AI service; ControllerReconnectTimeoutError included)
+        # and the case time limit must stop the whole agent loop, not just this
+        # tool call, so the case ends Cancelled or Blocked instead of the agent
+        # judging the app on a fault that is not the app's (mirrors how
         # agents/services/tools_utility.py:wait lets cancellation propagate).
         raise
     except Exception as e:

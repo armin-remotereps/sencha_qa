@@ -51,7 +51,7 @@
             {% with run=latest_runs|get_item:project.id %}
               {% if run %}
                 <a href="{% url 'projects:test_run_detail' project.id run.id %}">{{ run.display_name }}</a>
-                {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count only %}
+                {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count blocked_count=run.blocked_count only %}
                 <div class="muted small">{{ run.created_at|timesince }} ago</div>
               {% else %}
                 <span class="muted">No runs yet</span>

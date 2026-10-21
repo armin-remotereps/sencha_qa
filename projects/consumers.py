@@ -19,6 +19,7 @@ from projects.services import (
     _agent_status_group,
     fetch_test_case_state,
     fetch_test_run_state,
+    get_blocked_reason_fields,
     get_project_for_user,
 )
 
@@ -196,12 +197,15 @@ class TestRunCaseConsumer(AuthenticatedConsumer):
 
     async def _send_initial_state(self) -> None:
         pivot, screenshots = await sync_to_async(fetch_test_case_state)(self._pivot_id)
+        blocked_reason, blocked_reason_label = get_blocked_reason_fields(pivot)
         await self.send(
             text_data=json.dumps(
                 {
                     "type": "current_state",
                     "status": pivot.status,
                     "result": pivot.result,
+                    "blocked_reason": blocked_reason,
+                    "blocked_reason_label": blocked_reason_label,
                     "logs": pivot.logs,
                     "screenshots": [
                         {
@@ -246,6 +250,8 @@ class TestRunCaseConsumer(AuthenticatedConsumer):
                     "type": "status",
                     "status": event["status"],
                     "result": event["result"],
+                    "blocked_reason": event["blocked_reason"],
+                    "blocked_reason_label": event["blocked_reason_label"],
                 }
             )
         )

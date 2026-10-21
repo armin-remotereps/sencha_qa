@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from enum import StrEnum
+
 from agents.types import PixelUIElement
 
 
@@ -20,3 +22,42 @@ class RejectedElementChosenError(ElementNotFoundError):
 
 class ActionVerificationError(Exception):
     """Raised when a desktop action could not be confirmed within the attempt budget."""
+
+
+class InfrastructureError(Exception):
+    """The case cannot be executed or judged; never a verdict on the application."""
+
+
+class AIServiceErrorKind(StrEnum):
+    RATE_LIMITED = "rate_limited"
+    AUTH = "auth"
+    UNAVAILABLE = "unavailable"
+    REJECTED = "rejected"
+    TIMEOUT = "timeout"
+    CONNECTION = "connection"
+    BAD_RESPONSE = "bad_response"
+
+
+class AIServiceError(InfrastructureError):
+    """The LLM provider failed; ``message`` is safe to show and push to TestRail."""
+
+    def __init__(
+        self,
+        kind: AIServiceErrorKind,
+        message: str,
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.kind = kind
+        self.message = message
+        self.status_code = status_code
+
+
+class OrchestratorPlanError(AIServiceError):
+    def __init__(self, message: str) -> None:
+        super().__init__(AIServiceErrorKind.BAD_RESPONSE, message)
+
+
+class OrchestratorParseError(AIServiceError):
+    def __init__(self, message: str) -> None:
+        super().__init__(AIServiceErrorKind.BAD_RESPONSE, message)

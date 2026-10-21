@@ -26,6 +26,7 @@ from projects.models import (
     TestRun,
     TestRunStatus,
     TestRunTestCase,
+    TestRunTestCaseStatus,
 )
 from projects.services import _test_run_group
 from projects.testrail_client import (
@@ -38,6 +39,7 @@ from projects.testrail_client import (
 from projects.testrail_mapping import (
     build_result_comment,
     comment_hash,
+    format_blocked_result_text,
     format_push_confirm_body,
     format_testrail_elapsed,
     map_pivot_status_to_testrail,
@@ -104,6 +106,15 @@ def build_case_detail_url(
     return f"{links_base_url.rstrip('/')}{path}"
 
 
+def _pivot_result_text(pivot: TestRunTestCase) -> str:
+    """The result text for the comment; blocked cases lead with their reason."""
+    if pivot.status == TestRunTestCaseStatus.BLOCKED:
+        return format_blocked_result_text(
+            pivot.get_blocked_reason_display(), pivot.result
+        )
+    return pivot.result
+
+
 def _plan_pivot(
     pivot: TestRunTestCase, *, test_run: TestRun, links_base_url: str
 ) -> _PivotPlanOutcome:
@@ -117,7 +128,7 @@ def _plan_pivot(
     comment = build_result_comment(
         outcome_label=testrail_outcome_label(status_id),
         run_name=test_run.display_name,
-        result_text=pivot.result,
+        result_text=_pivot_result_text(pivot),
         case_url=build_case_detail_url(
             test_run, pivot.id, links_base_url=links_base_url
         ),

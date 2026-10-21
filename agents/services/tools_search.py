@@ -8,6 +8,7 @@ import httpx
 import trafilatura
 from django.conf import settings
 
+from agents.exceptions import AIServiceError
 from agents.services.llm_client import send_chat_completion
 from agents.services.tool_utils import safe_tool_call
 from agents.types import ChatMessage, LLMConfig, ToolResult
@@ -159,7 +160,8 @@ def _attempt_summarization(query: str, formatted: str, config: LLMConfig) -> Too
             f"{AI_SUMMARY_HEADER}\n{summary}\n\n{RAW_RESULTS_HEADER}\n{formatted}"
         )
         return _build_result(combined)
-    except (httpx.HTTPError, ValueError, TypeError, RuntimeError):
+    except (AIServiceError, httpx.HTTPError, ValueError, TypeError, RuntimeError):
+        # A search summary is not a verdict: fall back to the raw results.
         logger.warning(
             "AI summarization failed for query '%s', returning raw results",
             query,

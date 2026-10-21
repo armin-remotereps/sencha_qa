@@ -21,9 +21,9 @@ from agents.types import (
     ScreenshotCallback,
     ToolResult,
 )
+from projects.exceptions import ControllerActionError
 from projects.services import (
     ActionResult,
-    ControllerActionError,
     InteractiveCommandResult,
     controller_browser_click,
     controller_browser_download,

@@ -6,7 +6,7 @@
 
    Context contract (projects.views.test_run_list):
      project — current Project
-     test_runs — Page[TestRun], each row annotated case_count / success_count / failed_count
+     test_runs — Page[TestRun], each row annotated case_count / success_count / failed_count / blocked_count
      per_page / allowed_per_page / elided_page_range / query_params — pagination {% endcomment %}
 {% block title %}Runs · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 

@@ -8,6 +8,11 @@ from typing import Literal
 
 from django.conf import settings
 
+from agents.exceptions import (
+    AIServiceError,
+    OrchestratorParseError,
+    OrchestratorPlanError,
+)
 from agents.services.llm_client import send_chat_completion
 from agents.services.llm_config import (
     build_llm_config,
@@ -43,14 +48,6 @@ from agents.types import (
 logger = logging.getLogger(__name__)
 
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
-
-
-class OrchestratorPlanError(Exception):
-    pass
-
-
-class OrchestratorParseError(Exception):
-    pass
 
 
 def run_orchestrator(
@@ -381,8 +378,16 @@ def _build_verdict(
         ChatMessage(role="system", content="Summarize the test case execution."),
         ChatMessage(role="user", content=verdict_prompt),
     )
-    verdict_response = send_chat_completion(orchestrator_llm, verdict_messages)
-    summary = _extract_text(verdict_response.message)
+    try:
+        verdict_response = send_chat_completion(orchestrator_llm, verdict_messages)
+        summary = _extract_text(verdict_response.message)
+    except AIServiceError as exc:
+        # Pass or fail is already decided from the sub-task results; the LLM only
+        # words the summary, so a provider fault here must not block the case.
+        logger.warning(
+            "Verdict summary failed (%s), using deterministic summary", exc.kind
+        )
+        summary = _deterministic_summary(results, overall_status)
 
     return OrchestratorResult(
         status=overall_status,
@@ -390,6 +395,20 @@ def _build_verdict(
         sub_task_results=tuple(results),
         total_iterations=total_iterations,
     )
+
+
+def _deterministic_summary(
+    results: list[SubTaskResult],
+    overall_status: Literal["pass", "fail"],
+) -> str:
+    lines = [
+        f"Test {'passed' if overall_status == 'pass' else 'failed'} "
+        f"(AI summary unavailable)."
+    ]
+    lines.extend(
+        f"Step {i}: {r.status.upper()} — {r.summary}" for i, r in enumerate(results, 1)
+    )
+    return "\n".join(lines)
 
 
 def _evaluate_failure(

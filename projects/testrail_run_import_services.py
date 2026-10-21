@@ -196,9 +196,7 @@ def start_testrail_run_import(
     run = _fetch_run(project, run_id)
     upload = _create_upload_unless_in_flight(project, user, run)
     try:
-        result = celery_app.send_task(
-            IMPORT_TESTRAIL_RUN_CASES_TASK, args=[upload.id]
-        )
+        result = celery_app.send_task(IMPORT_TESTRAIL_RUN_CASES_TASK, args=[upload.id])
     except Exception as exc:
         # Broker unreachable: fail the row so the in-flight guard does not
         # block every later attempt at this run.

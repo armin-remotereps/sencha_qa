@@ -195,20 +195,13 @@ def _run_agent_loop(
             summarizer_config=context.summarizer_config,
         )
 
-        try:
-            response = send_chat_completion(
-                config.llm,
-                tuple(messages),
-                tool_definitions,
-            )
-        except Exception as e:
-            logger.error("LLM request failed: %s", e)
-            return AgentResult(
-                stop_reason=AgentStopReason.ERROR,
-                iterations=iterations,
-                messages=tuple(messages),
-                error=f"LLM request failed: {e}",
-            )
+        # AIServiceError propagates: a provider fault is not a verdict on the
+        # application, so the case is marked Blocked by the caller.
+        response = send_chat_completion(
+            config.llm,
+            tuple(messages),
+            tool_definitions,
+        )
 
         if response.reasoning_content:
             _debug_log(f"[Thinking] {response.reasoning_content}", on_log)

@@ -4,9 +4,9 @@ from typing import Any
 
 from django.core.management.base import BaseCommand
 
+from projects.exceptions import ControllerActionError
 from projects.services import (
     CommandResult,
-    ControllerActionError,
     controller_run_command,
 )
 
