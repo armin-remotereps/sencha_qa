@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 from django.contrib.messages import get_messages
 from django.test import Client, TestCase, override_settings
-from django.test.client import _MonkeyPatchedWSGIResponse
 from django.urls import reverse
 
 from projects.models import TestCaseUpload, TestRunStatus, UploadSource
@@ -26,7 +26,12 @@ TEST_KEY = Fernet.generate_key().decode("ascii")
 LOCMEM_CACHE = {"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
 
 
-def form_posting_to(response: _MonkeyPatchedWSGIResponse, action_url: str) -> str:
+if TYPE_CHECKING:
+    # django-stubs declares this response type; it does not exist at runtime.
+    from django.test.client import _MonkeyPatchedWSGIResponse
+
+
+def form_posting_to(response: "_MonkeyPatchedWSGIResponse", action_url: str) -> str:
     """Return the markup of the <form> whose action is ``action_url``."""
     html = response.content.decode()
     match = re.search(
