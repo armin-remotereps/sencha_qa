@@ -102,7 +102,7 @@ services:
         volumes:
             - "STATIC:/src/staticfiles"
             - "MEDIA:/src/media"
-        entrypoint: "python -m celery -A auto_tester worker -l INFO -Q execution --concurrency=2"
+        entrypoint: "python -m celery -A auto_tester worker -l INFO -Q execution --concurrency=10"
 
     beat-celery:
         hostname: execute
