@@ -4,6 +4,7 @@ import math
 import time
 
 from agents.types import AgentCancelledError, CancellationCheck, ToolResult
+from projects.controller_outage_clock import agent_monotonic
 
 MAX_WAIT_SECONDS = 300.0
 BUDGET_MARGIN_SECONDS = 15.0
@@ -50,7 +51,7 @@ def _validate_duration(seconds: object) -> float | None:
 def _remaining_seconds_after_margin(deadline: float | None) -> int | None:
     if deadline is None:
         return None
-    return math.floor(deadline - time.monotonic() - BUDGET_MARGIN_SECONDS)
+    return math.floor(deadline - agent_monotonic() - BUDGET_MARGIN_SECONDS)
 
 
 def _invalid_duration_result(seconds: object) -> ToolResult:

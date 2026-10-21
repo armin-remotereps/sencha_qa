@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections.abc import Sequence
 from typing import Any
 
 from asgiref.sync import sync_to_async
@@ -10,6 +11,8 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 
 from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
+    CloseCode,
+    ErrorCode,
     parse_handshake_capabilities,
     parse_omniparser_status_payload,
 )
@@ -51,9 +54,8 @@ from projects.controller_protocol import (
 from projects.controller_reply_tracker import ReplyTracker
 from projects.models import Project
 from projects.services import (
-    abort_active_test_run_on_disconnect,
     broadcast_agent_status,
-    mark_agent_disconnected,
+    release_agent_connection,
     update_agent_omniparser_status,
 )
 
@@ -176,17 +178,35 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             await self.close()
             return
 
-        await self._establish_authenticated_connection(result.project, request_id)
+        await self._establish_authenticated_connection(
+            result.project, system_info, client_version, capabilities, request_id
+        )
 
     async def _establish_authenticated_connection(
-        self, project: Project, request_id: str
+        self,
+        project: Project,
+        system_info: dict[str, Any],
+        client_version: str,
+        capabilities: Sequence[str],
+        request_id: str,
     ) -> None:
         self._authenticated = True
         self._project = project
 
-        await self.channel_layer.group_add(
-            self._controller_group_name(project.id), self.channel_name
+        # Join the group before ownership becomes visible in the DB, so an
+        # action dispatched to the new owner always reaches this consumer.
+        group_name = self._controller_group_name(project.id)
+        await self.channel_layer.group_add(group_name, self.channel_name)
+        previous_channel_name = await self._authenticator.claim_connection(
+            project, self.channel_name, system_info, client_version, capabilities
         )
+        if previous_channel_name:
+            # Drop the replaced connection from the group even if its consumer
+            # is gone (e.g. Daphne restarted), then ask it to close if alive.
+            await self.channel_layer.group_discard(group_name, previous_channel_name)
+            await self.channel_layer.send(
+                previous_channel_name, {"type": "controller.superseded"}
+            )
         await self._authenticator.broadcast_status(project)
         await self._send_handshake_ack(
             status="ok",
@@ -203,12 +223,24 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_discard(
             self._controller_group_name(self._project.id), self.channel_name
         )
-        await sync_to_async(mark_agent_disconnected)(self._project)
-        await sync_to_async(broadcast_agent_status)(self._project)
-        await sync_to_async(abort_active_test_run_on_disconnect)(self._project)
+        # Only the current owner clears the connection; a superseded consumer
+        # releases nothing. A running test waits for the runner to reconnect.
+        released = await sync_to_async(release_agent_connection)(
+            self._project.id, self.channel_name
+        )
+        # Wake the waiters only after ownership is released, so their
+        # wait_for_controller never hands this dead channel back to them.
+        await self._reply_tracker.fail_pending_replies(
+            ErrorCode.CONTROLLER_DISCONNECTED, "Test Runner connection lost"
+        )
+        if released is not None:
+            await sync_to_async(broadcast_agent_status)(released)
+
+    async def controller_superseded(self, event: dict[str, Any]) -> None:
+        await self.close(code=CloseCode.SUPERSEDED)
 
     async def controller_force_disconnect(self, event: dict[str, Any]) -> None:
-        await self.close()
+        await self.close(code=CloseCode.FORCE_DISCONNECTED)
 
     async def _forward_action(self, event: BaseActionEvent) -> None:
         request_id: str = event.get("request_id") or str(uuid.uuid4())

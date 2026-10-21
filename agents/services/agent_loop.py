@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import replace
 
 from django.conf import settings
@@ -32,6 +31,7 @@ from agents.types import (
     ToolContext,
     ToolResult,
 )
+from projects.controller_outage_clock import agent_monotonic
 
 logger = logging.getLogger(__name__)
 
@@ -169,14 +169,14 @@ def _run_agent_loop(
         ChatMessage(role="user", content=task_description),
     ]
 
-    start_time = time.monotonic()
+    start_time = agent_monotonic()
     context = replace(context, deadline=start_time + config.timeout_seconds)
     iterations = 0
     tool_calls_made = 0
     on_log = config.on_log
 
     while iterations < config.max_iterations:
-        elapsed = time.monotonic() - start_time
+        elapsed = agent_monotonic() - start_time
         if elapsed > config.timeout_seconds:
             logger.warning("Agent timed out after %.1f seconds", elapsed)
             return AgentResult(

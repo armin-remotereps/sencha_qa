@@ -16,6 +16,9 @@ class ClientConfig:
     port: int
     api_key: str
     reconnect_interval: int
+    # Upper bound of the exponential reconnect backoff, in seconds.
+    reconnect_max_interval: int
+    # 0 means retry forever.
     max_reconnect_attempts: int
     log_level: str
     cleanup_dir: str = DEFAULT_CLEANUP_DIR
@@ -40,6 +43,7 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
     parser.add_argument("--port", type=int, default=None)
     parser.add_argument("--api-key", type=str, default=None)
     parser.add_argument("--reconnect-interval", type=int, default=None)
+    parser.add_argument("--reconnect-max-interval", type=int, default=None)
     parser.add_argument("--max-reconnect-attempts", type=int, default=None)
     parser.add_argument("--log-level", type=str, default=None)
     parser.add_argument("--cleanup-dir", type=str, default=None)
@@ -50,10 +54,21 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
         host=args.host or _env_str("CONTROLLER_HOST", "localhost"),
         port=args.port or _env_int("CONTROLLER_PORT", 8000),
         api_key=args.api_key or _env_str("CONTROLLER_API_KEY", ""),
-        reconnect_interval=args.reconnect_interval
-        or _env_int("CONTROLLER_RECONNECT_INTERVAL", 5),
-        max_reconnect_attempts=args.max_reconnect_attempts
-        or _env_int("CONTROLLER_MAX_RECONNECT_ATTEMPTS", 10),
+        reconnect_interval=(
+            args.reconnect_interval
+            if args.reconnect_interval is not None
+            else _env_int("CONTROLLER_RECONNECT_INTERVAL", 5)
+        ),
+        reconnect_max_interval=(
+            args.reconnect_max_interval
+            if args.reconnect_max_interval is not None
+            else _env_int("CONTROLLER_RECONNECT_MAX_INTERVAL", 60)
+        ),
+        max_reconnect_attempts=(
+            args.max_reconnect_attempts
+            if args.max_reconnect_attempts is not None
+            else _env_int("CONTROLLER_MAX_RECONNECT_ATTEMPTS", 0)
+        ),
         log_level=args.log_level or _env_str("CONTROLLER_LOG_LEVEL", "INFO"),
         cleanup_dir=args.cleanup_dir
         or _env_str("CONTROLLER_CLEANUP_DIR", DEFAULT_CLEANUP_DIR),

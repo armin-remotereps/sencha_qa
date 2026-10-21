@@ -203,3 +203,24 @@ class ReplyTracker:
             },
         )
         return True
+
+    async def fail_pending_replies(self, code: str, message: str) -> int:
+        """Answer every pending request with an error and forget them all.
+
+        Called when the connection goes away so waiters learn about the loss
+        immediately instead of sitting out their reply timeout.
+        """
+        pending = self._pending_replies
+        self._pending_replies = {}
+        for request_id, reply_channel in pending.items():
+            await self._channel_layer.send(
+                reply_channel,
+                {
+                    "type": "error.result",
+                    "request_id": request_id,
+                    "code": code,
+                    "message": message,
+                    "details": "",
+                },
+            )
+        return len(pending)

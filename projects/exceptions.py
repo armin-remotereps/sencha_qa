@@ -23,3 +23,17 @@ class TestRailRunNotFoundError(TestRailRunImportError):
 
 class TestRailRunImportInProgressError(TestRailRunImportError):
     """The same run is already being imported into this project."""
+
+
+class ControllerNotConnectedError(Exception):
+    """No Test Runner is connected and no active run is waiting for one."""
+
+
+class ControllerReconnectTimeoutError(Exception):
+    """The Test Runner did not reconnect within the grace period of an active run."""
+
+    def __init__(self, grace_seconds: int) -> None:
+        super().__init__(
+            f"Test Runner did not reconnect within {grace_seconds}s; run aborted"
+        )
+        self.grace_seconds = grace_seconds

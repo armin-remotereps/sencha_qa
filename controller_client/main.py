@@ -43,6 +43,9 @@ def main(argv: list[str] | None = None) -> None:
 
     try:
         loop.run_until_complete(client.run())
+        # run() returns once it stops reconnecting; release browser, processes
+        # and interactive sessions so their threads do not hold up exit.
+        loop.run_until_complete(client.stop())
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received")
         loop.run_until_complete(client.stop())

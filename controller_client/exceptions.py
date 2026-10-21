@@ -10,6 +10,18 @@ class AuthenticationError(ControllerError):
     pass
 
 
+class HandshakeError(ConnectionError):
+    """The handshake did not complete; reconnecting may succeed."""
+
+
+class ConnectionTerminatedError(ControllerError):
+    """The server closed the session with a close code that forbids reconnecting."""
+
+    def __init__(self, code: int) -> None:
+        super().__init__(f"Connection terminated by the server (close code {code})")
+        self.code = code
+
+
 class ExecutionError(ControllerError):
     pass
 

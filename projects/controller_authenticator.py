@@ -10,11 +10,11 @@ from projects.models import Project
 from projects.services import (
     broadcast_agent_status,
     check_controller_compatibility,
+    claim_agent_connection,
     get_project_by_api_key,
-    mark_agent_connected,
 )
 
-HandshakeStatus: TypeAlias = Literal["ok", "error", "incompatible", "already_connected"]
+HandshakeStatus: TypeAlias = Literal["ok", "error", "incompatible"]
 
 
 class WebSocketSender(Protocol):
@@ -54,7 +54,9 @@ class ControllerAuthenticator:
 
         Compatibility is checked before the connection is ever marked
         established, so a stale controller is rejected up front instead of
-        authenticating and then silently timing out on first use.
+        authenticating and then silently timing out on first use. A valid
+        handshake never refuses on an existing connection: the caller claims
+        the project with ``claim_connection`` (newest connection wins).
         """
         if not api_key:
             return AuthenticationResult("error", None, "Missing api_key")
@@ -69,15 +71,20 @@ class ControllerAuthenticator:
         if incompatibility_reason is not None:
             return AuthenticationResult("incompatible", None, incompatibility_reason)
 
-        connected = await sync_to_async(mark_agent_connected)(
-            project, system_info, client_version, capabilities
-        )
-        if not connected:
-            return AuthenticationResult(
-                "already_connected", None, "Agent already connected"
-            )
-
         return AuthenticationResult("ok", project)
+
+    async def claim_connection(
+        self,
+        project: Project,
+        channel_name: str,
+        system_info: dict[str, Any],
+        client_version: str,
+        capabilities: Sequence[str],
+    ) -> str:
+        """Make ``channel_name`` the project's owner; return the replaced channel."""
+        return await sync_to_async(claim_agent_connection)(
+            project, channel_name, system_info, client_version, capabilities
+        )
 
     async def broadcast_status(self, project: Project) -> None:
         await sync_to_async(broadcast_agent_status)(project)

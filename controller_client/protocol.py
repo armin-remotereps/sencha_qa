@@ -3,7 +3,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from typing import Final
 
 from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
@@ -11,7 +11,20 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.2.0"
+CLIENT_VERSION: Final[str] = "0.3.0"
+
+
+class CloseCode(IntEnum):
+    """Application WebSocket close codes the server uses to end a session for good."""
+
+    # A newer Test Runner connected with the same key and took over the project.
+    SUPERSEDED = 4001
+    # A user pressed Force disconnect in the panel.
+    FORCE_DISCONNECTED = 4002
+
+
+# The controller stops reconnecting when the server closes with one of these.
+TERMINAL_CLOSE_CODES: Final[frozenset[int]] = frozenset(CloseCode)
 
 
 class MessageType(StrEnum):
@@ -100,6 +113,9 @@ class ErrorCode(StrEnum):
     ELEMENT_NOT_FOUND = "ELEMENT_NOT_FOUND"
     OMNIPARSER_NOT_READY = "OMNIPARSER_NOT_READY"
     INCOMPATIBLE_CLIENT = "INCOMPATIBLE_CLIENT"
+    # Sent by the server to an action waiter when the controller socket dropped
+    # before the reply arrived.
+    CONTROLLER_DISCONNECTED = "CONTROLLER_DISCONNECTED"
 
 
 @dataclass(frozen=True)

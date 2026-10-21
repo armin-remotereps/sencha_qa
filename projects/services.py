@@ -10,10 +10,10 @@ import uuid
 import zipfile
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import Any, NoReturn, TypedDict, TypeVar
 
 from asgiref.sync import async_to_sync
 from celery import chain
@@ -52,9 +52,21 @@ from auto_tester.celery import app as celery_app
 from controller_client.protocol import (
     CLIENT_VERSION,
     REQUIRED_CLIENT_CAPABILITIES,
+    ErrorCode,
     OmniParserState,
     OmniParserStatusPayload,
     parse_omniparser_status_payload,
+)
+from projects.controller_outage_clock import agent_monotonic, reset_outage_clock
+from projects.controller_reconnect_services import (
+    CONTROLLER_POLL_INTERVAL_SECONDS,
+    connected_owner,
+    controller_connection_lost,
+    wait_for_controller,
+)
+from projects.exceptions import (
+    ControllerNotConnectedError,
+    ControllerReconnectTimeoutError,
 )
 from projects.models import (
     ApplicationPlatform,
@@ -74,7 +86,6 @@ from projects.models import (
 
 logger = logging.getLogger(__name__)
 
-_AGENT_POLL_INTERVAL_SECONDS = 2
 _INTERACTIVE_TERMINATE_TIMEOUT_SECONDS = 30.0
 
 
@@ -724,34 +735,78 @@ def _initial_omniparser_status() -> dict[str, Any]:
     )
 
 
-def mark_agent_connected(
+def claim_agent_connection(
     project: Project,
+    channel_name: str,
     system_info: dict[str, Any],
     client_version: str,
     capabilities: Sequence[str],
-) -> bool:
-    """Returns True if connection established, False if already connected."""
-    rows_updated = Project.objects.filter(id=project.id, agent_connected=False).update(
-        agent_connected=True,
-        agent_system_info=system_info,
-        agent_client_version=client_version,
-        agent_capabilities=list(capabilities),
-        agent_omniparser_status=_initial_omniparser_status(),
-    )
-    if rows_updated > 0:
-        project.refresh_from_db()
-        return True
-    return False
+) -> str:
+    """Make ``channel_name`` the owner of the project's controller connection.
+
+    The newest authenticated connection always wins. Returns the channel name
+    of the connection it replaced (so the caller can close it), or "" when
+    there was none.
+    """
+    with transaction.atomic():
+        previous_channel_name = (
+            Project.objects.select_for_update()
+            .filter(pk=project.id)
+            .values_list("agent_channel_name", flat=True)
+            .get()
+        )
+        Project.objects.filter(pk=project.id).update(
+            agent_connected=True,
+            agent_channel_name=channel_name,
+            agent_system_info=system_info,
+            agent_client_version=client_version,
+            agent_capabilities=list(capabilities),
+            agent_omniparser_status=_initial_omniparser_status(),
+        )
+    project.refresh_from_db()
+    if previous_channel_name == channel_name:
+        return ""
+    return previous_channel_name
 
 
-def mark_agent_disconnected(project: Project) -> None:
-    project.agent_connected = False
-    project.agent_system_info = {}
-    project.agent_client_version = ""
-    project.agent_capabilities = []
-    project.agent_omniparser_status = {}
-    project.last_connected_at = timezone.now()
-    project.save()
+def release_agent_connection(project_id: int, channel_name: str) -> Project | None:
+    """Mark the project disconnected only if ``channel_name`` still owns it.
+
+    Returns the refreshed project when the state changed (so the caller
+    broadcasts it), or None when a newer connection already took over.
+    """
+    rows_updated = Project.objects.filter(
+        pk=project_id, agent_channel_name=channel_name
+    ).update(**_disconnected_agent_fields())
+    if rows_updated == 0:
+        return None
+    return Project.objects.get(pk=project_id)
+
+
+def _clear_agent_connection(project_id: int) -> None:
+    Project.objects.filter(pk=project_id).update(**_disconnected_agent_fields())
+
+
+class _DisconnectedAgentFields(TypedDict):
+    agent_connected: bool
+    agent_channel_name: str
+    agent_system_info: dict[str, object]
+    agent_client_version: str
+    agent_capabilities: list[str]
+    agent_omniparser_status: dict[str, object]
+    last_connected_at: datetime
+
+
+def _disconnected_agent_fields() -> _DisconnectedAgentFields:
+    return {
+        "agent_connected": False,
+        "agent_channel_name": "",
+        "agent_system_info": {},
+        "agent_client_version": "",
+        "agent_capabilities": [],
+        "agent_omniparser_status": {},
+        "last_connected_at": timezone.now(),
+    }
 
 
 def update_agent_omniparser_status(
@@ -821,6 +876,10 @@ def force_disconnect_controller(project: Project) -> bool:
     if not project.agent_connected:
         return False
 
+    # Clear ownership before the close event, so a waiter woken by the closing
+    # consumer's CONTROLLER_DISCONNECTED reply never sees the dead connection.
+    _clear_agent_connection(project.id)
+
     layer: Any = get_channel_layer()
     if layer is not None:
         async_to_sync(layer.group_send)(
@@ -828,7 +887,7 @@ def force_disconnect_controller(project: Project) -> bool:
             {"type": "controller.force_disconnect"},
         )
 
-    mark_agent_disconnected(project)
+    project.refresh_from_db()
     broadcast_agent_status(project)
     abort_active_test_run_on_disconnect(project)
     return True
@@ -902,13 +961,128 @@ def _raise_for_error_reply(reply: dict[str, Any], event_type: str) -> None:
     raise ControllerActionError(message)
 
 
+_T = TypeVar("_T")
+
+
+class _ConnectionLost(Exception):
+    """The connection that received an action dropped before it replied."""
+
+
+def _run_with_reconnect_retry(
+    project_id: int,
+    event_type: str,
+    attempt: Callable[[str], _T],
+    *,
+    on_resend: Callable[[], None] | None = None,
+    resend: bool = True,
+) -> _T:
+    """Run ``attempt`` and re-send it once if the Test Runner connection drops.
+
+    ``attempt`` receives the owning consumer channel and raises
+    ``_ConnectionLost`` when the loss rule matches. Each attempt dispatches a
+    new request on a new reply channel, so a late reply to the abandoned
+    request is never read. Any other failure propagates unchanged. With
+    ``resend=False`` nothing waits for the runner: a missing runner raises
+    ``ControllerNotConnectedError`` and a lost connection fails the action.
+    """
+    owner = (
+        wait_for_controller(project_id)
+        if resend
+        else _current_owner_or_raise(project_id)
+    )
+    try:
+        return attempt(owner)
+    except _ConnectionLost as exc:
+        if not resend:
+            raise ControllerActionError(
+                f"Test Runner connection was lost while running {event_type}"
+            ) from exc
+        logger.warning(
+            "Test Runner connection lost during %s for project %d; "
+            "waiting to re-send",
+            event_type,
+            project_id,
+        )
+
+    owner = wait_for_controller(project_id, lost_owner=owner)
+    logger.info("Re-sending %s for project %d (attempt 2)", event_type, project_id)
+    if on_resend is not None:
+        on_resend()
+    try:
+        return attempt(owner)
+    except _ConnectionLost as exc:
+        raise ControllerActionError(
+            f"Test Runner connection was lost again while running {event_type}; "
+            "giving up on this action"
+        ) from exc
+
+
+def _current_owner_or_raise(project_id: int) -> str:
+    owner = connected_owner(project_id)
+    if owner is None:
+        raise ControllerNotConnectedError(
+            f"Test Runner is not connected for project {project_id}"
+        )
+    return owner
+
+
+def _is_stray_disconnect_reply(
+    reply: dict[str, Any], project_id: int, owner: str
+) -> bool:
+    """Classify a ``CONTROLLER_DISCONNECTED`` reply.
+
+    Raises ``_ConnectionLost`` when the owner the action was sent to is gone.
+    Returns True when the owner is still connected: during a takeover the
+    action can reach the superseded consumer too, whose close fails it while
+    the owner's real reply is still on its way, so the caller keeps waiting.
+    """
+    if (
+        reply.get("type") != _ERROR_REPLY_TYPE
+        or reply.get("code") != ErrorCode.CONTROLLER_DISCONNECTED
+    ):
+        return False
+    if controller_connection_lost(project_id, owner):
+        raise _ConnectionLost(reply.get("message", ""))
+    return True
+
+
+def _raise_reply_timeout(
+    project_id: int, owner: str, message: str, cause: BaseException | None
+) -> NoReturn:
+    """Raise ``_ConnectionLost`` if the owner changed, else a plain timeout error."""
+    if controller_connection_lost(project_id, owner):
+        raise _ConnectionLost(message) from cause
+    raise ControllerActionError(message) from cause
+
+
 def _dispatch_controller_action(
     project_id: int,
     event_type: str,
     reply_timeout: float,
+    *,
+    resend_on_reconnect: bool = True,
     **payload: Any,
 ) -> dict[str, Any]:
     layer = _get_channel_layer_or_raise()
+
+    def _attempt(owner: str) -> dict[str, Any]:
+        return _send_controller_action_once(
+            layer, project_id, owner, event_type, reply_timeout, payload
+        )
+
+    return _run_with_reconnect_retry(
+        project_id, event_type, _attempt, resend=resend_on_reconnect
+    )
+
+
+def _send_controller_action_once(
+    layer: Any,
+    project_id: int,
+    owner: str,
+    event_type: str,
+    reply_timeout: float,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
     reply_channel: str = async_to_sync(layer.new_channel)()
     request_id = str(uuid.uuid4())
 
@@ -920,18 +1094,27 @@ def _dispatch_controller_action(
     }
     async_to_sync(layer.group_send)(_controller_group(project_id), event)
 
-    try:
-        result: dict[str, Any] = async_to_sync(asyncio.wait_for)(
-            layer.receive(reply_channel), timeout=reply_timeout
-        )
-    except asyncio.TimeoutError as exc:
-        raise ControllerActionError(
-            f"Timed out waiting for controller reply to {event_type} "
-            f"after {reply_timeout}s"
-        ) from exc
+    deadline = time.monotonic() + reply_timeout
+    timeout_message = (
+        f"Timed out waiting for controller reply to {event_type} "
+        f"after {reply_timeout}s"
+    )
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _raise_reply_timeout(project_id, owner, timeout_message, None)
 
-    _raise_for_error_reply(result, event_type)
-    return result
+        try:
+            result: dict[str, Any] = async_to_sync(asyncio.wait_for)(
+                layer.receive(reply_channel), timeout=remaining
+            )
+        except asyncio.TimeoutError as exc:
+            _raise_reply_timeout(project_id, owner, timeout_message, exc)
+
+        if _is_stray_disconnect_reply(result, project_id, owner):
+            continue
+        _raise_for_error_reply(result, event_type)
+        return result
 
 
 def _build_action_result(reply: dict[str, Any]) -> ActionResult:
@@ -1104,6 +1287,10 @@ def controller_find_elements(
     )
 
 
+_RUN_COMMAND_EVENT = "controller.run_command"
+_RERUN_COMMAND_MARKER = "[Test Runner reconnected - re-running command]"
+
+
 def controller_run_command(
     project_id: int,
     command: str,
@@ -1117,12 +1304,25 @@ def controller_run_command_streaming(
     on_output: Callable[[str, str], None] | None = None,
 ) -> CommandResult:
     layer = _get_channel_layer_or_raise()
-    reply_channel: str = async_to_sync(layer.new_channel)()
-    request_id = str(uuid.uuid4())
     timeout = float(settings.AGENT_TIMEOUT_SECONDS)
 
-    _dispatch_run_command_event(layer, project_id, request_id, reply_channel, command)
-    return _receive_streaming_command_result(layer, reply_channel, timeout, on_output)
+    def _attempt(owner: str) -> CommandResult:
+        reply_channel: str = async_to_sync(layer.new_channel)()
+        request_id = str(uuid.uuid4())
+        _dispatch_run_command_event(
+            layer, project_id, request_id, reply_channel, command
+        )
+        return _receive_streaming_command_result(
+            layer, project_id, owner, reply_channel, timeout, on_output
+        )
+
+    def _emit_rerun_marker() -> None:
+        if on_output is not None:
+            on_output(_RERUN_COMMAND_MARKER, "stderr")
+
+    return _run_with_reconnect_retry(
+        project_id, _RUN_COMMAND_EVENT, _attempt, on_resend=_emit_rerun_marker
+    )
 
 
 def _dispatch_run_command_event(
@@ -1133,7 +1333,7 @@ def _dispatch_run_command_event(
     command: str,
 ) -> None:
     event: dict[str, Any] = {
-        "type": "controller.run_command",
+        "type": _RUN_COMMAND_EVENT,
         "request_id": request_id,
         "reply_channel": reply_channel,
         "command": command,
@@ -1143,28 +1343,29 @@ def _dispatch_run_command_event(
 
 def _receive_streaming_command_result(
     layer: Any,
+    project_id: int,
+    owner: str,
     reply_channel: str,
     timeout: float,
     on_output: Callable[[str, str], None] | None,
 ) -> CommandResult:
     deadline = time.monotonic() + timeout
+    timeout_message = f"Timed out waiting for command result after {timeout}s"
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise ControllerActionError(
-                f"Timed out waiting for command result after {timeout}s"
-            )
+            _raise_reply_timeout(project_id, owner, timeout_message, None)
 
         try:
             reply: dict[str, Any] = async_to_sync(asyncio.wait_for)(
                 layer.receive(reply_channel), timeout=remaining
             )
         except asyncio.TimeoutError as exc:
-            raise ControllerActionError(
-                f"Timed out waiting for command result after {timeout}s"
-            ) from exc
+            _raise_reply_timeout(project_id, owner, timeout_message, exc)
 
-        _raise_for_error_reply(reply, "controller.run_command")
+        if _is_stray_disconnect_reply(reply, project_id, owner):
+            continue
+        _raise_for_error_reply(reply, _RUN_COMMAND_EVENT)
 
         msg_type = reply.get("type", "")
         if msg_type == "command.output":
@@ -1420,17 +1621,31 @@ def controller_check_app_installed(
 def controller_cleanup_environment(
     project_id: int,
     timeout: float = 30.0,
+    *,
+    resend_on_reconnect: bool = True,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.cleanup_environment", timeout
+        project_id,
+        "controller.cleanup_environment",
+        timeout,
+        resend_on_reconnect=resend_on_reconnect,
     )
     return _build_action_result(reply)
 
 
-def _safe_cleanup(project_id: int) -> None:
+def _safe_cleanup(project_id: int, *, wait_for_runner: bool) -> None:
+    """Empty the test machine's cleanup folder, never failing the test case.
+
+    Before a case (``wait_for_runner=True``) a dropped runner is waited for like
+    any action, and a grace expiry, abort or missing runner propagates so the
+    run is aborted or cancelled. After a case nothing waits for the runner: a
+    missing runner or a drop during the cleanup is only logged.
+    """
     try:
         timeout = float(settings.CLEANUP_TIMEOUT_SECONDS)
-        result = controller_cleanup_environment(project_id, timeout=timeout)
+        result = controller_cleanup_environment(
+            project_id, timeout=timeout, resend_on_reconnect=wait_for_runner
+        )
         if result["success"]:
             logger.info(
                 "Environment cleanup for project %d: %s", project_id, result["message"]
@@ -1441,6 +1656,16 @@ def _safe_cleanup(project_id: int) -> None:
                 project_id,
                 result["message"],
             )
+    except (
+        ControllerReconnectTimeoutError,
+        AgentCancelledError,
+        ControllerNotConnectedError,
+    ):
+        if wait_for_runner:
+            raise
+        logger.warning(
+            "Environment cleanup skipped for project %d", project_id, exc_info=True
+        )
     except Exception:
         logger.warning(
             "Environment cleanup failed for project %d", project_id, exc_info=True
@@ -2047,28 +2272,6 @@ def _build_cancellation_check(test_run_id: int) -> Callable[[], bool]:
     return _is_cancelled
 
 
-def _wait_for_agent_connection(
-    project: Project,
-    timeout: int | None = None,
-    cancellation_check: Callable[[], bool] | None = None,
-) -> None:
-    if timeout is None:
-        timeout = settings.CONTROLLER_AGENT_CONNECT_TIMEOUT
-    start = time.monotonic()
-    while time.monotonic() - start < timeout:
-        if cancellation_check is not None and cancellation_check():
-            raise AgentCancelledError(
-                "Test run cancelled while waiting for agent connection"
-            )
-        project.refresh_from_db()
-        if project.agent_connected:
-            return
-        time.sleep(_AGENT_POLL_INTERVAL_SECONDS)
-    raise TimeoutError(
-        f"Controller agent did not connect within {timeout}s for project {project.id}"
-    )
-
-
 def _wait_for_omniparser_ready(
     project: Project,
     cancellation_check: Callable[[], bool] | None = None,
@@ -2077,18 +2280,22 @@ def _wait_for_omniparser_ready(
 
     A freshly connected controller still needs to load its OmniParser
     weights in the background; running an action before that finishes
-    would otherwise time out with a confusing error.
+    would otherwise time out with a confusing error. A disconnect waits for
+    the Test Runner to reconnect; that wait does not count against the timeout.
     """
     timeout = settings.CONTROLLER_OMNIPARSER_READY_TIMEOUT
-    start = time.monotonic()
+    start = agent_monotonic()
     last_state = ""
-    while time.monotonic() - start < timeout:
+    while agent_monotonic() - start < timeout:
         _raise_if_run_cancelled(cancellation_check)
         project.refresh_from_db()
+        if not project.agent_connected:
+            wait_for_controller(project.id)
+            continue
         last_state = _raise_for_omniparser_failure(project)
         if last_state == OmniParserState.READY:
             return
-        time.sleep(_AGENT_POLL_INTERVAL_SECONDS)
+        time.sleep(CONTROLLER_POLL_INTERVAL_SECONDS)
     raise TimeoutError(
         f"OmniParser did not become ready within {timeout}s for project "
         f"{project.id} (last observed state: {last_state or 'unknown'})"
@@ -2103,11 +2310,6 @@ def _raise_if_run_cancelled(cancellation_check: Callable[[], bool] | None) -> No
 
 
 def _raise_for_omniparser_failure(project: Project) -> str:
-    if not project.agent_connected:
-        raise ControllerActionError(
-            "Controller disconnected while waiting for OmniParser readiness"
-        )
-
     if not project.agent_omniparser_status:
         return ""
     status = parse_omniparser_status_payload(project.agent_omniparser_status)
@@ -2122,6 +2324,7 @@ def _raise_for_omniparser_failure(project: Project) -> str:
 
 
 def execute_test_run_test_case(pivot_id: int) -> None:
+    reset_outage_clock()
     pivot = _fetch_pivot(pivot_id)
     if pivot.test_run.status == TestRunStatus.CANCELLED:
         return
@@ -2131,12 +2334,11 @@ def execute_test_run_test_case(pivot_id: int) -> None:
     _mark_pivot_in_progress(pivot)
 
     try:
-        if not project.agent_connected:
-            _wait_for_agent_connection(project, cancellation_check=cancellation_check)
+        wait_for_controller(project.id)
 
         _wait_for_omniparser_ready(project, cancellation_check=cancellation_check)
 
-        _safe_cleanup(project.id)
+        _safe_cleanup(project.id, wait_for_runner=True)
 
         on_log = _build_log_callback(pivot)
         on_screenshot = _build_screenshot_callback(pivot)
@@ -2159,11 +2361,16 @@ def execute_test_run_test_case(pivot_id: int) -> None:
             cancellation_check=cancellation_check,
         )
         _finalize_pivot(pivot, result)
-    except AgentCancelledError:
+    except (AgentCancelledError, ControllerNotConnectedError):
+        # Inside a case, wait_for_controller only reports "not connected" once
+        # the run is no longer STARTED, i.e. it was aborted.
         logger.info("Test run cancelled for pivot %d", pivot_id)
         pivot.refresh_from_db()
         if pivot.status != TestRunTestCaseStatus.CANCELLED:
             _mark_pivot_cancelled(pivot)
+    except ControllerReconnectTimeoutError as exc:
+        logger.warning("Aborting test run for pivot %d: %s", pivot_id, exc)
+        _abort_run_after_reconnect_timeout(pivot, str(exc))
     except Exception as exc:
         logger.exception("execute_test_run_test_case failed for pivot %d", pivot_id)
         _mark_pivot_failed(pivot, str(exc))
@@ -2177,8 +2384,22 @@ def execute_test_run_test_case(pivot_id: int) -> None:
         _mark_pivot_failed(pivot, str(exc))
         raise
     finally:
-        _safe_cleanup(project.id)
+        _safe_cleanup(project.id, wait_for_runner=False)
         _update_test_run_status_if_needed(pivot.test_run)
+
+
+def _abort_run_after_reconnect_timeout(pivot: TestRunTestCase, reason: str) -> None:
+    """Cancel the whole run without revoking this task, and record why on the case."""
+    test_run = pivot.test_run
+    test_run.refresh_from_db(fields=["status"])
+    # This task may be the chain's last one (celery_task_id); revoking it would
+    # SIGTERM itself mid-cleanup. Later tasks early-exit on CANCELLED.
+    abort_test_run(test_run, reason=reason, revoke_task=False)
+
+    pivot.refresh_from_db(fields=["result", "logs"])
+    pivot.result = reason
+    pivot.save(update_fields=["result", "updated_at"])
+    _build_log_callback(pivot)(reason)
 
 
 def _fetch_pivot(pivot_id: int) -> TestRunTestCase:
@@ -2298,7 +2519,9 @@ def _mark_pivot_cancelled(pivot: TestRunTestCase) -> None:
 
 
 @transaction.atomic
-def abort_test_run(test_run: TestRun, reason: str = "Test run aborted") -> None:
+def abort_test_run(
+    test_run: TestRun, reason: str = "Test run aborted", *, revoke_task: bool = True
+) -> None:
     if test_run.status != TestRunStatus.STARTED:
         return
 
@@ -2317,7 +2540,7 @@ def abort_test_run(test_run: TestRun, reason: str = "Test run aborted") -> None:
     _broadcast_test_run_status(test_run)
 
     celery_task_id = test_run.celery_task_id
-    if celery_task_id:
+    if revoke_task and celery_task_id:
         transaction.on_commit(
             lambda: celery_app.control.revoke(celery_task_id, terminate=True)
         )
@@ -2382,7 +2605,8 @@ def _generate_env_content(project: Project) -> str:
         f"CONTROLLER_PORT={settings.CONTROLLER_SERVER_PORT}\n"
         f"CONTROLLER_API_KEY={project.api_key}\n"
         "CONTROLLER_RECONNECT_INTERVAL=5\n"
-        "CONTROLLER_MAX_RECONNECT_ATTEMPTS=10\n"
+        "CONTROLLER_MAX_RECONNECT_ATTEMPTS=0\n"
+        "CONTROLLER_RECONNECT_MAX_INTERVAL=60\n"
         "CONTROLLER_LOG_LEVEL=INFO\n"
     )
 

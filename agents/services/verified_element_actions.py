@@ -21,6 +21,7 @@ from agents.types import (
     ScreenshotCallback,
     Verdict,
 )
+from projects.controller_outage_clock import agent_monotonic
 from projects.services import controller_screenshot
 
 MAX_VERIFY_ATTEMPTS: Final = 10
@@ -80,7 +81,7 @@ class VerificationBudget:
     def _deadline_exhausted(self) -> bool:
         if self.deadline is None:
             return False
-        return (self.deadline - time.monotonic()) < _MIN_REMAINING_SECONDS
+        return (self.deadline - agent_monotonic()) < _MIN_REMAINING_SECONDS
 
     def not_found_message(self, description: str, checked: int) -> str:
         header = (

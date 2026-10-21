@@ -2,10 +2,11 @@ import asyncio
 import logging
 from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any, TypeAlias
+from typing import Any, Final, TypeAlias
 
 import websockets
 from websockets.asyncio.client import ClientConnection
+from websockets.exceptions import ConnectionClosed
 
 from controller_client.app_checker import execute_check_app_installed
 from controller_client.app_launcher import execute_launch_app
@@ -27,7 +28,9 @@ from controller_client.config import ClientConfig
 from controller_client.exceptions import (
     AuthenticationError,
     BrowserElementNotFoundError,
+    ConnectionTerminatedError,
     ExecutionError,
+    HandshakeError,
     OmniParserError,
     ProtocolError,
     UnknownMessageTypeError,
@@ -55,8 +58,10 @@ from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import (
     CLIENT_CAPABILITIES,
     CLIENT_VERSION,
+    TERMINAL_CLOSE_CODES,
     ActionResultPayload,
     BrowserContentResultPayload,
+    CloseCode,
     CommandResultPayload,
     ErrorCode,
     FindElementResultPayload,
@@ -97,6 +102,21 @@ logger = logging.getLogger(__name__)
 _MB = 1024 * 1024
 MAX_MESSAGE_SIZE = 10 * _MB
 
+# How long the server may take to answer the handshake before we drop the
+# socket and try again; without it a server that accepts but never acks would
+# leave the client waiting forever.
+HANDSHAKE_ACK_TIMEOUT_SECONDS: Final[float] = 30.0
+OPEN_TIMEOUT_SECONDS: Final[float] = 15.0
+CLOSE_TIMEOUT_SECONDS: Final[float] = 10.0
+PING_INTERVAL_SECONDS: Final[float] = 30.0
+PING_TIMEOUT_SECONDS: Final[float] = 120.0
+# Ack statuses that retrying cannot fix: a wrong key or an outdated client.
+_TERMINAL_HANDSHAKE_STATUSES: Final[frozenset[str]] = frozenset(
+    {"error", "incompatible"}
+)
+# Keeps the backoff exponent small; the delay is capped long before this.
+_MAX_BACKOFF_EXPONENT: Final[int] = 16
+
 MessageHandler: TypeAlias = Callable[
     [str, dict[str, object]], Coroutine[Any, Any, None]
 ]
@@ -116,7 +136,6 @@ class ControllerClient:
         self._process_tracker = ProcessTracker()
         self._interactive_cmd_timeout = interactive_cmd_timeout
         self._handlers: dict[MessageType, MessageHandler] = {
-            MessageType.HANDSHAKE_ACK: self._handle_handshake_ack,
             MessageType.CLICK: self._handle_click,
             MessageType.HOVER: self._handle_hover,
             MessageType.DRAG: self._handle_drag,
@@ -144,39 +163,76 @@ class ControllerClient:
             MessageType.CLEANUP_ENVIRONMENT: self._handle_cleanup_environment,
             MessageType.FIND_ELEMENT: self._handle_find_element,
         }
-        self._handshake_event = asyncio.Event()
         self._omniparser_task: asyncio.Task[None] | None = None
+        # Set by stop() so a pending reconnect backoff ends immediately.
+        self._stop_event = asyncio.Event()
+        # Whether the current session got an "ok" handshake ack; run() resets
+        # the backoff only after such a session.
+        self._session_authenticated = False
 
     async def run(self) -> None:
         self._running = True
+        self._stop_event.clear()
         attempt = 0
 
-        while self._running and attempt < self._config.max_reconnect_attempts:
+        while self._running:
+            self._session_authenticated = False
             try:
                 await self._connect_and_listen()
-                attempt = 0
+                reason = "connection closed"
             except AuthenticationError as e:
                 logger.error("Authentication failed: %s", e)
-                self._running = False
+                break
+            except ConnectionTerminatedError as e:
+                logger.error("%s. Not reconnecting.", e)
                 break
             except Exception as e:
-                attempt += 1
-                logger.warning(
-                    "Connection lost (%s). Attempt %d/%d. Reconnecting in %ds...",
-                    e,
-                    attempt,
-                    self._config.max_reconnect_attempts,
-                    self._config.reconnect_interval,
-                )
-                if self._running:
-                    await asyncio.sleep(self._config.reconnect_interval)
+                reason = str(e) or type(e).__name__
 
-        if attempt >= self._config.max_reconnect_attempts:
-            logger.error("Max reconnect attempts reached. Shutting down.")
+            if not self._running:
+                break
+            if self._session_authenticated:
+                attempt = 0
+            attempt += 1
+            max_attempts = self._config.max_reconnect_attempts
+            if max_attempts > 0 and attempt > max_attempts:
+                logger.error(
+                    "Connection lost (%s). Max reconnect attempts (%d) reached. "
+                    "Shutting down.",
+                    reason,
+                    max_attempts,
+                )
+                break
+
+            delay = self._reconnect_delay(attempt)
+            logger.warning(
+                "Connection lost (%s). Reconnect attempt %d%s in %ds...",
+                reason,
+                attempt,
+                f"/{max_attempts}" if max_attempts > 0 else "",
+                delay,
+            )
+            await self._sleep_unless_stopped(delay)
+
         self._running = False
+
+    def _reconnect_delay(self, attempt: int) -> int:
+        """Exponential backoff from reconnect_interval, capped at reconnect_max_interval."""
+        exponent = min(attempt - 1, _MAX_BACKOFF_EXPONENT)
+        return min(
+            self._config.reconnect_interval << exponent,
+            self._config.reconnect_max_interval,
+        )
+
+    async def _sleep_unless_stopped(self, seconds: float) -> None:
+        try:
+            await asyncio.wait_for(self._stop_event.wait(), timeout=seconds)
+        except TimeoutError:
+            pass
 
     async def stop(self) -> None:
         self._running = False
+        self._stop_event.set()
         await self._cancel_omniparser_task()
         self._process_tracker.kill_all()
         self._session_manager.terminate_all()
@@ -188,24 +244,92 @@ class ControllerClient:
         url = self._config.ws_url
         logger.info("Connecting to %s", url)
 
-        # Client-side keepalive is off on purpose. Frames are ordered, so a
-        # ping queued behind a multi-MiB screenshot or find_element result on a
-        # slow uplink cannot be answered within the library's 20s default and
-        # the client would close the socket itself (1011 "keepalive ping
-        # timeout"). Daphne pings us every 30s with a 120s timeout instead,
-        # and our pong to it tolerates the same queueing.
+        # Client keepalive matches the tolerance Daphne already applies to us
+        # (--ping-interval 30 --ping-timeout 120): frames are ordered, so on a
+        # slow uplink a pong can sit behind a multi-MiB screenshot or
+        # find_element result for a long time. The library's 20s default would
+        # then close a healthy socket (1011 "keepalive ping timeout"); 120s
+        # does not, yet still detects a half-open link within ~150s instead of
+        # waiting on it forever.
+        session_error: ConnectionClosed | None = None
         async with websockets.connect(
-            url, max_size=MAX_MESSAGE_SIZE, ping_interval=None
+            url,
+            max_size=MAX_MESSAGE_SIZE,
+            open_timeout=OPEN_TIMEOUT_SECONDS,
+            close_timeout=CLOSE_TIMEOUT_SECONDS,
+            ping_interval=PING_INTERVAL_SECONDS,
+            ping_timeout=PING_TIMEOUT_SECONDS,
         ) as connection:
             self._connection = connection
-            self._handshake_event.clear()
             try:
-                await self._send_handshake()
+                await self._perform_handshake(connection)
                 await self._message_loop(connection)
+            except ConnectionClosed as e:
+                session_error = e
             finally:
+                self._connection = None
                 await self._cancel_omniparser_task()
 
-    async def _send_handshake(self) -> None:
+        # Leaving the context manager closed the socket, so close_code is set.
+        self._raise_if_terminated(connection.close_code)
+        if session_error is not None:
+            raise session_error
+
+    @staticmethod
+    def _raise_if_terminated(close_code: int | None) -> None:
+        """Turn a close code the server uses to end a session for good into a stop."""
+        if close_code not in TERMINAL_CLOSE_CODES:
+            return
+        if close_code == CloseCode.SUPERSEDED:
+            logger.error("This Test Runner was replaced by another Test Runner")
+        else:
+            logger.error("This Test Runner was disconnected from the panel")
+        raise ConnectionTerminatedError(close_code)
+
+    async def _perform_handshake(self, connection: ClientConnection) -> None:
+        """Send the handshake and wait for its ack before handling any command.
+
+        An "error" or "incompatible" ack raises AuthenticationError, which stops
+        the client; anything else that is not an "ok" ack, or no ack in time,
+        raises a retryable error.
+        """
+        await self._send_handshake(connection)
+        try:
+            raw_ack = await asyncio.wait_for(
+                connection.recv(), timeout=HANDSHAKE_ACK_TIMEOUT_SECONDS
+            )
+        except TimeoutError as e:
+            raise HandshakeError(
+                f"No handshake ack within {HANDSHAKE_ACK_TIMEOUT_SECONDS:.0f}s"
+            ) from e
+        if not isinstance(raw_ack, str):
+            raise HandshakeError("Handshake ack was not a text message")
+
+        try:
+            message_type, _, data = deserialize_server_message(raw_ack)
+            if message_type is not MessageType.HANDSHAKE_ACK:
+                raise ProtocolError(f"expected handshake_ack, got {message_type}")
+            ack = parse_handshake_ack_payload(data)
+        except ProtocolError as e:
+            raise HandshakeError(f"Invalid handshake ack: {e}") from e
+
+        if ack.status in _TERMINAL_HANDSHAKE_STATUSES:
+            raise AuthenticationError(
+                f"Handshake rejected ({ack.status}): {ack.message}"
+            )
+        if ack.status != "ok":
+            raise HandshakeError(
+                f"Handshake not accepted ({ack.status}): {ack.message}"
+            )
+
+        logger.info(
+            "Connected to project '%s' (id=%s)", ack.project_name, ack.project_id
+        )
+        self._session_authenticated = True
+        await self._cancel_omniparser_task()
+        self._omniparser_task = asyncio.create_task(self._initialize_omniparser())
+
+    async def _send_handshake(self, connection: ClientConnection) -> None:
         system_info = await asyncio.to_thread(gather_system_info)
         message = serialize_message(
             MessageType.HANDSHAKE,
@@ -214,11 +338,19 @@ class ControllerClient:
             capabilities=[capability.value for capability in CLIENT_CAPABILITIES],
             system_info=system_info.to_dict(),
         )
-        if self._connection is not None:
-            await self._connection.send(message)
-            logger.info("Handshake sent (client_version=%s)", CLIENT_VERSION)
+        await connection.send(message)
+        logger.info("Handshake sent (client_version=%s)", CLIENT_VERSION)
 
     async def _message_loop(self, connection: ClientConnection) -> None:
+        closed = asyncio.create_task(connection.wait_closed())
+        try:
+            await self._receive_messages(connection, closed)
+        finally:
+            closed.cancel()
+
+    async def _receive_messages(
+        self, connection: ClientConnection, closed: asyncio.Task[None]
+    ) -> None:
         async for raw_message in connection:
             if not self._running:
                 break
@@ -249,7 +381,41 @@ class ControllerClient:
                 )
                 continue
 
-            await self._dispatch(handler, message_type, request_id, data)
+            handled = await self._run_until_closed(
+                self._dispatch(handler, message_type, request_id, data), closed
+            )
+            if not handled:
+                logger.warning(
+                    "Connection closed while handling %s (request_id=%s); "
+                    "abandoning it",
+                    message_type.value,
+                    request_id,
+                )
+                return
+
+    @staticmethod
+    async def _run_until_closed(
+        handling: Coroutine[Any, Any, None], closed: asyncio.Task[None]
+    ) -> bool:
+        """Run one handler, but stop waiting for it as soon as the socket closes.
+
+        Handlers block on worker threads for up to minutes; waiting for them
+        would delay noticing the drop, and so reconnecting, by just as long.
+        Returns False when the socket closed first: the handler task is
+        cancelled, its thread finishes in the background and its result is
+        dropped (the server re-sends the action on the next connection).
+        """
+        task = asyncio.create_task(handling)
+        try:
+            await asyncio.wait({task, closed}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.wait({task})
+        if task.cancelled():
+            return False
+        task.result()
+        return True
 
     async def _reject_undecodable_message(
         self, raw_message: str, error: ProtocolError
@@ -278,8 +444,6 @@ class ControllerClient:
         """Run a handler without letting its failure drop the connection."""
         try:
             await handler(request_id, data)
-        except AuthenticationError:
-            raise
         except ProtocolError as e:
             logger.error(
                 "Invalid %s message (request_id=%s): %s", message_type, request_id, e
@@ -349,22 +513,6 @@ class ControllerClient:
             details=details,
         )
         await self._send_message(msg)
-
-    async def _handle_handshake_ack(
-        self, request_id: str, data: dict[str, object]
-    ) -> None:
-        ack = parse_handshake_ack_payload(data)
-        if ack.status != "ok":
-            logger.error("Handshake rejected (%s): %s", ack.status, ack.message)
-            raise AuthenticationError(
-                f"Handshake rejected ({ack.status}): {ack.message}"
-            )
-        logger.info(
-            "Connected to project '%s' (id=%s)", ack.project_name, ack.project_id
-        )
-        self._handshake_event.set()
-        await self._cancel_omniparser_task()
-        self._omniparser_task = asyncio.create_task(self._initialize_omniparser())
 
     async def _initialize_omniparser(self) -> None:
         """Preload the OmniParser models and report readiness to the server.
@@ -471,10 +619,17 @@ class ControllerClient:
     ) -> None:
         payload = parse_run_command_payload(data)
         loop = asyncio.get_running_loop()
+        # Output belongs to the connection the command arrived on. After a
+        # reconnect the abandoned thread may still be producing lines; they
+        # must not leak onto the new connection.
+        connection = self._connection
 
         def _on_output(line: str, stream: StreamName) -> None:
+            if connection is None or self._connection is not connection:
+                return
             future = asyncio.run_coroutine_threadsafe(
-                self._send_command_output_line(request_id, line, stream), loop
+                self._send_command_output_line(connection, request_id, line, stream),
+                loop,
             )
             try:
                 future.result(timeout=5)
@@ -494,8 +649,9 @@ class ControllerClient:
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
 
+    @staticmethod
     async def _send_command_output_line(
-        self, request_id: str, line: str, stream: StreamName
+        connection: ClientConnection, request_id: str, line: str, stream: StreamName
     ) -> None:
         message = serialize_message(
             MessageType.COMMAND_OUTPUT,
@@ -503,7 +659,7 @@ class ControllerClient:
             line=line,
             stream=stream,
         )
-        await self._send_message(message)
+        await connection.send(message)
 
     async def _send_command_result(
         self, request_id: str, result: CommandResultPayload

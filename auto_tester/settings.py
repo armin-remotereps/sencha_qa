@@ -268,8 +268,11 @@ CONTROLLER_SERVER_HOST: str = config(
     "CONTROLLER_SERVER_HOST", default="localhost", cast=str
 )
 CONTROLLER_SERVER_PORT: int = config("CONTROLLER_SERVER_PORT", default=8000, cast=int)
-CONTROLLER_AGENT_CONNECT_TIMEOUT: int = config(
-    "CONTROLLER_AGENT_CONNECT_TIMEOUT", default=60, cast=int
+# How long an active test run waits for the Test Runner to reconnect after a
+# drop. A test case may wait at most twice this in total; the wait does not
+# count against agent time.
+CONTROLLER_RECONNECT_GRACE_SECONDS: int = config(
+    "CONTROLLER_RECONNECT_GRACE_SECONDS", default=300, cast=int
 )
 INTERACTIVE_CMD_TIMEOUT_SECONDS: int = config(
     "INTERACTIVE_CMD_TIMEOUT_SECONDS", default=300, cast=int

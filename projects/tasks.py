@@ -9,6 +9,7 @@ from celery.app.task import Task
 from channels.layers import get_channel_layer
 from django.db import transaction
 
+from projects.controller_reconnect_services import max_outage_seconds_per_case
 from projects.models import Project, TestCaseUpload, TestRun, UploadStatus
 from projects.prompt_refiner import refine_project_prompt
 from projects.services import _agent_status_group, save_project_prompt
@@ -241,8 +242,10 @@ def import_testrail_run_cases(self: Task[[int], None], upload_id: int) -> None:
     max_retries=0,
     acks_late=True,
     reject_on_worker_lost=True,
-    soft_time_limit=1800,
-    time_limit=1860,
+    # Plus the per-case allowance for waiting on a Test Runner reconnect, so an
+    # outage aborts the run cleanly (wait_for_controller) before Celery kills it.
+    soft_time_limit=1800 + max_outage_seconds_per_case(),
+    time_limit=1860 + max_outage_seconds_per_case(),
 )
 def execute_test_run_case(self: Task[[int], None], pivot_id: int) -> None:
     from projects.services import execute_test_run_test_case

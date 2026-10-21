@@ -95,6 +95,10 @@ class Project(models.Model):
         max_length=64, unique=True, db_index=True, default=_default_api_key
     )
     agent_connected = models.BooleanField(default=False, db_index=True)
+    # Channels channel_name of the consumer that owns the controller connection.
+    # A late disconnect of an older socket only releases the project if it still
+    # owns it, so a reconnect is never wiped by its predecessor's cleanup.
+    agent_channel_name = models.CharField(max_length=255, blank=True, default="")
     agent_system_info = models.JSONField(default=dict, blank=True)
     agent_client_version = models.CharField(max_length=32, blank=True, default="")
     agent_capabilities = models.JSONField(default=list, blank=True)
