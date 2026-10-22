@@ -5,7 +5,7 @@ django_stubs_ext.monkeypatch()
 
 from pathlib import Path
 
-from decouple import Csv, config
+from decouple import Choices, Csv, config
 
 from auto_tester.encryption_key import validate_fernet_key
 
@@ -232,9 +232,11 @@ LOGGING = {
 
 # OpenAI API (shared credentials for all OpenAI-routed calls)
 OPENAI_API_KEY: str = config("OPENAI_API_KEY", default="", cast=str)
+# The full Responses API endpoint. Chat Completions is not supported: it rejects
+# function tools while gpt-5.6-sol is reasoning.
 OPENAI_BASE_URL: str = config(
     "OPENAI_BASE_URL",
-    default="https://api.openai.com/v1/chat/completions",
+    default="https://api.openai.com/v1/responses",
     cast=str,
 )
 # Every LLM role — agent, orchestrator, sub-agent, summarizer, refiner and
@@ -246,6 +248,15 @@ OPENAI_MODEL: str = config("OPENAI_MODEL", default="gpt-5.6-sol", cast=str)
 # visible token and may then emit up to MAX_OUTPUT_TOKENS, so the per-request
 # timeout is deliberately generous.
 OPENAI_REQUEST_TIMEOUT: int = config("OPENAI_REQUEST_TIMEOUT", default=900, cast=int)
+# Reasoning summary shown as [Thinking] in the agent debug log: auto, concise or
+# detailed. Needs a verified OpenAI organisation (otherwise every call returns
+# 400); leave blank to not request one. Reasoning effort is never sent, so the
+# model's default applies.
+OPENAI_REASONING_SUMMARY: str = config(
+    "OPENAI_REASONING_SUMMARY",
+    default="auto",
+    cast=Choices(["", "auto", "concise", "detailed"]),
+)
 
 # Agent
 AGENT_MAX_ITERATIONS: int = config("AGENT_MAX_ITERATIONS", default=30, cast=int)

@@ -72,11 +72,27 @@ ToolSchema = dict[str, object]
 
 
 @dataclass(frozen=True)
+class ReasoningItem:
+    """An opaque reasoning item returned by the Responses API.
+
+    Replayed in front of the assistant turn it came with, so the model keeps its
+    chain of thought across tool calls without OpenAI storing the conversation.
+    """
+
+    item_id: str
+    encrypted_content: str
+    summary: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class ChatMessage:
     role: str  # "system", "user", "assistant", "tool"
     content: str | tuple[ContentPart, ...] | None = None
     tool_calls: tuple[ToolCall, ...] | None = None
     tool_call_id: str | None = None
+    # Set only on assistant messages parsed from a response; sent back verbatim.
+    reasoning: tuple[ReasoningItem, ...] | None = None
+    phase: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +101,8 @@ class LLMConfig:
     api_key: str
     endpoint_url: str
     max_tokens: int
+    # Responses API ``reasoning.summary`` ("auto", "concise", "detailed"); None omits it.
+    reasoning_summary: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,6 +112,7 @@ class LLMResponse:
     usage_prompt_tokens: int
     usage_completion_tokens: int
     reasoning_content: str | None = None
+    usage_reasoning_tokens: int = 0
 
 
 LogCallback = Callable[[str], None]

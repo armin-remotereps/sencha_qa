@@ -8,6 +8,7 @@ from agents.types import (
     ImageContent,
     LLMResponse,
     MessageDict,
+    ReasoningItem,
     TextContent,
     ToolCall,
     ToolDefinition,
@@ -15,37 +16,91 @@ from agents.types import (
 )
 
 
-def _serialize_messages(messages: tuple[ChatMessage, ...]) -> list[MessageDict]:
-    result: list[MessageDict] = []
-    for msg in messages:
-        serialized = _serialize_single_message(msg)
-        result.append(serialized)
-    return result
+def _serialize_input(
+    messages: tuple[ChatMessage, ...],
+) -> tuple[str | None, list[MessageDict]]:
+    """Split a chat history into Responses API ``instructions`` and ``input`` items.
+
+    The leading system message becomes ``instructions``; any later one is sent as
+    a developer message.
+    """
+    instructions: str | None = None
+    remaining = messages
+    if messages and messages[0].role == "system":
+        instructions = _content_text(messages[0].content)
+        remaining = messages[1:]
+
+    items: list[MessageDict] = []
+    for msg in remaining:
+        items.extend(_serialize_single_message(msg))
+    return instructions, items
 
 
-def _serialize_single_message(msg: ChatMessage) -> MessageDict:
-    serialized_message: MessageDict = {"role": msg.role}
-
-    if msg.content is not None:
-        serialized_message["content"] = _serialize_content(msg.content)
-
-    if msg.tool_calls is not None:
-        serialized_message["tool_calls"] = [
+def _serialize_single_message(msg: ChatMessage) -> list[MessageDict]:
+    if msg.role == "tool":
+        if msg.tool_call_id is None:
+            error = "A tool message needs the tool_call_id of the call it answers"
+            raise ValueError(error)
+        return [
             {
-                "id": tc.tool_call_id,
-                "type": "function",
-                "function": {
-                    "name": tc.tool_name,
-                    "arguments": json.dumps(tc.arguments),
-                },
+                "type": "function_call_output",
+                "call_id": msg.tool_call_id,
+                "output": _content_text(msg.content),
             }
-            for tc in msg.tool_calls
         ]
+    if msg.role == "assistant":
+        return _serialize_assistant_message(msg)
 
-    if msg.tool_call_id is not None:
-        serialized_message["tool_call_id"] = msg.tool_call_id
+    role = "developer" if msg.role == "system" else msg.role
+    content = msg.content if msg.content is not None else ""
+    return [{"role": role, "content": _serialize_content(content)}]
 
-    return serialized_message
+
+def _serialize_assistant_message(msg: ChatMessage) -> list[MessageDict]:
+    # Same order the model produced them in: reasoning, text, function calls.
+    following: list[MessageDict] = []
+
+    text = _content_text(msg.content)
+    if text:
+        message_item: MessageDict = {"role": "assistant", "content": text}
+        if msg.phase is not None:
+            message_item["phase"] = msg.phase
+        following.append(message_item)
+
+    for tc in msg.tool_calls or ():
+        following.append(
+            {
+                "type": "function_call",
+                "call_id": tc.tool_call_id,
+                "name": tc.tool_name,
+                "arguments": json.dumps(tc.arguments),
+            }
+        )
+
+    # The API rejects a reasoning item that has nothing after it.
+    if not following:
+        return []
+
+    reasoning_items: list[MessageDict] = [
+        {
+            "type": "reasoning",
+            "id": item.item_id,
+            "summary": [
+                {"type": "summary_text", "text": text} for text in item.summary
+            ],
+            "encrypted_content": item.encrypted_content,
+        }
+        for item in msg.reasoning or ()
+    ]
+    return reasoning_items + following
+
+
+def _content_text(content: str | tuple[ContentPart, ...] | None) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    return "\n".join(part.text for part in content if isinstance(part, TextContent))
 
 
 def _serialize_content(
@@ -62,14 +117,12 @@ def _serialize_multimodal_content(
     result: list[MessageDict] = []
     for part in parts:
         if isinstance(part, TextContent):
-            result.append({"type": "text", "text": part.text})
+            result.append({"type": "input_text", "text": part.text})
         elif isinstance(part, ImageContent):
             result.append(
                 {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{part.media_type};base64,{part.base64_data}",
-                    },
+                    "type": "input_image",
+                    "image_url": f"data:{part.media_type};base64,{part.base64_data}",
                 }
             )
     return result
@@ -97,85 +150,154 @@ def _serialize_tools(
 
         func_schema: ToolSchema = {
             "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                },
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
             },
+            # Strict mode would rewrite our schemas (optional params, no
+            # additionalProperties); keep the arguments the model sends as-is.
+            "strict": False,
         }
         result.append(func_schema)
     return result
 
 
 def _parse_response(data: dict[str, object]) -> LLMResponse:
-    choices = data.get("choices")
-    if not isinstance(choices, list) or len(choices) == 0:
-        msg = "No choices in LLM response"
+    status = str(data.get("status", "completed"))
+    error = data.get("error")
+    if status in ("failed", "cancelled") or isinstance(error, dict):
+        detail = _error_detail(error)
+        msg = f"Response {status}{f': {detail}' if detail else ''}"
         raise ValueError(msg)
 
-    choice = choices[0]
-    if not isinstance(choice, dict):
-        msg = "Invalid choice format"
+    output = data.get("output")
+    if not isinstance(output, list):
+        msg = "No output in LLM response"
         raise ValueError(msg)
 
-    finish_reason = str(choice.get("finish_reason", "stop"))
-    raw_message = choice.get("message")
-    if not isinstance(raw_message, dict):
-        msg = "No message in LLM response choice"
-        raise ValueError(msg)
+    texts: list[str] = []
+    tool_calls: list[ToolCall] = []
+    reasoning: list[ReasoningItem] = []
+    phases: set[str | None] = set()
 
-    tool_calls = _parse_tool_calls(raw_message)
-
-    raw_content = raw_message.get("content")
-    content: str | None = str(raw_content) if raw_content is not None else None
-
-    raw_reasoning = raw_message.get("reasoning_content")
-    reasoning: str | None = str(raw_reasoning) if raw_reasoning is not None else None
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        item_type = item.get("type")
+        if item_type == "reasoning":
+            parsed_reasoning = _parse_reasoning_item(item)
+            if parsed_reasoning is not None:
+                reasoning.append(parsed_reasoning)
+        elif item_type == "message":
+            texts.append("".join(_parse_message_texts(item)))
+            raw_phase = item.get("phase")
+            phases.add(raw_phase if isinstance(raw_phase, str) else None)
+        elif item_type == "function_call":
+            tool_calls.append(_parse_function_call(item))
 
     message = ChatMessage(
-        role=str(raw_message.get("role", "assistant")),
-        content=content,
-        tool_calls=tool_calls,
+        role="assistant",
+        content="\n\n".join(text for text in texts if text) or None,
+        tool_calls=tuple(tool_calls) or None,
+        reasoning=tuple(reasoning) or None,
+        # Several message items are replayed as one, so a phase is kept only
+        # when they all share it; resending a wrong phase is worse than none.
+        phase=phases.pop() if len(phases) == 1 else None,
     )
 
-    usage = data.get("usage", {})
+    summaries = [text for item in reasoning for text in item.summary]
+
+    usage = data.get("usage")
     if not isinstance(usage, dict):
         usage = {}
+    output_details = usage.get("output_tokens_details")
+    if not isinstance(output_details, dict):
+        output_details = {}
 
     return LLMResponse(
         message=message,
-        reasoning_content=reasoning,
-        finish_reason=finish_reason,
-        usage_prompt_tokens=int(usage.get("prompt_tokens", 0)),
-        usage_completion_tokens=int(usage.get("completion_tokens", 0)),
+        reasoning_content="\n\n".join(summaries) or None,
+        finish_reason=_finish_reason(
+            status, data.get("incomplete_details"), bool(tool_calls)
+        ),
+        usage_prompt_tokens=int(usage.get("input_tokens", 0)),
+        usage_completion_tokens=int(usage.get("output_tokens", 0)),
+        usage_reasoning_tokens=int(output_details.get("reasoning_tokens", 0)),
     )
 
 
-def _parse_tool_calls(raw_message: dict[str, object]) -> tuple[ToolCall, ...] | None:
-    raw_tool_calls = raw_message.get("tool_calls")
-    if not isinstance(raw_tool_calls, list) or len(raw_tool_calls) == 0:
+def _error_detail(error: object) -> str:
+    if not isinstance(error, dict):
+        return ""
+    parts = [str(error[key]) for key in ("code", "message") if error.get(key)]
+    return " ".join(parts)
+
+
+def _finish_reason(
+    status: str, incomplete_details: object, has_tool_calls: bool
+) -> str:
+    """Map the Responses status to the Chat Completions finish_reason vocabulary."""
+    if status == "incomplete":
+        reason = (
+            str(incomplete_details.get("reason", ""))
+            if isinstance(incomplete_details, dict)
+            else ""
+        )
+        if reason == "max_output_tokens":
+            return "length"
+        if reason == "content_filter":
+            return "content_filter"
+        return f"incomplete:{reason}"
+    if has_tool_calls:
+        return "tool_calls"
+    return "stop"
+
+
+def _parse_reasoning_item(item: dict[str, object]) -> ReasoningItem | None:
+    item_id = item.get("id")
+    encrypted = item.get("encrypted_content")
+    if not isinstance(item_id, str) or not isinstance(encrypted, str):
         return None
 
-    parsed: list[ToolCall] = []
-    for raw_tc in raw_tool_calls:
-        if not isinstance(raw_tc, dict):
-            continue
-        tc_id = str(raw_tc.get("id", ""))
-        func = raw_tc.get("function")
-        if not isinstance(func, dict):
-            continue
-        name = str(func.get("name", ""))
-        raw_args = func.get("arguments", "{}")
-        try:
-            arguments: dict[str, object] = json.loads(str(raw_args))
-        except (json.JSONDecodeError, TypeError):
-            arguments = {}
-        parsed.append(ToolCall(tool_call_id=tc_id, tool_name=name, arguments=arguments))
+    summary: list[str] = []
+    raw_summary = item.get("summary")
+    if isinstance(raw_summary, list):
+        for part in raw_summary:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                summary.append(str(part["text"]))
+    return ReasoningItem(
+        item_id=item_id, encrypted_content=encrypted, summary=tuple(summary)
+    )
 
-    if not parsed:
-        return None
-    return tuple(parsed)
+
+def _parse_message_texts(item: dict[str, object]) -> list[str]:
+    content = item.get("content")
+    if not isinstance(content, list):
+        return []
+
+    texts: list[str] = []
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        # A refusal is surfaced as text so callers see why nothing was done.
+        if part.get("type") == "output_text" and isinstance(part.get("text"), str):
+            texts.append(str(part["text"]))
+        elif part.get("type") == "refusal" and isinstance(part.get("refusal"), str):
+            texts.append(str(part["refusal"]))
+    return texts
+
+
+def _parse_function_call(item: dict[str, object]) -> ToolCall:
+    raw_args = item.get("arguments", "{}")
+    try:
+        arguments: dict[str, object] = json.loads(str(raw_args))
+    except (json.JSONDecodeError, TypeError):
+        arguments = {}
+    return ToolCall(
+        tool_call_id=str(item.get("call_id", "")),
+        tool_name=str(item.get("name", "")),
+        arguments=arguments,
+    )

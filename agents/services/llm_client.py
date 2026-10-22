@@ -8,7 +8,7 @@ from django.conf import settings
 from agents.exceptions import AIServiceError, AIServiceErrorKind
 from agents.services.llm_serializer import (
     _parse_response,
-    _serialize_messages,
+    _serialize_input,
     _serialize_tools,
 )
 from agents.types import (
@@ -34,11 +34,20 @@ def _build_payload(
     messages: tuple[ChatMessage, ...],
     tools: tuple[ToolDefinition, ...],
 ) -> dict[str, object]:
+    instructions, input_items = _serialize_input(messages)
     payload: dict[str, object] = {
         "model": config.model,
-        "messages": _serialize_messages(messages),
-        "max_completion_tokens": config.max_tokens,
+        "input": input_items,
+        "max_output_tokens": config.max_tokens,
+        # Nothing (screenshots, prompts) is retained at OpenAI; the encrypted
+        # reasoning comes back instead and is replayed with the next turn.
+        "store": False,
+        "include": ["reasoning.encrypted_content"],
     }
+    if instructions is not None:
+        payload["instructions"] = instructions
+    if config.reasoning_summary is not None:
+        payload["reasoning"] = {"summary": config.reasoning_summary}
 
     if tools:
         payload["tools"] = _serialize_tools(tools)
@@ -84,8 +93,9 @@ def send_chat_completion(
     try:
         parsed = _parse_response(response.json())
     except (ValueError, TypeError, KeyError, AttributeError) as exc:
-        # json.JSONDecodeError is a ValueError; the rest cover a body whose
-        # shape does not match the chat-completions contract.
+        # json.JSONDecodeError is a ValueError, as is a failed or cancelled
+        # response; the rest cover a body that does not match the Responses
+        # contract.
         raise AIServiceError(
             AIServiceErrorKind.BAD_RESPONSE,
             f"AI service returned an unusable response: {_truncate(str(exc))}",
@@ -96,12 +106,13 @@ def send_chat_completion(
     tool_call_count = len(parsed.message.tool_calls) if parsed.message.tool_calls else 0
     logger.info(
         "LLM response: finish_reason=%s tool_calls=%s (count=%d) "
-        "usage(prompt=%d, completion=%d)",
+        "usage(prompt=%d, completion=%d, reasoning=%d)",
         parsed.finish_reason,
         has_tool_calls,
         tool_call_count,
         parsed.usage_prompt_tokens,
         parsed.usage_completion_tokens,
+        parsed.usage_reasoning_tokens,
     )
 
     return parsed

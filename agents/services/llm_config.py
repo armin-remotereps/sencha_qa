@@ -16,4 +16,5 @@ def build_llm_config() -> LLMConfig:
         max_tokens=MAX_OUTPUT_TOKENS,
         api_key=settings.OPENAI_API_KEY,
         endpoint_url=settings.OPENAI_BASE_URL,
+        reasoning_summary=settings.OPENAI_REASONING_SUMMARY or None,
     )
