@@ -272,15 +272,20 @@ def import_testrail_run_cases(self: Task[[int], None], upload_id: int) -> None:
     soft_time_limit=1800 + max_outage_seconds_per_case(),
     time_limit=1860 + max_outage_seconds_per_case(),
 )
-def execute_test_run_case(self: Task[[int], None], pivot_id: int) -> None:
+def execute_test_run_case(
+    self: Task[[int, int | None], None], pivot_id: int, generation: int | None = None
+) -> None:
     from projects.services import execute_test_run_test_case
 
     logger.info(
-        "execute_test_run_case started: task_id=%s pivot_id=%s",
+        "execute_test_run_case started: task_id=%s pivot_id=%s generation=%s",
         self.request.id,
         pivot_id,
+        generation,
     )
-    execute_test_run_test_case(pivot_id)
+    # Tasks queued before generations existed belong to generation 0 (the
+    # migration default); every Start and Resume since then is 1 or more.
+    execute_test_run_test_case(pivot_id, generation or 0)
     logger.info(
         "execute_test_run_case finished: task_id=%s pivot_id=%s",
         self.request.id,

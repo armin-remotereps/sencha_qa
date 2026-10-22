@@ -76,6 +76,10 @@ class BlockedReason(models.TextChoices):
         "Browser unavailable on the test machine",
     )
     RUNNER_OUTDATED = "runner_outdated", "Test Runner needs an update"
+    RESUME_STATE_LOST = (
+        "resume_state_lost",
+        "Could not restore the state to resume",
+    )
     INTERNAL_ERROR = "internal_error", "Internal error"
 
 
@@ -292,6 +296,9 @@ class TestRun(models.Model):
         db_index=True,
     )
     celery_task_id = models.CharField(max_length=255, blank=True, default="")
+    # Bumped by every Start and Resume; chain tasks carry the value they were
+    # queued with and stand down (no execution, no writes) once it moves on.
+    execution_generation = models.PositiveIntegerField(default=0)
     name = models.CharField(max_length=255, blank=True, default="")
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True, db_index=True)
@@ -387,12 +394,47 @@ class TestRunTestCase(models.Model):
     testrail_source_skip_reason = models.CharField(
         max_length=32, choices=CheckedPushSkipReason.choices, blank=True, default=""
     )
+    # Serialized orchestrator progress (plan, attempts, next step, browser) so a
+    # Blocked or Cancelled case can resume in place; {} means plan from scratch.
+    execution_checkpoint = models.JSONField(default=dict, blank=True)
 
     class Meta:
         unique_together = ("test_run", "test_case")
 
     def __str__(self) -> str:
         return f"TRTC #{self.pk} — {self.test_case.title[:50]}"
+
+
+class TestRunCaseResume(models.Model):
+    """Snapshot of a case's outcome taken each time it is resumed in place."""
+
+    test_run_test_case = models.ForeignKey(
+        TestRunTestCase, on_delete=models.CASCADE, related_name="resumes"
+    )
+    resumed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    # Step the case resumed at; null means it ran from the start (no checkpoint).
+    from_step = models.PositiveSmallIntegerField(null=True, blank=True)
+    previous_status = models.CharField(
+        max_length=20, choices=TestRunTestCaseStatus.choices
+    )
+    previous_blocked_reason = models.CharField(
+        max_length=32, choices=BlockedReason.choices, blank=True, default=""
+    )
+    previous_result = models.TextField(blank=True, default="")
+    previous_finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+    def __str__(self) -> str:
+        return f"Resume #{self.pk} of TRTC #{self.test_run_test_case_id}"
 
 
 def _screenshot_upload_path(instance: "TestRunScreenshot", filename: str) -> str:

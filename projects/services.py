@@ -33,9 +33,10 @@ from django.db.models import (
     Q,
     QuerySet,
     Subquery,
+    Value,
     When,
 )
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Concat
 from django.urls import reverse
 from django.utils import dateformat, timezone
 
@@ -60,6 +61,10 @@ from controller_client.protocol import (
     parse_omniparser_status_payload,
 )
 from projects.case_blocking import blocked_message, classify_case_exception
+from projects.case_checkpoint_services import (
+    build_checkpoint_callback,
+    load_resume_checkpoint,
+)
 from projects.checked_push_limits import is_checked_push_live
 from projects.controller_outage_clock import agent_monotonic, reset_outage_clock
 from projects.controller_reconnect_services import (
@@ -87,6 +92,7 @@ from projects.models import (
     TestCaseUpload,
     TestRailPushStatus,
     TestRun,
+    TestRunCaseResume,
     TestRunScreenshot,
     TestRunStatus,
     TestRunTestCase,
@@ -2208,6 +2214,7 @@ def reset_test_run(test_run: TestRun) -> None:
         pivot.testrail_source_sent_at = None
         pivot.testrail_source_attachment_count = 0
         pivot.testrail_source_skip_reason = ""
+        pivot.execution_checkpoint = {}
         pivot.save(
             update_fields=[
                 "status",
@@ -2222,9 +2229,11 @@ def reset_test_run(test_run: TestRun) -> None:
                 "testrail_source_sent_at",
                 "testrail_source_attachment_count",
                 "testrail_source_skip_reason",
+                "execution_checkpoint",
                 "updated_at",
             ]
         )
+    TestRunCaseResume.objects.filter(test_run_test_case__test_run=test_run).delete()
     test_run.status = TestRunStatus.WAITING
     test_run.celery_task_id = ""
     test_run.started_at = None
@@ -2264,15 +2273,24 @@ def _has_active_test_run(project: Project) -> bool:
     ).exists()
 
 
+@transaction.atomic
 def start_test_run(test_run: TestRun) -> None:
-    from projects.tasks import execute_test_run_case
+    # Same lock order as resume (project, then run): it serializes a Start
+    # against another Start or Resume in the project, so the "no other run is
+    # STARTED" check below cannot race.
+    Project.objects.select_for_update().only("id").get(pk=test_run.project_id)
+    locked_status = (
+        TestRun.objects.select_for_update()
+        .values_list("status", flat=True)
+        .get(pk=test_run.pk)
+    )
 
     pivot_ids = list(
         test_run.pivot_entries.order_by(*RUN_CASE_ORDERING).values_list("id", flat=True)
     )
     if not pivot_ids:
         raise ValueError("Cannot start a test run with no test cases.")
-    if test_run.status != TestRunStatus.WAITING:
+    if locked_status != TestRunStatus.WAITING:
         raise ValueError("Test run is not in WAITING status.")
     if _has_active_test_run(test_run.project):
         raise ValueError("Another test run is already in progress for this project.")
@@ -2280,12 +2298,53 @@ def start_test_run(test_run: TestRun) -> None:
     test_run.status = TestRunStatus.STARTED
     test_run.started_at = timezone.now()
     test_run.finished_at = None
-    test_run.save(update_fields=["status", "started_at", "finished_at", "updated_at"])
-    _broadcast_test_run_status(test_run)
+    test_run.execution_generation += 1
+    test_run.save(
+        update_fields=[
+            "status",
+            "started_at",
+            "finished_at",
+            "execution_generation",
+            "updated_at",
+        ]
+    )
 
-    result = chain(*[execute_test_run_case.si(pid) for pid in pivot_ids]).apply_async()
+    def _enqueue() -> None:
+        if queue_test_run_cases(test_run, pivot_ids):
+            _broadcast_test_run_status(test_run)
+
+    # Workers must see the STARTED run, so the chain is queued after commit.
+    transaction.on_commit(_enqueue)
+
+
+def queue_test_run_cases(test_run: TestRun, pivot_ids: Sequence[int]) -> bool:
+    """Chain the cases on the execution queue, tagged with the run's generation.
+
+    Call after commit, before broadcasting. If the broker refuses the chain,
+    the run is cancelled (best effort) so it does not sit in STARTED with
+    nobody executing it, and False is returned.
+    """
+    from projects.tasks import execute_test_run_case
+
+    generation = test_run.execution_generation
+    try:
+        result = chain(
+            *[execute_test_run_case.si(pid, generation) for pid in pivot_ids]
+        ).apply_async()
+    except Exception:
+        logger.exception("Could not queue test run %d", test_run.pk)
+        try:
+            abort_test_run(
+                test_run, reason="Could not queue the run", revoke_task=False
+            )
+        except Exception:
+            # The channel layer shares the broker's Redis; the run is already
+            # CANCELLED in the database when only the broadcast fails.
+            logger.exception("Could not cancel unqueued test run %d", test_run.pk)
+        return False
     test_run.celery_task_id = result.id
     test_run.save(update_fields=["celery_task_id", "updated_at"])
+    return True
 
 
 def get_test_run_summary(test_run: TestRun) -> dict[str, int]:
@@ -2489,14 +2548,41 @@ def _broadcast_pivot_status_to_run(pivot: TestRunTestCase) -> None:
     layer: Any = get_channel_layer()
     if layer is None:
         return
+    _send_pivot_status_to_run(layer, pivot, get_test_run_summary(pivot.test_run))
 
+
+def _send_pivot_status_to_run(
+    layer: Any, pivot: TestRunTestCase, summary: dict[str, int]
+) -> None:
     event: PivotStatusEvent = {
         "type": "test_run.pivot_status",
         "pivot_id": pivot.id,
         "status": pivot.status,
-        "summary": get_test_run_summary(pivot.test_run),
+        "summary": summary,
     }
-    async_to_sync(layer.group_send)(_test_run_group(pivot.test_run.id), event)
+    async_to_sync(layer.group_send)(_test_run_group(pivot.test_run_id), event)
+
+
+def broadcast_run_and_pivots(
+    test_run: TestRun, pivots: Sequence[TestRunTestCase]
+) -> None:
+    """Push the run's status and each pivot's status to the run and case pages.
+
+    The run summary is computed once (one query), not once per pivot.
+    """
+    layer: Any = get_channel_layer()
+    if layer is None:
+        return
+    summary = get_test_run_summary(test_run)
+    run_event: TestRunStatusEvent = {
+        "type": "test_run.status",
+        "test_run_status": test_run.status,
+        "summary": summary,
+    }
+    async_to_sync(layer.group_send)(_test_run_group(test_run.id), run_event)
+    for pivot in pivots:
+        _send_pivot_status_to_run(layer, pivot, summary)
+        _broadcast_pivot_status_to_case(pivot)
 
 
 def _broadcast_pivot_status_to_case(pivot: TestRunTestCase) -> None:
@@ -2590,13 +2676,21 @@ def fetch_test_case_state(
 # ============================================================================
 
 
-def _build_cancellation_check(test_run_id: int) -> Callable[[], bool]:
+def _build_cancellation_check(test_run_id: int, generation: int) -> Callable[[], bool]:
+    """True once the run is cancelled, or resumed/restarted by a newer chain."""
+    stopped = Q(status=TestRunStatus.CANCELLED) | ~Q(execution_generation=generation)
+
     def _is_cancelled() -> bool:
-        return TestRun.objects.filter(
-            pk=test_run_id, status=TestRunStatus.CANCELLED
-        ).exists()
+        return TestRun.objects.filter(stopped, pk=test_run_id).exists()
 
     return _is_cancelled
+
+
+def _is_stale_execution(test_run_id: int, generation: int) -> bool:
+    """A newer Start or Resume took over the run; this worker must not write."""
+    return not TestRun.objects.filter(
+        pk=test_run_id, execution_generation=generation
+    ).exists()
 
 
 def _wait_for_omniparser_ready(
@@ -2650,14 +2744,22 @@ def _raise_for_omniparser_failure(project: Project) -> str:
     )
 
 
-def execute_test_run_test_case(pivot_id: int) -> None:
+def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> None:
+    """Run one case as part of the run's ``generation`` (None: the current one)."""
     reset_outage_clock()
     pivot = _fetch_pivot(pivot_id)
     if pivot.test_run.status == TestRunStatus.CANCELLED:
         return
+    if generation is None:
+        generation = pivot.test_run.execution_generation
+    if pivot.test_run.execution_generation != generation:
+        # A task of a chain that was aborted and then resumed or restarted.
+        logger.info("Skipping stale task for pivot %d", pivot_id)
+        return
 
     project = pivot.test_run.project
-    cancellation_check = _build_cancellation_check(pivot.test_run.id)
+    run_id = pivot.test_run.id
+    cancellation_check = _build_cancellation_check(run_id, generation)
     _mark_pivot_in_progress(pivot)
 
     try:
@@ -2667,8 +2769,8 @@ def execute_test_run_test_case(pivot_id: int) -> None:
 
         _safe_cleanup(project.id, wait_for_runner=True)
 
-        on_log = _build_log_callback(pivot)
-        on_screenshot = _build_screenshot_callback(pivot)
+        on_log = _build_log_callback(pivot, generation)
+        on_screenshot = _build_screenshot_callback(pivot, generation)
         task_description = _build_task_description(pivot.test_case)
 
         from agents.services.orchestrator import (  # local import: breaks circular dependency
@@ -2678,6 +2780,10 @@ def execute_test_run_test_case(pivot_id: int) -> None:
         project.refresh_from_db(
             fields=["project_prompt", "application_url", "application_platform"]
         )
+        # A resumed case keeps its log and continues the persisted plan.
+        resume = load_resume_checkpoint(pivot)
+        if resume is not None:
+            on_log(f"=== Resumed from step {resume.next_step} ===")
         result = run_orchestrator(
             task_description,
             project.id,
@@ -2686,33 +2792,44 @@ def execute_test_run_test_case(pivot_id: int) -> None:
             system_info=project.agent_system_info or None,
             project_prompt=build_agent_project_context(project),
             cancellation_check=cancellation_check,
+            resume=resume,
+            on_checkpoint=build_checkpoint_callback(pivot, generation),
         )
-        _finalize_pivot(pivot, result)
+        # Once a Resume or Start took the run over, the pivot belongs to the
+        # newer chain: this worker records nothing (here and below).
+        if not _is_stale_execution(run_id, generation):
+            _finalize_pivot(pivot, result)
     except (AgentCancelledError, ControllerNotConnectedError):
         # Inside a case, wait_for_controller only reports "not connected" once
         # the run is no longer STARTED, i.e. it was aborted.
         logger.info("Test run cancelled for pivot %d", pivot_id)
-        pivot.refresh_from_db()
-        if pivot.status != TestRunTestCaseStatus.CANCELLED:
-            _mark_pivot_cancelled(pivot)
+        if not _is_stale_execution(run_id, generation):
+            pivot.refresh_from_db()
+            if pivot.status != TestRunTestCaseStatus.CANCELLED:
+                _mark_pivot_cancelled(pivot)
     except ControllerReconnectTimeoutError as exc:
         logger.warning("Aborting test run for pivot %d: %s", pivot_id, exc)
-        _abort_run_after_reconnect_timeout(pivot, exc)
+        if not _is_stale_execution(run_id, generation):
+            _abort_run_after_reconnect_timeout(pivot, exc)
     except Exception as exc:
         # Infrastructure faults, the soft time limit and bugs are never a
         # verdict on the app: block the case and let the chain continue.
-        _settle_pivot_after_error(pivot, exc)
+        if not _is_stale_execution(run_id, generation):
+            _settle_pivot_after_error(pivot, exc)
     except BaseException as exc:
         logger.critical(
             "execute_test_run_test_case hit BaseException for pivot %d: %s",
             pivot_id,
             exc,
         )
-        _settle_pivot_after_error(pivot, exc)
+        if not _is_stale_execution(run_id, generation):
+            _settle_pivot_after_error(pivot, exc)
         raise
     finally:
-        _safe_cleanup(project.id, wait_for_runner=False)
-        _update_test_run_status_if_needed(pivot.test_run)
+        # A newer chain may already be driving the machine: leave it alone.
+        if not _is_stale_execution(run_id, generation):
+            _safe_cleanup(project.id, wait_for_runner=False)
+            _update_test_run_status_if_needed(pivot.test_run)
 
 
 def _abort_run_after_reconnect_timeout(
@@ -2788,17 +2905,39 @@ def _mark_pivot_in_progress(pivot: TestRunTestCase) -> None:
         _broadcast_test_run_status(test_run)
 
 
-def _build_log_callback(pivot: TestRunTestCase) -> Callable[[str], None]:
+def _build_log_callback(
+    pivot: TestRunTestCase, generation: int
+) -> Callable[[str], None]:
     def _append_log(message: str) -> None:
-        pivot.logs += message + "\n"
-        pivot.save(update_fields=["logs", "updated_at"])
-        _broadcast_log(pivot, message)
+        if _append_pivot_log(pivot.pk, message, generation):
+            _broadcast_log(pivot, message)
 
     return _append_log
 
 
-def _build_screenshot_callback(pivot: TestRunTestCase) -> ScreenshotCallback:
+def _append_pivot_log(pivot_id: int, line: str, generation: int | None) -> bool:
+    """Append one line in the database (never rewrite the whole log).
+
+    With a ``generation`` the line only lands while the run still has it, so a
+    worker a Resume took over cannot interleave with the resumed case's log.
+    """
+    rows = TestRunTestCase.objects.filter(pk=pivot_id)
+    if generation is not None:
+        rows = rows.filter(test_run__execution_generation=generation)
+    return (
+        rows.update(
+            logs=Concat(F("logs"), Value(line + "\n")), updated_at=timezone.now()
+        )
+        > 0
+    )
+
+
+def _build_screenshot_callback(
+    pivot: TestRunTestCase, generation: int
+) -> ScreenshotCallback:
     def _save_screenshot(base64_data: str, tool_name: str) -> None:
+        if _is_stale_execution(pivot.test_run_id, generation):
+            return
         image_bytes = _decode_base64_image(base64_data)
         filename = _generate_screenshot_filename(tool_name)
         _persist_screenshot(pivot, image_bytes, filename, tool_name)
@@ -2867,7 +3006,7 @@ def _mark_pivot_blocked(
 ) -> None:
     """Mark a case Blocked: it could not be executed or judged, no verdict."""
     log_line = f"[Blocked: {reason.label}] {message}"
-    pivot.logs += log_line + "\n"
+    _append_pivot_log(pivot.pk, log_line, None)
     pivot.status = TestRunTestCaseStatus.BLOCKED
     pivot.blocked_reason = reason
     pivot.result = message
@@ -2878,7 +3017,6 @@ def _mark_pivot_blocked(
             "blocked_reason",
             "result",
             "finished_at",
-            "logs",
             "updated_at",
         ]
     )
@@ -2899,7 +3037,13 @@ def _mark_pivot_cancelled(pivot: TestRunTestCase) -> None:
 def abort_test_run(
     test_run: TestRun, reason: str = "Test run aborted", *, revoke_task: bool = True
 ) -> None:
-    if test_run.status != TestRunStatus.STARTED:
+    # Under the row lock: a concurrent Resume may have changed the status.
+    locked_status = (
+        TestRun.objects.select_for_update()
+        .values_list("status", flat=True)
+        .get(pk=test_run.pk)
+    )
+    if locked_status != TestRunStatus.STARTED:
         return
 
     test_run.status = TestRunStatus.CANCELLED

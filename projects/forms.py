@@ -8,7 +8,9 @@ from django import forms
 from django.core.exceptions import NON_FIELD_ERRORS
 from django.forms import BaseForm
 from django.http import QueryDict
+from django.utils.text import Truncator
 
+from projects.case_checkpoint_services import ResumeStepOption
 from projects.models import (
     ApplicationPlatform,
     Project,
@@ -285,6 +287,61 @@ class RunCaseSelectionForm(forms.Form):
                 f"Select at most {RUN_CASE_SELECTION_MAX_IDS} cases at a time."
             )
         return pivot_ids
+
+
+RESUME_STEP_LABEL_MAX_CHARS = 80
+
+
+def _resume_step_label(option: ResumeStepOption, *, is_last: bool) -> str:
+    if option.verdict_only:
+        return "After the last step: only write the verdict"
+    description = Truncator(option.description).chars(RESUME_STEP_LABEL_MAX_CHARS)
+    label = f"Step {option.step_num}: {description}"
+    if option.passed:
+        return f"{label} (passed)"
+    if is_last:
+        return f"{label} (stopped here)"
+    return label
+
+
+class CaseResumeForm(forms.Form):
+    """Step a resumed case continues from (Resume case dialog on the case page).
+
+    The caller supplies the case's checkpoint steps (``list_resume_steps``),
+    so the choices double as validation; the last option, the step that was
+    interrupted, is the default. Without a checkpoint the view posts no form.
+    """
+
+    from_step = forms.TypedChoiceField(
+        label="Continue from",
+        coerce=int,
+        choices=(),
+        required=True,
+        widget=forms.Select(attrs={"class": "select"}),
+        error_messages={
+            "required": "Choose the step to continue from.",
+            "invalid_choice": "That step can no longer be resumed. "
+            "Reload the page and try again.",
+        },
+    )
+
+    def __init__(
+        self,
+        step_options: Sequence[ResumeStepOption],
+        data: QueryDict | dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(data, **kwargs)
+        # django-stubs types `self.fields[...]` as the base `Field`; this is
+        # the TypedChoiceField declared above.
+        from_step_field = cast(forms.TypedChoiceField, self.fields["from_step"])
+        last_index = len(step_options) - 1
+        from_step_field.choices = [
+            (option.step_num, _resume_step_label(option, is_last=i == last_index))
+            for i, option in enumerate(step_options)
+        ]
+        if step_options:
+            from_step_field.initial = step_options[-1].step_num
 
 
 def _field_label(form: BaseForm, field_name: str) -> str:

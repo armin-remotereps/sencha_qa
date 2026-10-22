@@ -493,6 +493,11 @@ a:hover {
   justify-content: center;
 }
 
+/* Action row at the foot of a card, below its text. */
+.card-actions {
+  margin-top: 14px;
+}
+
 /* --------------------------------------------------------------------------
    Buttons
    -------------------------------------------------------------------------- */

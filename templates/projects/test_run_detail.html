@@ -25,7 +25,11 @@
      testrail_checked_push (projects.testrail_checked_push_services.CheckedPushPanel,
      consumed by the two _testrail_checked_push_* includes),
      checkable_pivot_ids / uncheckable_pivot_ids (list[int], ids on this page
-     that can be checked / unchecked; together they are the bulk selection).
+     that can be checked / unchecked; together they are the bulk selection),
+     resume_panel (projects.run_resume_services.ResumePanel: blocked,
+     cancelled_started, cancelled_unstarted counts, can_resume, blockers,
+     confirm_body). "Resume run" continues Blocked / Cancelled cases on this
+     run in place; "Re-run blocked" copies them into a new run instead.
 
      test_run also carries testrail_source_push_status; testRunLive exposes it
      as `testrailSourcePushStatus` (WS message "testrail_source_push").
@@ -57,6 +61,7 @@
 {% url 'projects:test_case_list' project.id as test_case_list_url %}
 {% url 'projects:testrail_push_start' project.id test_run.id as testrail_push_start_url %}
 {% url 'projects:settings' project.id as project_settings_url %}
+{% url 'projects:test_run_resume' project.id test_run.id as test_run_resume_url %}
 <div x-data="testRunLive">
 
   {# Section: Header — title, live subtitle, status-dependent actions #}
@@ -82,6 +87,21 @@
 
       <button type="button" class="btn btn-danger" x-show="testRunStatus === 'started'" x-cloak @click="$dispatch('open-abort-run')">Abort run</button>
 
+      {% if resume_panel.can_resume %}
+      <button type="button" class="btn btn-primary" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak @click="$dispatch('open-resume-run')">Resume run</button>
+      {% elif resume_panel.blockers %}
+      <button
+        type="button"
+        class="btn btn-primary"
+        x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'"
+        x-cloak
+        disabled
+        aria-disabled="true"
+        aria-describedby="resume-run-blockers"
+        title="{{ resume_panel.blockers|join:' ' }}"
+      >Resume run</button>
+      {% endif %}
+
       {% if can_rerun_failed %}
       <form method="post" action="{% url 'projects:test_run_rerun_failed' project.id test_run.id %}" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak>
         {% csrf_token %}
@@ -92,7 +112,7 @@
       {% if can_rerun_blocked %}
       <form method="post" action="{% url 'projects:test_run_rerun_blocked' project.id test_run.id %}" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak>
         {% csrf_token %}
-        <button type="submit" class="btn btn-secondary">Re-run blocked</button>
+        <button type="submit" class="btn btn-secondary" title="Copies the blocked cases into a new run, where each starts again from step 1">Re-run blocked in a new run</button>
       </form>
       {% endif %}
 
@@ -138,6 +158,13 @@
       <button type="button" class="btn btn-danger" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak @click="$dispatch('open-reset-run')">Reset run</button>
     </div>
   </div>
+
+  {% if not resume_panel.can_resume and resume_panel.blockers %}
+  {# Section: Why "Resume run" is disabled — mirrors the header's finished-run visibility #}
+  <p class="hint" id="resume-run-blockers" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak>
+    Resume run is unavailable: {{ resume_panel.blockers|join:" " }}
+  </p>
+  {% endif %}
 
   {# Section: TestRail push status — mirrors the header's finished-run visibility #}
   <p x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak>
@@ -348,6 +375,9 @@
   {# Section: Destructive-action confirm dialogs #}
   {% include "partials/confirm_dialog.html" with dialog_id="delete-run" title="Delete this run?" body="This permanently deletes the run and all of its case results, logs, and screenshots." confirm_label="Delete run" action_url=test_run_delete_url %}
   {% include "partials/confirm_dialog.html" with dialog_id="abort-run" title="Abort this run?" body="In-progress and pending cases will be marked as cancelled. Cases that already finished keep their result." confirm_label="Abort run" action_url=test_run_abort_url %}
+  {% if resume_panel.can_resume %}
+  {% include "partials/confirm_dialog.html" with dialog_id="resume-run" title="Resume this run?" body=resume_panel.confirm_body confirm_label="Resume run" confirm_class="btn-primary" action_url=test_run_resume_url %}
+  {% endif %}
   {% include "partials/confirm_dialog.html" with dialog_id="reset-run" title="Reset this run?" body="All results, logs, and screenshots will be cleared and the run returns to draft." confirm_label="Reset run" action_url=test_run_reset_url %}
 
   {% if testrail_push.configured %}

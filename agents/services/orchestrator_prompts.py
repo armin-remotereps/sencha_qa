@@ -150,13 +150,26 @@ def build_verdict_prompt(
         f"  {line}" for line in format_attempt_lines(attempts, planned_steps)
     )
     outcome = "PASSED" if overall_status == "pass" else "FAILED"
+    resumed_note = (
+        "The execution was interrupted and resumed: the Resume lines restored the "
+        "machine state before continuing, and they do not count either. Mention "
+        "that the case was resumed. "
+        if was_resumed(attempts)
+        else ""
+    )
     return (
         f"Sub-task execution finished. Results:\n{results_text}\n\n"
         "Provide a final summary of the test case execution in 2-4 sentences. "
         f"The overall result is {outcome}. It is decided from the final attempt of "
-        "each step, and recovery steps do not count. State that result and do not "
+        "each step, and recovery steps do not count. "
+        f"{resumed_note}"
+        "State that result and do not "
         "contradict it. Highlight any key observations, including recoveries."
     )
+
+
+def was_resumed(attempts: Sequence[SubTaskAttempt]) -> bool:
+    return any(attempt.kind == "resume" for attempt in attempts)
 
 
 def format_attempt_lines(
@@ -168,6 +181,9 @@ def format_attempt_lines(
     for index, attempt in enumerate(attempts):
         if attempt.kind == "recovery":
             label = f"Recovery for step {attempt.step_num}"
+        elif attempt.kind == "resume":
+            # A state restore before a resumed case; it is not a run step.
+            label = _resume_label(attempt)
         else:
             count = step_attempt_counts.get(attempt.step_num, 0) + 1
             step_attempt_counts[attempt.step_num] = count
@@ -201,6 +217,12 @@ def final_step_indices(attempts: Sequence[SubTaskAttempt]) -> dict[int, int]:
         for index, attempt in enumerate(attempts)
         if attempt.kind == "step"
     }
+
+
+def _resume_label(attempt: SubTaskAttempt) -> str:
+    if attempt.result.status == "pass":
+        return f"Resume: state restored before step {attempt.step_num}"
+    return f"Resume: could not restore state before step {attempt.step_num}"
 
 
 def _format_result_line(label: str, result: SubTaskResult) -> str:

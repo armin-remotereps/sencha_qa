@@ -53,6 +53,15 @@ class AIServiceError(InfrastructureError):
         self.status_code = status_code
 
 
+class ResumeStateLostError(InfrastructureError):
+    """A resumed case could not restore the state its earlier steps left behind."""
+
+    def __init__(self, step_num: int, summary: str) -> None:
+        super().__init__(summary)
+        self.step_num = step_num
+        self.summary = summary
+
+
 class OrchestratorPlanError(AIServiceError):
     def __init__(self, message: str) -> None:
         super().__init__(AIServiceErrorKind.BAD_RESPONSE, message)

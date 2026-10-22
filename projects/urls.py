@@ -191,6 +191,11 @@ urlpatterns: list[URLPattern] = [
         name="test_run_rerun_blocked",
     ),
     path(
+        "<int:project_id>/test-runs/<int:test_run_id>/resume/",
+        views.test_run_resume,
+        name="test_run_resume",
+    ),
+    path(
         "<int:project_id>/test-runs/<int:test_run_id>/testrail/push/",
         testrail_views.testrail_push_start,
         name="testrail_push_start",
@@ -229,6 +234,11 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/",
         views.test_run_case_detail,
         name="test_run_case_detail",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/resume/",
+        views.test_run_case_resume,
+        name="test_run_case_resume",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:test_case_id>/edit/",

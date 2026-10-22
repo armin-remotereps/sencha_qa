@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from django.conf import settings
@@ -12,6 +12,7 @@ from agents.exceptions import (
     AIServiceError,
     OrchestratorParseError,
     OrchestratorPlanError,
+    ResumeStateLostError,
 )
 from agents.services.llm_client import send_chat_completion
 from agents.services.llm_config import (
@@ -24,6 +25,7 @@ from agents.services.orchestrator_prompts import (
     build_verdict_prompt,
     final_step_indices,
     format_attempt_lines,
+    was_resumed,
 )
 from agents.services.sub_agent import run_sub_agent
 from agents.services.sub_task_budget import (
@@ -39,8 +41,10 @@ from agents.types import (
     BrowserSelection,
     CancellationCheck,
     ChatMessage,
+    CheckpointCallback,
     LLMConfig,
     LogCallback,
+    OrchestratorCheckpoint,
     OrchestratorDecision,
     OrchestratorResult,
     ScreenshotCallback,
@@ -63,6 +67,8 @@ def run_orchestrator(
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
     cancellation_check: CancellationCheck | None = None,
+    resume: OrchestratorCheckpoint | None = None,
+    on_checkpoint: CheckpointCallback | None = None,
 ) -> AgentResult:
     # One model serves every role. The distinct names keep the call sites below
     # readable and make a future per-role split a one-line change.
@@ -71,23 +77,32 @@ def run_orchestrator(
     vision_llm = orchestrator_llm
 
     _log(on_log, f"[Orchestrator] Model: {orchestrator_llm.model}")
-    _log(on_log, "[Orchestrator] Planning: decomposing test case into sub-tasks...")
 
     bounds = build_timeout_bounds()
-    sub_tasks = _plan_sub_tasks(
-        orchestrator_llm,
-        task_description,
-        bounds=bounds,
-        project_prompt=project_prompt,
-        on_log=on_log,
-    )
+    if resume is None:
+        _log(on_log, "[Orchestrator] Planning: decomposing test case into sub-tasks...")
+        sub_tasks = _plan_sub_tasks(
+            orchestrator_llm,
+            task_description,
+            bounds=bounds,
+            project_prompt=project_prompt,
+            on_log=on_log,
+        )
+    else:
+        sub_tasks = resume.plan
+        _log(
+            on_log,
+            f"[Orchestrator] Resuming at step {resume.next_step} of "
+            f"{len(sub_tasks)} from the saved plan.",
+        )
 
     _check_cancelled(cancellation_check, on_log)
 
-    _log(
-        on_log,
-        f"[Orchestrator] Planning complete: {len(sub_tasks)} sub-tasks created.",
-    )
+    if resume is None:
+        _log(
+            on_log,
+            f"[Orchestrator] Planning complete: {len(sub_tasks)} sub-tasks created.",
+        )
 
     sub_agent_config = _build_sub_agent_execution_config(
         sub_agent_llm, vision_llm, on_log, on_screenshot, cancellation_check
@@ -95,15 +110,22 @@ def run_orchestrator(
     # One selection per case (one run_orchestrator call per case), shared by
     # every sub-agent and recovery sub-agent, so the browser the case asked for
     # on its first navigate stays selected and the next case starts on Chromium.
-    browser_selection = BrowserSelection()
+    # A resumed case keeps the browser it had already selected.
+    browser_selection = (
+        BrowserSelection()
+        if resume is None
+        else BrowserSelection(current=resume.browser)
+    )
+    progress = _new_progress(sub_tasks, resume, browser_selection, on_checkpoint)
+    progress.checkpoint()
 
     orchestrator_result = _execute_sub_tasks(
         orchestrator_llm=orchestrator_llm,
-        sub_tasks=sub_tasks,
+        progress=progress,
         project_id=project_id,
         sub_agent_config=sub_agent_config,
-        browser_selection=browser_selection,
         bounds=bounds,
+        resuming=resume is not None,
         system_info=system_info,
         project_prompt=project_prompt,
         on_log=on_log,
@@ -117,6 +139,155 @@ def run_orchestrator(
     )
 
     return _to_agent_result(orchestrator_result)
+
+
+@dataclass
+class _Progress:
+    """Mutable progress of one case; mirrors what a checkpoint persists."""
+
+    plan: tuple[SubTask, ...]
+    browser_selection: BrowserSelection
+    on_checkpoint: CheckpointCallback | None
+    attempts: list[SubTaskAttempt] = field(default_factory=list)
+    state_lines: list[str] = field(default_factory=list)
+    total_iterations: int = 0
+    # 1-based step that is running or runs next.
+    next_step: int = 1
+
+    def checkpoint(self) -> None:
+        if self.on_checkpoint is None:
+            return
+        self.on_checkpoint(
+            OrchestratorCheckpoint(
+                plan=self.plan,
+                attempts=tuple(self.attempts),
+                next_step=self.next_step,
+                browser=self.browser_selection.current,
+                total_iterations=self.total_iterations,
+            )
+        )
+
+
+def _new_progress(
+    plan: tuple[SubTask, ...],
+    resume: OrchestratorCheckpoint | None,
+    browser_selection: BrowserSelection,
+    on_checkpoint: CheckpointCallback | None,
+) -> _Progress:
+    progress = _Progress(
+        plan=plan,
+        browser_selection=browser_selection,
+        on_checkpoint=on_checkpoint,
+    )
+    if resume is None:
+        return progress
+    progress.attempts = list(resume.attempts)
+    progress.total_iterations = resume.total_iterations
+    progress.next_step = resume.next_step
+    progress.state_lines = _rebuild_state_lines(resume.attempts, resume.next_step)
+    return progress
+
+
+def _rebuild_state_lines(
+    attempts: tuple[SubTaskAttempt, ...], next_step: int
+) -> list[str]:
+    """Rebuild the state lines ``_execute_sub_tasks`` wrote for these attempts.
+
+    A failed step only got a line when the run moved past it ("continue"); one
+    followed by a recovery, or still at the cursor, got none.
+    """
+    final_index = final_step_indices(attempts)
+    lines: list[str] = []
+    for index, attempt in enumerate(attempts):
+        result = attempt.result
+        if attempt.kind == "step":
+            if result.status == "pass":
+                lines.append(f"Step {attempt.step_num}: {result.summary}")
+            elif (
+                final_index[attempt.step_num] == index and attempt.step_num < next_step
+            ):
+                lines.append(f"Step {attempt.step_num}: FAILED — {result.summary}")
+        elif result.status != "pass":
+            continue
+        elif attempt.kind == "recovery":
+            lines.append(f"Recovery for step {attempt.step_num}: {result.summary}")
+        else:
+            lines.append(_resume_state_line(attempt.step_num, result.summary))
+    return lines
+
+
+def _resume_state_line(step_num: int, summary: str) -> str:
+    return f"Resumed: state restored before step {step_num} — {summary}"
+
+
+def _build_resume_sub_task(
+    plan: tuple[SubTask, ...], next_step: int, bounds: TimeoutBounds
+) -> SubTask:
+    done_lines = "\n".join(
+        f"{num}. {st.description} (expected: {st.expected_result})"
+        for num, st in enumerate(plan[: next_step - 1], 1)
+    )
+    description = (
+        "These steps of the test case already ran:\n"
+        f"{done_lines}\n\n"
+        "The test was interrupted and the test machine may have been restarted or "
+        "changed by a person. Make sure the machine is in the state those steps "
+        "left it in (applications open, pages loaded, files present, logged in), "
+        "redoing whatever is no longer in effect. Do not repeat actions whose "
+        "effect is still in place. Do not judge the application; only restore "
+        "state."
+    )
+    expected_result = (
+        "The machine is in the state described above, ready for step "
+        f"{next_step}: {plan[next_step - 1].description}"
+    )
+    return SubTask(
+        description=description,
+        expected_result=expected_result,
+        timeout_seconds=bounds.maximum,
+    )
+
+
+def _restore_resumed_state(
+    *,
+    progress: _Progress,
+    project_id: int,
+    sub_agent_config: AgentConfig,
+    bounds: TimeoutBounds,
+    system_info: dict[str, object] | None,
+    project_prompt: str | None,
+    on_log: LogCallback | None,
+) -> None:
+    step_num = progress.next_step
+    resume_task = _build_resume_sub_task(progress.plan, step_num, bounds)
+    _log(
+        on_log,
+        f"[Orchestrator] Restoring state before step {step_num} "
+        f"(budget {resume_task.timeout_seconds}s)",
+    )
+    result = run_sub_agent(
+        resume_task,
+        "\n".join(progress.state_lines),
+        project_id,
+        config=_config_for_sub_task(sub_agent_config, resume_task),
+        browser_selection=progress.browser_selection,
+        system_info=system_info,
+        project_prompt=project_prompt,
+    )
+    progress.total_iterations += result.iterations
+    progress.attempts.append(
+        SubTaskAttempt(step_num=step_num, kind="resume", result=result)
+    )
+    progress.checkpoint()
+
+    _log(
+        on_log,
+        f"[Orchestrator]   Restore result: {result.status.upper()} — {result.summary}",
+    )
+
+    if result.status != "pass":
+        raise ResumeStateLostError(step_num, result.summary)
+    progress.state_lines.append(_resume_state_line(step_num, result.summary))
 
 
 def _build_sub_agent_execution_config(
@@ -214,19 +385,20 @@ def _config_for_sub_task(base: AgentConfig, sub_task: SubTask) -> AgentConfig:
 def _execute_sub_tasks(
     *,
     orchestrator_llm: LLMConfig,
-    sub_tasks: tuple[SubTask, ...],
+    progress: _Progress,
     project_id: int,
     sub_agent_config: AgentConfig,
-    browser_selection: BrowserSelection,
     bounds: TimeoutBounds,
+    resuming: bool,
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
     on_log: LogCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
 ) -> OrchestratorResult:
-    attempts: list[SubTaskAttempt] = []
-    state_lines: list[str] = []
-    total_iterations = 0
+    sub_tasks = progress.plan
+    attempts = progress.attempts
+    state_lines = progress.state_lines
+    browser_selection = progress.browser_selection
     recovery_counts: dict[int, int] = {}
     max_recovery: int = settings.ORCHESTRATOR_MAX_RECOVERY_ATTEMPTS
 
@@ -235,13 +407,31 @@ def _execute_sub_tasks(
     ]
 
     total = len(sub_tasks)
-    i = 0
+    i = progress.next_step - 1
+
+    # Every step already had an attempt: there is nothing to restore or run.
+    if resuming and 0 < i < total:
+        _check_cancelled(cancellation_check, on_log)
+        _restore_resumed_state(
+            progress=progress,
+            project_id=project_id,
+            sub_agent_config=sub_agent_config,
+            bounds=bounds,
+            system_info=system_info,
+            project_prompt=project_prompt,
+            on_log=on_log,
+        )
 
     while i < len(sub_tasks):
         _check_cancelled(cancellation_check, on_log)
         sub_task = sub_tasks[i]
         step_num = i + 1
         state_description = "\n".join(state_lines) if state_lines else ""
+
+        # The cursor points at this step before it runs, so a case interrupted
+        # mid-step resumes by running it again.
+        progress.next_step = step_num
+        progress.checkpoint()
 
         _log(
             on_log,
@@ -257,7 +447,7 @@ def _execute_sub_tasks(
             system_info=system_info,
             project_prompt=project_prompt,
         )
-        total_iterations += result.iterations
+        progress.total_iterations += result.iterations
         attempts.append(SubTaskAttempt(step_num=step_num, kind="step", result=result))
 
         _log(
@@ -267,8 +457,14 @@ def _execute_sub_tasks(
 
         if result.status == "pass":
             state_lines.append(f"Step {step_num}: {result.summary}")
+            progress.next_step = step_num + 1
+            progress.checkpoint()
             i += 1
             continue
+
+        # What runs next depends on the failure decision below; until it is made
+        # the cursor stays on this step, so a resume reruns it.
+        progress.checkpoint()
 
         remaining = total - step_num
         decision = _evaluate_failure(
@@ -284,6 +480,8 @@ def _execute_sub_tasks(
 
         if decision.action == "continue":
             state_lines.append(f"Step {step_num}: FAILED — {result.summary}")
+            progress.next_step = step_num + 1
+            progress.checkpoint()
             i += 1
             continue
 
@@ -294,25 +492,26 @@ def _execute_sub_tasks(
             state_description=state_description,
             project_id=project_id,
             sub_agent_config=sub_agent_config,
-            browser_selection=browser_selection,
+            progress=progress,
             system_info=system_info,
             project_prompt=project_prompt,
-            attempts=attempts,
-            state_lines=state_lines,
             recovery_counts=recovery_counts,
             max_recovery=max_recovery,
             on_log=on_log,
         )
 
-        if recovered is not None:
-            total_iterations += recovered
+        if recovered:
             continue
 
         _log(on_log, f"[Orchestrator]   Stopping: {decision.reason}")
         state_lines.append(f"Step {step_num}: FAILED (stopped) — {result.summary}")
+        # The case is decided (Failed): a resume only rebuilds the verdict and
+        # never reruns the failed step.
+        progress.next_step = total + 1
+        progress.checkpoint()
         break
 
-    return _build_verdict(orchestrator_llm, attempts, total, total_iterations)
+    return _build_verdict(orchestrator_llm, attempts, total, progress.total_iterations)
 
 
 def _attempt_recovery(
@@ -323,29 +522,27 @@ def _attempt_recovery(
     state_description: str,
     project_id: int,
     sub_agent_config: AgentConfig,
-    browser_selection: BrowserSelection,
+    progress: _Progress,
     system_info: dict[str, object] | None,
     project_prompt: str | None,
-    attempts: list[SubTaskAttempt],
-    state_lines: list[str],
     recovery_counts: dict[int, int],
     max_recovery: int,
     on_log: LogCallback | None,
-) -> int | None:
+) -> bool:
     if decision.action != "recover":
-        return None
+        return False
 
     recoveries = recovery_counts.get(step_index, 0)
     if recoveries >= max_recovery:
         _log(on_log, "[Orchestrator]   Max recovery attempts reached — stopping test.")
-        return None
+        return False
 
     if decision.recovery_task is None:
         _log(
             on_log,
             "[Orchestrator]   Recovery requested but no task provided — stopping test.",
         )
-        return None
+        return False
 
     recovery_counts[step_index] = recoveries + 1
 
@@ -359,11 +556,11 @@ def _attempt_recovery(
         state_description,
         project_id,
         config=_config_for_sub_task(sub_agent_config, decision.recovery_task),
-        browser_selection=browser_selection,
+        browser_selection=progress.browser_selection,
         system_info=system_info,
         project_prompt=project_prompt,
     )
-    attempts.append(
+    progress.attempts.append(
         SubTaskAttempt(step_num=step_num, kind="recovery", result=recovery_result)
     )
 
@@ -374,11 +571,18 @@ def _attempt_recovery(
     )
 
     if recovery_result.status == "pass":
-        state_lines.append(f"Recovery for step {step_num}: {recovery_result.summary}")
-        return recovery_result.iterations
+        # Only a passed recovery's iterations count, as before; the step it
+        # recovered runs next (cursor unchanged).
+        progress.total_iterations += recovery_result.iterations
+        progress.state_lines.append(
+            f"Recovery for step {step_num}: {recovery_result.summary}"
+        )
+        progress.checkpoint()
+        return True
 
+    progress.checkpoint()
     _log(on_log, "[Orchestrator]   Recovery failed — stopping test.")
-    return None
+    return False
 
 
 def _build_verdict(
@@ -439,6 +643,8 @@ def _deterministic_summary(
         f"Test {'passed' if overall_status == 'pass' else 'failed'} "
         f"(AI summary unavailable)."
     ]
+    if was_resumed(attempts):
+        lines.append("The case was interrupted and resumed.")
     lines.extend(format_attempt_lines(attempts, planned_steps))
     return "\n".join(lines)
 

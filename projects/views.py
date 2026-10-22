@@ -20,11 +20,13 @@ from django.views.decorators.http import require_GET, require_POST
 
 from accounts.models import CustomUser
 from accounts.types import AuthenticatedRequest
+from projects.case_checkpoint_services import list_resume_steps
 from projects.decorators import project_membership_required
-from projects.exceptions import RunCaseCheckError
+from projects.exceptions import RunCaseCheckError, RunResumeError
 from projects.forms import (
     PROJECT_PROMPT_MAX_LENGTH,
     ApplicationContextForm,
+    CaseResumeForm,
     ProjectForm,
     RunCaseSelectionForm,
     TestCaseForm,
@@ -40,6 +42,14 @@ from projects.run_case_check_services import (
     list_checkable_pivot_ids,
     list_uncheckable_pivot_ids,
     uncheck_run_cases,
+)
+from projects.run_resume_services import (
+    can_resume_case,
+    get_resume_panel,
+    get_run_case_for_resume,
+    list_case_resumes,
+    resume_test_run,
+    resume_test_run_case,
 )
 from projects.services import (
     STATUS_FILTER_CHOICES,
@@ -876,6 +886,7 @@ def _build_test_run_detail_context(
             testrail_push.pending_count, test_run.testrail_run_id or 0
         ),
         "testrail_checked_push": get_checked_push_panel(test_run),
+        "resume_panel": get_resume_panel(test_run, project),
         "checkable_pivot_ids": [p.id for p in cases if is_checkable(p)],
         "uncheckable_pivot_ids": [p.id for p in cases if is_uncheckable(p)],
         "active_tab": "runs",
@@ -909,6 +920,8 @@ def test_run_case_detail(
     can_edit = can_edit_test_case_in_run(pivot.test_run)
     case_position, case_total = get_case_position(pivot)
     source_run_url = get_source_run_url(pivot, project)
+    can_resume = can_resume_case(pivot)
+    resume_steps = list_resume_steps(pivot) if can_resume else []
     return render(
         request,
         "projects/test_run_case_detail.html",
@@ -924,10 +937,66 @@ def test_run_case_detail(
             "can_check": is_checkable(pivot),
             "can_uncheck": is_uncheckable(pivot),
             "source_run_url": source_run_url,
+            "can_resume": can_resume,
+            "resume_steps": resume_steps,
+            "resume_form": CaseResumeForm(resume_steps) if resume_steps else None,
+            "resumes": list_case_resumes(pivot),
             "active_tab": "runs",
             "active_nav": "projects",
         },
     )
+
+
+@project_membership_required
+@require_POST
+def test_run_resume(
+    request: AuthenticatedRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    try:
+        resumed = resume_test_run(test_run=test_run, user=request.user)
+    except RunResumeError as exc:
+        messages.error(request, exc.message)
+    else:
+        messages.success(
+            request, f"Resumed {resumed} case{'' if resumed == 1 else 's'}."
+        )
+    return redirect(
+        "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
+    )
+
+
+@project_membership_required
+@require_POST
+def test_run_case_resume(
+    request: AuthenticatedRequest, project: Project, test_run_id: int, pivot_id: int
+) -> HttpResponse:
+    pivot = get_run_case_for_resume(pivot_id, test_run_id, project)
+    if pivot is None:
+        raise Http404
+    case_detail = redirect(
+        "projects:test_run_case_detail",
+        project_id=project.id,
+        test_run_id=test_run_id,
+        pivot_id=pivot.id,
+    )
+    from_step: int | None = None
+    step_options = list_resume_steps(pivot)
+    if step_options:
+        form = CaseResumeForm(step_options, request.POST)
+        if not form.is_valid():
+            messages.error(request, form_error_text(form))
+            return case_detail
+        from_step = form.cleaned_data["from_step"]
+    try:
+        resume_test_run_case(pivot=pivot, user=request.user, from_step=from_step)
+    except RunResumeError as exc:
+        messages.error(request, exc.message)
+    else:
+        messages.success(request, "Resumed this case.")
+    return case_detail
 
 
 def _change_run_case_checks(

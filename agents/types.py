@@ -163,9 +163,10 @@ class SubTaskResult:
 
 @dataclass(frozen=True)
 class SubTaskAttempt:
-    # 1-based planned step; a recovery carries the number of the step it recovers.
+    # 1-based planned step; a recovery carries the number of the step it recovers
+    # and a resume (state restore before a resumed case) the step it prepares.
     step_num: int
-    kind: Literal["step", "recovery"]
+    kind: Literal["step", "recovery", "resume"]
     result: SubTaskResult
 
 
@@ -183,6 +184,23 @@ class OrchestratorResult:
     attempts: tuple[SubTaskAttempt, ...]
     total_iterations: int
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class OrchestratorCheckpoint:
+    """Progress of one case, persisted so a blocked case can resume in place.
+
+    ``next_step`` is the 1-based step that is running or runs next.
+    """
+
+    plan: tuple[SubTask, ...]
+    attempts: tuple[SubTaskAttempt, ...]
+    next_step: int
+    browser: BrowserName
+    total_iterations: int
+
+
+CheckpointCallback = Callable[[OrchestratorCheckpoint], None]
 
 
 @dataclass

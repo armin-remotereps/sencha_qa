@@ -26,7 +26,15 @@
      pivot.blocked_reason / pivot.get_blocked_reason_display are set only when
      status is "blocked"; the blocked message itself is pivot.result. The case
      WS `status` / `current_state` events carry blocked_reason and
-     blocked_reason_label (empty unless blocked). {% endcomment %}
+     blocked_reason_label (empty unless blocked).
+
+     Resume (continue this case in place, on this run):
+     can_resume (bool, projects.run_resume_services.can_resume_case),
+     resume_steps (list[ResumeStepOption]: step_num, description, passed; empty
+     when the case has no checkpoint, so it resumes from the start),
+     resume_form (CaseResumeForm with the from_step select, or None when
+     resume_steps is empty), resumes (list[TestRunCaseResume], resumed_by
+     loaded; the case's earlier outcomes, oldest first). {% endcomment %}
 
 {% block title %}{{ pivot.test_case.title }} · {{ test_run.display_name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -133,8 +141,50 @@
       <span class="badge badge-blocked" x-text="blockedReasonLabel || 'Blocked'">{{ pivot.get_blocked_reason_display|default:"Blocked" }}</span>
     </div>
     <p class="pre-wrap" x-text="result || 'No details were recorded.'"></p>
-    <p class="hint">This case was not judged: an infrastructure problem stopped it before the agent could reach a verdict, so it counts as neither passed nor failed. Fix the problem, then use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked</a> on the run to try it again.</p>
+    <p class="hint">This case was not judged: an infrastructure problem stopped it before the agent could reach a verdict, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
+    {% if can_resume %}
+    <div class="actions card-actions">
+      <button type="button" class="btn btn-primary" @click="$dispatch('open-resume-case')">Resume case</button>
+    </div>
+    {% endif %}
   </section>
+
+  {% if can_resume %}
+  {# Section: Resume a cancelled case — only for status "cancelled" #}
+  <section aria-labelledby="cancelled-h" class="card" x-show="status === 'cancelled'" x-cloak>
+    <div class="card-header">
+      <h2 id="cancelled-h">This case was cancelled</h2>
+    </div>
+    <p class="hint">The run stopped before this case finished. Resume it to continue on this run{% if resume_steps %} from the step where it stopped{% endif %}.</p>
+    <div class="actions card-actions">
+      <button type="button" class="btn btn-primary" @click="$dispatch('open-resume-case')">Resume case</button>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if resumes %}
+  {# Section: Resume history — the outcome each earlier resume replaced #}
+  <section aria-labelledby="resumes-h" class="card">
+    <div class="card-header">
+      <h2 id="resumes-h">Resume history</h2>
+    </div>
+    <ul class="activity">
+      {% for resume in resumes %}
+      <li>
+        <span class="activity-icon is-warning" aria-hidden="true">↻</span>
+        <div>
+          <strong>{{ resume.get_previous_status_display }}{% if resume.previous_blocked_reason %}: {{ resume.get_previous_blocked_reason_display }}{% endif %}</strong>{% if resume.previous_result %} · {{ resume.previous_result|truncatechars:300 }}{% endif %}
+          <div class="muted small">
+            Resumed by {{ resume.resumed_by.get_full_name|default:resume.resumed_by.email|default:"a removed user" }}
+            on {{ resume.created_at|date:"M j, H:i" }}
+            {% if resume.from_step %}from step {{ resume.from_step }}{% else %}from the start{% endif %}
+          </div>
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
 
   {# Section: What the agent was asked to do #}
   <section aria-labelledby="case-h" class="card">
@@ -233,6 +283,44 @@
   {% if test_run.status == "waiting" %}
   {% url 'projects:test_run_remove_case' project.id test_run.id pivot.id as remove_case_url %}
   {% include "partials/confirm_dialog.html" with dialog_id="remove-case" title="Remove this case from the run?" body="The test case itself is not deleted." confirm_label="Remove" action_url=remove_case_url %}
+  {% endif %}
+
+  {# Section: Resume case dialog — step select when the case has a checkpoint #}
+  {% if can_resume %}
+  <div
+    class="dialog-backdrop"
+    x-data="dialog()"
+    x-show="open"
+    x-cloak
+    x-on:open-resume-case.window="show()"
+    x-on:keydown.escape.window="close()"
+    x-trap.noscroll="open"
+    @click.self="close()"
+  >
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="resume-case-title">
+      <div class="card-header">
+        <h3 id="resume-case-title">Resume this case?</h3>
+        <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+      </div>
+      <form method="post" action="{% url 'projects:test_run_case_resume' project.id test_run.id pivot.id %}">
+        {% csrf_token %}
+        {% if resume_form %}
+        <div class="field">
+          <label class="label" for="{{ resume_form.from_step.id_for_label }}">{{ resume_form.from_step.label }}</label>
+          {{ resume_form.from_step }}
+          <p class="hint">The agent first restores the state left by the earlier steps, then continues.</p>
+        </div>
+        {% else %}
+        <p>No progress was saved for this case, so it starts again from step 1 on this run.</p>
+        {% endif %}
+        <p>The result stays on this run. A Checked mark on this case is cleared.</p>
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Resume case</button>
+        </div>
+      </form>
+    </div>
+  </div>
   {% endif %}
 
   {# Section: Edit test case dialog #}

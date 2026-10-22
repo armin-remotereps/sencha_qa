@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from celery.exceptions import SoftTimeLimitExceeded
 
-from agents.exceptions import AIServiceError
+from agents.exceptions import AIServiceError, ResumeStateLostError
 from projects.exceptions import (
     BrowserUnavailableError,
     ControllerReconnectTimeoutError,
@@ -21,7 +21,14 @@ from projects.models import BlockedReason
 
 MAX_BLOCKED_MESSAGE_CHARS = 500
 
+RESUME_STATE_LOST_PREFIX = (
+    "The agent could not restore the state from the earlier steps before resuming."
+)
+
+# The first matching type wins, so a specific type must come before any of its
+# bases (``ResumeStateLostError`` is an ``InfrastructureError``).
 _REASON_BY_TYPE: tuple[tuple[type[BaseException], BlockedReason], ...] = (
+    (ResumeStateLostError, BlockedReason.RESUME_STATE_LOST),
     (ControllerReconnectTimeoutError, BlockedReason.RUNNER_DISCONNECTED),
     (TestRunnerDisconnectedError, BlockedReason.RUNNER_DISCONNECTED),
     (TestRunnerUnresponsiveError, BlockedReason.RUNNER_UNRESPONSIVE),
@@ -50,6 +57,14 @@ def blocked_message(exc: BaseException, reason: BlockedReason) -> str:
     """
     if reason == BlockedReason.TIME_LIMIT:
         text = "The case ran past its time limit before the agent reached a verdict."
+    elif isinstance(exc, ResumeStateLostError):
+        # The summary is model-written screen text; templates render it escaped.
+        summary = exc.summary.strip()
+        text = (
+            f"{RESUME_STATE_LOST_PREFIX} {summary}"
+            if summary
+            else RESUME_STATE_LOST_PREFIX
+        )
     elif reason == BlockedReason.VISUAL_ENGINE:
         # The controller's text can carry local paths; it stays in the server log.
         text = (
