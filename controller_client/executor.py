@@ -2,9 +2,11 @@ import base64
 import io
 import os
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
+from typing import Final
 
 import pyautogui
 from PIL import Image
@@ -104,11 +106,50 @@ def execute_type_text(payload: TypeTextPayload) -> ActionResultPayload:
     )
 
 
+# pyautogui silently skips key names its platform backend does not know, so
+# "cmd+n" on macOS (which only knows "command") pressed a bare "n". Map the
+# common aliases onto each backend's own names and reject anything unknown.
+if sys.platform == "darwin":
+    _KEY_ALIASES: Final[dict[str, str]] = {
+        "cmd": "command",
+        "meta": "command",
+        "super": "command",
+        "win": "command",
+        "opt": "option",
+        "control": "ctrl",
+    }
+else:
+    _KEY_ALIASES = {
+        "cmd": "win",
+        "command": "win",
+        "meta": "win",
+        "super": "win",
+        "opt": "alt",
+        "option": "alt",
+        "control": "ctrl",
+    }
+
+
+def _normalize_key(key: str, *, in_combination: bool) -> str:
+    if not key:
+        raise ExecutionError(
+            "Empty key in combination; the '+' key itself cannot be pressed"
+        )
+    # A lone uppercase letter means shift+letter to pyautogui; inside a
+    # combination "cmd+N" means Cmd+N, so lowercase it there.
+    name = key.lower() if len(key) > 1 or in_combination else key
+    name = _KEY_ALIASES.get(name, name)
+    if not pyautogui.isValidKey(name):
+        raise ExecutionError(f"Unknown key: {key!r}")
+    return name
+
+
 def execute_key_press(payload: KeyPressPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
+    parts = [k.strip() for k in payload.keys.split("+")]
+    keys = [_normalize_key(k, in_combination=len(parts) > 1) for k in parts]
     try:
-        keys = [k.strip() for k in payload.keys.split("+")]
         if len(keys) > 1:
             pyautogui.hotkey(*keys)
         else:
