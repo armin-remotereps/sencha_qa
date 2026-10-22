@@ -25,6 +25,7 @@ from projects.controller_protocol import (
     ActionTypeRegistry,
     BaseActionEvent,
     BrowserClickActionEvent,
+    BrowserDoubleClickActionEvent,
     BrowserDownloadActionEvent,
     BrowserGetElementsActionEvent,
     BrowserGetPageContentActionEvent,
@@ -37,7 +38,10 @@ from projects.controller_protocol import (
     CheckAppInstalledActionEvent,
     CleanupEnvironmentActionEvent,
     ClickActionEvent,
+    CloseAppActionEvent,
+    CloseTabActionEvent,
     ControllerMessageBuilder,
+    DoubleClickActionEvent,
     DragActionEvent,
     FindElementActionEvent,
     HoverActionEvent,
@@ -255,6 +259,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     async def controller_click(self, event: ClickActionEvent) -> None:
         await self._forward_action(event)
 
+    async def controller_double_click(self, event: DoubleClickActionEvent) -> None:
+        await self._forward_action(event)
+
     async def controller_hover(self, event: HoverActionEvent) -> None:
         await self._forward_action(event)
 
@@ -279,6 +286,11 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await self._forward_action(event)
 
     async def controller_browser_click(self, event: BrowserClickActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_browser_double_click(
+        self, event: BrowserDoubleClickActionEvent
+    ) -> None:
         await self._forward_action(event)
 
     async def controller_browser_type(self, event: BrowserTypeActionEvent) -> None:
@@ -334,6 +346,12 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await self._forward_action(event)
 
     async def controller_launch_app(self, event: LaunchAppActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_close_app(self, event: CloseAppActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_close_tab(self, event: CloseTabActionEvent) -> None:
         await self._forward_action(event)
 
     async def controller_check_app_installed(

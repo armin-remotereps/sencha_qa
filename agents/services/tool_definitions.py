@@ -124,6 +124,40 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
             ),
         ),
         ToolDefinition(
+            name="double_click",
+            description=(
+                "Double-click an element on the desktop found by vision-based natural-language "
+                "description (open a file or desktop icon, edit a grid cell, select a word). "
+                "The target element is verified by vision before double-clicking and the result "
+                "is checked afterwards; the tool retries automatically with other candidates "
+                "(up to 10) and returns an error if it cannot confirm the element, or an "
+                "'element not found' error once 3 candidates on the current screen have been "
+                "rejected. Use it only when the step says double-click or the UI needs one; "
+                "never emulate it with two click calls."
+                " Not for web pages opened with browser_navigate — use browser_double_click for those."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                ToolParameter(
+                    name="description",
+                    type="string",
+                    description="Natural language description of the element to double-click.",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="expected_result",
+                    type="string",
+                    description=(
+                        "Optional. What the screen should show after the double-click "
+                        "(e.g. 'the Documents folder opens'). The tool verifies the "
+                        "double-click against it and retries other candidates when it "
+                        "does not match."
+                    ),
+                    required=False,
+                ),
+            ),
+        ),
+        ToolDefinition(
             name="type_text",
             description=(
                 "Type text using the keyboard."
@@ -234,6 +268,55 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
             ),
         ),
         ToolDefinition(
+            name="close_app",
+            description=(
+                "Quit a desktop application the test no longer needs so its windows stop "
+                "cluttering the screen. Housekeeping: call it only after the step's "
+                "expected result is verified; a failed close never fails the step. "
+                "Never for the browser opened by browser tools, or for the Test Runner "
+                "or the terminal it runs in (use close_tab for a tab you opened there)."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                ToolParameter(
+                    name="app_name",
+                    type="string",
+                    description="The human-readable name of the application to quit (e.g. 'Calculator', 'TextEdit').",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="force",
+                    type="boolean",
+                    description=(
+                        "Optional, default false. Force-quit the app. Use only after a plain "
+                        "close reported the app is still open and discarding unsaved work "
+                        "is acceptable."
+                    ),
+                    required=False,
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="close_tab",
+            description=(
+                "Close the front tab of a desktop application, for an app that also hosts "
+                "the Test Runner (its terminal) or has other tabs the test still needs. "
+                "Click the tab you opened first so it is in front; the tool refuses when "
+                "another app is in front or when the front tab runs the Test Runner. "
+                "Housekeeping: call it only after the step's expected result is verified; "
+                "a failed close never fails the step."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                ToolParameter(
+                    name="app_name",
+                    type="string",
+                    description="The human-readable name of the application whose front tab to close (e.g. 'Terminal').",
+                    required=True,
+                ),
+            ),
+        ),
+        ToolDefinition(
             name="check_app_installed",
             description=(
                 "Check whether a software application is already installed on the remote machine. "
@@ -290,6 +373,23 @@ def get_browser_tool_definitions() -> tuple[ToolDefinition, ...]:
                     name="description",
                     type="string",
                     description="Natural language description of the element to click.",
+                    required=True,
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="browser_double_click",
+            description=(
+                "Double-click a browser element found by AI-based natural-language description. "
+                "Use it only when the step says double-click or the page needs one (e.g. edit "
+                "a grid cell); never emulate it with two browser_click calls."
+            ),
+            category=ToolCategory.BROWSER,
+            parameters=(
+                ToolParameter(
+                    name="description",
+                    type="string",
+                    description="Natural language description of the element to double-click.",
                     required=True,
                 ),
             ),

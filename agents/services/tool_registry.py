@@ -101,6 +101,25 @@ def _handle_click(context: ToolContext, arguments: dict[str, object]) -> ToolRes
     )
 
 
+def _handle_double_click(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    description = str(arguments.get("description", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_controller.double_click(
+        context.project_id,
+        description=description,
+        expected_result=_read_expected_result(arguments),
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
+    )
+
+
 def _handle_type_text(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     text = str(arguments.get("text", ""))
     return tools_controller.type_text(context.project_id, text=text)
@@ -154,6 +173,21 @@ def _handle_launch_app(
     return tools_controller.launch_app(context.project_id, app_name=app_name)
 
 
+def _handle_close_app(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    app_name = str(arguments.get("app_name", ""))
+    # Strict bool: a force-kill discards unsaved work, so only a real JSON true
+    # counts; strings such as "false" must not turn into a forced close.
+    force = arguments.get("force") is True
+    return tools_controller.close_app(
+        context.project_id, app_name=app_name, force=force
+    )
+
+
+def _handle_close_tab(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    app_name = str(arguments.get("app_name", ""))
+    return tools_controller.close_tab(context.project_id, app_name=app_name)
+
+
 def _handle_check_app_installed(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
@@ -194,6 +228,22 @@ def _handle_browser_click(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_controller.browser_click(
+        context.project_id,
+        description=description,
+        selection=context.browser_selection,
+        vision_config=context.vision_config,
+    )
+
+
+def _handle_browser_double_click(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    description = str(arguments.get("description", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_controller.browser_double_click(
         context.project_id,
         description=description,
         selection=context.browser_selection,
@@ -317,14 +367,18 @@ _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "wait_for_command": _handle_wait_for_command,
     "take_screenshot": _handle_take_screenshot,
     "click": _handle_click,
+    "double_click": _handle_double_click,
     "type_text": _handle_type_text,
     "key_press": _handle_key_press,
     "hover": _handle_hover,
     "drag": _handle_drag,
     "launch_app": _handle_launch_app,
+    "close_app": _handle_close_app,
+    "close_tab": _handle_close_tab,
     "check_app_installed": _handle_check_app_installed,
     "browser_navigate": _handle_browser_navigate,
     "browser_click": _handle_browser_click,
+    "browser_double_click": _handle_browser_double_click,
     "browser_type": _handle_browser_type,
     "browser_hover": _handle_browser_hover,
     "browser_get_page_content": _handle_browser_get_page_content,

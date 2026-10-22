@@ -259,7 +259,7 @@ OPENAI_REASONING_SUMMARY: str = config(
 )
 
 # Agent
-AGENT_MAX_ITERATIONS: int = config("AGENT_MAX_ITERATIONS", default=30, cast=int)
+AGENT_MAX_ITERATIONS: int = config("AGENT_MAX_ITERATIONS", default=300, cast=int)
 AGENT_TIMEOUT_SECONDS: int = config("AGENT_TIMEOUT_SECONDS", default=300, cast=int)
 
 # SearXNG (metasearch engine)
@@ -330,7 +330,9 @@ ORCHESTRATOR_MAX_RECOVERY_ATTEMPTS: int = config(
 )
 
 # Sub-Agent
-SUB_AGENT_MAX_ITERATIONS: int = config("SUB_AGENT_MAX_ITERATIONS", default=15, cast=int)
+SUB_AGENT_MAX_ITERATIONS: int = config(
+    "SUB_AGENT_MAX_ITERATIONS", default=300, cast=int
+)
 SUB_AGENT_TIMEOUT_SECONDS: int = config(
     "SUB_AGENT_TIMEOUT_SECONDS", default=180, cast=int
 )

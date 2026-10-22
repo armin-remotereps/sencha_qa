@@ -17,6 +17,11 @@ class ClickActionEvent(BaseActionEvent):
     button: str
 
 
+class DoubleClickActionEvent(BaseActionEvent):
+    x: int
+    y: int
+
+
 class HoverActionEvent(BaseActionEvent):
     x: int
     y: int
@@ -54,6 +59,11 @@ class BrowserNavigateActionEvent(BaseActionEvent):
 
 
 class BrowserClickActionEvent(BaseActionEvent):
+    element_index: int
+    browser: str
+
+
+class BrowserDoubleClickActionEvent(BaseActionEvent):
     element_index: int
     browser: str
 
@@ -116,6 +126,15 @@ class LaunchAppActionEvent(BaseActionEvent):
     app_name: str
 
 
+class CloseAppActionEvent(BaseActionEvent):
+    app_name: str
+    force: bool
+
+
+class CloseTabActionEvent(BaseActionEvent):
+    app_name: str
+
+
 class CheckAppInstalledActionEvent(BaseActionEvent):
     app_name: str
 
@@ -132,6 +151,7 @@ class FindElementActionEvent(BaseActionEvent):
 class ActionTypeRegistry:
     _ACTION_TYPE_MAP: Final[dict[str, MessageType]] = {
         "controller.click": MessageType.CLICK,
+        "controller.double_click": MessageType.DOUBLE_CLICK,
         "controller.hover": MessageType.HOVER,
         "controller.drag": MessageType.DRAG,
         "controller.type_text": MessageType.TYPE_TEXT,
@@ -140,6 +160,7 @@ class ActionTypeRegistry:
         "controller.run_command": MessageType.RUN_COMMAND,
         "controller.browser_navigate": MessageType.BROWSER_NAVIGATE,
         "controller.browser_click": MessageType.BROWSER_CLICK,
+        "controller.browser_double_click": MessageType.BROWSER_DOUBLE_CLICK,
         "controller.browser_type": MessageType.BROWSER_TYPE,
         "controller.browser_hover": MessageType.BROWSER_HOVER,
         "controller.browser_get_elements": MessageType.BROWSER_GET_ELEMENTS,
@@ -153,6 +174,8 @@ class ActionTypeRegistry:
         "controller.wait_for_command": MessageType.WAIT_FOR_COMMAND,
         "controller.terminate_interactive_cmd": MessageType.TERMINATE_INTERACTIVE_CMD,
         "controller.launch_app": MessageType.LAUNCH_APP,
+        "controller.close_app": MessageType.CLOSE_APP,
+        "controller.close_tab": MessageType.CLOSE_TAB,
         "controller.check_app_installed": MessageType.CHECK_APP_INSTALLED,
         "controller.cleanup_environment": MessageType.CLEANUP_ENVIRONMENT,
         "controller.find_element": MessageType.FIND_ELEMENT,
@@ -160,6 +183,7 @@ class ActionTypeRegistry:
 
     _PAYLOAD_KEYS: Final[dict[str, tuple[str, ...]]] = {
         "controller.click": ("x", "y", "button"),
+        "controller.double_click": ("x", "y"),
         "controller.hover": ("x", "y"),
         "controller.drag": (
             "start_x",
@@ -175,6 +199,7 @@ class ActionTypeRegistry:
         "controller.run_command": ("command",),
         "controller.browser_navigate": ("url", "browser"),
         "controller.browser_click": ("element_index", "browser"),
+        "controller.browser_double_click": ("element_index", "browser"),
         "controller.browser_type": ("element_index", "text", "browser"),
         "controller.browser_hover": ("element_index", "browser"),
         "controller.browser_get_elements": ("browser",),
@@ -188,6 +213,8 @@ class ActionTypeRegistry:
         "controller.wait_for_command": ("session_id",),
         "controller.terminate_interactive_cmd": ("session_id",),
         "controller.launch_app": ("app_name",),
+        "controller.close_app": ("app_name", "force"),
+        "controller.close_tab": ("app_name",),
         "controller.check_app_installed": ("app_name",),
         "controller.cleanup_environment": (),
         "controller.find_element": ("box_threshold", "iou_threshold"),

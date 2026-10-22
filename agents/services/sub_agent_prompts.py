@@ -84,7 +84,8 @@ def _build_state_section(state_description: str) -> str:
         )
     return (
         "CURRENT STATE — the machine is in the state resulting from these prior actions. "
-        "Applications, windows, and terminals mentioned below are still open and available. "
+        "Applications, windows, and terminals mentioned below are still open and available "
+        "unless a summary says they were closed. "
         "Take a screenshot first to see the current screen before acting:\n"
         f"{state_description}"
     )

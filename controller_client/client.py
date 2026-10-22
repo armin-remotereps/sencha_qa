@@ -9,10 +9,12 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 
 from controller_client.app_checker import execute_check_app_installed
+from controller_client.app_closer import execute_close_app, execute_close_tab
 from controller_client.app_launcher import execute_launch_app
 from controller_client.browser_executor import (
     BrowserSession,
     execute_browser_click,
+    execute_browser_double_click,
     execute_browser_download,
     execute_browser_get_elements,
     execute_browser_get_page_content,
@@ -39,6 +41,7 @@ from controller_client.exceptions import (
 from controller_client.executor import (
     execute_click,
     execute_command_streaming,
+    execute_double_click,
     execute_drag,
     execute_hover,
     execute_key_press,
@@ -81,6 +84,9 @@ from controller_client.protocol import (
     parse_browser_type_payload,
     parse_check_app_installed_payload,
     parse_click_payload,
+    parse_close_app_payload,
+    parse_close_tab_payload,
+    parse_double_click_payload,
     parse_drag_payload,
     parse_find_element_payload,
     parse_handshake_ack_payload,
@@ -148,6 +154,7 @@ class ControllerClient:
         self._interactive_cmd_timeout = interactive_cmd_timeout
         self._handlers: dict[MessageType, MessageHandler] = {
             MessageType.CLICK: self._handle_click,
+            MessageType.DOUBLE_CLICK: self._handle_double_click,
             MessageType.HOVER: self._handle_hover,
             MessageType.DRAG: self._handle_drag,
             MessageType.TYPE_TEXT: self._handle_type_text,
@@ -157,6 +164,7 @@ class ControllerClient:
             MessageType.PING: self._handle_ping,
             MessageType.BROWSER_NAVIGATE: self._handle_browser_navigate,
             MessageType.BROWSER_CLICK: self._handle_browser_click,
+            MessageType.BROWSER_DOUBLE_CLICK: self._handle_browser_double_click,
             MessageType.BROWSER_TYPE: self._handle_browser_type,
             MessageType.BROWSER_HOVER: self._handle_browser_hover,
             MessageType.BROWSER_GET_ELEMENTS: self._handle_browser_get_elements,
@@ -170,6 +178,8 @@ class ControllerClient:
             MessageType.WAIT_FOR_COMMAND: self._handle_wait_for_command,
             MessageType.TERMINATE_INTERACTIVE_CMD: self._handle_terminate_interactive_cmd,
             MessageType.LAUNCH_APP: self._handle_launch_app,
+            MessageType.CLOSE_APP: self._handle_close_app,
+            MessageType.CLOSE_TAB: self._handle_close_tab,
             MessageType.CHECK_APP_INSTALLED: self._handle_check_app_installed,
             MessageType.CLEANUP_ENVIRONMENT: self._handle_cleanup_environment,
             MessageType.FIND_ELEMENT: self._handle_find_element,
@@ -569,6 +579,16 @@ class ControllerClient:
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
 
+    async def _handle_double_click(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_double_click_payload(data)
+        try:
+            result = await asyncio.to_thread(execute_double_click, payload)
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
     async def _handle_hover(self, request_id: str, data: dict[str, object]) -> None:
         payload = parse_hover_payload(data)
         try:
@@ -711,6 +731,20 @@ class ControllerClient:
         try:
             result = await asyncio.to_thread(
                 execute_browser_click, self._browser_session, payload
+            )
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(
+                request_id, _browser_error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
+
+    async def _handle_browser_double_click(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_browser_click_payload(data)
+        try:
+            result = await asyncio.to_thread(
+                execute_browser_double_click, self._browser_session, payload
             )
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
@@ -887,6 +921,22 @@ class ControllerClient:
             result = await asyncio.to_thread(
                 execute_launch_app, payload, self._process_tracker
             )
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_close_app(self, request_id: str, data: dict[str, object]) -> None:
+        payload = parse_close_app_payload(data)
+        try:
+            result = await asyncio.to_thread(execute_close_app, payload)
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_close_tab(self, request_id: str, data: dict[str, object]) -> None:
+        payload = parse_close_tab_payload(data)
+        try:
+            result = await asyncio.to_thread(execute_close_tab, payload)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))

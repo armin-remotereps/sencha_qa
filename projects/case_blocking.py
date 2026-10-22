@@ -12,6 +12,7 @@ from agents.exceptions import AIServiceError
 from projects.exceptions import (
     BrowserUnavailableError,
     ControllerReconnectTimeoutError,
+    RunnerOutdatedError,
     TestRunnerDisconnectedError,
     TestRunnerUnresponsiveError,
     VisualEngineError,
@@ -26,6 +27,7 @@ _REASON_BY_TYPE: tuple[tuple[type[BaseException], BlockedReason], ...] = (
     (TestRunnerUnresponsiveError, BlockedReason.RUNNER_UNRESPONSIVE),
     (VisualEngineError, BlockedReason.VISUAL_ENGINE),
     (BrowserUnavailableError, BlockedReason.BROWSER_UNAVAILABLE),
+    (RunnerOutdatedError, BlockedReason.RUNNER_OUTDATED),
     (AIServiceError, BlockedReason.AI_SERVICE),
     (SoftTimeLimitExceeded, BlockedReason.TIME_LIMIT),
 )

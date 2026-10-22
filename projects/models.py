@@ -75,6 +75,7 @@ class BlockedReason(models.TextChoices):
         "browser_unavailable",
         "Browser unavailable on the test machine",
     )
+    RUNNER_OUTDATED = "runner_outdated", "Test Runner needs an update"
     INTERNAL_ERROR = "internal_error", "Internal error"
 
 

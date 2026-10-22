@@ -451,6 +451,30 @@ def execute_browser_click(
     )
 
 
+def execute_browser_double_click(
+    session: BrowserSession, payload: BrowserClickPayload
+) -> ActionResultPayload:
+    start = time.monotonic()
+    try:
+        _locate_element(session, payload.browser, payload.element_index).dblclick(
+            timeout=_ACTION_TIMEOUT_MS
+        )
+    except ExecutionError:
+        raise
+    except PlaywrightTimeoutError as e:
+        raise ExecutionError(
+            _not_actionable_message("double-clicked", payload.element_index)
+        ) from e
+    except Exception as e:
+        raise ExecutionError(f"Browser double-click failed: {e}") from e
+    duration_ms = (time.monotonic() - start) * 1000
+    return ActionResultPayload(
+        success=True,
+        message=f"Double-clicked element at index {payload.element_index}",
+        duration_ms=duration_ms,
+    )
+
+
 def execute_browser_type(
     session: BrowserSession, payload: BrowserTypePayload
 ) -> ActionResultPayload:

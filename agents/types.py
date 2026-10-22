@@ -131,7 +131,7 @@ class ScreenshotCallback(Protocol):
 class AgentConfig:
     llm: LLMConfig
     vision_llm: LLMConfig | None = None
-    max_iterations: int = 30
+    max_iterations: int = 300
     timeout_seconds: int = 900
     on_log: LogCallback | None = None
     on_screenshot: ScreenshotCallback | None = None

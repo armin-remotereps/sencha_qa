@@ -54,23 +54,28 @@ def build_tool_taxonomy() -> str:
         "2. send_command_input — Send input to a running interactive command session\n"
         "3. take_screenshot — Capture the desktop and answer a question about it using vision AI\n"
         "4. click — Click an element found by vision-based natural-language description\n"
-        "5. type_text — Type text using the keyboard\n"
-        "6. key_press — Press a key or key combination\n"
-        "7. hover — Hover over an element found by vision-based description\n"
-        "8. drag — Drag from one element to another, both found by vision-based description\n\n"
+        "5. double_click — Double-click an element found by vision-based description\n"
+        "6. type_text — Type text using the keyboard\n"
+        "7. key_press — Press a key or key combination\n"
+        "8. hover — Hover over an element found by vision-based description\n"
+        "9. drag — Drag from one element to another, both found by vision-based description\n"
+        "10. launch_app — Launch a desktop application by name\n"
+        "11. close_app — Quit a desktop application the test no longer needs\n"
+        "12. close_tab — Close the front tab you opened in an app that has other tabs to keep\n\n"
         "BROWSER TOOLS (Playwright — for web page interactions):\n"
-        "9. browser_navigate — Navigate the browser to a URL\n"
-        "10. browser_click — Click a web page element found by AI-based description\n"
-        "11. browser_type — Type text into a web page element found by AI-based description\n"
-        "12. browser_hover — Hover over a web page element found by AI-based description\n"
-        "13. browser_get_page_content — Get the text content of the current page\n"
-        "14. browser_get_url — Get the current browser URL\n"
-        "15. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
-        "16. browser_download — Download a file from a URL via the browser\n\n"
+        "13. browser_navigate — Navigate the browser to a URL\n"
+        "14. browser_click — Click a web page element found by AI-based description\n"
+        "15. browser_double_click — Double-click a web page element found by AI-based description\n"
+        "16. browser_type — Type text into a web page element found by AI-based description\n"
+        "17. browser_hover — Hover over a web page element found by AI-based description\n"
+        "18. browser_get_page_content — Get the text content of the current page\n"
+        "19. browser_get_url — Get the current browser URL\n"
+        "20. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
+        "21. browser_download — Download a file from a URL via the browser\n\n"
         "SEARCH TOOLS (for looking up information on the web):\n"
-        "17. web_search — Search the web and return top results with titles, snippets, and URLs\n\n"
+        "22. web_search — Search the web and return top results with titles, snippets, and URLs\n\n"
         "UTILITY TOOLS:\n"
-        "18. wait — Pause for a fixed number of seconds while the UI settles"
+        "23. wait — Pause for a fixed number of seconds while the UI settles"
     )
 
 
@@ -136,6 +141,7 @@ def build_tool_guidelines() -> str:
             build_browser_tool_examples(),
             build_browser_selection_rule(),
             build_tool_selection_rules(),
+            build_app_lifecycle_rules(),
             build_search_tool_examples(),
             build_utility_tool_examples(),
             build_shell_rules(),
@@ -152,20 +158,27 @@ def build_tool_guidelines() -> str:
 def build_desktop_tool_examples() -> str:
     return (
         "DESKTOP TOOLS (for native desktop interactions):\n"
-        "- Vision-based tools (click, hover, drag) use natural-language descriptions "
-        "to find elements on the screen via AI vision.\n"
-        "- click, hover and drag verify the target element before acting and confirm the "
+        "- Vision-based tools (click, double_click, hover, drag) use natural-language "
+        "descriptions to find elements on the screen via AI vision.\n"
+        "- click, double_click, hover and drag verify the target element before acting and confirm the "
         "result afterwards, trying up to 10 candidates on their own. Pass expected_result "
         "to tell them what the screen should show once the action worked.\n"
         "- If the element is not on the screen they stop early and report that it was not "
         "found instead of trying every candidate.\n"
-        "- When click, hover or drag returns an error, the element could not be confirmed: "
+        "- Use double_click / browser_double_click only when the step says double-click "
+        "or the UI needs it (open a file or desktop icon, edit a grid cell). Never "
+        "emulate it with two click calls.\n"
+        "- When click, double_click, hover or drag returns an error, the element could not be confirmed: "
         "re-describe it more precisely or use take_screenshot to understand the screen "
         "instead of repeating the same call.\n"
         '- click(description="the Login button", expected_result="the login form opens") — describe what to click and what should happen\n'
+        '- double_click(description="the Documents folder icon", expected_result="the Documents folder opens") — double-click and describe what should happen\n'
         '- hover(description="the Settings menu") — describe what to hover\n'
         '- drag(start_description="file icon", end_description="trash icon", expected_result="the file disappears from the desktop") — describe start, end and outcome\n'
         '- type_text(text="hello") — type text using the keyboard\n'
+        '- launch_app(app_name="Calculator") — open a desktop application\n'
+        '- close_app(app_name="Calculator") — quit an application the test no longer needs\n'
+        '- close_tab(app_name="Terminal") — close the front tab you opened (click that tab first)\n'
         '- key_press(keys="Return") — press a key or key combination\n'
         '- take_screenshot(question="What is on screen?") — capture desktop and ask about it\n'
         '- execute_command(command="ls -la") — run a shell command\n'
@@ -180,6 +193,7 @@ def build_browser_tool_examples() -> str:
         '- browser_navigate(url="https://example.com") — open a URL in the browser\n'
         '- browser_navigate(url="https://example.com", browser="firefox") — open a URL in Firefox, only when the test case names that browser\n'
         '- browser_click(description="the Login button") — click a web page element\n'
+        '- browser_double_click(description="the Price cell in the first row") — double-click a web page element\n'
         '- browser_type(description="the email input", text="user@example.com") — type into a web element\n'
         '- browser_hover(description="the Settings menu") — hover over a web element\n'
         "- browser_get_page_content() — get the visible text of the current page\n"
@@ -207,7 +221,8 @@ def build_tool_selection_rules() -> str:
     return (
         "WHEN TO USE WHICH:\n"
         "- WEB PAGES: Anything inside a web page opened with browser_navigate MUST be done "
-        "with browser_* tools: browser_click (not click), browser_type (not click + type_text), "
+        "with browser_* tools: browser_click (not click), browser_double_click (not "
+        "double_click), browser_type (not click + type_text), "
         "browser_hover (not hover), browser_take_screenshot (not take_screenshot) and "
         "browser_get_page_content to read the page. Desktop tools cannot see the Playwright "
         "page reliably and are NOT a substitute for browser tools on a web page.\n"
@@ -232,6 +247,29 @@ def build_tool_selection_rules() -> str:
         "- INSTALLATION LOOKUP: Before installing software, use web_search to look up the "
         "correct install command for the current OS. This avoids guessing wrong package names "
         "or using the wrong package manager."
+    )
+
+
+def build_app_lifecycle_rules() -> str:
+    return (
+        "CLOSING APPLICATIONS (housekeeping — leftover windows clutter every later screen):\n"
+        "- Close an application with close_app when the step tells you to, and close an "
+        "application YOU opened in this step when the expected result does not need it "
+        "to stay open.\n"
+        "- Close only AFTER you have verified the expected result. A failed or refused "
+        "close is housekeeping: mention it in your SUMMARY and NEVER turn the step into "
+        "FAIL because of it.\n"
+        "- When the application also hosts the Test Runner (the terminal it runs in) or "
+        "has other tabs the test still needs, never close the application: click the tab "
+        "you opened so it is in front, then close only that tab with close_tab.\n"
+        "- NEVER close the Test Runner or its terminal tab, NEVER close the browser opened "
+        "by browser tools (it is closed automatically), and NEVER close the application "
+        "under test while the step still uses it.\n"
+        "- If a plain close_app reports the app is still open (a save or confirm dialog), "
+        "handle the dialog, or pass force=true only when discarding unsaved work is "
+        "acceptable.\n"
+        "- Prefer close_app / close_tab over key_press quit shortcuts (cmd+q, alt+F4, "
+        "cmd+w): those act on whatever window has focus and can quit the Test Runner."
     )
 
 

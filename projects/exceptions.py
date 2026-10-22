@@ -70,6 +70,13 @@ class BrowserUnavailableError(InfrastructureError):
         self.detail = detail
 
 
+class RunnerOutdatedError(InfrastructureError):
+    """The connected Test Runner lacks an optional capability the case needs.
+
+    The message is fixed server text, shown in the UI and pushed to TestRail.
+    """
+
+
 class VisualEngineError(ControllerActionError, InfrastructureError):
     """The visual engine (OmniParser) failed or is not ready."""
 

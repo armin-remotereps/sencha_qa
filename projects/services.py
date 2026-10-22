@@ -1204,6 +1204,23 @@ def controller_click(
     return _build_action_result(reply)
 
 
+def controller_double_click(
+    project_id: int,
+    x: int,
+    y: int,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.double_click",
+        timeout,
+        x=x,
+        y=y,
+        runner_local=True,
+    )
+    return _build_action_result(reply)
+
+
 def controller_hover(
     project_id: int,
     x: int,
@@ -1607,6 +1624,23 @@ def controller_browser_click(
     return _build_action_result(reply)
 
 
+def controller_browser_double_click(
+    project_id: int,
+    element_index: int,
+    *,
+    browser: BrowserName,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.browser_double_click",
+        timeout,
+        element_index=element_index,
+        browser=browser.value,
+    )
+    return _build_action_result(reply)
+
+
 def controller_browser_type(
     project_id: int,
     element_index: int,
@@ -1724,6 +1758,41 @@ def controller_launch_app(
 ) -> ActionResult:
     reply = _dispatch_controller_action(
         project_id, "controller.launch_app", timeout, app_name=app_name
+    )
+    return _build_action_result(reply)
+
+
+def controller_close_app(
+    project_id: int,
+    app_name: str,
+    *,
+    force: bool = False,
+    timeout: float = 30.0,
+) -> ActionResult:
+    # The 30 s timeout is well above the runner's 5 s wait for the app to quit.
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.close_app",
+        timeout,
+        app_name=app_name,
+        force=force,
+        runner_local=True,
+    )
+    return _build_action_result(reply)
+
+
+def controller_close_tab(
+    project_id: int,
+    app_name: str,
+    *,
+    timeout: float = 30.0,
+) -> ActionResult:
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.close_tab",
+        timeout,
+        app_name=app_name,
+        runner_local=True,
     )
     return _build_action_result(reply)
 

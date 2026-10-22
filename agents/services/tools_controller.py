@@ -8,6 +8,7 @@ from agents.services.verified_element_actions import (
     VerificationBudget,
     confirm_action,
     default_click_expectation,
+    default_double_click_expectation,
     format_verified_message,
     resolve_verified_element,
     take_before_screenshot,
@@ -22,13 +23,22 @@ from agents.types import (
     ScreenshotCallback,
     ToolResult,
 )
-from controller_client.protocol import BROWSER_DISPLAY_NAMES, BrowserName
+from controller_client.protocol import (
+    BROWSER_DISPLAY_NAMES,
+    BrowserName,
+    ClientCapability,
+)
 from projects.browser_selection_services import ensure_runner_supports_browser
 from projects.exceptions import ControllerActionError
+from projects.runner_capability_services import (
+    ensure_runner_supports_double_click,
+    runner_supports,
+)
 from projects.services import (
     ActionResult,
     InteractiveCommandResult,
     controller_browser_click,
+    controller_browser_double_click,
     controller_browser_download,
     controller_browser_get_page_content,
     controller_browser_get_url,
@@ -39,6 +49,9 @@ from projects.services import (
     controller_browser_type,
     controller_check_app_installed,
     controller_click,
+    controller_close_app,
+    controller_close_tab,
+    controller_double_click,
     controller_drag,
     controller_hover,
     controller_key_press,
@@ -158,6 +171,7 @@ def take_screenshot(
 
 
 _AttemptFunc = Callable[[VerificationBudget], ToolResult | None]
+_PressFunc = Callable[[int, int], ActionResult]
 
 
 def _run_verified_action(
@@ -166,8 +180,11 @@ def _run_verified_action(
     *,
     cancellation_check: CancellationCheck | None,
     deadline: float | None,
+    precheck: Callable[[], None] | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
+        if precheck is not None:
+            precheck()
         budget = VerificationBudget(
             deadline=deadline, cancellation_check=cancellation_check
         )
@@ -217,6 +234,58 @@ def _before_image_if_confirming(project_id: int, expected_result: str) -> str:
     return take_before_screenshot(project_id) if expected_result else ""
 
 
+def _verified_click(
+    project_id: int,
+    *,
+    tool_name: str,
+    description: str,
+    vision_config: LLMConfig,
+    expected_result: str,
+    press: _PressFunc,
+    verb: str,
+    success_verb: str,
+    default_expectation: Callable[[str], str],
+    on_screenshot: ScreenshotCallback | None,
+    cancellation_check: CancellationCheck | None,
+    deadline: float | None,
+    precheck: Callable[[], None] | None = None,
+) -> ToolResult:
+    """Run the verified click flow shared by click and double_click.
+
+    ``press`` performs the mouse action at the verified element's centre;
+    ``verb`` / ``success_verb`` word the outcome check and the success text.
+    """
+    effective_expectation = expected_result or default_expectation(description)
+
+    def _attempt(budget: VerificationBudget) -> ToolResult | None:
+        element = resolve_verified_element(
+            project_id, description, vision_config, budget, on_screenshot=on_screenshot
+        )
+        x, y = element.center_x, element.center_y
+        before_image = take_before_screenshot(project_id)
+        _ensure_action_succeeded(press(x, y))
+        return _confirm_or_finish(
+            project_id,
+            vision_config,
+            budget,
+            acted_on=(element,),
+            before_image_base64=before_image,
+            action_summary=f"{verb} '{description}' at ({x}, {y})",
+            expected_result=effective_expectation,
+            tool_name=tool_name,
+            success_message=f"{success_verb} element at ({x}, {y}): {description}",
+            on_screenshot=on_screenshot,
+        )
+
+    return _run_verified_action(
+        tool_name,
+        _attempt,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+        precheck=precheck,
+    )
+
+
 def click(
     project_id: int,
     *,
@@ -227,30 +296,58 @@ def click(
     cancellation_check: CancellationCheck | None = None,
     deadline: float | None = None,
 ) -> ToolResult:
-    effective_expectation = expected_result or default_click_expectation(description)
+    def _press(x: int, y: int) -> ActionResult:
+        return controller_click(project_id, x, y)
 
-    def _attempt(budget: VerificationBudget) -> ToolResult | None:
-        element = resolve_verified_element(
-            project_id, description, vision_config, budget, on_screenshot=on_screenshot
-        )
-        x, y = element.center_x, element.center_y
-        before_image = take_before_screenshot(project_id)
-        _ensure_action_succeeded(controller_click(project_id, x, y))
-        return _confirm_or_finish(
-            project_id,
-            vision_config,
-            budget,
-            acted_on=(element,),
-            before_image_base64=before_image,
-            action_summary=f"clicked '{description}' at ({x}, {y})",
-            expected_result=effective_expectation,
-            tool_name="click",
-            success_message=f"Clicked element at ({x}, {y}): {description}",
-            on_screenshot=on_screenshot,
-        )
+    return _verified_click(
+        project_id,
+        tool_name="click",
+        description=description,
+        vision_config=vision_config,
+        expected_result=expected_result,
+        press=_press,
+        verb="clicked",
+        success_verb="Clicked",
+        default_expectation=default_click_expectation,
+        on_screenshot=on_screenshot,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+    )
 
-    return _run_verified_action(
-        "click", _attempt, cancellation_check=cancellation_check, deadline=deadline
+
+def double_click(
+    project_id: int,
+    *,
+    description: str,
+    vision_config: LLMConfig,
+    expected_result: str = "",
+    on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
+    deadline: float | None = None,
+) -> ToolResult:
+    def _press(x: int, y: int) -> ActionResult:
+        return controller_double_click(project_id, x, y)
+
+    def _precheck() -> None:
+        # Raises RunnerOutdatedError (an InfrastructureError, so safe_tool_call
+        # re-raises it and the case ends Blocked) on a Test Runner that cannot
+        # double-click; it runs before any screen parse is spent.
+        ensure_runner_supports_double_click(project_id)
+
+    return _verified_click(
+        project_id,
+        tool_name="double_click",
+        description=description,
+        vision_config=vision_config,
+        expected_result=expected_result,
+        press=_press,
+        verb="double-clicked",
+        success_verb="Double-clicked",
+        default_expectation=default_double_click_expectation,
+        on_screenshot=on_screenshot,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+        precheck=_precheck,
     )
 
 
@@ -383,6 +480,54 @@ def check_app_installed(project_id: int, *, app_name: str) -> ToolResult:
     return safe_tool_call("check_app_installed", _do)
 
 
+_CLOSE_APP_OUTDATED_MESSAGE = (
+    "This Test Runner is too old for close_app; close the app from its own menu "
+    "or with key_press (cmd+q on macOS, alt+F4 on Windows) after making sure the "
+    "app is focused. Closing is housekeeping and does not affect the step result."
+)
+_CLOSE_TAB_OUTDATED_MESSAGE = (
+    "This Test Runner is too old for close_tab; click the tab you opened to focus "
+    "it, then close it from the app's menu or with key_press (cmd+w on macOS, "
+    "ctrl+w on Windows), or type `exit` in a terminal tab you opened. Never close "
+    "the tab that runs the Test Runner. Closing is housekeeping and does not "
+    "affect the step result."
+)
+
+
+def _action_result_to_tool_result(result: ActionResult) -> ToolResult:
+    return ToolResult(
+        tool_call_id="",
+        content=result["message"],
+        is_error=not result["success"],
+    )
+
+
+def close_app(project_id: int, *, app_name: str, force: bool = False) -> ToolResult:
+    def _do() -> ToolResult:
+        # Closing is housekeeping, never the verdict: an old Test Runner gets a
+        # tool error with a manual fallback rather than blocking the case.
+        if not runner_supports(project_id, ClientCapability.CLOSE_APP_V1):
+            return ToolResult(
+                tool_call_id="", content=_CLOSE_APP_OUTDATED_MESSAGE, is_error=True
+            )
+        return _action_result_to_tool_result(
+            controller_close_app(project_id, app_name, force=force)
+        )
+
+    return safe_tool_call("close_app", _do)
+
+
+def close_tab(project_id: int, *, app_name: str) -> ToolResult:
+    def _do() -> ToolResult:
+        if not runner_supports(project_id, ClientCapability.CLOSE_APP_V1):
+            return ToolResult(
+                tool_call_id="", content=_CLOSE_TAB_OUTDATED_MESSAGE, is_error=True
+            )
+        return _action_result_to_tool_result(controller_close_tab(project_id, app_name))
+
+    return safe_tool_call("close_tab", _do)
+
+
 # ============================================================================
 # BROWSER TOOLS
 # ============================================================================
@@ -434,6 +579,29 @@ def browser_click(
         )
 
     return safe_tool_call("browser_click", _do)
+
+
+def browser_double_click(
+    project_id: int,
+    *,
+    description: str,
+    vision_config: LLMConfig,
+    selection: BrowserSelection,
+) -> ToolResult:
+    def _do() -> ToolResult:
+        # Raises RunnerOutdatedError, which blocks the case (see double_click).
+        ensure_runner_supports_double_click(project_id)
+        idx = find_element_index(
+            project_id, description, vision_config, browser=selection.current
+        )
+        controller_browser_double_click(project_id, idx, browser=selection.current)
+        return ToolResult(
+            tool_call_id="",
+            content=f"Double-clicked browser element [{idx}]: {description}",
+            is_error=False,
+        )
+
+    return safe_tool_call("browser_double_click", _do)
 
 
 def browser_type(

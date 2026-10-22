@@ -226,3 +226,10 @@ def default_click_expectation(description: str) -> str:
         f"the click landed on '{description}' and the UI reacted to it "
         "(state change, navigation, focus, selection, menu, dialog, or similar)"
     )
+
+
+def default_double_click_expectation(description: str) -> str:
+    return (
+        f"the double-click landed on '{description}' and the UI reacted to it "
+        "(item opened, edit mode, word or row selected, window maximised, or similar)"
+    )

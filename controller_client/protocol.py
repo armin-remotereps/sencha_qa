@@ -11,7 +11,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.4.0"
+CLIENT_VERSION: Final[str] = "0.5.0"
 
 
 class CloseCode(IntEnum):
@@ -38,6 +38,7 @@ class MessageType(StrEnum):
     PONG = "pong"
     HANDSHAKE_ACK = "handshake_ack"
     CLICK = "click"
+    DOUBLE_CLICK = "double_click"
     HOVER = "hover"
     DRAG = "drag"
     TYPE_TEXT = "type_text"
@@ -47,6 +48,7 @@ class MessageType(StrEnum):
     PING = "ping"
     BROWSER_NAVIGATE = "browser_navigate"
     BROWSER_CLICK = "browser_click"
+    BROWSER_DOUBLE_CLICK = "browser_double_click"
     BROWSER_TYPE = "browser_type"
     BROWSER_HOVER = "browser_hover"
     BROWSER_GET_ELEMENTS = "browser_get_elements"
@@ -61,6 +63,8 @@ class MessageType(StrEnum):
     INTERACTIVE_OUTPUT = "interactive_output"
     WAIT_FOR_COMMAND = "wait_for_command"
     LAUNCH_APP = "launch_app"
+    CLOSE_APP = "close_app"
+    CLOSE_TAB = "close_tab"
     CHECK_APP_INSTALLED = "check_app_installed"
     CLEANUP_ENVIRONMENT = "cleanup_environment"
     FIND_ELEMENT = "find_element"
@@ -76,6 +80,12 @@ class ClientCapability(StrEnum):
     # Optional: browser actions carry a ``browser`` field naming the browser to
     # drive. Older controllers ignore the field and always launch Chromium.
     BROWSER_SELECTION_V1 = "browser_selection_v1"
+    # Optional: ``double_click`` and ``browser_double_click``. Older controllers
+    # answer UNKNOWN_COMMAND.
+    DOUBLE_CLICK_V1 = "double_click_v1"
+    # Optional: ``close_app`` and ``close_tab``. Older controllers answer
+    # UNKNOWN_COMMAND.
+    CLOSE_APP_V1 = "close_app_v1"
 
 
 # What this client advertises in its handshake.
@@ -83,7 +93,7 @@ CLIENT_CAPABILITIES: Final[tuple[ClientCapability, ...]] = tuple(ClientCapabilit
 
 # What the server insists on; a controller missing any of them would
 # authenticate fine and then silently time out on first use. Optional
-# capabilities (BROWSER_SELECTION_V1) are checked where they are used instead.
+# capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1) are checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.FIND_ELEMENT_LOCAL_V1,
@@ -224,6 +234,12 @@ class ClickPayload:
 
 
 @dataclass(frozen=True)
+class DoubleClickPayload:
+    x: int
+    y: int
+
+
+@dataclass(frozen=True)
 class HoverPayload:
     x: int
     y: int
@@ -348,6 +364,19 @@ class WaitForCommandPayload:
 
 @dataclass(frozen=True)
 class LaunchAppPayload:
+    app_name: str
+
+
+@dataclass(frozen=True)
+class CloseAppPayload:
+    app_name: str
+    force: bool
+
+
+@dataclass(frozen=True)
+class CloseTabPayload:
+    # The app whose frontmost tab is closed; the controller refuses when another
+    # app is in front.
     app_name: str
 
 
@@ -527,6 +556,13 @@ def parse_click_payload(data: dict[str, object]) -> ClickPayload:
     )
 
 
+def parse_double_click_payload(data: dict[str, object]) -> DoubleClickPayload:
+    return DoubleClickPayload(
+        x=_extract_int(data, "x"),
+        y=_extract_int(data, "y"),
+    )
+
+
 def parse_hover_payload(data: dict[str, object]) -> HoverPayload:
     return HoverPayload(
         x=_extract_int(data, "x"),
@@ -672,6 +708,19 @@ def parse_wait_for_command_payload(data: dict[str, object]) -> WaitForCommandPay
 
 def parse_launch_app_payload(data: dict[str, object]) -> LaunchAppPayload:
     return LaunchAppPayload(
+        app_name=_extract_str(data, "app_name"),
+    )
+
+
+def parse_close_app_payload(data: dict[str, object]) -> CloseAppPayload:
+    return CloseAppPayload(
+        app_name=_extract_str(data, "app_name"),
+        force=_extract_bool(data, "force", default=False),
+    )
+
+
+def parse_close_tab_payload(data: dict[str, object]) -> CloseTabPayload:
+    return CloseTabPayload(
         app_name=_extract_str(data, "app_name"),
     )
 

@@ -40,6 +40,16 @@ def build_plan_system_prompt(
         "- If the test case names a browser (e.g. 'in Firefox', 'using Edge', 'in "
         "Safari'), keep that browser name in the description of the first sub-task that "
         "opens a web page.\n"
+        "- CLOSING APPS: when a desktop application the case opened is not used by any "
+        "later sub-task, end the description of the LAST sub-task that uses it with "
+        "'Afterwards, close <App> with close_app (housekeeping, does not affect this "
+        "step's result).' This includes the final sub-task of the case, so apps do not "
+        "leak into the next case. When the application also hosts the Test Runner (its "
+        "terminal, e.g. a Terminal tab the case opened) or has other tabs still needed, "
+        "write instead 'Afterwards, close the <App> tab you opened with close_tab "
+        "(housekeeping, does not affect this step's result).' Never add a separate "
+        "close-only sub-task, and do not schedule closing for the browser used by "
+        "browser tools.\n"
     )
 
     if project_prompt:

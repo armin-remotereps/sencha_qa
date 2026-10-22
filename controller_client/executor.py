@@ -19,6 +19,7 @@ from controller_client.protocol import (
     ActionResultPayload,
     ClickPayload,
     CommandResultPayload,
+    DoubleClickPayload,
     DragPayload,
     HoverPayload,
     InteractiveOutputPayload,
@@ -34,6 +35,9 @@ from controller_client.protocol import (
 )
 from controller_client.screen_capture import capture_screen
 
+if sys.platform == "darwin":
+    import Quartz
+
 pyautogui.FAILSAFE = False
 
 
@@ -48,6 +52,54 @@ def execute_click(payload: ClickPayload) -> ActionResultPayload:
     return ActionResultPayload(
         success=True,
         message=f"Clicked ({payload.x}, {payload.y}) with {payload.button} button",
+        duration_ms=duration_ms,
+    )
+
+
+if sys.platform == "darwin":
+
+    def _double_click(x: int, y: int) -> None:
+        # pyautogui 0.9.54 posts two plain down/up pairs on macOS and never sets
+        # kCGMouseEventClickState, the field AppKit reads as clickCount, so Cocoa
+        # apps saw two single clicks. Post the pairs with click state 1 then 2.
+        pyautogui.moveTo(x=x, y=y)
+        point = Quartz.CGPointMake(x, y)
+        for click_state in (1, 2):
+            for event_type in (
+                Quartz.kCGEventLeftMouseDown,
+                Quartz.kCGEventLeftMouseUp,
+            ):
+                event = Quartz.CGEventCreateMouseEvent(
+                    None, event_type, point, Quartz.kCGMouseButtonLeft
+                )
+                if event is None:
+                    raise ExecutionError("Could not create a mouse event")
+                Quartz.CGEventSetIntegerValueField(
+                    event, Quartz.kCGMouseEventClickState, click_state
+                )
+                Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+
+else:
+
+    def _double_click(x: int, y: int) -> None:
+        # Windows and Linux detect the double-click from the timing of the two
+        # clicks pyautogui sends back to back.
+        pyautogui.doubleClick(x=x, y=y)
+
+
+def execute_double_click(payload: DoubleClickPayload) -> ActionResultPayload:
+    ensure_input_not_blocked()
+    start = time.monotonic()
+    try:
+        _double_click(payload.x, payload.y)
+    except ExecutionError:
+        raise
+    except Exception as e:
+        raise ExecutionError(f"Double-click failed: {e}") from e
+    duration_ms = (time.monotonic() - start) * 1000
+    return ActionResultPayload(
+        success=True,
+        message=f"Double-clicked ({payload.x}, {payload.y})",
         duration_ms=duration_ms,
     )
 
