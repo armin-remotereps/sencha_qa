@@ -158,12 +158,18 @@ CELERY_BEAT_SCHEDULER = "django_celery_beat.schedulers:DatabaseScheduler"
 CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+# With acks_late, redis redelivers a message still unacked after this many
+# seconds (default 3600) even while a worker is running it. Keep it well above
+# the longest task limit (projects.checked_push_limits.CHECKED_PUSH_TIME_LIMIT,
+# 3660s) so a long "Send checked to TestRail" is never run twice.
+CELERY_BROKER_TRANSPORT_OPTIONS: dict[str, int] = {"visibility_timeout": 4 * 3600}
 CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "projects.tasks.execute_test_run_case": {"queue": "execution"},
     "projects.tasks.refine_project_prompt_task": {"queue": "upload"},
     "projects.tasks.import_testrail_cases": {"queue": "upload"},
     "projects.tasks.import_testrail_run_cases": {"queue": "upload"},
     "projects.tasks.push_test_run_results": {"queue": "upload"},
+    "projects.tasks.push_checked_results_to_testrail": {"queue": "upload"},
 }
 
 # Channels

@@ -201,6 +201,21 @@ urlpatterns: list[URLPattern] = [
         name="testrail_push_suite",
     ),
     path(
+        "<int:project_id>/test-runs/<int:test_run_id>/testrail/send-checked/",
+        testrail_views.testrail_send_checked,
+        name="testrail_send_checked",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/check/",
+        views.test_run_cases_check,
+        name="test_run_cases_check",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/uncheck/",
+        views.test_run_cases_uncheck,
+        name="test_run_cases_uncheck",
+    ),
+    path(
         "<int:project_id>/test-runs/<int:test_run_id>/add-cases/",
         views.test_run_add_cases,
         name="test_run_add_cases",

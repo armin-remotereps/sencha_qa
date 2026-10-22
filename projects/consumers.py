@@ -22,6 +22,7 @@ from projects.services import (
     get_blocked_reason_fields,
     get_project_for_user,
 )
+from projects.testrail_checked_push_services import checked_push_display_status
 
 
 class AuthenticatedConsumer(AsyncWebsocketConsumer):
@@ -137,6 +138,9 @@ class TestRunConsumer(AuthenticatedConsumer):
                         {"pivot_id": pid, "status": status} for pid, status in pivots
                     ],
                     "testrail_push_status": test_run.testrail_push_status,
+                    "testrail_source_push_status": (
+                        checked_push_display_status(test_run)
+                    ),
                 }
             )
         )
@@ -169,6 +173,17 @@ class TestRunConsumer(AuthenticatedConsumer):
             text_data=json.dumps(
                 {
                     "type": "testrail_push",
+                    "push_status": event["push_status"],
+                }
+            )
+        )
+
+    async def test_run_testrail_source_push(self, event: dict[str, Any]) -> None:
+        """Relay the "Send checked to TestRail" status (pushing/pushed/failed)."""
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "testrail_source_push",
                     "push_status": event["push_status"],
                 }
             )

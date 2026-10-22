@@ -1,0 +1,50 @@
+{% comment %} "Send checked to TestRail" status lines on the run detail page, shown
+   under the 018 push status line. Renders nothing when TestRail is not
+   configured (the 018 line already points to Settings).
+
+   - No case has a source TestRail run: a muted explanation of why results
+     cannot be sent back and how to fix it.
+   - Otherwise: the checked / ready / without-source counts, then the send
+     state: "Sending…" while `testrailSourcePushStatus` is "pushing" (live
+     over the run WebSocket), else the last send's time, summary and
+     "Open run R…" links, or its error.
+
+   Must sit inside the page's `testRunLive` Alpine root (reads
+   `testrailSourcePushStatus`).
+
+   Context contract:
+     project                — current Project
+     test_run               — current TestRun
+     testrail_checked_push  — projects.testrail_checked_push_services.CheckedPushPanel
+                              (used here: .configured, .has_any_source,
+                              .checked_count, .total_count, .ready_count,
+                              .no_source_count, .skipped_count, .status,
+                              .pushed_at, .summary, .error,
+                              .source_runs[].run_id/.url). .status already
+                              shows an interrupted (stale) send as "failed". {% endcomment %}
+{% if testrail_checked_push.configured %}
+  {% if not testrail_checked_push.has_any_source %}
+    <p class="muted">Results can't be sent back: this run's cases weren't imported from a TestRail run link when the run was created. Re-import the run link, then create a new run.</p>
+  {% else %}
+    <p class="muted">{{ testrail_checked_push.checked_count }} of {{ testrail_checked_push.total_count }} checked &middot; {{ testrail_checked_push.ready_count }} ready to send &middot; {{ testrail_checked_push.no_source_count }} without a source TestRail run{% if testrail_checked_push.skipped_count %} &middot; <span title="Marked &quot;Not sent&quot; in the Checked column: uncheck them, or fix them in TestRail and check them again.">{{ testrail_checked_push.skipped_count }} could not be sent</span>{% endif %}</p>
+    <p x-show="testrailSourcePushStatus !== 'not_pushed'" x-cloak>
+      <template x-if="testrailSourcePushStatus === 'pushing'">
+        <span class="badge badge-running">Sending checked results to TestRail&hellip;</span>
+      </template>
+      <template x-if="testrailSourcePushStatus !== 'pushing'">
+        <span>
+          {% if testrail_checked_push.status == "pushed" %}
+            <span class="badge badge-passed">Sent to TestRail</span>
+            {{ testrail_checked_push.pushed_at|date:"M j, H:i" }} &middot; {{ testrail_checked_push.summary }}
+          {% elif testrail_checked_push.status == "failed" %}
+            <span class="badge badge-failed">Send failed</span>
+            <span class="error-text">{{ testrail_checked_push.error }}</span>
+          {% endif %}
+          {% for source_run in testrail_checked_push.source_runs %}
+            &middot; <a href="{{ source_run.url }}" target="_blank" rel="noopener">Open run R{{ source_run.run_id }}</a>
+          {% endfor %}
+        </span>
+      </template>
+    </p>
+  {% endif %}
+{% endif %}

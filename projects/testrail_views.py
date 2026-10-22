@@ -9,7 +9,7 @@ from django.views.decorators.http import require_POST
 
 from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
-from projects.exceptions import TestRailRunImportError
+from projects.exceptions import CheckedPushError, TestRailRunImportError
 from projects.forms import (
     TestRailImportStartForm,
     TestRailPushStartForm,
@@ -19,6 +19,7 @@ from projects.forms import (
 )
 from projects.models import Project, TestRun
 from projects.services import get_test_run_for_project
+from projects.testrail_checked_push_services import start_checked_push
 from projects.testrail_client import TestRailError, TestRailProject, TestRailSuite
 from projects.testrail_results_services import (
     set_testrail_target,
@@ -423,3 +424,23 @@ def testrail_push_suite(
         messages.error(request, exc.message)
         return _redirect_to_run(project, test_run)
     return _set_target_and_push(request, project, test_run, target, links_base_url)
+
+
+@project_membership_required
+@require_POST
+def testrail_send_checked(
+    request: AuthenticatedRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    """Add each checked, unsent case's result to its source TestRail run."""
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    try:
+        start_checked_push(
+            test_run=test_run, links_base_url=request.build_absolute_uri("/")
+        )
+    except (CheckedPushError, TestRailNotConfiguredError) as exc:
+        messages.error(request, exc.message)
+        return _redirect_to_run(project, test_run)
+    messages.info(request, "Sending checked results to TestRail…")
+    return _redirect_to_run(project, test_run)

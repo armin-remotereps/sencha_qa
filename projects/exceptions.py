@@ -72,3 +72,31 @@ class BrowserUnavailableError(InfrastructureError):
 
 class VisualEngineError(ControllerActionError, InfrastructureError):
     """The visual engine (OmniParser) failed or is not ready."""
+
+
+class RunCaseCheckError(Exception):
+    """No selected case could be checked or unchecked; ``message`` is user-safe."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class CheckedPushError(Exception):
+    """Base for "Send checked to TestRail" refusals; ``message`` is user-safe."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class RunNotFinishedError(CheckedPushError):
+    """The run is still waiting or running."""
+
+
+class NothingToSendError(CheckedPushError):
+    """No checked, unsent case with a source TestRail run."""
+
+
+class CheckedPushInProgressError(CheckedPushError):
+    """A send for this run is already in progress."""

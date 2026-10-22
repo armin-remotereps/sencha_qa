@@ -6,13 +6,25 @@ from typing import Any
 from asgiref.sync import async_to_sync
 from celery import shared_task
 from celery.app.task import Task
+from celery.exceptions import SoftTimeLimitExceeded
 from channels.layers import get_channel_layer
 from django.db import transaction
 
+from projects.checked_push_limits import (
+    CHECKED_PUSH_SOFT_TIME_LIMIT,
+    CHECKED_PUSH_TIME_LIMIT,
+)
 from projects.controller_reconnect_services import max_outage_seconds_per_case
 from projects.models import Project, TestCaseUpload, TestRun, UploadStatus
 from projects.prompt_refiner import refine_project_prompt
 from projects.services import _agent_status_group, save_project_prompt
+from projects.testrail_checked_push_services import (
+    CHECKED_PUSH_TIMEOUT_MESSAGE,
+    get_checked_push_run,
+    mark_checked_push_failed,
+    mark_checked_push_succeeded,
+    push_checked_results,
+)
 from projects.testrail_client import TestRailError
 from projects.testrail_mapping import TestRailFieldMapper
 from projects.testrail_results_services import (
@@ -36,6 +48,9 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 GENERIC_UPLOAD_FAILURE_MESSAGE = "An error occurred while processing the upload."
 GENERIC_PUSH_FAILURE_MESSAGE = "An error occurred while pushing results to TestRail."
+GENERIC_CHECKED_PUSH_FAILURE_MESSAGE = (
+    "An error occurred while sending checked results to TestRail."
+)
 
 
 def _send_upload_progress(upload: TestCaseUpload) -> None:
@@ -126,6 +141,7 @@ def _run_testrail_import(upload: TestCaseUpload) -> None:
         mapper=mapper,
         suite_id=upload.testrail_suite_id,
         positions=positions,
+        source_run_id=None,
         batch_size=50,
         progress_callback=on_batch_processed,
     )
@@ -395,3 +411,80 @@ def push_test_run_results(
             test_run_id,
         )
         mark_testrail_push_failed(test_run, GENERIC_PUSH_FAILURE_MESSAGE)
+
+
+@shared_task(
+    bind=True,
+    name="projects.tasks.push_checked_results_to_testrail",
+    queue="upload",
+    max_retries=0,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=CHECKED_PUSH_SOFT_TIME_LIMIT,
+    time_limit=CHECKED_PUSH_TIME_LIMIT,
+)
+def push_checked_results_to_testrail(
+    self: Task[[int, str, str], None],
+    test_run_id: int,
+    links_base_url: str,
+    slot_token: str,
+) -> None:
+    """Send a run's checked results, with screenshots, to their source runs.
+
+    `slot_token` is the PUSHING slot taken by `start_checked_push`; a
+    redelivered task whose slot was taken over or reset does nothing.
+    """
+    logger.info(
+        "push_checked_results_to_testrail started: task_id=%s test_run_id=%s",
+        self.request.id,
+        test_run_id,
+    )
+
+    test_run = get_checked_push_run(test_run_id, slot_token)
+    if test_run is None:
+        logger.warning(
+            "TestRun id=%s is gone or no longer holds send slot %s; "
+            "skipping task_id=%s",
+            test_run_id,
+            slot_token,
+            self.request.id,
+        )
+        return
+
+    try:
+        outcome = push_checked_results(test_run, links_base_url=links_base_url)
+        mark_checked_push_succeeded(test_run, outcome)
+        logger.info(
+            "push_checked_results_to_testrail completed: task_id=%s test_run_id=%s "
+            "sent=%s screenshots=%s summary=%s",
+            self.request.id,
+            test_run_id,
+            outcome.sent,
+            outcome.screenshots,
+            outcome.summary,
+        )
+    except (TestRailError, TestRailNotConfiguredError) as exc:
+        status_code = exc.status_code if isinstance(exc, TestRailError) else 0
+        logger.warning(
+            "push_checked_results_to_testrail failed (TestRail): task_id=%s "
+            "test_run_id=%s status=%s message=%s",
+            self.request.id,
+            test_run_id,
+            status_code,
+            exc.message,
+        )
+        mark_checked_push_failed(test_run, exc.message)
+    except SoftTimeLimitExceeded:
+        logger.warning(
+            "push_checked_results_to_testrail timed out: task_id=%s test_run_id=%s",
+            self.request.id,
+            test_run_id,
+        )
+        mark_checked_push_failed(test_run, CHECKED_PUSH_TIMEOUT_MESSAGE)
+    except Exception:
+        logger.exception(
+            "push_checked_results_to_testrail failed: task_id=%s test_run_id=%s",
+            self.request.id,
+            test_run_id,
+        )
+        mark_checked_push_failed(test_run, GENERIC_CHECKED_PUSH_FAILURE_MESSAGE)

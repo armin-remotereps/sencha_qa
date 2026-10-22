@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import posixpath
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Final
 
 from projects.models import (
@@ -218,3 +220,124 @@ def build_result_comment(
 def comment_hash(comment: str) -> str:
     """SHA-256 hex digest of a comment body, used to detect unchanged pushes."""
     return hashlib.sha256(comment.encode("utf-8")).hexdigest()
+
+
+CHECKED_PUSH_SUMMARY_MAX: Final = 255
+_ATTACHMENT_LABEL_UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def build_checked_result_comment(
+    *,
+    outcome_label: str,
+    run_name: str,
+    result_text: str,
+    case_url: str,
+    checked_by_label: str,
+    checked_at: datetime,
+    screenshot_count: int,
+) -> str:
+    """The 018 result comment plus who checked it and how many screenshots follow."""
+    paragraphs = [
+        build_result_comment(
+            outcome_label=outcome_label,
+            run_name=run_name,
+            result_text=result_text,
+            case_url=case_url,
+        ),
+        f"Checked by {checked_by_label} on {checked_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC.",
+    ]
+    if screenshot_count > 0:
+        shots = pluralize_count(screenshot_count, "screenshot", "screenshots")
+        paragraphs.append(f"{shots} attached.")
+    return "\n\n".join(paragraphs)
+
+
+def _run_list(run_ids: Sequence[int]) -> str:
+    return ", ".join(f"R{run_id}" for run_id in run_ids)
+
+
+def format_checked_push_summary(
+    *,
+    sent: int,
+    screenshots: int,
+    sent_run_ids: Sequence[int],
+    already_sent: int,
+    not_in_run: Mapping[int, int],
+    missing_runs: Sequence[int],
+    closed_runs: Sequence[int],
+    no_source: int,
+    no_case_id: int,
+    missing_files: int,
+) -> str:
+    """e.g. "7 results sent to R123, R456 · 18 screenshots · 1 not in R123",
+    or "Nothing sent · R7 closed" when nothing went out.
+
+    Truncated to fit `TestRun.testrail_source_push_summary` (255 chars).
+    """
+    results = pluralize_count(sent, "result", "results")
+    shots = pluralize_count(screenshots, "screenshot", "screenshots")
+    # A resumed send may only attach screenshots to results added earlier.
+    head = results if sent else shots if screenshots else "Nothing"
+    head = f"{head} sent"
+    if sent_run_ids:
+        head = f"{head} to {_run_list(sent_run_ids)}"
+    parts = [head]
+    if sent and screenshots:
+        parts.append(shots)
+    if already_sent:
+        parts.append(f"{already_sent} already sent")
+    parts.extend(
+        f"{count} not in R{run_id}"
+        for run_id, count in sorted(not_in_run.items())
+        if count
+    )
+    if missing_runs:
+        parts.append(f"{_run_list(missing_runs)} not found")
+    if closed_runs:
+        parts.append(f"{_run_list(closed_runs)} closed")
+    if no_source:
+        parts.append(f"{no_source} without a source run")
+    if no_case_id:
+        parts.append(f"{no_case_id} without a TestRail ID")
+    if missing_files:
+        parts.append(
+            f"{pluralize_count(missing_files, 'screenshot file', 'screenshot files')} missing"
+        )
+    summary = " · ".join(parts)
+    if len(summary) <= CHECKED_PUSH_SUMMARY_MAX:
+        return summary
+    return summary[: CHECKED_PUSH_SUMMARY_MAX - 1] + "…"
+
+
+def format_checked_push_confirm_body(
+    ready_count: int, run_ids: Sequence[int], screenshot_count: int
+) -> str:
+    """Body of the "Send checked to TestRail" confirm dialog."""
+    if len(run_ids) > 1:
+        runs = f"TestRail runs {_run_list(run_ids[:-1])} and R{run_ids[-1]}"
+    else:
+        runs = f"TestRail run {_run_list(run_ids)}"
+    shots = pluralize_count(screenshot_count, "screenshot", "screenshots")
+    if ready_count == 0:
+        return (
+            f"The remaining {shots} will be attached to results already in {runs}. "
+            "Attachments cannot be removed from here afterwards."
+        )
+    results = pluralize_count(ready_count, "result", "results")
+    with_shots = f", with {shots}" if screenshot_count else ""
+    return (
+        f"{results} will be added to {runs}{with_shots}. "
+        "Results cannot be removed from TestRail afterwards."
+    )
+
+
+def screenshot_attachment_filename(case_id: int, index: int, image_name: str) -> str:
+    """Attachment name such as "C123_02_click.png" from a stored screenshot path.
+
+    `index` is 1-based. Stored names look like "<ms>_<tool>.png"; the tool
+    part becomes the label so TestRail lists the shots in a readable order.
+    """
+    stem, extension = posixpath.splitext(posixpath.basename(image_name))
+    tool = stem.split("_", 1)[1] if "_" in stem else stem
+    label = _ATTACHMENT_LABEL_UNSAFE.sub("-", tool).strip("-") or "screenshot"
+    return f"C{case_id}_{index:02d}_{label}{extension.lower() or '.png'}"

@@ -107,7 +107,7 @@ def build_case_detail_url(
     return f"{links_base_url.rstrip('/')}{path}"
 
 
-def _pivot_result_text(pivot: TestRunTestCase) -> str:
+def pivot_result_text(pivot: TestRunTestCase) -> str:
     """The result text for the comment; blocked cases lead with their reason."""
     if pivot.status == TestRunTestCaseStatus.BLOCKED:
         return format_blocked_result_text(
@@ -129,7 +129,7 @@ def _plan_pivot(
     comment = build_result_comment(
         outcome_label=testrail_outcome_label(status_id),
         run_name=test_run.display_name,
-        result_text=_pivot_result_text(pivot),
+        result_text=pivot_result_text(pivot),
         case_url=build_case_detail_url(
             test_run, pivot.id, links_base_url=links_base_url
         ),

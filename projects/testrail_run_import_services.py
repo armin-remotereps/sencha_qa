@@ -285,6 +285,7 @@ def import_testrail_run_cases(
         mapper=mapper,
         suite_id=upload.testrail_suite_id,
         positions=positions,
+        source_run_id=upload.testrail_run_id,
         batch_size=50,
         progress_callback=on_batch_processed,
     )

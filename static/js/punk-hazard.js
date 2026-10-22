@@ -85,7 +85,7 @@ document.addEventListener("alpine:init", () => {
    * (e.g. templates/projects/test_cases.html). `allIds` is the full list
    * of selectable row ids on the current page.
    */
-  Alpine.data("bulkSelect", (allIds = []) => ({
+  const bulkSelectState = (allIds = []) => ({
     allIds,
     selected: [],
 
@@ -113,7 +113,33 @@ document.addEventListener("alpine:init", () => {
     clear() {
       this.selected = [];
     },
-  }));
+  });
+
+  Alpine.data("bulkSelect", bulkSelectState);
+
+  /**
+   * Check / Uncheck selection for a run's case results table
+   * (templates/projects/test_run_detail.html). A `bulkSelect` over both id
+   * lists, plus `toCheck` / `toUncheck`: the selected ids each action
+   * applies to. Getters are copied as descriptors so they stay live.
+   */
+  Alpine.data("runCaseChecks", (checkIds = [], uncheckIds = []) =>
+    Object.defineProperties(
+      bulkSelectState([...checkIds, ...uncheckIds]),
+      Object.getOwnPropertyDescriptors({
+        checkIds,
+        uncheckIds,
+
+        get toCheck() {
+          return this.selected.filter((id) => this.checkIds.includes(id));
+        },
+
+        get toUncheck() {
+          return this.selected.filter((id) => this.uncheckIds.includes(id));
+        },
+      }),
+    ),
+  );
 
   /**
    * Copy-to-clipboard button. `copied` flips back to false after 1.5s so

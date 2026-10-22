@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -12,6 +12,11 @@ TESTRAIL_MAX_RATE_LIMIT_RETRIES = 3
 TESTRAIL_MAX_RETRY_AFTER_SECONDS = 30.0
 _DEFAULT_RETRY_AFTER_SECONDS = 5.0
 _API_PREFIX = "/index.php?/api/v2/"
+_JSON_HEADERS: Mapping[str, str] = {"Content-Type": "application/json"}
+
+# Multipart upload parts as httpx takes them: field -> (filename, bytes, type).
+# Bytes, never a file handle, so a 429 retry resends the same content.
+MultipartFiles = Mapping[str, tuple[str, bytes, str]]
 
 
 class TestRailError(Exception):
@@ -230,9 +235,10 @@ class TestRailClient:
     ) -> None:
         self._base_url = url.rstrip("/")
         self._sleep = sleep
+        # No default Content-Type: it would override the multipart boundary of
+        # attachment uploads. GETs set JSON explicitly; `json=` sets it on POST.
         self._http = httpx.Client(
             auth=(email, api_key),
-            headers={"Content-Type": "application/json"},
             timeout=timeout,
             transport=transport,
         )
@@ -287,6 +293,15 @@ class TestRailClient:
             f"&limit={TESTRAIL_PAGE_SIZE}"
         )
         return [_parse_section(raw) for raw in self._paginate(method, "sections")]
+
+    def get_run_case_ids(self, run_id: int) -> set[int]:
+        """The TestRail case ids of every test in a run (paginated `get_tests`)."""
+        method = f"get_tests/{run_id}&limit={TESTRAIL_PAGE_SIZE}"
+        return {
+            int(raw["case_id"])
+            for raw in self._paginate(method, "tests")
+            if raw.get("case_id") is not None
+        }
 
     def iter_run_cases(self, run_id: int) -> Iterator[TestRailCase]:
         """Yield the case behind each test in a run; tests carry the case fields."""
@@ -357,6 +372,29 @@ class TestRailClient:
             )
         return [_parse_result(raw) for raw in raw_results]
 
+    def add_attachment_to_result(
+        self,
+        result_id: int,
+        *,
+        filename: str,
+        content: bytes,
+        content_type: str = "image/png",
+    ) -> str:
+        """Attach a file to an existing result; returns the attachment id.
+
+        The id is an int on TestRail Server and older Cloud and a UUID on
+        newer Cloud, so it is returned as text and only used for logging.
+        """
+        files: MultipartFiles = {"attachment": (filename, content, content_type)}
+        data = self._parse_json_response(
+            self._request_with_rate_limit_retry(
+                f"add_attachment_to_result/{result_id}", files=files
+            )
+        )
+        if not isinstance(data, dict) or data.get("attachment_id") is None:
+            raise TestRailError("TestRail returned an unexpected response shape.", 200)
+        return str(data["attachment_id"])
+
     # -- transport helpers ---------------------------------------------------
 
     def _paginate(
@@ -424,7 +462,7 @@ class TestRailClient:
         self, method: str, body: dict[str, Any]
     ) -> Any:  # JSON payloads are untyped by nature
         return self._parse_json_response(
-            self._request_with_rate_limit_retry(method, body)
+            self._request_with_rate_limit_retry(method, json_body=body)
         )
 
     def _parse_json_response(
@@ -440,13 +478,18 @@ class TestRailClient:
             ) from exc
 
     def _request_with_rate_limit_retry(
-        self, method: str, json_body: dict[str, Any] | None = None
+        self,
+        method: str,
+        *,
+        json_body: dict[str, Any] | None = None,  # request body, untyped JSON
+        files: MultipartFiles | None = None,
     ) -> httpx.Response:
+        """GET when neither body is given, else POST JSON or multipart files."""
         url = f"{self._base_url}{_API_PREFIX}{method}"
         attempts = 0
         while True:
             try:
-                response = self._send_request(url, json_body)
+                response = self._send_request(url, json_body=json_body, files=files)
             except httpx.HTTPError as exc:
                 raise TestRailError(f"Could not reach TestRail: {exc}", 0) from exc
             if (
@@ -458,11 +501,17 @@ class TestRailClient:
             self._sleep(self._retry_after_seconds(response))
 
     def _send_request(
-        self, url: str, json_body: dict[str, Any] | None
+        self,
+        url: str,
+        *,
+        json_body: dict[str, Any] | None,  # request body, untyped JSON
+        files: MultipartFiles | None,
     ) -> httpx.Response:
-        if json_body is None:
-            return self._http.get(url)
-        return self._http.post(url, json=json_body)
+        if files is not None:
+            return self._http.post(url, files=files)
+        if json_body is not None:
+            return self._http.post(url, json=json_body)
+        return self._http.get(url, headers=_JSON_HEADERS)
 
     @staticmethod
     def _retry_after_seconds(response: httpx.Response) -> float:

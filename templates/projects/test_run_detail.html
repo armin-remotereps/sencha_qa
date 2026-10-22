@@ -21,7 +21,14 @@
      edit-case dialog's type/priority choices), can_edit, per_page,
      allowed_per_page, elided_page_range, query_params,
      testrail_push (projects.testrail_results_services.TestRailPushPanel),
-     testrail_push_confirm_body (str, the push confirm dialog's body text).
+     testrail_push_confirm_body (str, the push confirm dialog's body text),
+     testrail_checked_push (projects.testrail_checked_push_services.CheckedPushPanel,
+     consumed by the two _testrail_checked_push_* includes),
+     checkable_pivot_ids / uncheckable_pivot_ids (list[int], ids on this page
+     that can be checked / unchecked; together they are the bulk selection).
+
+     test_run also carries testrail_source_push_status; testRunLive exposes it
+     as `testrailSourcePushStatus` (WS message "testrail_source_push").
 
      test_run also carries testrail_run_id, testrail_push_status,
      testrail_pushed_at, testrail_push_error, testrail_push_summary.
@@ -126,6 +133,8 @@
       {% endif %}
       {% endif %}
 
+      {% include "projects/includes/_testrail_checked_push_actions.html" %}
+
       <button type="button" class="btn btn-danger" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak @click="$dispatch('open-reset-run')">Reset run</button>
     </div>
   </div>
@@ -155,6 +164,8 @@
       </template>
     {% endif %}
   </p>
+
+  {% include "projects/includes/_testrail_checked_push_status.html" %}
 
   {% include "partials/project_tabs.html" with project=project active_tab=active_tab only %}
 
@@ -208,18 +219,49 @@
     </div>
   </template>
 
-  {# Section: Case-level results, failures first #}
+  {% comment %} Section: Case-level results, failures first. runCaseChecks scope (a
+     bulkSelect over the page's checkable + uncheckable pivots); the Check and
+     Uncheck forms each post only the selected ids valid for them
+     (`toCheck` / `toUncheck`). {% endcomment %}
+  {% url 'projects:test_run_detail' project.id test_run.id as test_run_detail_url %}
+  <div x-data="runCaseChecks([{% for pid in checkable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}], [{% for pid in uncheckable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}])">
   <div class="card">
     <div class="card-header">
       <h2>Case results</h2>
     </div>
-    <p class="hint">Logs and screenshots are recorded per case. Open a case to see its full execution log and every screenshot the agent took.</p>
+    <p class="hint">Logs and screenshots are recorded per case. Open a case to see its full execution log and every screenshot the agent took. Select finished cases to mark their result as checked.</p>
+
+    <div class="bulk-bar" x-show="count > 0" x-cloak>
+      <span x-text="count + ' selected'"></span>
+      <form method="post" action="{% url 'projects:test_run_cases_check' project.id test_run.id %}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ test_run_detail_url }}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}">
+        <template x-for="id in toCheck" :key="id">
+          <input type="hidden" name="pivot_ids" :value="id">
+        </template>
+        <button type="submit" class="btn btn-sm btn-primary" :disabled="toCheck.length === 0" x-text="'Check (' + toCheck.length + ')'">Check</button>
+      </form>
+      <form method="post" action="{% url 'projects:test_run_cases_uncheck' project.id test_run.id %}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ test_run_detail_url }}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}">
+        <template x-for="id in toUncheck" :key="id">
+          <input type="hidden" name="pivot_ids" :value="id">
+        </template>
+        <button type="submit" class="btn btn-sm btn-secondary" :disabled="toUncheck.length === 0" x-text="'Uncheck (' + toUncheck.length + ')'">Uncheck</button>
+      </form>
+      <button type="button" class="btn btn-sm btn-ghost" @click="clear()">Clear</button>
+    </div>
+
     <div class="table-wrap">
       <table class="data-table">
         <thead>
           <tr>
+            <th scope="col" class="cell-check">
+              <input type="checkbox" aria-label="Select all selectable cases on this page" :checked="allSelected" :disabled="allIds.length === 0" @change="toggleAll()">
+            </th>
             <th scope="col">Case</th>
             <th scope="col">Result</th>
+            <th scope="col">Checked</th>
             <th scope="col">Duration</th>
             <th scope="col">Reason</th>
             {% if can_edit %}<th scope="col" x-show="testRunStatus === 'waiting'" x-cloak><span class="visually-hidden">Edit / remove</span></th>{% endif %}
@@ -229,6 +271,17 @@
         <tbody>
           {% for pivot in cases %}
           <tr data-pivot-id="{{ pivot.id }}">
+            <td data-label="" class="cell-check">
+              {% if pivot.id in checkable_pivot_ids or pivot.id in uncheckable_pivot_ids %}
+              <input type="checkbox" aria-label="Select {{ pivot.test_case.title }}" :checked="selected.includes({{ pivot.id }})" @change="toggle({{ pivot.id }})">
+              {% elif pivot.testrail_source_result_id %}
+              <input type="checkbox" disabled checked aria-label="{{ pivot.test_case.title }}: already sent to TestRail, can't be unchecked" title="Already sent to TestRail">
+              {% elif pivot.status == "cancelled" %}
+              <input type="checkbox" disabled aria-label="{{ pivot.test_case.title }}: cancelled cases have no verdict to check" title="Cancelled: no verdict to check">
+              {% else %}
+              <input type="checkbox" disabled aria-label="{{ pivot.test_case.title }}: not finished yet, no verdict to check" title="Not finished yet: no verdict to check">
+              {% endif %}
+            </td>
             <td data-label="Case" class="cell-primary">
               <a href="{% url 'projects:test_run_case_detail' project.id test_run.id pivot.id %}">{{ pivot.test_case.title }}</a>
               {% if pivot.test_case.testrail_id %}<div class="muted small">{{ pivot.test_case.testrail_id }}</div>{% endif %}
@@ -240,6 +293,18 @@
                 :class="pivotBadgeClass(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
                 x-text="pivotBadgeLabel(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
               >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% endif %}</span>
+            </td>
+            <td data-label="Checked">
+              {% if pivot.testrail_source_result_id %}
+                <span class="badge badge-passed" title="Checked by {{ pivot.checked_by.get_full_name|default:pivot.checked_by.email|default:'a removed user' }}, {{ pivot.checked_at|date:'M j, H:i' }}">Sent to R{{ pivot.testrail_source_run_id }}</span>
+                {% if pivot.testrail_source_skip_reason %}<div>{% include "projects/includes/_checked_skip_reason.html" with pivot=pivot only %}</div>{% endif %}
+              {% elif pivot.checked_at and pivot.testrail_source_skip_reason %}
+                {% include "projects/includes/_checked_skip_reason.html" with pivot=pivot only %}
+              {% elif pivot.checked_at %}
+                <span class="badge badge-passed" title="by {{ pivot.checked_by.get_full_name|default:pivot.checked_by.email|default:'a removed user' }}, {{ pivot.checked_at|date:'M j, H:i' }}">Checked</span>
+              {% else %}
+                <span class="muted">&mdash;</span>
+              {% endif %}
             </td>
             <td data-label="Duration">{% if pivot.finished_at and pivot.started_at %}{{ pivot.started_at|timesince:pivot.finished_at }}{% else %}—{% endif %}</td>
             <td data-label="Reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
@@ -275,6 +340,7 @@
     {% if not cases %}
       {% include "partials/empty_state.html" with icon="▤" title="No cases in this run" body="Add test cases to this draft run before starting it." primary_label="Add cases" primary_url=test_case_list_url only %}
     {% endif %}
+  </div>
   </div>
 
   {% include "partials/pagination.html" with page_obj=cases per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range query_params=query_params %}
@@ -438,6 +504,7 @@ document.addEventListener('alpine:init', () => {
   Alpine.data('testRunLive', () => ({
     testRunStatus: '{{ test_run.status }}',
     testrailPushStatus: '{{ test_run.testrail_push_status }}',
+    testrailSourcePushStatus: '{{ testrail_checked_push.status }}',
     summary: {
       total: {{ summary.total }},
       created: {{ summary.created }},
@@ -489,6 +556,21 @@ document.addEventListener('alpine:init', () => {
           );
           if (data.testrail_push_status) {
             this.testrailPushStatus = data.testrail_push_status;
+          }
+          if (data.testrail_source_push_status) {
+            this.testrailSourcePushStatus = data.testrail_source_push_status;
+          }
+          return;
+        }
+
+        if (data.type === 'testrail_source_push') {
+          const previousSourcePushStatus = this.testrailSourcePushStatus;
+          this.testrailSourcePushStatus = data.push_status;
+          const justSettled = data.push_status === 'pushed' || data.push_status === 'failed';
+          if (justSettled && previousSourcePushStatus !== data.push_status) {
+            // The sent-at time, summary/error text and the rows' "Sent to R…"
+            // marks are server-rendered — reload once to pick them up.
+            setTimeout(() => window.location.reload(), 1000);
           }
           return;
         }

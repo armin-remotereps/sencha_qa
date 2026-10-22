@@ -1,0 +1,41 @@
+{% comment %} "Send checked to TestRail" header action on the run detail page: the
+   button plus its confirm dialog. Renders nothing unless TestRail is
+   configured and at least one case in the run has a source TestRail run
+   (the status partial explains why otherwise). Like the 018 push button it
+   only shows for finished runs, and Alpine locks it while a send is running.
+
+   Must sit inside the page's `testRunLive` Alpine root (reads
+   `testRunStatus` and `testrailSourcePushStatus`).
+
+   Context contract:
+     project                — current Project
+     test_run               — current TestRun
+     testrail_checked_push  — projects.testrail_checked_push_services.CheckedPushPanel
+                              (used here: .configured, .has_any_source, .can_send,
+                              .ready_count, .resume_count, .confirm_body,
+                              .disabled_reason) {% endcomment %}
+{% if testrail_checked_push.configured and testrail_checked_push.has_any_source %}
+  {% if testrail_checked_push.can_send %}
+    <button
+      type="button"
+      class="btn btn-secondary"
+      x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'"
+      x-cloak
+      :disabled="testrailSourcePushStatus === 'pushing'"
+      :title="testrailSourcePushStatus === 'pushing' ? 'A send is already in progress' : null"
+      @click="$dispatch('open-send-checked-testrail')"
+    >{% if testrail_checked_push.ready_count %}Send checked to TestRail ({{ testrail_checked_push.ready_count }}){% else %}Finish sending to TestRail{% endif %}</button>
+    {% url 'projects:testrail_send_checked' project.id test_run.id as testrail_send_checked_url %}
+    {% include "partials/confirm_dialog.html" with dialog_id="send-checked-testrail" title="Send checked results to TestRail?" body=testrail_checked_push.confirm_body confirm_label="Send to TestRail" confirm_class="btn-primary" action_url=testrail_send_checked_url %}
+  {% else %}
+    <button
+      type="button"
+      class="btn btn-secondary"
+      x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'"
+      x-cloak
+      disabled
+      aria-disabled="true"
+      title="{{ testrail_checked_push.disabled_reason }}"
+    >Send checked to TestRail ({{ testrail_checked_push.ready_count }})</button>
+  {% endif %}
+{% endif %}

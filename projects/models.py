@@ -91,6 +91,15 @@ class TestRailPushStatus(models.TextChoices):
     FAILED = "failed", "Failed"
 
 
+class CheckedPushSkipReason(models.TextChoices):
+    """Why a checked case's result could not be sent to its source TestRail run."""
+
+    NOT_IN_RUN = "not_in_run", "Not in the source run"
+    RUN_CLOSED = "run_closed", "Source run closed"
+    RUN_MISSING = "run_missing", "Source run not found"
+    NO_CASE_ID = "no_case_id", "No TestRail case ID"
+
+
 class Tag(models.Model):
     name = models.CharField(max_length=50, unique=True, db_index=True)
 
@@ -232,6 +241,8 @@ class TestCase(models.Model):
     # TestRail suite order, written by imports only (never by TestCaseData).
     testrail_suite_id = models.PositiveIntegerField(null=True, blank=True)
     testrail_position = models.PositiveIntegerField(null=True, blank=True)
+    # The TestRail run this case was last imported from with a run link.
+    testrail_source_run_id = models.PositiveIntegerField(null=True, blank=True)
     title = models.CharField(max_length=500)
     template = models.CharField(max_length=100, default="Test Case")
     type = models.CharField(
@@ -296,6 +307,18 @@ class TestRun(models.Model):
     testrail_pushed_at = models.DateTimeField(null=True, blank=True)
     testrail_push_error = models.TextField(blank=True, default="")
     testrail_push_summary = models.CharField(max_length=255, blank=True, default="")
+    # "Send checked to TestRail": kept apart from the whole-run push fields above.
+    testrail_source_push_status = models.CharField(
+        max_length=20,
+        choices=TestRailPushStatus.choices,
+        default=TestRailPushStatus.NOT_PUSHED,
+    )
+    testrail_source_push_started_at = models.DateTimeField(null=True, blank=True)
+    testrail_source_pushed_at = models.DateTimeField(null=True, blank=True)
+    testrail_source_push_error = models.TextField(blank=True, default="")
+    testrail_source_push_summary = models.CharField(
+        max_length=255, blank=True, default=""
+    )
 
     def __str__(self) -> str:
         return f"TestRun #{self.pk} — {self.project.name}"
@@ -342,6 +365,27 @@ class TestRunTestCase(models.Model):
         max_length=64, blank=True, default=""
     )
     testrail_pushed_at = models.DateTimeField(null=True, blank=True)
+    # Snapshot of test_case.testrail_source_run_id taken when the pivot is created.
+    testrail_source_run_id = models.PositiveIntegerField(null=True, blank=True)
+    # Null means no human has checked the verdict.
+    checked_at = models.DateTimeField(null=True, blank=True)
+    checked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    # Set once the result is added to the source run; the dedupe key.
+    testrail_source_result_id = models.PositiveIntegerField(null=True, blank=True)
+    testrail_source_sent_at = models.DateTimeField(null=True, blank=True)
+    # Screenshots already attached to that result; a re-send resumes from here.
+    testrail_source_attachment_count = models.PositiveSmallIntegerField(default=0)
+    # Set when a send could not deliver this case; it is left out of later
+    # sends until unchecked (or the run is reset).
+    testrail_source_skip_reason = models.CharField(
+        max_length=32, choices=CheckedPushSkipReason.choices, blank=True, default=""
+    )
 
     class Meta:
         unique_together = ("test_run", "test_case")

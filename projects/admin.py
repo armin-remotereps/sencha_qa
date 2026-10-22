@@ -145,7 +145,17 @@ class TestRunTestCaseAdmin(admin.ModelAdmin[TestRunTestCase]):
         "created_at",
     )
     list_filter = ("status",)
-    readonly_fields = ("status", "result", "logs")
+    readonly_fields = (
+        "status",
+        "result",
+        "logs",
+        "testrail_source_run_id",
+        "checked_at",
+        "checked_by",
+        "testrail_source_result_id",
+        "testrail_source_sent_at",
+        "testrail_source_attachment_count",
+    )
     inlines = [TestRunScreenshotInline]
 
 

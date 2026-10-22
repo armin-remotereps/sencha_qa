@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, cast
 from urllib.parse import urlsplit
 
@@ -240,6 +241,50 @@ class TestRunCreateForm(forms.Form):
             (case_id, str(case_id))
             for case_id in project.test_cases.values_list("id", flat=True)
         ]
+
+
+RUN_CASE_SELECTION_MAX_IDS = 500
+
+
+class RunCaseSelectionForm(forms.Form):
+    """Selected run cases (pivot ids) for Check / Uncheck on a test run.
+
+    The caller supplies the allowed ids (the run's checkable or uncheckable
+    pivots), so the choices double as membership validation.
+    """
+
+    pivot_ids = forms.TypedMultipleChoiceField(
+        label="Cases",
+        coerce=int,
+        choices=(),
+        required=True,
+        widget=forms.MultipleHiddenInput,
+        error_messages={
+            "required": "Select at least one case.",
+            "invalid_choice": "Some selected cases can no longer be changed. "
+            "Reload the page and try again.",
+        },
+    )
+
+    def __init__(
+        self,
+        allowed_ids: Sequence[int],
+        data: QueryDict | dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(data, **kwargs)
+        # django-stubs types `self.fields[...]` as the base `Field`; this is
+        # the TypedMultipleChoiceField declared above.
+        pivot_ids_field = cast(forms.TypedMultipleChoiceField, self.fields["pivot_ids"])
+        pivot_ids_field.choices = [(pid, str(pid)) for pid in allowed_ids]
+
+    def clean_pivot_ids(self) -> list[int]:
+        pivot_ids: list[int] = self.cleaned_data["pivot_ids"]
+        if len(pivot_ids) > RUN_CASE_SELECTION_MAX_IDS:
+            raise forms.ValidationError(
+                f"Select at most {RUN_CASE_SELECTION_MAX_IDS} cases at a time."
+            )
+        return pivot_ids
 
 
 def _field_label(form: BaseForm, field_name: str) -> str:

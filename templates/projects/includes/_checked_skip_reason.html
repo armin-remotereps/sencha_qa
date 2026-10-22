@@ -1,0 +1,24 @@
+{% comment %} Why a checked case was not sent to its source TestRail run, as a warning
+   badge with a title saying how to fix it. Used by the run detail Checked
+   column and the case detail header.
+
+   Context contract:
+     pivot — TestRunTestCase with a non-empty testrail_source_skip_reason
+             (uses .testrail_source_skip_reason, .testrail_source_run_id,
+             .testrail_source_result_id) {% endcomment %}
+{% if pivot.testrail_source_result_id %}
+  {% comment %} Sent result whose remaining screenshots cannot be attached. {% endcomment %}
+  {% if pivot.testrail_source_skip_reason == "run_closed" %}
+    <span class="badge badge-warning" title="TestRail run R{{ pivot.testrail_source_run_id }} was closed before every screenshot was attached; the rest cannot be added.">Screenshots incomplete: R{{ pivot.testrail_source_run_id }} closed</span>
+  {% else %}
+    <span class="badge badge-warning" title="TestRail run R{{ pivot.testrail_source_run_id }} could not be found, so the remaining screenshots were not attached.">Screenshots incomplete: R{{ pivot.testrail_source_run_id }} not found</span>
+  {% endif %}
+{% elif pivot.testrail_source_skip_reason == "not_in_run" %}
+  <span class="badge badge-warning" title="This case is not part of TestRail run R{{ pivot.testrail_source_run_id }}. Uncheck it, or add the case to the run in TestRail and check it again.">Not sent: not in R{{ pivot.testrail_source_run_id }}</span>
+{% elif pivot.testrail_source_skip_reason == "run_closed" %}
+  <span class="badge badge-warning" title="TestRail run R{{ pivot.testrail_source_run_id }} is closed and accepts no more results. Uncheck the case to clear this.">Not sent: R{{ pivot.testrail_source_run_id }} closed</span>
+{% elif pivot.testrail_source_skip_reason == "run_missing" %}
+  <span class="badge badge-warning" title="TestRail run R{{ pivot.testrail_source_run_id }} was not found. Uncheck the case, or fix it in TestRail and check it again.">Not sent: R{{ pivot.testrail_source_run_id }} not found</span>
+{% elif pivot.testrail_source_skip_reason == "no_case_id" %}
+  <span class="badge badge-warning" title="This case has no TestRail case ID. Uncheck it, or fix the ID and check it again.">Not sent: no TestRail ID</span>
+{% endif %}

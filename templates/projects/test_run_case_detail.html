@@ -16,7 +16,12 @@
      test_run, screenshots prefetched), screenshots (list, same queryset),
      form (TestCaseForm, for the edit dialog's type/priority choices),
      can_edit, case_position (1-based index of this case within the run),
-     case_total (total case count for the run).
+     case_total (total case count for the run),
+     can_check (verdict reached and not checked), can_uncheck (checked and
+     not yet sent to TestRail), source_run_url (TestRail URL of the source
+     run the result was sent to; "" when not sent or TestRail unconfigured).
+     pivot.testrail_source_skip_reason is set when a send could not deliver
+     the case (shown via includes/_checked_skip_reason.html).
 
      pivot.blocked_reason / pivot.get_blocked_reason_display are set only when
      status is "blocked"; the blocked message itself is pivot.result. The case
@@ -58,6 +63,34 @@
       </p>
     </div>
     <div class="actions">
+      {% url 'projects:test_run_case_detail' project.id test_run.id pivot.id as case_detail_url %}
+      {% if pivot.checked_at %}
+        <span class="badge badge-passed">Checked by {{ pivot.checked_by.get_full_name|default:pivot.checked_by.email|default:"a removed user" }} &middot; {{ pivot.checked_at|date:"M j, H:i" }}</span>
+      {% endif %}
+      {% if pivot.testrail_source_skip_reason %}
+        {% include "projects/includes/_checked_skip_reason.html" with pivot=pivot only %}
+      {% endif %}
+      {% if pivot.testrail_source_result_id %}
+        {% if source_run_url %}
+        <a class="badge badge-passed" href="{{ source_run_url }}" target="_blank" rel="noopener">Sent to TestRail R{{ pivot.testrail_source_run_id }}</a>
+        {% else %}
+        <span class="badge badge-passed">Sent to TestRail R{{ pivot.testrail_source_run_id }}</span>
+        {% endif %}
+      {% elif can_uncheck %}
+        <form method="post" action="{% url 'projects:test_run_cases_uncheck' project.id test_run.id %}">
+          {% csrf_token %}
+          <input type="hidden" name="pivot_ids" value="{{ pivot.id }}">
+          <input type="hidden" name="next" value="{{ case_detail_url }}">
+          <button type="submit" class="btn btn-secondary">Uncheck</button>
+        </form>
+      {% elif can_check %}
+        <form method="post" action="{% url 'projects:test_run_cases_check' project.id test_run.id %}">
+          {% csrf_token %}
+          <input type="hidden" name="pivot_ids" value="{{ pivot.id }}">
+          <input type="hidden" name="next" value="{{ case_detail_url }}">
+          <button type="submit" class="btn btn-primary">Mark as checked</button>
+        </form>
+      {% endif %}
       {% if can_edit %}
       <button type="button" class="btn btn-secondary" x-show="testRunStatus !== 'started'" x-cloak @click="$dispatch('open-edit-case')">Edit test case</button>
       {% endif %}

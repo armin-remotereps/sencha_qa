@@ -60,6 +60,7 @@ from controller_client.protocol import (
     parse_omniparser_status_payload,
 )
 from projects.case_blocking import blocked_message, classify_case_exception
+from projects.checked_push_limits import is_checked_push_live
 from projects.controller_outage_clock import agent_monotonic, reset_outage_clock
 from projects.controller_reconnect_services import (
     CONTROLLER_POLL_INTERVAL_SECONDS,
@@ -1966,7 +1967,14 @@ def create_test_run_with_cases(
 ) -> TestRun:
     test_run = TestRun.objects.create(project=project, name=name)
     valid_cases = TestCase.objects.filter(id__in=test_case_ids, project=project)
-    pivots = [TestRunTestCase(test_run=test_run, test_case=tc) for tc in valid_cases]
+    pivots = [
+        TestRunTestCase(
+            test_run=test_run,
+            test_case=tc,
+            testrail_source_run_id=tc.testrail_source_run_id,
+        )
+        for tc in valid_cases
+    ]
     TestRunTestCase.objects.bulk_create(pivots)
     return test_run
 
@@ -1986,7 +1994,11 @@ def add_cases_to_test_run(*, test_run: TestRun, test_case_ids: list[int]) -> int
         test_run.pivot_entries.values_list("test_case_id", flat=True)
     )
     new_pivots = [
-        TestRunTestCase(test_run=test_run, test_case=tc)
+        TestRunTestCase(
+            test_run=test_run,
+            test_case=tc,
+            testrail_source_run_id=tc.testrail_source_run_id,
+        )
         for tc in valid_cases
         if tc.id not in existing_case_ids
     ]
@@ -2030,7 +2042,9 @@ def get_case_position(pivot: TestRunTestCase) -> tuple[int, int]:
 def get_test_run_case_detail(pivot_id: int, project: Project) -> TestRunTestCase | None:
     try:
         return (
-            TestRunTestCase.objects.select_related("test_run", "test_case")
+            TestRunTestCase.objects.select_related(
+                "test_run", "test_case", "checked_by"
+            )
             .prefetch_related(
                 Prefetch(
                     "screenshots",
@@ -2052,7 +2066,7 @@ def list_test_run_cases(
     TestRail order within each group.
     """
     qs = (
-        test_run.pivot_entries.select_related("test_case")
+        test_run.pivot_entries.select_related("test_case", "checked_by")
         .annotate(
             _failure_priority=Case(
                 When(status=TestRunTestCaseStatus.FAILED, then=0),
@@ -2091,8 +2105,24 @@ def remove_case_from_test_run(test_run: TestRun, pivot_id: int) -> None:
 
 @transaction.atomic
 def reset_test_run(test_run: TestRun) -> None:
-    if test_run.status not in (TestRunStatus.DONE, TestRunStatus.CANCELLED):
+    # Lock the row so a concurrent "Send checked to TestRail" cannot take the
+    # push slot between this check and the reset (its slot UPDATE waits, then
+    # no longer matches a WAITING run).
+    locked = (
+        TestRun.objects.select_for_update()
+        .only(
+            "id",
+            "status",
+            "testrail_source_push_status",
+            "testrail_source_push_started_at",
+        )
+        .get(pk=test_run.pk)
+    )
+    if locked.status not in (TestRunStatus.DONE, TestRunStatus.CANCELLED):
         raise ValueError("Only completed or cancelled test runs can be reset.")
+    # A stale PUSHING (killed worker) does not block the reset.
+    if is_checked_push_live(locked, timezone.now()):
+        raise ValueError("Wait for the checked results to finish sending to TestRail.")
     for pivot in test_run.pivot_entries.all():
         for screenshot in pivot.screenshots.all():
             screenshot.image.delete(save=False)
@@ -2103,6 +2133,12 @@ def reset_test_run(test_run: TestRun) -> None:
         pivot.logs = ""
         pivot.started_at = None
         pivot.finished_at = None
+        pivot.checked_at = None
+        pivot.checked_by = None
+        pivot.testrail_source_result_id = None
+        pivot.testrail_source_sent_at = None
+        pivot.testrail_source_attachment_count = 0
+        pivot.testrail_source_skip_reason = ""
         pivot.save(
             update_fields=[
                 "status",
@@ -2111,6 +2147,12 @@ def reset_test_run(test_run: TestRun) -> None:
                 "logs",
                 "started_at",
                 "finished_at",
+                "checked_at",
+                "checked_by",
+                "testrail_source_result_id",
+                "testrail_source_sent_at",
+                "testrail_source_attachment_count",
+                "testrail_source_skip_reason",
                 "updated_at",
             ]
         )
@@ -2122,6 +2164,11 @@ def reset_test_run(test_run: TestRun) -> None:
     test_run.testrail_pushed_at = None
     test_run.testrail_push_error = ""
     test_run.testrail_push_summary = ""
+    test_run.testrail_source_push_status = TestRailPushStatus.NOT_PUSHED
+    test_run.testrail_source_push_started_at = None
+    test_run.testrail_source_pushed_at = None
+    test_run.testrail_source_push_error = ""
+    test_run.testrail_source_push_summary = ""
     test_run.save(
         update_fields=[
             "status",
@@ -2132,6 +2179,11 @@ def reset_test_run(test_run: TestRun) -> None:
             "testrail_pushed_at",
             "testrail_push_error",
             "testrail_push_summary",
+            "testrail_source_push_status",
+            "testrail_source_push_started_at",
+            "testrail_source_pushed_at",
+            "testrail_source_push_error",
+            "testrail_source_push_summary",
             "updated_at",
         ]
     )
@@ -2206,14 +2258,15 @@ def rerun_cases(test_run: TestRun, scope: RerunScope) -> TestRun:
 
     Only DONE/CANCELLED runs qualify — a run still in progress has no stable
     set of cases to copy yet. The TestRail target is copied so pushing the new
-    run adds its verdicts to the same TestRail run.
+    run adds its verdicts to the same TestRail run, and each case keeps its
+    source TestRail run so its checked result can be sent there.
     """
-    case_ids = list(
+    rows = list(
         test_run.pivot_entries.filter(status=_RERUN_SCOPE_STATUS[scope]).values_list(
-            "test_case_id", flat=True
+            "test_case_id", "testrail_source_run_id"
         )
     )
-    if not can_rerun_cases(test_run, len(case_ids)):
+    if not can_rerun_cases(test_run, len(rows)):
         raise ValueError(
             f"Only completed or cancelled runs with {scope.value} cases can be rerun."
         )
@@ -2226,7 +2279,10 @@ def rerun_cases(test_run: TestRun, scope: RerunScope) -> TestRun:
         testrail_run_id=test_run.testrail_run_id,
     )
     pivots = [
-        TestRunTestCase(test_run=new_run, test_case_id=case_id) for case_id in case_ids
+        TestRunTestCase(
+            test_run=new_run, test_case_id=case_id, testrail_source_run_id=source_run_id
+        )
+        for case_id, source_run_id in rows
     ]
     TestRunTestCase.objects.bulk_create(pivots)
     return new_run

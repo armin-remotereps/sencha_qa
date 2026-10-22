@@ -376,9 +376,17 @@ def _apply_order(
 
 
 def _new_test_case(
-    project: Project, upload: TestCaseUpload, data: TestCaseData
+    project: Project,
+    upload: TestCaseUpload,
+    data: TestCaseData,
+    source_run_id: int | None,
 ) -> TestCase:
-    test_case = TestCase(project=project, upload=upload, testrail_id=data.testrail_id)
+    test_case = TestCase(
+        project=project,
+        upload=upload,
+        testrail_id=data.testrail_id,
+        testrail_source_run_id=source_run_id,
+    )
     _apply_data(test_case, data)
     return test_case
 
@@ -389,8 +397,13 @@ def _upsert_batch(
     project: Project,
     batch: Sequence[tuple[TestCaseData, int | None]],
     suite_id: int | None,
+    source_run_id: int | None,
 ) -> TestRailUpsertCounts:
-    """``batch`` pairs each case's data with its TestRail order position."""
+    """``batch`` pairs each case's data with its TestRail order position.
+
+    ``source_run_id`` (run-link imports only) overwrites the source run of
+    existing cases; ``None`` leaves it untouched.
+    """
     ids = [data.testrail_id for data, _ in batch]
     existing_by_id: dict[str, list[TestCase]] = {}
     for test_case in TestCase.objects.filter(project=project, testrail_id__in=ids):
@@ -402,7 +415,7 @@ def _upsert_batch(
     for data, position in batch:
         matches = existing_by_id.get(data.testrail_id, [])
         if not matches:
-            new_case = _new_test_case(project, upload, data)
+            new_case = _new_test_case(project, upload, data, source_run_id)
             _apply_order(new_case, suite_id, position)
             to_create.append(new_case)
             continue
@@ -410,13 +423,16 @@ def _upsert_batch(
         for test_case in matches:
             _apply_data(test_case, data)
             _apply_order(test_case, suite_id, position)
+            if source_run_id is not None:
+                test_case.testrail_source_run_id = source_run_id
             to_update.append(test_case)
 
+    update_fields = [*_UPSERT_FIELDS, *_ORDER_FIELDS, "updated_at"]
+    if source_run_id is not None:
+        update_fields.append("testrail_source_run_id")
     with transaction.atomic():
         if to_update:
-            TestCase.objects.bulk_update(
-                to_update, [*_UPSERT_FIELDS, *_ORDER_FIELDS, "updated_at"]
-            )
+            TestCase.objects.bulk_update(to_update, update_fields)
         if to_create:
             TestCase.objects.bulk_create(to_create)
     return TestRailUpsertCounts(created=len(to_create), updated=updated)
@@ -430,6 +446,7 @@ def upsert_test_cases_from_testrail(
     mapper: TestRailFieldMapper,
     suite_id: int | None,
     positions: Mapping[int, int],
+    source_run_id: int | None,
     batch_size: int = 50,
     progress_callback: Callable[[int, int], None] | None = None,
 ) -> TestRailUpsertCounts:
@@ -437,6 +454,7 @@ def upsert_test_cases_from_testrail(
 
     Every upserted case gets ``testrail_suite_id=suite_id`` and its TestRail
     order from ``positions`` (TestRail case ID -> rank; missing -> None).
+    Run-link imports pass the run as ``source_run_id``; suite imports pass None.
     progress_callback receives cumulative (processed, updated) after each batch.
     """
     created_total = 0
@@ -447,7 +465,11 @@ def upsert_test_cases_from_testrail(
             for case in cases[start : start + batch_size]
         ]
         counts = _upsert_batch(
-            upload=upload, project=project, batch=batch, suite_id=suite_id
+            upload=upload,
+            project=project,
+            batch=batch,
+            suite_id=suite_id,
+            source_run_id=source_run_id,
         )
         created_total += counts.created
         updated_total += counts.updated

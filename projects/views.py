@@ -21,15 +21,26 @@ from django.views.decorators.http import require_GET, require_POST
 from accounts.models import CustomUser
 from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
+from projects.exceptions import RunCaseCheckError
 from projects.forms import (
     PROJECT_PROMPT_MAX_LENGTH,
     ApplicationContextForm,
     ProjectForm,
+    RunCaseSelectionForm,
     TestCaseForm,
     TestRunCreateForm,
     form_error_text,
 )
 from projects.models import Project, TestRun, TestRunStatus
+from projects.run_case_check_services import (
+    check_run_cases,
+    format_check_message,
+    is_checkable,
+    is_uncheckable,
+    list_checkable_pivot_ids,
+    list_uncheckable_pivot_ids,
+    uncheck_run_cases,
+)
 from projects.services import (
     STATUS_FILTER_CHOICES,
     RerunScope,
@@ -91,6 +102,10 @@ from projects.services import (
     update_test_case,
 )
 from projects.tasks import refine_project_prompt_task
+from projects.testrail_checked_push_services import (
+    get_checked_push_panel,
+    get_source_run_url,
+)
 from projects.testrail_mapping import format_push_confirm_body
 from projects.testrail_results_services import get_testrail_push_panel
 from projects.testrail_services import get_testrail_picker_state
@@ -860,6 +875,9 @@ def _build_test_run_detail_context(
         "testrail_push_confirm_body": format_push_confirm_body(
             testrail_push.pending_count, test_run.testrail_run_id or 0
         ),
+        "testrail_checked_push": get_checked_push_panel(test_run),
+        "checkable_pivot_ids": [p.id for p in cases if is_checkable(p)],
+        "uncheckable_pivot_ids": [p.id for p in cases if is_uncheckable(p)],
         "active_tab": "runs",
         "active_nav": "projects",
     }
@@ -890,6 +908,7 @@ def test_run_case_detail(
     form = TestCaseForm()
     can_edit = can_edit_test_case_in_run(pivot.test_run)
     case_position, case_total = get_case_position(pivot)
+    source_run_url = get_source_run_url(pivot, project)
     return render(
         request,
         "projects/test_run_case_detail.html",
@@ -902,10 +921,65 @@ def test_run_case_detail(
             "can_edit": can_edit,
             "case_position": case_position,
             "case_total": case_total,
+            "can_check": is_checkable(pivot),
+            "can_uncheck": is_uncheckable(pivot),
+            "source_run_url": source_run_url,
             "active_tab": "runs",
             "active_nav": "projects",
         },
     )
+
+
+def _change_run_case_checks(
+    request: AuthenticatedRequest, project: Project, test_run_id: int, *, check: bool
+) -> HttpResponse:
+    """Shared body of Check / Uncheck: validate the selection, call the service."""
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    allowed_ids = (
+        list_checkable_pivot_ids(test_run)
+        if check
+        else list_uncheckable_pivot_ids(test_run)
+    )
+    form = RunCaseSelectionForm(allowed_ids, request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+    else:
+        pivot_ids: list[int] = form.cleaned_data["pivot_ids"]
+        try:
+            if check:
+                outcome = check_run_cases(
+                    test_run=test_run, pivot_ids=pivot_ids, user=request.user
+                )
+            else:
+                outcome = uncheck_run_cases(test_run=test_run, pivot_ids=pivot_ids)
+        except RunCaseCheckError as exc:
+            messages.error(request, exc.message)
+        else:
+            verb = "Checked" if check else "Unchecked"
+            messages.success(request, format_check_message(outcome, verb=verb))
+    fallback_url = reverse(
+        "projects:test_run_detail",
+        kwargs={"project_id": project.id, "test_run_id": test_run.id},
+    )
+    return redirect(_next_or_default(request, fallback_url))
+
+
+@project_membership_required
+@require_POST
+def test_run_cases_check(
+    request: AuthenticatedRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    return _change_run_case_checks(request, project, test_run_id, check=True)
+
+
+@project_membership_required
+@require_POST
+def test_run_cases_uncheck(
+    request: AuthenticatedRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    return _change_run_case_checks(request, project, test_run_id, check=False)
 
 
 @project_membership_required
