@@ -80,6 +80,7 @@ from projects.testrail_results_services import (
     build_case_detail_url,
     build_testrail_run_url,
     pivot_result_text,
+    pivot_step_breakdown,
 )
 from projects.testrail_services import (
     TestRailNotConfiguredError,
@@ -583,6 +584,7 @@ def _plan_pivot(
         outcome_label=testrail_outcome_label(status_id),
         run_name=test_run.display_name,
         result_text=pivot_result_text(pivot),
+        step_breakdown=pivot_step_breakdown(pivot),
         case_url=build_case_detail_url(
             test_run, pivot.id, links_base_url=links_base_url
         ),
@@ -615,6 +617,7 @@ _PLAN_PIVOT_FIELDS = (
     "status",
     "result",
     "blocked_reason",
+    "execution_checkpoint",
     "started_at",
     "finished_at",
     "checked_at",

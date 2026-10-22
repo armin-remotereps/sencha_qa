@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Final
 
+from projects.case_step_progress import CaseStepProgress, CaseStepRow
 from projects.models import (
     TestCaseData,
     TestCasePriority,
@@ -33,6 +34,18 @@ TESTRAIL_STATUS_BLOCKED: Final = 2
 TESTRAIL_STATUS_FAILED: Final = 5
 
 RESULT_COMMENT_TEXT_MAX: Final = 4000
+
+# Caps for the agent's step list in a result comment (one line per field).
+STEP_BREAKDOWN_MAX: Final = 6000
+_STEP_DESCRIPTION_MAX: Final = 160
+_STEP_RESULT_MAX: Final = 200
+_STEP_REASON_MAX: Final = 200
+_WHITESPACE = re.compile(r"\s+")
+_DECISION_LABELS: Mapping[str, str] = {
+    "stop": "Stopped here",
+    "continue": "Continued despite failure",
+    "recover": "Recovery attempted",
+}
 
 _PIVOT_STATUS_TO_TESTRAIL: Mapping[str, int] = {
     TestRunTestCaseStatus.SUCCESS: TESTRAIL_STATUS_PASSED,
@@ -205,14 +218,81 @@ def format_blocked_result_text(reason_label: str, result_text: str) -> str:
     return reason or text
 
 
+def _one_line(text: str, limit: int) -> str:
+    """Collapse whitespace (newlines included) and cap at ``limit`` chars."""
+    flat = _WHITESPACE.sub(" ", text).strip()
+    # Drop leading markup TestRail's Markdown would reinterpret mid-list.
+    flat = flat.lstrip("#>").lstrip()
+    if len(flat) <= limit:
+        return flat
+    return flat[: limit - 1].rstrip() + "…"
+
+
+def _step_lines(row: CaseStepRow) -> str:
+    line = f"{row.num}. {row.status_label}: " + _one_line(
+        row.description, _STEP_DESCRIPTION_MAX
+    )
+    result = _one_line(row.summary or row.error, _STEP_RESULT_MAX)
+    if result:
+        line += f" — {result}"
+    if row.decision is not None:
+        reason = _one_line(row.decision.reason, _STEP_REASON_MAX)
+        label = _DECISION_LABELS.get(row.decision.action, "Decision")
+        if reason:
+            line += f"\n   {label}: {reason}"
+    return line
+
+
+def format_step_breakdown(progress: CaseStepProgress) -> str:
+    """Plain-text list of the agent's planned steps with status and result.
+
+    Numbered like the verdict text ("Steps 4–7 were not run"), so a reader can
+    see what those steps were. Capped at ``STEP_BREAKDOWN_MAX``: trailing rows
+    that do not fit collapse into "… and N more steps, see Details".
+    """
+    if not progress.rows:
+        return ""
+    header = f"Steps planned by the agent ({progress.total}):"
+    entries = [_step_lines(row) for row in progress.rows]
+    text = "\n".join([header, *entries])
+    if len(text) <= STEP_BREAKDOWN_MAX:
+        return text
+    kept: list[str] = [header]
+    length = len(header)
+    for index, entry in enumerate(entries):
+        more = _more_steps_line(len(entries) - index - 1)
+        if length + 1 + len(entry) + 1 + len(more) > STEP_BREAKDOWN_MAX:
+            break
+        kept.append(entry)
+        length += 1 + len(entry)
+    kept.append(_more_steps_line(len(entries) - (len(kept) - 1)))
+    return "\n".join(kept)
+
+
+def _more_steps_line(count: int) -> str:
+    noun = "step" if count == 1 else "steps"
+    return f"… and {count} more {noun}, see Details"
+
+
 def build_result_comment(
-    *, outcome_label: str, run_name: str, result_text: str, case_url: str
+    *,
+    outcome_label: str,
+    run_name: str,
+    result_text: str,
+    step_breakdown: str,
+    case_url: str,
 ) -> str:
-    """Build the TestRail result comment body for one pushed case result."""
+    """Build the TestRail result comment body for one pushed case result.
+
+    ``step_breakdown`` (from ``format_step_breakdown``; empty for none) sits
+    between the result text and the Details link.
+    """
     truncated_result_text = result_text.strip()[:RESULT_COMMENT_TEXT_MAX]
     paragraphs = [f"{outcome_label} by Punk Hazard in run “{run_name}”."]
     if truncated_result_text:
         paragraphs.append(truncated_result_text)
+    if step_breakdown:
+        paragraphs.append(step_breakdown)
     paragraphs.append(f"Details: {case_url}")
     return "\n\n".join(paragraphs)
 
@@ -231,6 +311,7 @@ def build_checked_result_comment(
     outcome_label: str,
     run_name: str,
     result_text: str,
+    step_breakdown: str,
     case_url: str,
     checked_by_label: str,
     checked_at: datetime,
@@ -242,6 +323,7 @@ def build_checked_result_comment(
             outcome_label=outcome_label,
             run_name=run_name,
             result_text=result_text,
+            step_breakdown=step_breakdown,
             case_url=case_url,
         ),
         f"Checked by {checked_by_label} on {checked_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC.",

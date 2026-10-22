@@ -5,6 +5,10 @@ from typing import Literal
 
 from agents.types import SubTask, SubTaskAttempt, SubTaskResult
 
+# Step descriptions in the verdict input are shortened to this many characters:
+# enough to name the step, not to repeat it.
+_STEP_DESCRIPTION_MAX_CHARS = 100
+
 
 def build_plan_system_prompt(
     project_prompt: str | None = None,
@@ -144,10 +148,10 @@ def build_evaluate_prompt(
 def build_verdict_prompt(
     attempts: tuple[SubTaskAttempt, ...],
     overall_status: Literal["pass", "fail"],
-    planned_steps: int,
+    plan: Sequence[SubTask],
 ) -> str:
     results_text = "\n".join(
-        f"  {line}" for line in format_attempt_lines(attempts, planned_steps)
+        f"  {line}" for line in format_attempt_lines(attempts, plan)
     )
     outcome = "PASSED" if overall_status == "pass" else "FAILED"
     resumed_note = (
@@ -164,7 +168,10 @@ def build_verdict_prompt(
         "each step, and recovery steps do not count. "
         f"{resumed_note}"
         "State that result and do not "
-        "contradict it. Highlight any key observations, including recoveries."
+        "contradict it. Highlight any key observations, including recoveries. "
+        "Readers never see the numbered step list, so whenever you mention a step "
+        'number, name the step briefly next to it, e.g. "Steps 4-7 (open the '
+        'build folder, ...) were not run".'
     )
 
 
@@ -173,8 +180,9 @@ def was_resumed(attempts: Sequence[SubTaskAttempt]) -> bool:
 
 
 def format_attempt_lines(
-    attempts: tuple[SubTaskAttempt, ...], planned_steps: int
+    attempts: tuple[SubTaskAttempt, ...], plan: Sequence[SubTask]
 ) -> list[str]:
+    planned_steps = len(plan)
     final_index = final_step_indices(attempts)
     step_attempt_counts: dict[int, int] = {}
     lines: list[str] = []
@@ -195,6 +203,7 @@ def format_attempt_lines(
                 label = f"Step {attempt.step_num} (attempt {count}, final)"
             else:
                 label = f"Step {attempt.step_num}"
+            label = f"{label} — {_short_description(plan, attempt.step_num)}"
         lines.append(_format_result_line(label, attempt.result))
 
     # Steps run in order from step 1, so the unrun ones are the tail of the plan.
@@ -206,8 +215,21 @@ def format_attempt_lines(
             if first_unrun == planned_steps
             else f"Steps {first_unrun}-{planned_steps}"
         )
-        lines.append(f"{unrun}: not run")
+        names = "; ".join(
+            f"{num}: {_short_description(plan, num)}"
+            for num in range(first_unrun, planned_steps + 1)
+        )
+        lines.append(f"{unrun}: not run — {names}")
     return lines
+
+
+def _short_description(plan: Sequence[SubTask], step_num: int) -> str:
+    if not 1 <= step_num <= len(plan):
+        return "(unknown step)"
+    description = " ".join(plan[step_num - 1].description.split())
+    if len(description) <= _STEP_DESCRIPTION_MAX_CHARS:
+        return description
+    return description[: _STEP_DESCRIPTION_MAX_CHARS - 1].rstrip() + "…"
 
 
 def final_step_indices(attempts: Sequence[SubTaskAttempt]) -> dict[int, int]:

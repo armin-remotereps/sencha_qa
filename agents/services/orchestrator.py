@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Literal
 
 from django.conf import settings
+from django.utils import timezone
 
 from agents.exceptions import (
     AIServiceError,
@@ -46,8 +50,10 @@ from agents.types import (
     LogCallback,
     OrchestratorCheckpoint,
     OrchestratorDecision,
+    OrchestratorPhase,
     OrchestratorResult,
     ScreenshotCallback,
+    StepDecision,
     SubTask,
     SubTaskAttempt,
     SubTaskResult,
@@ -153,6 +159,18 @@ class _Progress:
     total_iterations: int = 0
     # 1-based step that is running or runs next.
     next_step: int = 1
+    # Display-only: why the case continued, recovered or stopped after a failed
+    # step, and what it is doing at the cursor step since when.
+    decisions: list[StepDecision] = field(default_factory=list)
+    phase: OrchestratorPhase = "step"
+    phase_started_at: datetime | None = None
+
+    def set_phase(self, phase: OrchestratorPhase) -> None:
+        # Every call enters a new phase (a new step is a new "step" phase), so
+        # the start time is always restamped.
+        self.phase = phase
+        self.phase_started_at = timezone.now()
+        self.checkpoint()
 
     def checkpoint(self) -> None:
         if self.on_checkpoint is None:
@@ -164,6 +182,9 @@ class _Progress:
                 next_step=self.next_step,
                 browser=self.browser_selection.current,
                 total_iterations=self.total_iterations,
+                decisions=tuple(self.decisions),
+                phase=self.phase,
+                phase_started_at=self.phase_started_at,
             )
         )
 
@@ -184,6 +205,7 @@ def _new_progress(
     progress.attempts = list(resume.attempts)
     progress.total_iterations = resume.total_iterations
     progress.next_step = resume.next_step
+    progress.decisions = list(resume.decisions)
     progress.state_lines = _rebuild_state_lines(resume.attempts, resume.next_step)
     return progress
 
@@ -265,6 +287,8 @@ def _restore_resumed_state(
         f"[Orchestrator] Restoring state before step {step_num} "
         f"(budget {resume_task.timeout_seconds}s)",
     )
+    progress.set_phase("resume")
+    started = time.monotonic()
     result = run_sub_agent(
         resume_task,
         "\n".join(progress.state_lines),
@@ -276,7 +300,12 @@ def _restore_resumed_state(
     )
     progress.total_iterations += result.iterations
     progress.attempts.append(
-        SubTaskAttempt(step_num=step_num, kind="resume", result=result)
+        SubTaskAttempt(
+            step_num=step_num,
+            kind="resume",
+            result=result,
+            duration_seconds=_elapsed_seconds(started),
+        )
     )
     progress.checkpoint()
 
@@ -431,13 +460,14 @@ def _execute_sub_tasks(
         # The cursor points at this step before it runs, so a case interrupted
         # mid-step resumes by running it again.
         progress.next_step = step_num
-        progress.checkpoint()
+        progress.set_phase("step")
 
         _log(
             on_log,
             f"[Orchestrator] Sub-task {step_num}/{total}: {sub_task.description}",
         )
 
+        started = time.monotonic()
         result = run_sub_agent(
             sub_task,
             state_description,
@@ -448,7 +478,14 @@ def _execute_sub_tasks(
             project_prompt=project_prompt,
         )
         progress.total_iterations += result.iterations
-        attempts.append(SubTaskAttempt(step_num=step_num, kind="step", result=result))
+        attempts.append(
+            SubTaskAttempt(
+                step_num=step_num,
+                kind="step",
+                result=result,
+                duration_seconds=_elapsed_seconds(started),
+            )
+        )
 
         _log(
             on_log,
@@ -464,7 +501,7 @@ def _execute_sub_tasks(
 
         # What runs next depends on the failure decision below; until it is made
         # the cursor stays on this step, so a resume reruns it.
-        progress.checkpoint()
+        progress.set_phase("evaluating")
 
         remaining = total - step_num
         decision = _evaluate_failure(
@@ -476,6 +513,11 @@ def _execute_sub_tasks(
             remaining_tasks=remaining,
             bounds=bounds,
             on_log=on_log,
+        )
+        progress.decisions.append(
+            StepDecision(
+                step_num=step_num, action=decision.action, reason=decision.reason
+            )
         )
 
         if decision.action == "continue":
@@ -506,12 +548,14 @@ def _execute_sub_tasks(
         _log(on_log, f"[Orchestrator]   Stopping: {decision.reason}")
         state_lines.append(f"Step {step_num}: FAILED (stopped) — {result.summary}")
         # The case is decided (Failed): a resume only rebuilds the verdict and
-        # never reruns the failed step.
+        # never reruns the failed step. The verdict checkpoint below persists it.
         progress.next_step = total + 1
-        progress.checkpoint()
         break
 
-    return _build_verdict(orchestrator_llm, attempts, total, progress.total_iterations)
+    progress.set_phase("verdict")
+    return _build_verdict(
+        orchestrator_llm, attempts, sub_tasks, progress.total_iterations
+    )
 
 
 def _attempt_recovery(
@@ -535,6 +579,7 @@ def _attempt_recovery(
     recoveries = recovery_counts.get(step_index, 0)
     if recoveries >= max_recovery:
         _log(on_log, "[Orchestrator]   Max recovery attempts reached — stopping test.")
+        _record_stop(progress, step_num, "Max recovery attempts reached")
         return False
 
     if decision.recovery_task is None:
@@ -542,6 +587,7 @@ def _attempt_recovery(
             on_log,
             "[Orchestrator]   Recovery requested but no task provided — stopping test.",
         )
+        _record_stop(progress, step_num, "Recovery requested but no task provided")
         return False
 
     recovery_counts[step_index] = recoveries + 1
@@ -551,6 +597,8 @@ def _attempt_recovery(
         f"[Orchestrator]   Recovery (budget {decision.recovery_task.timeout_seconds}s): "
         f"{decision.recovery_task.description}",
     )
+    progress.set_phase("recovery")
+    started = time.monotonic()
     recovery_result = run_sub_agent(
         decision.recovery_task,
         state_description,
@@ -561,7 +609,12 @@ def _attempt_recovery(
         project_prompt=project_prompt,
     )
     progress.attempts.append(
-        SubTaskAttempt(step_num=step_num, kind="recovery", result=recovery_result)
+        SubTaskAttempt(
+            step_num=step_num,
+            kind="recovery",
+            result=recovery_result,
+            duration_seconds=_elapsed_seconds(started),
+        )
     )
 
     _log(
@@ -580,21 +633,35 @@ def _attempt_recovery(
         progress.checkpoint()
         return True
 
+    _record_stop(progress, step_num, "Recovery failed")
     progress.checkpoint()
     _log(on_log, "[Orchestrator]   Recovery failed — stopping test.")
     return False
 
 
+def _record_stop(progress: _Progress, step_num: int, reason: str) -> None:
+    # A recover decision that cannot go ahead ends the case: record the final
+    # stop so the step shows why it stopped. The caller's next checkpoint
+    # persists it.
+    progress.decisions.append(
+        StepDecision(step_num=step_num, action="stop", reason=reason)
+    )
+
+
+def _elapsed_seconds(started: float) -> int:
+    return int(round(time.monotonic() - started))
+
+
 def _build_verdict(
     orchestrator_llm: LLMConfig,
     attempts: list[SubTaskAttempt],
-    planned_steps: int,
+    plan: Sequence[SubTask],
     total_iterations: int,
 ) -> OrchestratorResult:
     # A step that failed, was recovered and then passed on retry counts as passed:
     # only each planned step's final attempt decides, recoveries never do.
     finals = _final_step_results(attempts)
-    all_passed = len(finals) == planned_steps and all(
+    all_passed = len(finals) == len(plan) and all(
         r.status == "pass" for r in finals.values()
     )
     overall_status: Literal["pass", "fail"] = "pass" if all_passed else "fail"
@@ -602,7 +669,7 @@ def _build_verdict(
     error = finals[max(failed_steps)].summary if failed_steps else None
 
     attempts_tuple = tuple(attempts)
-    verdict_prompt = build_verdict_prompt(attempts_tuple, overall_status, planned_steps)
+    verdict_prompt = build_verdict_prompt(attempts_tuple, overall_status, plan)
     verdict_messages = (
         ChatMessage(role="system", content="Summarize the test case execution."),
         ChatMessage(role="user", content=verdict_prompt),
@@ -616,7 +683,7 @@ def _build_verdict(
         logger.warning(
             "Verdict summary failed (%s), using deterministic summary", exc.kind
         )
-        summary = _deterministic_summary(attempts_tuple, overall_status, planned_steps)
+        summary = _deterministic_summary(attempts_tuple, overall_status, plan)
 
     return OrchestratorResult(
         status=overall_status,
@@ -637,7 +704,7 @@ def _final_step_results(attempts: list[SubTaskAttempt]) -> dict[int, SubTaskResu
 def _deterministic_summary(
     attempts: tuple[SubTaskAttempt, ...],
     overall_status: Literal["pass", "fail"],
-    planned_steps: int,
+    plan: Sequence[SubTask],
 ) -> str:
     lines = [
         f"Test {'passed' if overall_status == 'pass' else 'failed'} "
@@ -645,7 +712,7 @@ def _deterministic_summary(
     ]
     if was_resumed(attempts):
         lines.append("The case was interrupted and resumed.")
-    lines.extend(format_attempt_lines(attempts, planned_steps))
+    lines.extend(format_attempt_lines(attempts, plan))
     return "\n".join(lines)
 
 

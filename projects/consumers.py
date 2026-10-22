@@ -8,6 +8,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from django.utils import dateformat
 
 from accounts.models import CustomUser
+from projects.case_step_progress import pivot_step_payload
 from projects.models import (
     Project,
     TestCaseUpload,
@@ -222,6 +223,7 @@ class TestRunCaseConsumer(AuthenticatedConsumer):
                     "blocked_reason": blocked_reason,
                     "blocked_reason_label": blocked_reason_label,
                     "logs": pivot.logs,
+                    "steps": pivot_step_payload(pivot),
                     "screenshots": [
                         {
                             "screenshot_id": s.id,
@@ -267,8 +269,14 @@ class TestRunCaseConsumer(AuthenticatedConsumer):
                     "result": event["result"],
                     "blocked_reason": event["blocked_reason"],
                     "blocked_reason_label": event["blocked_reason_label"],
+                    "steps": event["steps"],
                 }
             )
+        )
+
+    async def test_run_case_steps(self, event: dict[str, Any]) -> None:
+        await self.send(
+            text_data=json.dumps({"type": "steps", "steps": event["steps"]})
         )
 
 

@@ -7,6 +7,7 @@ back into an ``OrchestratorCheckpoint`` (or step choices for the case page).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from django.utils import timezone
@@ -34,12 +35,17 @@ class ResumeStepOption:
 
 
 def build_checkpoint_callback(
-    pivot: TestRunTestCase, generation: int
+    pivot: TestRunTestCase,
+    generation: int,
+    on_saved: Callable[[dict[str, object]], None] | None = None,
 ) -> CheckpointCallback:
     """Write each reported checkpoint to the pivot row (one small UPDATE).
 
     The write only lands while the run still has ``generation``, so a worker a
     Resume or Start took over cannot overwrite the newer checkpoint.
+    ``on_saved`` (injected: this module cannot import ``projects.services``)
+    gets the stored data only when the UPDATE changed the row, so a stale
+    worker never broadcasts.
     """
     rows = TestRunTestCase.objects.filter(
         pk=pivot.pk, test_run__execution_generation=generation
@@ -48,7 +54,9 @@ def build_checkpoint_callback(
     def _save_checkpoint(checkpoint: OrchestratorCheckpoint) -> None:
         data = checkpoint_to_json(checkpoint)
         pivot.execution_checkpoint = data
-        rows.update(execution_checkpoint=data, updated_at=timezone.now())
+        changed = rows.update(execution_checkpoint=data, updated_at=timezone.now())
+        if changed and on_saved is not None:
+            on_saved(data)
 
     return _save_checkpoint
 

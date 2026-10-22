@@ -1,15 +1,28 @@
 """(De)serialization of the orchestrator checkpoint stored on a run case.
 
 Pure: no ORM. A checkpoint that does not parse means "plan from scratch".
+
+New keys must stay optional and default when missing, with ``CHECKPOINT_VERSION``
+unchanged: a bump makes every stored checkpoint (and, on rollback, every new one)
+unusable, so every case would resume from step 1. Older parsers ignore unknown
+keys, which keeps rollbacks safe.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import logging
+from datetime import datetime
 from typing import Literal, cast
 
-from agents.types import OrchestratorCheckpoint, SubTask, SubTaskAttempt, SubTaskResult
+from agents.types import (
+    OrchestratorCheckpoint,
+    OrchestratorPhase,
+    StepDecision,
+    SubTask,
+    SubTaskAttempt,
+    SubTaskResult,
+)
 from controller_client.protocol import BrowserName
 
 logger = logging.getLogger(__name__)
@@ -18,6 +31,8 @@ CHECKPOINT_VERSION = 1
 
 _ATTEMPT_KINDS = ("step", "recovery", "resume")
 _RESULT_STATUSES = ("pass", "fail")
+_DECISION_ACTIONS = ("continue", "recover", "stop")
+_PHASES = ("step", "evaluating", "recovery", "resume", "verdict")
 
 
 class _MalformedCheckpoint(Exception):
@@ -43,12 +58,27 @@ def checkpoint_to_json(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
                 "summary": attempt.result.summary,
                 "iterations": attempt.result.iterations,
                 "error": attempt.result.error,
+                "duration_seconds": attempt.duration_seconds,
             }
             for attempt in checkpoint.attempts
         ],
         "next_step": checkpoint.next_step,
         "browser": checkpoint.browser.value,
         "total_iterations": checkpoint.total_iterations,
+        "decisions": [
+            {
+                "step_num": decision.step_num,
+                "action": decision.action,
+                "reason": decision.reason,
+            }
+            for decision in checkpoint.decisions
+        ],
+        "phase": checkpoint.phase,
+        "phase_started_at": (
+            checkpoint.phase_started_at.isoformat()
+            if checkpoint.phase_started_at
+            else None
+        ),
     }
 
 
@@ -66,10 +96,11 @@ def checkpoint_from_json(data: object) -> OrchestratorCheckpoint | None:
 def truncate_checkpoint(
     checkpoint: OrchestratorCheckpoint, from_step: int
 ) -> OrchestratorCheckpoint:
-    """Forget every attempt at or after ``from_step`` and resume there."""
+    """Forget every attempt and decision at or after ``from_step``; resume there."""
     return dataclasses.replace(
         checkpoint,
         attempts=tuple(a for a in checkpoint.attempts if a.step_num < from_step),
+        decisions=tuple(d for d in checkpoint.decisions if d.step_num < from_step),
         next_step=from_step,
     )
 
@@ -104,6 +135,9 @@ def _parse(data: object) -> OrchestratorCheckpoint:
         next_step=next_step,
         browser=browser,
         total_iterations=_as_int(root.get("total_iterations"), "total_iterations"),
+        decisions=_parse_decisions(root.get("decisions")),
+        phase=_parse_phase(root.get("phase")),
+        phase_started_at=_parse_datetime(root.get("phase_started_at")),
     )
 
 
@@ -124,7 +158,62 @@ def _parse_attempt(item: dict[str, object]) -> SubTaskAttempt:
             iterations=_as_int(item.get("iterations"), "iterations"),
             error=error,
         ),
+        duration_seconds=_parse_duration(item.get("duration_seconds")),
     )
+
+
+# The display-only keys below never make a checkpoint unusable: a bad value
+# falls back to its default, so Resume keeps the step cursor.
+
+
+def _parse_decisions(value: object) -> tuple[StepDecision, ...]:
+    if not isinstance(value, list):
+        return ()
+    decisions: list[StepDecision] = []
+    for raw in cast(list[object], value):
+        if not isinstance(raw, dict):
+            continue
+        item = cast(dict[str, object], raw)
+        step_num, action, reason = (
+            item.get("step_num"),
+            item.get("action"),
+            item.get("reason"),
+        )
+        if (
+            isinstance(step_num, int)
+            and not isinstance(step_num, bool)
+            and action in _DECISION_ACTIONS
+            and isinstance(reason, str)
+        ):
+            decisions.append(
+                StepDecision(
+                    step_num=step_num,
+                    action=cast(Literal["continue", "recover", "stop"], action),
+                    reason=reason,
+                )
+            )
+    return tuple(decisions)
+
+
+def _parse_phase(value: object) -> OrchestratorPhase:
+    if value not in _PHASES:
+        return "step"
+    return cast(OrchestratorPhase, value)
+
+
+def _parse_duration(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _parse_datetime(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _as_dict(value: object, name: str) -> dict[str, object]:

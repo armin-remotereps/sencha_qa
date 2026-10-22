@@ -21,6 +21,7 @@ from django.views.decorators.http import require_GET, require_POST
 from accounts.models import CustomUser
 from accounts.types import AuthenticatedRequest
 from projects.case_checkpoint_services import list_resume_steps
+from projects.case_step_progress import pivot_step_payload
 from projects.decorators import project_membership_required
 from projects.exceptions import RunCaseCheckError, RunResumeError
 from projects.forms import (
@@ -941,6 +942,7 @@ def test_run_case_detail(
             "resume_steps": resume_steps,
             "resume_form": CaseResumeForm(resume_steps) if resume_steps else None,
             "resumes": list_case_resumes(pivot),
+            "step_progress": pivot_step_payload(pivot),
             "active_tab": "runs",
             "active_nav": "projects",
         },

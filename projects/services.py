@@ -65,6 +65,11 @@ from projects.case_checkpoint_services import (
     build_checkpoint_callback,
     load_resume_checkpoint,
 )
+from projects.case_step_progress import (
+    StepProgressPayload,
+    case_step_payload,
+    pivot_step_payload,
+)
 from projects.checked_push_limits import is_checked_push_live
 from projects.controller_outage_clock import agent_monotonic, reset_outage_clock
 from projects.controller_reconnect_services import (
@@ -2523,6 +2528,12 @@ class CaseStatusEvent(TypedDict):
     result: str
     blocked_reason: str
     blocked_reason_label: str
+    steps: StepProgressPayload
+
+
+class CaseStepsEvent(TypedDict):
+    type: str
+    steps: StepProgressPayload
 
 
 class TestRunStatusEvent(TypedDict):
@@ -2597,6 +2608,24 @@ def _broadcast_pivot_status_to_case(pivot: TestRunTestCase) -> None:
         "result": pivot.result,
         "blocked_reason": blocked_reason,
         "blocked_reason_label": blocked_reason_label,
+        "steps": pivot_step_payload(pivot),
+    }
+    async_to_sync(layer.group_send)(_test_run_case_group(pivot.id), event)
+
+
+def _broadcast_case_steps(
+    pivot: TestRunTestCase, checkpoint_data: dict[str, object]
+) -> None:
+    """Push the running case's step rows after a checkpoint write landed."""
+    layer: Any = get_channel_layer()
+    if layer is None:
+        return
+
+    event: CaseStepsEvent = {
+        "type": "test_run_case.steps",
+        "steps": case_step_payload(
+            checkpoint_data, TestRunTestCaseStatus.IN_PROGRESS, pivot.started_at
+        ),
     }
     async_to_sync(layer.group_send)(_test_run_case_group(pivot.id), event)
 
@@ -2793,7 +2822,11 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
             project_prompt=build_agent_project_context(project),
             cancellation_check=cancellation_check,
             resume=resume,
-            on_checkpoint=build_checkpoint_callback(pivot, generation),
+            on_checkpoint=build_checkpoint_callback(
+                pivot,
+                generation,
+                on_saved=lambda data: _broadcast_case_steps(pivot, data),
+            ),
         )
         # Once a Resume or Start took the run over, the pivot belongs to the
         # newer chain: this worker records nothing (here and below).

@@ -792,6 +792,10 @@ a:hover {
   border-color: var(--info);
 }
 
+.card-header-count {
+  font-weight: 500;
+}
+
 .card-header h2,
 .card-header h3 {
   margin: 0;
@@ -2150,3 +2154,140 @@ details.card[open] > summary,
 /* Vertical rhythm for pages that mix cards, grids and section headers. */
 .stack > * + * { margin-top: 16px; }
 .stack > .card + .card { margin-top: 16px; }
+
+/* --------------------------------------------------------------------------
+   Step list — the orchestrator's planned steps on the run case page
+   (not the wizard's .steps/.step progress bar)
+   -------------------------------------------------------------------------- */
+
+.step-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.step-list .step-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 10px;
+  border-bottom: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.step-list .step-row:last-child {
+  border-bottom: 0;
+}
+
+.step-list .step-row.is-current {
+  background: var(--info-soft);
+  box-shadow: inset 3px 0 0 var(--info);
+}
+
+.step-list .step-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.step-list .step-head {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.step-list .step-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.step-list .step-num {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.78rem;
+  font-weight: 700;
+  background: rgba(155, 170, 182, 0.12);
+  color: var(--text-muted);
+  border: 1px solid var(--border-strong);
+}
+
+.step-list .step-num.is-passed {
+  background: var(--success-soft);
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.step-list .step-num.is-failed {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.step-list .step-num.is-running {
+  background: var(--info-soft);
+  color: var(--info);
+  border-color: var(--info);
+}
+
+.step-list .step-num.is-interrupted {
+  background: var(--warning-soft);
+  color: var(--warning);
+  border-color: var(--warning);
+}
+
+.step-list .step-meta {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.step-list .step-detail {
+  margin: 6px 0 0;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.step-list .step-detail.is-error {
+  color: var(--danger);
+}
+
+.step-list .step-attempts {
+  margin-top: 8px;
+  font-size: 0.88rem;
+}
+
+.step-list .step-attempts summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.step-list .step-attempts ol {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0 0 0 10px;
+  border-left: 2px solid var(--border);
+}
+
+.step-list .step-attempts li {
+  padding: 4px 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 767px) {
+  .step-list .step-row {
+    padding: 10px 4px;
+  }
+
+  .step-list .step-head {
+    flex-direction: column;
+    gap: 6px;
+  }
+}

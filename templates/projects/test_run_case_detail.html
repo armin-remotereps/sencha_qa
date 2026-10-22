@@ -34,7 +34,14 @@
      when the case has no checkpoint, so it resumes from the start),
      resume_form (CaseResumeForm with the from_step select, or None when
      resume_steps is empty), resumes (list[TestRunCaseResume], resumed_by
-     loaded; the case's earlier outcomes, oldest first). {% endcomment %}
+     loaded; the case's earlier outcomes, oldest first).
+
+     Steps card: step_progress (projects.case_step_progress.StepProgressPayload,
+     from projects.case_step_progress.pivot_step_payload), serialized with
+     json_script as "initial-steps". The case WS `current_state`, `status` and
+     `steps` messages carry the same payload under `steps`; the client replaces
+     it wholesale and derives no status itself. Its text is LLM output: render
+     it with x-text only. {% endcomment %}
 
 {% block title %}{{ pivot.test_case.title }} · {{ test_run.display_name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -132,6 +139,56 @@
     <template x-if="!(status === 'created' && testRunStatus === 'waiting')">
       <p class="pre-wrap" x-text="result || 'No result yet.'"></p>
     </template>
+  </section>
+
+  {# Section: Steps — the agent's planned steps, live while the case runs #}
+  <section aria-labelledby="steps-h" class="card">
+    <div class="card-header">
+      <h2 id="steps-h">
+        <span class="live-dot" aria-hidden="true" x-show="status === 'in_progress'" x-cloak></span>
+        Steps
+        <span class="muted small card-header-count" x-show="steps.available" x-cloak x-text="stepsHeadline()"></span>
+      </h2>
+      <span class="muted small" x-show="status === 'in_progress' && steps.activity_label" x-cloak x-text="steps.activity_label + (steps.phase_started_at ? ' since ' + formatClock(steps.phase_started_at) : '')"></span>
+    </div>
+    <p class="hint" x-show="!steps.available && steps.planning" x-cloak>Planning the steps…</p>
+    <p class="hint" x-show="!steps.available && !steps.planning" x-cloak>No step breakdown was recorded for this execution.</p>
+    <p class="hint" x-show="steps.available" x-cloak>The agent splits the test case into these steps; they rarely match the test case's own step numbers.</p>
+    <ol class="step-list" x-show="steps.available" x-cloak>
+      <template x-for="row in steps.rows" :key="row.num">
+        <li class="step-row" :class="row.num === steps.current_step ? 'is-current' : ''" :aria-current="row.num === steps.current_step ? 'step' : null">
+          <span class="step-num" :class="'is-' + row.status" x-text="row.num" aria-hidden="true"></span>
+          <div class="step-body">
+            <div class="step-head">
+              <span class="step-title" x-text="row.description"></span>
+              <span class="badge" :class="stepBadgeClass(row.status)" x-text="row.status_label"></span>
+            </div>
+            <div class="step-meta" x-show="row.expected_result || row.duration_seconds !== null || row.activity_label">
+              <span x-show="row.activity_label" x-text="row.activity_label + ' · '"></span>
+              <span x-show="row.expected_result" x-text="'Expected: ' + row.expected_result"></span>
+              <span x-show="row.duration_seconds !== null" x-text="(row.expected_result ? ' · ' : '') + formatDuration(row.duration_seconds)"></span>
+            </div>
+            <p class="step-detail" x-show="row.summary" x-text="row.summary"></p>
+            <p class="step-detail is-error" x-show="row.error" x-text="row.error"></p>
+            <p class="step-detail muted" x-show="row.decision" x-text="row.decision ? decisionLabel(row.decision) : ''"></p>
+            <details class="step-attempts" x-show="row.history.length > 0">
+              <summary x-text="'Attempts (' + row.history.length + ')'"></summary>
+              <ol>
+                <template x-for="(item, index) in row.history" :key="index">
+                  <li>
+                    <strong x-text="item.label"></strong>
+                    <span :class="item.passed ? 'badge badge-passed' : 'badge badge-failed'" x-text="item.passed ? 'Passed' : 'Failed'"></span>
+                    <span class="muted small" x-show="item.duration_seconds !== null" x-text="formatDuration(item.duration_seconds)"></span>
+                    <p class="step-detail" x-show="item.summary" x-text="item.summary"></p>
+                    <p class="step-detail is-error" x-show="item.error" x-text="item.error"></p>
+                  </li>
+                </template>
+              </ol>
+            </details>
+          </div>
+        </li>
+      </template>
+    </ol>
   </section>
 
   {# Section: Why this case was blocked — only for status "blocked" #}
@@ -421,6 +478,7 @@
 {% block extra_scripts %}
 {{ pivot.result|json_script:"initial-result" }}
 {{ pivot.logs|json_script:"initial-logs" }}
+{{ step_progress|json_script:"initial-steps" }}
 <script>
 document.addEventListener('alpine:init', () => {
   Alpine.data('testRunCaseLive', () => ({
@@ -429,6 +487,7 @@ document.addEventListener('alpine:init', () => {
     result: JSON.parse(document.getElementById('initial-result').textContent),
     blockedReasonLabel: '{{ pivot.get_blocked_reason_display|escapejs }}',
     logs: JSON.parse(document.getElementById('initial-logs').textContent),
+    steps: JSON.parse(document.getElementById('initial-steps').textContent),
     screenshots: [
       {% for screenshot in screenshots %}
       {
@@ -462,6 +521,44 @@ document.addEventListener('alpine:init', () => {
         blocked: 'Blocked',
         cancelled: 'Cancelled',
       }[status] || status;
+    },
+
+    stepBadgeClass(status) {
+      return {
+        pending: 'badge-draft',
+        running: 'badge-running',
+        passed: 'badge-passed',
+        failed: 'badge-failed',
+        interrupted: 'badge-blocked',
+        not_run: 'badge-cancelled',
+      }[status] || 'badge-draft';
+    },
+
+    stepsHeadline() {
+      const s = this.steps;
+      if (s.current_step) return 'Step ' + s.current_step + ' of ' + s.total;
+      const parts = [];
+      if (s.passed) parts.push(s.passed + ' passed');
+      if (s.failed) parts.push(s.failed + ' failed');
+      if (s.not_run) parts.push(s.not_run + ' not run');
+      return parts.length ? parts.join(' · ') : s.total + (s.total === 1 ? ' step' : ' steps');
+    },
+
+    decisionLabel(decision) {
+      const prefix = { continue: 'Continued', stop: 'Stopped', recover: 'Recovering' }[decision.action] || decision.action;
+      return prefix + ': ' + decision.reason;
+    },
+
+    formatDuration(seconds) {
+      if (seconds === null || seconds === undefined) return '';
+      if (seconds < 60) return seconds + 's';
+      const minutes = Math.floor(seconds / 60);
+      return minutes + 'm ' + String(seconds % 60).padStart(2, '0') + 's';
+    },
+
+    formatClock(iso) {
+      const date = new Date(iso);
+      return isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], { hour12: false });
     },
 
     openLightbox(index) {
@@ -514,6 +611,7 @@ document.addEventListener('alpine:init', () => {
           this.blockedReasonLabel = data.blocked_reason_label || '';
           this.logs = data.logs;
           this.screenshots = data.screenshots;
+          this.steps = data.steps;
           return;
         }
 
@@ -541,6 +639,15 @@ document.addEventListener('alpine:init', () => {
           this.status = data.status;
           this.result = data.result;
           this.blockedReasonLabel = data.blocked_reason_label || '';
+          this.steps = data.steps;
+          return;
+        }
+
+        if (data.type === 'steps') {
+          // A worker can land one last checkpoint after Abort; the status event
+          // already carried the final rows, so ignore it once the case ended.
+          if (this.status !== 'in_progress') return;
+          this.steps = data.steps;
           return;
         }
       };

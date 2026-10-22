@@ -20,6 +20,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from auto_tester.celery import app as celery_app
+from projects.case_step_progress import build_case_step_progress
 from projects.models import (
     Project,
     TestRailPushStatus,
@@ -42,6 +43,7 @@ from projects.testrail_mapping import (
     comment_hash,
     format_blocked_result_text,
     format_push_confirm_body,
+    format_step_breakdown,
     format_testrail_elapsed,
     map_pivot_status_to_testrail,
     parse_testrail_case_id,
@@ -116,6 +118,17 @@ def pivot_result_text(pivot: TestRunTestCase) -> str:
     return pivot.result
 
 
+def pivot_step_breakdown(pivot: TestRunTestCase) -> str:
+    """The agent's step list for the comment; empty without a checkpoint.
+
+    Reads only ``execution_checkpoint``, ``status`` and ``started_at``.
+    """
+    progress = build_case_step_progress(
+        pivot.execution_checkpoint, pivot.status, pivot.started_at
+    )
+    return format_step_breakdown(progress) if progress is not None else ""
+
+
 def _plan_pivot(
     pivot: TestRunTestCase, *, test_run: TestRun, links_base_url: str
 ) -> _PivotPlanOutcome:
@@ -130,6 +143,7 @@ def _plan_pivot(
         outcome_label=testrail_outcome_label(status_id),
         run_name=test_run.display_name,
         result_text=pivot_result_text(pivot),
+        step_breakdown=pivot_step_breakdown(pivot),
         case_url=build_case_detail_url(
             test_run, pivot.id, links_base_url=links_base_url
         ),

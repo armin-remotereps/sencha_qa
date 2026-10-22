@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime
 from enum import Enum
 from typing import Literal, Protocol
 
@@ -168,6 +169,9 @@ class SubTaskAttempt:
     step_num: int
     kind: Literal["step", "recovery", "resume"]
     result: SubTaskResult
+    # Wall-clock seconds the sub-agent ran; None for checkpoints written before
+    # durations were recorded.
+    duration_seconds: int | None = None
 
 
 @dataclass(frozen=True)
@@ -175,6 +179,21 @@ class OrchestratorDecision:
     action: Literal["continue", "recover", "stop"]
     reason: str
     recovery_task: SubTask | None = None
+
+
+@dataclass(frozen=True)
+class StepDecision:
+    """Why the orchestrator continued, recovered or stopped after a failed step."""
+
+    step_num: int
+    action: Literal["continue", "recover", "stop"]
+    reason: str
+
+
+# What the orchestrator is doing at the cursor step: running it, judging its
+# failure, running a recovery, restoring state before a resume, or writing the
+# verdict.
+OrchestratorPhase = Literal["step", "evaluating", "recovery", "resume", "verdict"]
 
 
 @dataclass(frozen=True)
@@ -198,6 +217,10 @@ class OrchestratorCheckpoint:
     next_step: int
     browser: BrowserName
     total_iterations: int
+    # Display-only progress detail for the case page and TestRail comments.
+    decisions: tuple[StepDecision, ...] = ()
+    phase: OrchestratorPhase = "step"
+    phase_started_at: datetime | None = None
 
 
 CheckpointCallback = Callable[[OrchestratorCheckpoint], None]
