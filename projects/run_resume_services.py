@@ -24,6 +24,7 @@ from agents.checkpoint import (
     checkpoint_to_json,
     truncate_checkpoint,
 )
+from machine_setup.turn_state import live_turn_exists
 from projects.case_checkpoint_services import load_resume_checkpoint
 from projects.checked_push_limits import is_checked_push_live
 from projects.exceptions import RunResumeError
@@ -60,6 +61,9 @@ _MACHINE_FAILED = (
     "Check Advanced diagnostics on the Environment page."
 )
 _NOTHING_RESUMABLE = "There are no Blocked or Cancelled cases to resume."
+_MACHINE_SETUP_RUNNING = (
+    "Machine setup is running for this project. Stop it or wait for it to finish."
+)
 
 # Every execution and Checked/Sent field a resume resets, as `reset_test_run`
 # does; logs, screenshots and the checkpoint are kept (started_at is set again
@@ -92,10 +96,11 @@ class ResumePanel:
 
 
 def get_resume_panel(test_run: TestRun, project: Project) -> ResumePanel:
-    """Counts, gates and dialog text for "Resume run" (at most 2 queries).
+    """Counts, gates and dialog text for "Resume run" (at most 3 queries).
 
-    One aggregate over the run's cases plus the "another run is STARTED"
-    check; the machine state comes from the run's ``project``.
+    One aggregate over the run's cases plus the "another run is STARTED" and
+    "a setup turn is live" checks; the machine state comes from the run's
+    ``project``.
 
     With resumable cases but a blocker, ``can_resume`` is False and
     ``blockers`` says why (the page shows the button disabled).
@@ -122,6 +127,8 @@ def get_resume_panel(test_run: TestRun, project: Project) -> ResumePanel:
     machine_blocker = _machine_blocker(project)
     if machine_blocker:
         blockers.append(machine_blocker)
+    if live_turn_exists(test_run.project_id, timezone.now()):
+        blockers.append(_MACHINE_SETUP_RUNNING)
     return ResumePanel(
         blocked=blocked,
         cancelled_started=cancelled_started,
@@ -248,6 +255,8 @@ def _lock_and_check(
     machine_blocker = _machine_blocker(project)
     if machine_blocker:
         raise RunResumeError(machine_blocker)
+    if live_turn_exists(project.pk, timezone.now()):
+        raise RunResumeError(_MACHINE_SETUP_RUNNING)
 
     queryset = TestRunTestCase.objects.filter(
         test_run_id=test_run.pk, status__in=RESUMABLE_STATUSES

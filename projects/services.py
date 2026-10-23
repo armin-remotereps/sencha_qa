@@ -60,6 +60,8 @@ from controller_client.protocol import (
     OmniParserStatusPayload,
     parse_omniparser_status_payload,
 )
+from machine_setup.turn_state import live_turn_exists
+from projects.application_context_services import write_application_context
 from projects.case_blocking import blocked_message, classify_case_exception
 from projects.case_checkpoint_services import (
     build_checkpoint_callback,
@@ -90,6 +92,7 @@ from projects.exceptions import (
 from projects.models import (
     ApplicationPlatform,
     BlockedReason,
+    ContextWriteSource,
     Project,
     Tag,
     TestCase,
@@ -636,6 +639,27 @@ def _application_context_check(project: Project) -> ReadinessCheck:
     )
 
 
+def _no_machine_setup_check(project: Project) -> ReadinessCheck:
+    passed = not live_turn_exists(project.id, timezone.now())
+    if passed:
+        title = "Machine setup is not running"
+        help_text = ""
+    else:
+        title = "Machine setup is running"
+        help_text = (
+            "The setup agent is working on this machine. "
+            "Stop it or wait for it to finish."
+        )
+    return ReadinessCheck(
+        key="no_machine_setup",
+        passed=passed,
+        blocking=True,
+        title=title,
+        help=help_text,
+        link_url=reverse("machine_setup:chat", kwargs={"project_id": project.id}),
+    )
+
+
 def get_run_readiness(
     project: Project,
     *,
@@ -649,6 +673,7 @@ def get_run_readiness(
         _machine_connected_check(project, machine_state),
         _visual_engine_ready_check(machine_state),
         _no_active_run_check(project, test_run),
+        _no_machine_setup_check(project),
         _application_context_check(project),
     )
     return RunReadiness(checks=checks)
@@ -677,9 +702,31 @@ def regenerate_api_key(project: Project) -> str:
     return project.api_key
 
 
-def save_project_prompt(*, project: Project, prompt: str) -> Project:
-    project.project_prompt = prompt
-    project.save(update_fields=["project_prompt", "updated_at"])
+# Fields `write_application_context` sets, reloaded so the returned project
+# carries the new notes and provenance.
+_CONTEXT_WRITE_FIELDS: tuple[str, ...] = (
+    "project_prompt",
+    "project_prompt_revision",
+    "project_prompt_source",
+    "project_prompt_written_by",
+    "project_prompt_written_at",
+    "project_prompt_change_summary",
+    "updated_at",
+)
+
+
+def save_project_prompt(
+    *,
+    project: Project,
+    prompt: str,
+    author: CustomUser | None = None,
+    source: ContextWriteSource = ContextWriteSource.USER,
+) -> Project:
+    """Replace the notes as a versioned write (raises ``ApplicationContextTooLongError``)."""
+    write_application_context(
+        project_id=project.pk, text=prompt, source=source, author=author
+    )
+    project.refresh_from_db(fields=_CONTEXT_WRITE_FIELDS)
     return project
 
 
@@ -689,19 +736,26 @@ def save_application_context(
     application_url: str,
     application_platform: str,
     project_prompt: str,
+    author: CustomUser | None = None,
 ) -> Project:
-    """Persist the application context used to brief the AI agent."""
-    project.application_url = application_url
-    project.application_platform = application_platform
-    project.project_prompt = project_prompt
-    project.save(
-        update_fields=[
-            "application_url",
-            "application_platform",
-            "project_prompt",
-            "updated_at",
-        ]
-    )
+    """Persist the application context used to brief the AI agent.
+
+    URL and platform are saved as plain fields; the notes go through the
+    versioned write, both in one transaction.
+    """
+    with transaction.atomic():
+        project.application_url = application_url
+        project.application_platform = application_platform
+        project.save(
+            update_fields=["application_url", "application_platform", "updated_at"]
+        )
+        write_application_context(
+            project_id=project.pk,
+            text=project_prompt,
+            source=ContextWriteSource.USER,
+            author=author,
+        )
+    project.refresh_from_db(fields=_CONTEXT_WRITE_FIELDS)
     return project
 
 
@@ -2299,6 +2353,11 @@ def start_test_run(test_run: TestRun) -> None:
         raise ValueError("Test run is not in WAITING status.")
     if _has_active_test_run(test_run.project):
         raise ValueError("Another test run is already in progress for this project.")
+    if live_turn_exists(test_run.project_id, timezone.now()):
+        raise ValueError(
+            "Machine setup is running for this project. "
+            "Stop it or wait for it to finish."
+        )
 
     test_run.status = TestRunStatus.STARTED
     test_run.started_at = timezone.now()

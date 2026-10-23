@@ -15,7 +15,14 @@ from projects.checked_push_limits import (
     CHECKED_PUSH_TIME_LIMIT,
 )
 from projects.controller_reconnect_services import max_outage_seconds_per_case
-from projects.models import Project, TestCaseUpload, TestRun, UploadStatus
+from projects.models import (
+    PROJECT_PROMPT_MAX_LENGTH,
+    ContextWriteSource,
+    Project,
+    TestCaseUpload,
+    TestRun,
+    UploadStatus,
+)
 from projects.prompt_refiner import refine_project_prompt
 from projects.services import _agent_status_group, save_project_prompt
 from projects.testrail_checked_push_services import (
@@ -333,9 +340,16 @@ def refine_project_prompt_task(
         project_id,
     )
     try:
-        refined = refine_project_prompt(raw_prompt)
+        # The model may expand the (already capped) input past the limit; the
+        # versioned write rejects anything longer.
+        refined = refine_project_prompt(raw_prompt)[:PROJECT_PROMPT_MAX_LENGTH]
         project = Project.objects.get(id=project_id)
-        save_project_prompt(project=project, prompt=refined)
+        save_project_prompt(
+            project=project,
+            prompt=refined,
+            author=None,
+            source=ContextWriteSource.REFINER,
+        )
         _send_prompt_refined(project_id, refined_prompt=refined)
         logger.info(
             "refine_project_prompt_task completed: task_id=%s project_id=%s",
