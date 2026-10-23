@@ -29,6 +29,7 @@ from machine_setup.services.live_turn import resolve_live_turn
 from machine_setup.tasks import run_setup_turn
 from projects.models import Project, TestRun, TestRunStatus
 from projects.services import MachineState, get_machine_state
+from visual_engine.services.pool_status import get_visual_engine_status
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,7 @@ def _send_locked(
     # and a run start cannot both pass their "nothing else is live" checks.
     locked = (
         Project.objects.select_for_update()
-        .only("id", "agent_connected", "agent_omniparser_status")
+        .only("id", "agent_connected")
         .get(pk=project.pk)
     )
     refusal = _refusal(locked, timezone.now())
@@ -73,7 +74,8 @@ def _refusal(project: Project, now: datetime) -> MachineSetupError | None:
         return SetupTurnActiveError()
     if TestRun.objects.filter(project=project, status=TestRunStatus.STARTED).exists():
         return SetupRunActiveError()
-    if get_machine_state(project) != MachineState.READY:
+    visual_engine = get_visual_engine_status()
+    if get_machine_state(project, visual_engine) != MachineState.READY:
         return SetupMachineNotReadyError()
     return None
 

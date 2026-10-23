@@ -25,12 +25,14 @@ from projects.models import Project
 @project_membership_required
 @require_GET
 def setup_chat(request: AuthenticatedRequest, project: Project) -> HttpResponse:
+    page = get_setup_page(project, include_messages=False)
     return render(
         request,
         "machine_setup/chat.html",
         {
             "project": project,
-            "page": get_setup_page(project, include_messages=False),
+            "page": page,
+            "visual_engine": page.visual_engine,
             "blocker_texts": {
                 "machine_not_ready": SetupMachineNotReadyError.default_message,
                 "turn_active": SetupTurnActiveError.default_message,

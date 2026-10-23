@@ -10,13 +10,14 @@ from machine_setup.services.chat_page import SetupPage, get_setup_page
 from projects.consumers import AuthenticatedConsumer
 from projects.models import Project
 from projects.services import _agent_status_group
+from visual_engine.services.pool_status import VISUAL_ENGINE_GROUP
 
 
 class MachineSetupConsumer(AuthenticatedConsumer):
     """Live machine setup chat: turn progress plus runner status on one socket.
 
-    Joins the setup group (via the base class `group_name`) and the
-    project's agent status group. Receive-only: client frames are ignored.
+    Joins the setup group (via the base class `group_name`), the
+    project's agent status group and the global visual engine group. Receive-only: client frames are ignored.
     """
 
     _project: Project
@@ -35,6 +36,7 @@ class MachineSetupConsumer(AuthenticatedConsumer):
     async def _send_initial_state(self) -> None:
         # Join before reading state so no runner update is missed in between.
         await self.channel_layer.group_add(self._agent_group_name, self.channel_name)
+        await self.channel_layer.group_add(VISUAL_ENGINE_GROUP, self.channel_name)
         project = self._project
         page: SetupPage = await sync_to_async(get_setup_page)(project)
         await self.send(
@@ -50,7 +52,7 @@ class MachineSetupConsumer(AuthenticatedConsumer):
                     "finishing_previous_turn": page.finishing_previous_turn,
                     "finishing_conversation_id": page.finishing_conversation_id,
                     "agent_connected": project.agent_connected,
-                    "agent_omniparser_status": project.agent_omniparser_status,
+                    "visual_engine": page.visual_engine,
                 }
             )
         )
@@ -61,6 +63,9 @@ class MachineSetupConsumer(AuthenticatedConsumer):
             await self.channel_layer.group_discard(
                 self._agent_group_name,
                 self.channel_name,
+            )
+            await self.channel_layer.group_discard(
+                VISUAL_ENGINE_GROUP, self.channel_name
             )
 
     async def receive(
@@ -99,7 +104,13 @@ class MachineSetupConsumer(AuthenticatedConsumer):
                 {
                     "type": "agent_status",
                     "agent_connected": event["agent_connected"],
-                    "agent_omniparser_status": event["agent_omniparser_status"],
                 }
+            )
+        )
+
+    async def visual_engine_status(self, event: dict[str, Any]) -> None:
+        await self.send(
+            text_data=json.dumps(
+                {"type": "visual_engine", "visual_engine": event["visual_engine"]}
             )
         )

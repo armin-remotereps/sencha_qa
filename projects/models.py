@@ -144,7 +144,6 @@ class Project(models.Model):
     agent_system_info = models.JSONField(default=dict, blank=True)
     agent_client_version = models.CharField(max_length=32, blank=True, default="")
     agent_capabilities = models.JSONField(default=list, blank=True)
-    agent_omniparser_status = models.JSONField(default=dict, blank=True)
     last_connected_at = models.DateTimeField(null=True, blank=True)
     project_prompt = models.TextField(blank=True, default="")
     # Bumped on every write; the setup agent's write is conditional on it.

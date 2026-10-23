@@ -24,6 +24,10 @@ from projects.services import (
     get_project_for_user,
 )
 from projects.testrail_checked_push_services import checked_push_display_status
+from visual_engine.services.pool_status import (
+    VISUAL_ENGINE_GROUP,
+    get_visual_engine_status,
+)
 
 
 class AuthenticatedConsumer(AsyncWebsocketConsumer):
@@ -294,6 +298,8 @@ class AgentStatusConsumer(AuthenticatedConsumer):
         return True
 
     async def _send_initial_state(self) -> None:
+        # Join before reading state so no engine update is missed in between.
+        await self.channel_layer.group_add(VISUAL_ENGINE_GROUP, self.channel_name)
         project_id = self._project_id
 
         def _fetch_project() -> dict[str, Any]:
@@ -303,21 +309,26 @@ class AgentStatusConsumer(AuthenticatedConsumer):
                 "agent_system_info": p.agent_system_info,
                 "agent_client_version": p.agent_client_version,
                 "agent_capabilities": p.agent_capabilities,
-                "agent_omniparser_status": p.agent_omniparser_status,
                 "last_connected_at": (
                     p.last_connected_at.isoformat() if p.last_connected_at else None
                 ),
             }
 
         state = await sync_to_async(_fetch_project)()
+        visual_engine = await sync_to_async(get_visual_engine_status)()
         await self.send(
             text_data=json.dumps(
                 {
                     "type": "agent_status",
                     **state,
+                    "visual_engine": visual_engine.to_payload(),
                 }
             )
         )
+
+    async def disconnect(self, close_code: int) -> None:
+        await super().disconnect(close_code)
+        await self.channel_layer.group_discard(VISUAL_ENGINE_GROUP, self.channel_name)
 
     async def agent_status(self, event: dict[str, Any]) -> None:
         await self.send(
@@ -328,9 +339,15 @@ class AgentStatusConsumer(AuthenticatedConsumer):
                     "agent_system_info": event["agent_system_info"],
                     "agent_client_version": event["agent_client_version"],
                     "agent_capabilities": event["agent_capabilities"],
-                    "agent_omniparser_status": event["agent_omniparser_status"],
                     "last_connected_at": event["last_connected_at"],
                 }
+            )
+        )
+
+    async def visual_engine_status(self, event: dict[str, Any]) -> None:
+        await self.send(
+            text_data=json.dumps(
+                {"type": "visual_engine", "visual_engine": event["visual_engine"]}
             )
         )
 

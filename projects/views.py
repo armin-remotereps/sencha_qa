@@ -81,6 +81,7 @@ from projects.services import (
     can_edit_test_case_in_run,
     can_rerun_cases,
     cancel_upload_processing,
+    connected_machine_state,
     copy_test_cases_to_project,
     count_test_cases,
     create_project,
@@ -137,6 +138,7 @@ from projects.testrail_checked_push_services import (
 from projects.testrail_mapping import format_push_confirm_body
 from projects.testrail_results_services import get_testrail_push_panel
 from projects.testrail_services import get_testrail_picker_state
+from visual_engine.services.pool_status import get_visual_engine_status
 
 ALLOWED_PER_PAGE = [10, 20, 50, 100]
 DEFAULT_PER_PAGE = 20
@@ -225,6 +227,8 @@ def project_list(request: AuthenticatedRequest) -> HttpResponse:
     tags = get_all_tags_for_user(user)
     form = ProjectForm()
     latest_runs = get_latest_runs_by_project(projects)
+    # The visual engine is global: one query gives every connected row's state.
+    machine_state_if_connected = connected_machine_state(get_visual_engine_status())
 
     return render(
         request,
@@ -232,6 +236,7 @@ def project_list(request: AuthenticatedRequest) -> HttpResponse:
         {
             "projects": projects,
             "latest_runs": latest_runs,
+            "connected_machine_state": machine_state_if_connected.value,
             "tags": tags,
             "form": form,
             "search": search or "",
@@ -373,13 +378,15 @@ def project_duplicate(request: AuthenticatedRequest, project_id: int) -> HttpRes
 
 @project_membership_required
 def project_overview(request: HttpRequest, project: Project) -> HttpResponse:
-    overview = get_project_overview(project)
+    visual_engine = get_visual_engine_status()
+    overview = get_project_overview(project, visual_engine)
     return render(
         request,
         "projects/overview.html",
         {
             "project": project,
             "overview": overview,
+            "visual_engine": visual_engine.to_payload(),
             "context_source": get_context_provenance(project),
             "active_tab": "overview",
             "active_nav": "projects",
@@ -389,13 +396,15 @@ def project_overview(request: HttpRequest, project: Project) -> HttpResponse:
 
 @project_membership_required
 def project_environment(request: HttpRequest, project: Project) -> HttpResponse:
-    machine_state = get_machine_state(project)
+    visual_engine = get_visual_engine_status()
+    machine_state = get_machine_state(project, visual_engine)
     return render(
         request,
         "projects/environment.html",
         {
             "project": project,
             "machine_state": machine_state,
+            "visual_engine": visual_engine.to_payload(),
             "active_tab": "environment",
             "active_nav": "projects",
         },
@@ -1205,6 +1214,7 @@ def setup_machine(request: HttpRequest, project: Project) -> HttpResponse:
         "projects/wizard/step_machine.html",
         {
             "project": project,
+            "visual_engine": get_visual_engine_status().to_payload(),
             "wizard_step": 4,
             "wizard_mode": "edit",
             "active_nav": "projects",

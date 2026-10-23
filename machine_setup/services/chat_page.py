@@ -32,6 +32,8 @@ from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 from machine_setup.turn_state import is_turn_stale
 from projects.models import Project, TestRun, TestRunStatus
 from projects.services import MachineState, get_machine_state
+from visual_engine.services.pool_status import get_visual_engine_status
+from visual_engine.types import VisualEngineStatusPayload
 
 SETUP_PAGE_MESSAGE_LIMIT = 300
 # Newest children loaded per run_setup_task row on page load.
@@ -45,6 +47,7 @@ class SetupPage:
     hidden_message_count: int
     turn: SetupTurnPayload | None
     machine_state: MachineState
+    visual_engine: VisualEngineStatusPayload
     run_active: bool
     send_blockers: tuple[str, ...]
     can_send: bool
@@ -56,7 +59,7 @@ class SetupPage:
 
 
 def get_setup_page(project: Project, *, include_messages: bool = True) -> SetupPage:
-    """About four queries; never loads ``llm_transcript``.
+    """About five queries; never loads ``llm_transcript``.
 
     The HTML page passes ``include_messages=False``: the socket's
     ``current_state`` delivers the rows, so they are built once per load.
@@ -87,7 +90,8 @@ def get_setup_page(project: Project, *, include_messages: bool = True) -> SetupP
     messages, hidden_count = (
         _recent_messages(conversation_id) if include_messages else ([], 0)
     )
-    machine_state = get_machine_state(project)
+    visual_engine = get_visual_engine_status()
+    machine_state = get_machine_state(project, visual_engine)
     run_active = TestRun.objects.filter(
         project=project, status=TestRunStatus.STARTED
     ).exists()
@@ -111,6 +115,7 @@ def get_setup_page(project: Project, *, include_messages: bool = True) -> SetupP
         hidden_message_count=hidden_count,
         turn=turn_payload(shown_turn) if shown_turn is not None else None,
         machine_state=machine_state,
+        visual_engine=visual_engine.to_payload(),
         run_active=run_active,
         send_blockers=tuple(blockers),
         can_send=not blockers,

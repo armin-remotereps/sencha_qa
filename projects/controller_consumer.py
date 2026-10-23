@@ -14,7 +14,6 @@ from controller_client.protocol import (
     CloseCode,
     ErrorCode,
     parse_handshake_capabilities,
-    parse_omniparser_status_payload,
 )
 from projects.controller_authenticator import (
     ControllerAuthenticator,
@@ -43,7 +42,6 @@ from projects.controller_protocol import (
     ControllerMessageBuilder,
     DoubleClickActionEvent,
     DragActionEvent,
-    FindElementActionEvent,
     HoverActionEvent,
     KeyPressActionEvent,
     LaunchAppActionEvent,
@@ -57,11 +55,7 @@ from projects.controller_protocol import (
 )
 from projects.controller_reply_tracker import ReplyTracker
 from projects.models import Project
-from projects.services import (
-    broadcast_agent_status,
-    release_agent_connection,
-    update_agent_omniparser_status,
-)
+from projects.services import broadcast_agent_status, release_agent_connection
 
 logger = logging.getLogger(__name__)
 
@@ -119,11 +113,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         msg_type: str = data.get("type", "")
         request_id: str = data.get("request_id", "")
 
+        # Unknown types fall through silently, including the
+        # ``omniparser_status`` reports a 0.5.x Test Runner still sends.
         if msg_type == "pong":
-            return
-
-        if msg_type == "omniparser_status":
-            await self._handle_omniparser_status(data)
             return
 
         handlers = {
@@ -133,25 +125,12 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             "command_result": self._reply_tracker.send_command_result,
             "browser_content_result": self._reply_tracker.send_browser_content_result,
             "interactive_output": self._reply_tracker.send_interactive_output,
-            "find_element_result": self._reply_tracker.send_find_element_result,
             "error": self._reply_tracker.send_error,
         }
 
         handler = handlers.get(msg_type)
         if handler:
             await handler(request_id, data)
-
-    async def _handle_omniparser_status(self, data: dict[str, Any]) -> None:
-        if self._project is None:
-            return
-
-        try:
-            payload = parse_omniparser_status_payload(data)
-        except ProtocolError as exc:
-            await self._send_error(f"Invalid omniparser_status: {exc}")
-            return
-
-        await sync_to_async(update_agent_omniparser_status)(self._project, payload)
 
     async def _handle_handshake(self, data: dict[str, Any], request_id: str) -> None:
         api_key: str = data.get("api_key", "")
@@ -362,9 +341,6 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     async def controller_cleanup_environment(
         self, event: CleanupEnvironmentActionEvent
     ) -> None:
-        await self._forward_action(event)
-
-    async def controller_find_element(self, event: FindElementActionEvent) -> None:
         await self._forward_action(event)
 
     async def _send_handshake_ack(

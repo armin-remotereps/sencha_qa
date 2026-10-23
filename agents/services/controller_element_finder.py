@@ -7,6 +7,7 @@ from collections.abc import Callable
 from agents.exceptions import ElementNotFoundError, RejectedElementChosenError
 from agents.services.llm_client import send_chat_completion
 from agents.types import (
+    CancellationCheck,
     ChatMessage,
     ImageContent,
     LLMConfig,
@@ -37,9 +38,12 @@ def parse_screen(
     project_id: int,
     *,
     on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
 ) -> PixelParseResult:
     """Run OmniParser on the current screen and publish the annotated image."""
-    parse_result = controller_find_elements(project_id)
+    parse_result = controller_find_elements(
+        project_id, cancellation_check=cancellation_check
+    )
 
     if on_screenshot is not None:
         on_screenshot(parse_result.annotated_image, "controller_omniparser")

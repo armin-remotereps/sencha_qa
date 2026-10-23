@@ -45,9 +45,7 @@ from agents.types import (
     AgentCancelledError,
     AgentResult,
     AgentStopReason,
-    PixelBBox,
     PixelParseResult,
-    PixelUIElement,
     ScreenshotCallback,
 )
 from auto_tester.celery import app as celery_app
@@ -56,9 +54,6 @@ from controller_client.protocol import (
     REQUIRED_CLIENT_CAPABILITIES,
     BrowserName,
     ErrorCode,
-    OmniParserState,
-    OmniParserStatusPayload,
-    parse_omniparser_status_payload,
 )
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from projects.application_context_services import write_application_context
@@ -75,7 +70,6 @@ from projects.case_step_progress import (
 from projects.checked_push_limits import is_checked_push_live
 from projects.controller_outage_clock import agent_monotonic, reset_outage_clock
 from projects.controller_reconnect_services import (
-    CONTROLLER_POLL_INTERVAL_SECONDS,
     connected_owner,
     controller_connection_lost,
     wait_for_controller,
@@ -87,7 +81,6 @@ from projects.exceptions import (
     ControllerReconnectTimeoutError,
     TestRunnerDisconnectedError,
     TestRunnerUnresponsiveError,
-    VisualEngineError,
 )
 from projects.models import (
     ApplicationPlatform,
@@ -108,6 +101,10 @@ from projects.models import (
     UploadStatus,
 )
 from projects.run_case_order import PICKER_CASE_ORDERING, RUN_CASE_ORDERING
+from visual_engine.services.parse_screenshot import parse_screenshot
+from visual_engine.services.pool_status import get_visual_engine_status
+from visual_engine.services.wait_for_ready_worker import wait_for_ready_worker
+from visual_engine.types import VisualEngineState, VisualEngineStatus
 
 logger = logging.getLogger(__name__)
 
@@ -349,26 +346,37 @@ class MachineState(StrEnum):
     STARTING = "starting"
     READY = "ready"
     FAILED = "failed"
+    VISUAL_ENGINE_OFFLINE = "offline"
 
 
-def get_machine_state(project: Project) -> MachineState:
-    """Derive one machine badge state from `agent_connected` and OmniParser status.
+_MACHINE_STATE_BY_ENGINE_STATE: Final[dict[VisualEngineState, MachineState]] = {
+    VisualEngineState.READY: MachineState.READY,
+    VisualEngineState.STARTING: MachineState.STARTING,
+    VisualEngineState.FAILED: MachineState.FAILED,
+    VisualEngineState.OFFLINE: MachineState.VISUAL_ENGINE_OFFLINE,
+}
 
-    A freshly connected controller reports an empty OmniParser status
-    dict until its first status update arrives, which is treated as
-    STARTING rather than FAILED.
+
+def connected_machine_state(visual_engine: VisualEngineStatus) -> MachineState:
+    """The machine state any project with a connected Test Runner has right now.
+
+    The visual engine is global, so every connected project shares it; pages
+    listing many projects compute it once instead of once per row.
+    """
+    return _MACHINE_STATE_BY_ENGINE_STATE[visual_engine.state]
+
+
+def get_machine_state(
+    project: Project, visual_engine: VisualEngineStatus
+) -> MachineState:
+    """Derive one machine badge state from `agent_connected` and the visual engine.
+
+    The engine status is passed in so pages rendering many projects read it
+    once (`get_visual_engine_status`) rather than once per project.
     """
     if not project.agent_connected:
         return MachineState.DISCONNECTED
-    if not project.agent_omniparser_status:
-        return MachineState.STARTING
-
-    status = parse_omniparser_status_payload(project.agent_omniparser_status)
-    if status.state == OmniParserState.READY:
-        return MachineState.READY
-    if status.state == OmniParserState.FAILED:
-        return MachineState.FAILED
-    return MachineState.STARTING
+    return connected_machine_state(visual_engine)
 
 
 class PrimaryAction(StrEnum):
@@ -460,11 +468,13 @@ def _compute_pass_rate_30d(project: Project) -> int | None:
     return round((result["success"] or 0) * 100 / total)
 
 
-def get_project_overview(project: Project) -> ProjectOverview:
+def get_project_overview(
+    project: Project, visual_engine: VisualEngineStatus
+) -> ProjectOverview:
     """Gather the project overview page's data in a fixed, small number of queries."""
     case_count = project.test_cases.count()
     never_run_count = project.test_cases.filter(run_entries__isnull=True).count()
-    machine_state = get_machine_state(project)
+    machine_state = get_machine_state(project, visual_engine)
     active_run = TestRun.objects.filter(
         project=project, status=TestRunStatus.STARTED
     ).first()
@@ -576,17 +586,29 @@ def _machine_connected_check(
     )
 
 
-def _visual_engine_ready_check(machine_state: MachineState) -> ReadinessCheck:
-    passed = machine_state == MachineState.READY
+_VISUAL_ENGINE_NOT_READY_HELP: Final[dict[VisualEngineState, str]] = {
+    VisualEngineState.STARTING: (
+        "A vision worker is loading its model — this usually takes a few "
+        "minutes after it connects."
+    ),
+    VisualEngineState.FAILED: (
+        "Every connected vision worker failed to load; check the worker's log "
+        "or run `python -m vision_worker.diagnose`."
+    ),
+    VisualEngineState.OFFLINE: (
+        "No vision worker is connected. Start one with `python -m vision_worker`."
+    ),
+}
+
+
+def _visual_engine_ready_check(visual_engine: VisualEngineStatus) -> ReadinessCheck:
+    passed = visual_engine.state == VisualEngineState.READY
     if passed:
         title = "Visual engine ready"
         help_text = ""
     else:
         title = "Visual engine not ready"
-        help_text = (
-            "The Test Runner is still starting its visual engine — this "
-            "usually takes a few minutes after it connects."
-        )
+        help_text = _VISUAL_ENGINE_NOT_READY_HELP[visual_engine.state]
     return ReadinessCheck(
         key="visual_engine_ready",
         passed=passed,
@@ -667,11 +689,12 @@ def get_run_readiness(
     selected_count: int | None = None,
 ) -> RunReadiness:
     """Compute the "Ready to run?" checklist shown before starting a run."""
-    machine_state = get_machine_state(project)
+    visual_engine = get_visual_engine_status()
+    machine_state = get_machine_state(project, visual_engine)
     checks = (
         _cases_selected_check(test_run, selected_count),
         _machine_connected_check(project, machine_state),
-        _visual_engine_ready_check(machine_state),
+        _visual_engine_ready_check(visual_engine),
         _no_active_run_check(project, test_run),
         _no_machine_setup_check(project),
         _application_context_check(project),
@@ -791,19 +814,6 @@ def _find_missing_capabilities(capabilities: Sequence[str]) -> list[str]:
     return sorted(cap for cap in REQUIRED_CLIENT_CAPABILITIES if cap not in present)
 
 
-def _initial_omniparser_status() -> dict[str, Any]:
-    return _serialize_omniparser_status(
-        OmniParserStatusPayload(
-            state=OmniParserState.LOADING,
-            message="Waiting for the controller to report OmniParser readiness",
-            device="",
-            weights_dir="",
-            phase="handshake",
-            load_seconds=0.0,
-        )
-    )
-
-
 def claim_agent_connection(
     project: Project,
     channel_name: str,
@@ -830,7 +840,6 @@ def claim_agent_connection(
             agent_system_info=system_info,
             agent_client_version=client_version,
             agent_capabilities=list(capabilities),
-            agent_omniparser_status=_initial_omniparser_status(),
         )
     project.refresh_from_db()
     if previous_channel_name == channel_name:
@@ -862,7 +871,6 @@ class _DisconnectedAgentFields(TypedDict):
     agent_system_info: dict[str, object]
     agent_client_version: str
     agent_capabilities: list[str]
-    agent_omniparser_status: dict[str, object]
     last_connected_at: datetime
 
 
@@ -873,28 +881,7 @@ def _disconnected_agent_fields() -> _DisconnectedAgentFields:
         "agent_system_info": {},
         "agent_client_version": "",
         "agent_capabilities": [],
-        "agent_omniparser_status": {},
         "last_connected_at": timezone.now(),
-    }
-
-
-def update_agent_omniparser_status(
-    project: Project, status: OmniParserStatusPayload
-) -> None:
-    """Persist the controller's latest OmniParser readiness report."""
-    project.agent_omniparser_status = _serialize_omniparser_status(status)
-    project.save(update_fields=["agent_omniparser_status"])
-    broadcast_agent_status(project)
-
-
-def _serialize_omniparser_status(status: OmniParserStatusPayload) -> dict[str, Any]:
-    return {
-        "state": status.state.value,
-        "message": status.message,
-        "device": status.device,
-        "weights_dir": status.weights_dir,
-        "phase": status.phase,
-        "load_seconds": status.load_seconds,
     }
 
 
@@ -904,7 +891,6 @@ class AgentStatusEvent(TypedDict):
     agent_system_info: dict[str, Any]
     agent_client_version: str
     agent_capabilities: list[str]
-    agent_omniparser_status: dict[str, Any]
     last_connected_at: str | None
 
 
@@ -919,7 +905,6 @@ def _build_agent_status_event(project: Project) -> AgentStatusEvent:
         "agent_system_info": project.agent_system_info,
         "agent_client_version": project.agent_client_version,
         "agent_capabilities": project.agent_capabilities,
-        "agent_omniparser_status": project.agent_omniparser_status,
         "last_connected_at": (
             project.last_connected_at.isoformat() if project.last_connected_at else None
         ),
@@ -1001,10 +986,6 @@ def _get_channel_layer_or_raise() -> Any:
 
 
 _ERROR_REPLY_TYPE = "error.result"
-# Error codes meaning the visual engine (OmniParser), not the app, failed.
-_VISUAL_ENGINE_ERROR_CODES = frozenset(
-    {ErrorCode.FIND_ELEMENT_FAILED, ErrorCode.OMNIPARSER_NOT_READY}
-)
 
 _BROWSER_NOT_INSTALLED_MESSAGE = (
     "The browser this case asked for is not installed on the test machine. "
@@ -1034,8 +1015,6 @@ def _raise_for_error_reply(reply: dict[str, Any], event_type: str) -> None:
         message = f"{message} [{code}]"
     if details:
         message = f"{message} ({details})"
-    if code in _VISUAL_ENGINE_ERROR_CODES:
-        raise VisualEngineError(message)
     if code == ErrorCode.BROWSER_NOT_INSTALLED:
         # The runner's text can carry local paths; it stays in the server log.
         logger.warning("Controller could not launch a browser: %s", message)
@@ -1139,7 +1118,7 @@ def _raise_reply_timeout(
     """Raise ``_ConnectionLost`` if the owner changed, else a timeout error.
 
     ``runner_local`` marks actions whose duration does not depend on the
-    application under test (input, screenshot, find_element, cleanup, ...):
+    application under test (input, screenshot, cleanup, ...):
     their silence means the Test Runner itself stopped responding, which blocks
     the case. Other timeouts stay plain so the agent can judge a hung app.
     """
@@ -1376,8 +1355,8 @@ def controller_screenshot(
 ) -> ScreenshotResult:
     """Take a desktop screenshot, re-asking up to ``_SCREENSHOT_ATTEMPTS`` times.
 
-    A multi-MiB image on a slow uplink, or a runner busy with the visual
-    engine, can miss one reply window while the runner is fine. Screenshots
+    A multi-MiB image on a slow uplink can miss one reply window while the
+    runner is fine. Screenshots
     are idempotent, so a timeout is re-sent instead of blocking the case at
     once; only the last timeout propagates as ``TestRunnerUnresponsiveError``.
     """
@@ -1408,62 +1387,25 @@ def controller_screenshot(
     return _build_screenshot_result(reply, "take a screenshot")
 
 
-def _build_pixel_element(data: dict[str, Any]) -> PixelUIElement:
-    bbox_data: dict[str, Any] = data.get("bbox", {})
-    return PixelUIElement(
-        index=data.get("index", 0),
-        type=data.get("type", "unknown"),
-        content=data.get("content", ""),
-        bbox=PixelBBox(
-            x_min=bbox_data.get("x_min", 0),
-            y_min=bbox_data.get("y_min", 0),
-            x_max=bbox_data.get("x_max", 0),
-            y_max=bbox_data.get("y_max", 0),
-        ),
-        center_x=data.get("center_x", 0),
-        center_y=data.get("center_y", 0),
-        interactivity=data.get("interactivity", False),
-    )
-
-
-def _raise_for_find_element_failure(reply: dict[str, Any]) -> None:
-    if reply.get("success", False):
-        return
-
-    message = reply.get("message") or "Controller failed to find elements on screen"
-    details = reply.get("details", "")
-    if details:
-        message = f"{message} ({details})"
-    raise VisualEngineError(message)
-
-
 def controller_find_elements(
     project_id: int,
     box_threshold: float | None = None,
     iou_threshold: float | None = None,
-    timeout: float | None = None,
+    cancellation_check: Callable[[], bool] | None = None,
 ) -> PixelParseResult:
-    resolved_timeout = (
-        float(settings.CONTROLLER_FIND_ELEMENT_TIMEOUT) if timeout is None else timeout
-    )
-    reply = _dispatch_controller_action(
-        project_id,
-        "controller.find_element",
-        resolved_timeout,
-        runner_local=True,
+    """Screenshot the test machine, then have a vision worker parse it.
+
+    The elements are in the screenshot's pixel space, which is the space the
+    runner's clicks use, so callers use their centers unchanged.
+    """
+    shot = controller_screenshot(project_id)
+    return parse_screenshot(
+        shot["image_base64"],
+        image_width=shot["width"],
+        image_height=shot["height"],
         box_threshold=box_threshold,
         iou_threshold=iou_threshold,
-    )
-    _raise_for_find_element_failure(reply)
-
-    elements_data: list[dict[str, Any]] = reply.get("elements", [])
-    elements = tuple(_build_pixel_element(el) for el in elements_data)
-
-    return PixelParseResult(
-        annotated_image=reply.get("annotated_image_base64", ""),
-        elements=elements,
-        image_width=reply.get("image_width", 0),
-        image_height=reply.get("image_height", 0),
+        cancellation_check=cancellation_check,
     )
 
 
@@ -2792,57 +2734,6 @@ def _is_stale_execution(test_run_id: int, generation: int) -> bool:
     ).exists()
 
 
-def _wait_for_omniparser_ready(
-    project: Project,
-    cancellation_check: Callable[[], bool] | None = None,
-) -> None:
-    """Block until the controller reports OmniParser as ready to use.
-
-    A freshly connected controller still needs to load its OmniParser
-    weights in the background; running an action before that finishes
-    would otherwise time out with a confusing error. A disconnect waits for
-    the Test Runner to reconnect; that wait does not count against the timeout.
-    """
-    timeout = settings.CONTROLLER_OMNIPARSER_READY_TIMEOUT
-    start = agent_monotonic()
-    last_state = ""
-    while agent_monotonic() - start < timeout:
-        _raise_if_run_cancelled(cancellation_check)
-        project.refresh_from_db()
-        if not project.agent_connected:
-            wait_for_controller(project.id)
-            continue
-        last_state = _raise_for_omniparser_failure(project)
-        if last_state == OmniParserState.READY:
-            return
-        time.sleep(CONTROLLER_POLL_INTERVAL_SECONDS)
-    raise VisualEngineError(
-        f"OmniParser did not become ready within {timeout}s for project "
-        f"{project.id} (last observed state: {last_state or 'unknown'})"
-    )
-
-
-def _raise_if_run_cancelled(cancellation_check: Callable[[], bool] | None) -> None:
-    if cancellation_check is not None and cancellation_check():
-        raise AgentCancelledError(
-            "Test run cancelled while waiting for OmniParser readiness"
-        )
-
-
-def _raise_for_omniparser_failure(project: Project) -> str:
-    if not project.agent_omniparser_status:
-        return ""
-    status = parse_omniparser_status_payload(project.agent_omniparser_status)
-    if status.state is not OmniParserState.FAILED:
-        return status.state.value
-
-    raise VisualEngineError(
-        "OmniParser failed to initialize on the controller: "
-        f"{status.message} (phase={status.phase}, device={status.device}, "
-        f"weights_dir={status.weights_dir})"
-    )
-
-
 def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> None:
     """Run one case as part of the run's ``generation`` (None: the current one)."""
     reset_outage_clock()
@@ -2864,7 +2755,10 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
     try:
         wait_for_controller(project.id)
 
-        _wait_for_omniparser_ready(project, cancellation_check=cancellation_check)
+        wait_for_ready_worker(
+            timeout=float(settings.VISION_WORKER_READY_TIMEOUT),
+            cancellation_check=cancellation_check,
+        )
 
         _safe_cleanup(project.id, wait_for_runner=True)
 

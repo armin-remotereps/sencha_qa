@@ -142,7 +142,11 @@ def resolve_verified_element(
     candidates on this screen have been rejected.
     """
     budget.raise_if_cancelled()
-    parse_result = parse_screen(project_id, on_screenshot=on_screenshot)
+    parse_result = parse_screen(
+        project_id,
+        on_screenshot=on_screenshot,
+        cancellation_check=budget.cancellation_check,
+    )
     rejected_indices: set[int] = set()
     rejected_count = 0
 

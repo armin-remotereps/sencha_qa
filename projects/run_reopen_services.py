@@ -27,6 +27,7 @@ from projects.services import (
     get_machine_state,
     queue_test_run_cases,
 )
+from visual_engine.services.pool_status import get_visual_engine_status
 
 REOPENABLE_RUN_STATUSES: tuple[str, ...] = (TestRunStatus.DONE, TestRunStatus.CANCELLED)
 
@@ -35,9 +36,10 @@ _CHECKED_PUSH_LIVE = "Wait for the checked results to finish sending to TestRail
 _RESULTS_PUSHING = "Wait for the results to finish pushing to TestRail."
 _MACHINE_NOT_READY = "Connect the Test Runner and wait for the visual engine."
 _MACHINE_FAILED = (
-    "The visual engine on the test machine failed. "
-    "Check Advanced diagnostics on the Environment page."
+    "Every connected vision worker failed to load. "
+    "Check the vision workers on the Environment page."
 )
+_VISUAL_ENGINE_OFFLINE = "Start a vision worker."
 
 
 def lock_project_and_run(test_run_id: int) -> tuple[Project, TestRun]:
@@ -108,9 +110,11 @@ def _has_other_started_run(project_id: int, test_run_id: int) -> bool:
 
 
 def _machine_blocker(project: Project) -> str | None:
-    state = get_machine_state(project)
+    state = get_machine_state(project, get_visual_engine_status())
     if state == MachineState.READY:
         return None
     if state == MachineState.FAILED:
         return _MACHINE_FAILED
+    if state == MachineState.VISUAL_ENGINE_OFFLINE:
+        return _VISUAL_ENGINE_OFFLINE
     return _MACHINE_NOT_READY

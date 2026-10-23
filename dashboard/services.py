@@ -24,6 +24,8 @@ from projects.services import (
     get_machine_state,
     resolve_primary_action,
 )
+from visual_engine.services.pool_status import get_visual_engine_status
+from visual_engine.types import VisualEngineStatus
 
 RECENT_PROJECTS_LIMIT = 3
 ATTENTION_LIMIT = 5
@@ -293,12 +295,13 @@ def _build_project_card(
     project: Project,
     runs_by_id: dict[int, TestRun],
     summaries_by_run_id: dict[int, dict[str, int]],
+    visual_engine: VisualEngineStatus,
 ) -> ProjectCard:
     # The three attributes below are annotate() fields on the project row.
     case_count: int = project.case_count  # type: ignore[attr-defined]
     active_run = runs_by_id.get(project.active_run_id)  # type: ignore[attr-defined]
     latest_run = runs_by_id.get(project.latest_run_id)  # type: ignore[attr-defined]
-    machine_state = get_machine_state(project)
+    machine_state = get_machine_state(project, visual_engine)
     latest_run_summary = (
         summaries_by_run_id.get(latest_run.id) if latest_run is not None else None
     )
@@ -358,9 +361,11 @@ def _build_project_cards(project_ids: list[int]) -> list[ProjectCard]:
     }
     runs_by_id = TestRun.objects.in_bulk(run_ids)
     summaries_by_run_id = _summaries_for_runs(run_ids)
+    # Global, so one query serves every card.
+    visual_engine = get_visual_engine_status()
 
     return [
-        _build_project_card(project, runs_by_id, summaries_by_run_id)
+        _build_project_card(project, runs_by_id, summaries_by_run_id, visual_engine)
         for project in projects
     ]
 
