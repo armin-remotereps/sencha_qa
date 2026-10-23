@@ -1010,3 +1010,7 @@ least one vision worker. A CPU worker on the dev Mac works for the logic checks.
     timeout and broadcasts normally.
   - `Any` for the channel layer: same as the existing controller code; `channels` ships no typed layer API.
   - Shared-token risks (name takeover, PARSE_FAILED from a rogue worker): accepted with Q3.
+- 2026-10-24: Docker support removed at the user's request (too complicated). The worker is deployed exactly like
+  the Test Runner: `scripts/setup.sh` / `setup.ps1` (the weights download is now inline in both), then
+  `python -m vision_worker.main`. Removed `Dockerfile`, `.dockerignore`, `docker-compose.yml`,
+  `scripts/download_weights.sh` and `__main__.py`. Several GPUs = one process per GPU with `CUDA_VISIBLE_DEVICES`.

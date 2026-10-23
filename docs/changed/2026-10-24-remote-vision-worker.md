@@ -4,7 +4,7 @@ Date: 2026-10-24
 Plan: docs/plan/refactor-remote-vision-worker.md
 
 ## What changed
-- `vision_worker/` (new standalone client): OmniParser (vendored code moved from `controller_client/omniparser/`) runs on a GPU machine with `python -m vision_worker` or the CUDA Docker image (`Dockerfile`, `docker-compose.yml`, one service per GPU). It connects out over wss, authenticates with `VISION_WORKER_TOKEN`, preloads the model, heartbeats `status` every 30 s and answers `parse_request`. Wire protocol: `vision_worker/protocol.py` (stdlib only, imported by the server). `python -m vision_worker.diagnose` checks the setup.
+- `vision_worker/` (new standalone client): OmniParser (vendored code moved from `controller_client/omniparser/`) runs on a GPU machine. Set it up with `vision_worker/scripts/setup.sh` / `setup.ps1` and run it with `python -m vision_worker.main`, like the Test Runner; one process per GPU (`CUDA_VISIBLE_DEVICES`). There is no Docker support. It connects out over wss, authenticates with `VISION_WORKER_TOKEN`, preloads the model, heartbeats `status` every 30 s and answers `parse_request`. Wire protocol: `vision_worker/protocol.py` (stdlib only, imported by the server). `python -m vision_worker.diagnose` checks the setup.
 - `visual_engine` (new Django app):
   - `VisionWorker` model, admin view (read-only), and `VisionWorkerConsumer` on `ws/vision-worker/`.
   - Services: `parse_screenshot` dispatches round robin across ready workers using a Redis counter, skips busy workers, and retries disconnects and timeouts within `VISION_PARSE_BUDGET_SECONDS`. `wait_for_ready_worker` waits for a worker; `pool_status` computes the engine state.
@@ -27,4 +27,5 @@ OmniParser needs a GPU and made every Test Runner a heavy install. It now runs o
 - The worker answers `BUSY` beyond 1 running + `VISION_MAX_QUEUE`, and the server backs off 1→8 s. Server-side in-flight leases (least-busy dispatch) were rejected because a killed Celery process leaks its lease.
 - The default worker name includes `CUDA_VISIBLE_DEVICES`. Two processes with the same name supersede each other (close 4001, and the older one exits).
 - macOS Retina coordinate scaling is a pre-existing issue and is untouched.
-- Not yet run live: a real CUDA/Docker build, Windows Docker Desktop, and an end-to-end case through Daphne + Celery. The worker client was exercised on MPS against a fake server.
+- Docker support was built first and then removed at the user's request as too complicated; deploy the worker with the setup scripts only.
+- Not yet run live: a real CUDA machine, Windows, and an end-to-end case through Daphne + Celery. The worker client was exercised on MPS against a fake server.

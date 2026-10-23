@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Set up a vision worker in vision_worker/.venv (Linux, WSL2 or macOS).
+# Set up a vision worker in vision_worker/.venv (Linux or macOS).
 # Usage: vision_worker/scripts/setup.sh [--python <python-binary>]
 set -euo pipefail
 
@@ -69,7 +69,19 @@ echo "[3/6] Installing remaining dependencies..."
 "$VENV_PIP" install --quiet -r "$PROJECT_DIR/requirements.txt"
 
 echo "[4/6] Downloading OmniParser model weights (this may take a while, ~1.5GB)..."
-"$SCRIPT_DIR/download_weights.sh" "$PROJECT_DIR/omniparser/weights"
+WEIGHTS_DIR="$PROJECT_DIR/omniparser/weights"
+# The download recreates icon_caption/ next to the renamed folder, so a re-run
+# skips it once both model folders are in place.
+if [ -d "$WEIGHTS_DIR/icon_detect" ] && [ -d "$WEIGHTS_DIR/icon_caption_florence" ]; then
+    echo "  Weights already present, skipping..."
+else
+    "$PROJECT_DIR/.venv/bin/hf" download microsoft/OmniParser-v2.0 --local-dir "$WEIGHTS_DIR"
+    if [ -d "$WEIGHTS_DIR/icon_caption" ]; then
+        rm -rf "$WEIGHTS_DIR/icon_caption_florence"
+        mv "$WEIGHTS_DIR/icon_caption" "$WEIGHTS_DIR/icon_caption_florence"
+        echo "  Renamed icon_caption -> icon_caption_florence"
+    fi
+fi
 
 # EasyOCR/PaddleOCR download their own models when util.utils is imported,
 # and the Florence-2 processor comes from the Hugging Face Hub on first load.
@@ -100,4 +112,4 @@ echo "  cd $ROOT_DIR"
 echo "  vision_worker/.venv/bin/python -m vision_worker.diagnose --check-server"
 echo ""
 echo "To start the vision worker:"
-echo "  vision_worker/.venv/bin/python -m vision_worker"
+echo "  vision_worker/.venv/bin/python -m vision_worker.main"

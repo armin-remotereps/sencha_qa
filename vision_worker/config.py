@@ -146,7 +146,7 @@ def load_engine_config() -> EngineConfig:
 
 def load_config(argv: list[str] | None = None) -> WorkerConfig:
     parser = argparse.ArgumentParser(
-        prog="python -m vision_worker",
+        prog="python -m vision_worker.main",
         description="Punk Hazard vision worker: runs OmniParser for the server.",
     )
     parser.add_argument("--server-url", type=str, default=None)

@@ -86,7 +86,7 @@ python -m controller_client.diagnose    # screen capture
 python -m controller_client.diagnose --browsers   # launch each browser (or --browsers firefox,msedge) and report what is missing
 
 # Vision worker (on the GPU machine, inside vision_worker/.venv, from the repo root; see vision_worker/README.md)
-python -m vision_worker                 # connect to VISION_SERVER_URL and serve parse requests
+python -m vision_worker.main            # connect to VISION_SERVER_URL and serve parse requests
 python -m vision_worker.diagnose        # imports, weights, device, model load, one inference, result size
 
 # Formatting and typing — same checks pre-commit runs
@@ -108,7 +108,7 @@ pip install -r requirements.txt
 
 ### vision_worker and visual_engine
 
-- **vision_worker/** — Standalone GPU client running OmniParser (vendored in `vision_worker/omniparser/`, weights `.gitignore`d), own venv/requirements/strict mypy config. Runs with `python -m vision_worker` or the CUDA Docker image (`vision_worker/Dockerfile`, one compose service per GPU). Connects out over wss to `ws/vision-worker/` with the shared `VISION_WORKER_TOKEN`, preloads the model, reports `status` (loading/ready/failed; also a 30 s heartbeat) and answers `parse_request` with elements + an annotated image; it answers `BUSY` beyond 1 running + `VISION_MAX_QUEUE` queued. Wire protocol in `vision_worker/protocol.py` (stdlib only; the server imports it, so the source stays in the server image).
+- **vision_worker/** — Standalone GPU client running OmniParser (vendored in `vision_worker/omniparser/`, weights `.gitignore`d), own venv/requirements/strict mypy config. Set up with `vision_worker/scripts/setup.sh` / `setup.ps1` and run with `python -m vision_worker.main`, like the Test Runner; one process per GPU (`CUDA_VISIBLE_DEVICES`). No Docker. Connects out over wss to `ws/vision-worker/` with the shared `VISION_WORKER_TOKEN`, preloads the model, reports `status` (loading/ready/failed; also a 30 s heartbeat) and answers `parse_request` with elements + an annotated image; it answers `BUSY` beyond 1 running + `VISION_MAX_QUEUE` queued. Wire protocol in `vision_worker/protocol.py` (stdlib only; the server imports it, so the source stays in the server image).
 - **visual_engine** (Django app) — global, not per project. `VisionWorker` rows (one per worker name; newest connection wins, stale after `VISION_WORKER_STALE_SECONDS` without a heartbeat), `VisionWorkerConsumer`, and services: `parse_screenshot` rotates over ready workers round robin with a Redis counter (shared by all Celery processes), skips busy ones and retries disconnects within `VISION_PARSE_BUDGET_SECONDS`. `projects.services.controller_find_elements` = runner `controller_screenshot` + `parse_screenshot`. Run/resume/re-run/machine-setup gating and the machine badge need at least one ready worker (`MachineState.VISUAL_ENGINE_OFFLINE` when none is connected).
 
 ### Key Patterns

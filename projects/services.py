@@ -596,7 +596,7 @@ _VISUAL_ENGINE_NOT_READY_HELP: Final[dict[VisualEngineState, str]] = {
         "or run `python -m vision_worker.diagnose`."
     ),
     VisualEngineState.OFFLINE: (
-        "No vision worker is connected. Start one with `python -m vision_worker`."
+        "No vision worker is connected. Start one with `python -m vision_worker.main`."
     ),
 }
 

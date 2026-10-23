@@ -38,8 +38,8 @@ def main(argv: list[str] | None = None) -> None:
     logger.info("Starting vision worker, connecting to %s", config.server_url)
     try:
         # A session the server ended for good (bad token, incompatible
-        # version, superseded) also exits 0: a restart policy such as
-        # Docker's on-failure must not bring the worker straight back.
+        # version, superseded) also exits 0: it is a deliberate stop, not a
+        # crash for a supervisor to restart.
         loop.run_until_complete(client.run())
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received")

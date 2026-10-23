@@ -65,13 +65,12 @@ PARSE_PHASE_SOM: Final[str] = "som"
 PARSE_PHASE_SERIALIZE: Final[str] = "serialize"
 
 SETUP_HINT: Final[str] = (
-    "Re-run vision_worker/scripts/setup.sh (or setup.ps1), or rebuild the "
-    "Docker image, to install the vision worker's dependencies."
+    "Re-run vision_worker/scripts/setup.sh (or setup.ps1) to install the "
+    "vision worker's dependencies."
 )
 WEIGHTS_HINT: Final[str] = (
-    "Run vision_worker/scripts/download_weights.sh (setup.sh runs it for you) "
-    "or point OMNIPARSER_WEIGHTS_DIR at an existing weights folder (in Docker, "
-    "mount it at /weights)."
+    "Re-run vision_worker/scripts/setup.sh (or setup.ps1) to download the "
+    "weights, or point OMNIPARSER_WEIGHTS_DIR at an existing weights folder."
 )
 
 
@@ -150,8 +149,7 @@ def detect_device(preference: DevicePreference) -> str:
     if preference is DevicePreference.CUDA and not cuda:
         raise RuntimeError(
             "VISION_DEVICE=cuda but torch sees no CUDA device. Check `nvidia-smi`, "
-            "that torch was installed from the CUDA wheel index, and (in Docker) "
-            "that the container was started with GPU access."
+            "and that torch was installed from the CUDA wheel index."
         )
     if preference is DevicePreference.MPS and not mps:
         raise RuntimeError("VISION_DEVICE=mps but torch sees no MPS device")
