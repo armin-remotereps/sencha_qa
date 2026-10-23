@@ -11,10 +11,14 @@
                     the connection card is fully live via environmentLive(),
                     ported from the old templates/projects/detail.html
                     WebSocket component)
+    visual_engine — VisualEngineStatusPayload (state,
+                    ready_count, connected_count, workers); seeds
+                    environmentLive().visualEngine, then kept live over the
+                    agent-status WS ("visual_engine" messages)
 
   The whole page body runs inside the environmentLive() Alpine scope so
   partials/advanced_diagnostics.html (which reads clientVersion,
-  capabilities, omniparserStatus, systemInfo from an ancestor scope) works
+  capabilities, visualEngine, systemInfo from an ancestor scope) works
   without a fallback stub.
 {% endcomment %}
 
@@ -32,10 +36,11 @@
 {% block project_content %}
 {{ project.agent_system_info|json_script:"env-system-info" }}
 {{ project.agent_capabilities|json_script:"env-capabilities" }}
-{{ project.agent_omniparser_status|json_script:"env-omniparser-status" }}
+{{ visual_engine|json_script:"env-visual-engine" }}
 <div x-data="environmentLive()">
   {% include "projects/includes/_environment_connection.html" with project=project %}
   {% include "projects/includes/_environment_visual_engine_failure.html" only %}
+  {% include "projects/includes/_environment_visual_engine.html" only %}
 
   <section aria-labelledby="setup-h">
     <h2 id="setup-h" class="visually-hidden">Set up the Test Runner on another machine</h2>
@@ -64,7 +69,7 @@ document.addEventListener('alpine:init', () => {
     lastConnectedAt: '{{ project.last_connected_at|date:"N j, Y, P"|default:"" }}',
     clientVersion: '{{ project.agent_client_version|escapejs }}',
     capabilities: JSON.parse(document.getElementById('env-capabilities').textContent),
-    omniparserStatus: JSON.parse(document.getElementById('env-omniparser-status').textContent),
+    visualEngine: JSON.parse(document.getElementById('env-visual-engine').textContent),
     ws: null,
 
     init() {
@@ -77,21 +82,20 @@ document.addEventListener('alpine:init', () => {
           this.lastConnectedAt = data.last_connected_at || this.lastConnectedAt;
           this.clientVersion = data.agent_client_version || '';
           this.capabilities = data.agent_capabilities || [];
-          this.omniparserStatus = data.agent_omniparser_status || {};
+          if (data.visual_engine) this.visualEngine = data.visual_engine;
+        } else if (data.type === 'visual_engine') {
+          this.visualEngine = data.visual_engine;
         }
       };
     },
 
     get machineState() {
       if (!this.agentConnected) return 'disconnected';
-      const state = this.omniparserStatus.state;
-      if (state === 'ready') return 'ready';
-      if (state === 'failed') return 'failed';
-      return 'starting';
+      return { ready: 'ready', starting: 'starting', failed: 'failed', offline: 'offline' }[this.visualEngine.state] || 'starting';
     },
 
     get machineBadgeClass() {
-      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed' }[this.machineState];
+      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed', offline: 'warning' }[this.machineState];
     },
 
     get machineBadgeLabel() {
@@ -100,7 +104,32 @@ document.addEventListener('alpine:init', () => {
         starting: 'Visual engine starting',
         ready: 'Test machine connected',
         failed: 'Visual engine failed',
+        offline: 'Visual engine offline',
       }[this.machineState];
+    },
+
+    // Visual engine card (_environment_visual_engine.html) — engine-wide,
+    // independent of whether this project's Test Runner is connected.
+    get engineBadgeClass() {
+      return { ready: 'connected', starting: 'starting', failed: 'failed', offline: 'warning' }[this.visualEngine.state] || 'starting';
+    },
+
+    get engineBadgeLabel() {
+      return { ready: 'Ready', starting: 'Starting', failed: 'Failed', offline: 'Offline' }[this.visualEngine.state] || 'Starting';
+    },
+
+    workerBadgeClass(state) {
+      return { ready: 'connected', loading: 'starting', failed: 'failed' }[state] || 'draft';
+    },
+
+    workerBadgeLabel(state) {
+      return { ready: 'Ready', loading: 'Loading', failed: 'Failed' }[state] || 'Connecting';
+    },
+
+    formatSince(iso) {
+      if (!iso) return '—';
+      const date = new Date(iso);
+      return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
     },
 
     get osLabel() {

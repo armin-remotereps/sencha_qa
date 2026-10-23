@@ -1,0 +1,58 @@
+{% comment %}
+  Visual engine card: the engine-wide state and every connected vision
+  worker. Must render inside the environmentLive() Alpine scope declared in
+  projects/environment.html; it reads `visualEngine` (VisualEngineStatusPayload:
+  state, ready_count, connected_count, workers[]) and the engineBadge* /
+  workerBadge* / formatSince helpers from that scope, so it stays live over
+  the agent-status WS.
+
+  Context contract: none.
+
+  Worker-supplied strings (name, device, GPU, version, message) are
+  untrusted: they are rendered only through x-text.
+{% endcomment %}
+<section aria-labelledby="visual-engine-h" class="card">
+  <div class="card-header">
+    <h2 id="visual-engine-h">Visual engine</h2>
+    <span class="badge" :class="'badge-' + engineBadgeClass" x-text="engineBadgeLabel"></span>
+  </div>
+
+  <p class="muted" x-show="visualEngine.connected_count" x-cloak
+     x-text="visualEngine.ready_count + ' of ' + visualEngine.connected_count + ' vision worker' + (visualEngine.connected_count === 1 ? '' : 's') + ' ready.'"></p>
+
+  <div class="table-wrap" x-show="(visualEngine.workers || []).length" x-cloak>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th scope="col">Worker</th>
+          <th scope="col">State</th>
+          <th scope="col">Device</th>
+          <th scope="col">GPU</th>
+          <th scope="col">Version</th>
+          <th scope="col">Connected since</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="(worker, index) in (visualEngine.workers || [])" :key="index">
+          <tr>
+            <td data-label="Worker" class="cell-primary"><span x-text="worker.name || '—'"></span></td>
+            <td data-label="State">
+              <div>
+                <span class="badge" :class="'badge-' + workerBadgeClass(worker.state)" x-text="workerBadgeLabel(worker.state)"></span>
+                <div class="muted small" x-show="worker.message" x-text="worker.message"></div>
+              </div>
+            </td>
+            <td data-label="Device" x-text="worker.device || '—'"></td>
+            <td data-label="GPU" x-text="worker.gpu || '—'"></td>
+            <td data-label="Version" x-text="worker.client_version || '—'"></td>
+            <td data-label="Connected since" x-text="formatSince(worker.connected_since)"></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </div>
+
+  <div x-show="!(visualEngine.workers || []).length" x-cloak>
+    {% include "partials/empty_state.html" with icon="◎" title="No vision worker connected" body="No vision worker connected. See vision_worker/README.md." only %}
+  </div>
+</section>

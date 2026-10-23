@@ -6,7 +6,10 @@
      show_archived — bool, whether archived rows are mixed in
      latest_runs   — dict of project id -> latest TestRun (annotated
                      success_count / failed_count), missing entries mean
-                     "no runs yet" {% endcomment %}
+                     "no runs yet"
+     connected_machine_state — "ready" | "starting" | "failed" | "offline",
+                     the machine state every connected project shares
+                     (the visual engine is global) {% endcomment %}
 <div class="table-wrap">
   <table class="data-table">
     <thead>
@@ -33,15 +36,7 @@
           </td>
           <td data-label="Test machine">
             {% if project.agent_connected %}
-              {% with omni_state=project.agent_omniparser_status.state %}
-                {% if omni_state == "ready" %}
-                  {% include "partials/badge_machine.html" with machine_state="ready" only %}
-                {% elif omni_state == "failed" %}
-                  {% include "partials/badge_machine.html" with machine_state="failed" only %}
-                {% else %}
-                  {% include "partials/badge_machine.html" with machine_state="starting" only %}
-                {% endif %}
-              {% endwith %}
+              {% include "partials/badge_machine.html" with machine_state=connected_machine_state only %}
             {% else %}
               {% include "partials/badge_machine.html" with machine_state="disconnected" only %}
             {% endif %}

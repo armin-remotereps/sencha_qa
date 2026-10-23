@@ -83,13 +83,22 @@ agent-status WebSocket component (ported from the current
   agentConnected: boolean,
   clientVersion: string,
   capabilities: string[],
-  omniparserStatus: {
-    state: string,
-    message: string,
-    device: string,
-    weights_dir: string,
-    phase: string,
-    load_seconds: number,
+  // Global visual engine (vision workers), not per test machine. Set from
+  // `{{ visual_engine|json_script }}` and replaced on `visual_engine` /
+  // initial-state WebSocket messages.
+  visualEngine: {
+    state: 'ready' | 'starting' | 'failed' | 'offline',
+    ready_count: number,
+    connected_count: number,
+    workers: {
+      name: string,
+      state: 'loading' | 'ready' | 'failed' | '',
+      device: string,
+      gpu: string,
+      message: string,
+      client_version: string,
+      connected_since: string,  // ISO 8601 or ''
+    }[],
   },
   systemInfo: object,
   lastConnectedAt: string | null,
@@ -97,7 +106,7 @@ agent-status WebSocket component (ported from the current
 ```
 
 Until that component exists, wrap `{% include "partials/advanced_diagnostics.html" %}`
-in a scope providing at least empty defaults (`x-data="{ clientVersion: '', capabilities: [], omniparserStatus: {} }"`)
+in a scope providing at least empty defaults (`x-data="{ clientVersion: '', capabilities: [], visualEngine: {} }"`)
 so the `x-text` bindings don't error against `undefined`.
 
 ## Status badges and the Blocked result

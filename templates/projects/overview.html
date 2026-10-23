@@ -6,6 +6,7 @@
   Context contract (projects/views.py::project_overview):
     project  — the current Project
     overview — projects.services.ProjectOverview
+    visual_engine — VisualEngineStatusPayload; seeds overviewLive().visualEngine
 
   The "Test machine" stat card below is a live view: it's kept in an
   ancestor Alpine scope (overviewLive(), extra_scripts) that opens the
@@ -25,6 +26,7 @@
       {% if overview.machine_state == "ready" %}test machine connected
       {% elif overview.machine_state == "starting" %}visual engine starting
       {% elif overview.machine_state == "failed" %}visual engine failed
+      {% elif overview.machine_state == "offline" %}visual engine offline
       {% else %}test machine not connected{% endif %}
     </p>
   </div>
@@ -41,7 +43,7 @@
 
 {% block project_content %}
 {{ project.agent_system_info|json_script:"overview-system-info" }}
-{{ project.agent_omniparser_status|json_script:"overview-omniparser-status" }}
+{{ visual_engine|json_script:"overview-visual-engine" }}
 <div x-data="overviewLive()">
   {% include "projects/includes/_overview_alert.html" with project=project overview=overview only %}
   {% include "projects/includes/_overview_stats.html" with project=project overview=overview only %}
@@ -57,7 +59,7 @@ document.addEventListener('alpine:init', () => {
   Alpine.data('overviewLive', () => ({
     agentConnected: {{ project.agent_connected|yesno:'true,false' }},
     systemInfo: JSON.parse(document.getElementById('overview-system-info').textContent),
-    omniparserStatus: JSON.parse(document.getElementById('overview-omniparser-status').textContent),
+    visualEngine: JSON.parse(document.getElementById('overview-visual-engine').textContent),
     ws: null,
 
     init() {
@@ -67,21 +69,20 @@ document.addEventListener('alpine:init', () => {
         if (data.type === 'agent_status') {
           this.agentConnected = data.agent_connected;
           this.systemInfo = data.agent_system_info || {};
-          this.omniparserStatus = data.agent_omniparser_status || {};
+          if (data.visual_engine) this.visualEngine = data.visual_engine;
+        } else if (data.type === 'visual_engine') {
+          this.visualEngine = data.visual_engine;
         }
       };
     },
 
     get machineState() {
       if (!this.agentConnected) return 'disconnected';
-      const state = this.omniparserStatus.state;
-      if (state === 'ready') return 'ready';
-      if (state === 'failed') return 'failed';
-      return 'starting';
+      return { ready: 'ready', starting: 'starting', failed: 'failed', offline: 'offline' }[this.visualEngine.state] || 'starting';
     },
 
     get machineBadgeClass() {
-      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed' }[this.machineState];
+      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed', offline: 'warning' }[this.machineState];
     },
 
     get machineBadgeLabel() {
@@ -90,6 +91,7 @@ document.addEventListener('alpine:init', () => {
         starting: 'Visual engine starting',
         ready: 'Connected',
         failed: 'Visual engine failed',
+        offline: 'Visual engine offline',
       }[this.machineState];
     },
   }));

@@ -10,7 +10,9 @@
   one `x-data="machineSetupChat"` root.
 
   Context contract (machine_setup.views.chat):
-    project    — the current Project (agent_connected, agent_omniparser_status)
+    project    — the current Project (agent_connected)
+    visual_engine — VisualEngineStatusPayload (state, ready_count,
+                 connected_count, workers)
     active_tab — "machine_setup"
     page       — machine_setup.services.chat_page.SetupPage (conversation_id,
                  messages, hidden_message_count, turn, send_blockers, can_send,
@@ -26,11 +28,11 @@
     setup-turn             — page.turn (SetupTurnPayload | null)
     setup-blocker-texts    — blocker_texts
     setup-blockers         — page.send_blockers (list[str])
-    setup-omniparser-status — project.agent_omniparser_status (object)
+    setup-visual-engine    — visual_engine (object)
 
   WebSocket /ws/projects/<id>/machine-setup/ (machine_setup.consumers):
-  current_state, message, screenshot, turn, reset, agent_status. All dynamic
-  text is rendered with x-text; never x-html.
+  current_state, message, screenshot, turn, reset, agent_status,
+  visual_engine. All dynamic text is rendered with x-text; never x-html.
 
   Client model (machineSetupChat): every row gets a client-only `args` (its
   tool_arguments_text parsed once on arrival, {} if it does not parse).
@@ -56,7 +58,7 @@
 {{ blocker_texts|json_script:"setup-blocker-texts" }}
 {{ page.turn|json_script:"setup-turn" }}
 {{ page.send_blockers|json_script:"setup-blockers" }}
-{{ project.agent_omniparser_status|json_script:"setup-omniparser-status" }}
+{{ visual_engine|json_script:"setup-visual-engine" }}
 <div x-data="machineSetupChat">
   <div class="page-header">
     <div>
@@ -392,7 +394,7 @@ document.addEventListener('alpine:init', () => {
     serverBlockers: readJson('setup-blockers'),
     finishingPreviousTurn: {{ page.finishing_previous_turn|yesno:'true,false' }},
     agentConnected: {{ project.agent_connected|yesno:'true,false' }},
-    omniparserStatus: readJson('setup-omniparser-status') || {},
+    visualEngine: readJson('setup-visual-engine') || {},
     draft: '',
     submitting: false,
     socketOpen: true,
@@ -435,7 +437,7 @@ document.addEventListener('alpine:init', () => {
         this.serverBlockers = data.send_blockers || [];
         this.finishingPreviousTurn = !!data.finishing_previous_turn;
         this.agentConnected = !!data.agent_connected;
-        this.omniparserStatus = data.agent_omniparser_status || {};
+        if (data.visual_engine) this.visualEngine = data.visual_engine;
       } else if (data.type === 'message') {
         this.upsertMessage(data.message);
       } else if (data.type === 'screenshot') {
@@ -454,7 +456,9 @@ document.addEventListener('alpine:init', () => {
         this.turn = null;
       } else if (data.type === 'agent_status') {
         this.agentConnected = !!data.agent_connected;
-        this.omniparserStatus = data.agent_omniparser_status || {};
+        if (data.visual_engine) this.visualEngine = data.visual_engine;
+      } else if (data.type === 'visual_engine') {
+        this.visualEngine = data.visual_engine || {};
       }
       if (stick) this.$nextTick(() => this.scrollToBottom());
     },
@@ -505,14 +509,11 @@ document.addEventListener('alpine:init', () => {
 
     get machineState() {
       if (!this.agentConnected) return 'disconnected';
-      const state = this.omniparserStatus.state;
-      if (state === 'ready') return 'ready';
-      if (state === 'failed') return 'failed';
-      return 'starting';
+      return { ready: 'ready', starting: 'starting', failed: 'failed', offline: 'offline' }[this.visualEngine.state] || 'starting';
     },
 
     get machineBadgeClass() {
-      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed' }[this.machineState];
+      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed', offline: 'warning' }[this.machineState];
     },
 
     get machineBadgeLabel() {
@@ -521,6 +522,7 @@ document.addEventListener('alpine:init', () => {
         starting: 'Visual engine starting',
         ready: 'Connected',
         failed: 'Visual engine failed',
+        offline: 'Visual engine offline',
       }[this.machineState];
     },
 

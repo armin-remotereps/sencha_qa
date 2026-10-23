@@ -3,7 +3,8 @@
 {% comment %} Onboarding wizard, step 4: connect a test machine.
 
    Context contract (projects.views.setup_machine): project, wizard_step
-   (always 4), wizard_mode (always "edit"). Everything else (connection
+   (always 4), wizard_mode (always "edit"), visual_engine
+   (VisualEngineStatusPayload). Everything else (connection
    state) is read straight off `project` at load time and kept live over
    the agent-status WS — same fields/shape as the connection-status
    component in the old templates/projects/detail.html (L10-45), and the
@@ -29,7 +30,7 @@
    JSON.parse reads them back — same pattern as the old detail.html. {% endcomment %}
 {{ project.agent_system_info|json_script:"agent-system-info" }}
 {{ project.agent_capabilities|json_script:"agent-capabilities" }}
-{{ project.agent_omniparser_status|json_script:"agent-omniparser-status" }}
+{{ visual_engine|json_script:"visual-engine-status" }}
 <div
   class="narrow"
   x-data="{
@@ -38,20 +39,38 @@
     lastConnectedAt: '{{ project.last_connected_at|date:'N j, Y, P'|default:'' }}',
     clientVersion: '{{ project.agent_client_version|escapejs }}',
     capabilities: JSON.parse(document.getElementById('agent-capabilities').textContent),
-    omniparserStatus: JSON.parse(document.getElementById('agent-omniparser-status').textContent),
+    visualEngine: JSON.parse(document.getElementById('visual-engine-status').textContent),
 
     init() {
       const ws = new WebSocket(punkHazard.wsUrl('/ws/projects/{{ project.id }}/agent-status/'));
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
+        if (data.type === 'visual_engine') {
+          this.visualEngine = data.visual_engine;
+          return;
+        }
         if (data.type !== 'agent_status') return;
         this.agentConnected = data.agent_connected;
         this.systemInfo = data.agent_system_info || {};
         this.lastConnectedAt = data.last_connected_at || '';
         this.clientVersion = data.agent_client_version || '';
         this.capabilities = data.agent_capabilities || [];
-        this.omniparserStatus = data.agent_omniparser_status || {};
+        if (data.visual_engine) this.visualEngine = data.visual_engine;
       };
+    },
+
+    get machineState() {
+      if (!this.agentConnected) return 'disconnected';
+      return { ready: 'ready', starting: 'starting', failed: 'failed', offline: 'offline' }[this.visualEngine.state] || 'starting';
+    },
+
+    get machineStatusText() {
+      return {
+        ready: ' is connected and ready.',
+        starting: ' is connected — visual engine starting.',
+        failed: ' is connected — visual engine failed.',
+        offline: ' is connected — visual engine offline (no vision worker connected).',
+      }[this.machineState] || '';
     },
   }"
 >
@@ -94,7 +113,7 @@
           <span class="alert-icon" aria-hidden="true">✓</span>
           <div>
             <p
-              x-text="(systemInfo.hostname || 'The test machine') + (omniparserStatus.state === 'ready' ? ' is connected and ready.' : ' is connected — visual engine starting.')"
+              x-text="(systemInfo.hostname || 'The test machine') + machineStatusText"
             ></p>
           </div>
         </div>

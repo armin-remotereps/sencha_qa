@@ -3,7 +3,7 @@
    Context contract: none (the connection key lives in
    partials/connection_key_card.html).
 
-   This partial reads clientVersion / capabilities / omniparserStatus from
+   This partial reads clientVersion / capabilities / visualEngine from
    an ANCESTOR Alpine scope — it declares no x-data of its own for those.
    See the "advanced_diagnostics.html — expected Alpine scope" section in
    templates/partials/README.md for the full shape and a fallback scope to
@@ -21,11 +21,11 @@
     </div>
     <div>
       <dt>Visual engine status</dt>
-      <dd x-text="(omniparserStatus.phase || omniparserStatus.state || '—') + (omniparserStatus.message ? ' — ' + omniparserStatus.message : '')"></dd>
+      <dd x-text="visualEngine.state || '—'"></dd>
     </div>
     <div>
-      <dt>Visual engine device</dt>
-      <dd x-text="omniparserStatus.device || '—'"></dd>
+      <dt>Vision workers</dt>
+      <dd x-text="(visualEngine.ready_count || 0) + ' ready of ' + (visualEngine.connected_count || 0) + ' connected'"></dd>
     </div>
   </dl>
 </details>

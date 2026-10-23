@@ -1,16 +1,24 @@
 {% comment %}
-  Visual engine failure panel — shown only while the connected Test
-  Runner's OmniParser status is "failed". Must render inside the
-  environmentLive() Alpine scope declared in projects/environment.html.
-  Ported from the old templates/projects/detail.html OmniParser failure
-  panel (L111-122), reworded into plain language per the terminology table
-  (OmniParser → "visual engine").
+  Visual engine problem panel — shown only while the test machine is
+  connected but the visual engine is "failed" (every connected vision
+  worker failed to load) or "offline" (no vision worker connected). Must
+  render inside the environmentLive() Alpine scope declared in
+  projects/environment.html. Per-worker error messages are listed in the
+  Visual engine card (_environment_visual_engine.html), not here.
 {% endcomment %}
 <div class="alert alert-danger" role="alert" x-show="machineState === 'failed'" x-cloak>
   <span class="alert-icon" aria-hidden="true">✕</span>
   <div>
-    <strong>The visual engine failed to start on the test machine</strong>
-    <p x-text="omniparserStatus.message"></p>
-    <p class="hint">Restart the Test Runner to try again.</p>
+    <strong>Every connected vision worker failed to load the visual engine</strong>
+    <p>See each worker&rsquo;s message in the Visual engine card below.</p>
+    <p class="hint">Check the worker&rsquo;s log or run <code>python -m vision_worker.diagnose</code>, then restart the vision worker.</p>
+  </div>
+</div>
+<div class="alert alert-warning" role="alert" x-show="machineState === 'offline'" x-cloak>
+  <span class="alert-icon" aria-hidden="true">!</span>
+  <div>
+    <strong>No vision worker is connected</strong>
+    <p>Tests cannot run until a vision worker is running and ready.</p>
+    <p class="hint">Start one with <code>python -m vision_worker</code>. See vision_worker/README.md.</p>
   </div>
 </div>
