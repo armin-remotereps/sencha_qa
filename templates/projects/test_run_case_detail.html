@@ -40,7 +40,7 @@
      None). Both are listed in the "Earlier attempts" card. When a re-run or
      resume resets this case, the `status` WS event moves it from a finished
      status back to "created" and the page reloads once to drop the old
-     screenshots and show the new history row.
+     screenshots (and, for a re-run, the old log) and show the new history row.
 
      Steps card: step_progress (projects.case_step_progress.StepProgressPayload,
      from projects.case_step_progress.pivot_step_payload), serialized with
@@ -651,8 +651,8 @@ document.addEventListener('alpine:init', () => {
           const reset = ['success', 'failed', 'blocked', 'cancelled', 'in_progress'];
           if (reset.includes(this.status) && data.status === 'created') {
             // Re-run or resume reset this case on its run: the old screenshots
-            // are gone and a new "Earlier attempts" row exists, both
-            // server-rendered — reload once to pick them up.
+            // (and, for a re-run, the log) are gone and a new "Earlier
+            // attempts" row exists, all server-rendered — reload once.
             this.status = data.status;
             window.location.reload();
             return;

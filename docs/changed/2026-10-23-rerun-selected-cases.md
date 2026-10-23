@@ -5,7 +5,7 @@ Plan: docs/plan/feat-rerun-selected-cases.md
 
 ## What changed
 - `projects/run_rerun_services.py` (new):
-  - `rerun_test_run_cases` resets the selected pivots in one UPDATE (status Created, verdict, reason, timestamps, checkpoint, Checked/Sent), appends `=== Re-run from the start ===` to the log, records a `kind=rerun` history row, deletes the screenshot rows (files after commit) and queues the pivots in `RUN_CASE_ORDERING`.
+  - `rerun_test_run_cases` resets the selected pivots in one UPDATE (status Created, verdict, reason, timestamps, checkpoint, Checked/Sent), clears the log, records a `kind=rerun` history row, deletes the screenshot rows (files after commit) and queues the pivots in `RUN_CASE_ORDERING`.
   - Also `get_rerun_panel`, `rerunnable_ids_on_page`, `list_rerunnable_pivot_ids` and `format_rerun_message`.
 - `projects/run_reopen_services.py` (new): `lock_project_and_run`, `list_reopen_blockers` and `reopen_run` (run back to Started, generation + 1, queue and broadcast on commit), extracted from `run_resume_services`. Resume now uses them.
 - `get_resume_panel(test_run, *, blockers)` takes the blockers that `get_rerun_panel` already computed, so the gates run once per page.
@@ -23,7 +23,7 @@ Users wanted to run some cases of a run again without creating a new run, in the
 ## Behaviour and contract changes
 - New POST URL `projects:test_run_cases_rerun` → `/projects/<id>/test-runs/<run_id>/cases/rerun/` (fields `pivot_ids`, `next`), with `@project_membership_required`.
 - Re-run works only on a Done or Cancelled run, with Resume's gates: no other run Started, no TestRail send or push live, the runner connected and the visual engine ready, and no live setup turn. Every case of any status can be re-run, including Sent ones; their Checked/Sent marks are cleared.
-- The replaced attempt's screenshots and step progress are deleted. Its log text stays, and the previous status, reason, verdict and finish time go into the history.
+- The replaced attempt's log, screenshots and step progress are deleted. The previous status, reason, verdict and finish time go into the history.
 - Migration 0025 is additive. Deploy: run `migrate` and restart Daphne/web. No task, WebSocket or controller protocol change.
 
 ## Notes for future changes

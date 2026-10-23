@@ -2,8 +2,8 @@
 
 Unlike Resume, a re-run starts the case over: its checkpoint (and so its step
 progress) and screenshots are dropped, so the next "Send checked" attaches
-only the new attempt's evidence. The log is kept, after a separator line, and
-the replaced outcome is recorded in the case's history. Cases run in the
+only the new attempt's evidence. The log is cleared too; only the replaced
+outcome is kept, in the case's history. Cases run in the
 run's order (`RUN_CASE_ORDERING`) restricted to the selection.
 """
 
@@ -15,8 +15,6 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from django.db import transaction
-from django.db.models import F, Value
-from django.db.models.functions import Concat
 from django.utils import timezone
 
 from accounts.models import CustomUser
@@ -39,8 +37,6 @@ from projects.run_reopen_services import (
 )
 
 logger = logging.getLogger(__name__)
-
-RERUN_LOG_SEPARATOR = "=== Re-run from the start ===\n"
 
 _NOT_FINISHED = "Only a finished or cancelled run can be re-run."
 _NOTHING_SELECTED = "None of the selected cases belong to this run."
@@ -138,7 +134,7 @@ def rerun_test_run_cases(
             testrail_source_sent_at=None,
             testrail_source_attachment_count=0,
             testrail_source_skip_reason="",
-            logs=Concat(F("logs"), Value(RERUN_LOG_SEPARATOR)),
+            logs="",
             # update() does not run auto_now.
             updated_at=now,
         )

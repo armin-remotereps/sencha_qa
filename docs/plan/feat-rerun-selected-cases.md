@@ -182,7 +182,7 @@ Steps 1–2 come first, because they are shared. Steps 3–4 depend on them. Ste
      - the run returns to Done with correct counters.
   2. On the case page of a re-run case:
      - the old screenshots are gone, both from the gallery and from `MEDIA_ROOT/screenshots/trtc_<id>/`;
-     - the log shows the old attempt, then `=== Re-run from the start ===`, then the new attempt;
+     - the log shows only the new attempt (cleared on re-run, see Changelog);
      - Steps shows only the new plan;
      - "Earlier attempts" lists "Re-run from the start by <you>" with the previous verdict.
   3. Keep a case page open while re-running it from the run page: the page reloads once and then streams the new attempt.
@@ -214,3 +214,4 @@ Steps 1–2 come first, because they are shared. Steps 3–4 depend on them. Ste
 - 2026-10-23: accepted: Resume now also reloads an open case page (it needs the new history row too). Accepted residual, as for Resume: a stale worker past its generation check can still write one old-attempt screenshot after the delete.
 - 2026-10-23: follow-up, not fixed: `add_cases_to_test_run` does not check the run status, so a case added to a Done run and not selected keeps a re-run Started until Abort. Resume has the same gap.
 - 2026-10-23: `black` reformats `projects/migrations/0022_*` on main (pre-existing, left out of this change).
+- 2026-10-23: user request after release: a re-run clears the case's log instead of appending a separator line (dialog text updated).

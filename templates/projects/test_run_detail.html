@@ -419,7 +419,7 @@
   >
     <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="rerun-selected-title" aria-describedby="rerun-selected-desc">
       <h3 id="rerun-selected-title" x-text="'Re-run ' + toRerun.length + (toRerun.length === 1 ? ' case' : ' cases') + ' on this run?'">Re-run the selected cases on this run?</h3>
-      <p id="rerun-selected-desc"><span x-text="toRerun.length + (toRerun.length === 1 ? ' case runs' : ' cases run')"></span> again from step 1 on this run, in run order. Their screenshots and step progress are replaced; the previous result stays in each case's history and the log keeps the earlier attempt. Checked marks are cleared; cases already sent to TestRail get a new result there when sent again.</p>
+      <p id="rerun-selected-desc"><span x-text="toRerun.length + (toRerun.length === 1 ? ' case runs' : ' cases run')"></span> again from step 1 on this run, in run order. Their log, screenshots and step progress are replaced; the previous result stays in each case's history. Checked marks are cleared; cases already sent to TestRail get a new result there when sent again.</p>
       <form method="post" action="{% url 'projects:test_run_cases_rerun' project.id test_run.id %}">
         {% csrf_token %}
         <input type="hidden" name="next" value="{{ test_run_detail_url }}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}">
