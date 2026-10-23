@@ -7,7 +7,7 @@
 <div class="chat-log" aria-live="polite">
   <p class="chat-notice" x-show="hiddenMessageCount > 0" x-cloak x-text="hiddenMessageCount + ' earlier messages not shown'"></p>
 
-  <div class="empty" x-show="messages.length === 0" x-cloak>
+  <div class="empty" x-show="loaded && messages.length === 0" x-cloak>
     <h3>No messages yet</h3>
     <p>Tell the agent what the test machine needs, or ask it to read the test cases' preconditions and prepare the machine for them.</p>
   </div>

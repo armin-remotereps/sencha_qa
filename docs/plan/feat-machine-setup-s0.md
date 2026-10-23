@@ -517,3 +517,18 @@ Resolved on 2026-10-23. The user accepted every assumption for Q1–Q8, Q10 and 
     - the notes cap raised from 4000 to 12000.
   - Concurrency: user writes are last write wins with history; agent writes are conditional on `base_revision`.
   - Removed the S0-notes non-goal; added the related risks and verification steps 13–18.
+- 2026-10-23: review/verify pass 1 fixes.
+  - Transcript persisted once per complete round, not per message.
+  - The page HTML no longer embeds chat rows; the socket's `current_state` delivers them, so they are built once per load.
+  - After a Reset, the archived turn's late rows are ignored: `SetupPage.finishing_conversation_id` seeds the client's ignore list.
+  - Stop and Reset close a still-queued turn at once as stopped.
+  - The setup socket is wrapped in `AllowedHostsOriginValidator`, with a local stub in `stubs/channels/security/`.
+  - The project-context block is now a public `prompt_parts.build_project_context(framing=)`. The tester's wording is unchanged.
+  - Shared `MACHINE_SETUP_RUNNING_MESSAGE`, `CONTEXT_CHANGE_SUMMARY_MAX_LENGTH`, and table-driven project-data tools.
+  - The unused `refresh_from_db` was dropped; `save_project_prompt` and `save_application_context` now return None.
+  - The blocker texts reach the client through `json_script`.
+  - Not changed, with reasons:
+    - The other WebSocket routes still have no origin check. The gap predates this work, and the Test Runner's socket sends no Origin, so a stack-wide validator would break it. Follow-up.
+    - Setup screenshots are served from MEDIA without auth, the same as run screenshots (existing pattern). Noted in the change note.
+    - `start_test_run` keeps raising `ValueError`, matching its other refusals. The text is now one shared constant.
+    - `sub_agent_prompts._build_project_context` keeps its own wording, because it is out of scope.

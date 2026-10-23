@@ -1,0 +1,3 @@
+from typing import Any
+
+def AllowedHostsOriginValidator(application: Any) -> Any: ...

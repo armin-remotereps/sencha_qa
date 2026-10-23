@@ -46,10 +46,16 @@ class SetupPage:
     max_iterations: int
     # A live turn belongs to a conversation archived by Reset.
     finishing_previous_turn: bool
+    # That archived conversation, so the page ignores its late rows.
+    finishing_conversation_id: int | None
 
 
-def get_setup_page(project: Project) -> SetupPage:
-    """About four queries; never loads ``llm_transcript``."""
+def get_setup_page(project: Project, *, include_messages: bool = True) -> SetupPage:
+    """About four queries; never loads ``llm_transcript``.
+
+    The HTML page passes ``include_messages=False``: the socket's
+    ``current_state`` delivers the rows, so they are built once per load.
+    """
     conversation_id = (
         SetupConversation.objects.filter(project=project, archived_at__isnull=True)
         .values_list("id", flat=True)
@@ -73,12 +79,19 @@ def get_setup_page(project: Project) -> SetupPage:
             .first()
         )
 
-    messages, hidden_count = _recent_messages(conversation_id)
+    messages, hidden_count = (
+        _recent_messages(conversation_id) if include_messages else ([], 0)
+    )
     machine_state = get_machine_state(project)
     run_active = TestRun.objects.filter(
         project=project, status=TestRunStatus.STARTED
     ).exists()
 
+    finishing_conversation_id = (
+        live_turn.conversation_id
+        if live_turn is not None and live_turn.conversation_id != conversation_id
+        else None
+    )
     blockers: list[str] = []
     if machine_state != MachineState.READY:
         blockers.append(SetupMachineNotReadyError().message)
@@ -97,9 +110,8 @@ def get_setup_page(project: Project) -> SetupPage:
         send_blockers=tuple(blockers),
         can_send=not blockers,
         max_iterations=settings.MACHINE_SETUP_MAX_ITERATIONS,
-        finishing_previous_turn=(
-            live_turn is not None and live_turn.conversation_id != conversation_id
-        ),
+        finishing_previous_turn=finishing_conversation_id is not None,
+        finishing_conversation_id=finishing_conversation_id,
     )
 
 

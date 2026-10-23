@@ -60,7 +60,7 @@ from controller_client.protocol import (
     OmniParserStatusPayload,
     parse_omniparser_status_payload,
 )
-from machine_setup.turn_state import live_turn_exists
+from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from projects.application_context_services import write_application_context
 from projects.case_blocking import blocked_message, classify_case_exception
 from projects.case_checkpoint_services import (
@@ -702,32 +702,17 @@ def regenerate_api_key(project: Project) -> str:
     return project.api_key
 
 
-# Fields `write_application_context` sets, reloaded so the returned project
-# carries the new notes and provenance.
-_CONTEXT_WRITE_FIELDS: tuple[str, ...] = (
-    "project_prompt",
-    "project_prompt_revision",
-    "project_prompt_source",
-    "project_prompt_written_by",
-    "project_prompt_written_at",
-    "project_prompt_change_summary",
-    "updated_at",
-)
-
-
 def save_project_prompt(
     *,
     project: Project,
     prompt: str,
     author: CustomUser | None = None,
     source: ContextWriteSource = ContextWriteSource.USER,
-) -> Project:
+) -> None:
     """Replace the notes as a versioned write (raises ``ApplicationContextTooLongError``)."""
     write_application_context(
         project_id=project.pk, text=prompt, source=source, author=author
     )
-    project.refresh_from_db(fields=_CONTEXT_WRITE_FIELDS)
-    return project
 
 
 def save_application_context(
@@ -737,7 +722,7 @@ def save_application_context(
     application_platform: str,
     project_prompt: str,
     author: CustomUser | None = None,
-) -> Project:
+) -> None:
     """Persist the application context used to brief the AI agent.
 
     URL and platform are saved as plain fields; the notes go through the
@@ -755,8 +740,6 @@ def save_application_context(
             source=ContextWriteSource.USER,
             author=author,
         )
-    project.refresh_from_db(fields=_CONTEXT_WRITE_FIELDS)
-    return project
 
 
 def build_agent_project_context(project: Project) -> str | None:
@@ -2354,10 +2337,7 @@ def start_test_run(test_run: TestRun) -> None:
     if _has_active_test_run(test_run.project):
         raise ValueError("Another test run is already in progress for this project.")
     if live_turn_exists(test_run.project_id, timezone.now()):
-        raise ValueError(
-            "Machine setup is running for this project. "
-            "Stop it or wait for it to finish."
-        )
+        raise ValueError(MACHINE_SETUP_RUNNING_MESSAGE)
 
     test_run.status = TestRunStatus.STARTED
     test_run.started_at = timezone.now()

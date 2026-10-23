@@ -38,9 +38,11 @@ from projects.exceptions import (
     BrowserUnavailableError,
     RunnerOutdatedError,
 )
-from projects.models import PROJECT_PROMPT_MAX_LENGTH, ContextWriteSource
-
-CHANGE_SUMMARY_MAX_LENGTH = 500
+from projects.models import (
+    CONTEXT_CHANGE_SUMMARY_MAX_LENGTH,
+    PROJECT_PROMPT_MAX_LENGTH,
+    ContextWriteSource,
+)
 
 # Called after a successful context write with the new revision and summary.
 ContextUpdatedCallback = Callable[[int, str], None]
@@ -155,7 +157,7 @@ def _project_data_tool_definitions() -> tuple[ToolDefinition, ...]:
                     type="string",
                     description=(
                         "What changed, in a sentence or two (at most "
-                        f"{CHANGE_SUMMARY_MAX_LENGTH} characters). Shown to the user."
+                        f"{CONTEXT_CHANGE_SUMMARY_MAX_LENGTH} characters). Shown to the user."
                     ),
                     required=True,
                 ),
@@ -189,10 +191,10 @@ def build_setup_dispatcher(
             )
         if not change_summary:
             raise _InvalidArgumentError("change_summary is empty. Say what changed.")
-        if len(change_summary) > CHANGE_SUMMARY_MAX_LENGTH:
+        if len(change_summary) > CONTEXT_CHANGE_SUMMARY_MAX_LENGTH:
             raise _InvalidArgumentError(
                 f"change_summary is {len(change_summary)} characters; the limit is "
-                f"{CHANGE_SUMMARY_MAX_LENGTH}."
+                f"{CONTEXT_CHANGE_SUMMARY_MAX_LENGTH}."
             )
         try:
             revision = write_application_context(
@@ -217,46 +219,55 @@ def build_setup_dispatcher(
         on_context_updated(revision, change_summary)
         return f"Saved as revision {revision}."
 
-    def _run_project_data_tool(name: str, arguments: dict[str, object]) -> str:
-        if name == "list_test_case_preconditions":
-            return _render_page(
-                list_case_preconditions(project_id, _optional_offset(arguments))
+    def _handle_list_preconditions(arguments: dict[str, object]) -> str:
+        return _render_page(
+            list_case_preconditions(project_id, _optional_offset(arguments))
+        )
+
+    def _handle_search_cases(arguments: dict[str, object]) -> str:
+        return _render_page(
+            search_cases(
+                project_id,
+                _optional_str(arguments, "query"),
+                _optional_offset(arguments),
             )
-        if name == "search_test_cases":
-            return _render_page(
-                search_cases(
-                    project_id,
-                    _optional_str(arguments, "query"),
-                    _optional_offset(arguments),
-                )
+        )
+
+    def _handle_get_case(arguments: dict[str, object]) -> str:
+        case_id = _required_int(arguments, "case_id")
+        case_text = get_case(project_id, case_id)
+        if case_text is None:
+            raise _InvalidArgumentError(
+                f"No test case with id {case_id} in this project. Use "
+                "search_test_cases to find case ids."
             )
-        if name == "get_test_case":
-            case_id = _required_int(arguments, "case_id")
-            case_text = get_case(project_id, case_id)
-            if case_text is None:
-                raise _InvalidArgumentError(
-                    f"No test case with id {case_id} in this project. Use "
-                    "search_test_cases to find case ids."
-                )
-            return case_text
-        if name == "get_application_context":
-            snapshot = get_application_context(project_id)
-            return (
-                f"Revision: {snapshot.revision}\n"
-                f"Length: {len(snapshot.text)} of {snapshot.max_length} characters\n"
-                "Text:\n"
-                "---\n"
-                f"{snapshot.text or '(empty)'}\n"
-                "---"
-            )
-        return _handle_update_context(arguments)
+        return case_text
+
+    def _handle_get_context(arguments: dict[str, object]) -> str:
+        snapshot = get_application_context(project_id)
+        return (
+            f"Revision: {snapshot.revision}\n"
+            f"Length: {len(snapshot.text)} of {snapshot.max_length} characters\n"
+            "Text:\n"
+            "---\n"
+            f"{snapshot.text or '(empty)'}\n"
+            "---"
+        )
+
+    # Every project data tool; its keys are also the "runs on the server" test.
+    project_data_handlers: dict[str, Callable[[dict[str, object]], str]] = {
+        "list_test_case_preconditions": _handle_list_preconditions,
+        "search_test_cases": _handle_search_cases,
+        "get_test_case": _handle_get_case,
+        "get_application_context": _handle_get_context,
+        "update_application_context": _handle_update_context,
+    }
 
     def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
-        if tool_call.tool_name in _PROJECT_DATA_TOOL_NAMES:
+        handler = project_data_handlers.get(tool_call.tool_name)
+        if handler is not None:
             try:
-                content = _run_project_data_tool(
-                    tool_call.tool_name, tool_call.arguments
-                )
+                content = handler(tool_call.arguments)
             except _InvalidArgumentError as exc:
                 return ToolResult(
                     tool_call_id=tool_call.tool_call_id,
@@ -296,11 +307,6 @@ def build_setup_dispatcher(
             )
 
     return _dispatch
-
-
-_PROJECT_DATA_TOOL_NAMES = frozenset(
-    definition.name for definition in _project_data_tool_definitions()
-)
 
 
 def _render_page(page: CatalogPage) -> str:

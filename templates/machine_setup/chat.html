@@ -17,10 +17,14 @@
                  finishing_previous_turn, …)
     form       — SetupMessageForm (field `text`, max_length 8000); only its
                  errors arrive via messages after PRG, so it is not rendered
+    blocker_texts — {machine_not_ready, turn_active}: the exceptions' default
+                 messages, which the client recomputes from live state
 
-  Initial state (json_script, replaced by the socket's current_state):
-    setup-messages         — page.messages (list[SetupMessagePayload])
+  Initial state (json_script, replaced by the socket's current_state). The
+  rows themselves arrive only with current_state (page.messages is empty here),
+  so the empty state waits for `loaded`:
     setup-turn             — page.turn (SetupTurnPayload | null)
+    setup-blocker-texts    — blocker_texts
     setup-blockers         — page.send_blockers (list[str])
     setup-omniparser-status — project.agent_omniparser_status (object)
 
@@ -32,7 +36,7 @@
 {% block title %}Machine setup · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
 {% block page %}
-{{ page.messages|json_script:"setup-messages" }}
+{{ blocker_texts|json_script:"setup-blocker-texts" }}
 {{ page.turn|json_script:"setup-turn" }}
 {{ page.send_blockers|json_script:"setup-blockers" }}
 {{ project.agent_omniparser_status|json_script:"setup-omniparser-status" }}
@@ -68,18 +72,22 @@
 <script>
 document.addEventListener('alpine:init', () => {
   const LIVE_STATUSES = ['queued', 'running'];
-  // Mirrors machine_setup/exceptions.py; the client recomputes these two
-  // blockers from live socket state and keeps any other server blocker (for
-  // example an active test run) until the next current_state.
-  const MACHINE_NOT_READY = 'The test machine is not ready: the Test Runner must be connected and the visual engine ready.';
-  const TURN_ACTIVE = 'The setup agent is still working. Wait for it to finish or stop it first.';
-  const FINISHING = 'Finishing the previous turn…';
   const readJson = (id) => JSON.parse(document.getElementById(id).textContent);
+  // The client recomputes these two blockers from live socket state and keeps
+  // any other server blocker (for example an active test run) until the next
+  // current_state.
+  const BLOCKER_TEXTS = readJson('setup-blocker-texts');
+  const MACHINE_NOT_READY = BLOCKER_TEXTS.machine_not_ready;
+  const TURN_ACTIVE = BLOCKER_TEXTS.turn_active;
+  const FINISHING = 'Finishing the previous turn…';
 
   Alpine.data('machineSetupChat', () => ({
     conversationId: {{ page.conversation_id|default_if_none:"null" }},
-    archivedConversationIds: [],
-    messages: readJson('setup-messages'),
+    // Rows of these conversations are ignored: archived here by a reset, or
+    // the archived conversation whose turn is still finishing.
+    archivedConversationIds: [{{ page.finishing_conversation_id|default_if_none:"" }}],
+    loaded: false,
+    messages: [],
     hiddenMessageCount: {{ page.hidden_message_count }},
     turn: readJson('setup-turn'),
     serverBlockers: readJson('setup-blockers'),
@@ -118,7 +126,11 @@ document.addEventListener('alpine:init', () => {
       const stick = this.atBottom();
       if (data.type === 'current_state') {
         this.conversationId = data.conversation_id;
+        if (data.finishing_conversation_id !== null && !this.archivedConversationIds.includes(data.finishing_conversation_id)) {
+          this.archivedConversationIds.push(data.finishing_conversation_id);
+        }
         this.messages = data.messages || [];
+        this.loaded = true;
         this.hiddenMessageCount = data.hidden_message_count || 0;
         this.turn = data.turn;
         this.serverBlockers = data.send_blockers || [];

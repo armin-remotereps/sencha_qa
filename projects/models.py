@@ -114,6 +114,7 @@ class Tag(models.Model):
 
 # Cap on the application context notes, for every writer (form and agent tool).
 PROJECT_PROMPT_MAX_LENGTH = 12000
+CONTEXT_CHANGE_SUMMARY_MAX_LENGTH = 500
 
 
 class ContextWriteSource(models.TextChoices):
@@ -161,7 +162,7 @@ class Project(models.Model):
     )
     project_prompt_written_at = models.DateTimeField(null=True, blank=True)
     project_prompt_change_summary = models.CharField(
-        max_length=500, blank=True, default=""
+        max_length=CONTEXT_CHANGE_SUMMARY_MAX_LENGTH, blank=True, default=""
     )
     application_url = models.URLField(max_length=500, blank=True, default="")
     application_platform = models.CharField(
@@ -217,7 +218,9 @@ class ApplicationContextVersion(models.Model):
         related_name="+",
     )
     written_at = models.DateTimeField(null=True, blank=True)
-    change_summary = models.CharField(max_length=500, blank=True, default="")
+    change_summary = models.CharField(
+        max_length=CONTEXT_CHANGE_SUMMARY_MAX_LENGTH, blank=True, default=""
+    )
     replaced_at = models.DateTimeField()
 
     class Meta:

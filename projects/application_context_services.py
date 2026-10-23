@@ -24,6 +24,7 @@ from projects.exceptions import (
     ApplicationContextVersionNotFoundError,
 )
 from projects.models import (
+    CONTEXT_CHANGE_SUMMARY_MAX_LENGTH,
     PROJECT_PROMPT_MAX_LENGTH,
     ApplicationContextVersion,
     ContextWriteSource,
@@ -152,7 +153,9 @@ def write_application_context(
             project_prompt_source=source,
             project_prompt_written_by=author,
             project_prompt_written_at=now,
-            project_prompt_change_summary=change_summary[:500],
+            project_prompt_change_summary=change_summary[
+                :CONTEXT_CHANGE_SUMMARY_MAX_LENGTH
+            ],
             updated_at=now,
         )
         _prune_history(project_id)

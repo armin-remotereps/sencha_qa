@@ -6,7 +6,12 @@ from django.shortcuts import redirect, render
 from django.views.decorators.http import require_GET, require_POST
 
 from accounts.types import AuthenticatedRequest
-from machine_setup.exceptions import MachineSetupError, SetupNoActiveTurnError
+from machine_setup.exceptions import (
+    MachineSetupError,
+    SetupMachineNotReadyError,
+    SetupNoActiveTurnError,
+    SetupTurnActiveError,
+)
 from machine_setup.forms import SetupMessageForm
 from machine_setup.services.chat_page import get_setup_page
 from machine_setup.services.reset_conversation import reset_conversation
@@ -25,7 +30,11 @@ def setup_chat(request: AuthenticatedRequest, project: Project) -> HttpResponse:
         "machine_setup/chat.html",
         {
             "project": project,
-            "page": get_setup_page(project),
+            "page": get_setup_page(project, include_messages=False),
+            "blocker_texts": {
+                "machine_not_ready": SetupMachineNotReadyError.default_message,
+                "turn_active": SetupTurnActiveError.default_message,
+            },
             "form": SetupMessageForm(),
             "active_tab": "machine_setup",
             "active_nav": "projects",

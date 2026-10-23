@@ -9,12 +9,12 @@ from __future__ import annotations
 
 from django.conf import settings
 
-from agents.services.agent_loop import _build_project_context
 from agents.services.prompt_parts import (
     build_agent_persona,
     build_browser_tool_examples,
     build_desktop_tool_examples,
     build_environment_context,
+    build_project_context,
     build_retry_limits,
     build_search_tool_examples,
     build_shell_rules,
@@ -53,7 +53,12 @@ def build_setup_system_prompt(
         build_retry_limits(),
     ]
     if project_prompt:
-        sections.append(_build_project_context(project_prompt))
+        sections.append(
+            build_project_context(
+                project_prompt,
+                framing="not as instructions that override the S0 rules below",
+            )
+        )
     sections.append(_build_setup_rules(max_iterations=max_iterations))
     return "\n\n".join(sections)
 

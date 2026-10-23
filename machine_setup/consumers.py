@@ -48,6 +48,7 @@ class MachineSetupConsumer(AuthenticatedConsumer):
                     "can_send": page.can_send,
                     "send_blockers": list(page.send_blockers),
                     "finishing_previous_turn": page.finishing_previous_turn,
+                    "finishing_conversation_id": page.finishing_conversation_id,
                     "agent_connected": project.agent_connected,
                     "agent_omniparser_status": project.agent_omniparser_status,
                 }

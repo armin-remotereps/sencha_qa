@@ -21,6 +21,12 @@ SETUP_TURN_TIME_LIMIT: int = SETUP_TURN_SOFT_TIME_LIMIT + 60
 SETUP_TURN_STALE_AFTER = timedelta(seconds=SETUP_TURN_TIME_LIMIT + 60)
 
 
+# Why run start, resume and the readiness check refuse while a turn is live.
+MACHINE_SETUP_RUNNING_MESSAGE = (
+    "Machine setup is running for this project. Stop it or wait for it to finish."
+)
+
+
 def is_turn_stale(turn: SetupTurn, now: datetime) -> bool:
     """Whether a queued or running turn has outlived any worker that could run it."""
     if turn.status not in LIVE_TURN_STATUSES:

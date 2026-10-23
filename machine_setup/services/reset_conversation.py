@@ -23,7 +23,7 @@ def reset_conversation(*, project: Project, user: CustomUser) -> None:
     now = timezone.now()
     turn = resolve_live_turn(project_id=project.pk, now=now)
     if turn is not None:
-        mark_stop_requested(turn, user)
+        mark_stop_requested(turn, user, reset=True)
     SetupConversation.objects.filter(project=project, archived_at__isnull=True).update(
         archived_at=now, archived_by=user
     )

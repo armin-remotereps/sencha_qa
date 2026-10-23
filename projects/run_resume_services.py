@@ -24,7 +24,7 @@ from agents.checkpoint import (
     checkpoint_to_json,
     truncate_checkpoint,
 )
-from machine_setup.turn_state import live_turn_exists
+from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from projects.case_checkpoint_services import load_resume_checkpoint
 from projects.checked_push_limits import is_checked_push_live
 from projects.exceptions import RunResumeError
@@ -61,9 +61,6 @@ _MACHINE_FAILED = (
     "Check Advanced diagnostics on the Environment page."
 )
 _NOTHING_RESUMABLE = "There are no Blocked or Cancelled cases to resume."
-_MACHINE_SETUP_RUNNING = (
-    "Machine setup is running for this project. Stop it or wait for it to finish."
-)
 
 # Every execution and Checked/Sent field a resume resets, as `reset_test_run`
 # does; logs, screenshots and the checkpoint are kept (started_at is set again
@@ -128,7 +125,7 @@ def get_resume_panel(test_run: TestRun, project: Project) -> ResumePanel:
     if machine_blocker:
         blockers.append(machine_blocker)
     if live_turn_exists(test_run.project_id, timezone.now()):
-        blockers.append(_MACHINE_SETUP_RUNNING)
+        blockers.append(MACHINE_SETUP_RUNNING_MESSAGE)
     return ResumePanel(
         blocked=blocked,
         cancelled_started=cancelled_started,
@@ -256,7 +253,7 @@ def _lock_and_check(
     if machine_blocker:
         raise RunResumeError(machine_blocker)
     if live_turn_exists(project.pk, timezone.now()):
-        raise RunResumeError(_MACHINE_SETUP_RUNNING)
+        raise RunResumeError(MACHINE_SETUP_RUNNING_MESSAGE)
 
     queryset = TestRunTestCase.objects.filter(
         test_run_id=test_run.pk, status__in=RESUMABLE_STATUSES
