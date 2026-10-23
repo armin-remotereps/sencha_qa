@@ -7,10 +7,16 @@ venv/
 # .gitignored, but .dockerignore needs its own entries).
 controller_client/.venv/
 controller_client/venv/
-controller_client/omniparser/weights/
 controller_client/.env
 controller_client/.pytest_cache/
 controller_client/.mypy_cache/
+# Same for vision_worker: the server imports vision_worker.protocol, so the
+# source stays; its venv, model weights and .env are per-machine artifacts.
+vision_worker/.venv/
+vision_worker/venv/
+vision_worker/omniparser/weights/
+vision_worker/.env
+vision_worker/.mypy_cache/
 .git/
 __pycache__/
 *.pyc

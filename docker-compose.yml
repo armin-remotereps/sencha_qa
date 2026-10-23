@@ -59,11 +59,12 @@ services:
             - "STATIC:/src/staticfiles"
             - "MEDIA:/src/media"
         # Daphne rejects incoming WebSocket messages above 1 MiB by default
-        # (close code 1009). Controller screenshots and OmniParser
-        # find_element results (annotated PNG as base64 + element list) are
-        # routinely several MiB, so both limits are raised to 32 MiB; the
-        # controller bounds its own results to OMNIPARSER_MAX_RESULT_BYTES
-        # (default 8 MiB), well under this.
+        # (close code 1009). Controller screenshots and vision worker parse
+        # results (annotated PNG as base64 + element list) are routinely
+        # several MiB, so both limits are raised to 32 MiB; the vision worker
+        # bounds its results to VISION_MAX_RESULT_BYTES (default 8 MiB), well
+        # under this. Outgoing parse requests (the screenshot) are not capped
+        # by these flags, only by the worker's own MAX_MESSAGE_BYTES.
         # Controller actions can briefly saturate CPU or upload multi-megabyte
         # screenshots. Keep the heartbeat tolerant of those bursts so Daphne
         # does not reset an otherwise healthy WebSocket mid-action.

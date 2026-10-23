@@ -56,8 +56,12 @@ plan.md
 !static/branding/*.png
 .playwright-mcp/
 
-# OmniParser weights
-controller_client/omniparser/weights/
+# Vision worker runtime artifacts (OmniParser weights, venv, secrets)
+vision_worker/.venv/
+vision_worker/venv/
+vision_worker/omniparser/weights/
+vision_worker/.env
+vision_worker/.mypy_cache/
 
 # Generated test reports
 *_TEST_REPORT.md

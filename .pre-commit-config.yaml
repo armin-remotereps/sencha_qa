@@ -4,13 +4,13 @@ repos:
     hooks:
       - id: black
         language_version: python3.13
-        exclude: controller_client/omniparser/util/
+        exclude: ^vision_worker/omniparser/util/
 
   - repo: https://github.com/PyCQA/isort
     rev: 7.0.0
     hooks:
       - id: isort
-        exclude: controller_client/omniparser/util/
+        exclude: ^vision_worker/omniparser/util/
 
   - repo: local
     hooks:
@@ -20,7 +20,7 @@ repos:
         language: system
         types: [python]
         args: ["--config-file", "setup.cfg"]
-        exclude: migrations/|controller_client/
+        exclude: migrations/|controller_client/|vision_worker/
 
       - id: mypy-controller-client
         name: mypy (controller_client)
@@ -28,4 +28,11 @@ repos:
         language: system
         types: [python]
         files: ^controller_client/
-        exclude: ^controller_client/omniparser/(util|weights)/
+
+      - id: mypy-vision-worker
+        name: mypy (vision_worker)
+        entry: vision_worker/.venv/bin/mypy --config-file vision_worker/setup.cfg
+        language: system
+        types: [python]
+        files: ^vision_worker/
+        exclude: ^vision_worker/omniparser/(util|weights)/
