@@ -2291,3 +2291,255 @@ details.card[open] > summary,
     gap: 6px;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Machine setup chat (templates/machine_setup/chat.html). Every row is
+   plain text (x-text, pre-wrap); the composer sticks to the viewport bottom
+   so it stays reachable in a long transcript.
+   -------------------------------------------------------------------------- */
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-connection {
+  margin: 0;
+  text-align: center;
+}
+
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.chat-row {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.chat-msg {
+  max-width: min(760px, 88%);
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}
+
+.chat-msg-user {
+  align-self: flex-end;
+  background: var(--cyan-soft);
+  border-color: rgba(46, 202, 228, 0.35);
+}
+
+.chat-msg-assistant {
+  align-self: flex-start;
+  background: var(--surface);
+}
+
+.chat-meta {
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.chat-tool {
+  align-self: stretch;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  padding: 8px 12px;
+  min-width: 0;
+}
+
+.chat-tool > summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  list-style: none;
+}
+
+.chat-tool > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-tool > summary::before {
+  content: "▸";
+  color: var(--text-muted);
+  font-size: 0.85em;
+  transition: transform 120ms ease;
+}
+
+.chat-tool[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.chat-tool-name {
+  font-family: var(--mono);
+  font-size: 0.86rem;
+}
+
+.chat-tool-body {
+  margin-top: 10px;
+  min-width: 0;
+}
+
+.chat-tool-label {
+  margin: 0 0 4px;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--text-muted);
+}
+
+/* Tool arguments/results: keep line breaks but wrap long lines. */
+.chat-pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.chat-shots {
+  margin-top: 4px;
+}
+
+.chat-notice {
+  align-self: center;
+  margin: 0;
+  max-width: 760px;
+  text-align: center;
+  font-size: 0.86rem;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.chat-notice a {
+  margin-left: 6px;
+}
+
+.chat-composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  padding: 12px 0;
+  background: var(--page);
+  border-top: 1px solid var(--border);
+}
+
+.chat-blocker {
+  margin: 0 0 8px;
+  color: var(--warning);
+}
+
+.chat-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.chat-composer-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-composer-form .textarea {
+  flex: 1;
+  min-height: 0;
+  resize: vertical;
+}
+
+/* Screenshot lightbox image (machine setup chat). */
+.lightbox-img {
+  max-height: 70vh;
+  width: 100%;
+  object-fit: contain;
+}
+
+.dialog-actions-spread {
+  justify-content: space-between;
+}
+
+@media (max-width: 767px) {
+  .chat-msg {
+    max-width: 100%;
+  }
+
+  .chat-composer-row,
+  .chat-composer-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   Application context history (projects/includes/_context_history_card.html)
+   and the provenance line of the current notes.
+   -------------------------------------------------------------------------- */
+
+.context-provenance {
+  margin: 0 0 14px;
+  font-size: 0.86rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.version-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.version-list > li {
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+
+.version-list > li:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.version-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.version-meta {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.version-summary {
+  margin: 6px 0;
+  overflow-wrap: anywhere;
+}
+
+.version-list .code-block {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+@media (max-width: 767px) {
+  .version-head {
+    flex-direction: column;
+  }
+}

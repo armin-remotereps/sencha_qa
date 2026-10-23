@@ -1,0 +1,41 @@
+{% comment %}
+  Machine setup composer: a plain form POST to machine_setup:send (PRG), plus
+  a Stop form while a turn is queued or running. Reads draft, canSend,
+  blockerText, turn, turnLive, submitting, onEnter and onSubmit from the
+  ancestor machineSetupChat scope (machine_setup/chat.html).
+
+  Context contract:
+    project — the current Project
+{% endcomment %}
+<div class="chat-composer">
+  <p class="chat-blocker small" x-show="!canSend" x-cloak x-text="blockerText"></p>
+  <div class="chat-composer-row">
+    <form class="chat-composer-form" method="post" action="{% url 'machine_setup:send' project_id=project.id %}" @submit="onSubmit($event)">
+      {% csrf_token %}
+      <label for="setup-message-text" class="visually-hidden">Message the setup agent</label>
+      <textarea
+        id="setup-message-text"
+        class="textarea"
+        name="text"
+        rows="2"
+        maxlength="8000"
+        required
+        placeholder="Describe what the test machine needs… (Enter to send, Shift+Enter for a new line)"
+        x-model="draft"
+        @keydown.enter="onEnter($event)"
+      ></textarea>
+      <button type="submit" class="btn btn-primary" x-show="!turnLive" :disabled="!canSend || submitting || !draft.trim()">Send</button>
+    </form>
+    <form method="post" action="{% url 'machine_setup:stop' project_id=project.id %}" x-show="turnLive" x-cloak>
+      {% csrf_token %}
+      <button
+        type="submit"
+        class="btn btn-danger"
+        title="Stops after the current action finishes; processes the agent started keep running."
+        :disabled="turn && turn.stop_requested"
+        x-text="turn && turn.stop_requested ? 'Stopping…' : 'Stop'"
+      >Stop</button>
+    </form>
+  </div>
+  <p class="muted small" x-show="turnLive" x-cloak x-text="turn ? 'Step ' + turn.iterations + ' of ' + turn.max_iterations : ''"></p>
+</div>

@@ -1,11 +1,12 @@
 {% extends "layouts/app.html" %}
 
 {% comment %} Project-scoped page shell: breadcrumbs + project tabs, wrapping every
-   Overview/Test Cases/Runs/Environment/wizard page.
+   Overview/Test Cases/Runs/Environment/Machine setup/wizard page.
 
    Context contract:
      project    — the current Project
-     active_tab — "overview" | "test_cases" | "runs" | "environment" | "settings"
+     active_tab — "overview" | "test_cases" | "runs" | "environment"
+                  | "machine_setup" | "settings"
                   (omit/blank on pages not represented by a tab, e.g. the
                   wizard steps or a run/case detail page)
 

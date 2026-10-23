@@ -47,7 +47,7 @@
   {% include "projects/includes/_overview_stats.html" with project=project overview=overview only %}
 </div>
 
-{% include "projects/includes/_overview_context.html" with project=project only %}
+{% include "projects/includes/_overview_context.html" with project=project context_source=context_source only %}
 {% include "projects/includes/_overview_runs.html" with project=project overview=overview only %}
 {% endblock %}
 

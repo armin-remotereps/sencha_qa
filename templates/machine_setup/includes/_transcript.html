@@ -1,0 +1,79 @@
+{% comment %}
+  Machine setup transcript. Reads messages, hiddenMessageCount, toolBadgeClass,
+  toolBadgeLabel, formatClock and openLightbox from the ancestor
+  machineSetupChat scope (machine_setup/chat.html). Every field is model or
+  agent text, so it is rendered with x-text only.
+{% endcomment %}
+<div class="chat-log" aria-live="polite">
+  <p class="chat-notice" x-show="hiddenMessageCount > 0" x-cloak x-text="hiddenMessageCount + ' earlier messages not shown'"></p>
+
+  <div class="empty" x-show="messages.length === 0" x-cloak>
+    <h3>No messages yet</h3>
+    <p>Tell the agent what the test machine needs, or ask it to read the test cases' preconditions and prepare the machine for them.</p>
+  </div>
+
+  <template x-for="message in messages" :key="message.id">
+    <div class="chat-row">
+      <template x-if="message.kind === 'user'">
+        <div class="chat-msg chat-msg-user">
+          <div class="chat-meta">
+            <span x-text="message.author_name || 'You'"></span>
+            <time :datetime="message.created_at" x-text="formatClock(message.created_at)"></time>
+          </div>
+          <div class="pre-wrap" x-text="message.text"></div>
+        </div>
+      </template>
+
+      <template x-if="message.kind === 'assistant'">
+        <div class="chat-msg chat-msg-assistant">
+          <div class="chat-meta">
+            <span>Setup agent</span>
+            <time :datetime="message.created_at" x-text="formatClock(message.created_at)"></time>
+          </div>
+          <div class="pre-wrap" x-text="message.text"></div>
+        </div>
+      </template>
+
+      <template x-if="message.kind === 'tool'">
+        <details class="chat-tool">
+          <summary>
+            <span class="chat-tool-name" x-text="message.tool_name"></span>
+            <span class="badge" :class="toolBadgeClass(message.tool_status)" x-text="toolBadgeLabel(message.tool_status)"></span>
+            <span class="muted small" x-show="message.screenshots.length > 0" x-text="message.screenshots.length + (message.screenshots.length === 1 ? ' screenshot' : ' screenshots')"></span>
+          </summary>
+          <div class="chat-tool-body">
+            <template x-if="message.tool_arguments_text">
+              <div>
+                <p class="chat-tool-label">Arguments</p>
+                <pre class="code-block chat-pre" x-text="message.tool_arguments_text"></pre>
+              </div>
+            </template>
+            <template x-if="message.text">
+              <div>
+                <p class="chat-tool-label">Result</p>
+                <pre class="code-block chat-pre" x-text="message.text"></pre>
+              </div>
+            </template>
+            <div class="gallery chat-shots" x-show="message.screenshots.length > 0">
+              <template x-for="(shot, index) in message.screenshots" :key="shot.id">
+                <button type="button" class="shot" @click="openLightbox(message.screenshots, index)">
+                  <img class="shot-img" :src="shot.url" alt="" loading="lazy">
+                  <span class="shot-caption" x-text="shot.tool_name"></span>
+                </button>
+              </template>
+            </div>
+          </div>
+        </details>
+      </template>
+
+      <template x-if="message.kind === 'notice'">
+        <p class="chat-notice">
+          <span x-text="message.text"></span>
+          <template x-if="message.link_url">
+            <a :href="message.link_url">Open application context</a>
+          </template>
+        </p>
+      </template>
+    </div>
+  </template>
+</div>

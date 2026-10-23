@@ -1,0 +1,295 @@
+{% extends "layouts/project.html" %}
+
+{% comment %}
+  Machine setup — a chat with the setup agent that brings the test machine to
+  state 0 (S0) before runs. Live via machineSetupChat below.
+
+  The header's machine and turn badges need the same live state as the
+  transcript and composer, so — as in test_run_case_detail.html — `block page`
+  is overridden wholesale (re-including the project tabs) so everything shares
+  one `x-data="machineSetupChat"` root.
+
+  Context contract (machine_setup.views.chat):
+    project    — the current Project (agent_connected, agent_omniparser_status)
+    active_tab — "machine_setup"
+    page       — machine_setup.services.chat_page.SetupPage (conversation_id,
+                 messages, hidden_message_count, turn, send_blockers, can_send,
+                 finishing_previous_turn, …)
+    form       — SetupMessageForm (field `text`, max_length 8000); only its
+                 errors arrive via messages after PRG, so it is not rendered
+
+  Initial state (json_script, replaced by the socket's current_state):
+    setup-messages         — page.messages (list[SetupMessagePayload])
+    setup-turn             — page.turn (SetupTurnPayload | null)
+    setup-blockers         — page.send_blockers (list[str])
+    setup-omniparser-status — project.agent_omniparser_status (object)
+
+  WebSocket /ws/projects/<id>/machine-setup/ (machine_setup.consumers):
+  current_state, message, screenshot, turn, reset, agent_status. All dynamic
+  text is rendered with x-text; never x-html.
+{% endcomment %}
+
+{% block title %}Machine setup · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page %}
+{{ page.messages|json_script:"setup-messages" }}
+{{ page.turn|json_script:"setup-turn" }}
+{{ page.send_blockers|json_script:"setup-blockers" }}
+{{ project.agent_omniparser_status|json_script:"setup-omniparser-status" }}
+<div x-data="machineSetupChat">
+  <div class="page-header">
+    <div>
+      <h1>Machine setup</h1>
+      <p class="subtitle">Bring the test machine to state 0 (S0) before runs</p>
+    </div>
+    <div class="actions">
+      <span class="badge" :class="'badge-' + machineBadgeClass" x-text="machineBadgeLabel"></span>
+      <span class="badge" x-show="turn" x-cloak :class="turnBadgeClass" x-text="turn ? turn.status_label : ''"></span>
+      <button type="button" class="btn btn-secondary" @click="$dispatch('open-reset-machine-setup')">Reset</button>
+    </div>
+  </div>
+
+  {% include "partials/project_tabs.html" with project=project active_tab=active_tab only %}
+
+  <section class="chat" aria-label="Machine setup conversation">
+    <p class="chat-connection muted small" x-show="!socketOpen" x-cloak>Live updates paused — reconnecting…</p>
+    {% include "machine_setup/includes/_transcript.html" %}
+    {% include "machine_setup/includes/_composer.html" with project=project %}
+  </section>
+
+  {% include "machine_setup/includes/_lightbox.html" %}
+
+  {% url 'machine_setup:reset' project_id=project.id as reset_url %}
+  {% include "partials/confirm_dialog.html" with dialog_id="reset-machine-setup" title="Reset the conversation?" body="Starts a new conversation. The agent forgets this chat. Changes already made to the test machine stay." confirm_label="Reset" action_url=reset_url csrf_token=csrf_token only %}
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+document.addEventListener('alpine:init', () => {
+  const LIVE_STATUSES = ['queued', 'running'];
+  // Mirrors machine_setup/exceptions.py; the client recomputes these two
+  // blockers from live socket state and keeps any other server blocker (for
+  // example an active test run) until the next current_state.
+  const MACHINE_NOT_READY = 'The test machine is not ready: the Test Runner must be connected and the visual engine ready.';
+  const TURN_ACTIVE = 'The setup agent is still working. Wait for it to finish or stop it first.';
+  const FINISHING = 'Finishing the previous turn…';
+  const readJson = (id) => JSON.parse(document.getElementById(id).textContent);
+
+  Alpine.data('machineSetupChat', () => ({
+    conversationId: {{ page.conversation_id|default_if_none:"null" }},
+    archivedConversationIds: [],
+    messages: readJson('setup-messages'),
+    hiddenMessageCount: {{ page.hidden_message_count }},
+    turn: readJson('setup-turn'),
+    serverBlockers: readJson('setup-blockers'),
+    finishingPreviousTurn: {{ page.finishing_previous_turn|yesno:'true,false' }},
+    agentConnected: {{ project.agent_connected|yesno:'true,false' }},
+    omniparserStatus: readJson('setup-omniparser-status') || {},
+    draft: '',
+    submitting: false,
+    socketOpen: true,
+    reconnectDelay: 1000,
+    lightboxShots: [],
+    lightboxIndex: 0,
+    showLightbox: false,
+
+    init() {
+      this.connect();
+      this.$nextTick(() => this.scrollToBottom());
+    },
+
+    connect() {
+      const ws = new WebSocket(window.punkHazard.wsUrl('/ws/projects/{{ project.id }}/machine-setup/'));
+      ws.onopen = () => {
+        this.socketOpen = true;
+        this.reconnectDelay = 1000;
+      };
+      ws.onclose = () => {
+        this.socketOpen = false;
+        // current_state on the next connect rehydrates everything missed.
+        setTimeout(() => this.connect(), this.reconnectDelay);
+        this.reconnectDelay = Math.min(this.reconnectDelay * 2, 15000);
+      };
+      ws.onmessage = (event) => this.apply(JSON.parse(event.data));
+    },
+
+    apply(data) {
+      const stick = this.atBottom();
+      if (data.type === 'current_state') {
+        this.conversationId = data.conversation_id;
+        this.messages = data.messages || [];
+        this.hiddenMessageCount = data.hidden_message_count || 0;
+        this.turn = data.turn;
+        this.serverBlockers = data.send_blockers || [];
+        this.finishingPreviousTurn = !!data.finishing_previous_turn;
+        this.agentConnected = !!data.agent_connected;
+        this.omniparserStatus = data.agent_omniparser_status || {};
+      } else if (data.type === 'message') {
+        this.upsertMessage(data.message);
+      } else if (data.type === 'screenshot') {
+        const message = this.messages.find((m) => m.id === data.message_id);
+        if (message && !message.screenshots.some((s) => s.id === data.screenshot.id)) {
+          message.screenshots.push(data.screenshot);
+        }
+      } else if (data.type === 'turn') {
+        this.applyTurn(data.turn);
+      } else if (data.type === 'reset') {
+        if (this.conversationId !== null) this.archivedConversationIds.push(this.conversationId);
+        if (this.turnLive) this.finishingPreviousTurn = true;
+        this.conversationId = null;
+        this.messages = [];
+        this.hiddenMessageCount = 0;
+        this.turn = null;
+      } else if (data.type === 'agent_status') {
+        this.agentConnected = !!data.agent_connected;
+        this.omniparserStatus = data.agent_omniparser_status || {};
+      }
+      if (stick) this.$nextTick(() => this.scrollToBottom());
+    },
+
+    // A row belongs to the shown conversation; with none shown yet (after a
+    // reset), the first row of a conversation that was not archived here
+    // starts it.
+    belongs(conversationId) {
+      if (this.conversationId === null && !this.archivedConversationIds.includes(conversationId)) {
+        this.conversationId = conversationId;
+      }
+      return conversationId === this.conversationId;
+    },
+
+    upsertMessage(message) {
+      if (!this.belongs(message.conversation_id)) return;
+      const index = this.messages.findIndex((m) => m.id === message.id);
+      if (index === -1) {
+        this.messages.push(message);
+        return;
+      }
+      // Keep screenshots that arrived on their own event before this update.
+      const known = this.messages[index].screenshots.filter(
+        (s) => !message.screenshots.some((n) => n.id === s.id),
+      );
+      message.screenshots = message.screenshots.concat(known);
+      this.messages[index] = message;
+    },
+
+    applyTurn(turn) {
+      if (this.belongs(turn.conversation_id)) {
+        this.turn = turn;
+        return;
+      }
+      // A turn of an archived conversation: the agent is still finishing it.
+      this.finishingPreviousTurn = LIVE_STATUSES.includes(turn.status);
+    },
+
+    get turnLive() {
+      return !!this.turn && LIVE_STATUSES.includes(this.turn.status);
+    },
+
+    get machineState() {
+      if (!this.agentConnected) return 'disconnected';
+      const state = this.omniparserStatus.state;
+      if (state === 'ready') return 'ready';
+      if (state === 'failed') return 'failed';
+      return 'starting';
+    },
+
+    get machineBadgeClass() {
+      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed' }[this.machineState];
+    },
+
+    get machineBadgeLabel() {
+      return {
+        disconnected: 'Not connected',
+        starting: 'Visual engine starting',
+        ready: 'Connected',
+        failed: 'Visual engine failed',
+      }[this.machineState];
+    },
+
+    get turnBadgeClass() {
+      if (!this.turn) return '';
+      return {
+        queued: 'badge-starting',
+        running: 'badge-running',
+        completed: 'badge-passed',
+        stopped: 'badge-cancelled',
+        failed: 'badge-failed',
+      }[this.turn.status] || 'badge-draft';
+    },
+
+    get blockers() {
+      const blockers = this.serverBlockers.filter((b) => b !== MACHINE_NOT_READY && b !== TURN_ACTIVE && b !== FINISHING);
+      if (this.machineState !== 'ready') blockers.unshift(MACHINE_NOT_READY);
+      if (this.turnLive) blockers.unshift(TURN_ACTIVE);
+      else if (this.finishingPreviousTurn) blockers.unshift(FINISHING);
+      return blockers;
+    },
+
+    get canSend() {
+      return this.blockers.length === 0;
+    },
+
+    get blockerText() {
+      return this.blockers.join(' ');
+    },
+
+    submit(form) {
+      if (!this.canSend || this.submitting || !this.draft.trim()) return;
+      this.submitting = true;
+      form.requestSubmit();
+    },
+
+    onSubmit(event) {
+      if (!this.canSend || !this.draft.trim()) {
+        event.preventDefault();
+        return;
+      }
+      this.submitting = true;
+    },
+
+    onEnter(event) {
+      if (event.shiftKey || event.isComposing) return;
+      event.preventDefault();
+      this.submit(event.target.form);
+    },
+
+    toolBadgeClass(status) {
+      return { running: 'badge-running', succeeded: 'badge-passed', failed: 'badge-failed' }[status] || 'badge-draft';
+    },
+
+    toolBadgeLabel(status) {
+      return { running: 'Running', succeeded: 'Done', failed: 'Error' }[status] || status;
+    },
+
+    formatClock(iso) {
+      const date = new Date(iso);
+      return isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    },
+
+    atBottom() {
+      const doc = document.documentElement;
+      return window.innerHeight + window.scrollY >= doc.scrollHeight - 120;
+    },
+
+    scrollToBottom() {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+    },
+
+    openLightbox(shots, index) {
+      this.lightboxShots = shots;
+      this.lightboxIndex = index;
+      this.showLightbox = true;
+    },
+
+    navigatePrev() {
+      if (this.showLightbox && this.lightboxIndex > 0) this.lightboxIndex--;
+    },
+
+    navigateNext() {
+      if (this.showLightbox && this.lightboxIndex < this.lightboxShots.length - 1) this.lightboxIndex++;
+    },
+  }));
+});
+</script>
+{% endblock %}

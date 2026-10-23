@@ -1,0 +1,55 @@
+{% comment %}
+  Application context version history: the replaced values of the notes,
+  newest first, each restorable behind a confirm dialog. "Restore previous"
+  opens the newest version's dialog.
+
+  Context contract:
+    project          — the current Project
+    context_versions — list[ApplicationContextVersion] (written_by
+                       select_related), non-empty, ordered by -revision
+    next             — path to return to after a restore (the current page)
+    csrf_token       — passed through for the restore forms (included with `only`)
+{% endcomment %}
+{% with previous=context_versions.0 %}
+<section aria-labelledby="context-history-h" class="card">
+  <div class="card-header">
+    <h2 id="context-history-h">Version history</h2>
+    <button type="button" class="btn btn-secondary btn-sm" @click="$dispatch('open-restore-context-{{ previous.id }}')">Restore previous</button>
+  </div>
+  <p class="hint">Earlier versions of the notes. Restoring one saves the current notes here first, so a restore can be undone.</p>
+  <ol class="version-list">
+    {% for version in context_versions %}
+    <li>
+      <div class="version-head">
+        <div>
+          <strong>Revision {{ version.revision }}</strong>
+          <span class="chip">{{ version.get_written_by_source_display|default:"Unknown" }}</span>
+          <p class="version-meta">
+            {% if version.written_by %}{{ version.written_by.get_full_name|default:version.written_by.email }} · {% endif %}
+            {% if version.written_at %}written {{ version.written_at|date:"M j, Y, H:i" }} · {% endif %}
+            replaced {{ version.replaced_at|date:"M j, Y, H:i" }}
+          </p>
+        </div>
+        <button type="button" class="btn btn-ghost btn-sm" @click="$dispatch('open-restore-context-{{ version.id }}')">Restore</button>
+      </div>
+      {% if version.change_summary %}<p class="version-summary">{{ version.change_summary }}</p>{% endif %}
+      <details>
+        <summary>Full text</summary>
+        {% if version.text %}
+          <pre class="code-block">{{ version.text }}</pre>
+        {% else %}
+          <p class="muted">Empty notes.</p>
+        {% endif %}
+      </details>
+
+      {% url 'projects:application_context_restore' project_id=project.id version_id=version.id as restore_url %}
+      {% with version_id=version.id|stringformat:"s" revision=version.revision|stringformat:"s" %}
+      {% with dialog_id="restore-context-"|add:version_id title="Restore revision "|add:revision|add:"?" %}
+        {% include "partials/confirm_dialog.html" with dialog_id=dialog_id title=title body="Replaces the current notes with this version. The current notes are kept in the history." confirm_label="Restore" confirm_class="btn-primary" action_url=restore_url next=next csrf_token=csrf_token only %}
+      {% endwith %}
+      {% endwith %}
+    </li>
+    {% endfor %}
+  </ol>
+</section>
+{% endwith %}

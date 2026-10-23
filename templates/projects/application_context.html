@@ -9,6 +9,10 @@
     project           — the current Project
     form              — ApplicationContextForm
     prompt_max_length — int, mirrors PROJECT_PROMPT_MAX_LENGTH
+    context_source    — projects.application_context_services.ContextProvenance
+                        | None: who wrote the current notes (provenance line)
+    context_versions  — list[ApplicationContextVersion]: replaced versions,
+                        newest first (version history card, when non-empty)
 
   "Refine with AI" is applicationContextPrompt() below, ported from the
   old templates/projects/detail.html projectPrompt() component: it POSTs
@@ -38,6 +42,11 @@
 
 {% block project_content %}
 <div class="card">
+  {% if context_source %}
+  <p class="context-provenance">
+    Written by {{ context_source.source_label }}{% if context_source.author_name %} ({{ context_source.author_name }}){% endif %}{% if context_source.written_at %} on {{ context_source.written_at|date:"M j, Y, H:i" }}{% endif %}{% if context_source.change_summary %} — {{ context_source.change_summary }}{% endif %}
+  </p>
+  {% endif %}
   <form method="post" action="{% url 'projects:application_context' project.id %}" novalidate>
     {% csrf_token %}
 
@@ -51,6 +60,10 @@
     </div>
   </form>
 </div>
+
+{% if context_versions %}
+  {% include "projects/includes/_context_history_card.html" with project=project context_versions=context_versions next=request.get_full_path csrf_token=csrf_token only %}
+{% endif %}
 {% endblock %}
 
 {% block extra_scripts %}
