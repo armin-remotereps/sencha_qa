@@ -315,3 +315,4 @@ Step 0 is a small foundation. Parts A, B and C then run in parallel; each owns i
 
 ## Changelog
 - 2026-10-23: created (Draft).
+- 2026-10-23: review pass 1: tool label lookups accept only own entries; the case renderer is typed with no Any; dead chat CSS removed.

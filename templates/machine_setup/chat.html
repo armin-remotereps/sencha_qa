@@ -198,12 +198,14 @@ document.addEventListener('alpine:init', () => {
     wait: plain('Waited', () => 'Waiting…', (args) => (args.seconds !== undefined && args.seconds !== null ? oneLine(args.seconds, 12) + 's' : '')),
   };
   // Tools without an entry fall back to their raw name.
-  const labelsFor = (toolName) => TOOL_LABELS[toolName] || {
+  // Own entries only: a model-chosen name like "constructor" must not hit Object.prototype.
+  const ownLabels = (toolName) => (Object.hasOwn(TOOL_LABELS, toolName) ? TOOL_LABELS[toolName] : null);
+  const labelsFor = (toolName) => ownLabels(toolName) || {
     summary: (count) => times(toolName || 'Tool', count),
     live: () => 'Running ' + (toolName || 'a tool') + '…',
     detail: () => '',
   };
-  const bucketOf = (toolName) => (TOOL_LABELS[toolName] && TOOL_LABELS[toolName].bucket) || toolName;
+  const bucketOf = (toolName) => (ownLabels(toolName) && ownLabels(toolName).bucket) || toolName;
   const SUMMARY_BUCKETS = 3;
 
   // Parsed once when a row arrives, never inside a render getter. Arguments

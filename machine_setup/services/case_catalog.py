@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
 
 from django.contrib.postgres.aggregates import ArrayAgg
 from django.db.models import Count, Q
@@ -144,7 +143,7 @@ def get_case(project_id: int, case_id: int) -> str | None:
     )
     if row is None:
         return None
-    return _render_case(row)
+    return _render_row(row)
 
 
 def get_cases(project_id: int, case_ids: Sequence[int]) -> CasesBatch:
@@ -173,7 +172,7 @@ def get_cases(project_id: int, case_ids: Sequence[int]) -> CasesBatch:
         if deferred:
             deferred.append(case_id)
             continue
-        case_text = _render_case(row)
+        case_text = _render_row(row)
         cost = len(case_text) + (len(_CASE_SEPARATOR) if rendered else 0)
         if rendered and used + cost > CASES_BATCH_CHAR_BUDGET:
             deferred.append(case_id)
@@ -203,13 +202,34 @@ def get_cases(project_id: int, case_ids: Sequence[int]) -> CasesBatch:
     )
 
 
-# A ``.values(*_CASE_COLUMNS)`` row; django-stubs types those as dict[str, Any].
-def _render_case(row: Mapping[str, Any]) -> str:
-    sections = [_case_heading(row["id"], row["testrail_id"], row["title"])]
+def _render_row(row: Mapping[str, object]) -> str:
+    """Render one ``.values(*_CASE_COLUMNS)`` row."""
+    case_id = row["id"]
+    assert isinstance(case_id, int)
+    return _render_case(
+        case_id=case_id,
+        testrail_id=str(row["testrail_id"]),
+        title=str(row["title"]),
+        preconditions=str(row["preconditions"]),
+        steps=str(row["steps"]),
+        expected=str(row["expected"]),
+    )
+
+
+def _render_case(
+    *,
+    case_id: int,
+    testrail_id: str,
+    title: str,
+    preconditions: str,
+    steps: str,
+    expected: str,
+) -> str:
+    sections = [_case_heading(case_id, testrail_id, title)]
     for label, value in (
-        ("Preconditions", row["preconditions"]),
-        ("Steps", row["steps"]),
-        ("Expected result", row["expected"]),
+        ("Preconditions", preconditions),
+        ("Steps", steps),
+        ("Expected result", expected),
     ):
         capped = _cap(value, CASE_FIELD_LIMIT)
         sections.append(f"{label}:\n{capped or '(none)'}")
