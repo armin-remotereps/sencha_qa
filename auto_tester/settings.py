@@ -52,6 +52,7 @@ INSTALLED_APPS: list[str] = [
     "dashboard",
     "projects",
     "agents",
+    "machine_setup",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -161,7 +162,8 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 # With acks_late, redis redelivers a message still unacked after this many
 # seconds (default 3600) even while a worker is running it. Keep it well above
 # the longest task limit (projects.checked_push_limits.CHECKED_PUSH_TIME_LIMIT,
-# 3660s) so a long "Send checked to TestRail" is never run twice.
+# 3660s; machine_setup.turn_state.SETUP_TURN_TIME_LIMIT, timeout + 360s) so a
+# long "Send checked to TestRail" or setup turn is never run twice.
 CELERY_BROKER_TRANSPORT_OPTIONS: dict[str, int] = {"visibility_timeout": 4 * 3600}
 CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "projects.tasks.execute_test_run_case": {"queue": "execution"},
@@ -170,6 +172,7 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "projects.tasks.import_testrail_run_cases": {"queue": "upload"},
     "projects.tasks.push_test_run_results": {"queue": "upload"},
     "projects.tasks.push_checked_results_to_testrail": {"queue": "upload"},
+    "machine_setup.tasks.run_setup_turn": {"queue": "execution"},
 }
 
 # Channels
@@ -261,6 +264,14 @@ OPENAI_REASONING_SUMMARY: str = config(
 # Agent
 AGENT_MAX_ITERATIONS: int = config("AGENT_MAX_ITERATIONS", default=300, cast=int)
 AGENT_TIMEOUT_SECONDS: int = config("AGENT_TIMEOUT_SECONDS", default=300, cast=int)
+
+# Machine setup (S0) chat agent: limits per user message (one agent turn).
+MACHINE_SETUP_MAX_ITERATIONS: int = config(
+    "MACHINE_SETUP_MAX_ITERATIONS", default=200, cast=int
+)
+MACHINE_SETUP_TURN_TIMEOUT_SECONDS: int = config(
+    "MACHINE_SETUP_TURN_TIMEOUT_SECONDS", default=3600, cast=int
+)
 
 # SearXNG (metasearch engine)
 SEARXNG_BASE_URL: str = config(
