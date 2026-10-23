@@ -1,6 +1,6 @@
 # feat: Machine setup chat that talks (agent narration, batch case reads, activity blocks)
 
-Status: In progress
+Status: Done
 Created: 2026-10-23
 Request: "It's not chatty, make the UI/UX better." On a real turn the user asked "Based on tests pre-condition, plan what needs to be presented on the machine". The page then showed about 35 collapsed tool rows, all marked "Done": `list_test_case_preconditions` ×2, `search_test_cases`, about 30 `get_test_case`, then `list_test_case_preconditions` ×2 again. There was no assistant text, then the blocker line "The setup agent is still working…", then the composer. It reads like a log, not a conversation. Two things should change. The agent should talk: say what it is about to do, answer planning questions with a plan and a confirmation question, and read cases in batches instead of one at a time. The transcript should read like a chat: tool calls folded into summarised activity blocks with friendly labels, a live "working" indicator, replies that stand out, and a friendlier status above the composer.
 
@@ -316,3 +316,4 @@ Step 0 is a small foundation. Parts A, B and C then run in parallel; each owns i
 ## Changelog
 - 2026-10-23: created (Draft).
 - 2026-10-23: review pass 1: tool label lookups accept only own entries; the case renderer is typed with no Any; dead chat CSS removed.
+- 2026-10-23: final review and verify clean (a stale CSS comment removed). Status set to Done.

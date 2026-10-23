@@ -2520,7 +2520,6 @@ details.card[open] > summary,
   white-space: nowrap;
 }
 
-/* With meta present, meta takes the free space and the chevron follows. */
 .chat-activity-list {
   display: flex;
   flex-direction: column;
