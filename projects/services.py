@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, NoReturn, TypedDict, TypeVar
+from typing import Any, Final, NoReturn, TypedDict, TypeVar
 
 from asgiref.sync import async_to_sync
 from celery import chain
@@ -1367,13 +1367,44 @@ def _build_screenshot_result(reply: dict[str, Any], action: str) -> ScreenshotRe
     )
 
 
+_SCREENSHOT_ATTEMPTS: Final = 3
+
+
 def controller_screenshot(
     project_id: int,
     timeout: float = 30.0,
 ) -> ScreenshotResult:
-    reply = _dispatch_controller_action(
-        project_id, "controller.screenshot", timeout, runner_local=True
-    )
+    """Take a desktop screenshot, re-asking up to ``_SCREENSHOT_ATTEMPTS`` times.
+
+    A multi-MiB image on a slow uplink, or a runner busy with the visual
+    engine, can miss one reply window while the runner is fine. Screenshots
+    are idempotent, so a timeout is re-sent instead of blocking the case at
+    once; only the last timeout propagates as ``TestRunnerUnresponsiveError``.
+    """
+    for attempt in range(1, _SCREENSHOT_ATTEMPTS):
+        try:
+            reply = _dispatch_controller_action(
+                project_id, "controller.screenshot", timeout, runner_local=True
+            )
+        except TestRunnerUnresponsiveError:
+            logger.warning(
+                "Screenshot timed out for project %d (attempt %d/%d); retrying",
+                project_id,
+                attempt,
+                _SCREENSHOT_ATTEMPTS,
+            )
+            continue
+        return _build_screenshot_result(reply, "take a screenshot")
+
+    try:
+        reply = _dispatch_controller_action(
+            project_id, "controller.screenshot", timeout, runner_local=True
+        )
+    except TestRunnerUnresponsiveError as exc:
+        raise TestRunnerUnresponsiveError(
+            f"Test Runner did not return a screenshot after "
+            f"{_SCREENSHOT_ATTEMPTS} attempts of {timeout:.0f}s each"
+        ) from exc
     return _build_screenshot_result(reply, "take a screenshot")
 
 
