@@ -1,0 +1,31 @@
+# torch and torchvision are installed first, from the PyTorch wheel index that
+# matches the machine (CUDA 12.8 wheels: --index-url
+# https://download.pytorch.org/whl/cu128); see README.md. They are listed here
+# too so a later `pip install -r` keeps the same versions instead of drifting.
+torch~=2.10.0
+torchvision~=0.25.0
+websockets~=15.0
+python-decouple~=3.8
+Pillow~=11.2.1
+ultralytics==8.3.70
+easyocr~=1.7.2
+paddlepaddle~=3.2.0
+paddleocr~=2.10.0
+transformers~=4.48.0
+accelerate~=1.12.0
+timm~=1.0.24
+# transformers~=4.48.0 requires huggingface_hub<1.0; the [cli] extra provides
+# the `hf` command scripts/download_weights.sh uses.
+huggingface_hub[cli]~=0.36.2
+supervision==0.18.0
+opencv-python-headless~=4.11.0.86
+# 2.1.1 is the newest version with a cp313 Windows wheel that still satisfies
+# ultralytics==8.3.70's numpy<=2.1.1 ceiling (1.26.4 has no cp313 Windows
+# wheel and would be source-built).
+numpy==2.1.1
+einops==0.8.0
+# Imported at module level by the vendored omniparser/util/utils.py.
+openai~=2.21.0
+mypy~=1.15.0
+black~=25.1.0
+isort~=6.0.1

@@ -1,0 +1,58 @@
+# Vision workers on a GPU machine: one service per GPU.
+#
+#   cd vision_worker
+#   cp example.env .env                 # set VISION_SERVER_URL and VISION_WORKER_TOKEN
+#   docker compose up -d --build        # GPU 0
+#   docker compose --profile gpu1 up -d # also GPU 1
+#
+# Each service pins one GPU with device_ids (Compose's `count` and
+# `device_ids` are mutually exclusive) and gets its own VISION_WORKER_NAME:
+# two workers with the same name replace each other.
+#
+# Weights: VISION_WEIGHTS_PATH (read from the shell or from .env here) is the
+# host folder holding icon_detect/ and icon_caption_florence/; it defaults to
+# ./omniparser/weights (scripts/download_weights.sh writes there).
+
+x-vision-worker: &vision-worker
+  build: .
+  image: punk-hazard-vision-worker:latest
+  env_file: .env
+  # The worker exits 0 when the server rejects its token or version, or when
+  # another worker with the same name takes over; on-failure does not bring
+  # it straight back in those cases. Network drops are retried inside the
+  # worker, without a restart.
+  restart: on-failure
+  volumes:
+    - ${VISION_WEIGHTS_PATH:-./omniparser/weights}:/weights:ro
+
+services:
+  vision-worker-gpu0:
+    <<: *vision-worker
+    environment:
+      OMNIPARSER_WEIGHTS_DIR: /weights
+      VISION_DEVICE: cuda
+      VISION_WORKER_NAME: ${VISION_WORKER_NAME_PREFIX:-gpu-pc}-gpu0
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["0"]
+              capabilities: [gpu]
+
+  # Second GPU: started only with `--profile gpu1`. Copy this block (and bump
+  # the profile, device id and name) for more GPUs.
+  vision-worker-gpu1:
+    <<: *vision-worker
+    profiles: ["gpu1"]
+    environment:
+      OMNIPARSER_WEIGHTS_DIR: /weights
+      VISION_DEVICE: cuda
+      VISION_WORKER_NAME: ${VISION_WORKER_NAME_PREFIX:-gpu-pc}-gpu1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["1"]
+              capabilities: [gpu]
