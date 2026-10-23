@@ -33,6 +33,10 @@ class ToolParameter:
     description: str
     required: bool
     enum: tuple[str, ...] | None = None
+    # For type="array": the JSON-schema type of the elements, and a size hint
+    # (strict mode is off, so the handler enforces the cap).
+    items_type: str | None = None
+    max_items: int | None = None
 
 
 @dataclass(frozen=True)

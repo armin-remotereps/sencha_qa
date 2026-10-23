@@ -137,12 +137,16 @@ def _serialize_tools(
         required: list[str] = []
 
         for param in tool.parameters:
-            parameter_schema: dict[str, str | list[str]] = {
+            parameter_schema: dict[str, object] = {
                 "type": param.type,
                 "description": param.description,
             }
             if param.enum is not None:
                 parameter_schema["enum"] = list(param.enum)
+            if param.items_type is not None:
+                parameter_schema["items"] = {"type": param.items_type}
+            if param.max_items is not None:
+                parameter_schema["maxItems"] = param.max_items
             properties[param.name] = parameter_schema
 
             if param.required:
