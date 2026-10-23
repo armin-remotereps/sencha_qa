@@ -2294,8 +2294,11 @@ details.card[open] > summary,
 
 /* --------------------------------------------------------------------------
    Machine setup chat (templates/machine_setup/chat.html). Every row is
-   plain text (x-text, pre-wrap); the composer sticks to the viewport bottom
-   so it stays reachable in a long transcript.
+   plain text (x-text, pre-wrap). The agent's replies are the hero; its
+   narration is a muted line above each activity block, which folds the
+   turn's tool rows; notices are centred pills. A working indicator follows
+   the last block while a turn runs, and the composer sticks to the viewport
+   bottom so it stays reachable in a long transcript.
    -------------------------------------------------------------------------- */
 
 .chat {
@@ -2312,14 +2315,49 @@ details.card[open] > summary,
 .chat-log {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   min-width: 0;
 }
 
 .chat-row {
   display: flex;
   flex-direction: column;
+  gap: 6px;
   min-width: 0;
+}
+
+.chat-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+/* Small round "agent" avatar used by replies, narration and the working
+   indicator. Holds a letter or an inline icon. */
+.chat-agent-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--cyan-soft);
+  color: var(--brand-cyan);
+  font-size: 0.7rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.chat-agent-mark svg,
+.chat-agent-mark img {
+  width: 12px;
+  height: 12px;
 }
 
 .chat-msg {
@@ -2336,27 +2374,179 @@ details.card[open] > summary,
   border-color: rgba(46, 202, 228, 0.35);
 }
 
-.chat-msg-assistant {
+/* An assistant row with no later tool row in its turn: the answer. */
+.chat-reply {
   align-self: flex-start;
+  width: fit-content;
+  max-width: min(820px, 92%);
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand-cyan);
+  border-radius: var(--radius);
+  background: var(--surface);
+  font-size: 1rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  animation: chat-fade-in 150ms ease-out;
+}
+
+.chat-reply .chat-meta {
+  justify-content: flex-start;
+}
+
+.chat-reply .chat-meta time {
+  margin-left: auto;
+}
+
+/* An assistant row followed by tool rows: one muted line, no bubble. */
+.chat-narration {
+  align-self: flex-start;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: min(820px, 92%);
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+  animation: chat-fade-in 150ms ease-out;
+}
+
+.chat-narration .chat-agent-mark {
+  margin-top: 1px;
+}
+
+@keyframes chat-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* Activity block: one <details> folding consecutive tool rows. */
+.chat-activity {
+  align-self: stretch;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   background: var(--surface);
 }
 
-.chat-meta {
-  display: flex;
-  gap: 10px;
-  justify-content: space-between;
-  font-size: 0.78rem;
-  font-weight: 650;
-  color: var(--text-muted);
-  margin-bottom: 4px;
+.chat-activity[open] {
+  background: var(--surface-raised);
 }
 
+.chat-activity-summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 12px;
+  list-style: none;
+  font-size: 0.9rem;
+}
+
+.chat-activity-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-activity-summary:hover {
+  background: var(--surface-hover);
+}
+
+.chat-activity-summary::after {
+  content: "▸";
+  flex: none;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 0.85em;
+  transition: transform 120ms ease;
+}
+
+.chat-activity[open] > .chat-activity-summary::after {
+  transform: rotate(90deg);
+}
+
+.chat-activity[open] > .chat-activity-summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.chat-activity-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.chat-activity-dot.is-running {
+  background: var(--info);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.chat-activity-dot.is-done {
+  background: var(--success);
+}
+
+.chat-activity-dot.is-failed {
+  background: var(--danger);
+}
+
+.chat-activity-text {
+  min-width: 0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-activity-live {
+  flex: 1 1 0;
+  min-width: 0;
+  color: var(--info);
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-activity-meta {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: none;
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/* With meta present, meta takes the free space and the chevron follows. */
+.chat-activity-summary:has(.chat-activity-meta)::after {
+  margin-left: 0;
+}
+
+.chat-activity-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 8px;
+  list-style: none;
+}
+
+/* One tool row inside an activity block. */
 .chat-tool {
   align-self: stretch;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--surface-raised);
-  padding: 8px 12px;
+  background: var(--surface);
+  padding: 6px 10px;
   min-width: 0;
 }
 
@@ -2364,9 +2554,10 @@ details.card[open] > summary,
   cursor: pointer;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 10px;
+  min-width: 0;
   list-style: none;
+  font-size: 0.86rem;
 }
 
 .chat-tool > summary::-webkit-details-marker {
@@ -2375,6 +2566,7 @@ details.card[open] > summary,
 
 .chat-tool > summary::before {
   content: "▸";
+  flex: none;
   color: var(--text-muted);
   font-size: 0.85em;
   transition: transform 120ms ease;
@@ -2384,9 +2576,28 @@ details.card[open] > summary,
   transform: rotate(90deg);
 }
 
-.chat-tool-name {
+.chat-tool-title {
+  flex: none;
+  font-weight: 600;
+}
+
+.chat-tool-detail {
+  flex: 1 1 0;
+  min-width: 0;
   font-family: var(--mono);
-  font-size: 0.86rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-tool-raw {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  opacity: 0.8;
 }
 
 .chat-tool-body {
@@ -2413,19 +2624,103 @@ details.card[open] > summary,
   margin-top: 4px;
 }
 
+/* Notice: a centred divider-style pill. Only the first span (the notice
+   text) keeps its line breaks, so template whitespace around the link does
+   not render. */
 .chat-notice {
   align-self: center;
-  margin: 0;
-  max-width: 760px;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin: 4px 0;
+  max-width: min(760px, 100%);
+  padding: 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
   text-align: center;
-  font-size: 0.86rem;
+  font-size: 0.82rem;
   color: var(--text-muted);
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.chat-notice a {
-  margin-left: 6px;
+.chat-notice > span:first-child {
+  white-space: pre-wrap;
+}
+
+.chat-notice-info {
+  background: var(--info-soft);
+  border-color: color-mix(in srgb, var(--info) 35%, transparent);
+  color: var(--text);
+}
+
+/* Working indicator after the last block while a turn runs. */
+.chat-working {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  max-width: min(820px, 92%);
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  min-width: 0;
+}
+
+.chat-typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.chat-typing-dots > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--brand-cyan);
+  animation: chat-typing 1.2s ease-in-out infinite;
+}
+
+.chat-typing-dots > span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.chat-typing-dots > span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes chat-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+    transform: translateY(0);
+  }
+
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* The global reduced-motion rule plays one near-instant iteration and
+   leaves the last frame; switch these off outright so they sit still. */
+@media (prefers-reduced-motion: reduce) {
+  .chat-typing-dots > span,
+  .chat-activity-dot.is-running {
+    animation: none;
+  }
+
+  .chat-typing-dots > span {
+    opacity: 0.7;
+  }
 }
 
 .chat-composer {
@@ -2437,9 +2732,11 @@ details.card[open] > summary,
   border-top: 1px solid var(--border);
 }
 
-.chat-blocker {
+/* Non-turn blockers above the textarea (visual engine, run active, ...). */
+.chat-status {
   margin: 0 0 8px;
-  color: var(--warning);
+  font-size: 0.85rem;
+  color: var(--text-muted);
 }
 
 .chat-composer-row {
@@ -2474,8 +2771,63 @@ details.card[open] > summary,
 }
 
 @media (max-width: 767px) {
-  .chat-msg {
+  .chat-msg,
+  .chat-reply,
+  .chat-narration,
+  .chat-working {
     max-width: 100%;
+  }
+
+  .chat-reply,
+  .chat-working {
+    align-self: stretch;
+  }
+
+  .chat-working {
+    border-radius: var(--radius);
+  }
+
+  /* The summary wraps under the dot: dot + text on the first line, then the
+     live line and the meta, each on one line, indented to the text. */
+  .chat-activity-summary {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .chat-activity-text {
+    flex: 1 1 0;
+  }
+
+  .chat-activity-summary::after {
+    margin-left: 0;
+  }
+
+  .chat-activity-live,
+  .chat-activity-meta {
+    flex: 1 0 100%;
+    margin-left: 0;
+    padding-left: 18px;
+  }
+
+  .chat-activity-live {
+    order: 3;
+  }
+
+  .chat-activity-meta {
+    order: 4;
+    flex-wrap: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .chat-tool > summary {
+    flex-wrap: wrap;
+    row-gap: 2px;
+  }
+
+  .chat-tool-raw {
+    flex-basis: 100%;
+    padding-left: 18px;
   }
 
   .chat-composer-row,

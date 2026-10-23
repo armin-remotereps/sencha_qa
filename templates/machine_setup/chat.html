@@ -31,6 +31,17 @@
   WebSocket /ws/projects/<id>/machine-setup/ (machine_setup.consumers):
   current_state, message, screenshot, turn, reset, agent_status. All dynamic
   text is rendered with x-text; never x-html.
+
+  Client model (machineSetupChat): every row gets a client-only `args` (its
+  tool_arguments_text parsed once on arrival, {} if it does not parse).
+  `blocks` folds the rows into {kind:'row', key, role, message} (role user,
+  reply, narration or notice; an assistant row is narration when a later row
+  of its turn is a tool row) and {kind:'activity', key:'act-<first row id>',
+  turnId, rows, running, liveText, failedCount, screenshotCount, summaryText,
+  dotClass} for each run of consecutive tool rows of one turn. TOOL_LABELS is
+  the only place tool wording lives; it returns plain strings. `working`
+  ({text, stepText} | null) drives the indicator, `statusText` the line above
+  the composer, `latestReplyText` the hidden live region.
 {% endcomment %}
 
 {% block title %}Machine setup · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
@@ -81,6 +92,198 @@ document.addEventListener('alpine:init', () => {
   const TURN_ACTIVE = BLOCKER_TEXTS.turn_active;
   const FINISHING = 'Finishing the previous turn…';
 
+  // --- Tool wording: the only place tool labels live. -----------------------
+  // Every function returns a plain string that the templates render with
+  // x-text; none of them builds HTML. The text typed by type_text,
+  // browser_type and send_command_input is never shown (it may be a secret).
+  const DETAIL_MAX = 80;
+  const oneLine = (value, max = DETAIL_MAX) => {
+    if (value === undefined || value === null) return '';
+    const line = String(Array.isArray(value) ? value.join('+') : value)
+      .split('\n').find((part) => part.trim() !== '') || '';
+    const text = line.replace(/\s+/g, ' ').trim();
+    return text.length > max ? text.slice(0, max - 1) + '…' : text;
+  };
+  const quoted = (value) => {
+    const text = oneLine(value, DETAIL_MAX - 2);
+    return text ? '“' + text + '”' : '';
+  };
+  const withDetail = (phrase, detail) => (detail ? phrase + ' ' + detail : phrase);
+  const plural = (count, one, many) => count + ' ' + (count === 1 ? one : many);
+  const times = (phrase, count) => (count > 1 ? phrase + ' ×' + count : phrase);
+  const caseIds = (args) => {
+    if (Array.isArray(args.case_ids)) return args.case_ids;
+    return args.case_id !== undefined && args.case_id !== null ? [args.case_id] : [];
+  };
+  const caseList = (ids) => {
+    if (ids.length === 0) return '';
+    const shown = ids.slice(0, 2).map((id) => '#' + oneLine(id, 12)).join(', ');
+    return ids.length > 2 ? shown + ' +' + (ids.length - 2) : shown;
+  };
+  const caseCount = (rows) => rows.reduce((total, row) => total + Math.max(caseIds(row.args).length, 1), 0);
+  const readCases = {
+    bucket: 'read_cases',
+    summary: (count, rows) => 'Read ' + plural(caseCount(rows), 'test case', 'test cases'),
+    live: (args) => {
+      const ids = caseIds(args);
+      return ids.length === 1 ? 'Reading test case #' + oneLine(ids[0], 12) + '…' : 'Reading ' + plural(ids.length, 'test case', 'test cases') + '…';
+    },
+    detail: (args) => caseList(caseIds(args)),
+  };
+  const pointer = (verb, verbing) => ({
+    bucket: verb,
+    summary: (count) => times(verb, count),
+    live: (args) => withDetail(verbing, quoted(args.description)) + '…',
+    detail: (args) => oneLine(args.description),
+  });
+  const appAction = (bucket, phrase, verbing) => ({
+    bucket,
+    summary: (count) => phrase(count),
+    live: (args) => withDetail(verbing, oneLine(args.app_name)) + '…',
+    detail: (args) => oneLine(args.app_name),
+  });
+  const plain = (summaryPhrase, livePhrase, detail = () => '') => ({
+    summary: (count) => times(summaryPhrase, count),
+    live: (args) => livePhrase(args),
+    detail,
+  });
+  const TOOL_LABELS = {
+    get_test_case: readCases,
+    get_test_cases: readCases,
+    list_test_case_preconditions: plain('Listed preconditions', () => 'Listing preconditions…'),
+    search_test_cases: plain('Searched test cases', (args) => withDetail('Searching test cases for', quoted(args.query)) + '…', (args) => quoted(args.query)),
+    get_application_context: plain('Read the application context', () => 'Reading the application context…'),
+    update_application_context: plain('Updated the application context', () => 'Updating the application context…', (args) => oneLine(args.change_summary)),
+    execute_command: {
+      summary: (count) => 'Ran ' + plural(count, 'command', 'commands'),
+      live: (args) => withDetail('Running', oneLine(args.command, 60)) + '…',
+      detail: (args) => oneLine(args.command),
+    },
+    wait_for_command: plain('Waited for a command', () => 'Waiting for a command…'),
+    send_command_input: plain('Sent input to a command', () => 'Sending input to a command…'),
+    take_screenshot: { bucket: 'look_screen', ...plain('Looked at the screen', () => 'Looking at the screen…', (args) => oneLine(args.question)) },
+    browser_take_screenshot: { bucket: 'look_page', ...plain('Looked at the page', () => 'Looking at the page…', (args) => oneLine(args.question)) },
+    click: pointer('Clicked', 'Clicking'),
+    double_click: pointer('Clicked', 'Double-clicking'),
+    browser_click: pointer('Clicked', 'Clicking'),
+    browser_double_click: pointer('Clicked', 'Double-clicking'),
+    hover: pointer('Hovered', 'Hovering over'),
+    browser_hover: pointer('Hovered', 'Hovering over'),
+    drag: plain('Dragged', () => 'Dragging…', (args) => {
+      const from = oneLine(args.start_description, 38);
+      const to = oneLine(args.end_description, 38);
+      return from || to ? from + ' → ' + to : '';
+    }),
+    type_text: { bucket: 'typed', ...plain('Typed text', () => 'Typing…') },
+    browser_type: { bucket: 'typed', ...plain('Typed text', (args) => withDetail('Typing into', quoted(args.description)) + '…', (args) => oneLine(args.description)) },
+    key_press: plain('Pressed keys', (args) => withDetail('Pressing', oneLine(args.keys, 40)) + '…', (args) => oneLine(args.keys)),
+    launch_app: appAction('launch_app', (n) => 'Opened ' + plural(n, 'app', 'apps'), 'Opening'),
+    close_app: appAction('close_app', (n) => 'Closed ' + plural(n, 'app', 'apps'), 'Closing'),
+    close_tab: appAction('close_tab', (n) => times('Closed a tab in', n), 'Closing a tab in'),
+    check_app_installed: appAction('check_app_installed', (n) => 'Checked ' + plural(n, 'app', 'apps'), 'Checking'),
+    browser_navigate: {
+      summary: (count) => 'Opened ' + plural(count, 'page', 'pages'),
+      live: () => 'Opening a page…',
+      detail: (args) => oneLine(args.url),
+    },
+    browser_get_page_content: plain('Read the page', () => 'Reading the page…'),
+    browser_get_url: plain('Checked the URL', () => 'Checking the URL…'),
+    browser_download: {
+      summary: (count) => 'Downloaded ' + plural(count, 'file', 'files'),
+      live: () => 'Downloading a file…',
+      detail: (args) => oneLine(args.url),
+    },
+    browser_list_downloads: plain('Listed downloads', () => 'Listing downloads…'),
+    web_search: plain('Searched the web', (args) => withDetail('Searching the web for', quoted(args.query)) + '…', (args) => quoted(args.query)),
+    wait: plain('Waited', () => 'Waiting…', (args) => (args.seconds !== undefined && args.seconds !== null ? oneLine(args.seconds, 12) + 's' : '')),
+  };
+  // Tools without an entry fall back to their raw name.
+  const labelsFor = (toolName) => TOOL_LABELS[toolName] || {
+    summary: (count) => times(toolName || 'Tool', count),
+    live: () => 'Running ' + (toolName || 'a tool') + '…',
+    detail: () => '',
+  };
+  const bucketOf = (toolName) => (TOOL_LABELS[toolName] && TOOL_LABELS[toolName].bucket) || toolName;
+  const SUMMARY_BUCKETS = 3;
+
+  // Parsed once when a row arrives, never inside a render getter. Arguments
+  // cut at 4000 chars fail to parse and fall back to {} (no detail shown).
+  const parseArgs = (text) => {
+    if (!text) return {};
+    try {
+      const value = JSON.parse(text);
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    } catch (error) {
+      return {};
+    }
+  };
+  const withArgs = (message) => {
+    message.args = message.kind === 'tool' ? parseArgs(message.tool_arguments_text) : {};
+    return message;
+  };
+
+  // Folds consecutive tool rows of one turn into an activity block and tags
+  // each assistant row as narration (a later row of the same turn is a tool
+  // row) or reply. O(rows); the page window is at most 300 rows.
+  const buildBlocks = (messages) => {
+    const narration = new Set();
+    const turnsWithLaterTools = new Set();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (message.kind === 'tool') turnsWithLaterTools.add(message.turn_id);
+      else if (message.kind === 'assistant' && message.turn_id !== null && turnsWithLaterTools.has(message.turn_id)) narration.add(message.id);
+    }
+    const blocks = [];
+    let current = null;
+    for (const message of messages) {
+      if (message.kind === 'tool') {
+        if (current && current.turnId === message.turn_id) {
+          current.rows.push(message);
+          continue;
+        }
+        current = { kind: 'activity', key: 'act-' + message.id, turnId: message.turn_id, rows: [message] };
+        blocks.push(current);
+        continue;
+      }
+      current = null;
+      let role = message.kind;
+      if (message.kind === 'assistant') role = narration.has(message.id) ? 'narration' : 'reply';
+      blocks.push({ kind: 'row', key: 'msg-' + message.id, role, message });
+    }
+    for (const block of blocks) {
+      if (block.kind === 'activity') Object.assign(block, summarizeActivity(block.rows));
+    }
+    return blocks;
+  };
+
+  const summarizeActivity = (rows) => {
+    const buckets = new Map();
+    let running = null;
+    let failedCount = 0;
+    let screenshotCount = 0;
+    for (const row of rows) {
+      const key = bucketOf(row.tool_name);
+      if (!buckets.has(key)) buckets.set(key, { toolName: row.tool_name, rows: [] });
+      buckets.get(key).rows.push(row);
+      if (row.tool_status === 'running') running = row;
+      if (row.tool_status === 'failed') failedCount++;
+      screenshotCount += row.screenshots.length;
+    }
+    const phrases = [...buckets.values()].slice(0, SUMMARY_BUCKETS).map(
+      (bucket) => labelsFor(bucket.toolName).summary(bucket.rows.length, bucket.rows),
+    );
+    const more = buckets.size - SUMMARY_BUCKETS;
+    return {
+      running,
+      // A cut-off argument already ends in an ellipsis; keep just one.
+      liveText: running ? labelsFor(running.tool_name).live(running.args).replace(/…+$/, '…') : '',
+      failedCount,
+      screenshotCount,
+      summaryText: phrases.join(' · ') + (more > 0 ? ' +' + more + ' more' : ''),
+      dotClass: running ? 'is-running' : failedCount > 0 ? 'is-failed' : 'is-done',
+    };
+  };
+
   Alpine.data('machineSetupChat', () => ({
     conversationId: {{ page.conversation_id|default_if_none:"null" }},
     // Rows of these conversations are ignored: archived here by a reset, or
@@ -129,7 +332,7 @@ document.addEventListener('alpine:init', () => {
         if (data.finishing_conversation_id !== null && !this.archivedConversationIds.includes(data.finishing_conversation_id)) {
           this.archivedConversationIds.push(data.finishing_conversation_id);
         }
-        this.messages = data.messages || [];
+        this.messages = (data.messages || []).map(withArgs);
         this.loaded = true;
         this.hiddenMessageCount = data.hidden_message_count || 0;
         this.turn = data.turn;
@@ -172,6 +375,7 @@ document.addEventListener('alpine:init', () => {
 
     upsertMessage(message) {
       if (!this.belongs(message.conversation_id)) return;
+      withArgs(message);
       const index = this.messages.findIndex((m) => m.id === message.id);
       if (index === -1) {
         this.messages.push(message);
@@ -242,8 +446,51 @@ document.addEventListener('alpine:init', () => {
       return this.blockers.length === 0;
     },
 
-    get blockerText() {
-      return this.blockers.join(' ');
+    // The status line above the composer: every blocker except "still
+    // working", which the working indicator and the Stop button already say.
+    get statusText() {
+      return this.blockers.filter((b) => b !== TURN_ACTIVE).join(' ');
+    },
+
+    get blocks() {
+      return buildBlocks(this.messages);
+    },
+
+    // The typing / working indicator: null unless a turn is live and the
+    // transcript does not end with a reply.
+    get working() {
+      if (!this.turnLive) return null;
+      const blocks = this.blocks;
+      const last = blocks[blocks.length - 1];
+      if (last && last.kind === 'row' && last.role === 'reply') return null;
+      let text = 'Thinking…';
+      if (this.turn.status === 'queued') text = 'Waiting for a worker…';
+      else if (this.turn.stop_requested) text = 'Stopping after the current action…';
+      else {
+        // The live turn's running block, even when a notice landed after it.
+        const running = [...blocks].reverse().find((b) => b.kind === 'activity' && b.running);
+        if (running) text = running.liveText;
+      }
+      const stepText = this.turn.iterations > 0 ? 'Step ' + this.turn.iterations + ' of ' + this.turn.max_iterations : '';
+      return { text, stepText };
+    },
+
+    // Text of the latest reply, for the visually hidden live region.
+    get latestReplyText() {
+      for (let i = this.messages.length - 1; i >= 0; i--) {
+        const message = this.messages[i];
+        if (message.kind === 'tool') return '';
+        if (message.kind === 'assistant') return message.text;
+      }
+      return '';
+    },
+
+    toolTitle(row) {
+      return labelsFor(row.tool_name).summary(1, [row]);
+    },
+
+    toolDetail(row) {
+      return labelsFor(row.tool_name).detail(row.args || {});
     },
 
     submit(form) {

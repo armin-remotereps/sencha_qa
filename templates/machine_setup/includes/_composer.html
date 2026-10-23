@@ -1,14 +1,19 @@
 {% comment %}
   Machine setup composer: a plain form POST to machine_setup:send (PRG), plus
-  a Stop form while a turn is queued or running. Reads draft, canSend,
-  blockerText, turn, turnLive, submitting, onEnter and onSubmit from the
-  ancestor machineSetupChat scope (machine_setup/chat.html).
+  a Stop form that replaces Send while a turn is queued or running. Reads
+  draft, canSend, statusText, turn, turnLive, submitting, onEnter and onSubmit
+  from the ancestor machineSetupChat scope (machine_setup/chat.html).
+
+  The textarea stays editable during a turn so the next message can be
+  drafted; sending stays blocked (canSend) on the client and the server. The
+  status line shows only blockers other than the running turn, which the
+  working indicator in the transcript already shows with its step count.
 
   Context contract:
     project — the current Project
 {% endcomment %}
 <div class="chat-composer">
-  <p class="chat-blocker small" x-show="!canSend" x-cloak x-text="blockerText"></p>
+  <p class="chat-status small" x-show="statusText" x-cloak x-text="statusText"></p>
   <div class="chat-composer-row">
     <form class="chat-composer-form" method="post" action="{% url 'machine_setup:send' project_id=project.id %}" @submit="onSubmit($event)">
       {% csrf_token %}
@@ -20,6 +25,7 @@
         rows="2"
         maxlength="8000"
         required
+        :placeholder="turnLive ? 'The agent is working. You can send when it finishes.' : 'Describe what the test machine needs… (Enter to send, Shift+Enter for a new line)'"
         placeholder="Describe what the test machine needs… (Enter to send, Shift+Enter for a new line)"
         x-model="draft"
         @keydown.enter="onEnter($event)"
@@ -37,5 +43,4 @@
       >Stop</button>
     </form>
   </div>
-  <p class="muted small" x-show="turnLive" x-cloak x-text="turn ? 'Step ' + turn.iterations + ' of ' + turn.max_iterations : ''"></p>
 </div>

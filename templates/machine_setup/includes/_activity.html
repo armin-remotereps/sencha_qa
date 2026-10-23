@@ -1,0 +1,56 @@
+{% comment %}
+  One activity block: a run of consecutive tool rows of one turn, folded into
+  a <details>. Rendered inside `<template x-for="block in blocks">` of
+  _transcript.html; reads `block` (kind 'activity', see machine_setup/chat.html)
+  and toolTitle, toolDetail, toolBadgeClass, toolBadgeLabel and openLightbox
+  from the machineSetupChat scope. The block's key is its first row's id, so an
+  expanded block stays open while rows join it. x-text / :title only.
+  Single root element (it is the content of an x-if template).
+{% endcomment %}
+<details class="chat-activity">
+  <summary class="chat-activity-summary">
+    <span class="chat-activity-dot" :class="block.dotClass" aria-hidden="true"></span>
+    <span class="chat-activity-text" x-text="block.summaryText"></span>
+    <span class="chat-activity-live" x-show="block.running" x-text="block.liveText" :title="block.liveText"></span>
+    <span class="chat-activity-meta">
+      <span x-text="block.rows.length + (block.rows.length === 1 ? ' step' : ' steps')"></span>
+      <span class="badge badge-failed" x-show="block.failedCount > 0" x-text="block.failedCount + ' failed'"></span>
+      <span x-show="block.screenshotCount > 0" x-text="block.screenshotCount + (block.screenshotCount === 1 ? ' screenshot' : ' screenshots')"></span>
+    </span>
+  </summary>
+  <div class="chat-activity-list">
+    <template x-for="row in block.rows" :key="row.id">
+      <details class="chat-tool">
+        <summary>
+          <span class="chat-tool-title" x-text="toolTitle(row)"></span>
+          <span class="chat-tool-detail" x-show="toolDetail(row)" x-text="toolDetail(row)" :title="toolDetail(row)"></span>
+          <span class="badge" :class="toolBadgeClass(row.tool_status)" x-text="toolBadgeLabel(row.tool_status)"></span>
+          <span class="chat-tool-raw" x-text="row.tool_name"></span>
+          <span class="muted small" x-show="row.screenshots.length > 0" x-text="row.screenshots.length + (row.screenshots.length === 1 ? ' screenshot' : ' screenshots')"></span>
+        </summary>
+        <div class="chat-tool-body">
+          <template x-if="row.tool_arguments_text">
+            <div>
+              <p class="chat-tool-label">Arguments</p>
+              <pre class="code-block chat-pre" x-text="row.tool_arguments_text"></pre>
+            </div>
+          </template>
+          <template x-if="row.text">
+            <div>
+              <p class="chat-tool-label">Result</p>
+              <pre class="code-block chat-pre" x-text="row.text"></pre>
+            </div>
+          </template>
+          <div class="gallery chat-shots" x-show="row.screenshots.length > 0">
+            <template x-for="(shot, index) in row.screenshots" :key="shot.id">
+              <button type="button" class="shot" @click="openLightbox(row.screenshots, index)">
+                <img class="shot-img" :src="shot.url" alt="" loading="lazy">
+                <span class="shot-caption" x-text="shot.tool_name"></span>
+              </button>
+            </template>
+          </div>
+        </div>
+      </details>
+    </template>
+  </div>
+</details>
