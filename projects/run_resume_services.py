@@ -24,42 +24,29 @@ from agents.checkpoint import (
     checkpoint_to_json,
     truncate_checkpoint,
 )
-from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from projects.case_checkpoint_services import load_resume_checkpoint
-from projects.checked_push_limits import is_checked_push_live
 from projects.exceptions import RunResumeError
 from projects.models import (
     Project,
-    TestRailPushStatus,
     TestRun,
     TestRunCaseResume,
-    TestRunStatus,
     TestRunTestCase,
     TestRunTestCaseStatus,
 )
 from projects.run_case_order import RUN_CASE_ORDERING
-from projects.services import (
-    MachineState,
-    broadcast_run_and_pivots,
-    get_machine_state,
-    queue_test_run_cases,
+from projects.run_reopen_services import (
+    REOPENABLE_RUN_STATUSES,
+    list_reopen_blockers,
+    lock_project_and_run,
+    reopen_run,
 )
 
 RESUMABLE_STATUSES: tuple[str, ...] = (
     TestRunTestCaseStatus.BLOCKED,
     TestRunTestCaseStatus.CANCELLED,
 )
-_RESUMABLE_RUN_STATUSES: tuple[str, ...] = (TestRunStatus.DONE, TestRunStatus.CANCELLED)
 
 _NOT_FINISHED = "Only a finished or cancelled run can be resumed."
-_OTHER_RUN_ACTIVE = "Another test run is already in progress for this project."
-_CHECKED_PUSH_LIVE = "Wait for the checked results to finish sending to TestRail."
-_RESULTS_PUSHING = "Wait for the results to finish pushing to TestRail."
-_MACHINE_NOT_READY = "Connect the Test Runner and wait for the visual engine."
-_MACHINE_FAILED = (
-    "The visual engine on the test machine failed. "
-    "Check Advanced diagnostics on the Environment page."
-)
 _NOTHING_RESUMABLE = "There are no Blocked or Cancelled cases to resume."
 
 # Every execution and Checked/Sent field a resume resets, as `reset_test_run`
@@ -92,17 +79,16 @@ class ResumePanel:
     confirm_body: str
 
 
-def get_resume_panel(test_run: TestRun, project: Project) -> ResumePanel:
-    """Counts, gates and dialog text for "Resume run" (at most 3 queries).
+def get_resume_panel(test_run: TestRun, *, blockers: Sequence[str]) -> ResumePanel:
+    """Counts, gates and dialog text for "Resume run" (1 query).
 
-    One aggregate over the run's cases plus the "another run is STARTED" and
-    "a setup turn is live" checks; the machine state comes from the run's
-    ``project``.
+    One aggregate over the run's cases. ``blockers`` are the run's
+    `list_reopen_blockers` (computed once per page, shared with Re-run).
 
     With resumable cases but a blocker, ``can_resume`` is False and
     ``blockers`` says why (the page shows the button disabled).
     """
-    if test_run.status not in _RESUMABLE_RUN_STATUSES:
+    if test_run.status not in REOPENABLE_RUN_STATUSES:
         return ResumePanel(0, 0, 0, False, (), "")
     no_checkpoint = Q(execution_checkpoint={})
     cancelled = Q(status=TestRunTestCaseStatus.CANCELLED)
@@ -117,15 +103,6 @@ def get_resume_panel(test_run: TestRun, project: Project) -> ResumePanel:
     if not blocked + cancelled_started + cancelled_unstarted:
         return ResumePanel(0, 0, 0, False, (), "")
 
-    blockers: list[str] = []
-    if _has_other_started_run(test_run.project_id, test_run.pk):
-        blockers.append(_OTHER_RUN_ACTIVE)
-    blockers.extend(_push_blockers(test_run))
-    machine_blocker = _machine_blocker(project)
-    if machine_blocker:
-        blockers.append(machine_blocker)
-    if live_turn_exists(test_run.project_id, timezone.now()):
-        blockers.append(MACHINE_SETUP_RUNNING_MESSAGE)
     return ResumePanel(
         blocked=blocked,
         cancelled_started=cancelled_started,
@@ -142,7 +119,7 @@ def can_resume_case(pivot: TestRunTestCase) -> bool:
     """Whether a loaded pivot (with its run) is resumable (no extra query)."""
     return (
         pivot.status in RESUMABLE_STATUSES
-        and pivot.test_run.status in _RESUMABLE_RUN_STATUSES
+        and pivot.test_run.status in REOPENABLE_RUN_STATUSES
     )
 
 
@@ -207,53 +184,20 @@ def _resume_pivots(
             _reset_execution_fields(pivot, now)
         TestRunCaseResume.objects.bulk_create(resumes)
         TestRunTestCase.objects.bulk_update(pivots, update_fields)
-
-        test_run.status = TestRunStatus.STARTED
-        test_run.finished_at = None
-        # Workers of the aborted chain see the new generation and stand down.
-        test_run.execution_generation += 1
-        test_run.save(
-            update_fields=[
-                "status",
-                "finished_at",
-                "execution_generation",
-                "updated_at",
-            ]
-        )
-
-        pivot_ids = [pivot.pk for pivot in pivots]
-
-        def _enqueue() -> None:
-            if queue_test_run_cases(test_run, pivot_ids):
-                broadcast_run_and_pivots(test_run, pivots)
-
-        # Workers must see the STARTED run and CREATED cases.
-        transaction.on_commit(_enqueue)
+        reopen_run(test_run, pivots)
     return len(pivots)
 
 
 def _lock_and_check(
     test_run_id: int, pivot_id: int | None
 ) -> tuple[TestRun, list[TestRunTestCase]]:
-    """Lock project then run (the order `start_test_run` uses) and apply gates."""
-    project_id = TestRun.objects.values_list("project_id", flat=True).get(
-        pk=test_run_id
-    )
-    project = Project.objects.select_for_update().get(pk=project_id)
-    test_run = TestRun.objects.select_for_update().get(pk=test_run_id)
-
-    if test_run.status not in _RESUMABLE_RUN_STATUSES:
+    """Lock project then run and apply the gates."""
+    project, test_run = lock_project_and_run(test_run_id)
+    if test_run.status not in REOPENABLE_RUN_STATUSES:
         raise RunResumeError(_NOT_FINISHED)
-    if _has_other_started_run(project.pk, test_run.pk):
-        raise RunResumeError(_OTHER_RUN_ACTIVE)
-    push_blockers = _push_blockers(test_run)
-    if push_blockers:
-        raise RunResumeError(push_blockers[0])
-    machine_blocker = _machine_blocker(project)
-    if machine_blocker:
-        raise RunResumeError(machine_blocker)
-    if live_turn_exists(project.pk, timezone.now()):
-        raise RunResumeError(MACHINE_SETUP_RUNNING_MESSAGE)
+    blockers = list_reopen_blockers(test_run, project)
+    if blockers:
+        raise RunResumeError(blockers[0])
 
     queryset = TestRunTestCase.objects.filter(
         test_run_id=test_run.pk, status__in=RESUMABLE_STATUSES
@@ -265,32 +209,6 @@ def _lock_and_check(
     if not pivots:
         raise RunResumeError(_NOTHING_RESUMABLE)
     return test_run, pivots
-
-
-def _has_other_started_run(project_id: int, test_run_id: int) -> bool:
-    return (
-        TestRun.objects.filter(project_id=project_id, status=TestRunStatus.STARTED)
-        .exclude(pk=test_run_id)
-        .exists()
-    )
-
-
-def _push_blockers(test_run: TestRun) -> list[str]:
-    blockers: list[str] = []
-    if is_checked_push_live(test_run, timezone.now()):
-        blockers.append(_CHECKED_PUSH_LIVE)
-    if test_run.testrail_push_status == TestRailPushStatus.PUSHING:
-        blockers.append(_RESULTS_PUSHING)
-    return blockers
-
-
-def _machine_blocker(project: Project) -> str | None:
-    state = get_machine_state(project)
-    if state == MachineState.READY:
-        return None
-    if state == MachineState.FAILED:
-        return _MACHINE_FAILED
-    return _MACHINE_NOT_READY
 
 
 def _choose_resume_step(

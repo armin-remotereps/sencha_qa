@@ -31,6 +31,7 @@ from projects.decorators import project_membership_required
 from projects.exceptions import (
     ApplicationContextVersionNotFoundError,
     RunCaseCheckError,
+    RunRerunError,
     RunResumeError,
 )
 from projects.forms import (
@@ -52,6 +53,13 @@ from projects.run_case_check_services import (
     list_checkable_pivot_ids,
     list_uncheckable_pivot_ids,
     uncheck_run_cases,
+)
+from projects.run_rerun_services import (
+    format_rerun_message,
+    get_rerun_panel,
+    list_rerunnable_pivot_ids,
+    rerun_test_run_cases,
+    rerunnable_ids_on_page,
 )
 from projects.run_resume_services import (
     can_resume_case,
@@ -916,6 +924,9 @@ def _build_test_run_detail_context(
         test_run, links_base_url=request.build_absolute_uri("/")
     )
 
+    # Shared with Resume, so the reopen gates run once per page.
+    rerun_panel = get_rerun_panel(test_run, project)
+
     context: dict[str, Any] = {
         "project": project,
         "test_run": test_run,
@@ -936,9 +947,11 @@ def _build_test_run_detail_context(
             testrail_push.pending_count, test_run.testrail_run_id or 0
         ),
         "testrail_checked_push": get_checked_push_panel(test_run),
-        "resume_panel": get_resume_panel(test_run, project),
+        "resume_panel": get_resume_panel(test_run, blockers=rerun_panel.blockers),
         "checkable_pivot_ids": [p.id for p in cases if is_checkable(p)],
         "uncheckable_pivot_ids": [p.id for p in cases if is_uncheckable(p)],
+        "rerunnable_pivot_ids": rerunnable_ids_on_page(test_run, cases),
+        "rerun_panel": rerun_panel,
         "active_tab": "runs",
         "active_nav": "projects",
     }
@@ -1100,6 +1113,34 @@ def test_run_cases_uncheck(
     request: AuthenticatedRequest, project: Project, test_run_id: int
 ) -> HttpResponse:
     return _change_run_case_checks(request, project, test_run_id, check=False)
+
+
+@project_membership_required
+@require_POST
+def test_run_cases_rerun(
+    request: AuthenticatedRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    form = RunCaseSelectionForm(list_rerunnable_pivot_ids(test_run), request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+    else:
+        pivot_ids: list[int] = form.cleaned_data["pivot_ids"]
+        try:
+            outcome = rerun_test_run_cases(
+                test_run=test_run, pivot_ids=pivot_ids, user=request.user
+            )
+        except RunRerunError as exc:
+            messages.error(request, exc.message)
+        else:
+            messages.success(request, format_rerun_message(outcome))
+    fallback_url = reverse(
+        "projects:test_run_detail",
+        kwargs={"project_id": project.id, "test_run_id": test_run.id},
+    )
+    return redirect(_next_or_default(request, fallback_url))
 
 
 @project_membership_required

@@ -25,7 +25,13 @@
      testrail_checked_push (projects.testrail_checked_push_services.CheckedPushPanel,
      consumed by the two _testrail_checked_push_* includes),
      checkable_pivot_ids / uncheckable_pivot_ids (list[int], ids on this page
-     that can be checked / unchecked; together they are the bulk selection),
+     that can be checked / unchecked), rerunnable_pivot_ids (list[int], every
+     id on this page when the run is Done / Cancelled, else empty); the union
+     of the three is the bulk selection,
+     rerun_panel (projects.run_rerun_services.RerunPanel: can_rerun, blockers;
+     (False, ()) when the run isn't Done / Cancelled). "Re-run (N)" in the bulk
+     bar runs the selected cases again from step 1 on this run, in run order,
+     posting pivot_ids + next to projects:test_run_cases_rerun,
      resume_panel (projects.run_resume_services.ResumePanel: blocked,
      cancelled_started, cancelled_unstarted counts, can_resume, blockers,
      confirm_body). "Resume run" continues Blocked / Cancelled cases on this
@@ -105,7 +111,7 @@
       {% if can_rerun_failed %}
       <form method="post" action="{% url 'projects:test_run_rerun_failed' project.id test_run.id %}" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak>
         {% csrf_token %}
-        <button type="submit" class="btn btn-secondary">Re-run failed</button>
+        <button type="submit" class="btn btn-secondary" title="Copies the failed cases into a new run, where each starts again from step 1">Re-run failed in a new run</button>
       </form>
       {% endif %}
 
@@ -247,16 +253,17 @@
   </template>
 
   {% comment %} Section: Case-level results, failures first. runCaseChecks scope (a
-     bulkSelect over the page's checkable + uncheckable pivots); the Check and
-     Uncheck forms each post only the selected ids valid for them
-     (`toCheck` / `toUncheck`). {% endcomment %}
+     bulkSelect over the page's checkable + uncheckable + re-runnable pivots);
+     the Check, Uncheck and Re-run forms each post only the selected ids valid
+     for them (`toCheck` / `toUncheck` / `toRerun`). The Re-run confirm dialog
+     lives inside this scope so its form can render the selected ids. {% endcomment %}
   {% url 'projects:test_run_detail' project.id test_run.id as test_run_detail_url %}
-  <div x-data="runCaseChecks([{% for pid in checkable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}], [{% for pid in uncheckable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}])">
+  <div x-data="runCaseChecks([{% for pid in checkable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}], [{% for pid in uncheckable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}], [{% for pid in rerunnable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}])">
   <div class="card">
     <div class="card-header">
       <h2>Case results</h2>
     </div>
-    <p class="hint">Logs and screenshots are recorded per case. Open a case to see its full execution log and every screenshot the agent took. Select finished cases to mark their result as checked.</p>
+    <p class="hint">Logs and screenshots are recorded per case. Open a case to see its full execution log and every screenshot the agent took. Select finished cases to mark their result as checked{% if rerunnable_pivot_ids %}, or select any cases to re-run them from step 1 on this run{% endif %}.</p>
 
     <div class="bulk-bar" x-show="count > 0" x-cloak>
       <span x-text="count + ' selected'"></span>
@@ -276,8 +283,37 @@
         </template>
         <button type="submit" class="btn btn-sm btn-secondary" :disabled="toUncheck.length === 0" x-text="'Uncheck (' + toUncheck.length + ')'">Uncheck</button>
       </form>
+      {% if rerun_panel.can_rerun %}
+      <button
+        type="button"
+        class="btn btn-sm btn-secondary"
+        x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'"
+        x-cloak
+        :disabled="toRerun.length === 0"
+        @click="$dispatch('open-rerun-selected')"
+        x-text="'Re-run (' + toRerun.length + ')'"
+      >Re-run</button>
+      {% elif rerun_panel.blockers %}
+      <button
+        type="button"
+        class="btn btn-sm btn-secondary"
+        x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'"
+        x-cloak
+        disabled
+        aria-disabled="true"
+        aria-describedby="rerun-selected-blockers"
+        title="{{ rerun_panel.blockers|join:' ' }}"
+        x-text="'Re-run (' + toRerun.length + ')'"
+      >Re-run</button>
+      {% endif %}
       <button type="button" class="btn btn-sm btn-ghost" @click="clear()">Clear</button>
     </div>
+    {% if not rerun_panel.can_rerun and rerun_panel.blockers %}
+    {# Why "Re-run (N)" is disabled — shown with the bulk bar on a finished run #}
+    <p class="hint" id="rerun-selected-blockers" x-show="count > 0 && (testRunStatus === 'done' || testRunStatus === 'cancelled')" x-cloak>
+      Re-run is unavailable: {{ rerun_panel.blockers|join:" " }}
+    </p>
+    {% endif %}
 
     <div class="table-wrap">
       <table class="data-table">
@@ -299,7 +335,7 @@
           {% for pivot in cases %}
           <tr data-pivot-id="{{ pivot.id }}">
             <td data-label="" class="cell-check">
-              {% if pivot.id in checkable_pivot_ids or pivot.id in uncheckable_pivot_ids %}
+              {% if pivot.id in checkable_pivot_ids or pivot.id in uncheckable_pivot_ids or pivot.id in rerunnable_pivot_ids %}
               <input type="checkbox" aria-label="Select {{ pivot.test_case.title }}" :checked="selected.includes({{ pivot.id }})" @change="toggle({{ pivot.id }})">
               {% elif pivot.testrail_source_result_id %}
               <input type="checkbox" disabled checked aria-label="{{ pivot.test_case.title }}: already sent to TestRail, can't be unchecked" title="Already sent to TestRail">
@@ -368,6 +404,36 @@
       {% include "partials/empty_state.html" with icon="▤" title="No cases in this run" body="Add test cases to this draft run before starting it." primary_label="Add cases" primary_url=test_case_list_url only %}
     {% endif %}
   </div>
+
+  {% if rerun_panel.can_rerun %}
+  {# Re-run confirm — inside runCaseChecks so the form can post the selected ids (toRerun) #}
+  <div
+    class="dialog-backdrop"
+    x-data="dialog()"
+    x-show="open"
+    x-cloak
+    x-on:open-rerun-selected.window="show()"
+    x-on:keydown.escape.window="close()"
+    x-trap.noscroll="open"
+    @click.self="close()"
+  >
+    <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="rerun-selected-title" aria-describedby="rerun-selected-desc">
+      <h3 id="rerun-selected-title" x-text="'Re-run ' + toRerun.length + (toRerun.length === 1 ? ' case' : ' cases') + ' on this run?'">Re-run the selected cases on this run?</h3>
+      <p id="rerun-selected-desc"><span x-text="toRerun.length + (toRerun.length === 1 ? ' case runs' : ' cases run')"></span> again from step 1 on this run, in run order. Their screenshots and step progress are replaced; the previous result stays in each case's history and the log keeps the earlier attempt. Checked marks are cleared; cases already sent to TestRail get a new result there when sent again.</p>
+      <form method="post" action="{% url 'projects:test_run_cases_rerun' project.id test_run.id %}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ test_run_detail_url }}{% if request.GET.urlencode %}?{{ request.GET.urlencode }}{% endif %}">
+        <template x-for="id in toRerun" :key="id">
+          <input type="hidden" name="pivot_ids" :value="id">
+        </template>
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary" :disabled="toRerun.length === 0" x-text="'Re-run (' + toRerun.length + ')'">Re-run</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
   </div>
 
   {% include "partials/pagination.html" with page_obj=cases per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range query_params=query_params %}

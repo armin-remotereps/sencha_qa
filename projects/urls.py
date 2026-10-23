@@ -226,6 +226,11 @@ urlpatterns: list[URLPattern] = [
         name="test_run_cases_uncheck",
     ),
     path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/rerun/",
+        views.test_run_cases_rerun,
+        name="test_run_cases_rerun",
+    ),
+    path(
         "<int:project_id>/test-runs/<int:test_run_id>/add-cases/",
         views.test_run_add_cases,
         name="test_run_add_cases",

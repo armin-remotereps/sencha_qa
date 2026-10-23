@@ -248,10 +248,10 @@ RUN_CASE_SELECTION_MAX_IDS = 500
 
 
 class RunCaseSelectionForm(forms.Form):
-    """Selected run cases (pivot ids) for Check / Uncheck on a test run.
+    """Selected run cases (pivot ids) for Check / Uncheck / Re-run on a test run.
 
-    The caller supplies the allowed ids (the run's checkable or uncheckable
-    pivots), so the choices double as membership validation.
+    The caller supplies the allowed ids (the run's checkable, uncheckable or
+    re-runnable pivots), so the choices double as membership validation.
     """
 
     pivot_ids = forms.TypedMultipleChoiceField(

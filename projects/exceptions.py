@@ -117,6 +117,14 @@ class RunResumeError(Exception):
         self.message = message
 
 
+class RunRerunError(Exception):
+    """Cases cannot be re-run in place; ``message`` is user-safe."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 class ApplicationContextError(Exception):
     """Base for application context writes; ``message`` is safe to show."""
 

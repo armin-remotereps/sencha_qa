@@ -468,8 +468,13 @@ class TestRunTestCase(models.Model):
         return f"TRTC #{self.pk} — {self.test_case.title[:50]}"
 
 
+class CaseRestartKind(models.TextChoices):
+    RESUME = "resume", "Resumed"
+    RERUN = "rerun", "Re-run"
+
+
 class TestRunCaseResume(models.Model):
-    """Snapshot of a case's outcome taken each time it is resumed in place."""
+    """Snapshot of a case's outcome taken each time it is resumed or re-run in place."""
 
     test_run_test_case = models.ForeignKey(
         TestRunTestCase, on_delete=models.CASCADE, related_name="resumes"
@@ -482,7 +487,11 @@ class TestRunCaseResume(models.Model):
         related_name="+",
     )
     created_at = models.DateTimeField(auto_now_add=True)
-    # Step the case resumed at; null means it ran from the start (no checkpoint).
+    kind = models.CharField(
+        max_length=10, choices=CaseRestartKind.choices, default=CaseRestartKind.RESUME
+    )
+    # Step the case resumed at; null means it ran from the start (no checkpoint,
+    # or a re-run).
     from_step = models.PositiveSmallIntegerField(null=True, blank=True)
     previous_status = models.CharField(
         max_length=20, choices=TestRunTestCaseStatus.choices
@@ -495,6 +504,10 @@ class TestRunCaseResume(models.Model):
 
     class Meta:
         ordering = ["created_at", "id"]
+
+    @property
+    def is_rerun(self) -> bool:
+        return self.kind == CaseRestartKind.RERUN
 
     def __str__(self) -> str:
         return f"Resume #{self.pk} of TRTC #{self.test_run_test_case_id}"

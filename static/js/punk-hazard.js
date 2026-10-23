@@ -118,17 +118,21 @@ document.addEventListener("alpine:init", () => {
   Alpine.data("bulkSelect", bulkSelectState);
 
   /**
-   * Check / Uncheck selection for a run's case results table
-   * (templates/projects/test_run_detail.html). A `bulkSelect` over both id
-   * lists, plus `toCheck` / `toUncheck`: the selected ids each action
-   * applies to. Getters are copied as descriptors so they stay live.
+   * Check / Uncheck / Re-run selection for a run's case results table
+   * (templates/projects/test_run_detail.html). A `bulkSelect` over the
+   * de-duplicated union of the three id lists (check and re-run ids
+   * overlap on a finished run), plus `toCheck` / `toUncheck` / `toRerun`:
+   * the selected ids each action applies to. `rerunIds` is empty unless
+   * the run is Done or Cancelled. Getters are copied as descriptors so
+   * they stay live.
    */
-  Alpine.data("runCaseChecks", (checkIds = [], uncheckIds = []) =>
+  Alpine.data("runCaseChecks", (checkIds = [], uncheckIds = [], rerunIds = []) =>
     Object.defineProperties(
-      bulkSelectState([...checkIds, ...uncheckIds]),
+      bulkSelectState([...new Set([...checkIds, ...uncheckIds, ...rerunIds])]),
       Object.getOwnPropertyDescriptors({
         checkIds,
         uncheckIds,
+        rerunIds,
 
         get toCheck() {
           return this.selected.filter((id) => this.checkIds.includes(id));
@@ -136,6 +140,10 @@ document.addEventListener("alpine:init", () => {
 
         get toUncheck() {
           return this.selected.filter((id) => this.uncheckIds.includes(id));
+        },
+
+        get toRerun() {
+          return this.selected.filter((id) => this.rerunIds.includes(id));
         },
       }),
     ),
