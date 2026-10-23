@@ -38,7 +38,13 @@
   reply, narration or notice; an assistant row is narration when a later row
   of its turn is a tool row) and {kind:'activity', key:'act-<first row id>',
   turnId, rows, running, liveText, failedCount, screenshotCount, summaryText,
-  dotClass} for each run of consecutive tool rows of one turn. TOOL_LABELS is
+  dotClass} for each run of consecutive tool rows of one turn. Sub-agent rows
+  (parent_id set) are grouped under their delegation row: each
+  run_setup_task row becomes {kind:'subtask', key:'sub-<id>', row, children
+  (the same row/activity blocks, every assistant row narration), stepCount,
+  hiddenCount, failedCount, screenshotCount, running, liveText, resultLabel,
+  badgeClass (fixed map on subtask_result), goalText, goal, doneWhen,
+  knownState, readOnly} and never joins an activity block. TOOL_LABELS is
   the only place tool wording lives; it returns plain strings. `working`
   ({text, stepText} | null) drives the indicator, `statusText` the line above
   the composer, `latestReplyText` the hidden live region.
@@ -196,6 +202,11 @@ document.addEventListener('alpine:init', () => {
     browser_list_downloads: plain('Listed downloads', () => 'Listing downloads…'),
     web_search: plain('Searched the web', (args) => withDetail('Searching the web for', quoted(args.query)) + '…', (args) => quoted(args.query)),
     wait: plain('Waited', () => 'Waiting…', (args) => (args.seconds !== undefined && args.seconds !== null ? oneLine(args.seconds, 12) + 's' : '')),
+    run_setup_task: {
+      summary: (count) => times('Ran a sub-task', count),
+      live: (args) => withDetail('Working on:', oneLine(args.goal, 60)) + '…',
+      detail: (args) => oneLine(args.goal),
+    },
   };
   // Tools without an entry fall back to their raw name.
   // Own entries only: a model-chosen name like "constructor" must not hit Object.prototype.
@@ -224,10 +235,45 @@ document.addEventListener('alpine:init', () => {
     return message;
   };
 
+  const DELEGATION_TOOL = 'run_setup_task';
+  // Badge class per subtask_result: a fixed map keyed by the enum, never
+  // built from model text.
+  const SUBTASK_BADGES = {
+    done: 'badge-passed',
+    failed: 'badge-failed',
+    needs_user: 'badge-starting',
+    unclear: 'badge-cancelled',
+    interrupted: 'badge-cancelled',
+  };
+  const TOOL_STATUS_BADGES = { running: 'badge-running', succeeded: 'badge-passed', failed: 'badge-failed' };
+  const TOOL_STATUS_LABELS = { running: 'Running', succeeded: 'Done', failed: 'Error' };
+  const textArg = (value) => (typeof value === 'string' ? value : '');
+
+  // Splits rows into top-level rows and sub-agent rows grouped by parent_id,
+  // then builds the top-level blocks. A child can arrive before its
+  // delegation row; it waits in its group until the parent shows up.
+  const buildTranscript = (messages) => {
+    const topLevel = [];
+    const children = new Map();
+    for (const message of messages) {
+      if (message.parent_id === null || message.parent_id === undefined) {
+        topLevel.push(message);
+        continue;
+      }
+      if (!children.has(message.parent_id)) children.set(message.parent_id, []);
+      children.get(message.parent_id).push(message);
+    }
+    return buildBlocks(topLevel, children);
+  };
+
   // Folds consecutive tool rows of one turn into an activity block and tags
   // each assistant row as narration (a later row of the same turn is a tool
-  // row) or reply. O(rows); the page window is at most 300 rows.
-  const buildBlocks = (messages) => {
+  // row) or reply. A run_setup_task row becomes its own subtask block holding
+  // its children's blocks. Nested blocks (children === null) have no reply:
+  // every sub-agent assistant row is narration, and no row nests further.
+  // O(rows); the page window is at most 300 top-level rows.
+  const buildBlocks = (messages, children) => {
+    const nested = children === null;
     const narration = new Set();
     const turnsWithLaterTools = new Set();
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -238,6 +284,11 @@ document.addEventListener('alpine:init', () => {
     const blocks = [];
     let current = null;
     for (const message of messages) {
+      if (!nested && message.kind === 'tool' && message.tool_name === DELEGATION_TOOL) {
+        current = null;
+        blocks.push(subtaskBlock(message, children.get(message.id) || []));
+        continue;
+      }
       if (message.kind === 'tool') {
         if (current && current.turnId === message.turn_id) {
           current.rows.push(message);
@@ -249,13 +300,56 @@ document.addEventListener('alpine:init', () => {
       }
       current = null;
       let role = message.kind;
-      if (message.kind === 'assistant') role = narration.has(message.id) ? 'narration' : 'reply';
+      if (message.kind === 'assistant') role = nested || narration.has(message.id) ? 'narration' : 'reply';
       blocks.push({ kind: 'row', key: 'msg-' + message.id, role, message });
     }
     for (const block of blocks) {
       if (block.kind === 'activity') Object.assign(block, summarizeActivity(block.rows));
     }
     return blocks;
+  };
+
+  // One delegation row and its sub-agent rows. stepCount counts tool calls,
+  // the unit activity blocks use: the children not loaded on page load
+  // (hidden_child_count) plus the loaded child tool rows.
+  const subtaskBlock = (row, childRows) => {
+    let toolCount = 0;
+    let failedCount = 0;
+    let screenshotCount = 0;
+    for (const child of childRows) {
+      screenshotCount += child.screenshots.length;
+      if (child.kind !== 'tool') continue;
+      toolCount++;
+      if (child.tool_status === 'failed') failedCount++;
+    }
+    const childBlocks = buildBlocks(childRows, null);
+    const running = row.tool_status === 'running';
+    const runningChild = running ? [...childBlocks].reverse().find((b) => b.kind === 'activity' && b.running) : null;
+    const goal = textArg(row.args.goal);
+    const resultLabel = row.subtask_result_label || (running ? 'Running' : TOOL_STATUS_LABELS[row.tool_status] || '');
+    const badgeClass = (Object.hasOwn(SUBTASK_BADGES, row.subtask_result) && SUBTASK_BADGES[row.subtask_result])
+      || (Object.hasOwn(TOOL_STATUS_BADGES, row.tool_status) && TOOL_STATUS_BADGES[row.tool_status])
+      || 'badge-draft';
+    const hiddenCount = row.hidden_child_count || 0;
+    return {
+      kind: 'subtask',
+      key: 'sub-' + row.id,
+      row,
+      children: childBlocks,
+      stepCount: hiddenCount + toolCount,
+      hiddenCount,
+      failedCount,
+      screenshotCount,
+      running,
+      liveText: running ? (runningChild ? runningChild.liveText : labelsFor(DELEGATION_TOOL).live(row.args).replace(/…+$/, '…')) : '',
+      resultLabel,
+      badgeClass,
+      goalText: oneLine(goal) || 'Sub-task',
+      goal,
+      doneWhen: textArg(row.args.done_when),
+      knownState: textArg(row.args.known_state),
+      readOnly: row.args.read_only === true,
+    };
   };
 
   const summarizeActivity = (rows) => {
@@ -388,6 +482,11 @@ document.addEventListener('alpine:init', () => {
         (s) => !message.screenshots.some((n) => n.id === s.id),
       );
       message.screenshots = message.screenshots.concat(known);
+      // Only the page load counts a sub-task's hidden steps; live updates send 0.
+      message.hidden_child_count = Math.max(
+        this.messages[index].hidden_child_count || 0,
+        message.hidden_child_count || 0,
+      );
       this.messages[index] = message;
     },
 
@@ -455,7 +554,7 @@ document.addEventListener('alpine:init', () => {
     },
 
     get blocks() {
-      return buildBlocks(this.messages);
+      return buildTranscript(this.messages);
     },
 
     // The typing / working indicator: null unless a turn is live and the
@@ -465,22 +564,24 @@ document.addEventListener('alpine:init', () => {
       const blocks = this.blocks;
       const last = blocks[blocks.length - 1];
       if (last && last.kind === 'row' && last.role === 'reply') return null;
+      // The live turn's running block, even when a notice landed after it.
+      // A running sub-task is a block of its own, so it is found here too.
+      const running = [...blocks].reverse().find((b) => (b.kind === 'activity' || b.kind === 'subtask') && b.running);
       let text = 'Thinking…';
       if (this.turn.status === 'queued') text = 'Waiting for a worker…';
       else if (this.turn.stop_requested) text = 'Stopping after the current action…';
-      else {
-        // The live turn's running block, even when a notice landed after it.
-        const running = [...blocks].reverse().find((b) => b.kind === 'activity' && b.running);
-        if (running) text = running.liveText;
-      }
-      const stepText = this.turn.iterations > 0 ? 'Step ' + this.turn.iterations + ' of ' + this.turn.max_iterations : '';
+      else if (running) text = running.liveText;
+      let stepText = this.turn.iterations > 0 ? 'Step ' + this.turn.iterations + ' of ' + this.turn.max_iterations : '';
+      if (running && running.kind === 'subtask') stepText = 'Sub-task · ' + plural(running.stepCount, 'step', 'steps');
       return { text, stepText };
     },
 
-    // Text of the latest reply, for the visually hidden live region.
+    // Text of the latest main-agent reply, for the visually hidden live
+    // region. Sub-agent rows (parent_id set) are narration and are skipped.
     get latestReplyText() {
       for (let i = this.messages.length - 1; i >= 0; i--) {
         const message = this.messages[i];
+        if (message.parent_id !== null && message.parent_id !== undefined) continue;
         if (message.kind === 'tool') return '';
         if (message.kind === 'assistant') return message.text;
       }
@@ -516,11 +617,11 @@ document.addEventListener('alpine:init', () => {
     },
 
     toolBadgeClass(status) {
-      return { running: 'badge-running', succeeded: 'badge-passed', failed: 'badge-failed' }[status] || 'badge-draft';
+      return (Object.hasOwn(TOOL_STATUS_BADGES, status) && TOOL_STATUS_BADGES[status]) || 'badge-draft';
     },
 
     toolBadgeLabel(status) {
-      return { running: 'Running', succeeded: 'Done', failed: 'Error' }[status] || status;
+      return (Object.hasOwn(TOOL_STATUS_LABELS, status) && TOOL_STATUS_LABELS[status]) || status;
     },
 
     formatClock(iso) {

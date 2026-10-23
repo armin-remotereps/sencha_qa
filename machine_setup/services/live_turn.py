@@ -16,12 +16,15 @@ from machine_setup.models import (
     LIVE_TURN_STATUSES,
     SetupMessage,
     SetupMessageKind,
-    SetupToolStatus,
     SetupTurn,
     SetupTurnEndReason,
     SetupTurnStatus,
 )
 from machine_setup.payloads import message_payload, turn_payload
+from machine_setup.services.activity_recorder import (
+    TOOL_INTERRUPTED_TEXT,
+    fail_running_rows,
+)
 from machine_setup.turn_outcome import stopped_outcome
 from machine_setup.turn_state import is_turn_stale
 
@@ -62,9 +65,8 @@ def _close_lost_turn(turn: SetupTurn, now: datetime) -> None:
     turn.ended_reason = SetupTurnEndReason.WORKER_LOST
     turn.error_message = WORKER_LOST_MESSAGE
     turn.finished_at = now
-    SetupMessage.objects.filter(turn=turn, tool_status=SetupToolStatus.RUNNING).update(
-        tool_status=SetupToolStatus.FAILED
-    )
+    # Nested sub-task rows too; a lost delegation row becomes interrupted.
+    failed_rows = fail_running_rows(turn_id=turn.pk, text=TOOL_INTERRUPTED_TEXT)
     notice = SetupMessage.objects.create(
         conversation_id=turn.conversation_id,
         turn=turn,
@@ -73,6 +75,8 @@ def _close_lost_turn(turn: SetupTurn, now: datetime) -> None:
     )
 
     def _broadcast() -> None:
+        for row in failed_rows:
+            broadcast_message(turn.project_id, message_payload(row))
         broadcast_message(turn.project_id, message_payload(notice, screenshots=[]))
         broadcast_turn(turn.project_id, turn_payload(turn))
 

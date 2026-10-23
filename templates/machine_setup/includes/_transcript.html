@@ -4,7 +4,8 @@
   messages, hiddenMessageCount, toolTitle, toolDetail, toolBadgeClass,
   toolBadgeLabel, formatClock and openLightbox from the ancestor
   machineSetupChat scope (machine_setup/chat.html; `blocks` is documented
-  there). Every field is model or agent text, so it is rendered with x-text
+  there; sub-task blocks render through _subtask.html). Every field is model
+  or agent text, so it is rendered with x-text
   (and :title) only; :href is bound only to the server-built link_url.
 
   The log itself is not a live region (tool row updates are not announced).
@@ -60,6 +61,10 @@
 
       <template x-if="block.kind === 'activity'">
         {% include "machine_setup/includes/_activity.html" %}
+      </template>
+
+      <template x-if="block.kind === 'subtask'">
+        {% include "machine_setup/includes/_subtask.html" %}
       </template>
     </div>
   </template>

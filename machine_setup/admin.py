@@ -62,11 +62,14 @@ class SetupMessageAdmin(_ReadOnlyAdminMixin, admin.ModelAdmin[SetupMessage]):
         "id",
         "conversation_id",
         "turn_id",
+        "parent",
         "kind",
         "tool_name",
+        "subtask_result",
         "created_at",
     )
-    list_filter = ("kind", "tool_status")
+    list_filter = ("kind", "tool_status", "subtask_result")
+    list_select_related = ("parent",)
     search_fields = ("text", "tool_name")
 
 

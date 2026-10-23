@@ -1,0 +1,82 @@
+{% comment %}
+  One sub-task block: a run_setup_task delegation row and the sub-agent rows
+  under it, folded into a <details>. Rendered inside
+  `<template x-for="block in blocks">` of _transcript.html; reads `block`
+  (kind 'subtask', see machine_setup/chat.html) and, through the nested
+  _activity.html, toolTitle, toolDetail, toolBadgeClass, toolBadgeLabel and
+  openLightbox from the machineSetupChat scope.
+
+  The nested loop names its item `block` too, so _activity.html reads the
+  child block unchanged; its items expression (`block.children`) is evaluated
+  in the outer scope, where `block` is still this sub-task. The key is the
+  delegation row's id, so an expanded block stays open while children join.
+  The badge class comes from a fixed client map on subtask_result, never from
+  model text. Goal, arguments and report are model text: x-text / :title only.
+  Single root element (it is the content of an x-if template).
+{% endcomment %}
+<details class="chat-subtask">
+  <summary class="chat-subtask-summary">
+    <span class="chat-activity-dot" :class="block.running ? 'is-running' : block.row.tool_status === 'failed' ? 'is-failed' : 'is-done'" aria-hidden="true"></span>
+    <span class="chat-subtask-goal" x-text="block.goalText" :title="block.goal"></span>
+    <span class="chat-activity-live" x-show="block.running" x-text="block.liveText" :title="block.liveText"></span>
+    <span class="chat-activity-meta">
+      <span x-text="block.stepCount + (block.stepCount === 1 ? ' step' : ' steps')"></span>
+      <span class="badge badge-failed" x-show="block.failedCount > 0" x-text="block.failedCount + ' failed'"></span>
+      <span x-show="block.screenshotCount > 0" x-text="block.screenshotCount + (block.screenshotCount === 1 ? ' screenshot' : ' screenshots')"></span>
+      <span class="badge" :class="block.badgeClass" x-text="block.resultLabel"></span>
+    </span>
+  </summary>
+  <div class="chat-subtask-body">
+    <p class="chat-notice" x-show="block.hiddenCount > 0" x-text="block.hiddenCount + (block.hiddenCount === 1 ? ' earlier step not shown' : ' earlier steps not shown')"></p>
+
+    <template x-for="block in block.children" :key="block.key">
+      <div class="chat-row">
+        <template x-if="block.kind === 'row' && block.role === 'narration'">
+          <p class="chat-narration">
+            <span class="pre-wrap" x-text="block.message.text"></span>
+          </p>
+        </template>
+
+        <template x-if="block.kind === 'row' && block.role === 'notice'">
+          <p class="chat-notice">
+            <span x-text="block.message.text"></span>
+          </p>
+        </template>
+
+        <template x-if="block.kind === 'activity'">
+          {% include "machine_setup/includes/_activity.html" %}
+        </template>
+      </div>
+    </template>
+
+    <details class="chat-tool">
+      <summary>
+        <span class="chat-tool-title">Task details</span>
+        <span class="chat-tool-detail" x-show="block.readOnly">Read-only</span>
+      </summary>
+      <div class="chat-tool-body">
+        <p class="chat-tool-label">Goal</p>
+        <pre class="code-block chat-pre" x-text="block.goal"></pre>
+        <template x-if="block.doneWhen">
+          <div>
+            <p class="chat-tool-label">Done when</p>
+            <pre class="code-block chat-pre" x-text="block.doneWhen"></pre>
+          </div>
+        </template>
+        <template x-if="block.knownState">
+          <div>
+            <p class="chat-tool-label">Known state</p>
+            <pre class="code-block chat-pre" x-text="block.knownState"></pre>
+          </div>
+        </template>
+      </div>
+    </details>
+
+    <template x-if="block.row.text">
+      <div>
+        <p class="chat-tool-label">Report</p>
+        <pre class="code-block chat-pre" x-text="block.row.text"></pre>
+      </div>
+    </template>
+  </div>
+</details>

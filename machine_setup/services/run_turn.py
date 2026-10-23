@@ -7,12 +7,9 @@ The LLM transcript (replayed exactly, reasoning included) and the display rows
 
 from __future__ import annotations
 
-import base64
 import logging
-import time
 
 from django.conf import settings
-from django.core.files.base import ContentFile
 from django.db.models import Q
 from django.urls import reverse
 from django.utils import timezone
@@ -28,33 +25,32 @@ from agents.types import (
     AgentConfig,
     BrowserSelection,
     ChatMessage,
-    TextContent,
     ToolCall,
     ToolContext,
-    ToolDispatcher,
     ToolResult,
 )
-from machine_setup.events import (
-    broadcast_message,
-    broadcast_screenshot,
-    broadcast_turn,
-)
+from machine_setup.events import broadcast_message, broadcast_turn
 from machine_setup.models import (
     SetupConversation,
     SetupMessage,
     SetupMessageKind,
-    SetupScreenshot,
-    SetupToolStatus,
     SetupTurn,
     SetupTurnEndReason,
     SetupTurnStatus,
 )
-from machine_setup.payloads import message_payload, screenshot_payload, turn_payload
+from machine_setup.payloads import message_payload, turn_payload
+from machine_setup.services.activity_recorder import (
+    TOOL_INTERRUPTED_TEXT,
+    ActivityRecorder,
+    fail_running_rows,
+)
+from machine_setup.services.run_setup_task import SetupTaskRuntime, run_setup_task
 from machine_setup.services.setup_prompt import build_setup_system_prompt
 from machine_setup.services.setup_tools import (
     build_setup_dispatcher,
-    setup_tool_definitions,
+    main_tool_definitions,
 )
+from machine_setup.subtask_types import SetupTaskRequest
 from machine_setup.turn_outcome import (
     TurnOutcome,
     classify_turn_end,
@@ -66,10 +62,16 @@ from projects.services import build_agent_project_context
 
 logger = logging.getLogger(__name__)
 
-TOOL_PREVIEW_LIMIT = 4000
-_PREVIOUS_TURN_STOPPED_NOTE = "Not run: the previous turn was stopped."
-_TURN_STOPPED_NOTE = "Not run: the turn was stopped."
-_TOOL_INTERRUPTED_TEXT = "The turn ended before this tool finished."
+# Said for any open call, including a sub-task that may have changed the
+# machine before Stop or a worker loss.
+_INTERRUPTED_CALL_NOTE = (
+    "Interrupted: the turn ended before this call returned. It may have partly "
+    "run; check the machine before relying on it."
+)
+_ONE_SUBTASK_AT_A_TIME = (
+    "Not run: delegate one sub-task at a time. Read the first report, then call "
+    "again."
+)
 
 
 def run_setup_turn(turn_id: int) -> None:
@@ -107,15 +109,17 @@ class _TurnRunner:
         self.iterations = 0
         # Transcript without the system prompt; None until it was loaded.
         self.transcript: tuple[ChatMessage, ...] | None = None
-        # This turn's tool rows by call id, with the screenshots attached so far.
-        self.tool_rows: dict[str, SetupMessage] = {}
-        self.row_screenshots: dict[int, list[SetupScreenshot]] = {}
-        # Raw results by call id: the loop hands the hook only the (possibly
-        # capped) model-facing text, without the error flag.
-        self.results: dict[str, ToolResult] = {}
-        self.current_call_id: str | None = None
-        # Calls of the last assistant message still waiting for their result.
-        self.pending_call_ids: set[str] = set()
+        self.recorder = ActivityRecorder(
+            project_id=self.project_id,
+            conversation_id=self.conversation_id,
+            turn_id=turn.pk,
+            parent=None,
+            record_final_reply=True,
+        )
+        # Built in _execute; every sub-task of the turn shares it.
+        self.subtask_runtime: SetupTaskRuntime | None = None
+        # Whether the current assistant message already ran a sub-task.
+        self.subtask_ran_this_round = False
 
     def run(self) -> None:
         outcome: TurnOutcome | None = None
@@ -149,7 +153,7 @@ class _TurnRunner:
         if user_text is None:
             raise LookupError(f"Setup turn {turn.pk} has no user message")
 
-        history = close_dangling_tool_calls(history, _PREVIOUS_TURN_STOPPED_NOTE) + (
+        history = close_dangling_tool_calls(history, _INTERRUPTED_CALL_NOTE) + (
             ChatMessage(role="user", content=user_text),
         )
         # Persisted up front so the message stays in the history even when the
@@ -157,18 +161,29 @@ class _TurnRunner:
         self._persist_transcript(history)
 
         project = turn.project
+        system_info = project.agent_system_info or None
+        project_prompt = build_agent_project_context(project)
         system_prompt = build_setup_system_prompt(
-            system_info=project.agent_system_info or None,
-            project_prompt=build_agent_project_context(project),
+            system_info=system_info,
+            project_prompt=project_prompt,
             max_iterations=settings.MACHINE_SETUP_MAX_ITERATIONS,
         )
         llm_config = build_llm_config()
+        self.subtask_runtime = SetupTaskRuntime(
+            project_id=self.project_id,
+            conversation_id=self.conversation_id,
+            turn_id=turn.pk,
+            system_info=system_info,
+            project_prompt=project_prompt,
+            llm_config=llm_config,
+            cancellation_check=self._should_stop,
+        )
         config = AgentConfig(
             llm=llm_config,
             vision_llm=llm_config,
             max_iterations=settings.MACHINE_SETUP_MAX_ITERATIONS,
             timeout_seconds=settings.MACHINE_SETUP_TURN_TIMEOUT_SECONDS,
-            on_screenshot=self._on_screenshot,
+            on_screenshot=self.recorder.on_screenshot,
             cancellation_check=self._should_stop,
         )
         context = ToolContext(
@@ -176,7 +191,7 @@ class _TurnRunner:
             browser_selection=BrowserSelection(),
             summarizer_config=build_llm_config(),
             vision_config=config.vision_llm,
-            on_screenshot=self._on_screenshot,
+            on_screenshot=self.recorder.on_screenshot,
             on_log=_log_tool_debug,
             cancellation_check=self._should_stop,
         )
@@ -184,13 +199,14 @@ class _TurnRunner:
             project_id=self.project_id,
             author=turn.requested_by,
             on_context_updated=self._on_context_updated,
+            run_subtask=self._run_subtask,
         )
         result = run_tool_loop(
             [ChatMessage(role="system", content=system_prompt), *history],
             context,
             config=config,
-            tool_definitions=setup_tool_definitions(),
-            dispatch=self._recording(dispatch),
+            tool_definitions=main_tool_definitions(),
+            dispatch=self.recorder.wrap(dispatch),
             on_transcript=self._on_transcript,
         )
         self.iterations = result.iterations
@@ -200,103 +216,48 @@ class _TurnRunner:
 
     # Tool loop callbacks
 
-    def _recording(self, dispatch: ToolDispatcher) -> ToolDispatcher:
-        def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
-            self.current_call_id = tool_call.tool_call_id
-            try:
-                result = dispatch(tool_call, context)
-            finally:
-                self.current_call_id = None
-            self.results[tool_call.tool_call_id] = result
-            return result
-
-        return _dispatch
-
     def _on_transcript(
         self, message: ChatMessage, transcript: tuple[ChatMessage, ...]
     ) -> None:
         self.transcript = tuple(m for m in transcript if m.role != "system")
         if message.role == "assistant":
-            self.pending_call_ids = {
-                call.tool_call_id for call in message.tool_calls or ()
-            }
-            self._record_assistant(message)
-        elif message.role == "tool" and message.tool_call_id is not None:
-            self.pending_call_ids.discard(message.tool_call_id)
-            self._record_tool_result(message.tool_call_id, message)
+            self.subtask_ran_this_round = False
+            self._count_iteration()
+        self.recorder.on_message(message)
         # Two writes per round: the assistant message (so a killed worker
         # leaves calls the next turn's close_dangling_tool_calls can answer,
         # matching the rows the user saw) and the round's last result.
         # Rewriting after every tool result would be quadratic in bytes.
-        if message.role == "assistant" or not self.pending_call_ids:
+        if message.role == "assistant" or not self.recorder.pending_calls:
             self._persist_transcript(self.transcript)
 
-    def _record_assistant(self, message: ChatMessage) -> None:
+    def _count_iteration(self) -> None:
         self.iterations += 1
         SetupTurn.objects.filter(pk=self.turn.pk).update(iterations=self.iterations)
         self.turn.iterations = self.iterations
         broadcast_turn(self.project_id, turn_payload(self.turn))
 
-        text = _message_text(message)
-        if text:
-            self._create_row(kind=SetupMessageKind.ASSISTANT, text=text)
-        calls = message.tool_calls or ()
-        if not calls:
-            return
-        rows = SetupMessage.objects.bulk_create(
-            [
-                SetupMessage(
-                    conversation_id=self.conversation_id,
-                    turn_id=self.turn.pk,
-                    kind=SetupMessageKind.TOOL,
-                    tool_name=call.tool_name,
-                    tool_call_id=call.tool_call_id,
-                    tool_arguments=call.arguments,
-                    tool_status=SetupToolStatus.RUNNING,
-                )
-                for call in calls
-            ]
+    def _run_subtask(
+        self, tool_call: ToolCall, request: SetupTaskRequest, context: ToolContext
+    ) -> ToolResult:
+        # Parallel tool calls can hold two delegations; the second goal was
+        # chosen without the first report.
+        if self.subtask_ran_this_round:
+            return ToolResult(
+                tool_call_id=tool_call.tool_call_id,
+                content=_ONE_SUBTASK_AT_A_TIME,
+                is_error=True,
+            )
+        if self.subtask_runtime is None:
+            raise RuntimeError("Sub-task runtime used before the turn started")
+        self.subtask_ran_this_round = True
+        return run_setup_task(
+            tool_call,
+            request,
+            context,
+            runtime=self.subtask_runtime,
+            parent_row=self.recorder.current_row(),
         )
-        for row in rows:
-            self.tool_rows[row.tool_call_id] = row
-            self.row_screenshots[row.pk] = []
-            self._broadcast_row(row)
-
-    def _record_tool_result(self, call_id: str, message: ChatMessage) -> None:
-        row = self.tool_rows.get(call_id)
-        result = self.results.pop(call_id, None)
-        if row is None:
-            return
-        row.tool_status = (
-            SetupToolStatus.FAILED
-            if result is not None and result.is_error
-            else SetupToolStatus.SUCCEEDED
-        )
-        row.text = _preview(
-            result.content if result is not None else _message_text(message)
-        )
-        row.save(update_fields=["tool_status", "text", "updated_at"])
-        self._broadcast_row(row)
-
-    def _on_screenshot(self, base64_data: str, tool_name: str) -> None:
-        row = (
-            self.tool_rows.get(self.current_call_id)
-            if self.current_call_id is not None
-            else None
-        )
-        if row is None:
-            logger.debug("Setup turn %s: screenshot outside a tool call", self.turn.pk)
-            return
-        timestamp_ms = int(time.time() * 1000)
-        screenshot = SetupScreenshot.objects.create(
-            message=row,
-            image=ContentFile(
-                base64.b64decode(base64_data), name=f"{timestamp_ms}_{tool_name}.png"
-            ),
-            tool_name=tool_name,
-        )
-        self.row_screenshots.setdefault(row.pk, []).append(screenshot)
-        broadcast_screenshot(self.project_id, row.pk, screenshot_payload(screenshot))
 
     def _on_context_updated(self, revision: int, change_summary: str) -> None:
         logger.info(
@@ -304,7 +265,7 @@ class _TurnRunner:
             self.turn.pk,
             revision,
         )
-        self._create_row(
+        self.recorder.create_row(
             kind=SetupMessageKind.NOTICE,
             text=f"Application context updated: {change_summary}",
             link_url=reverse(
@@ -335,7 +296,9 @@ class _TurnRunner:
             logger.exception("Setup turn %s: closing tool rows failed", self.turn.pk)
         if outcome.notice:
             try:
-                self._create_row(kind=SetupMessageKind.NOTICE, text=outcome.notice)
+                self.recorder.create_row(
+                    kind=SetupMessageKind.NOTICE, text=outcome.notice
+                )
             except Exception:
                 logger.exception(
                     "Setup turn %s: writing the notice failed", self.turn.pk
@@ -372,28 +335,16 @@ class _TurnRunner:
     def _close_transcript(self) -> None:
         if self.transcript is None:
             return
-        closed = close_dangling_tool_calls(self.transcript, _TURN_STOPPED_NOTE)
+        closed = close_dangling_tool_calls(self.transcript, _INTERRUPTED_CALL_NOTE)
         if len(closed) != len(self.transcript):
             self.transcript = closed
             self._persist_transcript(closed)
 
     def _fail_running_tool_rows(self) -> None:
-        running = [
-            row
-            for row in self.tool_rows.values()
-            if row.tool_status == SetupToolStatus.RUNNING
-        ]
-        if not running:
-            return
-        SetupMessage.objects.filter(pk__in=[row.pk for row in running]).update(
-            tool_status=SetupToolStatus.FAILED,
-            text=_TOOL_INTERRUPTED_TEXT,
-            updated_at=timezone.now(),
-        )
-        for row in running:
-            row.tool_status = SetupToolStatus.FAILED
-            row.text = _TOOL_INTERRUPTED_TEXT
-            self._broadcast_row(row)
+        # Nested rows belong to sub-task recorders: broadcast each row with
+        # its prefetched screenshots, not the main recorder's.
+        for row in fail_running_rows(turn_id=self.turn.pk, text=TOOL_INTERRUPTED_TEXT):
+            broadcast_message(self.project_id, message_payload(row))
 
     # Persistence helpers
 
@@ -402,46 +353,10 @@ class _TurnRunner:
             llm_transcript=transcript_to_json(transcript), updated_at=timezone.now()
         )
 
-    def _create_row(
-        self, *, kind: SetupMessageKind, text: str, link_url: str = ""
-    ) -> SetupMessage:
-        row = SetupMessage.objects.create(
-            conversation_id=self.conversation_id,
-            turn_id=self.turn.pk,
-            kind=kind,
-            text=text,
-            link_url=link_url,
-        )
-        self._broadcast_row(row)
-        return row
-
-    def _broadcast_row(self, row: SetupMessage) -> None:
-        broadcast_message(
-            self.project_id,
-            message_payload(row, screenshots=self.row_screenshots.get(row.pk, [])),
-        )
-
     def _conversation_archived(self) -> bool:
         return SetupConversation.objects.filter(
             pk=self.conversation_id, archived_at__isnull=False
         ).exists()
-
-
-def _message_text(message: ChatMessage) -> str:
-    content = message.content
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content.strip()
-    return "\n".join(
-        part.text for part in content if isinstance(part, TextContent)
-    ).strip()
-
-
-def _preview(text: str) -> str:
-    if len(text) > TOOL_PREVIEW_LIMIT:
-        return text[:TOOL_PREVIEW_LIMIT] + "\n…[truncated]"
-    return text
 
 
 def _log_tool_debug(message: str) -> None:

@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from django.conf import settings
-from django.db.models import Prefetch
+from django.db.models import Count, F, Prefetch, Q, Window
+from django.db.models.functions import RowNumber
 from django.utils import timezone
 
 from machine_setup.exceptions import (
@@ -17,6 +18,7 @@ from machine_setup.models import (
     LIVE_TURN_STATUSES,
     SetupConversation,
     SetupMessage,
+    SetupMessageKind,
     SetupScreenshot,
     SetupTurn,
 )
@@ -26,11 +28,14 @@ from machine_setup.payloads import (
     message_payload,
     turn_payload,
 )
+from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 from machine_setup.turn_state import is_turn_stale
 from projects.models import Project, TestRun, TestRunStatus
 from projects.services import MachineState, get_machine_state
 
 SETUP_PAGE_MESSAGE_LIMIT = 300
+# Newest children loaded per run_setup_task row on page load.
+SUBTASK_PAGE_CHILD_LIMIT = 50
 
 
 @dataclass(frozen=True)
@@ -118,21 +123,66 @@ def get_setup_page(project: Project, *, include_messages: bool = True) -> SetupP
 def _recent_messages(
     conversation_id: int | None,
 ) -> tuple[list[SetupMessagePayload], int]:
-    """The last ``SETUP_PAGE_MESSAGE_LIMIT`` rows in id order, and how many are older."""
+    """The last ``SETUP_PAGE_MESSAGE_LIMIT`` top-level rows, and how many are older.
+
+    Each ``run_setup_task`` row in that window brings its newest
+    ``SUBTASK_PAGE_CHILD_LIMIT`` children; the rest are counted on the row as
+    ``hidden_child_count``. One flat list in id order, in four or five queries.
+    """
     if conversation_id is None:
         return [], 0
+    screenshots = Prefetch(
+        "screenshots", queryset=SetupScreenshot.objects.order_by("id")
+    )
     rows = list(
-        SetupMessage.objects.filter(conversation_id=conversation_id)
-        .select_related("author")
-        .prefetch_related(
-            Prefetch("screenshots", queryset=SetupScreenshot.objects.order_by("id"))
+        SetupMessage.objects.filter(
+            conversation_id=conversation_id, parent__isnull=True
         )
+        .select_related("author")
+        .prefetch_related(screenshots)
         .order_by("-id")[:SETUP_PAGE_MESSAGE_LIMIT]
     )
     rows.reverse()
     hidden_count = 0
     if len(rows) == SETUP_PAGE_MESSAGE_LIMIT:
         hidden_count = SetupMessage.objects.filter(
-            conversation_id=conversation_id, id__lt=rows[0].pk
+            conversation_id=conversation_id, parent__isnull=True, id__lt=rows[0].pk
         ).count()
-    return [message_payload(row) for row in rows], hidden_count
+
+    delegation_ids = [row.pk for row in rows if row.tool_name == RUN_SETUP_TASK_TOOL]
+    children: list[SetupMessage] = []
+    child_totals: dict[int, int] = {}
+    loaded: dict[int, int] = {}
+    if delegation_ids:
+        annotated = list(
+            SetupMessage.objects.filter(parent_id__in=delegation_ids)
+            .annotate(
+                row_number=Window(
+                    RowNumber(),
+                    partition_by=[F("parent_id")],
+                    order_by=F("id").desc(),
+                ),
+                # Steps are tool calls; narration rows are not counted.
+                tool_total=Window(
+                    Count("id", filter=Q(kind=SetupMessageKind.TOOL)),
+                    partition_by=[F("parent_id")],
+                ),
+            )
+            .filter(row_number__lte=SUBTASK_PAGE_CHILD_LIMIT)
+            .prefetch_related(screenshots)
+            .order_by("id")
+        )
+        for child in annotated:
+            if child.parent_id is not None:
+                child_totals[child.parent_id] = child.tool_total
+                if child.kind == SetupMessageKind.TOOL:
+                    loaded[child.parent_id] = loaded.get(child.parent_id, 0) + 1
+        children.extend(annotated)
+    ordered = sorted([*rows, *children], key=lambda row: row.pk)
+    return [
+        message_payload(
+            row,
+            hidden_child_count=child_totals.get(row.pk, 0) - loaded.get(row.pk, 0),
+        )
+        for row in ordered
+    ], hidden_count

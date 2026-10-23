@@ -12,6 +12,12 @@ from typing import TypedDict
 from django.conf import settings
 
 from machine_setup.models import SetupMessage, SetupScreenshot, SetupTurn
+from machine_setup.subtask_types import (
+    DONE_WHEN_MAX_CHARS,
+    GOAL_MAX_CHARS,
+    KNOWN_STATE_MAX_CHARS,
+    RUN_SETUP_TASK_TOOL,
+)
 
 _ARGUMENTS_TEXT_LIMIT = 4000
 
@@ -35,6 +41,12 @@ class SetupMessagePayload(TypedDict):
     screenshots: list[SetupScreenshotPayload]
     link_url: str
     created_at: str
+    # The run_setup_task row a sub-agent row belongs to; None at top level.
+    parent_id: int | None
+    subtask_result: str
+    subtask_result_label: str
+    # Sub-agent rows of a run_setup_task row left out of the page load.
+    hidden_child_count: int
 
 
 class SetupTurnPayload(TypedDict):
@@ -59,7 +71,10 @@ def screenshot_payload(screenshot: SetupScreenshot) -> SetupScreenshotPayload:
 
 
 def message_payload(
-    message: SetupMessage, screenshots: list[SetupScreenshot] | None = None
+    message: SetupMessage,
+    screenshots: list[SetupScreenshot] | None = None,
+    *,
+    hidden_child_count: int = 0,
 ) -> SetupMessagePayload:
     """``screenshots`` defaults to the prefetched ``message.screenshots``."""
     rows = screenshots if screenshots is not None else list(message.screenshots.all())
@@ -72,11 +87,21 @@ def message_payload(
         "text": message.text,
         "author_name": (author.get_full_name() or author.email) if author else "",
         "tool_name": message.tool_name,
-        "tool_arguments_text": _arguments_text(message.tool_arguments),
+        "tool_arguments_text": (
+            _delegation_arguments_text(message.tool_arguments)
+            if message.tool_name == RUN_SETUP_TASK_TOOL
+            else _arguments_text(message.tool_arguments)
+        ),
         "tool_status": message.tool_status,
         "screenshots": [screenshot_payload(row) for row in rows],
         "link_url": message.link_url,
         "created_at": message.created_at.isoformat(),
+        "parent_id": message.parent_id,
+        "subtask_result": message.subtask_result,
+        "subtask_result_label": (
+            message.get_subtask_result_display() if message.subtask_result else ""
+        ),
+        "hidden_child_count": hidden_child_count,
     }
 
 
@@ -95,6 +120,33 @@ def turn_payload(turn: SetupTurn) -> SetupTurnPayload:
         "iterations": turn.iterations,
         "max_iterations": settings.MACHINE_SETUP_MAX_ITERATIONS,
     }
+
+
+# Per-field display caps of run_setup_task arguments (the tool's own limits).
+_DELEGATION_FIELD_LIMITS = {
+    "goal": GOAL_MAX_CHARS,
+    "done_when": DONE_WHEN_MAX_CHARS,
+    "known_state": KNOWN_STATE_MAX_CHARS,
+}
+
+
+def _delegation_arguments_text(arguments: object) -> str:
+    """The page parses these to show the sub-task, so the JSON must stay whole.
+
+    Each string field is cut to its own limit instead of cutting the JSON text.
+    """
+    if not isinstance(arguments, dict):
+        return _arguments_text(arguments)
+    capped = {
+        key: (
+            value[: _DELEGATION_FIELD_LIMITS[key]]
+            if key in _DELEGATION_FIELD_LIMITS and isinstance(value, str)
+            else value
+        )
+        for key, value in arguments.items()
+        if key in _DELEGATION_FIELD_LIMITS or key in ("read_only", "timeout_seconds")
+    }
+    return json.dumps(capped, indent=2, ensure_ascii=False, default=str)
 
 
 def _arguments_text(arguments: object) -> str:

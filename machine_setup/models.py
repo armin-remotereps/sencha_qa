@@ -45,6 +45,14 @@ class SetupToolStatus(models.TextChoices):
     FAILED = "failed", "Failed"
 
 
+class SetupSubtaskResult(models.TextChoices):
+    DONE = "done", "Done"
+    FAILED = "failed", "Failed"
+    NEEDS_USER = "needs_user", "Needs you"
+    UNCLEAR = "unclear", "Unclear"
+    INTERRUPTED = "interrupted", "Interrupted"
+
+
 class SetupConversation(models.Model):
     """A machine setup chat; one active (not archived) per project."""
 
@@ -168,12 +176,34 @@ class SetupMessage(models.Model):
     tool_status = models.CharField(
         max_length=20, choices=SetupToolStatus.choices, blank=True, default=""
     )
+    # Set on rows a sub-agent wrote: the main agent's run_setup_task row.
+    parent = models.ForeignKey(
+        "self",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="children",
+        # Covered by the (parent, id) index below.
+        db_index=False,
+    )
+    # Set on run_setup_task rows only: how the sub-task ended.
+    subtask_result = models.CharField(
+        max_length=20, choices=SetupSubtaskResult.choices, blank=True, default=""
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         ordering = ["id"]
-        indexes = [models.Index(fields=["conversation", "id"])]
+        indexes = [
+            models.Index(fields=["conversation", "id"]),
+            models.Index(fields=["parent", "id"], name="setup_msg_parent_id"),
+            models.Index(
+                fields=["conversation", "id"],
+                condition=Q(parent__isnull=True),
+                name="setup_msg_top_level",
+            ),
+        ]
 
     def __str__(self) -> str:
         return f"Setup message #{self.pk} ({self.kind})"

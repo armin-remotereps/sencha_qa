@@ -278,6 +278,20 @@ MACHINE_SETUP_MAX_ITERATIONS: int = config(
 MACHINE_SETUP_TURN_TIMEOUT_SECONDS: int = config(
     "MACHINE_SETUP_TURN_TIMEOUT_SECONDS", default=3600, cast=int
 )
+# One delegated sub-task of a setup turn: its wall-clock budget (clamped to
+# [MIN, MAX] and to what the turn has left) and its LLM rounds.
+MACHINE_SETUP_SUBTASK_TIMEOUT_SECONDS: int = config(
+    "MACHINE_SETUP_SUBTASK_TIMEOUT_SECONDS", default=900, cast=int
+)
+MACHINE_SETUP_SUBTASK_MIN_TIMEOUT_SECONDS: int = config(
+    "MACHINE_SETUP_SUBTASK_MIN_TIMEOUT_SECONDS", default=150, cast=int
+)
+MACHINE_SETUP_SUBTASK_MAX_TIMEOUT_SECONDS: int = config(
+    "MACHINE_SETUP_SUBTASK_MAX_TIMEOUT_SECONDS", default=1800, cast=int
+)
+MACHINE_SETUP_SUBTASK_MAX_ITERATIONS: int = config(
+    "MACHINE_SETUP_SUBTASK_MAX_ITERATIONS", default=100, cast=int
+)
 
 # SearXNG (metasearch engine)
 SEARXNG_BASE_URL: str = config(
