@@ -36,7 +36,6 @@ from controller_client.exceptions import (
     ConnectionTerminatedError,
     ExecutionError,
     HandshakeError,
-    OmniParserError,
     ProtocolError,
     UnknownMessageTypeError,
 )
@@ -55,11 +54,6 @@ from controller_client.executor import (
     execute_wait_for_command,
 )
 from controller_client.interactive_session import InteractiveSessionManager
-from controller_client.omniparser_executor import (
-    execute_find_element,
-    get_omniparser_readiness,
-    load_omniparser_model,
-)
 from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import (
     CLIENT_CAPABILITIES,
@@ -70,11 +64,8 @@ from controller_client.protocol import (
     CloseCode,
     CommandResultPayload,
     ErrorCode,
-    FindElementResultPayload,
     InteractiveOutputPayload,
     MessageType,
-    OmniParserState,
-    OmniParserStatusPayload,
     ScreenshotResponsePayload,
     StreamName,
     deserialize_server_message,
@@ -90,7 +81,6 @@ from controller_client.protocol import (
     parse_close_tab_payload,
     parse_double_click_payload,
     parse_drag_payload,
-    parse_find_element_payload,
     parse_handshake_ack_payload,
     parse_hover_payload,
     parse_key_press_payload,
@@ -102,7 +92,6 @@ from controller_client.protocol import (
     parse_type_text_payload,
     parse_wait_for_command_payload,
     peek_request_id,
-    serialize_find_element_result,
     serialize_message,
 )
 from controller_client.system_info import gather_system_info
@@ -192,9 +181,7 @@ class ControllerClient:
             MessageType.CLOSE_TAB: self._handle_close_tab,
             MessageType.CHECK_APP_INSTALLED: self._handle_check_app_installed,
             MessageType.CLEANUP_ENVIRONMENT: self._handle_cleanup_environment,
-            MessageType.FIND_ELEMENT: self._handle_find_element,
         }
-        self._omniparser_task: asyncio.Task[None] | None = None
         # Set by stop() so a pending reconnect backoff ends immediately.
         self._stop_event = asyncio.Event()
         # Whether the current session got an "ok" handshake ack; run() resets
@@ -272,7 +259,6 @@ class ControllerClient:
     async def stop(self) -> None:
         self._running = False
         self._stop_event.set()
-        await self._cancel_omniparser_task()
         self._process_tracker.kill_all()
         self._session_manager.terminate_all()
         # The executor is not shut down: stop() can run twice (signal, then
@@ -287,11 +273,11 @@ class ControllerClient:
 
         # Client keepalive matches the tolerance Daphne already applies to us
         # (--ping-interval 30 --ping-timeout 120): frames are ordered, so on a
-        # slow uplink a pong can sit behind a multi-MiB screenshot or
-        # find_element result for a long time. The library's 20s default would
-        # then close a healthy socket (1011 "keepalive ping timeout"); 120s
-        # does not, yet still detects a half-open link within ~150s instead of
-        # waiting on it forever.
+        # slow uplink a pong can sit behind a multi-MiB screenshot for a
+        # long time. The library's 20s default would then close a healthy
+        # socket (1011 "keepalive ping timeout"); 120s does not, yet still
+        # detects a half-open link within ~150s instead of waiting on it
+        # forever.
         session_error: ConnectionClosed | None = None
         async with websockets.connect(
             url,
@@ -309,7 +295,6 @@ class ControllerClient:
                 session_error = e
             finally:
                 self._connection = None
-                await self._cancel_omniparser_task()
 
         # Leaving the context manager closed the socket, so close_code is set.
         self._raise_if_terminated(connection.close_code)
@@ -367,8 +352,6 @@ class ControllerClient:
             "Connected to project '%s' (id=%s)", ack.project_name, ack.project_id
         )
         self._session_authenticated = True
-        await self._cancel_omniparser_task()
-        self._omniparser_task = asyncio.create_task(self._initialize_omniparser())
 
     async def _send_handshake(self, connection: ClientConnection) -> None:
         system_info = await asyncio.to_thread(gather_system_info)
@@ -526,23 +509,6 @@ class ControllerClient:
         )
         await self._send_message(message)
 
-    async def _send_find_element_result(
-        self, request_id: str, result: FindElementResultPayload
-    ) -> None:
-        await self._send_message(serialize_find_element_result(request_id, result))
-
-    async def _send_omniparser_status(self, payload: OmniParserStatusPayload) -> None:
-        message = serialize_message(
-            MessageType.OMNIPARSER_STATUS,
-            state=payload.state.value,
-            message=payload.message,
-            device=payload.device,
-            weights_dir=payload.weights_dir,
-            phase=payload.phase,
-            load_seconds=payload.load_seconds,
-        )
-        await self._send_message(message)
-
     async def _send_error(
         self, request_id: str, code: ErrorCode, message: str, details: str = ""
     ) -> None:
@@ -554,42 +520,6 @@ class ControllerClient:
             details=details,
         )
         await self._send_message(msg)
-
-    async def _initialize_omniparser(self) -> None:
-        """Preload the OmniParser models and report readiness to the server.
-
-        Runs right after the handshake so cold model loading is never charged
-        to a find_element request timeout, and so the server can tell the user
-        why find_element will fail before it is ever used. On a warm reconnect
-        the models are already loaded and only the current readiness is sent.
-        """
-        readiness = get_omniparser_readiness()
-        if readiness.state is not OmniParserState.READY:
-            await self._send_omniparser_status(readiness.to_status_payload())
-            try:
-                await asyncio.to_thread(load_omniparser_model)
-            except OmniParserError as e:
-                logger.error(
-                    "OmniParser initialization failed (%s): %s", e.details(), e
-                )
-            except Exception:
-                logger.exception("Unexpected OmniParser initialization failure")
-        await self._send_omniparser_status(
-            get_omniparser_readiness().to_status_payload()
-        )
-
-    async def _cancel_omniparser_task(self) -> None:
-        task = self._omniparser_task
-        self._omniparser_task = None
-        if task is None or task.done():
-            return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            logger.exception("OmniParser initialization task failed")
 
     async def _handle_click(self, request_id: str, data: dict[str, object]) -> None:
         payload = parse_click_payload(data)
@@ -649,21 +579,6 @@ class ControllerClient:
             await self._send_screenshot_response(request_id, result)
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.SCREENSHOT_FAILED, str(e))
-
-    async def _handle_find_element(
-        self, request_id: str, data: dict[str, object]
-    ) -> None:
-        payload = parse_find_element_payload(data)
-        try:
-            result = await asyncio.to_thread(execute_find_element, payload)
-            await self._send_find_element_result(request_id, result)
-        except OmniParserError as e:
-            logger.error("find_element failed (%s): %s", e.details(), e)
-            await self._send_error(
-                request_id, ErrorCode(e.code), str(e), details=e.details()
-            )
-        except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.FIND_ELEMENT_FAILED, str(e))
 
     async def _handle_run_command(
         self, request_id: str, data: dict[str, object]

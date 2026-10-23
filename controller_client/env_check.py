@@ -31,8 +31,8 @@ def verify_environment() -> None:
 def verify_screen_capture() -> None:
     """Raise EnvironmentCheckError if this machine will not let us grab the screen.
 
-    Every desktop tool the agent has -- the screenshot tool and the OmniParser
-    element finder alike -- starts by capturing the screen, so a refused
+    Every desktop tool the agent has -- the screenshot tool and the visual
+    engine's element finder alike -- starts by capturing the screen, so a refused
     capture disables all of them at once. Probing here reports it against the
     controller at startup rather than mid-run against whichever tool happened
     to ask first.

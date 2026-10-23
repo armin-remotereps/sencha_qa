@@ -1,4 +1,3 @@
-import dataclasses
 import json
 import uuid
 from dataclasses import dataclass
@@ -11,7 +10,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.5.1"
+CLIENT_VERSION: Final[str] = "0.6.0"
 
 
 class CloseCode(IntEnum):
@@ -67,16 +66,11 @@ class MessageType(StrEnum):
     CLOSE_TAB = "close_tab"
     CHECK_APP_INSTALLED = "check_app_installed"
     CLEANUP_ENVIRONMENT = "cleanup_environment"
-    FIND_ELEMENT = "find_element"
-    FIND_ELEMENT_RESULT = "find_element_result"
-    OMNIPARSER_STATUS = "omniparser_status"
 
 
 class ClientCapability(StrEnum):
-    FIND_ELEMENT_LOCAL_V1 = "find_element_local_v1"
     INTERACTIVE_COMMANDS_V1 = "interactive_commands_v1"
     CLEANUP_ENVIRONMENT_V1 = "cleanup_environment_v1"
-    OMNIPARSER_STATUS_V1 = "omniparser_status_v1"
     # Optional: browser actions carry a ``browser`` field naming the browser to
     # drive. Older controllers ignore the field and always launch Chromium.
     BROWSER_SELECTION_V1 = "browser_selection_v1"
@@ -96,10 +90,8 @@ CLIENT_CAPABILITIES: Final[tuple[ClientCapability, ...]] = tuple(ClientCapabilit
 # capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1) are checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
-        ClientCapability.FIND_ELEMENT_LOCAL_V1,
         ClientCapability.INTERACTIVE_COMMANDS_V1,
         ClientCapability.CLEANUP_ENVIRONMENT_V1,
-        ClientCapability.OMNIPARSER_STATUS_V1,
     }
 )
 
@@ -143,12 +135,6 @@ BROWSER_DISPLAY_NAMES: Final[dict[BrowserName, str]] = {
 DEFAULT_BROWSER: Final[BrowserName] = BrowserName.CHROMIUM
 
 
-class OmniParserState(StrEnum):
-    LOADING = "loading"
-    READY = "ready"
-    FAILED = "failed"
-
-
 class MouseButton(StrEnum):
     LEFT = "left"
     RIGHT = "right"
@@ -166,9 +152,7 @@ class ErrorCode(StrEnum):
     UNKNOWN_COMMAND = "UNKNOWN_COMMAND"
     SCREENSHOT_FAILED = "SCREENSHOT_FAILED"
     TIMEOUT = "TIMEOUT"
-    FIND_ELEMENT_FAILED = "FIND_ELEMENT_FAILED"
     ELEMENT_NOT_FOUND = "ELEMENT_NOT_FOUND"
-    OMNIPARSER_NOT_READY = "OMNIPARSER_NOT_READY"
     INCOMPATIBLE_CLIENT = "INCOMPATIBLE_CLIENT"
     # Sent by the server to an action waiter when the controller socket dropped
     # before the reply arrived.
@@ -214,16 +198,6 @@ class HandshakeAckPayload:
     message: str
     project_id: str
     project_name: str
-
-
-@dataclass(frozen=True)
-class OmniParserStatusPayload:
-    state: OmniParserState
-    message: str
-    device: str
-    weights_dir: str
-    phase: str
-    load_seconds: float
 
 
 @dataclass(frozen=True)
@@ -385,45 +359,11 @@ class CheckAppInstalledPayload:
     app_name: str
 
 
-@dataclass(frozen=True)
-class FindElementPayload:
-    box_threshold: float | None
-    iou_threshold: float | None
-
-
-@dataclass(frozen=True)
-class PixelBBoxPayload:
-    x_min: int
-    y_min: int
-    x_max: int
-    y_max: int
-
-
-@dataclass(frozen=True)
-class PixelElementPayload:
-    index: int
-    type: str
-    content: str
-    bbox: PixelBBoxPayload
-    center_x: int
-    center_y: int
-    interactivity: bool
-
-
-@dataclass(frozen=True)
-class FindElementResultPayload:
-    success: bool
-    annotated_image_base64: str
-    elements: tuple[PixelElementPayload, ...]
-    image_width: int
-    image_height: int
-
-
 def serialize_message(
     message_type: MessageType,
     request_id: str | None = None,
-    # object, not a narrower union: find_element results carry nested
-    # lists of element dicts, which the original union couldn't express.
+    # object, not a narrower union: payloads carry nested lists and dicts
+    # (the handshake's capabilities and system_info, for example).
     **payload: object,
 ) -> str:
     message: dict[str, object] = {
@@ -433,20 +373,6 @@ def serialize_message(
     }
     message.update(payload)
     return json.dumps(message)
-
-
-def serialize_find_element_result(
-    request_id: str, result: FindElementResultPayload
-) -> str:
-    return serialize_message(
-        MessageType.FIND_ELEMENT_RESULT,
-        request_id=request_id,
-        success=result.success,
-        annotated_image_base64=result.annotated_image_base64,
-        elements=[dataclasses.asdict(element) for element in result.elements],
-        image_width=result.image_width,
-        image_height=result.image_height,
-    )
 
 
 def peek_request_id(raw: str) -> str | None:
@@ -528,24 +454,6 @@ def parse_handshake_capabilities(data: dict[str, object]) -> tuple[str, ...]:
     if not isinstance(raw, list) or not all(isinstance(c, str) for c in raw):
         raise ProtocolError("Invalid 'capabilities': expected a list of strings")
     return tuple(raw)
-
-
-def parse_omniparser_status_payload(
-    data: dict[str, object],
-) -> OmniParserStatusPayload:
-    raw_state = _extract_str(data, "state")
-    try:
-        state = OmniParserState(raw_state)
-    except ValueError as e:
-        raise ProtocolError(f"Unknown OmniParser state: {raw_state}") from e
-    return OmniParserStatusPayload(
-        state=state,
-        message=_extract_str(data, "message", default=""),
-        device=_extract_str(data, "device", default=""),
-        weights_dir=_extract_str(data, "weights_dir", default=""),
-        phase=_extract_str(data, "phase", default=""),
-        load_seconds=_extract_number(data, "load_seconds", default=0.0),
-    )
 
 
 def parse_click_payload(data: dict[str, object]) -> ClickPayload:
@@ -668,15 +576,6 @@ def _extract_optional_int(data: dict[str, object], field: str) -> int | None:
     return value
 
 
-def _extract_optional_number(data: dict[str, object], field: str) -> float | None:
-    value = data.get(field)
-    if value is None:
-        return None
-    if not isinstance(value, (int, float)):
-        raise ProtocolError(f"Invalid '{field}': expected number or null")
-    return float(value)
-
-
 def parse_start_interactive_cmd_payload(
     data: dict[str, object],
 ) -> StartInteractiveCmdPayload:
@@ -730,11 +629,4 @@ def parse_check_app_installed_payload(
 ) -> CheckAppInstalledPayload:
     return CheckAppInstalledPayload(
         app_name=_extract_str(data, "app_name"),
-    )
-
-
-def parse_find_element_payload(data: dict[str, object]) -> FindElementPayload:
-    return FindElementPayload(
-        box_threshold=_extract_optional_number(data, "box_threshold"),
-        iou_threshold=_extract_optional_number(data, "iou_threshold"),
     )

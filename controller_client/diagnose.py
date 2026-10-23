@@ -3,13 +3,25 @@ import sys
 
 from controller_client.browser_diagnostics import build_browser_steps
 from controller_client.config import setup_logging
-from controller_client.omniparser_diagnostics import (
-    build_default_steps,
-    run_diagnostics,
-)
+from controller_client.diagnostics import DiagnosticStep, run_diagnostics
 from controller_client.protocol import BrowserName
+from controller_client.screen_capture import describe_screen_capture_failure
 
 _ALL_BROWSERS = "all"
+
+_SCREEN_CAPTURE_HINT = (
+    "The Test Runner must run inside an interactive desktop session that may "
+    "capture the screen: on macOS grant Screen Recording to the terminal, on "
+    "Linux make sure DISPLAY points at the desktop, on Windows run it from a "
+    "logged-in desktop session rather than a service."
+)
+
+
+def _check_screen_capture() -> str:
+    failure = describe_screen_capture_failure()
+    if failure is not None:
+        raise RuntimeError(f"{failure}. {_SCREEN_CAPTURE_HINT}")
+    return "the screen can be captured"
 
 
 def _parse_browsers(value: str) -> tuple[BrowserName, ...]:
@@ -42,15 +54,9 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m controller_client.diagnose",
         description=(
-            "Check the OmniParser setup step by step: dependencies, weights, "
-            "screenshot capture, device, model load and one inference. With "
-            "--browsers, check the browsers instead."
+            "Check that this machine lets the Test Runner capture the screen. "
+            "With --browsers, check the browsers instead."
         ),
-    )
-    parser.add_argument(
-        "--skip-inference",
-        action="store_true",
-        help="stop after loading the models instead of also parsing a screenshot",
     )
     parser.add_argument(
         "--browsers",
@@ -73,12 +79,12 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     passed = run_diagnostics(
-        build_default_steps(skip_inference=args.skip_inference), print
+        (DiagnosticStep("screen capture", _check_screen_capture),), print
     )
     if passed:
-        print("All OmniParser diagnostics passed.")
+        print("All diagnostics passed.")
         return
-    print("Diagnostics stopped at the first failure; fix it and re-run.")
+    print("Diagnostics failed; fix the problem above and re-run.")
     sys.exit(1)
 
 

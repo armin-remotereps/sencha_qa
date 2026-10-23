@@ -58,7 +58,7 @@ esac
 
 # Install system dependencies (Linux only)
 if [[ "$(uname -s)" == "Linux" ]]; then
-    echo "[1/9] Installing system dependencies..."
+    echo "[1/6] Installing system dependencies..."
     if command -v apt-get &> /dev/null; then
         if ! command -v gnome-screenshot &> /dev/null; then
             echo "  Installing gnome-screenshot (required by PyAutoGUI)..."
@@ -70,76 +70,44 @@ if [[ "$(uname -s)" == "Linux" ]]; then
         echo "  WARNING: Non-apt system detected. Please install gnome-screenshot manually."
     fi
 else
-    echo "[1/9] System dependencies check skipped (not Linux)."
+    echo "[1/6] System dependencies check skipped (not Linux)."
 fi
 
 # Create virtual environment
 if [ ! -d "$PROJECT_DIR/.venv" ]; then
-    echo "[2/9] Creating Python virtual environment..."
+    echo "[2/6] Creating Python virtual environment..."
     "$PYTHON_BIN" -m venv "$PROJECT_DIR/.venv"
 else
-    echo "[2/9] Virtual environment already exists, skipping..."
+    echo "[2/6] Virtual environment already exists, skipping..."
 fi
 
 "$PROJECT_DIR/.venv/bin/pip" install --quiet --upgrade pip
 
-# Install torch/torchvision with a platform-appropriate build: CUDA wheel on
-# Linux/Windows with an NVIDIA GPU detected, CPU-only wheel otherwise (macOS
-# wheels already include MPS support with no separate index needed).
-echo "[3/9] Installing torch (platform-appropriate build)..."
-if [[ "$(uname -s)" == "Darwin" ]]; then
-    echo "  macOS detected, installing standard torch build (includes MPS support)."
-    "$PROJECT_DIR/.venv/bin/pip" install --quiet "torch~=2.10.0" "torchvision~=0.25.0"
-elif command -v nvidia-smi &> /dev/null; then
-    echo "  NVIDIA GPU detected, installing CUDA-enabled torch."
-    "$PROJECT_DIR/.venv/bin/pip" install --quiet "torch~=2.10.0" "torchvision~=0.25.0"
-else
-    echo "  No NVIDIA GPU detected, installing CPU-only torch."
-    "$PROJECT_DIR/.venv/bin/pip" install --quiet --index-url https://download.pytorch.org/whl/cpu "torch~=2.10.0" "torchvision~=0.25.0"
-fi
-
-# Install remaining dependencies
-echo "[4/9] Installing remaining dependencies..."
+# Install dependencies
+echo "[3/6] Installing dependencies..."
 "$PROJECT_DIR/.venv/bin/pip" install --quiet -r "$PROJECT_DIR/requirements.txt"
 
 # Install Playwright browsers. The default set covers Chromium, Firefox and
 # WebKit; Google Chrome and Microsoft Edge are used from their normal system
 # install, so install those the usual way if test cases need them.
-echo "[5/9] Installing Playwright browsers..."
+echo "[4/6] Installing Playwright browsers..."
 "$PROJECT_DIR/.venv/bin/playwright" install --with-deps
-
-# Download OmniParser model weights (huggingface_hub[cli] comes from
-# requirements.txt above, resolved together with transformers instead of a
-# separate late pip install that could drag it past transformers' <1.0 ceiling)
-echo "[6/9] Downloading OmniParser model weights (this may take a while, ~1.5GB)..."
-"$SCRIPT_DIR/download_omniparser_weights.sh" "$PROJECT_DIR/omniparser/weights"
-
-# Pre-warm the OCR engines' own model downloads (EasyOCR/PaddleOCR construct
-# their models at import time, independent of the OmniParser weights above).
-# Without this, that download happens silently on the first real
-# find_element call, on top of the OmniParser model load, risking a timeout.
-echo "[7/9] Pre-warming OCR engines (downloads their own models on first use)..."
-"$PROJECT_DIR/.venv/bin/python" -c "
-import sys
-sys.path.insert(0, '$PROJECT_DIR/omniparser')
-import util.utils
-"
 
 # Copy example.env to .env if not exists
 if [ ! -f "$PROJECT_DIR/.env" ]; then
-    echo "[8/9] Creating .env from example.env..."
+    echo "[5/6] Creating .env from example.env..."
     cp "$PROJECT_DIR/example.env" "$PROJECT_DIR/.env"
     echo ""
     echo "IMPORTANT: Edit .env and set your CONTROLLER_API_KEY"
 else
-    echo "[8/9] .env already exists, skipping..."
+    echo "[5/6] .env already exists, skipping..."
 fi
 
 # Verify the environment isn't left in the corrupted-certifi state that has
 # broken click/screenshot tooling on client machines (partial overwrite
 # across the separate pip install passes above). Self-heal automatically if
 # it is, since fixing it here is far cheaper than debugging it mid test run.
-echo "[9/9] Verifying environment..."
+echo "[6/6] Verifying environment..."
 if ! "$PROJECT_DIR/.venv/bin/python" -c "import certifi; certifi.where()" &> /dev/null; then
     echo "  certifi looks corrupted, reinstalling..."
     "$PROJECT_DIR/.venv/bin/pip" install --quiet --force-reinstall --no-cache-dir certifi requests urllib3
@@ -156,7 +124,7 @@ echo "To start the controller client:"
 echo "  cd $ROOT_DIR"
 echo "  controller_client/.venv/bin/python -m controller_client.main"
 echo ""
-echo "To check the OmniParser setup end to end (dependencies, weights, screenshot, model load, one inference):"
+echo "To check that the Test Runner can capture the screen:"
 echo "  controller_client/.venv/bin/python -m controller_client.diagnose"
 echo ""
 echo "Chromium, Firefox and WebKit are installed. For Google Chrome or Microsoft Edge, install them normally."

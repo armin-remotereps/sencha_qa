@@ -3,7 +3,7 @@ from collections.abc import Callable, Sequence
 from playwright.sync_api import sync_playwright
 
 from controller_client.browser_executor import launch_browser
-from controller_client.omniparser_diagnostics import DiagnosticStep
+from controller_client.diagnostics import DiagnosticStep
 from controller_client.protocol import BROWSER_DISPLAY_NAMES, BrowserName
 
 
