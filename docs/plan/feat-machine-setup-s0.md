@@ -532,3 +532,4 @@ Resolved on 2026-10-23. The user accepted every assumption for Q1–Q8, Q10 and 
     - Setup screenshots are served from MEDIA without auth, the same as run screenshots (existing pattern). Noted in the change note.
     - `start_test_run` keeps raising `ValueError`, matching its other refusals. The text is now one shared constant.
     - `sub_agent_prompts._build_project_context` keeps its own wording, because it is out of scope.
+- 2026-10-23: review pass 2: the assistant message is also persisted before its tools run, so a killed worker leaves calls the next turn closes (the chat and the model's history stay in sync); stopping a running turn re-reads its status before broadcasting.

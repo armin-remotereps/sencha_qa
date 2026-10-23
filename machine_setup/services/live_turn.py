@@ -97,6 +97,8 @@ def mark_stop_requested(
         return False
     turn.stop_requested = True
     turn.stop_requested_by = user
+    # The worker may have claimed it since it was read; broadcast its status.
+    turn.refresh_from_db(fields=["status", "started_at"])
     transaction.on_commit(lambda: broadcast_turn(turn.project_id, turn_payload(turn)))
     return True
 

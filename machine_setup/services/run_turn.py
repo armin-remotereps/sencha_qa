@@ -224,10 +224,11 @@ class _TurnRunner:
         elif message.role == "tool" and message.tool_call_id is not None:
             self.pending_call_ids.discard(message.tool_call_id)
             self._record_tool_result(message.tool_call_id, message)
-        # Persist only complete rounds: rewriting the whole transcript after
-        # every tool result is quadratic in bytes. A round cut short is closed
-        # (and saved) by _finish, or by the next turn's close_dangling_tool_calls.
-        if not self.pending_call_ids:
+        # Two writes per round: the assistant message (so a killed worker
+        # leaves calls the next turn's close_dangling_tool_calls can answer,
+        # matching the rows the user saw) and the round's last result.
+        # Rewriting after every tool result would be quadratic in bytes.
+        if message.role == "assistant" or not self.pending_call_ids:
             self._persist_transcript(self.transcript)
 
     def _record_assistant(self, message: ChatMessage) -> None:
