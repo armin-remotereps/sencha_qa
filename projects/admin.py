@@ -5,6 +5,7 @@ from django.db.models import QuerySet
 from django.http import HttpRequest
 
 from projects.models import (
+    ApplicationContextVersion,
     Project,
     Tag,
     TestCase,
@@ -164,3 +165,34 @@ class TestRunScreenshotAdmin(admin.ModelAdmin[TestRunScreenshot]):
     list_display = ("id", "test_run_test_case", "tool_name", "created_at")
     list_filter = ("tool_name",)
     readonly_fields = ("image", "tool_name", "created_at")
+
+
+@admin.register(ApplicationContextVersion)
+class ApplicationContextVersionAdmin(admin.ModelAdmin[ApplicationContextVersion]):
+    """Read-only: versions are written by the context service, restored in the app."""
+
+    list_display = (
+        "id",
+        "project",
+        "revision",
+        "written_by_source",
+        "written_by",
+        "written_at",
+        "replaced_at",
+    )
+    list_filter = ("written_by_source", "project")
+    list_select_related = ("project", "written_by")
+    search_fields = ("text", "change_summary")
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return False
+
+    def has_change_permission(
+        self, request: HttpRequest, obj: ApplicationContextVersion | None = None
+    ) -> bool:
+        return False
+
+    def has_delete_permission(
+        self, request: HttpRequest, obj: ApplicationContextVersion | None = None
+    ) -> bool:
+        return False

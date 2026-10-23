@@ -75,6 +75,11 @@ urlpatterns: list[URLPattern] = [
         name="application_context",
     ),
     path(
+        "<int:project_id>/application-context/versions/<int:version_id>/restore/",
+        views.application_context_restore,
+        name="application_context_restore",
+    ),
+    path(
         "<int:project_id>/regenerate-api-key/",
         views.project_regenerate_api_key,
         name="regenerate_api_key",

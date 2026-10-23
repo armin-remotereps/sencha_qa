@@ -20,21 +20,30 @@ from django.views.decorators.http import require_GET, require_POST
 
 from accounts.models import CustomUser
 from accounts.types import AuthenticatedRequest
+from projects.application_context_services import (
+    get_context_provenance,
+    list_context_versions,
+    restore_context_version,
+)
 from projects.case_checkpoint_services import list_resume_steps
 from projects.case_step_progress import pivot_step_payload
 from projects.decorators import project_membership_required
-from projects.exceptions import RunCaseCheckError, RunResumeError
+from projects.exceptions import (
+    ApplicationContextVersionNotFoundError,
+    RunCaseCheckError,
+    RunResumeError,
+)
 from projects.forms import (
-    PROJECT_PROMPT_MAX_LENGTH,
     ApplicationContextForm,
     CaseResumeForm,
+    ContextRestoreForm,
     ProjectForm,
     RunCaseSelectionForm,
     TestCaseForm,
     TestRunCreateForm,
     form_error_text,
 )
-from projects.models import Project, TestRun, TestRunStatus
+from projects.models import PROJECT_PROMPT_MAX_LENGTH, Project, TestRun, TestRunStatus
 from projects.run_case_check_services import (
     check_run_cases,
     format_check_message,
@@ -160,6 +169,17 @@ def _get_elided_page_range(page_obj: Page[Any]) -> list[int | str]:
 def _parse_test_case_ids(request: HttpRequest) -> list[int]:
     raw_ids = request.POST.getlist("test_case_ids")
     return [int(x) for x in raw_ids if x.isdigit()]
+
+
+def _safe_next_url(request: HttpRequest, next_url: str, default_url: str) -> str:
+    """Return `next_url` when it stays on this host, else `default_url`."""
+    if next_url and url_has_allowed_host_and_scheme(
+        next_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return next_url
+    return default_url
 
 
 def _next_or_default(request: HttpRequest, default_url: str) -> str:
@@ -352,6 +372,7 @@ def project_overview(request: HttpRequest, project: Project) -> HttpResponse:
         {
             "project": project,
             "overview": overview,
+            "context_source": get_context_provenance(project),
             "active_tab": "overview",
             "active_nav": "projects",
         },
@@ -382,10 +403,11 @@ def _application_context_initial(project: Project) -> dict[str, str]:
 
 
 def _save_application_context_from_form(
-    project: Project, form: ApplicationContextForm
+    project: Project, form: ApplicationContextForm, author: CustomUser
 ) -> None:
     save_application_context(
         project=project,
+        author=author,
         application_url=form.cleaned_data["application_url"],
         application_platform=form.cleaned_data["application_platform"],
         project_prompt=form.cleaned_data["project_prompt"],
@@ -402,6 +424,8 @@ def _render_application_context_page(
             "project": project,
             "form": form,
             "prompt_max_length": PROJECT_PROMPT_MAX_LENGTH,
+            "context_versions": list_context_versions(project),
+            "context_source": get_context_provenance(project),
             "active_tab": "overview",
             "active_nav": "projects",
         },
@@ -409,7 +433,9 @@ def _render_application_context_page(
 
 
 @project_membership_required
-def project_application_context(request: HttpRequest, project: Project) -> HttpResponse:
+def project_application_context(
+    request: AuthenticatedRequest, project: Project
+) -> HttpResponse:
     """Standalone application-context edit page, linked from the overview."""
     if request.method == "GET":
         form = ApplicationContextForm(initial=_application_context_initial(project))
@@ -419,9 +445,32 @@ def project_application_context(request: HttpRequest, project: Project) -> HttpR
     if not form.is_valid():
         return _render_application_context_page(request, project, form)
 
-    _save_application_context_from_form(project, form)
+    _save_application_context_from_form(project, form, request.user)
     messages.success(request, "Application context saved.")
     return redirect("projects:detail", project_id=project.id)
+
+
+@project_membership_required
+@require_POST
+def application_context_restore(
+    request: AuthenticatedRequest, project: Project, version_id: int
+) -> HttpResponse:
+    """Write an earlier application context version back as a new revision."""
+    form = ContextRestoreForm(request.POST)
+    next_url = form.cleaned_data["next"] if form.is_valid() else ""
+    target_url = _safe_next_url(
+        request,
+        next_url,
+        reverse("projects:application_context", args=[project.id]),
+    )
+    try:
+        revision = restore_context_version(
+            project=project, version_id=version_id, user=request.user
+        )
+    except ApplicationContextVersionNotFoundError:
+        raise Http404
+    messages.success(request, f"Restored as revision {revision}.")
+    return redirect(target_url)
 
 
 def _render_wizard_context(
@@ -442,7 +491,7 @@ def _render_wizard_context(
 
 
 @project_membership_required
-def setup_context(request: HttpRequest, project: Project) -> HttpResponse:
+def setup_context(request: AuthenticatedRequest, project: Project) -> HttpResponse:
     """Wizard step 2: application context."""
     if request.method == "GET":
         form = ApplicationContextForm(initial=_application_context_initial(project))
@@ -452,7 +501,7 @@ def setup_context(request: HttpRequest, project: Project) -> HttpResponse:
     if not form.is_valid():
         return _render_wizard_context(request, project, form)
 
-    _save_application_context_from_form(project, form)
+    _save_application_context_from_form(project, form, request.user)
     return redirect("projects:setup_cases", project_id=project.id)
 
 
@@ -1195,9 +1244,11 @@ def setup_run(request: HttpRequest, project: Project) -> HttpResponse:
 
 @project_membership_required
 @require_POST
-def project_save_prompt(request: HttpRequest, project: Project) -> HttpResponse:
+def project_save_prompt(
+    request: AuthenticatedRequest, project: Project
+) -> HttpResponse:
     prompt = request.POST.get("project_prompt", "")[:PROJECT_PROMPT_MAX_LENGTH]
-    save_project_prompt(project=project, prompt=prompt)
+    save_project_prompt(project=project, prompt=prompt, author=request.user)
     messages.success(request, "Project prompt saved.")
     return redirect("projects:detail", project_id=project.id)
 

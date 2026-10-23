@@ -8,6 +8,10 @@ urlpatterns: list[URLResolver | URLPattern] = [
     path("accounts/", include("accounts.urls")),
     path("", include("dashboard.urls")),
     path("projects/", include("projects.urls")),
+    path(
+        "projects/<int:project_id>/machine-setup/",
+        include("machine_setup.urls"),
+    ),
     path("admin/", admin.site.urls),
 ]
 
