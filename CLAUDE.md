@@ -43,7 +43,7 @@ until clean -> document in `docs/changed/`.
 - Custom user model (`accounts`); keep it extensible.
 - All imports at module top level; no lazy imports. Full type annotations
   everywhere; mypy runs in strict mode for the server and, with its own config,
-  for `controller_client/`. No skipping types.
+  for `controller_client/` and `vision_worker/`. No skipping types.
 - Settings: every env var is read in `settings.py` via `python-decouple` (never
   import `decouple` elsewhere, never read `os.environ` in app code). All service
   configs (db, redis, LLM, ...) come from `.env`; keep `example.env` up to date.
@@ -59,7 +59,7 @@ until clean -> document in `docs/changed/`.
 ```bash
 # Dev server (ASGI via Daphne, required for WebSockets). Daphne caps incoming
 # WebSocket messages at 1 MiB by default and closes the socket (code 1009) on
-# anything bigger; controller screenshots / OmniParser results are several MiB,
+# anything bigger; controller screenshots / vision worker parse results are several MiB,
 # so always pass the two size flags (docker-compose.yml already does). Plain
 # `runserver` cannot raise that limit — use it only when no controller connects.
 python -m daphne -b 0.0.0.0 -p 8000 --websocket-max-message-size 33554432 --websocket-max-frame-size 33554432 auto_tester.asgi:application
@@ -71,8 +71,9 @@ celery -A auto_tester worker -Q execution -l info -n execution@%h
 celery -A auto_tester beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
 
 # Type checking (strict mode)
-mypy .                                  # runs with strict=True, excludes venv|migrations|controller_client
+mypy .                                  # runs with strict=True, excludes venv|migrations|controller_client|vision_worker
 controller_client/.venv/bin/mypy --config-file controller_client/setup.cfg controller_client/  # separate venv/config
+vision_worker/.venv/bin/mypy --config-file vision_worker/setup.cfg vision_worker/              # separate venv/config
 
 # Infrastructure
 docker compose up db redis searxng -d   # minimal local services
@@ -81,8 +82,12 @@ scripts/verify_server_image.sh          # build the server image and assert it c
 
 # Controller client diagnostics (run on the controller machine, inside its venv,
 # from the directory that contains controller_client/)
-python -m controller_client.diagnose    # imports, weights, screenshot, device, model load, one inference, payload size
+python -m controller_client.diagnose    # screen capture
 python -m controller_client.diagnose --browsers   # launch each browser (or --browsers firefox,msedge) and report what is missing
+
+# Vision worker (on the GPU machine, inside vision_worker/.venv, from the repo root; see vision_worker/README.md)
+python -m vision_worker                 # connect to VISION_SERVER_URL and serve parse requests
+python -m vision_worker.diagnose        # imports, weights, device, model load, one inference, result size
 
 # Formatting and typing — same checks pre-commit runs
 pre-commit run --all-files
@@ -99,7 +104,12 @@ pip install -r requirements.txt
 
 ### controller_client
 
-- **controller_client/** — Standalone Python client that runs on target machines. Connects to the server via WebSocket, receives action commands (click, type, screenshot, browser actions), and replies with results. Also runs OmniParser locally in-process (own venv/dependencies, own strict mypy config) to parse screenshots for element-finding — no central OmniParser service exists; the server dispatches a `find_element` action to the controller over the same WebSocket connection. The handshake carries `client_version` + a typed capability list (`controller_client/protocol.py`: `CLIENT_VERSION`, `ClientCapability`, `REQUIRED_CLIENT_CAPABILITIES`); the server rejects controllers missing a required capability before marking the project connected. After the handshake the controller preloads OmniParser in the background and reports `omniparser_status` (loading/ready/failed) which the server stores on `Project.agent_omniparser_status` and gates test-run execution on. The tracked `controller_client/` source must stay inside the server Docker image (shared protocol import + ZIP download); only its venv/weights are `.dockerignore`d. On Windows, input actions (click/hover/drag/type/key) first run `controller_client/input_guard.py`: UIPI makes Windows silently drop injected input while an elevated window (Task Manager, installers, anything past a UAC prompt) is in the foreground, and pyautogui never notices — the guard raises `InputBlockedError` instead so the agent sees a failure rather than a phantom "Clicked". Run the controller as Administrator when tests need to drive elevated apps. Optional capabilities (checked where used, not at handshake): `BROWSER_SELECTION_V1`, `DOUBLE_CLICK_V1` (`double_click`, `browser_double_click`; a case needing it on an older runner is Blocked `runner_outdated`) and `CLOSE_APP_V1` (`close_app`, `close_tab`, in `controller_client/app_closer*.py` + `app_close_policy.py`). `close_app`/`close_tab` fail closed: they never close the runner's own process, its terminal (ancestor or any known terminal host) or the OS shell, and `close_tab` refuses unless it can prove the front tab is not the runner's
+- **controller_client/** — Standalone Python client that runs on target machines. Connects to the server via WebSocket, receives action commands (click, type, screenshot, browser actions), and replies with results. Own venv/dependencies and own strict mypy config; it no longer runs OmniParser (see vision_worker below). The handshake carries `client_version` + a typed capability list (`controller_client/protocol.py`: `CLIENT_VERSION`, `ClientCapability`, `REQUIRED_CLIENT_CAPABILITIES`); the server rejects controllers missing a required capability before marking the project connected. The tracked `controller_client/` source must stay inside the server Docker image (shared protocol import + ZIP download); only its venv is `.dockerignore`d. On Windows, input actions (click/hover/drag/type/key) first run `controller_client/input_guard.py`: UIPI makes Windows silently drop injected input while an elevated window (Task Manager, installers, anything past a UAC prompt) is in the foreground, and pyautogui never notices — the guard raises `InputBlockedError` instead so the agent sees a failure rather than a phantom "Clicked". Run the controller as Administrator when tests need to drive elevated apps. Optional capabilities (checked where used, not at handshake): `BROWSER_SELECTION_V1`, `DOUBLE_CLICK_V1` (`double_click`, `browser_double_click`; a case needing it on an older runner is Blocked `runner_outdated`) and `CLOSE_APP_V1` (`close_app`, `close_tab`, in `controller_client/app_closer*.py` + `app_close_policy.py`). `close_app`/`close_tab` fail closed: they never close the runner's own process, its terminal (ancestor or any known terminal host) or the OS shell, and `close_tab` refuses unless it can prove the front tab is not the runner's
+
+### vision_worker and visual_engine
+
+- **vision_worker/** — Standalone GPU client running OmniParser (vendored in `vision_worker/omniparser/`, weights `.gitignore`d), own venv/requirements/strict mypy config. Runs with `python -m vision_worker` or the CUDA Docker image (`vision_worker/Dockerfile`, one compose service per GPU). Connects out over wss to `ws/vision-worker/` with the shared `VISION_WORKER_TOKEN`, preloads the model, reports `status` (loading/ready/failed; also a 30 s heartbeat) and answers `parse_request` with elements + an annotated image; it answers `BUSY` beyond 1 running + `VISION_MAX_QUEUE` queued. Wire protocol in `vision_worker/protocol.py` (stdlib only; the server imports it, so the source stays in the server image).
+- **visual_engine** (Django app) — global, not per project. `VisionWorker` rows (one per worker name; newest connection wins, stale after `VISION_WORKER_STALE_SECONDS` without a heartbeat), `VisionWorkerConsumer`, and services: `parse_screenshot` rotates over ready workers round robin with a Redis counter (shared by all Celery processes), skips busy ones and retries disconnects within `VISION_PARSE_BUDGET_SECONDS`. `projects.services.controller_find_elements` = runner `controller_screenshot` + `parse_screenshot`. Run/resume/re-run/machine-setup gating and the machine badge need at least one ready worker (`MachineState.VISUAL_ENGINE_OFFLINE` when none is connected).
 
 ### Key Patterns
 
