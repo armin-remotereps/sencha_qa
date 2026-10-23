@@ -6,7 +6,9 @@ a large suite cannot flood the model's context; pages continue via ``offset``.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from django.contrib.postgres.aggregates import ArrayAgg
 from django.db.models import Count, Q
@@ -21,6 +23,11 @@ PRECONDITION_CASE_IDS_SHOWN = 5
 SEARCH_PAGE_SIZE = 50
 SEARCH_PRECONDITION_PREVIEW = 200
 CASE_FIELD_LIMIT = 4000
+MAX_CASES_PER_BATCH = 20
+# About 6k tokens; one case is at most ~12.2k characters, so the first always fits.
+CASES_BATCH_CHAR_BUDGET = 24000
+_CASE_COLUMNS = ("id", "testrail_id", "title", "preconditions", "steps", "expected")
+_CASE_SEPARATOR = "\n\n---\n\n"
 
 
 @dataclass(frozen=True)
@@ -30,6 +37,16 @@ class CatalogPage:
     text: str
     total: int
     next_offset: int | None
+
+
+@dataclass(frozen=True)
+class CasesBatch:
+    """Several cases in full; ids not in the project or over the budget are listed."""
+
+    text: str
+    found: tuple[int, ...]
+    missing: tuple[int, ...]
+    deferred: tuple[int, ...]
 
 
 def list_case_preconditions(project_id: int, offset: int) -> CatalogPage:
@@ -122,11 +139,72 @@ def get_case(project_id: int, case_id: int) -> str | None:
     """One case in full (each field capped), or None if not in this project."""
     row = (
         TestCase.objects.filter(project_id=project_id, pk=case_id)
-        .values("id", "testrail_id", "title", "preconditions", "steps", "expected")
+        .values(*_CASE_COLUMNS)
         .first()
     )
     if row is None:
         return None
+    return _render_case(row)
+
+
+def get_cases(project_id: int, case_ids: Sequence[int]) -> CasesBatch:
+    """Up to ``MAX_CASES_PER_BATCH`` cases in full, in the requested order.
+
+    One query. The first found case is always included so a call makes
+    progress; later cases are added while the text fits
+    ``CASES_BATCH_CHAR_BUDGET`` and the rest are reported as deferred.
+    """
+    requested = list(dict.fromkeys(case_ids))[:MAX_CASES_PER_BATCH]
+    rows = {
+        row["id"]: row
+        for row in TestCase.objects.filter(
+            project_id=project_id, pk__in=requested
+        ).values(*_CASE_COLUMNS)
+    }
+    missing = tuple(case_id for case_id in requested if case_id not in rows)
+    rendered: list[str] = []
+    found: list[int] = []
+    deferred: list[int] = []
+    used = 0
+    for case_id in requested:
+        row = rows.get(case_id)
+        if row is None:
+            continue
+        if deferred:
+            deferred.append(case_id)
+            continue
+        case_text = _render_case(row)
+        cost = len(case_text) + (len(_CASE_SEPARATOR) if rendered else 0)
+        if rendered and used + cost > CASES_BATCH_CHAR_BUDGET:
+            deferred.append(case_id)
+            continue
+        rendered.append(case_text)
+        found.append(case_id)
+        used += cost
+    notes: list[str] = []
+    if missing:
+        notes.append(
+            "Not found in this project: " + ", ".join(str(i) for i in missing) + "."
+        )
+    if deferred:
+        notes.append(
+            "Not included (size limit), call get_test_cases again with: "
+            + ", ".join(str(i) for i in deferred)
+            + "."
+        )
+    parts = [_CASE_SEPARATOR.join(rendered)] if rendered else []
+    if notes:
+        parts.append("\n".join(notes))
+    return CasesBatch(
+        text="\n\n".join(parts),
+        found=tuple(found),
+        missing=missing,
+        deferred=tuple(deferred),
+    )
+
+
+# A ``.values(*_CASE_COLUMNS)`` row; django-stubs types those as dict[str, Any].
+def _render_case(row: Mapping[str, Any]) -> str:
     sections = [_case_heading(row["id"], row["testrail_id"], row["title"])]
     for label, value in (
         ("Preconditions", row["preconditions"]),
