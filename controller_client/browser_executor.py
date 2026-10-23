@@ -1,17 +1,22 @@
 import base64
 import logging
 import re
-import threading
 import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NoReturn
 from urllib.parse import urlparse
 
 from playwright.sync_api import (
     Browser,
     BrowserContext,
     Download,
+)
+from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import (
     Frame,
     Locator,
     Page,
@@ -83,7 +88,7 @@ def _detect_login_page(page: Page) -> str | None:
     return None
 
 
-def _handle_download_timeout(page: Page) -> None:
+def _handle_download_timeout(page: Page) -> NoReturn:
     login_url = _detect_login_page(page)
     if login_url is not None:
         raise ExecutionError(
@@ -156,6 +161,12 @@ _COLLECT_ELEMENTS_JS = """
 
 
 _LIST_DOWNLOADS_WAIT_S: float = 300.0
+# Server waits 120 s for browser_download; the whole action, browser launch
+# included, must finish inside this budget.
+_EXPLICIT_DOWNLOAD_BUDGET_S: float = 110.0
+# Each poll runs the Playwright event loop, which is what lets the download
+# handlers finish their saves; sleeping instead would stall them.
+_DOWNLOAD_POLL_MS: float = 250.0
 
 # Playwright 1.50 launch errors that mean the browser is simply not on this
 # machine: a bundled engine never downloaded ("Executable doesn't exist at"),
@@ -237,7 +248,14 @@ class DownloadRecord:
     started_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat()
     )
-    completed_event: threading.Event = field(default_factory=threading.Event)
+
+
+@dataclass
+class _ExplicitDownload:
+    """The download browser_download is waiting for, claimed by _on_download."""
+
+    save_path: str | None
+    record: DownloadRecord | None = None
 
 
 class BrowserSession:
@@ -249,7 +267,7 @@ class BrowserSession:
         self._browser_name: BrowserName | None = None
         self._element_frames: dict[int, Frame] = {}
         self._downloads: list[DownloadRecord] = []
-        self._downloads_lock: threading.Lock = threading.Lock()
+        self._explicit_download: _ExplicitDownload | None = None
 
     def ensure_page(self, browser: BrowserName) -> Page:
         if self._browser_name is not None and self._browser_name is not browser:
@@ -320,44 +338,89 @@ class BrowserSession:
         self._element_frames = {}
 
     def clear_downloads(self) -> None:
-        with self._downloads_lock:
-            self._downloads.clear()
+        self._downloads.clear()
 
     def snapshot_downloads(self) -> list[DownloadRecord]:
-        with self._downloads_lock:
-            return list(self._downloads)
+        return list(self._downloads)
+
+    @contextmanager
+    def explicit_download(self, save_path: str | None) -> Iterator[_ExplicitDownload]:
+        """Have _on_download save the next download to save_path."""
+        claim = _ExplicitDownload(save_path=save_path)
+        self._explicit_download = claim
+        try:
+            yield claim
+        finally:
+            self._explicit_download = None
+
+    def wait_for_downloads(
+        self, timeout_s: float, records: list[DownloadRecord] | None = None
+    ) -> None:
+        """Drive the event loop until no download (of records, else all) is in
+        progress or time runs out."""
+        watched = self._downloads if records is None else records
+        self._drive_until(
+            lambda: all(r.status != "in_progress" for r in watched), timeout_s
+        )
+
+    def wait_for_claim(self, claim: _ExplicitDownload, timeout_s: float) -> None:
+        """Drive the event loop until _on_download claims a download."""
+        self._drive_until(lambda: claim.record is not None, timeout_s)
+
+    def _drive_until(self, done: Callable[[], bool], timeout_s: float) -> None:
+        deadline = time.monotonic() + timeout_s
+        while not done():
+            remaining_ms = (deadline - time.monotonic()) * 1000
+            if remaining_ms <= 0:
+                return
+            page = self._any_open_page()
+            if page is None:
+                # A closed context fails or abandons every pending save.
+                return
+            try:
+                page.wait_for_timeout(min(_DOWNLOAD_POLL_MS, remaining_ms))
+            except PlaywrightError:
+                # The page closed mid-wait; report what we have.
+                return
+
+    def _any_open_page(self) -> Page | None:
+        if self._page is not None and not self._page.is_closed():
+            return self._page
+        if self._context is None:
+            return None
+        for page in self._context.pages:
+            if not page.is_closed():
+                return page
+        return None
 
     def _on_download(self, download: Download) -> None:
+        # In the sync API each protocol event is dispatched in its own greenlet on
+        # the Playwright thread, so the blocking save_as below is supported: it
+        # parks that greenlet and progresses while another Playwright call drives
+        # the event loop. Later "download" listeners wait until it returns. It
+        # must never move to another thread: the sync API is bound to this one.
         record = DownloadRecord(
             filename=download.suggested_filename,
             path="",
             status="in_progress",
         )
-        with self._downloads_lock:
-            self._downloads.append(record)
-        thread = threading.Thread(
-            target=self._save_download,
-            args=(download, record),
-            daemon=True,
-        )
-        thread.start()
-
-    def _save_download(self, download: Download, record: DownloadRecord) -> None:
+        self._downloads.append(record)
         save_path = Path.home() / "Downloads" / record.filename
+        claim = self._explicit_download
+        if claim is not None and claim.record is None:
+            claim.record = record
+            if claim.save_path:
+                save_path = Path(claim.save_path)
         try:
             save_path.parent.mkdir(parents=True, exist_ok=True)
             download.save_as(str(save_path))
-            file_size = save_path.stat().st_size
-            with self._downloads_lock:
-                record.path = str(save_path)
-                record.size = file_size
-                record.status = "completed"
+            record.size = save_path.stat().st_size
+            record.path = str(save_path)
+            record.status = "completed"
         except Exception as e:
-            with self._downloads_lock:
-                record.status = "failed"
-                record.error = str(e)
+            record.status = "failed"
+            record.error = str(e)
             logger.warning("Download save failed for %s: %s", record.filename, e)
-        record.completed_event.set()
 
 
 def execute_browser_navigate(
@@ -655,26 +718,44 @@ def execute_browser_download(
         raise
     except Exception as e:
         raise ExecutionError(f"Browser download failed: {e}") from e
+    # _on_download saves the file in its own greenlet; this only waits for it,
+    # bounded, so a stalled download cannot wedge the Playwright thread. No
+    # expect_download: its listener runs after _on_download in the same
+    # greenlet, so it would only fire once the save had finished.
     try:
-        with page.expect_download(timeout=_DOWNLOAD_TIMEOUT_MS) as download_info:
-            page.goto(payload.url)
-        download = download_info.value
-        save_path = payload.save_path or str(
-            Path.home() / "Downloads" / download.suggested_filename
-        )
-        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-        download.save_as(save_path)
-        file_size = Path(save_path).stat().st_size
-    except PlaywrightTimeoutError:
-        _handle_download_timeout(page)
+        goto_error: PlaywrightError | None = None
+        with session.explicit_download(payload.save_path) as claim:
+            try:
+                page.goto(payload.url)
+            except PlaywrightError as e:
+                # A URL that downloads aborts the navigation even though the
+                # download starts; only fatal if no download is captured.
+                goto_error = e
+            session.wait_for_claim(claim, _DOWNLOAD_TIMEOUT_MS / 1000)
+        record = claim.record
+        if record is None:
+            if goto_error is not None:
+                raise ExecutionError(
+                    f"Browser download failed: {goto_error}"
+                ) from goto_error
+            _handle_download_timeout(page)
+        remaining_s = _EXPLICIT_DOWNLOAD_BUDGET_S - (time.monotonic() - start)
+        session.wait_for_downloads(max(0.0, remaining_s), [record])
     except ExecutionError:
         raise
     except Exception as e:
         raise ExecutionError(f"Browser download failed: {e}") from e
+    if record.status == "failed":
+        raise ExecutionError(f"Browser download failed: {record.error}")
+    if record.status == "in_progress":
+        raise ExecutionError(
+            f"Browser download failed: {record.filename} still in progress after "
+            f"{_EXPLICIT_DOWNLOAD_BUDGET_S:.0f}s; check browser_list_downloads later"
+        )
     duration_ms = (time.monotonic() - start) * 1000
     return ActionResultPayload(
         success=True,
-        message=f"Downloaded to {save_path} ({file_size} bytes)",
+        message=f"Downloaded to {record.path} ({record.size} bytes)",
         duration_ms=duration_ms,
     )
 
@@ -691,12 +772,8 @@ def execute_browser_list_downloads(
             message="No downloads recorded.",
             duration_ms=duration_ms,
         )
-    deadline = time.monotonic() + _LIST_DOWNLOADS_WAIT_S
-    for record in snapshot:
-        if record.status == "in_progress":
-            remaining = max(0.0, deadline - time.monotonic())
-            record.completed_event.wait(timeout=remaining)
-    message = _format_downloads_list(snapshot)
+    session.wait_for_downloads(_LIST_DOWNLOADS_WAIT_S)
+    message = _format_downloads_list(session.snapshot_downloads())
     duration_ms = (time.monotonic() - start) * 1000
     return ActionResultPayload(
         success=True,

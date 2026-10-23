@@ -1,8 +1,10 @@
 import asyncio
+import functools
 import logging
 from collections.abc import Callable, Coroutine
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Final, TypeAlias
+from typing import Any, Final, ParamSpec, TypeAlias, TypeVar
 
 import websockets
 from websockets.asyncio.client import ClientConnection
@@ -129,6 +131,9 @@ MessageHandler: TypeAlias = Callable[
     [str, dict[str, object]], Coroutine[Any, Any, None]
 ]
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
 
 def _browser_error_code(exc: Exception, fallback: ErrorCode) -> ErrorCode:
     """Map a browser action failure to the error code the server acts on."""
@@ -149,6 +154,11 @@ class ControllerClient:
         self._running = False
         self._connection: ClientConnection | None = None
         self._browser_session = BrowserSession()
+        # Playwright's sync API is bound to the thread that started it, so every
+        # browser call goes through this one worker instead of asyncio.to_thread.
+        self._browser_executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="playwright"
+        )
         self._session_manager = InteractiveSessionManager()
         self._process_tracker = ProcessTracker()
         self._interactive_cmd_timeout = interactive_cmd_timeout
@@ -251,13 +261,23 @@ class ControllerClient:
         except TimeoutError:
             pass
 
+    async def _run_browser(
+        self, fn: Callable[_P, _R], *args: _P.args, **kwargs: _P.kwargs
+    ) -> _R:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            self._browser_executor, functools.partial(fn, *args, **kwargs)
+        )
+
     async def stop(self) -> None:
         self._running = False
         self._stop_event.set()
         await self._cancel_omniparser_task()
         self._process_tracker.kill_all()
         self._session_manager.terminate_all()
-        await asyncio.to_thread(self._browser_session.close)
+        # The executor is not shut down: stop() can run twice (signal, then
+        # after run() returns) and the idle worker is joined at exit anyway.
+        await self._run_browser(self._browser_session.close)
         if self._connection is not None:
             await self._connection.close()
 
@@ -715,7 +735,7 @@ class ControllerClient:
     ) -> None:
         payload = parse_browser_navigate_payload(data)
         try:
-            result = await asyncio.to_thread(
+            result = await self._run_browser(
                 execute_browser_navigate, self._browser_session, payload
             )
             await self._send_action_result(request_id, result)
@@ -729,7 +749,7 @@ class ControllerClient:
     ) -> None:
         payload = parse_browser_click_payload(data)
         try:
-            result = await asyncio.to_thread(
+            result = await self._run_browser(
                 execute_browser_click, self._browser_session, payload
             )
             await self._send_action_result(request_id, result)
@@ -743,7 +763,7 @@ class ControllerClient:
     ) -> None:
         payload = parse_browser_click_payload(data)
         try:
-            result = await asyncio.to_thread(
+            result = await self._run_browser(
                 execute_browser_double_click, self._browser_session, payload
             )
             await self._send_action_result(request_id, result)
@@ -757,7 +777,7 @@ class ControllerClient:
     ) -> None:
         payload = parse_browser_type_payload(data)
         try:
-            result = await asyncio.to_thread(
+            result = await self._run_browser(
                 execute_browser_type, self._browser_session, payload
             )
             await self._send_action_result(request_id, result)
@@ -771,7 +791,7 @@ class ControllerClient:
     ) -> None:
         payload = parse_browser_hover_payload(data)
         try:
-            result = await asyncio.to_thread(
+            result = await self._run_browser(
                 execute_browser_hover, self._browser_session, payload
             )
             await self._send_action_result(request_id, result)
@@ -785,7 +805,7 @@ class ControllerClient:
     ) -> None:
         payload = parse_browser_target_payload(data)
         try:
-            result = await asyncio.to_thread(
+            result = await self._run_browser(
                 execute_browser_get_elements, self._browser_session, payload
             )
             await self._send_browser_content_result(request_id, result)
@@ -799,7 +819,7 @@ class ControllerClient:
     ) -> None:
         payload = parse_browser_target_payload(data)
         try:
-            result = await asyncio.to_thread(
+            result = await self._run_browser(
                 execute_browser_get_page_content, self._browser_session, payload
             )
             await self._send_browser_content_result(request_id, result)
@@ -813,7 +833,7 @@ class ControllerClient:
     ) -> None:
         payload = parse_browser_target_payload(data)
         try:
-            result = await asyncio.to_thread(
+            result = await self._run_browser(
                 execute_browser_get_url, self._browser_session, payload
             )
             await self._send_browser_content_result(request_id, result)
@@ -827,7 +847,7 @@ class ControllerClient:
     ) -> None:
         payload = parse_browser_target_payload(data)
         try:
-            result = await asyncio.to_thread(
+            result = await self._run_browser(
                 execute_browser_take_screenshot, self._browser_session, payload
             )
             await self._send_screenshot_response(request_id, result)
@@ -841,7 +861,7 @@ class ControllerClient:
     ) -> None:
         payload = parse_browser_download_payload(data)
         try:
-            result = await asyncio.to_thread(
+            result = await self._run_browser(
                 execute_browser_download, self._browser_session, payload
             )
             await self._send_action_result(request_id, result)
@@ -854,7 +874,7 @@ class ControllerClient:
         self, request_id: str, data: dict[str, object]
     ) -> None:
         try:
-            result = await asyncio.to_thread(
+            result = await self._run_browser(
                 execute_browser_list_downloads, self._browser_session
             )
             await self._send_action_result(request_id, result)
@@ -955,7 +975,8 @@ class ControllerClient:
         self, request_id: str, data: dict[str, object]
     ) -> None:
         try:
-            result = await asyncio.to_thread(
+            # Cleanup closes the browser, so it runs on the Playwright thread.
+            result = await self._run_browser(
                 execute_cleanup,
                 self._browser_session,
                 self._session_manager,
