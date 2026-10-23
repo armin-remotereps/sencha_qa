@@ -14,6 +14,9 @@ from machine_setup.routing import (  # noqa: E402
 )
 from projects.controller_consumer import ControllerConsumer  # noqa: E402
 from projects.routing import websocket_urlpatterns  # noqa: E402
+from visual_engine.routing import (  # noqa: E402
+    websocket_urlpatterns as visual_engine_websocket_urlpatterns,
+)
 
 application = ProtocolTypeRouter(
     {
@@ -23,6 +26,7 @@ application = ProtocolTypeRouter(
                 [path("ws/controller/", ControllerConsumer.as_asgi())]
                 + websocket_urlpatterns
                 + machine_setup_websocket_urlpatterns
+                + visual_engine_websocket_urlpatterns
             )
         ),
     }

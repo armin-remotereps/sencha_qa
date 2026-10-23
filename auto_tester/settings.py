@@ -53,6 +53,7 @@ INSTALLED_APPS: list[str] = [
     "projects",
     "agents",
     "machine_setup",
+    "visual_engine",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -326,11 +327,29 @@ INTERACTIVE_CMD_TIMEOUT_SECONDS: int = config(
     "INTERACTIVE_CMD_TIMEOUT_SECONDS", default=300, cast=int
 )
 CLEANUP_TIMEOUT_SECONDS: int = config("CLEANUP_TIMEOUT_SECONDS", default=30, cast=int)
-CONTROLLER_FIND_ELEMENT_TIMEOUT: int = config(
-    "CONTROLLER_FIND_ELEMENT_TIMEOUT", default=120, cast=int
+
+# Visual engine (remote vision workers running OmniParser)
+# Shared secret every vision worker sends in its handshake. Empty rejects all.
+VISION_WORKER_TOKEN: str = config("VISION_WORKER_TOKEN", default="", cast=str)
+# Wait for one worker's reply, including the time it sat in that worker's queue.
+VISION_PARSE_ATTEMPT_TIMEOUT: int = config(
+    "VISION_PARSE_ATTEMPT_TIMEOUT", default=45, cast=int
 )
-CONTROLLER_OMNIPARSER_READY_TIMEOUT: int = config(
-    "CONTROLLER_OMNIPARSER_READY_TIMEOUT", default=600, cast=int
+# All attempts of one parse together, across workers.
+VISION_PARSE_BUDGET_SECONDS: int = config(
+    "VISION_PARSE_BUDGET_SECONDS", default=90, cast=int
+)
+# Mid-case wait for any ready worker before the case is blocked.
+VISION_WORKER_WAIT_SECONDS: int = config(
+    "VISION_WORKER_WAIT_SECONDS", default=30, cast=int
+)
+# Wait for a ready worker at the start of each test case.
+VISION_WORKER_READY_TIMEOUT: int = config(
+    "VISION_WORKER_READY_TIMEOUT", default=600, cast=int
+)
+# A worker with no heartbeat for this long is ignored; keep >= 3x the 30s heartbeat.
+VISION_WORKER_STALE_SECONDS: int = config(
+    "VISION_WORKER_STALE_SECONDS", default=90, cast=int
 )
 
 # Orchestrator (sub-agent architecture)
