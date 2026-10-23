@@ -9,6 +9,9 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "auto_tester.settings")
 
 django_asgi_app = get_asgi_application()
 
+from machine_setup.routing import (  # noqa: E402
+    websocket_urlpatterns as machine_setup_websocket_urlpatterns,
+)
 from projects.controller_consumer import ControllerConsumer  # noqa: E402
 from projects.routing import websocket_urlpatterns  # noqa: E402
 
@@ -19,6 +22,7 @@ application = ProtocolTypeRouter(
             URLRouter(
                 [path("ws/controller/", ControllerConsumer.as_asgi())]
                 + websocket_urlpatterns
+                + machine_setup_websocket_urlpatterns
             )
         ),
     }
