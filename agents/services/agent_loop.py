@@ -30,7 +30,10 @@ from agents.types import (
     LLMConfig,
     LogCallback,
     ToolContext,
+    ToolDefinition,
+    ToolDispatcher,
     ToolResult,
+    TranscriptCallback,
 )
 from projects.controller_outage_clock import agent_monotonic
 
@@ -161,22 +164,48 @@ def _run_agent_loop(
             system_info=system_info,
             project_prompt=project_prompt,
         )
-    tool_definitions = get_all_tool_definitions()
-
-    _debug_log(
-        f"[Agent] Loaded {len(tool_definitions)} tool definitions", config.on_log
-    )
-
     messages: list[ChatMessage] = [
         ChatMessage(role="system", content=system_prompt),
         ChatMessage(role="user", content=task_description),
     ]
+    return run_tool_loop(
+        messages,
+        context,
+        config=config,
+        tool_definitions=get_all_tool_definitions(),
+        dispatch=dispatch_tool_call,
+    )
 
+
+def run_tool_loop(
+    messages: list[ChatMessage],
+    context: ToolContext,
+    *,
+    config: AgentConfig,
+    tool_definitions: tuple[ToolDefinition, ...],
+    dispatch: ToolDispatcher,
+    on_transcript: TranscriptCallback | None = None,
+) -> AgentResult:
+    """Run the LLM/tool loop, continuing from ``messages`` (system prompt first).
+
+    Shared by the tester's sub-agents and the machine setup chat, so the
+    deadline, cancellation and summarization rules exist once.
+    """
+    _debug_log(
+        f"[Agent] Loaded {len(tool_definitions)} tool definitions", config.on_log
+    )
+
+    messages = list(messages)
     start_time = agent_monotonic()
     context = replace(context, deadline=start_time + config.timeout_seconds)
     iterations = 0
     tool_calls_made = 0
     on_log = config.on_log
+
+    def _append(message: ChatMessage) -> None:
+        messages.append(message)
+        if on_transcript is not None:
+            on_transcript(message, tuple(messages))
 
     while iterations < config.max_iterations:
         elapsed = agent_monotonic() - start_time
@@ -211,7 +240,7 @@ def _run_agent_loop(
         if isinstance(response.message.content, str) and response.message.content:
             _debug_log(f"[Agent] {response.message.content}", on_log)
 
-        messages.append(response.message)
+        _append(response.message)
         _check_cancellation(config.cancellation_check)
 
         if response.message.tool_calls is None:
@@ -232,14 +261,14 @@ def _run_agent_loop(
             _debug_log(
                 f"[Tool Call] {tool_call.tool_name}({tool_call.arguments})", on_log
             )
-            tool_result = dispatch_tool_call(tool_call, context)
+            tool_result = dispatch(tool_call, context)
 
             tool_message = _build_tool_result_message(
                 tool_result,
                 summarizer_config=context.summarizer_config,
             )
             _debug_log(f"[Tool Result] {tool_message.content}", on_log)
-            messages.append(tool_message)
+            _append(tool_message)
 
     logger.warning("Agent hit max iterations: %d", config.max_iterations)
     return AgentResult(
@@ -254,11 +283,15 @@ def _build_tool_result_message(
     *,
     summarizer_config: LLMConfig | None = None,
 ) -> ChatMessage:
-    content = summarize_output(
-        tool_result.content,
-        tool_name=tool_result.tool_call_id,
-        is_error=tool_result.is_error,
-        summarizer_config=summarizer_config,
+    content = (
+        tool_result.content
+        if tool_result.verbatim
+        else summarize_output(
+            tool_result.content,
+            tool_name=tool_result.tool_call_id,
+            is_error=tool_result.is_error,
+            summarizer_config=summarizer_config,
+        )
     )
     return ChatMessage(
         role="tool",

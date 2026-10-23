@@ -14,6 +14,8 @@ class ToolCategory(Enum):
     BROWSER = "browser"
     SEARCH = "search"
     UTILITY = "utility"
+    # Read-only project data (test cases, application context) for the setup agent.
+    PROJECT_DATA = "project_data"
 
 
 class AgentStopReason(Enum):
@@ -53,6 +55,9 @@ class ToolResult:
     tool_call_id: str
     content: str
     is_error: bool
+    # True skips the LLM output summary: the content is data the model must see
+    # intact (case listings, the application context).
+    verbatim: bool = False
 
 
 @dataclass(frozen=True)
@@ -225,6 +230,10 @@ class OrchestratorCheckpoint:
 
 CheckpointCallback = Callable[[OrchestratorCheckpoint], None]
 
+# Called after every message the tool loop appends, with that message and the
+# full current transcript (which can shrink after a context summary).
+TranscriptCallback = Callable[[ChatMessage, tuple[ChatMessage, ...]], None]
+
 
 @dataclass
 class BrowserSelection:
@@ -247,6 +256,9 @@ class ToolContext:
     on_log: LogCallback | None = None
     cancellation_check: CancellationCheck | None = None
     deadline: float | None = None
+
+
+ToolDispatcher = Callable[[ToolCall, ToolContext], ToolResult]
 
 
 @dataclass(frozen=True)
