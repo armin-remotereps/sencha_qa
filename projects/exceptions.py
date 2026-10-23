@@ -115,3 +115,40 @@ class RunResumeError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+class ApplicationContextError(Exception):
+    """Base for application context writes; ``message`` is safe to show."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class ApplicationContextConflictError(ApplicationContextError):
+    """The context changed since the writer read it (revision moved)."""
+
+    def __init__(self, expected_revision: int, current_revision: int) -> None:
+        super().__init__(
+            f"The application context changed since you read it (revision "
+            f"{expected_revision} → {current_revision})."
+        )
+        self.expected_revision = expected_revision
+        self.current_revision = current_revision
+
+
+class ApplicationContextTooLongError(ApplicationContextError):
+    """The notes exceed ``PROJECT_PROMPT_MAX_LENGTH``."""
+
+    def __init__(self, length: int, max_length: int) -> None:
+        super().__init__(
+            f"The application context is {length} characters; the limit is "
+            f"{max_length}."
+        )
+
+
+class ApplicationContextVersionNotFoundError(ApplicationContextError):
+    """No such version in this project's history."""
+
+    def __init__(self) -> None:
+        super().__init__("That application context version no longer exists.")

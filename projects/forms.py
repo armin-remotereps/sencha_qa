@@ -12,14 +12,13 @@ from django.utils.text import Truncator
 
 from projects.case_checkpoint_services import ResumeStepOption
 from projects.models import (
+    PROJECT_PROMPT_MAX_LENGTH,
     ApplicationPlatform,
     Project,
     TestCaseData,
     TestCasePriority,
     TestCaseType,
 )
-
-PROJECT_PROMPT_MAX_LENGTH = 4000
 
 _APPLICATION_PLATFORM_CHOICES: list[tuple[str, str]] = [("", "Not specified")] + list(
     ApplicationPlatform.choices
@@ -439,6 +438,12 @@ class TestRailRunImportForm(forms.Form):
     """Import the cases of one TestRail run, pasted as a run URL or ID."""
 
     run_reference = forms.CharField(max_length=2000, strip=True)
+    next = forms.CharField(required=False, max_length=2000, widget=forms.HiddenInput)
+
+
+class ContextRestoreForm(forms.Form):
+    """Restore one application context version; ``next`` is checked same-host."""
+
     next = forms.CharField(required=False, max_length=2000, widget=forms.HiddenInput)
 
 

@@ -112,6 +112,17 @@ class Tag(models.Model):
         return self.name
 
 
+# Cap on the application context notes, for every writer (form and agent tool).
+PROJECT_PROMPT_MAX_LENGTH = 12000
+
+
+class ContextWriteSource(models.TextChoices):
+    USER = "user", "You"
+    REFINER = "refiner", "AI refine"
+    SETUP_AGENT = "setup_agent", "Machine setup agent"
+    RESTORE = "restore", "Restore"
+
+
 class Project(models.Model):
     name = models.CharField(max_length=255)
     tags = models.ManyToManyField(Tag, blank=True, related_name="projects")
@@ -135,6 +146,23 @@ class Project(models.Model):
     agent_omniparser_status = models.JSONField(default=dict, blank=True)
     last_connected_at = models.DateTimeField(null=True, blank=True)
     project_prompt = models.TextField(blank=True, default="")
+    # Bumped on every write; the setup agent's write is conditional on it.
+    project_prompt_revision = models.PositiveIntegerField(default=0)
+    # Provenance of the current notes, copied into the history on replacement.
+    project_prompt_source = models.CharField(
+        max_length=20, choices=ContextWriteSource.choices, blank=True, default=""
+    )
+    project_prompt_written_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    project_prompt_written_at = models.DateTimeField(null=True, blank=True)
+    project_prompt_change_summary = models.CharField(
+        max_length=500, blank=True, default=""
+    )
     application_url = models.URLField(max_length=500, blank=True, default="")
     application_platform = models.CharField(
         max_length=16,
@@ -166,6 +194,38 @@ class Project(models.Model):
             and self.testrail_email
             and self.testrail_api_key_encrypted
         )
+
+
+class ApplicationContextVersion(models.Model):
+    """A replaced value of ``Project.project_prompt``, with who wrote it."""
+
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="context_versions"
+    )
+    # The revision this text had while it was current.
+    revision = models.PositiveIntegerField()
+    text = models.TextField(blank=True, default="")
+    written_by_source = models.CharField(
+        max_length=20, choices=ContextWriteSource.choices, blank=True, default=""
+    )
+    # The author; for the setup agent, the user whose turn wrote it.
+    written_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    written_at = models.DateTimeField(null=True, blank=True)
+    change_summary = models.CharField(max_length=500, blank=True, default="")
+    replaced_at = models.DateTimeField()
+
+    class Meta:
+        ordering = ["-revision"]
+        indexes = [models.Index(fields=["project", "-revision"])]
+
+    def __str__(self) -> str:
+        return f"Context revision {self.revision} (project {self.project_id})"
 
 
 class TestCaseUpload(models.Model):
