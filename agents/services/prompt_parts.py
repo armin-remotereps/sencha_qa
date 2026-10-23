@@ -303,6 +303,11 @@ def build_utility_tool_examples() -> str:
 def build_shell_rules() -> str:
     return (
         "SHELL RULES:\n"
+        "- BACKGROUND SHELL: execute_command runs in a hidden background shell. No terminal "
+        "window opens and nothing changes on screen, so do NOT take a screenshot to see a "
+        "command run or to read its output. The tool result already contains the output "
+        "and exit code; judge the command from that. Take a screenshot only to check a GUI "
+        "application the command launched.\n"
         "- STATELESS SHELL: Each execute_command runs in a fresh session. A standalone 'cd' has "
         "NO effect on later commands. To run a command in a specific directory, EITHER use the "
         "cwd parameter (preferred) OR chain commands: 'cd /path && your_command'.\n"

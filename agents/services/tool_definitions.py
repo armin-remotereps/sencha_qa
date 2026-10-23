@@ -13,7 +13,11 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                 "If the command needs input (sudo password, Y/n confirmation), it returns a "
                 "session_id — use send_command_input to respond. "
                 "Each command runs in a FRESH shell session — use the cwd parameter "
-                "to set the working directory instead of a separate cd command."
+                "to set the working directory instead of a separate cd command. "
+                "The command runs in a HIDDEN background shell: no terminal window opens "
+                "and nothing appears on screen. Its output (stdout/stderr, exit code) is "
+                "returned in the tool result — read that instead of taking a screenshot. "
+                "Only a GUI application the command launches becomes visible on screen."
             ),
             category=ToolCategory.CONTROLLER,
             parameters=(
