@@ -95,10 +95,9 @@ def mark_stop_requested(
     ).update(stop_requested=True, stop_requested_by=user)
     if not updated:
         return False
-    turn.stop_requested = True
-    turn.stop_requested_by = user
-    # The worker may have claimed it since it was read; broadcast its status.
-    turn.refresh_from_db(fields=["status", "started_at"])
+    # The worker may have claimed (or even finished) it since it was read;
+    # broadcast the row as it is now, stop flag included.
+    turn.refresh_from_db()
     transaction.on_commit(lambda: broadcast_turn(turn.project_id, turn_payload(turn)))
     return True
 
