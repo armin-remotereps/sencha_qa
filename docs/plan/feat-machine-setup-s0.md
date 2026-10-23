@@ -1,6 +1,6 @@
 # feat: Machine setup (S0) chat agent
 
-Status: In progress
+Status: Done
 Created: 2026-10-23
 Request: "Prepare machine for S0." Getting the test machine to "state 0" (S0) takes a lot of time today: installing what the test cases' preconditions need, preparing directories, and so on. Each project gets a new tab (working name "S0" / "Machine setup"). It opens a chat with an AI agent that has the same powers as the tester: it can run commands, browse and download, click and type, and so on. It can also query the project's test cases (titles, preconditions, steps). The user talks to it to get the machine ready before starting runs. Because requirements change and the context can get messy, a **Reset** button starts the chat over.
 
@@ -534,3 +534,4 @@ Resolved on 2026-10-23. The user accepted every assumption for Q1–Q8, Q10 and 
     - `sub_agent_prompts._build_project_context` keeps its own wording, because it is out of scope.
 - 2026-10-23: review pass 2: the assistant message is also persisted before its tools run, so a killed worker leaves calls the next turn closes (the chat and the model's history stay in sync); stopping a running turn re-reads its status before broadcasting.
 - 2026-10-23: review pass 3: the stop broadcast re-reads the whole turn row, so its step count and other fields are current.
+- 2026-10-23: final review and verify are clean. Rejected the optional "refresh reloads llm_transcript" point: that field is on SetupConversation, not SetupTurn. Status set to Done.
