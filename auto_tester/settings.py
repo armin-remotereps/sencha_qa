@@ -264,6 +264,12 @@ OPENAI_REASONING_SUMMARY: str = config(
 # Agent
 AGENT_MAX_ITERATIONS: int = config("AGENT_MAX_ITERATIONS", default=300, cast=int)
 AGENT_TIMEOUT_SECONDS: int = config("AGENT_TIMEOUT_SECONDS", default=300, cast=int)
+# Longest tool result (chars) handed to the model; longer ones keep their head
+# and tail. Generous on purpose: the model reads ~922k input tokens, and a
+# Responses request sets truncation "auto" for anything beyond that.
+AGENT_TOOL_RESULT_MAX_CHARS: int = config(
+    "AGENT_TOOL_RESULT_MAX_CHARS", default=100_000, cast=int
+)
 
 # Machine setup (S0) chat agent: limits per user message (one agent turn).
 MACHINE_SETUP_MAX_ITERATIONS: int = config(
@@ -311,25 +317,6 @@ CONTROLLER_FIND_ELEMENT_TIMEOUT: int = config(
 )
 CONTROLLER_OMNIPARSER_READY_TIMEOUT: int = config(
     "CONTROLLER_OMNIPARSER_READY_TIMEOUT", default=600, cast=int
-)
-
-# Output Summarizer
-OUTPUT_SUMMARIZE_THRESHOLD: int = config(
-    "OUTPUT_SUMMARIZE_THRESHOLD", default=2000, cast=int
-)
-OUTPUT_SUMMARIZE_CHUNK_SIZE: int = config(
-    "OUTPUT_SUMMARIZE_CHUNK_SIZE", default=6000, cast=int
-)
-
-# Context Summarizer
-CONTEXT_SUMMARIZE_THRESHOLD: int = config(
-    "CONTEXT_SUMMARIZE_THRESHOLD", default=20000, cast=int
-)
-CONTEXT_PRESERVE_LAST_MESSAGES: int = config(
-    "CONTEXT_PRESERVE_LAST_MESSAGES", default=6, cast=int
-)
-CONTEXT_SUMMARIZE_CHUNK_SIZE: int = config(
-    "CONTEXT_SUMMARIZE_CHUNK_SIZE", default=8000, cast=int
 )
 
 # Orchestrator (sub-agent architecture)

@@ -111,7 +111,7 @@ class _TurnRunner:
         self.tool_rows: dict[str, SetupMessage] = {}
         self.row_screenshots: dict[int, list[SetupScreenshot]] = {}
         # Raw results by call id: the loop hands the hook only the (possibly
-        # summarized) model-facing text, without the error flag.
+        # capped) model-facing text, without the error flag.
         self.results: dict[str, ToolResult] = {}
         self.current_call_id: str | None = None
         # Calls of the last assistant message still waiting for their result.

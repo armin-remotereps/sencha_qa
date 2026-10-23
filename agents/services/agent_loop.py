@@ -5,12 +5,10 @@ from dataclasses import replace
 
 from django.conf import settings
 
-from agents.services.context_summarizer import summarize_context_if_needed
 from agents.services.llm_client import send_chat_completion
 from agents.services.llm_config import (
     build_llm_config,
 )
-from agents.services.output_summarizer import summarize_output
 from agents.services.prompt_parts import (
     build_agent_persona,
     build_environment_context,
@@ -28,17 +26,19 @@ from agents.types import (
     BrowserSelection,
     CancellationCheck,
     ChatMessage,
-    LLMConfig,
     LogCallback,
     ToolContext,
     ToolDefinition,
     ToolDispatcher,
-    ToolResult,
     TranscriptCallback,
 )
 from projects.controller_outage_clock import agent_monotonic
 
 logger = logging.getLogger(__name__)
+
+# The [Tool Result] debug line reaches the case log and its WebSocket; the
+# model gets the full (capped) result.
+_TOOL_RESULT_LOG_PREVIEW_CHARS = 2000
 
 
 def _check_cancellation(cancellation_check: CancellationCheck | None) -> None:
@@ -180,7 +180,7 @@ def run_tool_loop(
     """Run the LLM/tool loop, continuing from ``messages`` (system prompt first).
 
     Shared by the tester's sub-agents and the machine setup chat, so the
-    deadline, cancellation and summarization rules exist once.
+    deadline, cancellation and tool-result cap rules exist once.
     """
     _debug_log(
         f"[Agent] Loaded {len(tool_definitions)} tool definitions", config.on_log
@@ -212,11 +212,6 @@ def run_tool_loop(
         iterations += 1
         _check_cancellation(config.cancellation_check)
         _debug_log(f"Agent iteration {iterations}/{config.max_iterations}", on_log)
-
-        messages = summarize_context_if_needed(
-            messages,
-            summarizer_config=context.summarizer_config,
-        )
 
         # AIServiceError propagates: a provider fault is not a verdict on the
         # application, so the case is marked Blocked by the caller.
@@ -254,12 +249,13 @@ def run_tool_loop(
             )
             tool_result = dispatch(tool_call, context)
 
-            tool_message = _build_tool_result_message(
-                tool_result,
-                summarizer_config=context.summarizer_config,
+            content = _cap_tool_result(tool_result.content)
+            _debug_log(f"[Tool Result] {_log_preview(content)}", on_log)
+            _append(
+                ChatMessage(
+                    role="tool", content=content, tool_call_id=tool_result.tool_call_id
+                )
             )
-            _debug_log(f"[Tool Result] {tool_message.content}", on_log)
-            _append(tool_message)
 
     logger.warning("Agent hit max iterations: %d", config.max_iterations)
     return AgentResult(
@@ -269,23 +265,29 @@ def run_tool_loop(
     )
 
 
-def _build_tool_result_message(
-    tool_result: ToolResult,
-    *,
-    summarizer_config: LLMConfig | None = None,
-) -> ChatMessage:
-    content = (
-        tool_result.content
-        if tool_result.verbatim
-        else summarize_output(
-            tool_result.content,
-            tool_name=tool_result.tool_call_id,
-            is_error=tool_result.is_error,
-            summarizer_config=summarizer_config,
-        )
+def _cap_tool_result(content: str) -> str:
+    """Keep a too-long result's head and tail, half the budget each.
+
+    Even halves: a failing command's error and exit code are at the end, a
+    page's main content at the start.
+    """
+    # At least one character, so a misconfigured setting cannot garble slices.
+    limit = max(1, settings.AGENT_TOOL_RESULT_MAX_CHARS)
+    total = len(content)
+    if total <= limit:
+        return content
+    head = limit // 2
+    tail = limit - head
+    omitted = total - limit
+    logger.info("[Agent] Tool result capped: %d of %d chars kept", limit, total)
+    return (
+        content[:head]
+        + f"\n\n[... {omitted:,} of {total:,} characters omitted from the middle "
+        "of this tool result ...]\n\n" + content[total - tail :]
     )
-    return ChatMessage(
-        role="tool",
-        content=content,
-        tool_call_id=tool_result.tool_call_id,
-    )
+
+
+def _log_preview(content: str) -> str:
+    if len(content) <= _TOOL_RESULT_LOG_PREVIEW_CHARS:
+        return content
+    return f"{content[:_TOOL_RESULT_LOG_PREVIEW_CHARS]}… ({len(content):,} chars total)"

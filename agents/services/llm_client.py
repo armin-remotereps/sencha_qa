@@ -43,6 +43,9 @@ def _build_payload(
         # reasoning comes back instead and is replayed with the next turn.
         "store": False,
         "include": ["reasoning.encrypted_content"],
+        # Past the context window the API drops the oldest input items instead
+        # of failing with a 400; `instructions` is never dropped.
+        "truncation": "auto",
     }
     if instructions is not None:
         payload["instructions"] = instructions

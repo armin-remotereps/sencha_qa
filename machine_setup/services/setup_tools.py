@@ -1,7 +1,7 @@
 """The setup agent's tool set: every tester tool plus read-only project data.
 
 Project data tools (test cases, the application context) run on the server
-and return verbatim results. Every other tool is the tester's own, reached
+and return their results directly. Every other tool is the tester's own, reached
 through ``dispatch_tool_call`` after a cheap "is the runner connected" check.
 """
 
@@ -313,13 +313,11 @@ def build_setup_dispatcher(
                     tool_call_id=tool_call.tool_call_id,
                     content=str(exc),
                     is_error=True,
-                    verbatim=True,
                 )
             return ToolResult(
                 tool_call_id=tool_call.tool_call_id,
                 content=content,
                 is_error=False,
-                verbatim=True,
             )
 
         # Without this one indexed query a lost runner surfaces as a tool error

@@ -3,7 +3,6 @@ from agents.services.agent_loop import (
     build_system_prompt,
     run_agent,
 )
-from agents.services.context_summarizer import summarize_context_if_needed
 from agents.services.controller_element_finder import find_element_coordinates
 from agents.services.llm_client import send_chat_completion
 from agents.services.llm_config import build_llm_config
@@ -34,7 +33,6 @@ __all__ = [
     "key_press",
     "run_agent",
     "send_chat_completion",
-    "summarize_context_if_needed",
     "take_screenshot",
     "type_text",
 ]

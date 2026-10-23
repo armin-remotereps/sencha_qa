@@ -59,9 +59,6 @@ class ToolResult:
     tool_call_id: str
     content: str
     is_error: bool
-    # True skips the LLM output summary: the content is data the model must see
-    # intact (case listings, the application context).
-    verbatim: bool = False
 
 
 @dataclass(frozen=True)
@@ -235,7 +232,7 @@ class OrchestratorCheckpoint:
 CheckpointCallback = Callable[[OrchestratorCheckpoint], None]
 
 # Called after every message the tool loop appends, with that message and the
-# full current transcript (which can shrink after a context summary).
+# full current transcript (append-only).
 TranscriptCallback = Callable[[ChatMessage, tuple[ChatMessage, ...]], None]
 
 
