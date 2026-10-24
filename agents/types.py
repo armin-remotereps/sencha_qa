@@ -166,6 +166,9 @@ class SubTaskResult:
     summary: str
     iterations: int
     error: str | None = None
+    # Failed results only: what the attempt did (agents/attempt_digest.py), so
+    # the recovery and the retried step do not start blind.
+    actions_digest: str = ""
 
 
 @dataclass(frozen=True)

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Literal
+from typing import Final, Literal
 
 from agents.types import SubTask, SubTaskAttempt, SubTaskResult
 
 # Step descriptions in the verdict input are shortened to this many characters:
 # enough to name the step, not to repeat it.
 _STEP_DESCRIPTION_MAX_CHARS = 100
+
+# The planner ends a step with this housekeeping clause; the teardown of a case
+# that never reached the step finds it by the same words.
+CLOSE_CLAUSE_PREFIX: Final = "Afterwards, close"
 
 
 def build_plan_system_prompt(
@@ -46,12 +50,12 @@ def build_plan_system_prompt(
         "opens a web page.\n"
         "- CLOSING APPS: when a desktop application the case opened is not used by any "
         "later sub-task, end the description of the LAST sub-task that uses it with "
-        "'Afterwards, close <App> with close_app (housekeeping, does not affect this "
-        "step's result).' This includes the final sub-task of the case, so apps do not "
-        "leak into the next case. When the application also hosts the Test Runner (its "
-        "terminal, e.g. a Terminal tab the case opened) or has other tabs still needed, "
-        "write instead 'Afterwards, close the <App> tab you opened with close_tab "
-        "(housekeeping, does not affect this step's result).' Never add a separate "
+        f"'{CLOSE_CLAUSE_PREFIX} <App> with close_app (housekeeping, does not affect "
+        "this step's result).' This includes the final sub-task of the case, so apps do "
+        "not leak into the next case. When the application also hosts the Test Runner "
+        "(its terminal, e.g. a Terminal tab the case opened) or has other tabs still "
+        f"needed, write instead '{CLOSE_CLAUSE_PREFIX} the <App> tab you opened with "
+        "close_tab (housekeeping, does not affect this step's result).' Never add a separate "
         "close-only sub-task, and do not schedule closing for the browser used by "
         "browser tools.\n"
     )
@@ -126,6 +130,9 @@ def build_evaluate_prompt(
         f"TIME BUDGET GIVEN: {sub_task.timeout_seconds} seconds\n"
         f"RESULT: {sub_task_result.summary}\n"
         f"ERROR: {sub_task_result.error or 'none'}\n\n"
+        "ACTIONS THE FAILED ATTEMPT TOOK (tool calls in order, results shortened; "
+        "their effects may still be in place):\n"
+        f"{sub_task_result.actions_digest or '(none recorded)'}\n\n"
         f"CURRENT STATE:\n{state_description}\n\n"
         f"REMAINING SUB-TASKS: {remaining_tasks}\n\n"
         "Decide what to do:\n"
@@ -137,11 +144,37 @@ def build_evaluate_prompt(
         "timeout_seconds (between "
         f"{min_timeout_seconds} and {max_timeout_seconds}) — do not add verification steps "
         "the test case never asked for.\n\n"
+        "The recovery sub-agent and the retried sub-task see the failed attempt's "
+        "actions too. Write the recovery_task so it does not repeat actions whose "
+        "effect is already in place (text already typed, forms already submitted, "
+        "apps already opened), and say what the attempt already did when that "
+        "matters.\n\n"
         "OUTPUT FORMAT — respond with ONLY this JSON, no other text:\n"
         '{"decision": "continue"|"recover"|"stop", "reason": "...", '
         '"recovery_task": {"description": "...", "expected_result": "...", '
         '"timeout_seconds": N}}  '
         "(recovery_task only when decision is recover)"
+    )
+
+
+def format_failed_attempt_state(
+    step_num: int, result: SubTaskResult, *, with_actions: bool
+) -> str:
+    """State line for a failed step that a recovery follows.
+
+    ``with_actions`` adds the attempt's digest: given only to the recovery and
+    the retry right after it, so later steps do not carry it in every prompt.
+    Shared by the live loop and the resume rebuild so both write the same state.
+    """
+    line = f"Step {step_num}: an earlier attempt FAILED — {result.summary}"
+    if not with_actions or not result.actions_digest:
+        return line
+    actions = "\n".join(
+        f"    {digest_line}" for digest_line in result.actions_digest.splitlines()
+    )
+    return (
+        f"{line}\n  Actions that attempt took (their effects may still be in "
+        f"place; check the screen before repeating any):\n{actions}"
     )
 
 

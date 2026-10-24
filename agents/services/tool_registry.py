@@ -11,6 +11,8 @@ from agents.services.tool_definitions import (
 from agents.types import (
     ToolCall,
     ToolContext,
+    ToolDefinition,
+    ToolDispatcher,
     ToolResult,
 )
 from controller_client.protocol import BrowserName
@@ -31,6 +33,32 @@ def dispatch_tool_call(tool_call: ToolCall, context: ToolContext) -> ToolResult:
 
     result = handler(context, tool_call.arguments)
     return dataclasses.replace(result, tool_call_id=tool_call.tool_call_id)
+
+
+def tool_definitions_named(names: frozenset[str]) -> tuple[ToolDefinition, ...]:
+    return tuple(
+        definition
+        for definition in get_all_tool_definitions()
+        if definition.name in names
+    )
+
+
+def allowlisted_dispatcher(names: frozenset[str]) -> ToolDispatcher:
+    """``dispatch_tool_call`` refusing every tool outside ``names``.
+
+    Enforced here, not only by the definitions the model is shown.
+    """
+
+    def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
+        if tool_call.tool_name not in names:
+            return ToolResult(
+                tool_call_id=tool_call.tool_call_id,
+                content=f"Tool not available in this task: {tool_call.tool_name}",
+                is_error=True,
+            )
+        return dispatch_tool_call(tool_call, context)
+
+    return _dispatch
 
 
 def _handle_execute_command(

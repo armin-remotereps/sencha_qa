@@ -148,6 +148,8 @@ def _run_agent_loop(
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
     system_prompt: str | None = None,
+    tool_definitions: tuple[ToolDefinition, ...] | None = None,
+    dispatch: ToolDispatcher | None = None,
 ) -> AgentResult:
     if system_prompt is None:
         system_prompt = build_system_prompt(
@@ -163,8 +165,10 @@ def _run_agent_loop(
         messages,
         context,
         config=config,
-        tool_definitions=get_all_tool_definitions(),
-        dispatch=dispatch_tool_call,
+        tool_definitions=(
+            get_all_tool_definitions() if tool_definitions is None else tool_definitions
+        ),
+        dispatch=dispatch_tool_call if dispatch is None else dispatch,
     )
 
 

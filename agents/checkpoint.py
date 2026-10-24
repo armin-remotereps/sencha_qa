@@ -58,6 +58,7 @@ def checkpoint_to_json(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
                 "summary": attempt.result.summary,
                 "iterations": attempt.result.iterations,
                 "error": attempt.result.error,
+                "actions_digest": attempt.result.actions_digest,
                 "duration_seconds": attempt.duration_seconds,
             }
             for attempt in checkpoint.attempts
@@ -157,6 +158,7 @@ def _parse_attempt(item: dict[str, object]) -> SubTaskAttempt:
             summary=_as_str(item.get("summary"), "summary"),
             iterations=_as_int(item.get("iterations"), "iterations"),
             error=error,
+            actions_digest=_parse_digest(item.get("actions_digest")),
         ),
         duration_seconds=_parse_duration(item.get("duration_seconds")),
     )
@@ -199,6 +201,11 @@ def _parse_phase(value: object) -> OrchestratorPhase:
     if value not in _PHASES:
         return "step"
     return cast(OrchestratorPhase, value)
+
+
+def _parse_digest(value: object) -> str:
+    # Absent from checkpoints written before the digest existed.
+    return value if isinstance(value, str) else ""
 
 
 def _parse_duration(value: object) -> int | None:

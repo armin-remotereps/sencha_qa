@@ -13,7 +13,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final, NoReturn, TypedDict, TypeVar
+from typing import Any, Final, NoReturn, Protocol, TypedDict, TypeVar
 
 from asgiref.sync import async_to_sync
 from celery import chain
@@ -45,6 +45,9 @@ from agents.types import (
     AgentCancelledError,
     AgentResult,
     AgentStopReason,
+    CancellationCheck,
+    LogCallback,
+    OrchestratorCheckpoint,
     PixelParseResult,
     ScreenshotCallback,
 )
@@ -53,6 +56,7 @@ from controller_client.protocol import (
     CLIENT_VERSION,
     REQUIRED_CLIENT_CAPABILITIES,
     BrowserName,
+    ClientCapability,
     ErrorCode,
 )
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
@@ -67,6 +71,7 @@ from projects.case_step_progress import (
     case_step_payload,
     pivot_step_payload,
 )
+from projects.case_teardown_policy import needs_teardown
 from projects.checked_push_limits import is_checked_push_live
 from projects.controller_outage_clock import agent_monotonic, reset_outage_clock
 from projects.controller_reconnect_services import (
@@ -102,11 +107,32 @@ from projects.models import (
 )
 from projects.run_case_order import PICKER_CASE_ORDERING, RUN_CASE_ORDERING
 from visual_engine.services.parse_screenshot import parse_screenshot
-from visual_engine.services.pool_status import get_visual_engine_status
+from visual_engine.services.pool_status import (
+    get_visual_engine_status,
+    list_ready_workers,
+)
 from visual_engine.services.wait_for_ready_worker import wait_for_ready_worker
 from visual_engine.types import VisualEngineState, VisualEngineStatus
 
 logger = logging.getLogger(__name__)
+
+
+class _CaseTeardown(Protocol):
+    """``agents.services.case_teardown.run_case_teardown``, injected (import cycle)."""
+
+    def __call__(
+        self,
+        checkpoint: OrchestratorCheckpoint,
+        project_id: int,
+        *,
+        timeout_seconds: int,
+        on_log: LogCallback | None,
+        cancellation_check: CancellationCheck | None,
+        system_info: dict[str, object] | None,
+        project_prompt: str | None,
+        machine_ready: Callable[[], bool],
+    ) -> None: ...
+
 
 _INTERACTIVE_TERMINATE_TIMEOUT_SECONDS = 30.0
 
@@ -1889,6 +1915,58 @@ def _safe_cleanup(project_id: int, *, wait_for_runner: bool) -> None:
         )
 
 
+def _safe_teardown(
+    pivot: TestRunTestCase,
+    project: Project,
+    *,
+    generation: int,
+    cancellation_check: Callable[[], bool],
+    run_case_teardown: _CaseTeardown,
+) -> None:
+    """Close the apps a Failed or Blocked case left open, never failing the case.
+
+    Runs after the outcome is written and before ``_safe_cleanup``, so apps that
+    hold files in the cleanup folder are gone before it is emptied.
+    """
+    timeout = settings.CASE_TEARDOWN_TIMEOUT_SECONDS
+    if timeout <= 0:
+        return
+    try:
+        pivot.refresh_from_db(fields=["status", "blocked_reason"])
+        if not needs_teardown(pivot.status, pivot.blocked_reason):
+            return
+        checkpoint = load_resume_checkpoint(pivot)
+        if checkpoint is None:
+            logger.info("Teardown skipped for pivot %d: no plan", pivot.pk)
+            return
+        run_case_teardown(
+            checkpoint,
+            project.id,
+            timeout_seconds=timeout,
+            on_log=_build_log_callback(pivot, generation),
+            cancellation_check=cancellation_check,
+            system_info=project.agent_system_info or None,
+            project_prompt=build_agent_project_context(project),
+            machine_ready=lambda: _machine_can_close_apps(project.id),
+        )
+    except Exception:
+        logger.warning("Teardown failed for pivot %d", pivot.pk, exc_info=True)
+
+
+def _machine_can_close_apps(project_id: int) -> bool:
+    """Runner connected with ``close_app_v1`` and a vision worker ready."""
+    connected, capabilities = (
+        Project.objects.filter(pk=project_id)
+        .values_list("agent_connected", "agent_capabilities")
+        .get()
+    )
+    return (
+        connected
+        and ClientCapability.CLOSE_APP_V1.value in (capabilities or [])
+        and bool(list_ready_workers())
+    )
+
+
 def controller_browser_take_screenshot(
     project_id: int,
     *,
@@ -2747,9 +2825,18 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         logger.info("Skipping stale task for pivot %d", pivot_id)
         return
 
+    from agents.services.case_teardown import (  # local import: breaks circular dependency
+        run_case_teardown,
+    )
+    from agents.services.orchestrator import (  # local import: breaks circular dependency
+        run_orchestrator,
+    )
+
     project = pivot.test_run.project
     run_id = pivot.test_run.id
     cancellation_check = _build_cancellation_check(run_id, generation)
+    # A worker shutdown (BaseException) must not start an agent on its way out.
+    allow_teardown = True
     _mark_pivot_in_progress(pivot)
 
     try:
@@ -2765,10 +2852,6 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         on_log = _build_log_callback(pivot, generation)
         on_screenshot = _build_screenshot_callback(pivot, generation)
         task_description = _build_task_description(pivot.test_case)
-
-        from agents.services.orchestrator import (  # local import: breaks circular dependency
-            run_orchestrator,
-        )
 
         project.refresh_from_db(
             fields=["project_prompt", "application_url", "application_platform"]
@@ -2814,6 +2897,7 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         if not _is_stale_execution(run_id, generation):
             _settle_pivot_after_error(pivot, exc)
     except BaseException as exc:
+        allow_teardown = False
         logger.critical(
             "execute_test_run_test_case hit BaseException for pivot %d: %s",
             pivot_id,
@@ -2824,6 +2908,15 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         raise
     finally:
         # A newer chain may already be driving the machine: leave it alone.
+        # Checked again after the teardown, which can take minutes.
+        if allow_teardown and not _is_stale_execution(run_id, generation):
+            _safe_teardown(
+                pivot,
+                project,
+                generation=generation,
+                cancellation_check=cancellation_check,
+                run_case_teardown=run_case_teardown,
+            )
         if not _is_stale_execution(run_id, generation):
             _safe_cleanup(project.id, wait_for_runner=False)
             _update_test_run_status_if_needed(pivot.test_run)

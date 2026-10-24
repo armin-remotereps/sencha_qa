@@ -327,6 +327,10 @@ INTERACTIVE_CMD_TIMEOUT_SECONDS: int = config(
     "INTERACTIVE_CMD_TIMEOUT_SECONDS", default=300, cast=int
 )
 CLEANUP_TIMEOUT_SECONDS: int = config("CLEANUP_TIMEOUT_SECONDS", default=30, cast=int)
+# Budget for closing the apps a Failed/Blocked case left open; 0 disables it.
+CASE_TEARDOWN_TIMEOUT_SECONDS: int = config(
+    "CASE_TEARDOWN_TIMEOUT_SECONDS", default=120, cast=int
+)
 
 # Visual engine (remote vision workers running OmniParser)
 # Shared secret every vision worker sends in its handshake. Empty rejects all.

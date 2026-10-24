@@ -4,9 +4,14 @@ import logging
 import re
 from typing import Literal
 
+from agents.attempt_digest import build_attempt_digest
 from agents.services.agent_loop import _run_agent_loop
 from agents.services.llm_config import build_llm_config
 from agents.services.sub_agent_prompts import build_sub_agent_system_prompt
+from agents.services.tool_registry import (
+    allowlisted_dispatcher,
+    tool_definitions_named,
+)
 from agents.types import (
     AgentConfig,
     AgentResult,
@@ -34,7 +39,9 @@ def run_sub_agent(
     browser_selection: BrowserSelection,
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
+    tool_names: frozenset[str] | None = None,
 ) -> SubTaskResult:
+    """Run one sub-task; ``tool_names`` limits the tools it may see and call."""
     system_prompt = build_sub_agent_system_prompt(
         sub_task.description,
         sub_task.expected_result,
@@ -43,6 +50,7 @@ def run_sub_agent(
         current_browser=browser_selection.current,
         system_info=system_info,
         project_prompt=project_prompt,
+        tool_names=tool_names,
     )
 
     summarizer_config = build_llm_config()
@@ -67,6 +75,10 @@ def run_sub_agent(
         context,
         config=config,
         system_prompt=system_prompt,
+        tool_definitions=(
+            None if tool_names is None else tool_definitions_named(tool_names)
+        ),
+        dispatch=None if tool_names is None else allowlisted_dispatcher(tool_names),
     )
 
     return _parse_sub_task_result(agent_result)
@@ -86,6 +98,11 @@ def _parse_sub_task_result(agent_result: AgentResult) -> SubTaskResult:
                 summary=summary,
                 iterations=agent_result.iterations,
                 error=agent_result.error,
+                actions_digest=(
+                    build_attempt_digest(agent_result.messages)
+                    if status == "fail"
+                    else ""
+                ),
             )
 
     if agent_result.stop_reason == AgentStopReason.TASK_COMPLETE:
@@ -109,6 +126,7 @@ def _parse_sub_task_result(agent_result: AgentResult) -> SubTaskResult:
         summary=last_text or agent_result.error or "Step failed.",
         iterations=agent_result.iterations,
         error=agent_result.error,
+        actions_digest=build_attempt_digest(agent_result.messages),
     )
 
 

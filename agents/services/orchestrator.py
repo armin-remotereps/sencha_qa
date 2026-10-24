@@ -29,6 +29,7 @@ from agents.services.orchestrator_prompts import (
     build_verdict_prompt,
     final_step_indices,
     format_attempt_lines,
+    format_failed_attempt_state,
     was_resumed,
 )
 from agents.services.sub_agent import run_sub_agent
@@ -156,6 +157,9 @@ class _Progress:
     on_checkpoint: CheckpointCallback | None
     attempts: list[SubTaskAttempt] = field(default_factory=list)
     state_lines: list[str] = field(default_factory=list)
+    # Step -> the failed attempt's state with its actions, shown only while that
+    # step is retried after a passed recovery (state_lines keep one line).
+    retry_notes: dict[int, str] = field(default_factory=dict)
     total_iterations: int = 0
     # 1-based step that is running or runs next.
     next_step: int = 1
@@ -206,23 +210,31 @@ def _new_progress(
     progress.total_iterations = resume.total_iterations
     progress.next_step = resume.next_step
     progress.decisions = list(resume.decisions)
-    progress.state_lines = _rebuild_state_lines(resume.attempts, resume.next_step)
+    progress.state_lines, progress.retry_notes = _rebuild_state(
+        resume.attempts, resume.next_step
+    )
     return progress
 
 
-def _rebuild_state_lines(
+def _rebuild_state(
     attempts: tuple[SubTaskAttempt, ...], next_step: int
-) -> list[str]:
-    """Rebuild the state lines ``_execute_sub_tasks`` wrote for these attempts.
+) -> tuple[list[str], dict[int, str]]:
+    """Rebuild the state lines and retry notes ``_execute_sub_tasks`` wrote.
 
-    A failed step only got a line when the run moved past it ("continue"); one
-    followed by a recovery, or still at the cursor, got none.
+    A failed step got a plain line when the run moved past it ("continue"); one
+    followed by a passed recovery got the failed-attempt line just before the
+    recovery line, plus a retry note with its actions; one still at the cursor
+    got none.
     """
     final_index = final_step_indices(attempts)
+    last_failed: dict[int, SubTaskResult] = {}
     lines: list[str] = []
+    notes: dict[int, str] = {}
     for index, attempt in enumerate(attempts):
         result = attempt.result
         if attempt.kind == "step":
+            if result.status != "pass":
+                last_failed[attempt.step_num] = result
             if result.status == "pass":
                 lines.append(f"Step {attempt.step_num}: {result.summary}")
             elif (
@@ -232,10 +244,20 @@ def _rebuild_state_lines(
         elif result.status != "pass":
             continue
         elif attempt.kind == "recovery":
+            failed = last_failed.get(attempt.step_num)
+            if failed is not None:
+                lines.append(
+                    format_failed_attempt_state(
+                        attempt.step_num, failed, with_actions=False
+                    )
+                )
+                notes[attempt.step_num] = format_failed_attempt_state(
+                    attempt.step_num, failed, with_actions=True
+                )
             lines.append(f"Recovery for step {attempt.step_num}: {result.summary}")
         else:
             lines.append(_resume_state_line(attempt.step_num, result.summary))
-    return lines
+    return lines, notes
 
 
 def _resume_state_line(step_num: int, summary: str) -> str:
@@ -455,7 +477,13 @@ def _execute_sub_tasks(
         _check_cancelled(cancellation_check, on_log)
         sub_task = sub_tasks[i]
         step_num = i + 1
-        state_description = "\n".join(state_lines) if state_lines else ""
+        # A step retried after a passed recovery also sees what its failed
+        # attempt did.
+        state_description = "\n".join(
+            [*state_lines, progress.retry_notes[step_num]]
+            if step_num in progress.retry_notes
+            else state_lines
+        )
 
         # The cursor points at this step before it runs, so a case interrupted
         # mid-step resumes by running it again.
@@ -532,6 +560,7 @@ def _execute_sub_tasks(
             step_index=i,
             step_num=step_num,
             state_description=state_description,
+            failed_result=result,
             project_id=project_id,
             sub_agent_config=sub_agent_config,
             progress=progress,
@@ -564,6 +593,7 @@ def _attempt_recovery(
     step_index: int,
     step_num: int,
     state_description: str,
+    failed_result: SubTaskResult,
     project_id: int,
     sub_agent_config: AgentConfig,
     progress: _Progress,
@@ -597,11 +627,19 @@ def _attempt_recovery(
         f"[Orchestrator]   Recovery (budget {decision.recovery_task.timeout_seconds}s): "
         f"{decision.recovery_task.description}",
     )
+    # The recovery, and on success the retried step, learn what the failed
+    # attempt already did.
+    failed_note = format_failed_attempt_state(
+        step_num, failed_result, with_actions=True
+    )
+    recovery_state = (
+        f"{state_description}\n{failed_note}" if state_description else failed_note
+    )
     progress.set_phase("recovery")
     started = time.monotonic()
     recovery_result = run_sub_agent(
         decision.recovery_task,
-        state_description,
+        recovery_state,
         project_id,
         config=_config_for_sub_task(sub_agent_config, decision.recovery_task),
         browser_selection=progress.browser_selection,
@@ -627,6 +665,10 @@ def _attempt_recovery(
         # Only a passed recovery's iterations count, as before; the step it
         # recovered runs next (cursor unchanged).
         progress.total_iterations += recovery_result.iterations
+        progress.state_lines.append(
+            format_failed_attempt_state(step_num, failed_result, with_actions=False)
+        )
+        progress.retry_notes[step_num] = failed_note
         progress.state_lines.append(
             f"Recovery for step {step_num}: {recovery_result.summary}"
         )

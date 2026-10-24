@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from agents.services.prompt_parts import (
     build_agent_persona,
+    build_app_lifecycle_rules,
     build_environment_context,
     build_qa_rules,
     build_tool_guidelines,
@@ -19,17 +20,29 @@ def build_sub_agent_system_prompt(
     current_browser: BrowserName,
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
+    tool_names: frozenset[str] | None = None,
 ) -> str:
-    sections = [
-        _build_sub_agent_persona(system_info=system_info),
-        build_qa_rules(),
-        build_tool_taxonomy(),
-        build_environment_context(system_info=system_info),
-        build_tool_guidelines(),
-        _build_current_browser_section(current_browser),
-        _build_time_budget_section(timeout_seconds),
-        _build_result_format_instructions(),
-    ]
+    """``tool_names`` set: describe only those tools (a housekeeping sub-task)."""
+    if tool_names is None:
+        sections = [
+            _build_sub_agent_persona(system_info=system_info),
+            build_qa_rules(),
+            build_tool_taxonomy(),
+            build_environment_context(system_info=system_info),
+            build_tool_guidelines(),
+            _build_current_browser_section(current_browser),
+            _build_time_budget_section(timeout_seconds),
+            _build_result_format_instructions(),
+        ]
+    else:
+        # No environment section: it steers towards browser, typing and
+        # key_press tools a restricted sub-task cannot call.
+        sections = [
+            _build_sub_agent_persona(system_info=system_info),
+            _build_restricted_tools_section(tool_names),
+            _build_time_budget_section(timeout_seconds),
+            _build_result_format_instructions(),
+        ]
     if project_prompt:
         sections.append(_build_project_context(project_prompt))
     sections.append(_build_state_section(state_description))
@@ -45,6 +58,14 @@ def _build_sub_agent_persona(
         system_info=system_info,
         role="a strict QA step executor",
         job="execute ONE test step exactly as described and report the result honestly",
+    )
+
+
+def _build_restricted_tools_section(tool_names: frozenset[str]) -> str:
+    return (
+        f"TOOLS:\nYou may use only these tools: {', '.join(sorted(tool_names))}. "
+        "Any other tool is refused.\n\n"
+        f"{build_app_lifecycle_rules()}"
     )
 
 
