@@ -52,6 +52,7 @@ from machine_setup.services.setup_tools import (
     build_setup_dispatcher,
     main_tool_definitions,
 )
+from machine_setup.services.turn_reply_notification import notify_turn_reply
 from machine_setup.subtask_types import SetupTaskRequest
 from machine_setup.thread_role import ThreadRole, thread_role
 from machine_setup.turn_outcome import (
@@ -350,6 +351,8 @@ class _TurnRunner:
             # Last: the turn is no longer live, so the run's gates pass.
             # Never raises.
             settle_case_auto_fix(self.turn)
+            # Never raises.
+            notify_turn_reply(self.turn, notice=outcome.notice)
 
     def _close_transcript(self) -> None:
         if self.transcript is None:

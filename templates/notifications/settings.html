@@ -17,7 +17,7 @@
 <div class="page-header">
   <div>
     <h1>Notifications</h1>
-    <p class="subtitle">Get a notification in the ntfy app on your phone or computer when a test case in one of your projects needs help or fails.</p>
+    <p class="subtitle">Get a notification in the ntfy app on your phone or computer when a test case in one of your projects needs help or fails, or when the Machine setup agent answers you while you are away.</p>
   </div>
 </div>
 
@@ -123,6 +123,10 @@
       <label class="checkbox" for="{{ kinds_form.failed.id_for_label }}">
         {{ kinds_form.failed }}
         <span><strong>{{ kinds_form.failed.label }}</strong><br><span class="muted small">The agent judged a case Failed. Sent at a lower priority.</span></span>
+      </label>
+      <label class="checkbox" for="{{ kinds_form.chat_reply.id_for_label }}">
+        {{ kinds_form.chat_reply }}
+        <span><strong>{{ kinds_form.chat_reply.label }}</strong><br><span class="muted small">The Machine setup agent answered a message you sent while you were not looking at the chat.</span></span>
       </label>
       <div class="actions">
         <button type="submit" class="btn btn-primary btn-sm">Save</button>

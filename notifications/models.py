@@ -27,6 +27,7 @@ class NotificationPreference(models.Model):
     enabled = models.BooleanField(default=True)
     notify_need_help = models.BooleanField(default=True)
     notify_failed = models.BooleanField(default=True)
+    notify_chat_reply = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

@@ -52,6 +52,11 @@
   reset, help, agent_status, visual_engine. `help` (and current_state's
   `help`) is re-dispatched as the `help-state` window event for the nested
   helpPanel. All dynamic text is rendered with x-text; never x-html.
+  Client to server: {type:'presence', visible, conversation_id} on open,
+  on visibilitychange, every 15 s while visible, visible:false on pagehide, again on a
+  back/forward-cache pageshow.
+  While hidden, the tab title gets '(N) ' per turn of the shown
+  conversation ending completed or failed.
 
   Client model (machineSetupChat): every row gets a client-only `args` (its
   tool_arguments_text parsed once on arrival, {} if it does not parse).
@@ -143,6 +148,16 @@ document.addEventListener('alpine:init', () => {
   // adopt a new conversation (after a reset) but never an auto-fix thread.
   const THREAD_VIEW = {% if conversation %}true{% else %}false{% endif %};
   const THREAD_KIND = '{{ thread_kind|escapejs }}';
+  // Presence: the page tells the server whether this tab shows the
+  // conversation, so a reply is only pushed to people who are away. The
+  // socket and the heartbeat timer live outside the Alpine component (a
+  // WebSocket inside Alpine's reactive proxy cannot send).
+  const PRESENCE_INTERVAL_MS = 15000;
+  let socket = null;
+  let presenceTimer = null;
+  // Unread badge: '(N) ' before the page title while the tab is hidden.
+  const BASE_TITLE = document.title;
+  const REPLY_END_STATUSES = ['completed', 'failed'];
 
   // --- Tool wording: the only place tool labels live. -----------------------
   // Every function returns a plain string that the templates render with
@@ -544,20 +559,47 @@ document.addEventListener('alpine:init', () => {
     lightboxShots: [],
     lightboxIndex: 0,
     showLightbox: false,
+    unreadCount: 0,
+    lastCountedTurnId: null,
 
     init() {
       this.connect();
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') this.clearUnread();
+        this.sendPresence();
+        this.syncHeartbeat();
+      });
+      window.addEventListener('pagehide', () => {
+        this.sendPresence(false);
+        this.stopHeartbeat();
+      });
+      // Back/forward cache restore with the socket still open: no onopen.
+      window.addEventListener('pageshow', (event) => {
+        if (!event.persisted) return;
+        this.sendPresence();
+        this.syncHeartbeat();
+      });
+      // The main chat adopts a new conversation (first message after a
+      // reset): announce it; a reset clears the old one.
+      this.$watch('conversationId', (value, oldValue) => {
+        if (value === null) this.sendPresence(false, oldValue);
+        else this.sendPresence();
+      });
       this.$nextTick(() => this.scrollToBottom());
     },
 
     connect() {
       const ws = new WebSocket(window.punkHazard.wsUrl({% if conversation %}'/ws/projects/{{ project.id }}/machine-setup/threads/{{ conversation.pk }}/'{% else %}'/ws/projects/{{ project.id }}/machine-setup/'{% endif %}));
+      socket = ws;
       ws.onopen = () => {
         this.socketOpen = true;
         this.reconnectDelay = 1000;
+        this.sendPresence();
+        this.syncHeartbeat();
       };
       ws.onclose = () => {
         this.socketOpen = false;
+        this.stopHeartbeat();
         // current_state on the next connect rehydrates everything missed.
         setTimeout(() => this.connect(), this.reconnectDelay);
         this.reconnectDelay = Math.min(this.reconnectDelay * 2, 15000);
@@ -653,8 +695,47 @@ document.addEventListener('alpine:init', () => {
       this.messages[index] = message;
     },
 
+    // Sends a presence frame for the shown conversation (or conversationId,
+    // when the shown one was just dropped). Nothing without a conversation
+    // or an open socket.
+    sendPresence(visible = document.visibilityState === 'visible', conversationId = this.conversationId) {
+      if (conversationId === null || conversationId === undefined) return;
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify({ type: 'presence', visible, conversation_id: conversationId }));
+    },
+
+    // One heartbeat at most: running only while the tab is visible and the
+    // socket is open.
+    syncHeartbeat() {
+      this.stopHeartbeat();
+      if (document.visibilityState !== 'visible' || !socket || socket.readyState !== WebSocket.OPEN) return;
+      presenceTimer = setInterval(() => this.sendPresence(), PRESENCE_INTERVAL_MS);
+    },
+
+    stopHeartbeat() {
+      if (presenceTimer !== null) clearInterval(presenceTimer);
+      presenceTimer = null;
+    },
+
+    // Whether an assistant row is a reply or narration is only known once a
+    // later row arrives, so the badge counts turns of the shown conversation
+    // that end answered (completed or failed), once per turn.
+    countUnread(turn) {
+      if (document.visibilityState !== 'hidden') return;
+      if (!REPLY_END_STATUSES.includes(turn.status) || turn.id === this.lastCountedTurnId) return;
+      this.lastCountedTurnId = turn.id;
+      this.unreadCount++;
+      document.title = '(' + this.unreadCount + ') ' + BASE_TITLE;
+    },
+
+    clearUnread() {
+      this.unreadCount = 0;
+      document.title = BASE_TITLE;
+    },
+
     applyTurn(turn) {
       if (turn.conversation_id === this.conversationId) {
+        this.countUnread(turn);
         this.turn = turn;
         return;
       }

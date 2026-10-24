@@ -40,17 +40,20 @@ def get_preference_view(user: CustomUser) -> PreferenceView | None:
     """
     row = (
         NotificationPreference.objects.filter(user=user)
-        .values_list("enabled", "topic", "notify_need_help", "notify_failed")
+        .values_list(
+            "enabled", "topic", "notify_need_help", "notify_failed", "notify_chat_reply"
+        )
         .first()
     )
     if row is None:
         return None
-    enabled, topic, notify_need_help, notify_failed = row
+    enabled, topic, notify_need_help, notify_failed, notify_chat_reply = row
     return PreferenceView(
         enabled=enabled,
         topic=topic,
         notify_need_help=notify_need_help,
         notify_failed=notify_failed,
+        notify_chat_reply=notify_chat_reply,
         links=ntfy_subscribe_links(topic),
     )
 
@@ -108,7 +111,9 @@ def regenerate_topic(user: CustomUser) -> None:
         return
 
 
-def update_kinds(user: CustomUser, *, need_help: bool, failed: bool) -> None:
+def update_kinds(
+    user: CustomUser, *, need_help: bool, failed: bool, chat_reply: bool
+) -> None:
     """Choose which kinds of notification the user gets.
 
     Raises ``NotificationsOffError`` when the user never turned notifications on.
@@ -116,6 +121,7 @@ def update_kinds(user: CustomUser, *, need_help: bool, failed: bool) -> None:
     updated = NotificationPreference.objects.filter(user=user).update(
         notify_need_help=need_help,
         notify_failed=failed,
+        notify_chat_reply=chat_reply,
         updated_at=timezone.now(),
     )
     if updated == 0:

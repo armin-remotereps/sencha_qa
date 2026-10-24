@@ -17,6 +17,7 @@ _ELLIPSIS = "…"
 class NotificationKind(StrEnum):
     NEED_HELP = "need_help"
     FAILED = "failed"
+    CHAT_REPLY = "chat_reply"
     TEST = "test"
 
 
@@ -31,6 +32,9 @@ class NotificationDelivery:
 _DELIVERY: dict[NotificationKind, NotificationDelivery] = {
     NotificationKind.NEED_HELP: NotificationDelivery(priority=4, tags=("sos",)),
     NotificationKind.FAILED: NotificationDelivery(priority=3, tags=("x",)),
+    NotificationKind.CHAT_REPLY: NotificationDelivery(
+        priority=3, tags=("speech_balloon",)
+    ),
     NotificationKind.TEST: NotificationDelivery(priority=3, tags=("white_check_mark",)),
 }
 
@@ -39,6 +43,7 @@ _DELIVERY: dict[NotificationKind, NotificationDelivery] = {
 _PREFERENCE_FLAG: dict[NotificationKind, str | None] = {
     NotificationKind.NEED_HELP: "notify_need_help",
     NotificationKind.FAILED: "notify_failed",
+    NotificationKind.CHAT_REPLY: "notify_chat_reply",
     NotificationKind.TEST: None,
 }
 

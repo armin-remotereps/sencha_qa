@@ -8,3 +8,4 @@ class NotificationKindsForm(forms.Form):
 
     need_help = forms.BooleanField(required=False, label="A case needs help")
     failed = forms.BooleanField(required=False, label="A case failed")
+    chat_reply = forms.BooleanField(required=False, label="Chat replies")

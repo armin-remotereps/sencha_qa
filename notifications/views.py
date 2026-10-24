@@ -30,9 +30,10 @@ def notification_settings(request: AuthenticatedRequest) -> HttpResponse:
             {
                 "need_help": preference.notify_need_help,
                 "failed": preference.notify_failed,
+                "chat_reply": preference.notify_chat_reply,
             }
             if preference is not None
-            else {"need_help": True, "failed": True}
+            else {"need_help": True, "failed": True, "chat_reply": True}
         )
     )
     return render(
@@ -95,6 +96,7 @@ def update_notification_kinds(request: AuthenticatedRequest) -> HttpResponse:
             request.user,
             need_help=form.cleaned_data["need_help"],
             failed=form.cleaned_data["failed"],
+            chat_reply=form.cleaned_data["chat_reply"],
         )
     except NotificationError as exc:
         messages.error(request, exc.message)

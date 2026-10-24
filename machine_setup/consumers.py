@@ -5,22 +5,32 @@ from typing import Any
 
 from asgiref.sync import sync_to_async
 
+from accounts.models import CustomUser
 from machine_setup.events import setup_group
 from machine_setup.models import SetupConversation
 from machine_setup.payloads import HelpThreadPayload
+from machine_setup.presence_frame import parse_presence_frame
 from machine_setup.services.chat_page import SetupPage, find_thread, get_setup_page
 from machine_setup.services.help_thread_state import load_help_thread_payload
+from machine_setup.services.viewer_presence import clear_viewing, update_viewing
 from projects.consumers import AuthenticatedConsumer
 from projects.models import Project
 from projects.services import _agent_status_group
 from visual_engine.services.pool_status import VISUAL_ENGINE_GROUP
+
+# Conversation ids checked on this socket. A long-lived main-route socket
+# sees a new id per reset, never more than a handful; past this many, unknown
+# ids are dropped so a flood of made-up ids cannot cost a query per frame.
+_MAX_CHECKED_CONVERSATIONS = 32
 
 
 class MachineSetupConsumer(AuthenticatedConsumer):
     """Live machine setup chat: turn progress plus runner status on one socket.
 
     Joins the setup group (via the base class `group_name`), the
-    project's agent status group and the global visual engine group. Receive-only: client frames are ignored.
+    project's agent status group and the global visual engine group. The only
+    client frame is the presence heartbeat (``{"type": "presence", "visible":
+    bool, "conversation_id": int}``); anything else is ignored.
     The thread route (``conversation_id`` in the URL) uses the same group; its
     ``current_state`` describes that thread (with ``help``, the help panel,
     for a help thread), and the client ignores rows of other conversations.
@@ -29,6 +39,10 @@ class MachineSetupConsumer(AuthenticatedConsumer):
     _project: Project
     _thread: SetupConversation | None
     _agent_group_name: str
+    # Conversation id -> whether it is a non-archived thread of the project.
+    _checked_conversations: dict[int, bool]
+    # The conversation this socket last marked as viewed, cleared on close.
+    _viewing_conversation_id: int | None = None
 
     async def _authorize(self) -> bool:
         project = await self._get_project()
@@ -47,6 +61,7 @@ class MachineSetupConsumer(AuthenticatedConsumer):
         self._thread = thread
         self.group_name = setup_group(project.id)
         self._agent_group_name = _agent_status_group(project.id)
+        self._checked_conversations = {}
         return True
 
     async def _send_initial_state(self) -> None:
@@ -92,12 +107,41 @@ class MachineSetupConsumer(AuthenticatedConsumer):
             await self.channel_layer.group_discard(
                 VISUAL_ENGINE_GROUP, self.channel_name
             )
+        if self._viewing_conversation_id is not None:
+            await clear_viewing(
+                self._viewing_conversation_id, self._user_id(), self.channel_name
+            )
+            self._viewing_conversation_id = None
 
     async def receive(
         self, text_data: str | None = None, bytes_data: bytes | None = None
     ) -> None:
-        # Input goes through Django forms (PRG); the socket only pushes updates.
-        return
+        # Input goes through Django forms (PRG); the only frame is presence.
+        # A bad frame is dropped, never answered by closing the socket.
+        frame = parse_presence_frame(text_data)
+        if frame is None or not await self._is_project_thread(frame.conversation_id):
+            return
+        self._viewing_conversation_id = await update_viewing(
+            previous_id=self._viewing_conversation_id,
+            conversation_id=frame.conversation_id,
+            visible=frame.visible,
+            user_id=self._user_id(),
+            channel_name=self.channel_name,
+        )
+
+    async def _is_project_thread(self, conversation_id: int) -> bool:
+        # Cached per socket so the 15 s heartbeat costs no query.
+        checked = self._checked_conversations
+        if conversation_id not in checked:
+            if len(checked) >= _MAX_CHECKED_CONVERSATIONS:
+                return False
+            thread = await sync_to_async(find_thread)(self._project, conversation_id)
+            checked[conversation_id] = thread is not None
+        return checked[conversation_id]
+
+    def _user_id(self) -> int:
+        user: CustomUser = self.scope["user"]
+        return user.pk
 
     async def machine_setup_message(self, event: dict[str, Any]) -> None:
         await self.send(

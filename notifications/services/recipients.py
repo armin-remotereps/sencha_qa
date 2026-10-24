@@ -9,15 +9,21 @@ from notifications.services.notification_message import (
 )
 
 
-def recipient_user_ids(project_id: int, kind: NotificationKind) -> list[int]:
+def recipient_user_ids(
+    project_id: int, kind: NotificationKind, *, among: list[int] | None = None
+) -> list[int]:
     """Members of the project with notifications on and ``kind`` opted in.
 
-    One query: preferences joined to the project's member table. A user is a
-    member of a project at most once, so no DISTINCT is needed.
+    ``among`` narrows the answer to those users (e.g. the one person a chat
+    reply is for). One query: preferences joined to the project's member
+    table. A user is a member of a project at most once, so no DISTINCT is
+    needed.
     """
     queryset = NotificationPreference.objects.filter(
         user__projects__id=project_id, enabled=True
     )
+    if among is not None:
+        queryset = queryset.filter(user_id__in=among)
     flag = preference_flag(kind)
     if flag is not None:
         queryset = queryset.filter(**{flag: True})

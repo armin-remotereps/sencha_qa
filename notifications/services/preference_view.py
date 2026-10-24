@@ -19,4 +19,5 @@ class PreferenceView:
     topic: str
     notify_need_help: bool
     notify_failed: bool
+    notify_chat_reply: bool
     links: NtfySubscribeLinks
