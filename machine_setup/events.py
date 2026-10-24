@@ -8,6 +8,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
 from machine_setup.payloads import (
+    HelpThreadPayload,
     SetupMessagePayload,
     SetupScreenshotPayload,
     SetupTurnPayload,
@@ -48,3 +49,8 @@ def broadcast_turn(project_id: int, payload: SetupTurnPayload) -> None:
 
 def broadcast_reset(project_id: int) -> None:
     _send(project_id, {"type": "machine_setup.reset"})
+
+
+def broadcast_help(project_id: int, payload: HelpThreadPayload) -> None:
+    """The help panel of a help thread changed (draft or the agent's suggestion)."""
+    _send(project_id, {"type": "machine_setup.help", "help": payload})

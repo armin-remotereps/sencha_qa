@@ -13,4 +13,5 @@ urlpatterns: list[URLPattern] = [
     path("messages/", views.setup_send, name="send"),
     path("stop/", views.setup_stop, name="stop"),
     path("reset/", views.setup_reset, name="reset"),
+    path("help/<int:pivot_id>/", views.help_chat_open, name="help_chat_open"),
 ]

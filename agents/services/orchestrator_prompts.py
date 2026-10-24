@@ -5,6 +5,7 @@ from typing import Final, Literal
 
 from agents.types import (
     CheckpointHelp,
+    PlanRevisionRecord,
     SubTask,
     SubTaskAttempt,
     SubTaskResult,
@@ -184,15 +185,21 @@ def build_evaluate_prompt(
 
 
 def format_failed_attempt_state(
-    step_num: int, result: SubTaskResult, *, with_actions: bool
+    step_num: int,
+    result: SubTaskResult,
+    *,
+    with_actions: bool,
+    step_label: str = "",
 ) -> str:
     """State line for a failed step that a recovery follows.
 
     ``with_actions`` adds the attempt's digest: given only to the recovery and
     the retry right after it, so later steps do not carry it in every prompt.
     Shared by the live loop and the resume rebuild so both write the same state.
+    ``step_label`` replaces "Step N" (an earlier plan's step after a redesign).
     """
-    line = f"Step {step_num}: an earlier attempt FAILED — {result.summary}"
+    label = step_label or f"Step {step_num}"
+    line = f"{label}: an earlier attempt FAILED — {result.summary}"
     if not with_actions or not result.actions_digest:
         return line
     actions = "\n".join(
@@ -244,28 +251,90 @@ def _help_details(help: CheckpointHelp, reason: str) -> str:
     return " ".join(parts)
 
 
-def format_help_state_line(step_num: int, help: CheckpointHelp, reason: str) -> str:
+def format_help_state_line(
+    step_num: int, help: CheckpointHelp, reason: str, *, step_label: str = ""
+) -> str:
     """State line for a step that failed, paused for help and is retried after it.
 
     ``reason`` is why the orchestrator asked for help at that step, used when
     the help key carries no ask. Shared by the live continue and the resume
-    rebuild so both write the same state.
+    rebuild so both write the same state. ``step_label`` replaces "Step N" (an
+    earlier plan's step after a redesign).
     """
     details = _help_details(help, reason)
     return (
-        f"Step {step_num}: the test machine was fixed by {helper_name(help)}."
+        f"{step_label or f'Step {step_num}'}: the test machine was fixed by "
+        f"{helper_name(help)}."
         f"{' ' + details if details else ''} Check the screen: the fix may have "
         "changed it."
     )
 
 
-def help_verdict_note(help: CheckpointHelp, reason: str = "") -> str:
-    """Who fixed the machine at which step, with the ask and their messages."""
+def help_verdict_note(
+    help: CheckpointHelp, reason: str = "", *, redesigned: bool = False
+) -> str:
+    """Who fixed the machine at which step, with the ask and their messages.
+
+    ``redesigned``: the help also redesigned the test plan, so the step it
+    paused at belongs to the earlier plan and was not retried as such.
+    """
     details = _help_details(help, reason)
+    if redesigned:
+        where = f"step {help.step_num} of the earlier plan"
+        after = "before the redesigned plan continued"
+    else:
+        where, after = f"step {help.step_num}", "before the step was retried"
     return (
-        f"The case paused at step {help.step_num} for help, and the test machine "
-        f"was fixed by {helper_name(help)} before the step was retried."
-        f"{' ' + details if details else ''}"
+        f"The case paused at {where} for help, and the test machine was fixed by "
+        f"{helper_name(help)} {after}.{' ' + details if details else ''}"
+    )
+
+
+def redesign_for_help(
+    help: CheckpointHelp | None, revisions: Sequence[PlanRevisionRecord]
+) -> PlanRevisionRecord | None:
+    """The newest revision when ``help``'s request redesigned the test plan."""
+    if help is None or help.request_id is None or not revisions:
+        return None
+    latest = revisions[-1]
+    return latest if latest.help_request_id == help.request_id else None
+
+
+def _carried_range(record: PlanRevisionRecord) -> str:
+    carried = record.resume_step - 1
+    if carried <= 0:
+        return "No step was carried over"
+    if carried == 1:
+        return "Step 1 was carried over"
+    return f"Steps 1–{carried} were carried over"
+
+
+def format_redesign_state_line(record: PlanRevisionRecord) -> str:
+    """State line after the carried steps when help redesigned the test plan."""
+    reason = _sentence(record.reason)
+    return (
+        f"The test plan was redesigned during help{': ' + reason if reason else ''}. "
+        f"{_carried_range(record)}; continue at step {record.resume_step} from "
+        "the current screen."
+    )
+
+
+def redesign_verdict_note(record: PlanRevisionRecord) -> str:
+    """Verdict sentence for a help that redesigned the test plan."""
+    reason = _sentence(record.reason)
+    carried = record.resume_step - 1
+    if carried <= 0:
+        carried_text = (
+            "No step of the earlier plan was carried over; every step ran again"
+        )
+    else:
+        carried_text = (
+            f"{_carried_range(record)} from the earlier plan, where they had "
+            "passed; they were not re-run"
+        )
+    return (
+        f"The test plan was redesigned during help"
+        f"{' (' + reason + ')' if reason else ''}. {carried_text}."
     )
 
 
@@ -275,9 +344,10 @@ def build_verdict_prompt(
     plan: Sequence[SubTask],
     *,
     helped: CheckpointHelp | None = None,
+    revisions: Sequence[PlanRevisionRecord] = (),
 ) -> str:
     results_text = "\n".join(
-        f"  {line}" for line in format_attempt_lines(attempts, plan)
+        f"  {line}" for line in format_attempt_lines(attempts, plan, revisions)
     )
     outcome = "PASSED" if overall_status == "pass" else "FAILED"
     resumed_note = (
@@ -287,8 +357,18 @@ def build_verdict_prompt(
         if was_resumed(attempts)
         else ""
     )
+    redesign = redesign_for_help(helped, revisions)
     helped_note = (
-        f"{help_verdict_note(helped)} Mention that help. " if helped is not None else ""
+        f"{help_verdict_note(helped, redesigned=redesign is not None)} "
+        "Mention that help. "
+        if helped is not None
+        else ""
+    )
+    redesign_note = (
+        f"{redesign_verdict_note(redesign)} Mention this; the carried steps count "
+        "as passed. "
+        if redesign is not None
+        else ""
     )
     return (
         f"Sub-task execution finished. Results:\n{results_text}\n\n"
@@ -297,6 +377,7 @@ def build_verdict_prompt(
         "each step, and recovery steps do not count. "
         f"{resumed_note}"
         f"{helped_note}"
+        f"{redesign_note}"
         "State that result and do not "
         "contradict it. Highlight any key observations, including recoveries. "
         "Readers never see the numbered step list, so whenever you mention a step "
@@ -310,7 +391,9 @@ def was_resumed(attempts: Sequence[SubTaskAttempt]) -> bool:
 
 
 def format_attempt_lines(
-    attempts: tuple[SubTaskAttempt, ...], plan: Sequence[SubTask]
+    attempts: tuple[SubTaskAttempt, ...],
+    plan: Sequence[SubTask],
+    revisions: Sequence[PlanRevisionRecord] = (),
 ) -> list[str]:
     planned_steps = len(plan)
     final_index = final_step_indices(attempts)
@@ -322,6 +405,10 @@ def format_attempt_lines(
         elif attempt.kind == "resume":
             # A state restore before a resumed case; it is not a run step.
             label = _resume_label(attempt)
+        elif attempt.carried_from is not None:
+            # Passed under the earlier plan before a help-chat redesign.
+            lines.append(_carried_line(attempt, plan, revisions))
+            continue
         else:
             count = step_attempt_counts.get(attempt.step_num, 0) + 1
             step_attempt_counts[attempt.step_num] = count
@@ -353,10 +440,33 @@ def format_attempt_lines(
     return lines
 
 
+def _carried_line(
+    attempt: SubTaskAttempt,
+    plan: Sequence[SubTask],
+    revisions: Sequence[PlanRevisionRecord],
+) -> str:
+    old_step = attempt.carried_from
+    old = ""
+    # Carried attempts always come from the newest revision.
+    if revisions and old_step is not None:
+        previous_plan = revisions[-1].previous_plan
+        if 1 <= old_step <= len(previous_plan):
+            old = f" ({_shorten(previous_plan[old_step - 1][0])})"
+    return (
+        f"Step {attempt.step_num} ({_short_description(plan, attempt.step_num)}): "
+        f"PASSED under the earlier plan as step {old_step}{old}, not re-run — "
+        f"{attempt.result.summary}"
+    )
+
+
 def _short_description(plan: Sequence[SubTask], step_num: int) -> str:
     if not 1 <= step_num <= len(plan):
         return "(unknown step)"
-    description = " ".join(plan[step_num - 1].description.split())
+    return _shorten(plan[step_num - 1].description)
+
+
+def _shorten(text: str) -> str:
+    description = " ".join(text.split())
     if len(description) <= _STEP_DESCRIPTION_MAX_CHARS:
         return description
     return description[: _STEP_DESCRIPTION_MAX_CHARS - 1].rstrip() + "…"

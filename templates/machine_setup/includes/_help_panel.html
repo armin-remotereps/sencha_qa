@@ -1,0 +1,118 @@
+{% comment %}
+  Help thread page (auto-fix or help chat): the paused case's help panel.
+  Shown only while the run is paused on this thread's help request.
+
+  Context contract (machine_setup.views._render_chat):
+    project, conversation, csrf_token
+    help_panel — projects.case_help_services.HelpPanel (request with
+                 test_run_test_case__test_case, blockers, is_open,
+                 latest_screenshot_url, pending_draft)
+    help_form  — projects.forms.CaseHelpResolutionForm (note pre-filled from
+                 the agent's suggestion, use_plan_revision initially True,
+                 return_thread_id, plan_revision_id)
+    help_case_url — the case page
+    help_turn_blocker — the gate a live setup turn raises; the page tracks
+                 that turn itself (turnLive / otherThreadTurnLive of the
+                 ancestor machineSetupChat), so the panel drops it from the
+                 server's blockers
+
+  The draft and the agent's suggestion live in the Alpine `helpPanel`
+  component (chat.html): initial state from the `help-initial` json_script,
+  then `help` socket messages (machineSetupChat re-dispatches them as the
+  `help-state` window event). The hidden plan_revision_id follows the shown
+  draft. All model and agent text is autoescaped or x-text; never |safe or
+  x-html.
+{% endcomment %}
+{% with help_request=help_panel.request %}
+{% with pivot=help_request.test_run_test_case %}
+<section class="help-panel" x-data="helpPanel" aria-labelledby="help-panel-h">
+  <div class="help-panel-header">
+    <h2 id="help-panel-h" x-text="requestOpen ? 'This case needs help' : 'Help given: ' + resolutionLabel">{% if help_panel.is_open %}This case needs help{% else %}Help given: {{ help_request.get_resolution_display }}{% endif %}</h2>
+    <span class="badge badge-need-help" x-show="requestOpen">Need help</span>
+  </div>
+  <p class="muted small">
+    {{ pivot.test_case.title }} · stopped at step {{ help_request.step_num }} · waiting
+    <time datetime="{{ help_request.requested_at|date:'c' }}">{{ help_request.requested_at|timesince }}</time>
+    {% if help_case_url %} · <a href="{{ help_case_url }}">Open the test case</a>{% endif %}
+    {% if help_panel.latest_screenshot_url %} · <a href="{{ help_panel.latest_screenshot_url }}" target="_blank" rel="noopener">Latest screenshot</a>{% endif %}
+  </p>
+  {% if help_request.ask %}
+    <div>
+      <div class="label">What the tester asks</div>
+      <p class="help-quote">{{ help_request.ask }}</p>
+    </div>
+  {% endif %}
+
+  <template x-if="draft">
+    <div>
+      <div class="label">The agent's redesigned test plan</div>
+      <p class="pre-wrap small" x-show="draft.reason" x-text="draft.reason"></p>
+      <div class="plan-diff">
+        <div class="plan-diff-col">
+          <h3>Current plan</h3>
+          <template x-for="row in draft.old_rows" :key="'old-' + row.num">
+            <div class="plan-diff-row" :class="row.carried_to ? 'plan-diff-row--carried' : 'plan-diff-row--dropped'">
+              <span x-text="row.num + '. ' + row.description"></span>
+              <span class="badge" :class="statusBadge(row.status)" x-text="row.status_label"></span>
+              <span class="plan-diff-map" x-text="row.carried_to ? '→ new step ' + row.carried_to : 'Dropped'"></span>
+            </div>
+          </template>
+        </div>
+        <div class="plan-diff-col">
+          <h3>Redesigned plan</h3>
+          <template x-for="row in draft.new_rows" :key="'new-' + row.num">
+            <div class="plan-diff-row" :class="{ 'plan-diff-row--carried': row.state === 'carried', 'plan-diff-row--resume': row.state === 'resume' }">
+              <span x-text="row.num + '. ' + row.description"></span>
+              <span class="plan-diff-map" x-text="row.state_label"></span>
+              <span class="hint" x-show="row.expected_result" x-text="'Expected: ' + row.expected_result"></span>
+            </div>
+          </template>
+        </div>
+      </div>
+      <p class="hint" x-text="resumeText"></p>
+      <form method="post" :action="discardUrl">
+        {% csrf_token %}
+        <input type="hidden" name="return_thread_id" value="{{ conversation.pk }}">
+        <button type="submit" class="btn btn-sm btn-secondary">Discard the draft</button>
+      </form>
+    </div>
+  </template>
+
+  <template x-if="proposal">
+    <div class="help-suggestion">
+      <strong x-text="'The agent suggests: ' + proposal.action_label"></strong>
+      <p class="pre-wrap small" x-show="proposal.note" x-text="proposal.note"></p>
+      <p class="hint">Only you resolve the case; its note is pre-filled below.</p>
+    </div>
+  </template>
+
+  <form method="post" action="{% url 'projects:test_run_case_help_continue' project.id pivot.test_run_id pivot.pk %}" x-show="requestOpen">
+    {% csrf_token %}
+    <input type="hidden" name="return_thread_id" value="{{ conversation.pk }}">
+    <input type="hidden" name="plan_revision_id" :value="draft ? draft.revision_id : ''">
+    <div class="field">
+      <label class="label" for="help-panel-note">{{ help_form.note.label }}</label>
+      <textarea id="help-panel-note" class="textarea" name="note" rows="3" maxlength="2000" x-model="note" @input="noteEdited = true" placeholder="Optional: what you fixed, or what the agent should know"></textarea>
+    </div>
+    <div class="field" x-show="draft">
+      <label class="checkbox" for="help-panel-use-plan">
+        <input type="checkbox" id="help-panel-use-plan" name="use_plan_revision" value="on" x-model="usePlan">
+        <span>{{ help_form.use_plan_revision.label }}</span>
+      </label>
+    </div>
+    <p class="hint" x-text="continueHint"></p>
+    <p class="hint" id="help-panel-blockers" x-show="continueBlockers.length" x-text="'Continue is unavailable: ' + continueBlockers.join(' ')"></p>
+    <div class="help-actions">
+      <button type="submit" class="btn btn-primary" :disabled="!canContinue" :aria-disabled="!canContinue" aria-describedby="help-panel-blockers">Continue</button>
+      <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_help_fail' project.id pivot.test_run_id pivot.pk %}">Mark failed</button>
+      <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_help_skip' project.id pivot.test_run_id pivot.pk %}">Skip</button>
+    </div>
+  </form>
+</section>
+{% url 'projects:test_run_case_plan_revision_discard' project.id pivot.test_run_id pivot.pk 0 as discard_url_template %}
+{{ discard_url_template|json_script:"help-discard-url" }}
+{{ help_panel.blockers|json_script:"help-blockers" }}
+{{ help_turn_blocker|json_script:"help-turn-blocker" }}
+{{ help_request.step_num|json_script:"help-step-num" }}
+{% endwith %}
+{% endwith %}

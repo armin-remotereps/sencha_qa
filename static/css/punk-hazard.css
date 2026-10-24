@@ -3109,3 +3109,190 @@ details.card[open] > summary,
   color: var(--code-text);
   overflow-wrap: anywhere;
 }
+
+/* --------------------------------------------------------------------------
+   Help chat: the help panel on the Machine setup thread page, the agent's
+   suggestion, the side-by-side plan redesign (old plan | new plan) and the
+   Steps card's carried rows and Earlier plans. All text in them is model or
+   user text, rendered escaped / x-text.
+   -------------------------------------------------------------------------- */
+
+.help-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--brand-orange);
+  border-radius: var(--radius);
+  background: var(--surface);
+  min-width: 0;
+}
+
+.help-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px 12px;
+  overflow-wrap: anywhere;
+}
+
+.help-panel-header h2,
+.help-panel-header h3 {
+  margin: 0;
+}
+
+/* The help-chat agent's suggested action, or its redesign summary. */
+.help-suggestion {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--brand-cyan) 35%, transparent);
+  border-left: 3px solid var(--brand-cyan);
+  border-radius: var(--radius-sm);
+  background: var(--cyan-soft);
+  overflow-wrap: anywhere;
+}
+
+.help-suggestion p {
+  margin: 6px 0 0;
+}
+
+.help-suggestion .hint {
+  margin-top: 4px;
+}
+
+/* Side by side: current plan (left) and redesigned plan (right). */
+.plan-diff {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.plan-diff-col {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.plan-diff-col > h3,
+.plan-diff-col > h4 {
+  margin: 0 0 2px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.plan-diff-row {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.plan-diff-row--carried {
+  border-left-color: var(--success);
+  background: var(--success-soft);
+}
+
+.plan-diff-row--dropped {
+  border-left-color: var(--text-muted);
+  opacity: 0.75;
+}
+
+.plan-diff-row--resume {
+  border-left-color: var(--info);
+  background: var(--info-soft);
+}
+
+/* "→ new step j", "dropped", "carried from step k", "Resumes here". */
+.plan-diff-map {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.plan-diff-row--carried .plan-diff-map {
+  color: var(--success);
+}
+
+.plan-diff-row--resume .plan-diff-map {
+  color: var(--info);
+}
+
+@media (max-width: 767px) {
+  .plan-diff {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Steps card: a step carried over from an earlier plan. */
+.step-list .step-row.step-carried {
+  box-shadow: inset 3px 0 0 var(--success);
+}
+
+.step-list .step-row.step-carried.is-current {
+  box-shadow: inset 3px 0 0 var(--info);
+}
+
+.step-list .step-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: none;
+}
+
+/* Steps card: the plans replaced by help-chat redesigns. */
+.earlier-plans {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.earlier-plans > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.earlier-plans-item {
+  margin-top: 12px;
+}
+
+.earlier-plans-item h3 {
+  margin: 0 0 6px;
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.earlier-plans-item ol {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0 0 0 10px;
+  border-left: 2px solid var(--border);
+  display: grid;
+  gap: 6px;
+}
+
+.earlier-plans-item li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+.earlier-plans-num {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.earlier-plans-desc {
+  flex: 1 1 14rem;
+  min-width: 0;
+}

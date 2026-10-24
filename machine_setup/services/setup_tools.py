@@ -37,6 +37,11 @@ from machine_setup.services.case_catalog import (
     list_case_preconditions,
     search_cases,
 )
+from machine_setup.services.help_chat_tools import (
+    HelpToolError,
+    build_help_chat_handlers,
+    help_chat_tool_definitions,
+)
 from machine_setup.subtask_types import (
     DONE_WHEN_MAX_CHARS,
     GOAL_MAX_CHARS,
@@ -45,6 +50,7 @@ from machine_setup.subtask_types import (
     SetupTaskRequest,
     SubtaskRunner,
 )
+from machine_setup.thread_role import ThreadRole
 from projects.application_context_services import (
     get_application_context,
     write_application_context,
@@ -73,14 +79,17 @@ class _InvalidArgumentError(Exception):
     pass
 
 
-def main_tool_definitions(*, auto_fix: bool = False) -> tuple[ToolDefinition, ...]:
+def main_tool_definitions(role: ThreadRole) -> tuple[ToolDefinition, ...]:
     """The main setup agent's tools: project data plus delegation.
 
-    An auto-fix turn also gets ``report_case_fix``.
+    An auto-fix turn also gets ``report_case_fix``; a person's turn in a help
+    thread gets the help-chat tools.
     """
     tools = _project_data_tool_definitions() + (_run_setup_task_definition(),)
-    if auto_fix:
+    if role == ThreadRole.AUTO_FIX:
         tools += (_report_case_fix_definition(),)
+    elif role == ThreadRole.CASE_HELP:
+        tools += help_chat_tool_definitions()
     return tools
 
 
@@ -334,14 +343,16 @@ def build_setup_dispatcher(
     author: CustomUser | None,
     on_context_updated: ContextUpdatedCallback,
     run_subtask: SubtaskRunner,
-    auto_fix_conversation_id: int | None = None,
+    role: ThreadRole,
+    conversation_id: int,
+    help_request_id: int | None,
 ) -> ToolDispatcher:
     """The main agent's per-turn dispatcher.
 
     ``author`` is recorded on context writes; ``run_subtask`` runs a validated
-    ``run_setup_task`` call. Machine tools are refused. With
-    ``auto_fix_conversation_id`` (an auto-fix turn), ``report_case_fix``
-    records its report on that conversation.
+    ``run_setup_task`` call. Machine tools are refused. In an auto-fix turn
+    ``report_case_fix`` records its report on ``conversation_id``; in a help
+    chat turn the help tools act on ``help_request_id``.
     """
 
     def _handle_report_case_fix(arguments: dict[str, object]) -> str:
@@ -355,10 +366,7 @@ def build_setup_dispatcher(
                 "still wrong."
             )
         _check_length("summary", summary, SETUP_FIX_SUMMARY_MAX_LENGTH)
-        if auto_fix_conversation_id is None:
-            # Not registered outside auto-fix turns; kept for the type checker.
-            raise _InvalidArgumentError(f"{REPORT_CASE_FIX_TOOL} is not available.")
-        SetupConversation.objects.filter(pk=auto_fix_conversation_id).update(
+        SetupConversation.objects.filter(pk=conversation_id).update(
             fix_result=SetupFixResult.FIXED if fixed else SetupFixResult.NOT_FIXED,
             fix_summary=summary,
         )
@@ -454,8 +462,9 @@ def build_setup_dispatcher(
             "---"
         )
 
-    # Every project data tool (and report_case_fix in an auto-fix turn);
-    # anything else but run_setup_task is refused.
+    # Every project data tool, plus report_case_fix in an auto-fix turn or the
+    # help tools in a help chat turn; anything else but run_setup_task is
+    # refused.
     project_data_handlers: dict[str, Callable[[dict[str, object]], str]] = {
         "list_test_case_preconditions": _handle_list_preconditions,
         "search_test_cases": _handle_search_cases,
@@ -464,8 +473,16 @@ def build_setup_dispatcher(
         "get_application_context": _handle_get_context,
         "update_application_context": _handle_update_context,
     }
-    if auto_fix_conversation_id is not None:
+    if role == ThreadRole.AUTO_FIX:
         project_data_handlers[REPORT_CASE_FIX_TOOL] = _handle_report_case_fix
+    elif role == ThreadRole.CASE_HELP and help_request_id is not None:
+        project_data_handlers.update(
+            build_help_chat_handlers(
+                help_request_id=help_request_id,
+                conversation_id=conversation_id,
+                project_id=project_id,
+            )
+        )
 
     def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
         if tool_call.tool_name == RUN_SETUP_TASK_TOOL:
@@ -486,7 +503,7 @@ def build_setup_dispatcher(
             )
         try:
             content = handler(tool_call.arguments)
-        except _InvalidArgumentError as exc:
+        except (_InvalidArgumentError, HelpToolError) as exc:
             return _tool_error(tool_call, str(exc))
         return ToolResult(
             tool_call_id=tool_call.tool_call_id,

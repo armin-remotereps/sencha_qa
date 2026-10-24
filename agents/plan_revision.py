@@ -28,7 +28,7 @@ from typing import Literal, cast
 
 from agents.checkpoint import MAX_PLAN_REVISION_RECORDS, checkpoint_to_json
 from agents.exceptions import PlanRevisionInvalid
-from agents.services.sub_task_budget import TimeoutBounds, resolve_timeout_seconds
+from agents.timeout_bounds import TimeoutBounds, resolve_timeout_seconds
 from agents.types import (
     OrchestratorCheckpoint,
     PlanRevisionRecord,

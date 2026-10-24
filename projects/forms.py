@@ -310,6 +310,27 @@ class CaseHelpResolutionForm(forms.Form):
             }
         ),
     )
+    # The help-chat redesign shown with the form; None when none was shown.
+    plan_revision_id = forms.IntegerField(
+        required=False, min_value=1, widget=forms.HiddenInput
+    )
+    use_plan_revision = forms.BooleanField(
+        label="Use the redesigned plan",
+        required=False,
+        initial=True,
+    )
+    # The help-chat thread to return to; checked by the service.
+    return_thread_id = forms.IntegerField(
+        required=False, min_value=1, widget=forms.HiddenInput
+    )
+
+
+class HelpReturnForm(forms.Form):
+    """Discard a help-chat redesign; optionally return to the help-chat thread."""
+
+    return_thread_id = forms.IntegerField(
+        required=False, min_value=1, widget=forms.HiddenInput
+    )
 
 
 class RunCaseSelectionForm(forms.Form):

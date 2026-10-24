@@ -6,13 +6,27 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('projects', '0021_checked_results_source_push'),
+        ("projects", "0021_checked_results_source_push"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='testruntestcase',
-            name='blocked_reason',
-            field=models.CharField(blank=True, choices=[('runner_disconnected', 'Test Runner disconnected'), ('runner_unresponsive', 'Test Runner stopped responding'), ('visual_engine', 'Visual engine unavailable'), ('ai_service', 'AI service error'), ('time_limit', 'Case time limit reached'), ('browser_unavailable', 'Browser unavailable on the test machine'), ('runner_outdated', 'Test Runner needs an update'), ('internal_error', 'Internal error')], default='', max_length=32),
+            model_name="testruntestcase",
+            name="blocked_reason",
+            field=models.CharField(
+                blank=True,
+                choices=[
+                    ("runner_disconnected", "Test Runner disconnected"),
+                    ("runner_unresponsive", "Test Runner stopped responding"),
+                    ("visual_engine", "Visual engine unavailable"),
+                    ("ai_service", "AI service error"),
+                    ("time_limit", "Case time limit reached"),
+                    ("browser_unavailable", "Browser unavailable on the test machine"),
+                    ("runner_outdated", "Test Runner needs an update"),
+                    ("internal_error", "Internal error"),
+                ],
+                default="",
+                max_length=32,
+            ),
         ),
     ]

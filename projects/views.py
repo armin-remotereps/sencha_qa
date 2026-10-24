@@ -35,14 +35,23 @@ from projects.case_help_services import (
     get_run_case_for_help,
     list_case_help_requests,
     mark_failed_after_help,
+    resolve_return_thread,
     skip_after_help,
     stop_auto_fix,
 )
 from projects.case_help_state import get_run_help_state
-from projects.case_step_progress import pivot_step_payload
+from projects.case_plan_revision_services import (
+    discard_plan_revision,
+    plan_revision_belongs_to,
+)
+from projects.case_step_progress import (
+    build_case_step_progress,
+    step_progress_payload,
+)
 from projects.decorators import project_membership_required
 from projects.exceptions import (
     ApplicationContextVersionNotFoundError,
+    PlanRevisionError,
     RunCaseCheckError,
     RunHelpError,
     RunRerunError,
@@ -53,6 +62,7 @@ from projects.forms import (
     CaseHelpResolutionForm,
     CaseResumeForm,
     ContextRestoreForm,
+    HelpReturnForm,
     ProjectForm,
     RunCaseSelectionForm,
     RunCasesRerunForm,
@@ -70,6 +80,7 @@ from projects.models import (
     TestRun,
     TestRunStatus,
     TestRunTestCase,
+    TestRunTestCaseStatus,
 )
 from projects.run_case_check_services import (
     check_run_cases,
@@ -1040,6 +1051,14 @@ def test_run_case_detail(
     source_run_url = get_source_run_url(pivot, project)
     can_resume = can_resume_case(pivot)
     resume_steps = list_resume_steps(pivot) if can_resume else []
+    # One checkpoint parse for the live Steps payload and the Earlier plans.
+    progress = build_case_step_progress(
+        pivot.execution_checkpoint, pivot.status, pivot.started_at
+    )
+    step_progress = step_progress_payload(
+        progress,
+        planning=progress is None and pivot.status == TestRunTestCaseStatus.IN_PROGRESS,
+    )
     return render(
         request,
         "projects/test_run_case_detail.html",
@@ -1069,9 +1088,18 @@ def test_run_case_detail(
             ),
             "help_panel": help_panel,
             "help_requests": list_case_help_requests(pivot),
-            "help_form": CaseHelpResolutionForm(),
+            "help_form": CaseHelpResolutionForm(
+                initial={
+                    "note": (
+                        help_panel.request.agent_proposal_note
+                        if help_panel is not None and help_panel.is_open
+                        else ""
+                    )
+                }
+            ),
             "resumes": list_case_resumes(pivot),
-            "step_progress": pivot_step_payload(pivot),
+            "step_progress": step_progress,
+            "earlier_plans": progress.earlier_plans if progress is not None else (),
             "active_tab": "runs",
             "active_nav": "projects",
         },
@@ -1285,6 +1313,25 @@ def _case_detail_redirect(project: Project, pivot: TestRunTestCase) -> HttpRespo
     )
 
 
+def _help_return_redirect(
+    project: Project,
+    pivot: TestRunTestCase,
+    form: CaseHelpResolutionForm | HelpReturnForm,
+) -> HttpResponse:
+    """Back to the help-chat thread the action came from, else the case page."""
+    raw_thread_id = (
+        form.cleaned_data.get("return_thread_id") if form.is_valid() else None
+    )
+    thread_id = resolve_return_thread(
+        pivot=pivot, thread_id=raw_thread_id if isinstance(raw_thread_id, int) else None
+    )
+    if thread_id is None:
+        return _case_detail_redirect(project, pivot)
+    return redirect(
+        "machine_setup:thread", project_id=project.id, conversation_id=thread_id
+    )
+
+
 @project_membership_required
 @require_POST
 def test_run_case_help_continue(
@@ -1297,13 +1344,17 @@ def test_run_case_help_continue(
         return _case_detail_redirect(project, pivot)
     try:
         result = continue_after_help(
-            pivot=pivot, user=request.user, note=form.cleaned_data["note"]
+            pivot=pivot,
+            user=request.user,
+            note=form.cleaned_data["note"],
+            plan_revision_id=form.cleaned_data["plan_revision_id"],
+            use_plan_revision=form.cleaned_data["use_plan_revision"],
         )
     except RunHelpError as exc:
         messages.error(request, exc.message)
     else:
         messages.success(request, format_help_action_message("Continuing", result))
-    return _case_detail_redirect(project, pivot)
+    return _help_return_redirect(project, pivot, form)
 
 
 @project_membership_required
@@ -1326,7 +1377,7 @@ def test_run_case_help_fail(
         messages.success(
             request, format_help_action_message("Marked the case failed", result)
         )
-    return _case_detail_redirect(project, pivot)
+    return _help_return_redirect(project, pivot, form)
 
 
 @project_membership_required
@@ -1349,7 +1400,33 @@ def test_run_case_help_skip(
         messages.success(
             request, format_help_action_message("Skipped the case", result)
         )
-    return _case_detail_redirect(project, pivot)
+    return _help_return_redirect(project, pivot, form)
+
+
+@project_membership_required
+@require_POST
+def test_run_case_plan_revision_discard(
+    request: AuthenticatedRequest,
+    project: Project,
+    test_run_id: int,
+    pivot_id: int,
+    revision_id: int,
+) -> HttpResponse:
+    pivot = _help_case_or_404(project, test_run_id, pivot_id)
+    if not plan_revision_belongs_to(pivot=pivot, revision_id=revision_id):
+        raise Http404
+    form = HelpReturnForm(request.POST)
+    try:
+        discard_plan_revision(pivot=pivot, revision_id=revision_id, user=request.user)
+    except PlanRevisionError as exc:
+        messages.error(request, exc.message)
+    else:
+        messages.success(
+            request,
+            "Discarded the redesigned plan. Continue now re-runs the step that "
+            "needed help.",
+        )
+    return _help_return_redirect(project, pivot, form)
 
 
 @project_membership_required

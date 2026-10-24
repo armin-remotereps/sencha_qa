@@ -31,7 +31,10 @@ from agents.services.orchestrator_prompts import (
     format_attempt_lines,
     format_failed_attempt_state,
     format_help_state_line,
+    format_redesign_state_line,
     help_verdict_note,
+    redesign_for_help,
+    redesign_verdict_note,
     was_resumed,
 )
 from agents.services.sub_agent import run_sub_agent
@@ -59,6 +62,7 @@ from agents.types import (
     OrchestratorDecision,
     OrchestratorPhase,
     OrchestratorResult,
+    PlanRevisionRecord,
     ScreenshotCallback,
     StepDecision,
     SubTask,
@@ -204,6 +208,10 @@ class _Progress:
     # The last help this case got, carried into every checkpoint so a later
     # resume still names it; never marked continue_pending once running.
     help: CheckpointHelp | None = None
+    # Help-chat redesigns applied to this case and the newest earlier plans;
+    # carried into every checkpoint so a save after a resume keeps them.
+    plan_version: int = 0
+    plan_revisions: tuple[PlanRevisionRecord, ...] = ()
 
     def set_phase(self, phase: OrchestratorPhase) -> None:
         # Every call enters a new phase (a new step is a new "step" phase), so
@@ -226,6 +234,8 @@ class _Progress:
                 phase=self.phase,
                 phase_started_at=self.phase_started_at,
                 help=self.help,
+                plan_version=self.plan_version,
+                plan_revisions=self.plan_revisions,
             )
         )
 
@@ -247,13 +257,19 @@ def _new_progress(
     progress.total_iterations = resume.total_iterations
     progress.next_step = resume.next_step
     progress.decisions = list(resume.decisions)
+    progress.plan_version = resume.plan_version
+    progress.plan_revisions = resume.plan_revisions
     # The first checkpoint below already clears continue_pending: an
     # interruption after it resumes normally, with a restore.
     progress.help = (
         None if resume.help is None else replace(resume.help, continue_pending=False)
     )
     progress.state_lines, progress.retry_notes = _rebuild_state(
-        resume.attempts, resume.next_step, resume.help, resume.decisions
+        resume.attempts,
+        resume.next_step,
+        resume.help,
+        resume.decisions,
+        resume.plan_revisions,
     )
     return progress
 
@@ -263,6 +279,7 @@ def _rebuild_state(
     next_step: int,
     help: CheckpointHelp | None = None,
     decisions: Sequence[StepDecision] = (),
+    revisions: Sequence[PlanRevisionRecord] = (),
 ) -> tuple[list[str], dict[int, str]]:
     """Rebuild the state lines and retry notes ``_execute_sub_tasks`` wrote.
 
@@ -272,15 +289,33 @@ def _rebuild_state(
     got none. The failed attempt the case paused at for ``help`` gets the
     failed-attempt line, the help line and a retry note, as a passed recovery
     does.
+
+    When that help redesigned the test plan, the failed attempt belongs to the
+    earlier plan (in the newest revision record): the carried steps get their
+    lines, then the redesign line and the help line, and the first new step
+    that is not carried gets the earlier failed attempt as its retry note.
     """
+    redesign = redesign_for_help(help, revisions)
     final_index = final_step_indices(attempts)
-    help_anchor = _help_anchor_index(attempts, help, next_step, final_index)
+    help_anchor = _help_anchor_index(
+        attempts, help, next_step, final_index, redesigned=redesign is not None
+    )
     last_failed: dict[int, SubTaskResult] = {}
     lines: list[str] = []
     notes: dict[int, str] = {}
+    # Carried attempts lead the attempts; the redesign lines follow them.
+    redesign_pending = redesign is not None
     for index, attempt in enumerate(attempts):
         result = attempt.result
-        if attempt.kind == "step":
+        if redesign_pending and attempt.carried_from is None:
+            lines.extend(_redesign_state(redesign, help, notes))
+            redesign_pending = False
+        if attempt.carried_from is not None and result.status == "pass":
+            lines.append(
+                f"Step {attempt.step_num}: {result.summary} (done before the plan "
+                f"was redesigned; earlier step {attempt.carried_from})"
+            )
+        elif attempt.kind == "step":
             if result.status != "pass":
                 last_failed[attempt.step_num] = result
             if help is not None and index == help_anchor:
@@ -321,7 +356,54 @@ def _rebuild_state(
             lines.append(f"Recovery for step {attempt.step_num}: {result.summary}")
         else:
             lines.append(_resume_state_line(attempt.step_num, result.summary))
+    if redesign_pending:
+        lines.extend(_redesign_state(redesign, help, notes))
     return lines, notes
+
+
+def _redesign_state(
+    record: PlanRevisionRecord | None,
+    help: CheckpointHelp | None,
+    notes: dict[int, str],
+) -> list[str]:
+    """The redesign and help lines; sets the first new step's retry note.
+
+    The retry note is the earlier plan's failed attempt at the step the case
+    paused at, with its actions, so the first new step knows what was done to
+    the screen.
+    """
+    if record is None or help is None:
+        return []
+    label = f"Earlier plan, step {record.paused_step}"
+    failed = _earlier_failed_result(record)
+    if failed is not None:
+        notes[record.resume_step] = format_failed_attempt_state(
+            record.paused_step,
+            replace(failed, actions_digest=record.paused_digest),
+            with_actions=True,
+            step_label=label,
+        )
+    return [
+        format_redesign_state_line(record),
+        format_help_state_line(
+            record.paused_step,
+            help,
+            _help_reason(record.earlier_decisions, record.paused_step),
+            step_label=label,
+        ),
+    ]
+
+
+def _earlier_failed_result(record: PlanRevisionRecord) -> SubTaskResult | None:
+    """The earlier plan's last failed attempt at the step the case paused at."""
+    for attempt in reversed(record.earlier_attempts):
+        if (
+            attempt.kind == "step"
+            and attempt.step_num == record.paused_step
+            and attempt.result.status != "pass"
+        ):
+            return attempt.result
+    return None
 
 
 def _help_anchor_index(
@@ -329,14 +411,18 @@ def _help_anchor_index(
     help: CheckpointHelp | None,
     next_step: int,
     final_index: dict[int, int],
+    *,
+    redesigned: bool = False,
 ) -> int | None:
     """Index of the failed step attempt the case paused at for ``help``.
 
     That is the last failed attempt of the helped step that was retried
     afterwards, or that is still at the cursor waiting for its retry. None
-    when the attempt is gone (a re-run in place dropped it).
+    when the attempt is gone (a re-run in place dropped it), or when the help
+    ``redesigned`` the plan: the attempt then belongs to the earlier plan, and
+    ``help.step_num`` names an earlier step, not one of the current plan.
     """
-    if help is None:
+    if help is None or redesigned:
         return None
     anchor: int | None = None
     for index, attempt in enumerate(attempts):
@@ -364,14 +450,23 @@ def _applied_help(
     help: CheckpointHelp | None,
     attempts: Sequence[SubTaskAttempt],
     decisions: Sequence[StepDecision],
+    revisions: Sequence[PlanRevisionRecord] = (),
 ) -> CheckpointHelp | None:
     """``help`` when its step's failed attempt is still in the attempts.
 
-    A help without an ask gets the need_help decision's reason as its ask, as
-    the state line does.
+    Also when the help redesigned the test plan: that attempt then moved into
+    the newest revision record. A help without an ask gets the need_help
+    decision's reason as its ask, as the state line does.
     """
     if help is None:
         return None
+    redesign = redesign_for_help(help, revisions)
+    if redesign is not None:
+        if help.ask.strip():
+            return help
+        return replace(
+            help, ask=_help_reason(redesign.earlier_decisions, help.step_num)
+        )
     for attempt in attempts:
         if (
             attempt.kind == "step"
@@ -742,7 +837,10 @@ def _execute_sub_tasks(
         attempts,
         sub_tasks,
         progress.total_iterations,
-        helped=_applied_help(progress.help, attempts, progress.decisions),
+        helped=_applied_help(
+            progress.help, attempts, progress.decisions, progress.plan_revisions
+        ),
+        revisions=progress.plan_revisions,
     )
 
 
@@ -895,6 +993,7 @@ def _build_verdict(
     total_iterations: int,
     *,
     helped: CheckpointHelp | None = None,
+    revisions: Sequence[PlanRevisionRecord] = (),
 ) -> OrchestratorResult:
     # A step that failed, was recovered and then passed on retry counts as passed:
     # only each planned step's final attempt decides, recoveries never do.
@@ -908,7 +1007,7 @@ def _build_verdict(
 
     attempts_tuple = tuple(attempts)
     verdict_prompt = build_verdict_prompt(
-        attempts_tuple, overall_status, plan, helped=helped
+        attempts_tuple, overall_status, plan, helped=helped, revisions=revisions
     )
     verdict_messages = (
         ChatMessage(role="system", content="Summarize the test case execution."),
@@ -924,7 +1023,7 @@ def _build_verdict(
             "Verdict summary failed (%s), using deterministic summary", exc.kind
         )
         summary = _deterministic_summary(
-            attempts_tuple, overall_status, plan, helped=helped
+            attempts_tuple, overall_status, plan, helped=helped, revisions=revisions
         )
 
     return OrchestratorResult(
@@ -949,6 +1048,7 @@ def _deterministic_summary(
     plan: Sequence[SubTask],
     *,
     helped: CheckpointHelp | None = None,
+    revisions: Sequence[PlanRevisionRecord] = (),
 ) -> str:
     lines = [
         f"Test {'passed' if overall_status == 'pass' else 'failed'} "
@@ -956,9 +1056,12 @@ def _deterministic_summary(
     ]
     if was_resumed(attempts):
         lines.append("The case was interrupted and resumed.")
+    redesign = redesign_for_help(helped, revisions)
     if helped is not None:
-        lines.append(help_verdict_note(helped))
-    lines.extend(format_attempt_lines(attempts, plan))
+        lines.append(help_verdict_note(helped, redesigned=redesign is not None))
+    if redesign is not None:
+        lines.append(redesign_verdict_note(redesign))
+    lines.extend(format_attempt_lines(attempts, plan, revisions))
     return "\n".join(lines)
 
 

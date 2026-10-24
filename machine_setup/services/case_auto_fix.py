@@ -15,14 +15,6 @@ import logging
 from django.db import transaction
 from django.utils import timezone
 
-from agents.checkpoint import checkpoint_from_json
-from agents.types import OrchestratorCheckpoint
-from machine_setup.auto_fix_brief import (
-    ACTIONS_DIGEST_MAX,
-    AutoFixBriefData,
-    PlanStep,
-    build_auto_fix_brief,
-)
 from machine_setup.models import (
     LIVE_TURN_STATUSES,
     SetupConversation,
@@ -32,6 +24,10 @@ from machine_setup.models import (
 )
 from machine_setup.services.auto_fix_settlement import (
     settle_case_auto_fix as settle_case_auto_fix,
+)
+from machine_setup.services.case_help_context import (
+    build_help_brief,
+    load_help_request,
 )
 from machine_setup.services.live_turn import resolve_live_turn
 from machine_setup.services.queue_turn import broadcast_and_enqueue, create_turn
@@ -89,13 +85,7 @@ def start_case_auto_fix(help_request_id: int) -> None:
 def _start_locked(help_request_id: int) -> str | None:
     """``None`` when started or nothing to do; else why it cannot start."""
     # One query for the brief: request -> case, run.
-    request = (
-        CaseHelpRequest.objects.select_related(
-            "test_run_test_case__test_case", "test_run_test_case__test_run"
-        )
-        .filter(pk=help_request_id)
-        .first()
-    )
+    request = load_help_request(help_request_id)
     if request is None:
         return None
     pivot = request.test_run_test_case
@@ -127,7 +117,7 @@ def _start_locked(help_request_id: int) -> str | None:
     if get_machine_state(project, get_visual_engine_status()) != MachineState.READY:
         return _MACHINE_NOT_READY_REASON
 
-    brief = build_auto_fix_brief(_brief_data(request))
+    brief = build_help_brief(request, audience="auto_fix")
     conversation = SetupConversation.objects.create(
         project=project,
         kind=SetupConversationKind.AUTO_FIX,
@@ -165,48 +155,6 @@ def _enqueue(turn: SetupTurn, message: SetupMessage) -> None:
         enqueued = False
     if not enqueued:
         settle_case_auto_fix(turn)
-
-
-def _brief_data(request: CaseHelpRequest) -> AutoFixBriefData:
-    pivot = request.test_run_test_case
-    case = pivot.test_case
-    checkpoint = checkpoint_from_json(pivot.execution_checkpoint)
-    plan = (
-        tuple(
-            PlanStep(description=task.description, expected_result=task.expected_result)
-            for task in checkpoint.plan
-        )
-        if checkpoint is not None
-        else ()
-    )
-    return AutoFixBriefData(
-        run_name=pivot.test_run.name,
-        case_title=case.title,
-        preconditions=case.preconditions,
-        steps=case.steps,
-        expected=case.expected,
-        plan=plan,
-        step_num=request.step_num,
-        reason=request.reason,
-        ask=request.ask,
-        actions_digest=_failed_attempt_digest(checkpoint, request.step_num),
-    )
-
-
-def _failed_attempt_digest(
-    checkpoint: OrchestratorCheckpoint | None, step_num: int
-) -> str:
-    """The actions digest of the step's last failed attempt, if any."""
-    if checkpoint is None:
-        return ""
-    for attempt in reversed(checkpoint.attempts):
-        if (
-            attempt.step_num == step_num
-            and attempt.result.status == "fail"
-            and attempt.result.actions_digest
-        ):
-            return attempt.result.actions_digest[:ACTIONS_DIGEST_MAX]
-    return ""
 
 
 def settle_stale_auto_fix_turn(project_id: int) -> None:

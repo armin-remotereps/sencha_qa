@@ -35,14 +35,27 @@ from machine_setup.models import (
     SetupTurn,
 )
 from machine_setup.payloads import (
+    HelpThreadPayload,
     SetupMessagePayload,
     SetupTurnPayload,
+    help_thread_payload,
     message_payload,
     turn_payload,
 )
+from machine_setup.services.case_help_context import help_request_is_waiting
 from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 from machine_setup.turn_state import is_turn_stale
-from projects.models import HelpAutoFixState, Project, TestRun, TestRunStatus
+from projects.case_help_services import HelpPanel, get_help_panel
+from projects.case_plan_revision_services import get_pending_plan_draft
+from projects.models import (
+    CaseHelpRequest,
+    HelpAutoFixState,
+    HelpProposalAction,
+    HelpResolution,
+    Project,
+    TestRun,
+    TestRunStatus,
+)
 from projects.services import MachineState, get_machine_state
 from visual_engine.services.pool_status import get_visual_engine_status
 from visual_engine.types import VisualEngineStatusPayload
@@ -50,8 +63,11 @@ from visual_engine.types import VisualEngineStatusPayload
 SETUP_PAGE_MESSAGE_LIMIT = 300
 # Newest children loaded per run_setup_task row on page load.
 SUBTASK_PAGE_CHILD_LIMIT = 50
-# Newest auto-fix threads listed on the page.
-AUTO_FIX_THREAD_LIMIT = 20
+# Newest help threads (auto-fix and help chat) listed on the page.
+HELP_THREAD_LIMIT = 20
+
+# Thread kinds that belong to a help request.
+HELP_THREAD_KINDS = (SetupConversationKind.AUTO_FIX, SetupConversationKind.CASE_HELP)
 
 # Send blocker while a turn is live in a thread other than the one shown.
 OTHER_THREAD_TURN_MESSAGE = (
@@ -61,17 +77,22 @@ OTHER_THREAD_TURN_MESSAGE = (
 
 
 @dataclass(frozen=True)
-class AutoFixThread:
-    """An auto-fix thread as listed on the page and shown in its header."""
+class HelpThread:
+    """A help thread (auto-fix or help chat) as listed and shown in its header."""
 
     conversation_id: int
+    # "auto_fix" or "case_help", and its label ("Auto-fix" / "Help chat").
+    kind: str
+    kind_label: str
+    help_request_id: int | None
     created_at: datetime
     # The help request's case; None when the request row is gone.
     test_run_id: int | None
     pivot_id: int | None
     case_title: str
     step_num: int | None
-    # "running", "fixed" or "not_fixed".
+    # Auto-fix: "running", "fixed" or "not_fixed". Help chat: "running",
+    # "open" or "resolved".
     state: str
     state_label: str
 
@@ -80,16 +101,18 @@ _THREAD_STATE_LABELS = {
     "running": "Running",
     "fixed": "Fixed",
     "not_fixed": "Not fixed",
+    "open": "Needs help",
 }
 
 
 @dataclass(frozen=True)
 class SetupPage:
     conversation_id: int | None
-    # The shown thread's kind: "chat" (the main chat) or "auto_fix".
+    # The shown thread's kind: "chat" (the main chat), "auto_fix" or
+    # "case_help".
     kind: str
-    # Set when the shown thread is an auto-fix thread.
-    thread: AutoFixThread | None
+    # Set when the shown thread is a help thread (auto-fix or help chat).
+    thread: HelpThread | None
     messages: list[SetupMessagePayload]
     hidden_message_count: int
     turn: SetupTurnPayload | None
@@ -108,7 +131,7 @@ class SetupPage:
 
 
 def find_thread(project: Project, conversation_id: int) -> SetupConversation | None:
-    """A non-archived thread (main chat or auto-fix) of this project, or None."""
+    """A non-archived thread (main chat or help thread) of this project, or None."""
     return (
         SetupConversation.objects.filter(
             pk=conversation_id, project=project, archived_at__isnull=True
@@ -118,15 +141,15 @@ def find_thread(project: Project, conversation_id: int) -> SetupConversation | N
     )
 
 
-def list_auto_fix_threads(
-    project: Project, limit: int = AUTO_FIX_THREAD_LIMIT
-) -> list[AutoFixThread]:
-    """The newest auto-fix threads of the project, newest first; one query."""
-    rows = _auto_fix_threads(project).order_by("-id")[:limit]
+def list_help_threads(
+    project: Project, limit: int = HELP_THREAD_LIMIT
+) -> list[HelpThread]:
+    """The newest help threads of the project, newest first; one query."""
+    rows = _help_threads(project).order_by("-id")[:limit]
     return [_thread_from_row(row) for row in rows]
 
 
-def _auto_fix_threads(project: Project) -> QuerySet[SetupConversation]:
+def _help_threads(project: Project) -> QuerySet[SetupConversation]:
     latest_turn_status = (
         SetupTurn.objects.filter(conversation=OuterRef("pk"))
         .order_by("-id")
@@ -135,17 +158,19 @@ def _auto_fix_threads(project: Project) -> QuerySet[SetupConversation]:
     return (
         SetupConversation.objects.filter(
             project=project,
-            kind=SetupConversationKind.AUTO_FIX,
+            kind__in=HELP_THREAD_KINDS,
             archived_at__isnull=True,
         )
         .select_related("help_request__test_run_test_case__test_case")
         .only(
             "id",
+            "kind",
             "created_at",
             "fix_result",
             "help_request__id",
             "help_request__step_num",
             "help_request__auto_fix_state",
+            "help_request__resolution",
             "help_request__test_run_test_case__id",
             "help_request__test_run_test_case__test_run",
             "help_request__test_run_test_case__test_case__id",
@@ -155,11 +180,20 @@ def _auto_fix_threads(project: Project) -> QuerySet[SetupConversation]:
     )
 
 
-def _thread_from_row(row: SetupConversation) -> AutoFixThread:
+def _thread_from_row(row: SetupConversation) -> HelpThread:
     request = row.help_request
     latest_status: str | None = getattr(row, "latest_turn_status", None)
+    state_label = ""
     if latest_status in LIVE_TURN_STATUSES:
         state = "running"
+    elif row.kind == SetupConversationKind.CASE_HELP:
+        if request is None or request.resolution != HelpResolution.OPEN:
+            state = "resolved"
+            state_label = (
+                request.get_resolution_display() if request is not None else "Closed"
+            )
+        else:
+            state = "open"
     elif request is not None:
         state = (
             "fixed" if request.auto_fix_state == HelpAutoFixState.FIXED else "not_fixed"
@@ -167,15 +201,89 @@ def _thread_from_row(row: SetupConversation) -> AutoFixThread:
     else:
         state = "fixed" if row.fix_result == SetupFixResult.FIXED else "not_fixed"
     pivot = request.test_run_test_case if request is not None else None
-    return AutoFixThread(
+    return HelpThread(
         conversation_id=row.pk,
+        kind=row.kind,
+        kind_label=row.get_kind_display(),
+        help_request_id=request.pk if request is not None else None,
         created_at=row.created_at,
         test_run_id=pivot.test_run_id if pivot is not None else None,
         pivot_id=pivot.pk if pivot is not None else None,
         case_title=pivot.test_case.title if pivot is not None else "",
         step_num=request.step_num if request is not None else None,
         state=state,
-        state_label=_THREAD_STATE_LABELS[state],
+        state_label=state_label or _THREAD_STATE_LABELS[state],
+    )
+
+
+def get_thread_help_panel(project: Project, thread: HelpThread) -> HelpPanel | None:
+    """The help panel of a help thread's run, when its run waits on this request.
+
+    None when the run is not paused (no further queries), or when the run's
+    latest help request is another one (the case paused again later).
+    """
+    if thread.test_run_id is None or thread.help_request_id is None:
+        return None
+    # Whole row: the panel's gates read several run fields.
+    test_run = TestRun.objects.filter(pk=thread.test_run_id, project=project).first()
+    if test_run is None:
+        return None
+    panel = get_help_panel(test_run, project, pivot_id=thread.pivot_id)
+    if panel is None or panel.request.pk != thread.help_request_id:
+        return None
+    return panel
+
+
+def help_panel_payload(conversation_id: int, panel: HelpPanel) -> HelpThreadPayload:
+    """The initial help state of a thread page, from its loaded panel (no query)."""
+    request = panel.request
+    waiting = panel.is_open
+    action = request.agent_proposal_action if waiting else ""
+    return help_thread_payload(
+        conversation_id=conversation_id,
+        request_open=waiting,
+        resolution_label=request.get_resolution_display(),
+        proposal_action=action,
+        proposal_action_label=HelpProposalAction(action).label if action else "",
+        proposal_note=request.agent_proposal_note if waiting else "",
+        draft=panel.pending_draft if waiting else None,
+    )
+
+
+def load_help_thread_payload(
+    conversation_id: int, help_request_id: int
+) -> HelpThreadPayload | None:
+    """The help panel state of a help thread; two queries (one when resolved).
+
+    None when the request row is gone.
+    """
+    request = (
+        CaseHelpRequest.objects.select_related("test_run_test_case__test_run")
+        .only(
+            "id",
+            "resolution",
+            "agent_proposal_action",
+            "agent_proposal_note",
+            "test_run_test_case__id",
+            "test_run_test_case__status",
+            "test_run_test_case__test_run__id",
+            "test_run_test_case__test_run__status",
+        )
+        .filter(pk=help_request_id)
+        .first()
+    )
+    if request is None:
+        return None
+    waiting = help_request_is_waiting(request)
+    action = request.agent_proposal_action if waiting else ""
+    return help_thread_payload(
+        conversation_id=conversation_id,
+        request_open=waiting,
+        resolution_label=request.get_resolution_display(),
+        proposal_action=action,
+        proposal_action_label=(HelpProposalAction(action).label if action else ""),
+        proposal_note=request.agent_proposal_note if waiting else "",
+        draft=get_pending_plan_draft(request.pk) if waiting else None,
     )
 
 
@@ -191,7 +299,7 @@ def get_setup_page(
     ``include_messages=False``: the socket's ``current_state`` delivers the
     rows, so they are built once per load.
     """
-    thread: AutoFixThread | None = None
+    thread: HelpThread | None = None
     if conversation is None:
         kind: str = SetupConversationKind.CHAT
         conversation_id = (
@@ -206,8 +314,8 @@ def get_setup_page(
     else:
         kind = conversation.kind
         conversation_id = conversation.pk
-        if kind == SetupConversationKind.AUTO_FIX:
-            row = _auto_fix_threads(project).filter(pk=conversation_id).first()
+        if kind in HELP_THREAD_KINDS:
+            row = _help_threads(project).filter(pk=conversation_id).first()
             thread = _thread_from_row(row) if row is not None else None
     live_turn = (
         SetupTurn.objects.filter(project=project, status__in=LIVE_TURN_STATUSES)

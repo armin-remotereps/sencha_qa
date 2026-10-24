@@ -8,26 +8,34 @@ from django.views.decorators.http import require_GET, require_POST
 
 from accounts.types import AuthenticatedRequest
 from machine_setup.exceptions import (
+    HelpChatSendRefusedError,
     MachineSetupError,
     SetupMachineNotReadyError,
     SetupNoActiveTurnError,
     SetupTurnActiveError,
 )
-from machine_setup.forms import SetupMessageForm, SetupThreadForm
+from machine_setup.forms import OpenHelpChatForm, SetupMessageForm, SetupThreadForm
 from machine_setup.models import SetupConversation, SetupConversationKind
+from machine_setup.payloads import HelpThreadPayload
 from machine_setup.services.case_auto_fix import settle_stale_auto_fix_turn
 from machine_setup.services.chat_page import (
     OTHER_THREAD_TURN_MESSAGE,
     SetupPage,
     find_thread,
     get_setup_page,
-    list_auto_fix_threads,
+    get_thread_help_panel,
+    help_panel_payload,
+    list_help_threads,
 )
+from machine_setup.services.open_help_chat import find_help_case, open_help_chat
 from machine_setup.services.reset_conversation import reset_conversation
 from machine_setup.services.send_message import send_setup_message
 from machine_setup.services.stop_turn import request_stop
+from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE
+from projects.case_help_services import HelpPanel
 from projects.decorators import project_membership_required
-from projects.forms import form_error_text
+from projects.exceptions import RunHelpError
+from projects.forms import CaseHelpResolutionForm, form_error_text
 from projects.models import Project
 
 
@@ -64,16 +72,32 @@ def _render_chat(
     conversation: SetupConversation | None,
 ) -> HttpResponse:
     help_case_url = ""
-    if page.thread is not None and page.thread.pivot_id is not None:
+    help_panel: HelpPanel | None = None
+    help_form: CaseHelpResolutionForm | None = None
+    help_state: HelpThreadPayload | None = None
+    thread = page.thread
+    if thread is not None and thread.pivot_id is not None:
         help_case_url = reverse(
             "projects:test_run_case_detail",
             kwargs={
                 "project_id": project.id,
-                "test_run_id": page.thread.test_run_id,
-                "pivot_id": page.thread.pivot_id,
+                "test_run_id": thread.test_run_id,
+                "pivot_id": thread.pivot_id,
             },
         )
-    threads = list_auto_fix_threads(project)
+        help_panel = get_thread_help_panel(project, thread)
+    if help_panel is not None and conversation is not None:
+        help_state = help_panel_payload(conversation.pk, help_panel)
+        draft = help_panel.pending_draft
+        help_form = CaseHelpResolutionForm(
+            initial={
+                "note": help_panel.request.agent_proposal_note,
+                "use_plan_revision": True,
+                "return_thread_id": conversation.pk,
+                "plan_revision_id": draft.revision_id if draft is not None else None,
+            }
+        )
+    threads = list_help_threads(project)
     return render(
         request,
         "machine_setup/chat.html",
@@ -83,6 +107,12 @@ def _render_chat(
             "conversation": conversation,
             "thread_kind": page.kind,
             "help_case_url": help_case_url,
+            "help_panel": help_panel,
+            "help_form": help_form,
+            "help_state": help_state,
+            # The panel's gate that a live turn of this very thread raises;
+            # the page tracks that turn itself.
+            "help_turn_blocker": MACHINE_SETUP_RUNNING_MESSAGE,
             "threads": threads,
             "thread_ids": [thread.conversation_id for thread in threads],
             "visual_engine": page.visual_engine,
@@ -96,6 +126,42 @@ def _render_chat(
             "active_nav": "projects",
         },
     )
+
+
+@project_membership_required
+@require_POST
+def help_chat_open(
+    request: AuthenticatedRequest, project: Project, pivot_id: int
+) -> HttpResponse:
+    pivot = find_help_case(project, pivot_id)
+    if pivot is None:
+        raise Http404("No such test case.")
+    case_url = reverse(
+        "projects:test_run_case_detail",
+        kwargs={
+            "project_id": project.id,
+            "test_run_id": pivot.test_run_id,
+            "pivot_id": pivot.pk,
+        },
+    )
+    form = OpenHelpChatForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return redirect(case_url)
+    try:
+        thread = open_help_chat(
+            project=project,
+            pivot=pivot,
+            user=request.user,
+            text=form.cleaned_data["text"],
+        )
+    except HelpChatSendRefusedError as exc:
+        messages.error(request, exc.message)
+        return _back_to_chat(project, exc.conversation_id)
+    except (RunHelpError, MachineSetupError) as exc:
+        messages.error(request, exc.message)
+        return redirect(case_url)
+    return _back_to_chat(project, thread.pk)
 
 
 @project_membership_required

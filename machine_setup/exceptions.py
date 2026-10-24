@@ -38,3 +38,14 @@ class SetupNoActiveTurnError(MachineSetupError):
 
 class SetupRunnerLostError(InfrastructureError):
     """The Test Runner disconnected mid-turn; ends the turn (internal)."""
+
+
+class HelpChatSendRefusedError(MachineSetupError):
+    """The thread exists, but its first message could not be sent.
+
+    ``conversation_id`` is the thread to show the person, with ``message``.
+    """
+
+    def __init__(self, message: str, *, conversation_id: int) -> None:
+        super().__init__(message)
+        self.conversation_id = conversation_id

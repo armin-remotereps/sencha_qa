@@ -229,9 +229,12 @@ def _one_line(text: str, limit: int) -> str:
 
 
 def _step_lines(row: CaseStepRow) -> str:
-    line = f"{row.num}. {row.status_label}: " + _one_line(
-        row.description, _STEP_DESCRIPTION_MAX
+    status = (
+        f"{row.status_label} (carried over from the earlier plan)"
+        if row.carried_from is not None
+        else row.status_label
     )
+    line = f"{row.num}. {status}: " + _one_line(row.description, _STEP_DESCRIPTION_MAX)
     result = _one_line(row.summary or row.error, _STEP_RESULT_MAX)
     if result:
         line += f" — {result}"
@@ -248,11 +251,14 @@ def format_step_breakdown(progress: CaseStepProgress) -> str:
 
     Numbered like the verdict text ("Steps 4–7 were not run"), so a reader can
     see what those steps were. Capped at ``STEP_BREAKDOWN_MAX``: trailing rows
-    that do not fit collapse into "… and N more steps, see Details".
+    that do not fit collapse into "… and N more steps, see Details". A plan a
+    help chat redesigned says so under the header.
     """
     if not progress.rows:
         return ""
     header = f"Steps planned by the agent ({progress.total}):"
+    if progress.earlier_plans:
+        header += "\nThe test plan was redesigned during help."
     entries = [_step_lines(row) for row in progress.rows]
     text = "\n".join([header, *entries])
     if len(text) <= STEP_BREAKDOWN_MAX:

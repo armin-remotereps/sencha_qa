@@ -9,6 +9,10 @@ requires the run to be PAUSED, and resolves the case's open help request. The
 remaining cases are then queued (the helped case first), unless the auto-fix
 turn of the request is still live: it is asked to stop, and the run is queued
 when it ends (``finish_case_auto_fix``).
+
+A help-chat redesign of the plan (``case_plan_revision_services``) is applied
+by Continue when the person keeps it; every other resolution supersedes it.
+Every resolution clears the help-chat agent's suggestion.
 """
 
 from __future__ import annotations
@@ -18,16 +22,34 @@ from datetime import datetime
 from enum import StrEnum
 
 from django.db import transaction
-from django.db.models import Prefetch, QuerySet
+from django.db.models import Prefetch, Q, QuerySet, Subquery
 from django.utils import timezone
 
 from accounts.models import CustomUser
 from agents.checkpoint import with_help
+from agents.plan_revision import PlanDraftView
 from agents.types import CheckpointHelp, HelpSource
 from machine_setup.auto_fix_stop import request_auto_fix_stop
-from machine_setup.models import SetupConversation, SetupConversationKind
-from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, auto_fix_turn_live
+from machine_setup.models import (
+    LIVE_TURN_STATUSES,
+    SetupConversation,
+    SetupConversationKind,
+    SetupTurn,
+)
+from machine_setup.turn_state import (
+    MACHINE_SETUP_RUNNING_MESSAGE,
+    SETUP_TURN_STALE_AFTER,
+    auto_fix_turn_live,
+)
 from projects.case_help_notifications import notify_case_needs_help
+from projects.case_help_proposal_services import clear_agent_proposal
+from projects.case_plan_revision_services import (
+    apply_plan_revision_locked,
+    get_pending_plan_draft,
+    pending_revision_id_locked,
+    supersede_pending_revisions,
+    with_decided_revisions,
+)
 from projects.exceptions import RunHelpError
 from projects.models import (
     HELP_NOTE_MAX_LENGTH,
@@ -37,6 +59,7 @@ from projects.models import (
     HelpResolution,
     Project,
     TestRun,
+    TestRunScreenshot,
     TestRunStatus,
     TestRunTestCase,
     TestRunTestCaseStatus,
@@ -52,9 +75,13 @@ _NOT_PAUSED = "This run is not waiting for help."
 _NO_OPEN_REQUEST = "This case no longer needs help. Reload the page."
 _STILL_NEEDS_HELP = "A case of this run still needs help. Resolve it on its case page."
 _AUTO_FIX_NOT_RUNNING = "The auto-fix is not running."
+_AGENT_REPLYING = "The agent is still replying. Wait or press Stop."
+_NEWER_DRAFT = "The agent proposed a newer plan. Review it, then continue again."
 
-# Prefetched onto a help request: its auto-fix threads, newest first.
-_THREADS_ATTR = "auto_fix_threads"
+# Prefetched onto a help request: its threads (auto-fix or help chat), newest
+# first. The one-thread-per-request constraint keeps it to one row.
+_THREADS_ATTR = "help_threads"
+_HELP_THREAD_KINDS = (SetupConversationKind.AUTO_FIX, SetupConversationKind.CASE_HELP)
 
 
 class HelpActionOutcome(StrEnum):
@@ -83,13 +110,18 @@ class HelpPanel:
     # The run's latest help request (open, or resolved while the run waits),
     # with ``test_run_test_case__test_case`` loaded.
     request: CaseHelpRequest
-    # Latest auto-fix thread of the request; None when no thread was opened.
+    # The request's thread (Night auto-fix or help chat); None when no thread
+    # was opened.
     thread: SetupConversation | None
     # The auto-fix turn of the request is queued or running (not stale).
     auto_fix_live: bool
     # Why the pending cases cannot be queued right now (the live auto-fix of
     # this request aside, since resolving the request stops it).
     blockers: tuple[str, ...]
+    # The help-chat agent's pending redesign of the plan (open request only).
+    pending_draft: PlanDraftView | None = None
+    # The case's newest screenshot ("" when none).
+    latest_screenshot_url: str = ""
 
     @property
     def is_open(self) -> bool:
@@ -125,8 +157,16 @@ class HelpPanel:
 def _with_threads() -> Prefetch[str, QuerySet[SetupConversation], str]:
     return Prefetch(
         "setup_conversations",
-        queryset=SetupConversation.objects.filter(kind=SetupConversationKind.AUTO_FIX)
-        .only("id", "help_request_id", "fix_result", "fix_summary", "created_at")
+        queryset=SetupConversation.objects.filter(kind__in=_HELP_THREAD_KINDS)
+        .only(
+            "id",
+            "help_request_id",
+            "kind",
+            "archived_at",
+            "fix_result",
+            "fix_summary",
+            "created_at",
+        )
         .order_by("-created_at", "-id"),
         to_attr=_THREADS_ATTR,
     )
@@ -168,16 +208,57 @@ def get_help_panel(
         thread=_latest_thread(request),
         auto_fix_live=auto_fix_live,
         blockers=tuple(blockers),
+        pending_draft=get_pending_plan_draft(request.pk) if request.is_open else None,
+        latest_screenshot_url=_latest_screenshot_url(request.test_run_test_case_id),
     )
 
 
 def list_case_help_requests(pivot: TestRunTestCase) -> list[CaseHelpRequest]:
-    """Every help request of the case, oldest first, with person and thread loaded."""
+    """Every help request of the case, oldest first.
+
+    Loaded: the resolving person, the thread (``help_threads``) and the
+    applied and discarded redesigns (``decided_plan_revisions``).
+    """
     return list(
         CaseHelpRequest.objects.filter(test_run_test_case_id=pivot.pk)
         .select_related("resolved_by")
-        .prefetch_related(_with_threads())
+        .prefetch_related(_with_threads(), with_decided_revisions())
         .order_by("requested_at", "id")
+    )
+
+
+def help_request_waiting(help_request_id: int) -> bool:
+    """Whether the request is open, its case Need help and its run PAUSED."""
+    return CaseHelpRequest.objects.filter(
+        pk=help_request_id,
+        resolution=HelpResolution.OPEN,
+        test_run_test_case__status=TestRunTestCaseStatus.NEED_HELP,
+        test_run_test_case__test_run__status=TestRunStatus.PAUSED,
+    ).exists()
+
+
+def resolve_return_thread(
+    *, pivot: TestRunTestCase, thread_id: int | None
+) -> int | None:
+    """``thread_id`` if it is the non-archived thread of the case's latest request.
+
+    The help actions redirect there; any other id falls back to the case page.
+    """
+    if thread_id is None:
+        return None
+    latest_request = (
+        CaseHelpRequest.objects.filter(test_run_test_case_id=pivot.pk)
+        .order_by("-requested_at", "-id")
+        .values("id")[:1]
+    )
+    return (
+        SetupConversation.objects.filter(
+            pk=thread_id,
+            archived_at__isnull=True,
+            help_request_id=Subquery(latest_request),
+        )
+        .values_list("id", flat=True)
+        .first()
     )
 
 
@@ -224,19 +305,47 @@ def format_help_action_message(verb: str, result: HelpActionResult) -> str:
 
 
 def continue_after_help(
-    *, pivot: TestRunTestCase, user: CustomUser, note: str
+    *,
+    pivot: TestRunTestCase,
+    user: CustomUser,
+    note: str,
+    plan_revision_id: int | None = None,
+    use_plan_revision: bool = True,
 ) -> HelpActionResult:
-    """The machine is fixed: the case re-runs its failing step from its checkpoint."""
+    """The machine is fixed: the case re-runs its failing step from its checkpoint.
+
+    ``plan_revision_id`` is the help-chat redesign the person saw (None when
+    none was shown). With ``use_plan_revision`` that draft is applied first and
+    the case resumes at its first step that is not carried; otherwise a
+    pending draft is superseded and the case re-runs its failing step. A
+    pending draft other than the one shown refuses (the agent proposed a newer
+    plan).
+    """
     with transaction.atomic():
         project, test_run = _lock_paused_run(pivot.test_run_id)
         locked_pivot, request = _lock_open_request(test_run, pivot.pk)
         now = timezone.now()
+        if _person_turn_live(request.pk, now):
+            raise RunHelpError(_AGENT_REPLYING)
         auto_fix_live = auto_fix_turn_live(request.pk)
         blockers = list_reopen_blockers(test_run, project)
         if auto_fix_live:
             blockers = [b for b in blockers if b != MACHINE_SETUP_RUNNING_MESSAGE]
         if blockers:
             raise RunHelpError(blockers[0])
+
+        if use_plan_revision and plan_revision_id is not None:
+            apply_plan_revision_locked(
+                pivot=locked_pivot,
+                request=request,
+                revision_id=plan_revision_id,
+                user=user,
+            )
+        else:
+            pending_id = pending_revision_id_locked(request)
+            if pending_id is not None and pending_id != plan_revision_id:
+                raise RunHelpError(_NEWER_DRAFT)
+            supersede_pending_revisions(request)
 
         note = _cap_note(note)
         _resolve(request, HelpResolution.CONTINUED, user, note, now, auto_fix_live)
@@ -254,6 +363,7 @@ def mark_failed_after_help(
         now = timezone.now()
         auto_fix_live = auto_fix_turn_live(request.pk)
         note = _cap_note(note)
+        supersede_pending_revisions(request)
         _resolve(request, HelpResolution.MARKED_FAILED, user, note, now, auto_fix_live)
         locked_pivot.status = TestRunTestCaseStatus.FAILED
         locked_pivot.blocked_reason = ""
@@ -286,6 +396,8 @@ def skip_after_help(
         now = timezone.now()
         auto_fix_live = auto_fix_turn_live(request.pk)
         note = _cap_note(note)
+        # The skipped case resumes later on its current (old) plan.
+        supersede_pending_revisions(request)
         _resolve(request, HelpResolution.SKIPPED, user, note, now, auto_fix_live)
         locked_pivot.status = TestRunTestCaseStatus.BLOCKED
         locked_pivot.blocked_reason = BlockedReason.HELP_SKIPPED
@@ -332,6 +444,39 @@ def stop_auto_fix(*, pivot: TestRunTestCase, user: CustomUser) -> None:
             notify_case_needs_help(request_id, after_auto_fix=True)
 
         transaction.on_commit(_after_commit)
+
+
+def lock_help_request_for_chat(*, project: Project, pivot_id: int) -> CaseHelpRequest:
+    """Lock the case's open help request for opening its help chat.
+
+    Must be called inside ``transaction.atomic()``. Locks project, run, case
+    and request; raises ``RunHelpError`` unless the run is PAUSED with an open
+    request for that case of ``project``. A running auto-fix that has no
+    thread yet (its start task is still queued) is released to the person:
+    it becomes not fixed without a notification (the person is here), and
+    the late start task does nothing. Returns the request with
+    ``test_run_test_case`` loaded.
+    """
+    test_run_id = (
+        TestRunTestCase.objects.filter(pk=pivot_id, test_run__project=project)
+        .values_list("test_run_id", flat=True)
+        .first()
+    )
+    if test_run_id is None:
+        raise RunHelpError(_NO_OPEN_REQUEST)
+    _, test_run = _lock_paused_run(test_run_id)
+    locked_pivot, request = _lock_open_request(test_run, pivot_id)
+    request.test_run_test_case = locked_pivot
+    if (
+        request.auto_fix_state == HelpAutoFixState.RUNNING
+        and not SetupConversation.objects.filter(help_request_id=request.pk).exists()
+    ):
+        request.auto_fix_state = HelpAutoFixState.NOT_FIXED
+        request.save(update_fields=["auto_fix_state"])
+        transaction.on_commit(
+            lambda: broadcast_run_and_pivots(test_run, [locked_pivot])
+        )
+    return request
 
 
 def continue_paused_run(*, test_run: TestRun, user: CustomUser) -> None:
@@ -453,6 +598,8 @@ def finish_case_auto_fix(*, help_request_id: int, fixed: bool, summary: str) -> 
                         "resolved_at",
                     ]
                 )
+                supersede_pending_revisions(request)
+                clear_agent_proposal(request)
                 _set_continue_pending(pivot, request, "auto_fix")
                 queue_pending_cases(test_run)
         except RunHelpError:
@@ -518,6 +665,31 @@ def _resolve(
         request.auto_fix_state = HelpAutoFixState.NOT_FIXED
         update_fields.append("auto_fix_state")
     request.save(update_fields=update_fields)
+    clear_agent_proposal(request)
+
+
+def _person_turn_live(help_request_id: int, now: datetime) -> bool:
+    """Whether a person's (not auto-fix) turn of the request's thread is live.
+
+    Queued or running and not stale, as ``turn_state.live_turn_exists``.
+    """
+    cutoff = now - SETUP_TURN_STALE_AFTER
+    return SetupTurn.objects.filter(
+        Q(started_at__gte=cutoff) | Q(started_at__isnull=True, created_at__gte=cutoff),
+        auto_fix=False,
+        conversation__help_request_id=help_request_id,
+        status__in=LIVE_TURN_STATUSES,
+    ).exists()
+
+
+def _latest_screenshot_url(pivot_id: int) -> str:
+    screenshot = (
+        TestRunScreenshot.objects.filter(test_run_test_case_id=pivot_id)
+        .only("id", "image")
+        .order_by("-created_at", "-id")
+        .first()
+    )
+    return screenshot.image.url if screenshot is not None and screenshot.image else ""
 
 
 def _write_help_key(

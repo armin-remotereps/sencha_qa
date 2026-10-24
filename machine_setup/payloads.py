@@ -11,6 +11,7 @@ from typing import TypedDict
 
 from django.conf import settings
 
+from agents.plan_revision import PlanDraftView
 from machine_setup.models import SetupMessage, SetupScreenshot, SetupTurn
 from machine_setup.subtask_types import (
     DONE_WHEN_MAX_CHARS,
@@ -20,6 +21,11 @@ from machine_setup.subtask_types import (
 )
 
 _ARGUMENTS_TEXT_LIMIT = 4000
+# Help panel caps (the services already cap these; the payload caps again).
+_HELP_NOTE_LIMIT = 2000
+_HELP_REASON_LIMIT = 1000
+_HELP_STEP_TEXT_LIMIT = 2000
+_HELP_ROWS_LIMIT = 60
 
 
 class SetupScreenshotPayload(TypedDict):
@@ -156,3 +162,105 @@ def _arguments_text(arguments: object) -> str:
     if len(text) > _ARGUMENTS_TEXT_LIMIT:
         return text[:_ARGUMENTS_TEXT_LIMIT] + "\n…"
     return text
+
+
+class HelpProposalPayload(TypedDict):
+    action: str
+    action_label: str
+    note: str
+
+
+class PlanDraftOldRowPayload(TypedDict):
+    num: int
+    description: str
+    status: str
+    status_label: str
+    # New step it is carried to; None when dropped.
+    carried_to: int | None
+
+
+class PlanDraftNewRowPayload(TypedDict):
+    num: int
+    description: str
+    expected_result: str
+    carried_from: int | None
+    # "carried", "resume" or "run".
+    state: str
+    state_label: str
+
+
+class PlanDraftPayload(TypedDict):
+    revision_id: int
+    reason: str
+    resume_step: int
+    carried_count: int
+    old_rows: list[PlanDraftOldRowPayload]
+    new_rows: list[PlanDraftNewRowPayload]
+
+
+class HelpThreadPayload(TypedDict):
+    """The help panel of a help thread (auto-fix or help chat)."""
+
+    conversation_id: int
+    # The request still waits for a person (open, run paused, case Need help).
+    request_open: bool
+    resolution_label: str
+    agent_proposal: HelpProposalPayload | None
+    plan_draft: PlanDraftPayload | None
+
+
+def help_thread_payload(
+    *,
+    conversation_id: int,
+    request_open: bool,
+    resolution_label: str,
+    proposal_action: str,
+    proposal_action_label: str,
+    proposal_note: str,
+    draft: PlanDraftView | None,
+) -> HelpThreadPayload:
+    return {
+        "conversation_id": conversation_id,
+        "request_open": request_open,
+        "resolution_label": resolution_label,
+        "agent_proposal": (
+            {
+                "action": proposal_action,
+                "action_label": proposal_action_label,
+                "note": proposal_note[:_HELP_NOTE_LIMIT],
+            }
+            if proposal_action
+            else None
+        ),
+        "plan_draft": plan_draft_payload(draft) if draft is not None else None,
+    }
+
+
+def plan_draft_payload(draft: PlanDraftView) -> PlanDraftPayload:
+    return {
+        "revision_id": draft.revision_id,
+        "reason": draft.reason[:_HELP_REASON_LIMIT],
+        "resume_step": draft.resume_step,
+        "carried_count": draft.carried_count,
+        "old_rows": [
+            {
+                "num": row.num,
+                "description": row.description[:_HELP_STEP_TEXT_LIMIT],
+                "status": row.status,
+                "status_label": row.status_label,
+                "carried_to": row.carried_to,
+            }
+            for row in draft.old_rows[:_HELP_ROWS_LIMIT]
+        ],
+        "new_rows": [
+            {
+                "num": row.num,
+                "description": row.description[:_HELP_STEP_TEXT_LIMIT],
+                "expected_result": row.expected_result[:_HELP_STEP_TEXT_LIMIT],
+                "carried_from": row.carried_from,
+                "state": row.state,
+                "state_label": row.state_label,
+            }
+            for row in draft.new_rows[:_HELP_ROWS_LIMIT]
+        ],
+    }

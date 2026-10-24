@@ -3,7 +3,8 @@
    Context contract:
      project, test_run, csrf_token
      help_panel — projects.case_help_services.HelpPanel (request with
-                  test_run_test_case__test_case loaded, thread, auto_fix_live,
+                  test_run_test_case__test_case loaded, thread (auto-fix or
+                  help-chat thread; "Help chat" link), auto_fix_live,
                   blockers, is_open, can_continue_run, waiting_for_auto_fix_stop)
    The agent's reason / ask is model text: autoescaped, never |safe. {% endcomment %}
 {% with help_request=help_panel.request %}
@@ -24,7 +25,7 @@
       <div class="help-actions">
         <a class="btn btn-sm btn-primary" href="{% url 'projects:test_run_case_detail' project.id test_run.id case.id %}">Open the case</a>
         {% if help_panel.thread %}
-        <a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id help_panel.thread.id %}">View the auto-fix thread</a>
+        <a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id help_panel.thread.id %}">Help chat</a>
         {% endif %}
       </div>
     {% elif help_panel.waiting_for_auto_fix_stop %}

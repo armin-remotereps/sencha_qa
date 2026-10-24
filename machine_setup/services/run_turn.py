@@ -45,6 +45,7 @@ from machine_setup.services.activity_recorder import (
     fail_running_rows,
 )
 from machine_setup.services.auto_fix_settlement import settle_case_auto_fix
+from machine_setup.services.case_help_context import describe_help_status
 from machine_setup.services.run_setup_task import SetupTaskRuntime, run_setup_task
 from machine_setup.services.setup_prompt import build_setup_system_prompt
 from machine_setup.services.setup_tools import (
@@ -52,6 +53,7 @@ from machine_setup.services.setup_tools import (
     main_tool_definitions,
 )
 from machine_setup.subtask_types import SetupTaskRequest
+from machine_setup.thread_role import ThreadRole, thread_role
 from machine_setup.turn_outcome import (
     TurnOutcome,
     classify_turn_end,
@@ -164,11 +166,18 @@ class _TurnRunner:
         project = turn.project
         system_info = project.agent_system_info or None
         project_prompt = build_agent_project_context(project)
+        help_request_id = turn.conversation.help_request_id
+        role = thread_role(auto_fix_turn=turn.auto_fix, help_request_id=help_request_id)
         system_prompt = build_setup_system_prompt(
             system_info=system_info,
             project_prompt=project_prompt,
             max_iterations=settings.MACHINE_SETUP_MAX_ITERATIONS,
-            auto_fix=turn.auto_fix,
+            role=role,
+            help_status=(
+                describe_help_status(help_request_id)
+                if role == ThreadRole.CASE_HELP and help_request_id is not None
+                else ""
+            ),
         )
         llm_config = build_llm_config()
         self.subtask_runtime = SetupTaskRuntime(
@@ -202,13 +211,15 @@ class _TurnRunner:
             author=turn.requested_by,
             on_context_updated=self._on_context_updated,
             run_subtask=self._run_subtask,
-            auto_fix_conversation_id=self.conversation_id if turn.auto_fix else None,
+            role=role,
+            conversation_id=self.conversation_id,
+            help_request_id=help_request_id,
         )
         result = run_tool_loop(
             [ChatMessage(role="system", content=system_prompt), *history],
             context,
             config=config,
-            tool_definitions=main_tool_definitions(auto_fix=turn.auto_fix),
+            tool_definitions=main_tool_definitions(role),
             dispatch=self.recorder.wrap(dispatch),
             on_transcript=self._on_transcript,
         )

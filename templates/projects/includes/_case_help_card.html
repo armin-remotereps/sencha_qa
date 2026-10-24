@@ -3,16 +3,25 @@
    Context contract:
      project, test_run, pivot, csrf_token
      help_panel — projects.case_help_services.HelpPanel for this case (the
-                  run is paused on it): request, thread (auto-fix
-                  SetupConversation or None; fix_result, fix_summary),
+                  run is paused on it): request (agent_proposal_action,
+                  agent_proposal_note: the help-chat agent's suggestion),
+                  thread (auto-fix or help-chat SetupConversation or None;
+                  kind, fix_result, fix_summary),
+                  pending_draft (agents.plan_revision.PlanDraftView or None:
+                  revision_id, reason, resume_step, carried_count, new_rows),
                   auto_fix_summary (the setup agent's report, request copy
                   else thread; shown next to the note once the auto-fix
                   has ended),
                   auto_fix_live, blockers, is_open, can_continue,
                   can_continue_run, waiting_for_auto_fix_stop
-     help_form  — CaseHelpResolutionForm (the optional note)
+     help_form  — CaseHelpResolutionForm (the optional note, pre-filled from
+                  the agent's suggestion; use_plan_revision)
    Continue / Mark failed / Skip share one form (the note) and post to their
-   own URL via formaction. Abort opens the page's "abort-run" dialog.
+   own URL via formaction. Abort opens the page's "abort-run" dialog. With a
+   pending draft the form carries its hidden plan_revision_id and the
+   "Use the redesigned plan" checkbox (Continue applies it; the others
+   supersede it). "Open help chat" posts to machine_setup:help_chat_open
+   (optional first message `text`); with a thread it is a link instead.
    Agent and human text is autoescaped, never |safe. {% endcomment %}
 {% with help_request=help_panel.request thread=help_panel.thread %}
 {% with auto_fix_summary=help_panel.auto_fix_summary %}
@@ -44,9 +53,8 @@
         <span class="alert-icon" aria-hidden="true">⚙</span>
         <div>
           <strong>The Machine setup agent is trying to fix this</strong>
-          <p>Continue, Mark failed and Skip take effect when the auto-fix agent stops.</p>
+          <p>Continue, Mark failed and Skip take effect when the auto-fix agent stops. Stop auto-fix to talk to it yourself in the help chat.</p>
           <div class="help-actions">
-            {% if thread %}<a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id thread.id %}">View the auto-fix thread</a>{% endif %}
             <form method="post" action="{% url 'projects:test_run_case_help_stop_auto_fix' project.id test_run.id pivot.id %}">
               {% csrf_token %}
               <button type="submit" class="btn btn-sm btn-danger">Stop auto-fix</button>
@@ -60,7 +68,6 @@
         <div>
           <strong>Auto-fix could not fix it</strong>
           <p>Its report is next to the note below; the test agent gets it too.</p>
-          {% if thread %}<a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id thread.id %}">View the auto-fix thread</a>{% endif %}
         </div>
       </div>
     {% elif help_request.auto_fix_state == "fixed" %}
@@ -68,8 +75,40 @@
         <span class="alert-icon" aria-hidden="true">⚠</span>
         <div>
           <strong>The auto-fix reported the machine fixed, but the run could not continue</strong>
-          {% if thread %}<a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id thread.id %}">View the auto-fix thread</a>{% endif %}
         </div>
+      </div>
+    {% endif %}
+
+    {% if thread %}
+      <div class="help-actions">
+        <a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id thread.id %}">Go to help chat</a>
+      </div>
+    {% else %}
+      <form method="post" action="{% url 'machine_setup:help_chat_open' project.id pivot.id %}" class="field">
+        {% csrf_token %}
+        <label class="label" for="help-chat-text">Talk to the agent about this case</label>
+        <textarea class="textarea" id="help-chat-text" name="text" rows="2" maxlength="8000" placeholder="Optional: your first message. Empty asks it to look at the test machine and suggest what to do."></textarea>
+        <div class="help-actions">
+          <button type="submit" class="btn btn-sm btn-secondary">Open help chat</button>
+        </div>
+      </form>
+    {% endif %}
+
+    {% with draft=help_panel.pending_draft %}
+    {% if draft %}
+      <div class="help-suggestion">
+        <strong>The agent proposed a redesigned test: {{ draft.new_rows|length }} step{{ draft.new_rows|length|pluralize }}, {{ draft.carried_count }} carried, resumes at step {{ draft.resume_step }}.</strong>
+        {% if draft.reason %}<p class="pre-wrap small">{{ draft.reason }}</p>{% endif %}
+        {% if thread %}<a href="{% url 'machine_setup:thread' project.id thread.id %}">Review it side by side in the help chat</a>{% endif %}
+      </div>
+    {% endif %}
+    {% endwith %}
+
+    {% if help_request.agent_proposal_action %}
+      <div class="help-suggestion">
+        <strong>The agent suggests: {{ help_request.get_agent_proposal_action_display }}</strong>
+        {% if help_request.agent_proposal_note %}<p class="pre-wrap small">{{ help_request.agent_proposal_note }}</p>{% endif %}
+        <p class="hint">Only you resolve the case; its note is pre-filled below.</p>
       </div>
     {% endif %}
 
@@ -84,6 +123,16 @@
         {{ help_form.note }}
         <p class="hint">Continue re-runs step {{ help_request.step_num }} from the current screen, with your note{% if auto_fix_summary and help_request.auto_fix_state != "running" %} and the Machine setup agent's report{% endif %}. Mark failed records a Failed verdict. Skip leaves the case Blocked so it can be resumed later. In every case the rest of the run then continues.</p>
       </div>
+      {% if help_panel.pending_draft %}
+        <input type="hidden" name="plan_revision_id" value="{{ help_panel.pending_draft.revision_id }}">
+        <div class="field">
+          <label class="checkbox" for="{{ help_form.use_plan_revision.id_for_label }}">
+            {{ help_form.use_plan_revision }}
+            <span>{{ help_form.use_plan_revision.label }}</span>
+          </label>
+          <p class="hint">Ticked, Continue resumes at step {{ help_panel.pending_draft.resume_step }} of the redesigned plan on the machine as it is now (no cleanup). Unticked, the draft is dropped and step {{ help_request.step_num }} re-runs. Mark failed and Skip drop it too.</p>
+        </div>
+      {% endif %}
       {% if help_panel.blockers %}
         <p class="hint" id="help-continue-blockers">Continue is unavailable: {{ help_panel.blockers|join:" " }}</p>
       {% endif %}

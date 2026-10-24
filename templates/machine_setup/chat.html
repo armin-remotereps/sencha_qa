@@ -13,10 +13,15 @@
     project    — the current Project (agent_connected)
     conversation — the shown thread (SetupConversation) on the thread page,
                  None on the main chat
-    thread_kind — "chat" or "auto_fix" (page.kind)
-    help_case_url — auto-fix thread only: the case page it was opened for
+    thread_kind — "chat", "auto_fix" or "case_help" (page.kind)
+    help_case_url — help threads only: the case page it was opened for
                  ("" when the case is gone)
-    threads    — list[AutoFixThread] for the thread list (_threads.html)
+    help_panel, help_form, help_turn_blocker — help threads only, while the
+                 run is paused on the thread's request (else None); see
+                 includes/_help_panel.html
+    help_state — HelpThreadPayload | None: the panel's initial draft and
+                 suggestion (json_script help-initial)
+    threads    — list[HelpThread] for the thread list (_threads.html)
     visual_engine — VisualEngineStatusPayload (state, ready_count,
                  connected_count, workers)
     active_tab — "machine_setup"
@@ -36,14 +41,17 @@
     setup-blocker-texts    — blocker_texts
     setup-blockers         — page.send_blockers (list[str])
     setup-visual-engine    — visual_engine (object)
-    setup-thread-ids       — conversation ids of the listed auto-fix threads
+    setup-thread-ids       — conversation ids of the listed help threads
+    help-initial           — help_state (help threads with a panel only)
 
   WebSocket /ws/projects/<id>/machine-setup/, or on the thread page
   /ws/projects/<id>/machine-setup/threads/<conversation_id>/ (same group, so
   rows of every thread arrive; only the shown conversation's rows are kept;
   machine_setup.consumers):
-  current_state, message, screenshot, turn, reset, agent_status,
-  visual_engine. All dynamic text is rendered with x-text; never x-html.
+  current_state (with `help` on a help thread), message, screenshot, turn,
+  reset, help, agent_status, visual_engine. `help` (and current_state's
+  `help`) is re-dispatched as the `help-state` window event for the nested
+  helpPanel. All dynamic text is rendered with x-text; never x-html.
 
   Client model (machineSetupChat): every row gets a client-only `args` (its
   tool_arguments_text parsed once on arrival, {} if it does not parse).
@@ -71,11 +79,12 @@
 {{ page.send_blockers|json_script:"setup-blockers" }}
 {{ visual_engine|json_script:"setup-visual-engine" }}
 {{ thread_ids|json_script:"setup-thread-ids" }}
+{% if help_panel %}{{ help_state|json_script:"help-initial" }}{% endif %}
 <div x-data="machineSetupChat">
   <div class="page-header">
     <div>
-      {% if thread_kind == "auto_fix" %}
-      <h1>Auto-fix thread</h1>
+      {% if thread_kind == "auto_fix" or thread_kind == "case_help" %}
+      <h1>{% if thread_kind == "case_help" %}Help chat{% else %}Auto-fix thread{% endif %}</h1>
       <p class="subtitle">
         {% if page.thread %}{{ page.thread.case_title|default:"Deleted case" }}{% if page.thread.step_num %} · step {{ page.thread.step_num }}{% endif %} · {{ page.thread.state_label }}{% else %}Opened for a test case that needed help{% endif %}
         {% if help_case_url %} · <a href="{{ help_case_url }}">Open the test case</a>{% endif %}
@@ -88,7 +97,7 @@
     <div class="actions">
       <span class="badge" :class="'badge-' + machineBadgeClass" x-text="machineBadgeLabel"></span>
       <span class="badge" x-show="turn" x-cloak :class="turnBadgeClass" x-text="turn ? turn.status_label : ''"></span>
-      {% if thread_kind != "auto_fix" %}
+      {% if thread_kind == "chat" %}
       <button type="button" class="btn btn-secondary" @click="$dispatch('open-reset-machine-setup')">Reset</button>
       {% endif %}
     </div>
@@ -98,7 +107,11 @@
 
   {% include "machine_setup/includes/_threads.html" with project=project threads=threads conversation=conversation only %}
 
-  <section class="chat" aria-label="{% if thread_kind == 'auto_fix' %}Auto-fix thread{% else %}Machine setup conversation{% endif %}">
+  {% if help_panel %}
+  {% include "machine_setup/includes/_help_panel.html" %}
+  {% endif %}
+
+  <section class="chat" aria-label="{% if thread_kind == 'case_help' %}Help chat{% elif thread_kind == 'auto_fix' %}Auto-fix thread{% else %}Machine setup conversation{% endif %}">
     <p class="chat-connection muted small" x-show="!socketOpen" x-cloak>Live updates paused — reconnecting…</p>
     {% include "machine_setup/includes/_transcript.html" %}
     {% include "machine_setup/includes/_composer.html" with project=project conversation=conversation %}
@@ -106,7 +119,7 @@
 
   {% include "machine_setup/includes/_lightbox.html" %}
 
-  {% if thread_kind != "auto_fix" %}
+  {% if thread_kind == "chat" %}
   {% url 'machine_setup:reset' project_id=project.id as reset_url %}
   {% include "partials/confirm_dialog.html" with dialog_id="reset-machine-setup" title="Reset the conversation?" body="Starts a new conversation. The agent forgets this chat. Changes already made to the test machine stay. Auto-fix threads are kept." confirm_label="Reset" action_url=reset_url csrf_token=csrf_token only %}
   {% endif %}
@@ -414,6 +427,92 @@ document.addEventListener('alpine:init', () => {
     };
   };
 
+  // Help threads: the paused case's panel (includes/_help_panel.html). Reads
+  // turnLive / otherThreadTurnLive / finishingPreviousTurn from the ancestor
+  // machineSetupChat scope.
+  const readOptionalJson = (id) => {
+    const node = document.getElementById(id);
+    return node ? JSON.parse(node.textContent) : null;
+  };
+  const CASE_STATUS_BADGES = {
+    passed: 'badge-passed',
+    failed: 'badge-failed',
+    needs_help: 'badge-need-help',
+    not_run: 'badge-draft',
+  };
+
+  Alpine.data('helpPanel', () => {
+    const initial = readOptionalJson('help-initial') || {};
+    const proposal = initial.agent_proposal || null;
+    return {
+      requestOpen: !!initial.request_open,
+      resolutionLabel: initial.resolution_label || '',
+      draft: initial.plan_draft || null,
+      proposal,
+      note: proposal ? proposal.note : '',
+      noteEdited: false,
+      usePlan: true,
+      stepNum: readOptionalJson('help-step-num'),
+      gateBlockers: readOptionalJson('help-blockers') || [],
+      turnBlocker: readOptionalJson('help-turn-blocker') || '',
+      discardUrlTemplate: readOptionalJson('help-discard-url') || '',
+
+      init() {
+        window.addEventListener('help-state', (event) => this.applyHelp(event.detail));
+      },
+
+      applyHelp(help) {
+        if (!help) return;
+        this.requestOpen = !!help.request_open;
+        this.resolutionLabel = help.resolution_label || '';
+        const previousDraftId = this.draft ? this.draft.revision_id : null;
+        this.draft = help.plan_draft || null;
+        // A new draft is offered ticked again.
+        if (this.draft && this.draft.revision_id !== previousDraftId) this.usePlan = true;
+        this.proposal = help.agent_proposal || null;
+        if (!this.noteEdited && this.proposal) this.note = this.proposal.note;
+      },
+
+      // The server's gates without the "setup turn live" one: this page
+      // tracks the live turn itself.
+      get continueBlockers() {
+        const blockers = this.gateBlockers.filter((b) => b !== this.turnBlocker);
+        if (this.turnLive || this.otherThreadTurnLive || this.finishingPreviousTurn) {
+          blockers.unshift('The agent is still replying. Wait or press Stop.');
+        }
+        return blockers;
+      },
+
+      get canContinue() {
+        return this.requestOpen && this.continueBlockers.length === 0;
+      },
+
+      get discardUrl() {
+        if (!this.draft) return '';
+        return this.discardUrlTemplate.replace(/\/plan\/0\/discard\/$/, '/plan/' + this.draft.revision_id + '/discard/');
+      },
+
+      get resumeText() {
+        if (!this.draft) return '';
+        if (this.draft.carried_count === 0) {
+          return 'Continue resumes at step 1 on the machine as it is now (no cleanup).';
+        }
+        return 'Continue resumes at step ' + this.draft.resume_step + ' on the machine as it is now (no cleanup); steps 1–' + this.draft.carried_count + ' count as passed.';
+      },
+
+      get continueHint() {
+        if (this.draft && this.usePlan) {
+          return 'Continue applies the redesigned plan and resumes at its step ' + this.draft.resume_step + '. Mark failed records a Failed verdict. Skip leaves the case Blocked to resume later on its current plan.';
+        }
+        return 'Continue re-runs step ' + this.stepNum + ' from the current screen with your note' + (this.draft ? ' and drops the draft' : '') + '. Mark failed records a Failed verdict. Skip leaves the case Blocked to resume later.';
+      },
+
+      statusBadge(status) {
+        return (Object.hasOwn(CASE_STATUS_BADGES, status) && CASE_STATUS_BADGES[status]) || 'badge-draft';
+      },
+    };
+  });
+
   Alpine.data('machineSetupChat', () => ({
     conversationId: {{ page.conversation_id|default_if_none:"null" }},
     // Rows of these conversations are ignored: archived here by a reset, or
@@ -476,6 +575,11 @@ document.addEventListener('alpine:init', () => {
         this.otherThreadTurnLive = !!data.other_thread_turn_live;
         this.agentConnected = !!data.agent_connected;
         if (data.visual_engine) this.visualEngine = data.visual_engine;
+        if (data.help) this.$dispatch('help-state', data.help);
+      } else if (data.type === 'help') {
+        if (data.help && data.help.conversation_id === this.conversationId) {
+          this.$dispatch('help-state', data.help);
+        }
       } else if (data.type === 'message') {
         this.upsertMessage(data.message);
       } else if (data.type === 'screenshot') {
