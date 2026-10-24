@@ -16,10 +16,10 @@ from agents.types import (
     AgentCancelledError,
     CancellationCheck,
     LLMConfig,
+    OutcomeVerdict,
     PixelUIElement,
     RejectedCandidate,
     ScreenshotCallback,
-    Verdict,
 )
 from projects.controller_outage_clock import agent_monotonic
 from projects.services import controller_screenshot
@@ -198,7 +198,7 @@ def confirm_action(
     expected_result: str,
     tool_name: str,
     on_screenshot: ScreenshotCallback | None = None,
-) -> Verdict:
+) -> OutcomeVerdict:
     """Settle, screenshot the result, and verify the action against the expected outcome."""
     time.sleep(POST_ACTION_SETTLE_SECONDS)
     after_image_base64 = controller_screenshot(project_id)["image_base64"]
@@ -212,14 +212,32 @@ def confirm_action(
         action_summary,
         expected_result,
     )
-    if not verdict.accepted:
+    # Only a miss rules the element out: an unexpected outcome ends the call.
+    if verdict.status == "missed":
         for element in acted_on:
             budget.reject(element, "outcome", verdict.reason)
     return verdict
 
 
 def format_verified_message(base: str, budget: VerificationBudget) -> str:
-    message = f"{base} (verified on attempt {budget.used})"
+    return _with_skipped(f"{base} (verified on attempt {budget.used})", budget)
+
+
+def format_unconfirmed_message(
+    base: str, reason: str, budget: VerificationBudget
+) -> str:
+    one_line_reason = " ".join(reason.split()).rstrip(".")
+    message = (
+        f"{base}. The expected result was NOT confirmed: {one_line_reason}. The action "
+        "was performed once and the screen changed; no other element was tried. "
+        "Check the current screen (take_screenshot) and decide: continue if the "
+        "step's goal is met, otherwise act on what you see. Do not repeat the "
+        "same action blindly."
+    )
+    return _with_skipped(message, budget)
+
+
+def _with_skipped(message: str, budget: VerificationBudget) -> str:
     if not budget.rejections:
         return message
     return message + "\nSkipped candidates:\n" + "\n".join(budget.history_lines())

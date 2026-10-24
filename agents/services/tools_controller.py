@@ -9,6 +9,7 @@ from agents.services.verified_element_actions import (
     confirm_action,
     default_click_expectation,
     default_double_click_expectation,
+    format_unconfirmed_message,
     format_verified_message,
     resolve_verified_element,
     take_before_screenshot,
@@ -221,8 +222,16 @@ def _confirm_or_finish(
             tool_name=tool_name,
             on_screenshot=on_screenshot,
         )
-        if not verdict.accepted:
+        if verdict.status == "missed":
             return None
+        if verdict.status == "unexpected":
+            return ToolResult(
+                tool_call_id="",
+                content=format_unconfirmed_message(
+                    success_message, verdict.reason, budget
+                ),
+                is_error=False,
+            )
     return ToolResult(
         tool_call_id="",
         content=format_verified_message(success_message, budget),

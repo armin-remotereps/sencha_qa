@@ -400,6 +400,19 @@ class Verdict:
     reason: str
 
 
+OutcomeStatus = Literal["confirmed", "unexpected", "missed"]
+
+
+@dataclass(frozen=True)
+class OutcomeVerdict:
+    """Outcome check of an action: ``unexpected`` means the intended element was
+    acted on and the screen changed, but not as expected; ``missed`` means nothing
+    changed or a different element was acted on."""
+
+    status: OutcomeStatus
+    reason: str
+
+
 @dataclass(frozen=True)
 class RejectedCandidate:
     attempt: int

@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from agents.services.llm_client import send_chat_completion
 from agents.types import (
     ChatMessage,
     ImageContent,
     LLMConfig,
+    OutcomeStatus,
+    OutcomeVerdict,
     PixelParseResult,
     PixelUIElement,
     TextContent,
@@ -30,11 +33,24 @@ _OUTCOME_SYSTEM_PROMPT = (
     "BEFORE and an AFTER screenshot of a desktop, taken immediately before "
     "and after the agent performed an action, along with a summary of the "
     "action and the result the agent expected.\n\n"
-    "Decide whether the action hit the intended element and produced the "
-    "expected result.\n"
-    "Reply with YES or NO on the first line, then one short reason on the "
-    "next line."
+    "Answer on the first line with exactly one word:\n"
+    "YES — the expected result is visible in the AFTER screenshot.\n"
+    "CHANGED — the intended element was acted on and the screen changed in "
+    "response, but the expected result is not shown, or only partly (for "
+    "example the right page opened but a detail the agent expected is "
+    "elsewhere or missing).\n"
+    "NO — nothing visibly changed, or a different element or the wrong "
+    "place was acted on.\n"
+    "Then one short reason on the next line."
 )
+
+_OUTCOME_WORDS: dict[str, OutcomeStatus] = {
+    "YES": "confirmed",
+    "CHANGED": "unexpected",
+    "NO": "missed",
+}
+# Leading letters only, so "YES—shown" reads YES and "NOTHING" is not NO.
+_FIRST_WORD = re.compile(r"[A-Za-z]+")
 
 
 def verify_candidate(
@@ -70,13 +86,15 @@ def verify_action_outcome(
     after_image_base64: str,
     action_summary: str,
     expected_result: str,
-) -> Verdict:
+) -> OutcomeVerdict:
     """Ask the vision model to compare before/after screenshots against the expected result."""
     question = (
         f"The agent {action_summary}. Expected result: {expected_result}. "
-        "Comparing the BEFORE and AFTER screenshots, did the action hit the "
-        "intended element and produce that result? Reply YES or NO on the "
-        "first line, then one short reason."
+        "Comparing the BEFORE and AFTER screenshots, reply YES if that result "
+        "is shown, CHANGED if the intended element was acted on and the screen "
+        "changed but not to that result, or NO if nothing changed or a "
+        "different element was acted on. One word on the first line, then one "
+        "short reason."
     )
     messages = (
         ChatMessage(role="system", content=_OUTCOME_SYSTEM_PROMPT),
@@ -92,7 +110,28 @@ def verify_action_outcome(
         ),
     )
     response = send_chat_completion(vision_config, messages)
-    return _parse_verdict(response.message.content)
+    return _parse_outcome_verdict(response.message.content)
+
+
+def _parse_outcome_verdict(content: object) -> OutcomeVerdict:
+    """Map the first word of the reply; anything unreadable counts as missed."""
+    if not isinstance(content, str):
+        return OutcomeVerdict(
+            status="missed", reason="vision model returned no content"
+        )
+
+    lines = content.splitlines()
+    first_line_index = _first_non_empty_line_index(lines)
+    if first_line_index is None:
+        return OutcomeVerdict(status="missed", reason=content.strip())
+
+    first_line = lines[first_line_index].strip()
+    remainder = "\n".join(lines[first_line_index + 1 :]).strip()
+    match = _FIRST_WORD.match(first_line.lstrip("*_ "))
+    status = _OUTCOME_WORDS.get(match.group().upper()) if match else None
+    if status is None:
+        return OutcomeVerdict(status="missed", reason=content.strip())
+    return OutcomeVerdict(status=status, reason=remainder or first_line)
 
 
 def _parse_verdict(content: object) -> Verdict:

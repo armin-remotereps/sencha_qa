@@ -208,6 +208,10 @@ def build_desktop_tool_examples() -> str:
         "- When click, double_click, hover or drag returns an error, the element could not be confirmed: "
         "re-describe it more precisely or use take_screenshot to understand the screen "
         "instead of repeating the same call.\n"
+        "- When the result says the expected result was NOT confirmed, the action was "
+        "performed once on the intended element and no other element was tried: use "
+        "take_screenshot, then decide whether the step's goal is met; do not repeat the "
+        "action blindly.\n"
         '- click(description="the Login button", expected_result="the login form opens") — describe what to click and what should happen\n'
         '- double_click(description="the Documents folder icon", expected_result="the Documents folder opens") — double-click and describe what should happen\n'
         '- hover(description="the Settings menu") — describe what to hover\n'

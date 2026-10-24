@@ -121,7 +121,9 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     description=(
                         "Optional. What the screen should show after the click "
                         "(e.g. 'the Settings dialog opens'). The tool verifies the click "
-                        "against it and retries other candidates when it does not match."
+                        "against it and retries other candidates when the click missed; "
+                        "when the intended element was clicked but the result differs, it "
+                        "stops and reports the action as performed but not confirmed."
                     ),
                     required=False,
                 ),
@@ -155,7 +157,9 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                         "Optional. What the screen should show after the double-click "
                         "(e.g. 'the Documents folder opens'). The tool verifies the "
                         "double-click against it and retries other candidates when it "
-                        "does not match."
+                        "missed; when the intended element was double-clicked but the "
+                        "result differs, it stops and reports the action as performed but "
+                        "not confirmed."
                     ),
                     required=False,
                 ),
@@ -213,7 +217,9 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     description=(
                         "Optional. What the screen should show after hovering "
                         "(e.g. 'a tooltip with the file size appears'). The post-hover check "
-                        "runs only when this is given; on a mismatch the tool retries other candidates."
+                        "runs only when this is given; the tool retries other candidates when "
+                        "the action missed, and stops and reports it as performed but not "
+                        "confirmed when the intended element was acted on but the result differs."
                     ),
                     required=False,
                 ),
@@ -247,7 +253,9 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     description=(
                         "Optional. What the screen should show after the drag "
                         "(e.g. 'the file appears inside the Archive folder'). The post-drag check "
-                        "runs only when this is given; on a mismatch the tool retries other candidates."
+                        "runs only when this is given; the tool retries other candidates when "
+                        "the action missed, and stops and reports it as performed but not "
+                        "confirmed when the intended element was acted on but the result differs."
                     ),
                     required=False,
                 ),
