@@ -116,7 +116,9 @@ turn a status into a badge on server-rendered pages; the live Alpine maps in
 `projects/test_run_detail.html` (`pivotBadgeClass` / `pivotBadgeLabel`) and
 `projects/test_run_case_detail.html` (`badgeClass` / `badgeLabel`) must list
 the same statuses. Case statuses: `created`, `in_progress`, `success`,
-`failed`, `blocked`, `cancelled`.
+`failed`, `blocked`, `cancelled`, `need_help`. Run statuses add `paused`
+(label "Needs help"). Both use `.badge-need-help`; pass `auto_fixing` to show
+the "Auto-fixing" variant while a night auto-fix runs.
 
 **Blocked** (`.badge-blocked`, warning palette) means an infrastructure fault
 stopped the case before a verdict. It is neither passed nor failed and never

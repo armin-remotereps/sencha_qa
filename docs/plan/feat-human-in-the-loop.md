@@ -1,6 +1,6 @@
 # feat: Human in the loop (Need help case status, sleeping run, push notifications, night auto-fix)
 
-Status: In progress
+Status: Done
 Created: 2026-10-24
 
 ## Request
