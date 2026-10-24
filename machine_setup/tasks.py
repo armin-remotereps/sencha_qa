@@ -72,9 +72,10 @@ def start_case_auto_fix(self: Task[[int], None], help_request_id: int) -> None:
 
 @shared_task(
     bind=True,
-    # Scheduled by CELERY_BEAT_SCHEDULE (settings) every two minutes.
+    # Scheduled by CELERY_BEAT_SCHEDULE (settings) every two minutes. On the
+    # small notify worker so a busy or failing execution pool cannot hold it.
     name=SWEEP_STALE_AUTO_FIXES,
-    queue="execution",
+    queue="notify",
     max_retries=0,
     soft_time_limit=_SWEEP_SOFT_TIME_LIMIT,
     time_limit=_SWEEP_TIME_LIMIT,

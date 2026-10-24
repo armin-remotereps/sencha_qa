@@ -176,7 +176,8 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "projects.tasks.push_checked_results_to_testrail": {"queue": "upload"},
     "machine_setup.tasks.run_setup_turn": {"queue": "execution"},
     "machine_setup.tasks.start_case_auto_fix": {"queue": "execution"},
-    "machine_setup.tasks.sweep_stale_auto_fixes": {"queue": "execution"},
+    # Not "execution": it must run when that pool is busy or failing.
+    "machine_setup.tasks.sweep_stale_auto_fixes": {"queue": "notify"},
     # Its own small worker, so a push is never stuck behind TestRail imports.
     "notifications.tasks.send_push": {"queue": "notify"},
 }

@@ -157,8 +157,10 @@ def _enqueue(turn: SetupTurn, message: SetupMessage) -> None:
     try:
         enqueued = broadcast_and_enqueue(turn, message)
     except Exception:
-        # Closing the unqueued turn failed too; settle all the same, and the
-        # stale sweep closes the turn row later.
+        # Closing the unqueued turn failed too; settle all the same. The turn
+        # row still looks queued: the periodic sweep closes it once stale
+        # (``sweep_stale_auto_fixes`` checks every live auto-fix turn of a
+        # paused run, whatever its request's state).
         logger.exception("Auto-fix turn %s: enqueue failed", turn.pk)
         enqueued = False
     if not enqueued:

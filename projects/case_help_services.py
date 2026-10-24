@@ -366,7 +366,9 @@ def finish_case_auto_fix(*, help_request_id: int, fixed: bool, summary: str) -> 
     resolved ``auto_fixed`` and the pending cases are queued (the helped case
     first). Not fixed, or stopped: the request stays open for a person and the
     project members are notified. If a person already resolved the request
-    during the auto-fix, the pending cases are queued.
+    during the auto-fix, the pending cases are queued. An open request whose
+    auto-fix is no longer ``running`` (already settled, or stopped before a
+    turn existed) only gets the summary: no second notification, no continue.
     """
     test_run_id = (
         CaseHelpRequest.objects.filter(pk=help_request_id)
@@ -416,6 +418,13 @@ def finish_case_auto_fix(*, help_request_id: int, fixed: bool, summary: str) -> 
             return
 
         request.auto_fix_summary = auto_fix_summary
+        if request.auto_fix_state != HelpAutoFixState.RUNNING:
+            # Already settled while the turn was ending: a person pressed Stop
+            # before a turn existed (not fixed, notified), or an earlier settle
+            # of this request ran. Keep the agent's report only: no second
+            # notification and no auto-continue.
+            request.save(update_fields=["auto_fix_summary"])
+            return
         if not fixed:
             request.auto_fix_state = HelpAutoFixState.NOT_FIXED
             request.save(update_fields=["auto_fix_state", "auto_fix_summary"])
