@@ -2,6 +2,7 @@
    the mobile nav panel in partials/topbar.html so they never drift apart.
 
    Context contract:
-     active_nav — "dashboard" | "projects" | anything else for no match {% endcomment %}
+     active_nav — "dashboard" | "projects" | "notifications" | anything else for no match {% endcomment %}
 <a class="nav-link" href="{% url 'dashboard:index' %}"{% if active_nav == "dashboard" %} aria-current="page"{% endif %}>◈ Dashboard</a>
 <a class="nav-link" href="{% url 'projects:list' %}"{% if active_nav == "projects" %} aria-current="page"{% endif %}>▣ Projects</a>
+<a class="nav-link" href="{% url 'notifications:settings' %}"{% if active_nav == "notifications" %} aria-current="page"{% endif %}>◉ Notifications</a>

@@ -1,0 +1,99 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Notifications page: turn Web Push on/off for this browser, list the
+   user's devices, send a test notification.
+
+   Context contract (notifications/views.py):
+     push_configured  — bool; False when the server has no VAPID keys
+     vapid_public_key — str, the application server key ("" when disabled)
+     devices          — list[notifications.services.subscriptions.PushDevice]
+                        (never endpoints or keys) {% endcomment %}
+
+{% block title %}Notifications · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <h1>Notifications</h1>
+    <p class="subtitle">Get a push notification on your devices when a test case in one of your projects needs help.</p>
+  </div>
+</div>
+
+{% if not push_configured %}
+  <div class="alert alert-info" role="status">
+    <span class="alert-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <strong>Push notifications are turned off on this server</strong>
+      <p>An administrator has to set the VAPID key pair and contact (<code>WEBPUSH_VAPID_PUBLIC_KEY</code>, <code>WEBPUSH_VAPID_PRIVATE_KEY</code>, <code>WEBPUSH_VAPID_SUBJECT</code>) before devices can be turned on. Need help cases still show on the dashboard and run pages.</p>
+    </div>
+  </div>
+{% else %}
+<div class="stack">
+  <section
+    class="card"
+    aria-labelledby="this-device-heading"
+    x-data="pushDevice()"
+    data-public-key="{{ vapid_public_key }}"
+    data-subscribe-url="{% url 'notifications:subscribe' %}"
+    data-unsubscribe-url="{% url 'notifications:unsubscribe' %}"
+    data-csrf-token="{{ csrf_token }}"
+  >
+    <div class="card-header">
+      <h2 id="this-device-heading">This device</h2>
+      <span class="badge badge-passed" x-show="subscribed" x-cloak>On</span>
+    </div>
+
+    <div class="push-hint" x-show="showIosHint" x-cloak>
+      <p><strong>On iPhone or iPad,</strong> notifications only work from the Home Screen app: tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>, open {{ brand_name|default:"Punk Hazard" }} from the Home Screen, and turn notifications on here (iOS 16.4 or later).</p>
+    </div>
+
+    <p class="muted" x-show="!supported && !showIosHint" x-cloak>This browser cannot receive push notifications.</p>
+    <p class="muted" x-show="supported && permission === 'denied'" x-cloak>Notifications are blocked for this site. Allow them in the browser's site settings, then reload this page.</p>
+    <p x-show="supported && subscribed" x-cloak>This browser gets a notification when a case needs help.</p>
+    <p x-show="supported && !subscribed && permission !== 'denied'" x-cloak>Turn notifications on to be told when a case needs help, even when this tab is closed.</p>
+
+    <p class="error-text" role="alert" x-show="error" x-text="error" x-cloak></p>
+
+    <div class="card-actions actions" x-show="supported" x-cloak>
+      <button type="button" class="btn btn-primary" x-show="!subscribed" :disabled="busy || permission === 'denied'" @click="enable()">Turn on notifications</button>
+      <button type="button" class="btn btn-secondary" x-show="subscribed" :disabled="busy" @click="disable()">Turn off on this device</button>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="devices-heading">
+    <div class="card-header">
+      <h2 id="devices-heading">Your devices</h2>
+      {% if devices %}
+        <form method="post" action="{% url 'notifications:test' %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-secondary btn-sm">Send a test notification</button>
+        </form>
+      {% endif %}
+    </div>
+
+    {% if devices %}
+      <ul class="push-device-list">
+        {% for device in devices %}
+          <li>
+            <div>
+              <strong>{{ device.label }}</strong>
+              <div class="muted small">
+                Added {{ device.created_at|date:"M j, Y" }}
+                · {% if device.last_success_at %}last notified {{ device.last_success_at|timesince }} ago{% else %}not notified yet{% endif %}
+              </div>
+            </div>
+            <form method="post" action="{% url 'notifications:unsubscribe' %}">
+              {% csrf_token %}
+              <input type="hidden" name="subscription_id" value="{{ device.id }}">
+              <button type="submit" class="btn btn-ghost btn-sm" aria-label="Remove {{ device.label }}">Remove</button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No devices yet. Turn notifications on above, on each device you want to be notified on.</p>
+    {% endif %}
+  </section>
+</div>
+{% endif %}
+{% endblock %}

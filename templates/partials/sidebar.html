@@ -2,7 +2,7 @@
 {% comment %} Desktop sidebar (hidden below 1024px — see .sidebar in punk-hazard.css).
 
    Context contract:
-     active_nav — "dashboard" | "projects", forwarded to partials/nav_links.html
+     active_nav — "dashboard" | "projects" | "notifications", forwarded to partials/nav_links.html
      user       — the logged-in CustomUser (from django.contrib.auth) {% endcomment %}
 <aside class="sidebar">
   <a class="brand" href="{% url 'dashboard:index' %}">

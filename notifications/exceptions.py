@@ -21,3 +21,19 @@ class PushEndpointNotAllowedError(NotificationError):
 
     def __init__(self) -> None:
         super().__init__("This browser's push service is not supported.")
+
+
+class NoPushDevicesError(NotificationError):
+    """The user has no device with notifications enabled."""
+
+    def __init__(self) -> None:
+        super().__init__("Turn on notifications on this device first.")
+
+
+class TestPushThrottledError(NotificationError):
+    """The user asked for test notifications too often."""
+
+    def __init__(self, retry_seconds: int) -> None:
+        super().__init__(
+            f"A test notification was just sent. Try again in {retry_seconds} seconds."
+        )
