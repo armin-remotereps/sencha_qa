@@ -47,7 +47,16 @@
      json_script as "initial-steps". The case WS `current_state`, `status` and
      `steps` messages carry the same payload under `steps`; the client replaces
      it wholesale and derives no status itself. Its text is LLM output: render
-     it with x-text only. {% endcomment %}
+     it with x-text only.
+
+     Need help: help_panel (projects.case_help_services.HelpPanel, or None
+     unless the run is paused on this case; see includes/_case_help_card.html),
+     help_form (CaseHelpResolutionForm), help_requests (list[CaseHelpRequest],
+     oldest first, resolved_by loaded, auto-fix threads prefetched as
+     auto_fix_threads, newest first), help_mode_form (RunHelpModeForm: the help
+     mode select of the Resume case dialog, pre-set to the run's mode). The
+     page reloads when the case moves into, out of, or stays in "need_help"
+     (an auto-fix ended), since the help card is server-rendered. {% endcomment %}
 
 {% block title %}{{ pivot.test_case.title }} · {{ test_run.display_name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -75,7 +84,7 @@
           data-status="{{ pivot.status }}"
           :class="badgeClass(status)"
           x-text="badgeLabel(status)"
-        >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% endif %}</span>
+        >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% endif %}</span>
       </h1>
       <p class="subtitle">
         Case {{ case_position }} of {{ case_total }} in {{ test_run.display_name }}
@@ -113,7 +122,7 @@
         </form>
       {% endif %}
       {% if can_edit %}
-      <button type="button" class="btn btn-secondary" x-show="testRunStatus !== 'started'" x-cloak @click="$dispatch('open-edit-case')">Edit test case</button>
+      <button type="button" class="btn btn-secondary" x-show="testRunStatus !== 'started' && testRunStatus !== 'paused'" x-cloak @click="$dispatch('open-edit-case')">Edit test case</button>
       {% endif %}
       {% if test_run.status == "waiting" %}
       <button type="button" class="btn btn-danger" @click="$dispatch('open-remove-case')">Remove from run</button>
@@ -128,11 +137,11 @@
   <section
     aria-labelledby="result-h"
     class="card"
-    :class="status === 'failed' ? 'card-tone-danger' : (status === 'success' ? 'card-tone-success' : (status === 'blocked' ? 'card-tone-warning' : ''))"
+    :class="status === 'failed' ? 'card-tone-danger' : (status === 'success' ? 'card-tone-success' : (status === 'blocked' ? 'card-tone-warning' : (status === 'need_help' ? 'card-tone-need-help' : '')))"
   >
     <div class="card-header">
       <h2 id="result-h">Result</h2>
-      <span class="badge" data-status="{{ pivot.status }}" :class="badgeClass(status)" x-text="badgeLabel(status)">{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% endif %}</span>
+      <span class="badge" data-status="{{ pivot.status }}" :class="badgeClass(status)" x-text="badgeLabel(status)">{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% endif %}</span>
     </div>
     <template x-if="status === 'created' && testRunStatus === 'waiting'">
       <div class="alert alert-info">
@@ -146,6 +155,11 @@
       <p class="pre-wrap" x-text="result || 'No result yet.'"></p>
     </template>
   </section>
+
+  {% if help_panel %}
+  {# Section: Need help — the agent's ask and the human actions (server-rendered) #}
+  {% include "projects/includes/_case_help_card.html" with project=project test_run=test_run pivot=pivot help_panel=help_panel help_form=help_form csrf_token=csrf_token only %}
+  {% endif %}
 
   {# Section: Steps — the agent's planned steps, live while the case runs #}
   <section aria-labelledby="steps-h" class="card">
@@ -222,6 +236,34 @@
     <div class="actions card-actions">
       <button type="button" class="btn btn-primary" @click="$dispatch('open-resume-case')">Resume case</button>
     </div>
+  </section>
+  {% endif %}
+
+  {% if help_requests %}
+  {# Section: Help history — every Need help of this case and how it was resolved #}
+  <section aria-labelledby="help-history-h" class="card">
+    <div class="card-header">
+      <h2 id="help-history-h">Help history</h2>
+    </div>
+    <ul class="activity">
+      {% for help_request in help_requests %}
+      <li>
+        <span class="activity-icon is-warning" aria-hidden="true">✋</span>
+        <div>
+          <strong>Step {{ help_request.step_num }} · {% if help_request.is_open %}Open{% else %}{{ help_request.get_resolution_display }}{% endif %}</strong>{% if help_request.ask %} · {{ help_request.ask|truncatechars:300 }}{% endif %}
+          <div class="muted small">
+            Asked {{ help_request.requested_at|date:"M j, H:i" }}
+            {% if help_request.auto_fix_state %} · auto-fix: {{ help_request.get_auto_fix_state_display|lower }}{% endif %}
+            {% if help_request.resolved_at %}
+              · resolved {{ help_request.resolved_at|date:"M j, H:i" }}{% if help_request.resolved_by %} by {{ help_request.resolved_by.get_full_name|default:help_request.resolved_by.email }}{% elif help_request.resolution == "auto_fixed" %} by the Machine setup agent{% endif %}
+            {% endif %}
+            {% with thread=help_request.auto_fix_threads.0 %}{% if thread %} · <a href="{% url 'machine_setup:thread' project.id thread.id %}">auto-fix thread</a>{% endif %}{% endwith %}
+          </div>
+          {% if help_request.note %}<p class="pre-wrap small">{{ help_request.note|truncatechars:600 }}</p>{% endif %}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
   </section>
   {% endif %}
 
@@ -347,6 +389,11 @@
     </div>
   </div>
 
+  {% if help_panel %}
+  {% url 'projects:test_run_abort' project.id test_run.id as test_run_abort_url %}
+  {% include "partials/confirm_dialog.html" with dialog_id="abort-run" title="Abort this run?" body="This case and the pending cases will be marked as cancelled (a running auto-fix is asked to stop). Cases that already finished keep their result." confirm_label="Abort run" action_url=test_run_abort_url %}
+  {% endif %}
+
   {# Section: Remove-from-run confirm #}
   {% if test_run.status == "waiting" %}
   {% url 'projects:test_run_remove_case' project.id test_run.id pivot.id as remove_case_url %}
@@ -381,6 +428,7 @@
         {% else %}
         <p>No progress was saved for this case, so it starts again from step 1 on this run.</p>
         {% endif %}
+        {% include "projects/includes/_help_mode_select.html" with field_id="resume-case-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode only %}
         <p>The result stays on this run. A Checked mark on this case is cleared.</p>
         <div class="dialog-actions">
           <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
@@ -520,6 +568,7 @@ document.addEventListener('alpine:init', () => {
         failed: 'badge-failed',
         blocked: 'badge-blocked',
         cancelled: 'badge-cancelled',
+        need_help: 'badge-need-help',
       }[status] || 'badge-draft';
     },
 
@@ -531,6 +580,7 @@ document.addEventListener('alpine:init', () => {
         failed: 'Failed',
         blocked: 'Blocked',
         cancelled: 'Cancelled',
+        need_help: 'Need help',
       }[status] || status;
     },
 
@@ -542,6 +592,7 @@ document.addEventListener('alpine:init', () => {
         failed: 'badge-failed',
         interrupted: 'badge-blocked',
         not_run: 'badge-cancelled',
+        awaiting_help: 'badge-need-help',
       }[status] || 'badge-draft';
     },
 
@@ -556,7 +607,7 @@ document.addEventListener('alpine:init', () => {
     },
 
     decisionLabel(decision) {
-      const prefix = { continue: 'Continued', stop: 'Stopped', recover: 'Recovering' }[decision.action] || decision.action;
+      const prefix = { continue: 'Continued', stop: 'Stopped', recover: 'Recovering', need_help: 'Asked for help' }[decision.action] || decision.action;
       return prefix + ': ' + decision.reason;
     },
 
@@ -647,6 +698,13 @@ document.addEventListener('alpine:init', () => {
         }
 
         if (data.type === 'status') {
+          if (data.status === 'need_help' || this.status === 'need_help') {
+            // The help card is server-rendered: reload when the case pauses,
+            // is resolved, or its auto-fix ends (a need_help -> need_help event).
+            this.status = data.status;
+            window.location.reload();
+            return;
+          }
           // in_progress too: a re-run can pick up a row a killed worker left.
           const reset = ['success', 'failed', 'blocked', 'cancelled', 'in_progress'];
           if (reset.includes(this.status) && data.status === 'created') {

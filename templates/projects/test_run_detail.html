@@ -37,6 +37,20 @@
      confirm_body). "Resume run" continues Blocked / Cancelled cases on this
      run in place; "Re-run blocked" copies them into a new run instead.
 
+     Need help: help_panel (projects.case_help_services.HelpPanel, or None
+     unless the run is "paused"): request (latest CaseHelpRequest, case loaded),
+     thread (auto-fix SetupConversation or None), auto_fix_live, blockers,
+     is_open, can_continue_run, waiting_for_auto_fix_stop. Drives the paused
+     banner and "Continue run" (projects:test_run_continue). start_form
+     (TestRunStartForm, waiting runs only: the help_mode radio, initial = the
+     run's mode). help_mode_form (RunHelpModeForm: the choices of the help
+     mode select in the Resume / Re-run dialogs, pre-set to the run's mode).
+     summary also carries need_help. The run WS events carry help_state
+     ("none" | "auto_fixing" | "waiting_for_person"; the context key
+     help_state is the page's baseline); the page reloads when
+     the run moves into or out of "paused" or help_state changes, since the
+     banner is server-rendered. Agent and human text is autoescaped.
+
      test_run also carries testrail_source_push_status; testRunLive exposes it
      as `testrailSourcePushStatus` (WS message "testrail_source_push").
 
@@ -81,9 +95,13 @@
         <template x-if="testRunStatus === 'started'">
           <span>Running since <time datetime="{{ test_run.started_at|date:'c' }}">{{ test_run.started_at|date:"M j, H:i" }}</time> · <span x-text="summary.total"></span> cases</span>
         </template>
+        <template x-if="testRunStatus === 'paused'">
+          <span>Paused: a case needs help · started <time datetime="{{ test_run.started_at|date:'c' }}">{{ test_run.started_at|date:"M j, H:i" }}</time> · <span x-text="summary.total"></span> cases</span>
+        </template>
         <template x-if="testRunStatus === 'done' || testRunStatus === 'cancelled'">
           <span>Finished <time datetime="{{ test_run.finished_at|date:'c' }}">{{ test_run.finished_at|date:"M j, H:i" }}</time>{% if test_run.finished_at and test_run.started_at %} · {{ test_run.started_at|timesince:test_run.finished_at }}{% endif %} · <span x-text="summary.total"></span> cases</span>
         </template>
+        <span x-show="testRunStatus !== 'waiting'" x-cloak> · Help mode: {{ test_run.get_help_mode_display }}</span>
       </p>
     </div>
     <div class="actions">
@@ -91,7 +109,7 @@
 
       <button type="button" class="btn btn-danger" x-show="testRunStatus === 'waiting'" x-cloak @click="$dispatch('open-delete-run')">Delete run</button>
 
-      <button type="button" class="btn btn-danger" x-show="testRunStatus === 'started'" x-cloak @click="$dispatch('open-abort-run')">Abort run</button>
+      <button type="button" class="btn btn-danger" x-show="testRunStatus === 'started' || testRunStatus === 'paused'" x-cloak @click="$dispatch('open-abort-run')">Abort run</button>
 
       {% if resume_panel.can_resume %}
       <button type="button" class="btn btn-primary" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak @click="$dispatch('open-resume-run')">Resume run</button>
@@ -200,6 +218,10 @@
 
   {% include "projects/includes/_testrail_checked_push_status.html" %}
 
+  {% if help_panel %}
+  {% include "projects/includes/_run_help_banner.html" with project=project test_run=test_run help_panel=help_panel csrf_token=csrf_token only %}
+  {% endif %}
+
   {% include "partials/project_tabs.html" with project=project active_tab=active_tab only %}
 
   {# Section: Draft readiness — checklist + the actual Start run action #}
@@ -209,9 +231,31 @@
         <h2>Ready to run?</h2>
       </div>
       {% include "partials/readiness_checklist.html" with readiness=readiness only %}
-      <form method="post" action="{% url 'projects:test_run_start' project.id test_run.id %}" class="actions" style="margin-top: 16px;">
+      <form method="post" action="{% url 'projects:test_run_start' project.id test_run.id %}" style="margin-top: 16px;">
         {% csrf_token %}
-        <button type="submit" class="btn btn-primary"{% if readiness.blockers %} disabled aria-disabled="true"{% endif %}>Start run</button>
+        {% if start_form %}
+        <fieldset class="radio-card-stack">
+          <legend class="label">{{ start_form.help_mode.label }}</legend>
+          {% for value, label in start_form.fields.help_mode.choices %}
+          <label class="radio-card" :class="{ selected: helpMode === '{{ value }}' }">
+            <input type="radio" name="help_mode" value="{{ value }}" x-model="helpMode"{% if value == start_form.help_mode.value %} checked{% endif %}>
+            <div>
+              <div class="radio-title">{{ label }}</div>
+              <div class="muted small">
+                {% if value == "attended" %}
+                A case that hits a machine problem (a stuck installer, a stray dialog, a UAC prompt) pauses the run and notifies the project's members. Someone fixes the machine and continues the case.
+                {% else %}
+                For unattended runs. The Machine setup agent first tries to fix the machine on its own, in a new visible setup thread, with the same shell access and limits as Machine setup and nobody watching. If it reports the machine fixed, the case continues by itself; otherwise people are notified as in Attended.
+                {% endif %}
+              </div>
+            </div>
+          </label>
+          {% endfor %}
+        </fieldset>
+        {% endif %}
+        <div class="actions">
+          <button type="submit" class="btn btn-primary"{% if readiness.blockers %} disabled aria-disabled="true"{% endif %}>Start run</button>
+        </div>
       </form>
       {% if readiness.blockers %}<p class="hint">Resolve the items above to start this run.</p>{% endif %}
     </div>
@@ -233,7 +277,11 @@
           <div class="stat-label">Blocked</div>
           <div class="stat-value is-warning" x-text="summary.blocked"></div>
         </div>
-        <div class="stat-card">
+        <div class="stat-card" x-show="summary.need_help > 0" x-cloak>
+          <div class="stat-label">Need help</div>
+          <div class="stat-value is-need-help" x-text="summary.need_help"></div>
+        </div>
+        <div class="stat-card" x-show="!(summary.need_help > 0)">
           <div class="stat-label">Duration</div>
           <div class="stat-value">{% if test_run.finished_at and test_run.started_at %}{{ test_run.started_at|timesince:test_run.finished_at }}{% elif test_run.started_at %}Running…{% else %}—{% endif %}</div>
         </div>
@@ -355,7 +403,7 @@
                 data-status="{{ pivot.status }}"
                 :class="pivotBadgeClass(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
                 x-text="pivotBadgeLabel(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
-              >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% endif %}</span>
+              >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% endif %}</span>
             </td>
             <td data-label="Checked">
               {% if pivot.testrail_source_result_id %}
@@ -370,7 +418,7 @@
               {% endif %}
             </td>
             <td data-label="Duration">{% if pivot.finished_at and pivot.started_at %}{{ pivot.started_at|timesince:pivot.finished_at }}{% else %}—{% endif %}</td>
-            <td data-label="Reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
+            <td data-label="Reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>Needs help</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
             {% if can_edit %}
             <td data-label="" x-show="testRunStatus === 'waiting'" x-cloak>
               <div class="actions">
@@ -426,6 +474,7 @@
         <template x-for="id in toRerun" :key="id">
           <input type="hidden" name="pivot_ids" :value="id">
         </template>
+        {% include "projects/includes/_help_mode_select.html" with field_id="rerun-selected-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode only %}
         <div class="dialog-actions">
           <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
           <button type="submit" class="btn btn-primary" :disabled="toRerun.length === 0" x-text="'Re-run (' + toRerun.length + ')'">Re-run</button>
@@ -440,9 +489,32 @@
 
   {# Section: Destructive-action confirm dialogs #}
   {% include "partials/confirm_dialog.html" with dialog_id="delete-run" title="Delete this run?" body="This permanently deletes the run and all of its case results, logs, and screenshots." confirm_label="Delete run" action_url=test_run_delete_url %}
-  {% include "partials/confirm_dialog.html" with dialog_id="abort-run" title="Abort this run?" body="In-progress and pending cases will be marked as cancelled. Cases that already finished keep their result." confirm_label="Abort run" action_url=test_run_abort_url %}
+  {% include "partials/confirm_dialog.html" with dialog_id="abort-run" title="Abort this run?" body="In-progress, pending and Need help cases will be marked as cancelled (a running auto-fix is asked to stop). Cases that already finished keep their result." confirm_label="Abort run" action_url=test_run_abort_url %}
   {% if resume_panel.can_resume %}
-  {% include "partials/confirm_dialog.html" with dialog_id="resume-run" title="Resume this run?" body=resume_panel.confirm_body confirm_label="Resume run" confirm_class="btn-primary" action_url=test_run_resume_url %}
+  {# Resume confirm — like confirm_dialog.html, plus the help mode select #}
+  <div
+    class="dialog-backdrop"
+    x-data="dialog()"
+    x-show="open"
+    x-cloak
+    x-on:open-resume-run.window="show()"
+    x-on:keydown.escape.window="close()"
+    x-trap.noscroll="open"
+    @click.self="close()"
+  >
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="resume-run-title" aria-describedby="resume-run-desc">
+      <h3 id="resume-run-title">Resume this run?</h3>
+      <p id="resume-run-desc">{{ resume_panel.confirm_body }}</p>
+      <form method="post" action="{{ test_run_resume_url }}">
+        {% csrf_token %}
+        {% include "projects/includes/_help_mode_select.html" with field_id="resume-run-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode only %}
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Resume run</button>
+        </div>
+      </form>
+    </div>
+  </div>
   {% endif %}
   {% include "partials/confirm_dialog.html" with dialog_id="reset-run" title="Reset this run?" body="All results, logs, and screenshots will be cleared and the run returns to draft." confirm_label="Reset run" action_url=test_run_reset_url %}
 
@@ -601,6 +673,8 @@ document.addEventListener('alpine:init', () => {
     testRunStatus: '{{ test_run.status }}',
     testrailPushStatus: '{{ test_run.testrail_push_status }}',
     testrailSourcePushStatus: '{{ testrail_checked_push.status }}',
+    helpState: '{{ help_state }}',
+    helpMode: '{{ test_run.help_mode|escapejs }}',
     summary: {
       total: {{ summary.total }},
       created: {{ summary.created }},
@@ -608,7 +682,8 @@ document.addEventListener('alpine:init', () => {
       success: {{ summary.success }},
       failed: {{ summary.failed }},
       blocked: {{ summary.blocked }},
-      cancelled: {{ summary.cancelled }}
+      cancelled: {{ summary.cancelled }},
+      need_help: {{ summary.need_help|default:0 }}
     },
     pivotStatuses: {
       {% for pivot in cases %}
@@ -624,6 +699,7 @@ document.addEventListener('alpine:init', () => {
         failed: 'badge-failed',
         blocked: 'badge-blocked',
         cancelled: 'badge-cancelled',
+        need_help: 'badge-need-help',
       }[status] || 'badge-draft';
     },
 
@@ -635,7 +711,23 @@ document.addEventListener('alpine:init', () => {
         failed: 'Failed',
         blocked: 'Blocked',
         cancelled: 'Cancelled',
+        need_help: 'Need help',
       }[status] || status;
+    },
+
+    // The paused banner and "Continue run" are server-rendered: reload when
+    // the run moves into or out of "paused", or its help_state changes. The
+    // server-rendered help_state is the baseline.
+    helpChanged(data) {
+      const pausedMoved = (this.testRunStatus === 'paused') !== (data.test_run_status === 'paused');
+      const state = data.help_state || 'none';
+      const stateMoved = this.helpState !== state;
+      this.helpState = state;
+      if (!pausedMoved && !stateMoved) return false;
+      this.testRunStatus = data.test_run_status;
+      this.summary = data.summary;
+      setTimeout(() => window.location.reload(), 500);
+      return true;
     },
 
     init() {
@@ -645,6 +737,7 @@ document.addEventListener('alpine:init', () => {
         const data = JSON.parse(event.data);
 
         if (data.type === 'current_state') {
+          if (this.helpChanged(data)) return;
           this.testRunStatus = data.test_run_status;
           this.summary = data.summary;
           this.pivotStatuses = Object.fromEntries(
@@ -690,6 +783,7 @@ document.addEventListener('alpine:init', () => {
         }
 
         if (data.type === 'test_run_status') {
+          if (this.helpChanged(data)) return;
           const previousStatus = this.testRunStatus;
           this.testRunStatus = data.test_run_status;
           this.summary = data.summary;

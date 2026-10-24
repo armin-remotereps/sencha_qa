@@ -1,0 +1,16 @@
+{% comment %} Help mode select for the Resume / Re-run dialogs (optional field
+   `help_mode`; the run keeps its mode when it is left as is).
+
+   Context contract:
+     field_id — unique id for the <select> on the page
+     choices  — RunHelpModeForm().fields.help_mode.choices
+     current  — the run's help_mode value, pre-selected {% endcomment %}
+<div class="field">
+  <label class="label" for="{{ field_id }}">When a case needs help</label>
+  <select class="select" id="{{ field_id }}" name="help_mode">
+    {% for value, label in choices %}
+    <option value="{{ value }}"{% if value == current %} selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  <p class="hint">Attended pauses the run and notifies people. Night lets the Machine setup agent try to fix the machine first.</p>
+</div>

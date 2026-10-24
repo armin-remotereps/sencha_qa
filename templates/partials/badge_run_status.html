@@ -1,7 +1,10 @@
 {% comment %} Status badge for a TestRun.
 
    Context contract:
-     status        — TestRunStatus value: "waiting" | "started" | "done" | "cancelled"
+     status        — TestRunStatus value: "waiting" | "started" | "paused" |
+                     "done" | "cancelled" ("paused": a case needs help)
+     auto_fixing   — optional bool; when status is "paused" and the Night
+                     auto-fix is running, the badge reads "Auto-fixing"
      failed_count  — optional int; when status is "done" and failed_count > 0
                      the badge reads "Failed"
      blocked_count — optional int; when status is "done", failed_count is 0 and
@@ -12,6 +15,8 @@
   <span class="badge badge-draft">Draft</span>
 {% elif status == "started" %}
   <span class="badge badge-running">Running</span>
+{% elif status == "paused" %}
+  <span class="badge badge-need-help">{% if auto_fixing %}Auto-fixing{% else %}Needs help{% endif %}</span>
 {% elif status == "cancelled" %}
   <span class="badge badge-cancelled">Cancelled</span>
 {% elif status == "done" %}

@@ -33,11 +33,13 @@
 
           <td data-label="Cases">{{ run.case_count }} case{{ run.case_count|pluralize }}</td>
 
-          <td data-label="Result" {% if run.status == "waiting" or run.status == "started" %}class="muted"{% endif %}>
+          <td data-label="Result" {% if run.status == "waiting" or run.status == "started" or run.status == "paused" %}class="muted"{% endif %}>
             {% if run.status == "done" %}
               {{ run.success_count }} passed{% if run.failed_count %} &middot; {{ run.failed_count }} failed{% endif %}{% if run.blocked_count %} &middot; {{ run.blocked_count }} blocked{% endif %}
             {% elif run.status == "started" %}
               In progress
+            {% elif run.status == "paused" %}
+              Paused: a case needs help
             {% elif run.status == "waiting" %}
               {{ run.case_count }} case{{ run.case_count|pluralize }} selected
             {% elif run.status == "cancelled" %}

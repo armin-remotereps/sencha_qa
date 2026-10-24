@@ -196,6 +196,11 @@ urlpatterns: list[URLPattern] = [
         name="test_run_rerun_blocked",
     ),
     path(
+        "<int:project_id>/test-runs/<int:test_run_id>/continue/",
+        views.test_run_continue,
+        name="test_run_continue",
+    ),
+    path(
         "<int:project_id>/test-runs/<int:test_run_id>/resume/",
         views.test_run_resume,
         name="test_run_resume",
@@ -249,6 +254,26 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/resume/",
         views.test_run_case_resume,
         name="test_run_case_resume",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/help/continue/",
+        views.test_run_case_help_continue,
+        name="test_run_case_help_continue",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/help/fail/",
+        views.test_run_case_help_fail,
+        name="test_run_case_help_fail",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/help/skip/",
+        views.test_run_case_help_skip,
+        name="test_run_case_help_skip",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/help/stop-auto-fix/",
+        views.test_run_case_help_stop_auto_fix,
+        name="test_run_case_help_stop_auto_fix",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:test_case_id>/edit/",

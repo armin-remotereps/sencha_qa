@@ -12,9 +12,11 @@ from django.utils.text import Truncator
 
 from projects.case_checkpoint_services import ResumeStepOption
 from projects.models import (
+    HELP_NOTE_MAX_LENGTH,
     PROJECT_PROMPT_MAX_LENGTH,
     ApplicationPlatform,
     Project,
+    RunHelpMode,
     TestCaseData,
     TestCasePriority,
     TestCaseType,
@@ -247,6 +249,55 @@ class TestRunCreateForm(forms.Form):
 RUN_CASE_SELECTION_MAX_IDS = 500
 
 
+class TestRunStartForm(forms.Form):
+    """Start a draft run: what happens when one of its cases needs help."""
+
+    help_mode = forms.ChoiceField(
+        label="When a case needs help",
+        choices=RunHelpMode.choices,
+        initial=RunHelpMode.ATTENDED,
+        widget=forms.RadioSelect,
+        error_messages={
+            "required": "Choose what happens when a case needs help.",
+            "invalid_choice": "Choose Attended or Night.",
+        },
+    )
+
+
+class RunHelpModeForm(forms.Form):
+    """Optional help mode of a Resume or Re-run; blank keeps the run's mode."""
+
+    help_mode = forms.ChoiceField(
+        label="When a case needs help",
+        choices=RunHelpMode.choices,
+        required=False,
+        widget=forms.Select(attrs={"class": "select"}),
+        error_messages={"invalid_choice": "Choose Attended or Night."},
+    )
+
+    def clean_help_mode(self) -> str | None:
+        value: str = self.cleaned_data.get("help_mode") or ""
+        return value or None
+
+
+class CaseHelpResolutionForm(forms.Form):
+    """Continue / Mark failed / Skip on a Need help case, with an optional note."""
+
+    note = forms.CharField(
+        label="Note for the agent",
+        required=False,
+        max_length=HELP_NOTE_MAX_LENGTH,
+        strip=True,
+        widget=forms.Textarea(
+            attrs={
+                "class": "textarea",
+                "rows": 3,
+                "placeholder": "Optional: what you fixed, or what the agent should know",
+            }
+        ),
+    )
+
+
 class RunCaseSelectionForm(forms.Form):
     """Selected run cases (pivot ids) for Check / Uncheck / Re-run on a test run.
 
@@ -291,6 +342,10 @@ class RunCaseSelectionForm(forms.Form):
 RESUME_STEP_LABEL_MAX_CHARS = 80
 
 
+class RunCasesRerunForm(RunCaseSelectionForm, RunHelpModeForm):
+    """Re-run selected cases in place, optionally changing the run's help mode."""
+
+
 def _resume_step_label(option: ResumeStepOption, *, is_last: bool) -> str:
     if option.verdict_only:
         return "After the last step: only write the verdict"
@@ -303,12 +358,13 @@ def _resume_step_label(option: ResumeStepOption, *, is_last: bool) -> str:
     return label
 
 
-class CaseResumeForm(forms.Form):
+class CaseResumeForm(RunHelpModeForm):
     """Step a resumed case continues from (Resume case dialog on the case page).
 
     The caller supplies the case's checkpoint steps (``list_resume_steps``),
     so the choices double as validation; the last option, the step that was
-    interrupted, is the default. Without a checkpoint the view posts no form.
+    interrupted, is the default. Without a checkpoint the view validates only
+    ``RunHelpModeForm``. The optional ``help_mode`` is inherited.
     """
 
     from_step = forms.TypedChoiceField(

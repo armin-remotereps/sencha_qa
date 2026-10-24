@@ -7,6 +7,8 @@
     project  — the current Project
     overview — projects.services.ProjectOverview
     visual_engine — VisualEngineStatusPayload; seeds overviewLive().visualEngine
+    open_help_request — CaseHelpRequest (case loaded) of the paused active
+                        run, or None
 
   The "Test machine" stat card below is a live view: it's kept in an
   ancestor Alpine scope (overviewLive(), extra_scripts) that opens the
@@ -33,7 +35,7 @@
   <div class="actions">
     <a class="btn btn-ghost" href="{% url 'projects:setup_details' project.id %}">Restart setup wizard</a>
     {% if overview.active_run %}
-      <a class="btn btn-primary" href="{% url 'projects:test_run_detail' project.id overview.active_run.id %}">View running tests</a>
+      <a class="btn btn-primary" href="{% url 'projects:test_run_detail' project.id overview.active_run.id %}">{% if overview.active_run.status == "paused" %}View paused run{% else %}View running tests{% endif %}</a>
     {% else %}
       <a class="btn btn-primary" href="{% url 'projects:test_case_list' project.id %}">Run tests</a>
     {% endif %}
@@ -45,7 +47,7 @@
 {{ project.agent_system_info|json_script:"overview-system-info" }}
 {{ visual_engine|json_script:"overview-visual-engine" }}
 <div x-data="overviewLive()">
-  {% include "projects/includes/_overview_alert.html" with project=project overview=overview only %}
+  {% include "projects/includes/_overview_alert.html" with project=project overview=overview open_help_request=open_help_request only %}
   {% include "projects/includes/_overview_stats.html" with project=project overview=overview only %}
 </div>
 

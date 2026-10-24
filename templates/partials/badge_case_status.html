@@ -4,9 +4,12 @@
 
    Context contract:
      status    — TestRunTestCaseStatus value:
-                 "created" | "in_progress" | "success" | "failed" | "blocked" | "cancelled"
+                 "created" | "in_progress" | "success" | "failed" | "blocked" |
+                 "cancelled" | "need_help"
      never_run — optional bool; when status is "created" and never_run is
-                 true, the badge reads "Never run" instead of "Not started" {% endcomment %}
+                 true, the badge reads "Never run" instead of "Not started"
+     auto_fixing — optional bool; when status is "need_help" and the Night
+                 auto-fix is running, the badge reads "Auto-fixing" {% endcomment %}
 {% if status == "created" %}
   <span class="badge badge-draft" data-status="{{ status }}">{% if never_run %}Never run{% else %}Not started{% endif %}</span>
 {% elif status == "in_progress" %}
@@ -19,4 +22,6 @@
   <span class="badge badge-blocked" data-status="{{ status }}">Blocked</span>
 {% elif status == "cancelled" %}
   <span class="badge badge-cancelled" data-status="{{ status }}">Cancelled</span>
+{% elif status == "need_help" %}
+  <span class="badge badge-need-help" data-status="{{ status }}">{% if auto_fixing %}Auto-fixing{% else %}Need help{% endif %}</span>
 {% endif %}

@@ -2962,3 +2962,121 @@ details.card[open] > summary,
     flex-direction: column;
   }
 }
+
+/* --------------------------------------------------------------------------
+   Need help (a run case asks a person, or the auto-fix agent, for help)
+   -------------------------------------------------------------------------- */
+
+/* Orange, so it never reads as Blocked (warning) or Failed (danger). */
+.badge-need-help {
+  color: var(--brand-orange);
+  background: var(--orange-soft);
+  border-color: color-mix(in srgb, var(--brand-orange) 35%, transparent);
+}
+
+.badge-need-help::before {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.alert-need-help {
+  background: var(--orange-soft);
+  border-color: color-mix(in srgb, var(--brand-orange) 35%, transparent);
+}
+
+.alert-need-help .alert-icon {
+  color: var(--brand-orange);
+}
+
+.card-tone-need-help {
+  border-color: var(--brand-orange);
+}
+
+.stat-value.is-need-help {
+  color: var(--brand-orange);
+}
+
+/* The agent's reason / ask and the people's notes: model or user text. */
+.help-quote {
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--brand-orange);
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.help-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.radio-card-stack {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+/* Machine setup threads: the main chat, then auto-fix threads. */
+.chat-thread-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.chat-thread-list__item {
+  display: block;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.chat-thread-list__item:hover {
+  background: var(--surface-hover);
+}
+
+.chat-thread-list__item--active {
+  border-color: var(--brand-cyan);
+  background: var(--cyan-soft);
+}
+
+.chat-thread-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+/* Notifications page: this user's push devices. */
+.push-device-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.push-device-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  overflow-wrap: anywhere;
+}
+
+.push-hint {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}

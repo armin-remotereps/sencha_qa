@@ -4,8 +4,21 @@
   Context contract:
     project  — the current Project
     overview — projects.services.ProjectOverview
+    open_help_request — CaseHelpRequest (test_run_test_case__test_case loaded)
+                        of the paused active run, or None; wins over the rest
 {% endcomment %}
-{% if overview.primary_action == "import_cases" %}
+{% if open_help_request %}
+  {% with case=open_help_request.test_run_test_case %}
+  <div class="alert alert-need-help" role="alert">
+    <span class="alert-icon" aria-hidden="true">✋</span>
+    <div>
+      <strong>{{ overview.active_run.display_name }} is paused: {{ case.test_case.title }} {% if open_help_request.auto_fix_state == "running" %}is being auto-fixed{% else %}needs help{% endif %}</strong>
+      {% if open_help_request.ask %}<p>{{ open_help_request.ask|truncatechars:200 }}</p>{% endif %}
+      <a class="btn btn-sm btn-primary" href="{% url 'projects:test_run_case_detail' project.id case.test_run_id case.id %}">Open the case</a>
+    </div>
+  </div>
+  {% endwith %}
+{% elif overview.primary_action == "import_cases" %}
   <div class="alert alert-info" role="status">
     <span class="alert-icon" aria-hidden="true">ℹ</span>
     <div>
@@ -27,7 +40,7 @@
   <div class="alert alert-info" role="status">
     <span class="alert-icon" aria-hidden="true">ℹ</span>
     <div>
-      <strong>{{ overview.active_run.display_name }} is running</strong>
+      <strong>{{ overview.active_run.display_name }} {% if overview.active_run.status == "paused" %}is paused{% else %}is running{% endif %}</strong>
       <a class="btn btn-sm btn-secondary" href="{% url 'projects:test_run_detail' project.id overview.active_run.id %}">View run</a>
     </div>
   </div>

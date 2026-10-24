@@ -1,0 +1,53 @@
+{% comment %} Run page banner while the run is paused (asleep) because a case needs help.
+
+   Context contract:
+     project, test_run, csrf_token
+     help_panel — projects.case_help_services.HelpPanel (request with
+                  test_run_test_case__test_case loaded, thread, auto_fix_live,
+                  blockers, is_open, can_continue_run, waiting_for_auto_fix_stop)
+   The agent's reason / ask is model text: autoescaped, never |safe. {% endcomment %}
+{% with help_request=help_panel.request %}
+{% with case=help_request.test_run_test_case %}
+<div class="alert alert-need-help" role="alert" x-show="testRunStatus === 'paused'">
+  <span class="alert-icon" aria-hidden="true">✋</span>
+  <div>
+    {% if help_panel.is_open %}
+      <strong>Run paused: {{ case.test_case.title }} {% if help_request.auto_fix_state == "running" %}is being auto-fixed{% else %}needs help{% endif %}</strong>
+      <p>Step {{ help_request.step_num }}{% if help_request.ask %}: {{ help_request.ask|truncatechars:240 }}{% elif help_request.reason %}: {{ help_request.reason|truncatechars:240 }}{% endif %}</p>
+      {% if help_request.auto_fix_state == "running" %}
+        <p>The Machine setup agent is trying to fix the machine. Nothing else in this run executes until the case is resolved.</p>
+      {% elif help_request.auto_fix_state == "not_fixed" %}
+        <p>The auto-fix could not fix it. A person needs to fix the machine and continue the case.</p>
+      {% else %}
+        <p>Waiting {{ help_request.requested_at|timesince }} for a person. Nothing else in this run executes until the case is resolved.</p>
+      {% endif %}
+      <div class="help-actions">
+        <a class="btn btn-sm btn-primary" href="{% url 'projects:test_run_case_detail' project.id test_run.id case.id %}">Open the case</a>
+        {% if help_panel.thread %}
+        <a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id help_panel.thread.id %}">View the auto-fix thread</a>
+        {% endif %}
+      </div>
+    {% elif help_panel.waiting_for_auto_fix_stop %}
+      <strong>Run paused: {{ case.test_case.title }} was {{ help_request.get_resolution_display|lower }}</strong>
+      <p>The run continues as soon as the auto-fix agent stops.</p>
+      {% if help_panel.thread %}
+      <div class="help-actions">
+        <a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id help_panel.thread.id %}">View the auto-fix thread</a>
+      </div>
+      {% endif %}
+    {% else %}
+      <strong>Run paused: {{ case.test_case.title }} was {{ help_request.get_resolution_display|lower }}, but the run could not continue</strong>
+      {% if help_panel.blockers %}
+        <p>{{ help_panel.blockers|join:" " }}</p>
+      {% else %}
+        <p>The run can continue now.</p>
+      {% endif %}
+      <form method="post" action="{% url 'projects:test_run_continue' project.id test_run.id %}" class="help-actions">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-primary"{% if help_panel.blockers %} disabled aria-disabled="true"{% endif %}>Continue run</button>
+      </form>
+    {% endif %}
+  </div>
+</div>
+{% endwith %}
+{% endwith %}

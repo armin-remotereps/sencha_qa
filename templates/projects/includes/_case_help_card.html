@@ -1,0 +1,98 @@
+{% comment %} Case page: "This case needs help" card and its actions.
+
+   Context contract:
+     project, test_run, pivot, csrf_token
+     help_panel — projects.case_help_services.HelpPanel for this case (the
+                  run is paused on it): request, thread (auto-fix
+                  SetupConversation or None; fix_result, fix_summary),
+                  auto_fix_live, blockers, is_open, can_continue,
+                  can_continue_run, waiting_for_auto_fix_stop
+     help_form  — CaseHelpResolutionForm (the optional note)
+   Continue / Mark failed / Skip share one form (the note) and post to their
+   own URL via formaction. Abort opens the page's "abort-run" dialog.
+   Agent and human text is autoescaped, never |safe. {% endcomment %}
+{% with help_request=help_panel.request thread=help_panel.thread %}
+<section aria-labelledby="help-h" class="card card-tone-need-help">
+  <div class="card-header">
+    <h2 id="help-h">{% if help_panel.is_open %}This case needs help{% else %}Help given: {{ help_request.get_resolution_display }}{% endif %}</h2>
+    {% if help_panel.is_open %}
+      {% include "partials/badge_case_status.html" with status="need_help" auto_fixing=help_panel.auto_fix_live only %}
+    {% endif %}
+  </div>
+
+  {% if help_panel.is_open %}
+    <p class="muted small">
+      Stopped at step {{ help_request.step_num }} · waiting
+      <time datetime="{{ help_request.requested_at|date:'c' }}">{{ help_request.requested_at|timesince }}</time>.
+      The run is paused: nothing else in it executes until this case is resolved. The test machine was left exactly as it is.
+    </p>
+    {% if help_request.reason %}
+      <div class="label">Why the agent stopped</div>
+      <p class="help-quote">{{ help_request.reason }}</p>
+    {% endif %}
+    {% if help_request.ask %}
+      <div class="label">What the agent asks you to do</div>
+      <p class="help-quote">{{ help_request.ask }}</p>
+    {% endif %}
+
+    {% if help_request.auto_fix_state == "running" %}
+      <div class="alert alert-info">
+        <span class="alert-icon" aria-hidden="true">⚙</span>
+        <div>
+          <strong>The Machine setup agent is trying to fix this</strong>
+          <p>Continue, Mark failed and Skip take effect when the auto-fix agent stops.</p>
+          <div class="help-actions">
+            {% if thread %}<a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id thread.id %}">View the auto-fix thread</a>{% endif %}
+            <form method="post" action="{% url 'projects:test_run_case_help_stop_auto_fix' project.id test_run.id pivot.id %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn-sm btn-danger">Stop auto-fix</button>
+            </form>
+          </div>
+        </div>
+      </div>
+    {% elif help_request.auto_fix_state == "not_fixed" %}
+      <div class="alert alert-warning">
+        <span class="alert-icon" aria-hidden="true">⚠</span>
+        <div>
+          <strong>Auto-fix could not fix it{% if thread.fix_summary %}:{% endif %}</strong>
+          {% if thread.fix_summary %}<p class="pre-wrap">{{ thread.fix_summary }}</p>{% endif %}
+          {% if thread %}<a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id thread.id %}">View the auto-fix thread</a>{% endif %}
+        </div>
+      </div>
+    {% elif help_request.auto_fix_state == "fixed" %}
+      <div class="alert alert-warning">
+        <span class="alert-icon" aria-hidden="true">⚠</span>
+        <div>
+          <strong>The auto-fix reported the machine fixed, but the run could not continue</strong>
+          {% if thread.fix_summary %}<p class="pre-wrap">{{ thread.fix_summary }}</p>{% endif %}
+          {% if thread %}<a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id thread.id %}">View the auto-fix thread</a>{% endif %}
+        </div>
+      </div>
+    {% endif %}
+
+    <form method="post" action="{% url 'projects:test_run_case_help_continue' project.id test_run.id pivot.id %}">
+      {% csrf_token %}
+      <div class="field">
+        <label class="label" for="{{ help_form.note.id_for_label }}">{{ help_form.note.label }}</label>
+        {{ help_form.note }}
+        <p class="hint">Continue re-runs step {{ help_request.step_num }} from the current screen, with your note. Mark failed records a Failed verdict. Skip leaves the case Blocked so it can be resumed later. In every case the rest of the run then continues.</p>
+      </div>
+      {% if help_panel.blockers %}
+        <p class="hint" id="help-continue-blockers">Continue is unavailable: {{ help_panel.blockers|join:" " }}</p>
+      {% endif %}
+      <div class="help-actions">
+        <button type="submit" class="btn btn-primary"{% if not help_panel.can_continue %} disabled aria-disabled="true" aria-describedby="help-continue-blockers"{% endif %}>Continue</button>
+        <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_help_fail' project.id test_run.id pivot.id %}">Mark failed</button>
+        <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_help_skip' project.id test_run.id pivot.id %}">Skip</button>
+        <button type="button" class="btn btn-danger" @click="$dispatch('open-abort-run')">Abort run</button>
+      </div>
+    </form>
+  {% elif help_panel.waiting_for_auto_fix_stop %}
+    <p>The run continues as soon as the auto-fix agent stops.</p>
+    {% if thread %}<a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id thread.id %}">View the auto-fix thread</a>{% endif %}
+  {% else %}
+    <p>The run could not continue yet.{% if help_panel.blockers %} {{ help_panel.blockers|join:" " }}{% endif %}</p>
+    <a class="btn btn-sm btn-primary" href="{% url 'projects:test_run_detail' project.id test_run.id %}">Continue it from the run page</a>
+  {% endif %}
+</section>
+{% endwith %}

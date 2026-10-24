@@ -20,31 +20,56 @@ from django.views.decorators.http import require_GET, require_POST
 
 from accounts.models import CustomUser
 from accounts.types import AuthenticatedRequest
+from machine_setup.services.case_auto_fix import settle_stale_auto_fix_turn
 from projects.application_context_services import (
     get_context_provenance,
     list_context_versions,
     restore_context_version,
 )
 from projects.case_checkpoint_services import list_resume_steps
+from projects.case_help_services import (
+    continue_after_help,
+    continue_paused_run,
+    format_help_action_message,
+    get_help_panel,
+    get_open_help_request,
+    get_run_case_for_help,
+    list_case_help_requests,
+    mark_failed_after_help,
+    skip_after_help,
+    stop_auto_fix,
+)
 from projects.case_step_progress import pivot_step_payload
 from projects.decorators import project_membership_required
 from projects.exceptions import (
     ApplicationContextVersionNotFoundError,
     RunCaseCheckError,
+    RunHelpError,
     RunRerunError,
     RunResumeError,
 )
 from projects.forms import (
     ApplicationContextForm,
+    CaseHelpResolutionForm,
     CaseResumeForm,
     ContextRestoreForm,
     ProjectForm,
     RunCaseSelectionForm,
+    RunCasesRerunForm,
+    RunHelpModeForm,
     TestCaseForm,
     TestRunCreateForm,
+    TestRunStartForm,
     form_error_text,
 )
-from projects.models import PROJECT_PROMPT_MAX_LENGTH, Project, TestRun, TestRunStatus
+from projects.models import (
+    PROJECT_PROMPT_MAX_LENGTH,
+    Project,
+    RunHelpMode,
+    TestRun,
+    TestRunStatus,
+    TestRunTestCase,
+)
 from projects.run_case_check_services import (
     check_run_cases,
     format_check_message,
@@ -102,6 +127,7 @@ from projects.services import (
     get_project_overview,
     get_project_tag_names,
     get_run_case_picker,
+    get_run_help_state,
     get_run_readiness,
     get_test_case_for_project,
     get_test_run_case_detail,
@@ -380,12 +406,19 @@ def project_duplicate(request: AuthenticatedRequest, project_id: int) -> HttpRes
 def project_overview(request: HttpRequest, project: Project) -> HttpResponse:
     visual_engine = get_visual_engine_status()
     overview = get_project_overview(project, visual_engine)
+    open_help_request = (
+        get_open_help_request(overview.active_run)
+        if overview.active_run is not None
+        and overview.active_run.status == TestRunStatus.PAUSED
+        else None
+    )
     return render(
         request,
         "projects/overview.html",
         {
             "project": project,
             "overview": overview,
+            "open_help_request": open_help_request,
             "visual_engine": visual_engine.to_payload(),
             "context_source": get_context_provenance(project),
             "active_tab": "overview",
@@ -806,10 +839,14 @@ def test_run_start(
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
         raise Http404
-    try:
-        start_test_run(test_run)
-    except ValueError as exc:
-        messages.error(request, str(exc))
+    form = TestRunStartForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+    else:
+        try:
+            start_test_run(test_run, help_mode=form.cleaned_data["help_mode"])
+        except ValueError as exc:
+            messages.error(request, str(exc))
     return redirect(
         "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
     )
@@ -961,11 +998,18 @@ def _build_test_run_detail_context(
         "uncheckable_pivot_ids": [p.id for p in cases if is_uncheckable(p)],
         "rerunnable_pivot_ids": rerunnable_ids_on_page(test_run, cases),
         "rerun_panel": rerun_panel,
+        "help_panel": get_help_panel(test_run, project),
+        "help_state": get_run_help_state(test_run),
+        # Resume / Re-run dialogs: pre-set to the run's current mode.
+        "help_mode_form": RunHelpModeForm(initial={"help_mode": test_run.help_mode}),
         "active_tab": "runs",
         "active_nav": "projects",
     }
     if test_run.status == TestRunStatus.WAITING:
         context["readiness"] = get_run_readiness(project, test_run=test_run)
+        context["start_form"] = TestRunStartForm(
+            initial={"help_mode": test_run.help_mode}
+        )
     return context
 
 
@@ -984,9 +1028,12 @@ def test_run_detail(
 def test_run_case_detail(
     request: HttpRequest, project: Project, test_run_id: int, pivot_id: int
 ) -> HttpResponse:
+    # A killed auto-fix worker falls back to a person before the case is read.
+    settle_stale_auto_fix_turn(project)
     pivot = get_test_run_case_detail(pivot_id, project)
     if pivot is None or pivot.test_run_id != test_run_id:
         raise Http404
+    help_panel = get_help_panel(pivot.test_run, project, pivot_id=pivot.id)
     screenshots = list(pivot.screenshots.all())
     form = TestCaseForm()
     can_edit = can_edit_test_case_in_run(pivot.test_run)
@@ -1011,7 +1058,19 @@ def test_run_case_detail(
             "source_run_url": source_run_url,
             "can_resume": can_resume,
             "resume_steps": resume_steps,
-            "resume_form": CaseResumeForm(resume_steps) if resume_steps else None,
+            "resume_form": (
+                CaseResumeForm(
+                    resume_steps, initial={"help_mode": pivot.test_run.help_mode}
+                )
+                if resume_steps
+                else None
+            ),
+            "help_mode_form": RunHelpModeForm(
+                initial={"help_mode": pivot.test_run.help_mode}
+            ),
+            "help_panel": help_panel,
+            "help_requests": list_case_help_requests(pivot),
+            "help_form": CaseHelpResolutionForm(),
             "resumes": list_case_resumes(pivot),
             "step_progress": pivot_step_payload(pivot),
             "active_tab": "runs",
@@ -1028,8 +1087,18 @@ def test_run_resume(
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
         raise Http404
+    form = RunHelpModeForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return redirect(
+            "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
+        )
     try:
-        resumed = resume_test_run(test_run=test_run, user=request.user)
+        resumed = resume_test_run(
+            test_run=test_run,
+            user=request.user,
+            help_mode=form.cleaned_data["help_mode"],
+        )
     except RunResumeError as exc:
         messages.error(request, exc.message)
     else:
@@ -1057,14 +1126,23 @@ def test_run_case_resume(
     )
     from_step: int | None = None
     step_options = list_resume_steps(pivot)
+    form: RunHelpModeForm = (
+        CaseResumeForm(step_options, request.POST)
+        if step_options
+        else RunHelpModeForm(request.POST)
+    )
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return case_detail
     if step_options:
-        form = CaseResumeForm(step_options, request.POST)
-        if not form.is_valid():
-            messages.error(request, form_error_text(form))
-            return case_detail
         from_step = form.cleaned_data["from_step"]
     try:
-        resume_test_run_case(pivot=pivot, user=request.user, from_step=from_step)
+        resume_test_run_case(
+            pivot=pivot,
+            user=request.user,
+            from_step=from_step,
+            help_mode=form.cleaned_data["help_mode"],
+        )
     except RunResumeError as exc:
         messages.error(request, exc.message)
     else:
@@ -1132,14 +1210,17 @@ def test_run_cases_rerun(
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
         raise Http404
-    form = RunCaseSelectionForm(list_rerunnable_pivot_ids(test_run), request.POST)
+    form = RunCasesRerunForm(list_rerunnable_pivot_ids(test_run), request.POST)
     if not form.is_valid():
         messages.error(request, form_error_text(form))
     else:
         pivot_ids: list[int] = form.cleaned_data["pivot_ids"]
         try:
             outcome = rerun_test_run_cases(
-                test_run=test_run, pivot_ids=pivot_ids, user=request.user
+                test_run=test_run,
+                pivot_ids=pivot_ids,
+                user=request.user,
+                help_mode=form.cleaned_data["help_mode"],
             )
         except RunRerunError as exc:
             messages.error(request, exc.message)
@@ -1180,6 +1261,132 @@ def test_run_case_edit(
         kwargs={"project_id": project.id, "test_run_id": test_run.id},
     )
     return redirect(_next_or_default(request, fallback_url))
+
+
+# ============================================================================
+# NEED HELP: HUMAN ACTIONS ON A PAUSED RUN
+# ============================================================================
+
+
+def _help_case_or_404(
+    project: Project, test_run_id: int, pivot_id: int
+) -> TestRunTestCase:
+    pivot = get_run_case_for_help(pivot_id, test_run_id, project)
+    if pivot is None:
+        raise Http404
+    return pivot
+
+
+def _case_detail_redirect(project: Project, pivot: TestRunTestCase) -> HttpResponse:
+    return redirect(
+        "projects:test_run_case_detail",
+        project_id=project.id,
+        test_run_id=pivot.test_run_id,
+        pivot_id=pivot.id,
+    )
+
+
+@project_membership_required
+@require_POST
+def test_run_case_help_continue(
+    request: AuthenticatedRequest, project: Project, test_run_id: int, pivot_id: int
+) -> HttpResponse:
+    pivot = _help_case_or_404(project, test_run_id, pivot_id)
+    form = CaseHelpResolutionForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return _case_detail_redirect(project, pivot)
+    try:
+        result = continue_after_help(
+            pivot=pivot, user=request.user, note=form.cleaned_data["note"]
+        )
+    except RunHelpError as exc:
+        messages.error(request, exc.message)
+    else:
+        messages.success(request, format_help_action_message("Continuing", result))
+    return _case_detail_redirect(project, pivot)
+
+
+@project_membership_required
+@require_POST
+def test_run_case_help_fail(
+    request: AuthenticatedRequest, project: Project, test_run_id: int, pivot_id: int
+) -> HttpResponse:
+    pivot = _help_case_or_404(project, test_run_id, pivot_id)
+    form = CaseHelpResolutionForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return _case_detail_redirect(project, pivot)
+    try:
+        result = mark_failed_after_help(
+            pivot=pivot, user=request.user, note=form.cleaned_data["note"]
+        )
+    except RunHelpError as exc:
+        messages.error(request, exc.message)
+    else:
+        messages.success(
+            request, format_help_action_message("Marked the case failed", result)
+        )
+    return _case_detail_redirect(project, pivot)
+
+
+@project_membership_required
+@require_POST
+def test_run_case_help_skip(
+    request: AuthenticatedRequest, project: Project, test_run_id: int, pivot_id: int
+) -> HttpResponse:
+    pivot = _help_case_or_404(project, test_run_id, pivot_id)
+    form = CaseHelpResolutionForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return _case_detail_redirect(project, pivot)
+    try:
+        result = skip_after_help(
+            pivot=pivot, user=request.user, note=form.cleaned_data["note"]
+        )
+    except RunHelpError as exc:
+        messages.error(request, exc.message)
+    else:
+        messages.success(
+            request, format_help_action_message("Skipped the case", result)
+        )
+    return _case_detail_redirect(project, pivot)
+
+
+@project_membership_required
+@require_POST
+def test_run_case_help_stop_auto_fix(
+    request: AuthenticatedRequest, project: Project, test_run_id: int, pivot_id: int
+) -> HttpResponse:
+    pivot = _help_case_or_404(project, test_run_id, pivot_id)
+    try:
+        stop_auto_fix(pivot=pivot, user=request.user)
+    except RunHelpError as exc:
+        messages.error(request, exc.message)
+    else:
+        messages.success(
+            request, "Stopping the auto-fix. The case now waits for a person."
+        )
+    return _case_detail_redirect(project, pivot)
+
+
+@project_membership_required
+@require_POST
+def test_run_continue(
+    request: AuthenticatedRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    try:
+        continue_paused_run(test_run=test_run, user=request.user)
+    except RunHelpError as exc:
+        messages.error(request, exc.message)
+    else:
+        messages.success(request, "The run continues.")
+    return redirect(
+        "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
+    )
 
 
 # ============================================================================
@@ -1269,7 +1476,8 @@ def _handle_setup_run_submit(request: HttpRequest, project: Project) -> HttpResp
         name=form.cleaned_data["name"],
     )
     try:
-        start_test_run(test_run)
+        # The wizard has no mode choice: a first run is attended.
+        start_test_run(test_run, help_mode=RunHelpMode.ATTENDED)
     except ValueError as exc:
         messages.error(request, str(exc))
     return redirect(
