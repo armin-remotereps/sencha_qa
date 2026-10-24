@@ -1079,7 +1079,8 @@ def test_run_case_detail(
             "help_requests": list_case_help_requests(pivot),
             # The agent's suggested note is shown, never pre-filled: the
             # Continue note reaches the tester as the person's own words.
-            "help_form": CaseHelpResolutionForm(),
+            # The draft is only summarised here, so it is not applied by default.
+            "help_form": CaseHelpResolutionForm(initial={"use_plan_revision": False}),
             "resumes": list_case_resumes(pivot),
             "step_progress": step_progress,
             "earlier_plans": earlier_plans,

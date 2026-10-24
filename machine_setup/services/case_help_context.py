@@ -47,6 +47,7 @@ def load_help_request(help_request_id: int) -> CaseHelpRequest | None:
         CaseHelpRequest.objects.select_related(
             "test_run_test_case__test_case", "test_run_test_case__test_run"
         )
+        .defer("test_run_test_case__logs")
         .filter(pk=help_request_id)
         .first()
     )
@@ -148,6 +149,7 @@ def describe_help_status(help_request_id: int) -> str:
             "test_run_test_case__test_run__id",
             "test_run_test_case__test_run__status",
         )
+        .defer("test_run_test_case__logs")
         .filter(pk=help_request_id)
         .first()
     )

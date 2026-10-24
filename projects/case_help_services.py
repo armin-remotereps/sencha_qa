@@ -185,6 +185,7 @@ def get_help_panel(
     request = (
         CaseHelpRequest.objects.filter(test_run_test_case__test_run_id=test_run.pk)
         .select_related("test_run_test_case__test_case")
+        .defer("test_run_test_case__logs")
         .prefetch_related(_with_threads())
         .order_by("-requested_at", "-id")
         .first()

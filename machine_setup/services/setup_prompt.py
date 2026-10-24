@@ -136,7 +136,8 @@ def _build_help_chat_tools() -> str:
         "expected_result, timeout_seconds?, carried_from?}. The person reviews it "
         "side by side with the current plan; Continue applies it\n"
         f"- {PROPOSE_RESOLUTION_TOOL}(action, note) — suggest continue, "
-        "mark_failed or skip, with a note; it pre-fills the person's form"
+        "mark_failed or skip, with a note; the person sees it next to the chat, and it is not sent "
+        "to the tester"
     )
 
 

@@ -264,7 +264,7 @@ The agent can suggest an action; only the person acts. Type: `feat`.
 | URL | Method | Permission | Form | Template / context | Errors |
 |---|---|---|---|---|---|
 | `machine_setup:help_chat_open` `/projects/<id>/machine-setup/help/<pivot_id>/` | POST | `@project_membership_required` | `OpenHelpChatForm` (`text`, optional, ≤ 8000) | redirect to `machine_setup:thread` | pivot not in project → 404; not paused / no open request → message + case page; send refused → thread page with message |
-| `machine_setup:thread` (existing) | GET | same | `SetupMessageForm` | `chat.html` + `help_panel`, `help_form` (note pre-filled from the agent's proposal, `use_plan_revision` initially True), `help_case_url`, `threads` | 404 for a foreign thread |
+| `machine_setup:thread` (existing) | GET | same | `SetupMessageForm` | `chat.html` + `help_panel`, `help_form` (note never pre-filled from the agent's proposal, `use_plan_revision` initially True; unticked on the case page, which only summarises the draft), `help_case_url`, `threads` | 404 for a foreign thread |
 | `projects:test_run_case_help_continue` / `_fail` / `_skip` (existing) | POST | same | `CaseHelpResolutionForm` + `plan_revision_id` (hidden, optional), `use_plan_revision` (checkbox), `return_thread_id` (hidden, optional) | case page, or `machine_setup:thread` when `return_thread_id` is the non-archived thread **of this request** (checked in the service, `reverse()`d) | `RunHelpError` (newer draft, case changed, agent still replying, gates) → message |
 | `projects:test_run_case_plan_revision_discard` `/projects/<id>/test-runs/<run_id>/cases/<pivot_id>/help/plan/<revision_id>/discard/` | POST | same | `HelpReturnForm` (`return_thread_id`) | same redirect rule | `PlanRevisionError` → message; 404 if the revision is not this pivot's |
 
@@ -305,7 +305,7 @@ Templates (autoescaped or `x-text`; never `|safe` or `x-html`; JSON through `jso
 
 ### Interaction rules
 
-- **End of chat**: only the person resolves, from the case page or the thread panel. `propose_resolution` pre-selects and pre-fills only. After resolution the thread stays usable as a setup chat, and the help tools return "no longer waiting for help".
+- **End of chat**: only the person resolves, from the case page or the thread panel. `propose_resolution` is shown to the person only; its note is never pre-filled or sent to the tester. After resolution the thread stays usable as a setup chat, and the help tools return "no longer waiting for help".
 - **Resume point**: the first step that is not carried (`next_step = C + 1`), with no cleanup and no restore. This includes C = 0 (step 1). Without a draft, the behaviour is unchanged (old step N).
 - **Night auto-fix**:
   - While the auto-fix is running, "Help chat" opens the auto-fix thread. Stop (existing) settles it not fixed, and the person's next turn is `CASE_HELP`.
@@ -336,7 +336,7 @@ Templates (autoescaped or `x-text`; never `|safe` or `x-html`; JSON through `jso
 1. Case X pauses at step N. The person clicks **Open help chat**. `open_help_chat` reuses or creates the thread and starts the first turn.
 2. The `CASE_HELP` turn checks the screen read-only, talks with the person over several turns, and does machine work through `run_setup_task`.
 3. The agent decides the test was misunderstood. It prepares the machine, then calls `propose_plan_change` with a full list whose first steps carry old passed steps. The draft is validated and stored, and the `help` event fills the side-by-side panel.
-4. The agent calls `propose_resolution("continue", note)`, which pre-fills the Continue note.
+4. The agent calls `propose_resolution("continue", note)`, which the panel shows next to the chat (the note is not pre-filled).
 5. The person presses **Continue** with the draft ticked. Under the locks:
    - the draft is re-checked (id, fingerprint, validity) and applied: new plan, carried passes, earlier plan in a record, cursor C+1, version +1;
    - the request is resolved, the help key is written, the pivot goes to CREATED and the run is queued.
@@ -461,7 +461,7 @@ Manual; this project has no automated tests.
    - Submit Continue with an older draft id after the agent proposes a newer one: refused.
    - Continue while the agent is replying: refused.
    - Continue after a Resume or Abort changed the case: refused (fingerprint, or not paused).
-9. `propose_resolution("mark_failed", …)`: the panel shows it and pre-fills the note, and nothing changes until the person clicks.
+9. `propose_resolution("mark_failed", …)`: the panel shows it (the note field stays empty), and nothing changes until the person clicks.
 10. **Night**:
     - while the auto-fix is running, the help chat is the auto-fix thread; Stop, then type, and the turn has the plan tools (the auto-fix turn had none);
     - opening the chat while the start task is queued: no auto-fix thread, state not fixed;
@@ -500,6 +500,12 @@ None.
   - Verification updated.
 
   Status Ready.
+- 2026-10-24: review pass 1 (reviewer + verifier), all findings fixed:
+  - the agent's `propose_resolution` note is no longer pre-filled into the person's Continue note (it would reach the tester as "Person: …"); a draft arriving over the socket unticks "Use the redesigned plan";
+  - record/snapshot text caps, fingerprint without `checkpoint_to_json`, `get_help_case` returns an ≤ 8k case update, superseded drafts drop their step JSON, abort supersedes drafts and clears the proposal;
+  - verdict keeps the redesign sentence after a later help; `person_turn_live` in `machine_setup/turn_state.py`; lock order project → run → request → case everywhere; single save on Continue; `help_thread_state.py`.
+  - Accepted (not changed): no `help` broadcast from `projects` on resolve/discard (pages redirect back); `case_step_progress` builds the carried label locally (import cycle); Continue refuses whenever the pending draft differs from the shown one.
+- 2026-10-24: review pass 2: setup prompt no longer says the suggestion pre-fills the form; the case page leaves "Use the redesigned plan" unticked (it shows only a summary); help reads defer `logs`. Rejected: annotating the help-history step count instead of loading `steps` (bounded by person discards, not worth the complexity).
 
 ## Frozen contracts (Foundation, written 2026-10-24)
 
