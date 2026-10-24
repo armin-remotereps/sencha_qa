@@ -3073,29 +3073,39 @@ details.card[open] > summary,
   color: var(--text-muted);
 }
 
-/* Notifications page: this user's push devices. */
-.push-device-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* Notifications page: the user's ntfy server and topic, each with a copy button. */
+.ntfy-subscription {
   display: grid;
   gap: 8px;
+  margin: 0 0 14px;
 }
 
-.push-device-list > li {
+.ntfy-subscription > div {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
   padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface-raised);
-  overflow-wrap: anywhere;
 }
 
-.push-hint {
+.ntfy-subscription dt {
+  min-width: 4.5rem;
   font-size: 0.85rem;
   color: var(--text-muted);
+}
+
+.ntfy-subscription dd {
+  flex: 1 1 14rem;
+  margin: 0;
+  min-width: 0;
+}
+
+.ntfy-topic {
+  font-family: var(--mono);
+  font-size: 0.86rem;
+  color: var(--code-text);
+  overflow-wrap: anywhere;
 }

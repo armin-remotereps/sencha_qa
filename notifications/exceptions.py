@@ -9,28 +9,21 @@ class NotificationError(Exception):
         self.message = message
 
 
-class PushNotConfiguredError(NotificationError):
-    """Web Push is disabled: the VAPID keys or subject are not set."""
+class NotificationsNotConfiguredError(NotificationError):
+    """ntfy is disabled or misconfigured: NTFY_SERVER_URL or the prefix is invalid."""
 
     def __init__(self) -> None:
-        super().__init__("Push notifications are not configured on this server.")
+        super().__init__("Notifications are not configured on this server.")
 
 
-class PushEndpointNotAllowedError(NotificationError):
-    """A subscription endpoint is not https or not on an allowed push service."""
-
-    def __init__(self) -> None:
-        super().__init__("This browser's push service is not supported.")
-
-
-class NoPushDevicesError(NotificationError):
-    """The user has no device with notifications enabled."""
+class NotificationsOffError(NotificationError):
+    """The user has not turned notifications on."""
 
     def __init__(self) -> None:
-        super().__init__("Turn on notifications on this device first.")
+        super().__init__("Turn notifications on first.")
 
 
-class TestPushThrottledError(NotificationError):
+class TestNotificationThrottledError(NotificationError):
     """The user asked for test notifications too often."""
 
     def __init__(self, retry_seconds: int) -> None:

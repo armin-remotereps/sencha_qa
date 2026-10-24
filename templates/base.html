@@ -8,11 +8,7 @@
 
   <link rel="stylesheet" href="{% static 'css/punk-hazard.css' %}">
   <link rel="icon" type="image/png" href="{% static 'branding/punk-hazard-mark.png' %}">
-  {# Installable web app: lets iOS (16.4+) receive push from the Home Screen. #}
-  <link rel="manifest" href="{% url 'notifications:manifest' %}">
   <meta name="theme-color" content="#0b1118">
-  <link rel="apple-touch-icon" href="{% static 'branding/punk-hazard-apple-touch-icon.png' %}">
-  <meta name="apple-mobile-web-app-title" content="{{ brand_name|default:"Punk Hazard" }}">
 
   {# Order matters: the focus plugin and our alpine:init registrations must run before Alpine core starts. #}
   <script defer src="https://cdn.jsdelivr.net/npm/@alpinejs/focus@3.14.9/dist/cdn.min.js"></script>

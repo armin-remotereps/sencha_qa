@@ -3,31 +3,32 @@ from __future__ import annotations
 from django.conf import settings
 from django.db import models
 
-PUSH_ENDPOINT_MAX_LENGTH = 1000
+# ntfy topic names are at most 64 characters of [-_A-Za-z0-9].
+NTFY_TOPIC_MAX_LENGTH = 64
 
 
-class PushSubscription(models.Model):
-    """One browser or device that accepts Web Push for a user.
+class NotificationPreference(models.Model):
+    """A user's ntfy subscription and the kinds of notifications they want.
 
-    ``endpoint``, ``p256dh`` and ``auth`` are secrets of the device: they are
-    never rendered or logged.
+    The row is created the first time the user turns notifications on; turning
+    them off keeps it, so turning them back on keeps the same topic.
+
+    ``topic`` is a secret (on public ntfy servers anyone who knows it can read
+    and publish): it is shown only to its owner and never logged, put in task
+    arguments or shown in the admin.
     """
 
-    user = models.ForeignKey(
+    user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name="push_subscriptions",
+        related_name="notification_preference",
     )
-    endpoint = models.URLField(max_length=PUSH_ENDPOINT_MAX_LENGTH, unique=True)
-    p256dh = models.CharField(max_length=255)
-    auth = models.CharField(max_length=255)
-    # Shown to the user so they can tell their devices apart.
-    user_agent = models.CharField(max_length=255, blank=True, default="")
+    topic = models.CharField(max_length=NTFY_TOPIC_MAX_LENGTH, unique=True)
+    enabled = models.BooleanField(default=True)
+    notify_need_help = models.BooleanField(default=True)
+    notify_failed = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    last_success_at = models.DateTimeField(null=True, blank=True)
-
-    class Meta:
-        ordering = ["-created_at", "-id"]
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self) -> str:
-        return f"Push subscription #{self.pk} (user {self.user_id})"
+        return f"Notification preference (user {self.user_id})"

@@ -7,7 +7,7 @@ from django.urls import URLPattern, URLResolver, include, path
 urlpatterns: list[URLResolver | URLPattern] = [
     path("accounts/", include("accounts.urls")),
     path("", include("dashboard.urls")),
-    # /sw.js and /manifest.webmanifest must sit at the root; also /notifications/.
+    # The Notifications page and its actions, all under /notifications/.
     path("", include("notifications.urls")),
     path("projects/", include("projects.urls")),
     path(

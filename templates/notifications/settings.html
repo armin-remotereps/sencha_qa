@@ -1,13 +1,15 @@
 {% extends "layouts/app.html" %}
 
-{% comment %} Notifications page: turn Web Push on/off for this browser, list the
-   user's devices, send a test notification.
+{% comment %} Notifications page: turn ntfy notifications on/off, show the user's
+   own ntfy server and topic with subscribe links, choose the kinds, regenerate
+   the topic, send a test notification.
 
    Context contract (notifications/views.py):
-     push_configured  — bool; False when the server has no VAPID keys
-     vapid_public_key — str, the application server key ("" when disabled)
-     devices          — list[notifications.services.subscriptions.PushDevice]
-                        (never endpoints or keys) {% endcomment %}
+     ntfy_configured — bool; False when NTFY_SERVER_URL (or the prefix) is unset or invalid
+     preference      — notifications.services.preference_view.PreferenceView | None
+                       (the request user's own row only: it holds their secret topic;
+                       None until they first turn notifications on)
+     kinds_form      — notifications.forms.NotificationKindsForm (initial from preference) {% endcomment %}
 
 {% block title %}Notifications · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -15,85 +17,121 @@
 <div class="page-header">
   <div>
     <h1>Notifications</h1>
-    <p class="subtitle">Get a push notification on your devices when a test case in one of your projects needs help.</p>
+    <p class="subtitle">Get a notification in the ntfy app on your phone or computer when a test case in one of your projects needs help or fails.</p>
   </div>
 </div>
 
-{% if not push_configured %}
+{% if not ntfy_configured %}
   <div class="alert alert-info" role="status">
     <span class="alert-icon" aria-hidden="true">ℹ</span>
     <div>
-      <strong>Push notifications are turned off on this server</strong>
-      <p>An administrator has to set the VAPID key pair and contact (<code>WEBPUSH_VAPID_PUBLIC_KEY</code>, <code>WEBPUSH_VAPID_PRIVATE_KEY</code>, <code>WEBPUSH_VAPID_SUBJECT</code>) before devices can be turned on. Need help cases still show on the dashboard and run pages.</p>
+      <strong>Notifications are turned off on this server</strong>
+      <p>An administrator has to set <code>NTFY_SERVER_URL</code> (and, for a private ntfy server, <code>NTFY_ACCESS_TOKEN</code>) before notifications can be turned on. Need help and failed cases still show on the dashboard and run pages.</p>
     </div>
   </div>
+{% elif preference is None or not preference.enabled %}
+<section class="card" aria-labelledby="ntfy-off-heading">
+  <div class="card-header">
+    <h2 id="ntfy-off-heading">Turn on notifications</h2>
+    <span class="badge badge-draft">Off</span>
+  </div>
+  <p>Notifications are delivered through <a href="https://ntfy.sh" target="_blank" rel="noopener noreferrer">ntfy</a>, a free notification app. Install ntfy on your phone or computer, then turn notifications on: you get your own private topic to subscribe to.</p>
+  <ul>
+    <li><a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener noreferrer">ntfy for Android</a> (Google Play; also on F-Droid)</li>
+    <li><a href="https://apps.apple.com/us/app/ntfy/id1625396347" target="_blank" rel="noopener noreferrer">ntfy for iPhone and iPad</a> (App Store)</li>
+    <li><a href="https://ntfy.sh/app" target="_blank" rel="noopener noreferrer">ntfy in the browser</a>, for desktop notifications</li>
+  </ul>
+  {% if preference %}
+    <p class="muted small">Turning notifications back on keeps your topic, so devices already subscribed to it keep working.</p>
+  {% endif %}
+  <div class="card-actions actions">
+    <form method="post" action="{% url 'notifications:enable' %}">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-primary">Turn on notifications</button>
+    </form>
+  </div>
+</section>
 {% else %}
 <div class="stack">
-  <section
-    class="card"
-    aria-labelledby="this-device-heading"
-    x-data="pushDevice()"
-    data-public-key="{{ vapid_public_key }}"
-    data-subscribe-url="{% url 'notifications:subscribe' %}"
-    data-unsubscribe-url="{% url 'notifications:unsubscribe' %}"
-    data-csrf-token="{{ csrf_token }}"
-  >
+  <section class="card" aria-labelledby="ntfy-topic-heading">
     <div class="card-header">
-      <h2 id="this-device-heading">This device</h2>
-      <span class="badge badge-passed" x-show="subscribed" x-cloak>On</span>
+      <h2 id="ntfy-topic-heading">Your topic</h2>
+      <span class="badge badge-passed">On</span>
+    </div>
+    <p>Subscribe to this topic in the ntfy app on each device you want to be notified on.</p>
+
+    <dl class="ntfy-subscription">
+      <div>
+        <dt>Server</dt>
+        <dd class="ntfy-topic">{{ preference.links.server_url }}</dd>
+        <span x-data="clipboard()">
+          <button class="btn btn-sm btn-secondary" type="button" @click="copy('{{ preference.links.server_url|escapejs }}')" aria-label="Copy the ntfy server">
+            <span x-show="!copied">Copy</span>
+            <span x-show="copied" x-cloak>Copied!</span>
+          </button>
+        </span>
+      </div>
+      <div>
+        <dt>Topic</dt>
+        <dd class="ntfy-topic">{{ preference.topic }}</dd>
+        <span x-data="clipboard()">
+          <button class="btn btn-sm btn-secondary" type="button" @click="copy('{{ preference.topic|escapejs }}')" aria-label="Copy the ntfy topic">
+            <span x-show="!copied">Copy</span>
+            <span x-show="copied" x-cloak>Copied!</span>
+          </button>
+        </span>
+      </div>
+    </dl>
+
+    <div class="actions">
+      <a class="btn btn-secondary btn-sm" href="{{ preference.links.app_url }}">Open in ntfy app</a>
+      <a class="btn btn-secondary btn-sm" href="{{ preference.links.web_url }}" target="_blank" rel="noopener noreferrer">Open in ntfy web</a>
+    </div>
+    <p class="hint">"Open in ntfy app" works on Android. On iPhone, iPad or the desktop app, tap <strong>+</strong> (Subscribe to topic), paste the topic and, if the server is not ntfy.sh, turn on <strong>Use another server</strong> and paste the server.</p>
+
+    <div class="alert alert-warning">
+      <span class="alert-icon" aria-hidden="true">⚠</span>
+      <div>
+        <strong>Treat the topic like a password</strong>
+        <p>Anyone who knows it can read your notifications (project names, case titles and short summaries) and send you messages. Do not share it. If it leaks, regenerate it.</p>
+      </div>
     </div>
 
-    <div class="push-hint" x-show="showIosHint" x-cloak>
-      <p><strong>On iPhone or iPad,</strong> notifications only work from the Home Screen app: tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>, open {{ brand_name|default:"Punk Hazard" }} from the Home Screen, and turn notifications on here (iOS 16.4 or later).</p>
-    </div>
-
-    <p class="muted" x-show="!supported && !showIosHint" x-cloak>This browser cannot receive push notifications.</p>
-    <p class="muted" x-show="supported && permission === 'denied'" x-cloak>Notifications are blocked for this site. Allow them in the browser's site settings, then reload this page.</p>
-    <p x-show="supported && subscribed" x-cloak>This browser gets a notification when a case needs help.</p>
-    <p x-show="supported && !subscribed && permission !== 'denied'" x-cloak>Turn notifications on to be told when a case needs help, even when this tab is closed.</p>
-
-    <p class="error-text" role="alert" x-show="error" x-text="error" x-cloak></p>
-
-    <div class="card-actions actions" x-show="supported" x-cloak>
-      <button type="button" class="btn btn-primary" x-show="!subscribed" :disabled="busy || permission === 'denied'" @click="enable()">Turn on notifications</button>
-      <button type="button" class="btn btn-secondary" x-show="subscribed" :disabled="busy" @click="disable()">Turn off on this device</button>
+    <div class="card-actions actions">
+      <form method="post" action="{% url 'notifications:test' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-secondary">Send a test notification</button>
+      </form>
+      <button type="button" class="btn btn-secondary" @click="$dispatch('open-regenerate-topic')">Regenerate topic</button>
+      <form method="post" action="{% url 'notifications:disable' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-ghost">Turn off notifications</button>
+      </form>
     </div>
   </section>
 
-  <section class="card" aria-labelledby="devices-heading">
+  <section class="card" aria-labelledby="ntfy-kinds-heading">
     <div class="card-header">
-      <h2 id="devices-heading">Your devices</h2>
-      {% if devices %}
-        <form method="post" action="{% url 'notifications:test' %}">
-          {% csrf_token %}
-          <button type="submit" class="btn btn-secondary btn-sm">Send a test notification</button>
-        </form>
-      {% endif %}
+      <h2 id="ntfy-kinds-heading">What to notify you about</h2>
     </div>
-
-    {% if devices %}
-      <ul class="push-device-list">
-        {% for device in devices %}
-          <li>
-            <div>
-              <strong>{{ device.label }}</strong>
-              <div class="muted small">
-                Added {{ device.created_at|date:"M j, Y" }}
-                · {% if device.last_success_at %}last notified {{ device.last_success_at|timesince }} ago{% else %}not notified yet{% endif %}
-              </div>
-            </div>
-            <form method="post" action="{% url 'notifications:unsubscribe' %}">
-              {% csrf_token %}
-              <input type="hidden" name="subscription_id" value="{{ device.id }}">
-              <button type="submit" class="btn btn-ghost btn-sm" aria-label="Remove {{ device.label }}">Remove</button>
-            </form>
-          </li>
-        {% endfor %}
-      </ul>
-    {% else %}
-      <p class="muted">No devices yet. Turn notifications on above, on each device you want to be notified on.</p>
-    {% endif %}
+    <form method="post" action="{% url 'notifications:kinds' %}" class="stack">
+      {% csrf_token %}
+      <label class="checkbox" for="{{ kinds_form.need_help.id_for_label }}">
+        {{ kinds_form.need_help }}
+        <span><strong>{{ kinds_form.need_help.label }}</strong><br><span class="muted small">An attended run paused for you, or night auto-fix could not fix a case.</span></span>
+      </label>
+      <label class="checkbox" for="{{ kinds_form.failed.id_for_label }}">
+        {{ kinds_form.failed }}
+        <span><strong>{{ kinds_form.failed.label }}</strong><br><span class="muted small">The agent judged a case Failed. Sent at a lower priority.</span></span>
+      </label>
+      <div class="actions">
+        <button type="submit" class="btn btn-primary btn-sm">Save</button>
+      </div>
+    </form>
   </section>
 </div>
+
+{% url 'notifications:regenerate' as regenerate_topic_url %}
+{% include "partials/confirm_dialog.html" with dialog_id="regenerate-topic" title="Regenerate your topic?" body="Your current topic stops getting notifications. Subscribe to the new topic in the ntfy app on every device." confirm_label="Regenerate" confirm_class="btn-danger-solid" action_url=regenerate_topic_url %}
 {% endif %}
 {% endblock %}

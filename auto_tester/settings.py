@@ -178,8 +178,8 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "machine_setup.tasks.start_case_auto_fix": {"queue": "execution"},
     # Not "execution": it must run when that pool is busy or failing.
     "machine_setup.tasks.sweep_stale_auto_fixes": {"queue": "notify"},
-    # Its own small worker, so a push is never stuck behind TestRail imports.
-    "notifications.tasks.send_push": {"queue": "notify"},
+    # Its own small worker, so a notification is never stuck behind TestRail imports.
+    "notifications.tasks.send_notification": {"queue": "notify"},
 }
 # Installed into django-celery-beat's tables by its DatabaseScheduler when
 # beat starts (machine_setup.task_names.SWEEP_STALE_AUTO_FIXES).
@@ -374,27 +374,21 @@ VISION_WORKER_STALE_SECONDS: int = config(
     "VISION_WORKER_STALE_SECONDS", default=90, cast=int
 )
 
-# Web Push (notifications app). Push is disabled while any VAPID value is empty.
-# Generate a key pair with: vapid --gen (py-vapid, installed with pywebpush).
-WEBPUSH_VAPID_PUBLIC_KEY: str = config("WEBPUSH_VAPID_PUBLIC_KEY", default="", cast=str)
-WEBPUSH_VAPID_PRIVATE_KEY: str = config(
-    "WEBPUSH_VAPID_PRIVATE_KEY", default="", cast=str
-)
-# "mailto:" or "https:" contact the push services can reach.
-WEBPUSH_VAPID_SUBJECT: str = config("WEBPUSH_VAPID_SUBJECT", default="", cast=str)
-# How long a push service keeps an undelivered notification.
-WEBPUSH_TTL_SECONDS: int = config("WEBPUSH_TTL_SECONDS", default=86400, cast=int)
-WEBPUSH_REQUEST_TIMEOUT: int = config("WEBPUSH_REQUEST_TIMEOUT", default=10, cast=int)
-# Host suffixes a subscription endpoint must end with (https only): FCM,
-# Mozilla, Apple and Windows (WNS) push services.
-WEBPUSH_ALLOWED_ENDPOINT_HOSTS: list[str] = config(
-    "WEBPUSH_ALLOWED_ENDPOINT_HOSTS",
-    default=(
-        "fcm.googleapis.com,android.googleapis.com,push.services.mozilla.com,"
-        "push.apple.com,notify.windows.com"
-    ),
-    cast=Csv(),
-)
+# Notifications through ntfy (notifications app). An empty NTFY_SERVER_URL
+# turns notifications off. Topics on public ntfy.sh are readable by anyone who
+# knows them; a self-hosted server with deny-all access is recommended.
+NTFY_SERVER_URL: str = config("NTFY_SERVER_URL", default="https://ntfy.sh", cast=str)
+# Optional publisher access token (tk_...), sent only as a Bearer header. Secret.
+NTFY_ACCESS_TOKEN: str = config("NTFY_ACCESS_TOKEN", default="", cast=str)
+# Optional topic prefix, at most 16 characters of [-_A-Za-z0-9] (e.g. "punkhazard-").
+NTFY_TOPIC_PREFIX: str = config("NTFY_TOPIC_PREFIX", default="", cast=str)
+# Seconds per publish request.
+NTFY_REQUEST_TIMEOUT: int = config("NTFY_REQUEST_TIMEOUT", default=10, cast=int)
+
+# Public origin of this site (e.g. https://sench.remotereps.com), used for
+# absolute links built outside a request, such as notification clicks. Empty
+# means notifications carry no click link.
+SITE_URL: str = config("SITE_URL", default="", cast=str)
 
 # Orchestrator (sub-agent architecture)
 ORCHESTRATOR_MAX_SUBTASKS: int = config(

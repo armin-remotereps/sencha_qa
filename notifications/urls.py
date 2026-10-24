@@ -6,17 +6,15 @@ from notifications import views
 
 app_name = "notifications"
 
-# Included at the site root: the service worker must be served from "/" to
-# control every page, and the manifest sits beside it.
 urlpatterns: list[URLPattern] = [
-    path("sw.js", views.service_worker, name="service_worker"),
-    path("manifest.webmanifest", views.web_app_manifest, name="manifest"),
     path("notifications/", views.notification_settings, name="settings"),
-    path("notifications/subscriptions/", views.subscribe, name="subscribe"),
+    path("notifications/enable/", views.enable_notifications, name="enable"),
+    path("notifications/disable/", views.disable_notifications, name="disable"),
     path(
-        "notifications/subscriptions/remove/",
-        views.unsubscribe,
-        name="unsubscribe",
+        "notifications/regenerate/",
+        views.regenerate_notification_topic,
+        name="regenerate",
     ),
+    path("notifications/kinds/", views.update_notification_kinds, name="kinds"),
     path("notifications/test/", views.test_notification, name="test"),
 ]

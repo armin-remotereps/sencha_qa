@@ -69,6 +69,7 @@ from projects.case_checkpoint_services import (
     build_checkpoint_callback,
     load_resume_checkpoint,
 )
+from projects.case_failed_notifications import notify_case_failed
 from projects.case_help_notifications import notify_case_needs_help
 from projects.case_help_policy import auto_fix_eligible
 from projects.case_help_state import (
@@ -2939,6 +2940,10 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
                 )
             else:
                 _finalize_pivot(pivot, result)
+                # Only the agent's verdict notifies; the entry point re-checks
+                # the generation, since _finalize_pivot holds no run lock.
+                if pivot.status == TestRunTestCaseStatus.FAILED:
+                    notify_case_failed(pivot.pk, generation=generation)
     except (AgentCancelledError, ControllerNotConnectedError):
         # Inside a case, wait_for_controller only reports "not connected" once
         # the run is no longer STARTED, i.e. it was aborted.
