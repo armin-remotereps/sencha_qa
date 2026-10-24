@@ -6,6 +6,7 @@ from django.http import HttpRequest
 
 from projects.models import (
     ApplicationContextVersion,
+    CaseHelpRequest,
     Project,
     Tag,
     TestCase,
@@ -194,5 +195,36 @@ class ApplicationContextVersionAdmin(admin.ModelAdmin[ApplicationContextVersion]
 
     def has_delete_permission(
         self, request: HttpRequest, obj: ApplicationContextVersion | None = None
+    ) -> bool:
+        return False
+
+
+@admin.register(CaseHelpRequest)
+class CaseHelpRequestAdmin(admin.ModelAdmin[CaseHelpRequest]):
+    """Read-only: help requests are written by the run and its help actions."""
+
+    list_display = (
+        "id",
+        "test_run_test_case",
+        "step_num",
+        "auto_fix_state",
+        "resolution",
+        "resolved_by",
+        "requested_at",
+        "resolved_at",
+    )
+    list_filter = ("auto_fix_state", "resolution")
+    list_select_related = ("test_run_test_case__test_case", "resolved_by")
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return False
+
+    def has_change_permission(
+        self, request: HttpRequest, obj: CaseHelpRequest | None = None
+    ) -> bool:
+        return False
+
+    def has_delete_permission(
+        self, request: HttpRequest, obj: CaseHelpRequest | None = None
     ) -> bool:
         return False

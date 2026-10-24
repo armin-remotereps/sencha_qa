@@ -52,6 +52,19 @@ class TestRunStatus(models.TextChoices):
     STARTED = "started", "Started"
     DONE = "done", "Done"
     CANCELLED = "cancelled", "Cancelled"
+    # Asleep: a case needs help; nothing in the run executes until it is resolved.
+    PAUSED = "paused", "Needs help"
+
+
+# A run in either status holds the project's machine: no other run may start.
+ACTIVE_RUN_STATUSES: tuple[str, ...] = (TestRunStatus.STARTED, TestRunStatus.PAUSED)
+
+
+class RunHelpMode(models.TextChoices):
+    """What happens when a case of the run needs help."""
+
+    ATTENDED = "attended", "Attended"
+    NIGHT = "night", "Night (auto-fix first)"
 
 
 class TestRunTestCaseStatus(models.TextChoices):
@@ -61,6 +74,9 @@ class TestRunTestCaseStatus(models.TextChoices):
     FAILED = "failed", "Failed"
     CANCELLED = "cancelled", "Cancelled"
     BLOCKED = "blocked", "Blocked"
+    # Stopped without a verdict at a failing step; waits for a person (or the
+    # auto-fix agent) with the checkpoint and the machine state kept.
+    NEED_HELP = "need_help", "Need help"
 
 
 class BlockedReason(models.TextChoices):
@@ -81,6 +97,7 @@ class BlockedReason(models.TextChoices):
         "Could not restore the state to resume",
     )
     INTERNAL_ERROR = "internal_error", "Internal error"
+    HELP_SKIPPED = "help_skipped", "Skipped while waiting for help"
 
 
 class ApplicationPlatform(models.TextChoices):
@@ -361,6 +378,10 @@ class TestRun(models.Model):
     # Bumped by every Start and Resume; chain tasks carry the value they were
     # queued with and stand down (no execution, no writes) once it moves on.
     execution_generation = models.PositiveIntegerField(default=0)
+    # Chosen at Start; kept by Resume and Re-run in place unless changed there.
+    help_mode = models.CharField(
+        max_length=16, choices=RunHelpMode.choices, default=RunHelpMode.ATTENDED
+    )
     name = models.CharField(max_length=255, blank=True, default="")
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True, db_index=True)
@@ -510,6 +531,88 @@ class TestRunCaseResume(models.Model):
 
     def __str__(self) -> str:
         return f"Resume #{self.pk} of TRTC #{self.test_run_test_case_id}"
+
+
+# Caps on the model-written and human-written help texts.
+HELP_REQUEST_TEXT_MAX_LENGTH = 1000
+HELP_NOTE_MAX_LENGTH = 2000
+
+
+class HelpAutoFixState(models.TextChoices):
+    """Progress of the Night-mode auto-fix of one help request."""
+
+    NONE = "", "None"
+    RUNNING = "running", "Running"
+    FIXED = "fixed", "Fixed"
+    NOT_FIXED = "not_fixed", "Not fixed"
+
+
+class HelpResolution(models.TextChoices):
+    """How a help request was closed; blank while it is open."""
+
+    OPEN = "", "Open"
+    CONTINUED = "continued", "Continued"
+    AUTO_FIXED = "auto_fixed", "Fixed by the setup agent"
+    MARKED_FAILED = "marked_failed", "Marked failed"
+    SKIPPED = "skipped", "Skipped"
+    CANCELLED = "cancelled", "Cancelled"
+
+
+class CaseHelpRequest(models.Model):
+    """One Need help event of a run case: the failing step and the agent's ask."""
+
+    test_run_test_case = models.ForeignKey(
+        TestRunTestCase, on_delete=models.CASCADE, related_name="help_requests"
+    )
+    # 1-based plan step the case stopped at.
+    step_num = models.PositiveSmallIntegerField()
+    # Model-written; shown escaped.
+    reason = models.TextField(
+        max_length=HELP_REQUEST_TEXT_MAX_LENGTH, blank=True, default=""
+    )
+    ask = models.TextField(
+        max_length=HELP_REQUEST_TEXT_MAX_LENGTH, blank=True, default=""
+    )
+    requested_at = models.DateTimeField(auto_now_add=True)
+    auto_fix_state = models.CharField(
+        max_length=16, choices=HelpAutoFixState.choices, blank=True, default=""
+    )
+    resolution = models.CharField(
+        max_length=16, choices=HelpResolution.choices, blank=True, default=""
+    )
+    # Null for ``auto_fixed`` (the setup agent resolved it) and while open.
+    resolved_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    # The person's note, or the setup agent's summary for ``auto_fixed``.
+    note = models.TextField(max_length=HELP_NOTE_MAX_LENGTH, blank=True, default="")
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["test_run_test_case"],
+                condition=models.Q(resolution=""),
+                name="case_help_one_open_request",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["test_run_test_case", "step_num", "-requested_at"],
+                name="case_help_pivot_step_idx",
+            )
+        ]
+
+    @property
+    def is_open(self) -> bool:
+        return self.resolution == HelpResolution.OPEN
+
+    def __str__(self) -> str:
+        return f"Help request #{self.pk} of TRTC #{self.test_run_test_case_id}"
 
 
 def _screenshot_upload_path(instance: "TestRunScreenshot", filename: str) -> str:

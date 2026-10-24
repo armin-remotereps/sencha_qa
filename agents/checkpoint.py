@@ -16,6 +16,9 @@ from datetime import datetime
 from typing import Literal, cast
 
 from agents.types import (
+    CheckpointHelp,
+    DecisionAction,
+    HelpSource,
     OrchestratorCheckpoint,
     OrchestratorPhase,
     StepDecision,
@@ -31,8 +34,10 @@ CHECKPOINT_VERSION = 1
 
 _ATTEMPT_KINDS = ("step", "recovery", "resume")
 _RESULT_STATUSES = ("pass", "fail")
-_DECISION_ACTIONS = ("continue", "recover", "stop")
-_PHASES = ("step", "evaluating", "recovery", "resume", "verdict")
+_DECISION_ACTIONS = ("continue", "recover", "stop", "need_help")
+_PHASES = ("step", "evaluating", "recovery", "resume", "verdict", "awaiting_help")
+_HELP_SOURCES = ("human", "auto_fix")
+_HELP_KEY = "help"
 
 
 class _MalformedCheckpoint(Exception):
@@ -40,6 +45,13 @@ class _MalformedCheckpoint(Exception):
 
 
 def checkpoint_to_json(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
+    data = _checkpoint_body(checkpoint)
+    if checkpoint.help is not None:
+        data[_HELP_KEY] = help_to_json(checkpoint.help)
+    return data
+
+
+def _checkpoint_body(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
     return {
         "version": CHECKPOINT_VERSION,
         "plan": [
@@ -94,6 +106,56 @@ def checkpoint_from_json(data: object) -> OrchestratorCheckpoint | None:
         return None
 
 
+def help_to_json(help: CheckpointHelp) -> dict[str, object]:
+    return {
+        "step_num": help.step_num,
+        "request_id": help.request_id,
+        "note": help.note,
+        "source": help.source,
+        "continue_pending": help.continue_pending,
+    }
+
+
+def read_checkpoint_help(checkpoint_json: object) -> CheckpointHelp | None:
+    """The ``help`` key of a stored checkpoint; ``None`` when absent or malformed.
+
+    Reads only that key, so callers need not parse the whole checkpoint.
+    """
+    if not isinstance(checkpoint_json, dict):
+        return None
+    return _parse_help(cast(dict[str, object], checkpoint_json).get(_HELP_KEY))
+
+
+def with_help(checkpoint_json: object, help: CheckpointHelp) -> dict[str, object]:
+    """A copy of a stored checkpoint with its ``help`` key set to ``help``.
+
+    A value that is not a non-empty object has no progress to continue from,
+    so ``{}`` (plan from scratch) is returned unchanged.
+    """
+    if not isinstance(checkpoint_json, dict) or not checkpoint_json:
+        return {}
+    data = dict(cast(dict[str, object], checkpoint_json))
+    data[_HELP_KEY] = help_to_json(help)
+    return data
+
+
+def clear_help_continue_pending(checkpoint_json: object) -> dict[str, object]:
+    """A copy of a stored checkpoint whose ``help`` no longer asks to continue.
+
+    Without a (valid) ``help`` key the checkpoint is returned as a plain copy;
+    a value that is not an object becomes ``{}``.
+    """
+    if not isinstance(checkpoint_json, dict):
+        return {}
+    data = dict(cast(dict[str, object], checkpoint_json))
+    help = _parse_help(data.get(_HELP_KEY))
+    if help is not None and help.continue_pending:
+        data[_HELP_KEY] = help_to_json(
+            dataclasses.replace(help, continue_pending=False)
+        )
+    return data
+
+
 def truncate_checkpoint(
     checkpoint: OrchestratorCheckpoint, from_step: int
 ) -> OrchestratorCheckpoint:
@@ -139,6 +201,7 @@ def _parse(data: object) -> OrchestratorCheckpoint:
         decisions=_parse_decisions(root.get("decisions")),
         phase=_parse_phase(root.get("phase")),
         phase_started_at=_parse_datetime(root.get("phase_started_at")),
+        help=_parse_help(root.get(_HELP_KEY)),
     )
 
 
@@ -190,7 +253,7 @@ def _parse_decisions(value: object) -> tuple[StepDecision, ...]:
             decisions.append(
                 StepDecision(
                     step_num=step_num,
-                    action=cast(Literal["continue", "recover", "stop"], action),
+                    action=cast(DecisionAction, action),
                     reason=reason,
                 )
             )
@@ -201,6 +264,33 @@ def _parse_phase(value: object) -> OrchestratorPhase:
     if value not in _PHASES:
         return "step"
     return cast(OrchestratorPhase, value)
+
+
+def _parse_help(value: object) -> CheckpointHelp | None:
+    # Absent from checkpoints of cases that never asked for help.
+    if not isinstance(value, dict):
+        return None
+    item = cast(dict[str, object], value)
+    step_num, request_id, note, source, continue_pending = (
+        item.get("step_num"),
+        item.get("request_id"),
+        item.get("note"),
+        item.get("source"),
+        item.get("continue_pending"),
+    )
+    if isinstance(step_num, bool) or not isinstance(step_num, int):
+        return None
+    if source not in _HELP_SOURCES:
+        return None
+    if isinstance(request_id, bool) or not isinstance(request_id, int):
+        request_id = None
+    return CheckpointHelp(
+        step_num=step_num,
+        request_id=request_id,
+        note=note if isinstance(note, str) else "",
+        source=cast(HelpSource, source),
+        continue_pending=continue_pending is True,
+    )
 
 
 def _parse_digest(value: object) -> str:

@@ -101,6 +101,15 @@ def reopen_run(test_run: TestRun, pivots: Sequence[TestRunTestCase]) -> None:
     transaction.on_commit(_enqueue)
 
 
+def queue_pending_cases(test_run: TestRun) -> None:
+    """Queue every CREATED case of the locked run, in run order, after commit.
+
+    Used when a Need help case is resolved: the helped case is CREATED and
+    earlier than the rest, so it runs first.
+    """
+    raise NotImplementedError
+
+
 def _has_other_started_run(project_id: int, test_run_id: int) -> bool:
     return (
         TestRun.objects.filter(project_id=project_id, status=TestRunStatus.STARTED)

@@ -125,6 +125,14 @@ class RunRerunError(Exception):
         self.message = message
 
 
+class RunHelpError(Exception):
+    """A Need help action cannot be taken; ``message`` is user-safe."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 class ApplicationContextError(Exception):
     """Base for application context writes; ``message`` is safe to show."""
 

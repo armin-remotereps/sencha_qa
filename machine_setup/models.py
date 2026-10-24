@@ -4,7 +4,7 @@ from django.conf import settings
 from django.db import models
 from django.db.models import Q
 
-from projects.models import Project
+from projects.models import CaseHelpRequest, Project
 
 
 class SetupTurnStatus(models.TextChoices):
@@ -53,8 +53,26 @@ class SetupSubtaskResult(models.TextChoices):
     INTERRUPTED = "interrupted", "Interrupted"
 
 
+class SetupConversationKind(models.TextChoices):
+    CHAT = "chat", "Chat"
+    # Opened by the server for a Night-mode run case that needs help.
+    AUTO_FIX = "auto_fix", "Auto-fix"
+
+
+class SetupFixResult(models.TextChoices):
+    """What the setup agent reported through ``report_case_fix``; blank = no report."""
+
+    NONE = "", "No report"
+    FIXED = "fixed", "Fixed"
+    NOT_FIXED = "not_fixed", "Not fixed"
+
+
+# Cap on the setup agent's ``report_case_fix`` summary.
+SETUP_FIX_SUMMARY_MAX_LENGTH = 2000
+
+
 class SetupConversation(models.Model):
-    """A machine setup chat; one active (not archived) per project."""
+    """A machine setup thread: the main chat (one active per project) or an auto-fix."""
 
     project = models.ForeignKey(
         Project, on_delete=models.CASCADE, related_name="setup_conversations"
@@ -78,12 +96,33 @@ class SetupConversation(models.Model):
     )
     # agents/transcript.py shape, without the system prompt (rebuilt every turn).
     llm_transcript = models.JSONField(default=dict, blank=True)
+    kind = models.CharField(
+        max_length=16,
+        choices=SetupConversationKind.choices,
+        default=SetupConversationKind.CHAT,
+    )
+    # Auto-fix threads only: the help request the thread was opened for.
+    help_request = models.ForeignKey(
+        CaseHelpRequest,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="setup_conversations",
+    )
+    # Auto-fix threads only: the agent's last ``report_case_fix`` call.
+    fix_result = models.CharField(
+        max_length=16, choices=SetupFixResult.choices, blank=True, default=""
+    )
+    fix_summary = models.TextField(
+        max_length=SETUP_FIX_SUMMARY_MAX_LENGTH, blank=True, default=""
+    )
 
     class Meta:
         constraints = [
+            # One main chat per project; auto-fix threads are not limited.
             models.UniqueConstraint(
                 fields=["project"],
-                condition=Q(archived_at__isnull=True),
+                condition=Q(archived_at__isnull=True, kind="chat"),
                 name="setup_one_active_conversation",
             )
         ]
@@ -127,6 +166,9 @@ class SetupTurn(models.Model):
     )
     celery_task_id = models.CharField(max_length=255, blank=True, default="")
     iterations = models.PositiveIntegerField(default=0)
+    # The one turn the server starts for an auto-fix thread; later turns a
+    # person starts in that thread are ordinary turns.
+    auto_fix = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)

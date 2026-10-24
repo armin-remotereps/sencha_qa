@@ -54,6 +54,7 @@ INSTALLED_APPS: list[str] = [
     "agents",
     "machine_setup",
     "visual_engine",
+    "notifications",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -174,6 +175,8 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "projects.tasks.push_test_run_results": {"queue": "upload"},
     "projects.tasks.push_checked_results_to_testrail": {"queue": "upload"},
     "machine_setup.tasks.run_setup_turn": {"queue": "execution"},
+    "machine_setup.tasks.start_case_auto_fix": {"queue": "execution"},
+    "notifications.tasks.send_push": {"queue": "upload"},
 }
 
 # Channels
@@ -354,6 +357,28 @@ VISION_WORKER_READY_TIMEOUT: int = config(
 # A worker with no heartbeat for this long is ignored; keep >= 3x the 30s heartbeat.
 VISION_WORKER_STALE_SECONDS: int = config(
     "VISION_WORKER_STALE_SECONDS", default=90, cast=int
+)
+
+# Web Push (notifications app). Push is disabled while any VAPID value is empty.
+# Generate a key pair with: vapid --gen (py-vapid, installed with pywebpush).
+WEBPUSH_VAPID_PUBLIC_KEY: str = config("WEBPUSH_VAPID_PUBLIC_KEY", default="", cast=str)
+WEBPUSH_VAPID_PRIVATE_KEY: str = config(
+    "WEBPUSH_VAPID_PRIVATE_KEY", default="", cast=str
+)
+# "mailto:" or "https:" contact the push services can reach.
+WEBPUSH_VAPID_SUBJECT: str = config("WEBPUSH_VAPID_SUBJECT", default="", cast=str)
+# How long a push service keeps an undelivered notification.
+WEBPUSH_TTL_SECONDS: int = config("WEBPUSH_TTL_SECONDS", default=86400, cast=int)
+WEBPUSH_REQUEST_TIMEOUT: int = config("WEBPUSH_REQUEST_TIMEOUT", default=10, cast=int)
+# Host suffixes a subscription endpoint must end with (https only): FCM,
+# Mozilla, Apple and Windows (WNS) push services.
+WEBPUSH_ALLOWED_ENDPOINT_HOSTS: list[str] = config(
+    "WEBPUSH_ALLOWED_ENDPOINT_HOSTS",
+    default=(
+        "fcm.googleapis.com,android.googleapis.com,push.services.mozilla.com,"
+        "push.apple.com,notify.windows.com"
+    ),
+    cast=Csv(),
 )
 
 # Orchestrator (sub-agent architecture)

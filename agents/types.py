@@ -24,6 +24,20 @@ class AgentStopReason(Enum):
     TASK_COMPLETE = "task_complete"
     ERROR = "error"
     CANCELLED = "cancelled"
+    # The orchestrator paused the case at a failing step for a person (or the
+    # setup agent) to fix the machine; ``AgentResult.help`` says why.
+    NEEDS_HUMAN_HELP = "needs_human_help"
+
+
+@dataclass(frozen=True)
+class HelpRequestInfo:
+    """Why a case stopped for help: the failing step and what to fix there."""
+
+    # 1-based plan step the case stopped at; it re-runs after the fix.
+    step_num: int
+    reason: str
+    # One or two imperative sentences: what to fix on the machine.
+    ask: str
 
 
 @dataclass(frozen=True)
@@ -151,6 +165,8 @@ class AgentResult:
     iterations: int
     messages: tuple[ChatMessage, ...]
     error: str | None = None
+    # Set only with ``AgentStopReason.NEEDS_HUMAN_HELP``.
+    help: HelpRequestInfo | None = None
 
 
 @dataclass(frozen=True)
@@ -183,35 +199,74 @@ class SubTaskAttempt:
     duration_seconds: int | None = None
 
 
+# What the orchestrator decides after a failed step.
+DecisionAction = Literal["continue", "recover", "stop", "need_help"]
+
+# The orchestrator's view of who is at fault for a failed step.
+FailureCause = Literal["environment", "agent", "product", "unclear"]
+
+
 @dataclass(frozen=True)
 class OrchestratorDecision:
-    action: Literal["continue", "recover", "stop"]
+    action: DecisionAction
     reason: str
     recovery_task: SubTask | None = None
+    # None when the model gave no (or an unknown) cause.
+    cause: FailureCause | None = None
+    # What a person should fix on the machine; set for need_help and recover.
+    help_ask: str = ""
 
 
 @dataclass(frozen=True)
 class StepDecision:
-    """Why the orchestrator continued, recovered or stopped after a failed step."""
+    """Why the orchestrator continued, recovered, stopped or asked for help."""
 
     step_num: int
-    action: Literal["continue", "recover", "stop"]
+    action: DecisionAction
     reason: str
 
 
 # What the orchestrator is doing at the cursor step: running it, judging its
-# failure, running a recovery, restoring state before a resume, or writing the
-# verdict.
-OrchestratorPhase = Literal["step", "evaluating", "recovery", "resume", "verdict"]
+# failure, running a recovery, restoring state before a resume, writing the
+# verdict, or waiting for help at a failed step.
+OrchestratorPhase = Literal[
+    "step", "evaluating", "recovery", "resume", "verdict", "awaiting_help"
+]
 
 
 @dataclass(frozen=True)
 class OrchestratorResult:
-    status: Literal["pass", "fail"]
+    status: Literal["pass", "fail", "need_help"]
     summary: str
     attempts: tuple[SubTaskAttempt, ...]
     total_iterations: int
     error: str | None = None
+    # Set only when ``status == "need_help"``.
+    help: HelpRequestInfo | None = None
+
+
+# Who fixed the machine after a case asked for help.
+HelpSource = Literal["human", "auto_fix"]
+
+
+@dataclass(frozen=True)
+class CheckpointHelp:
+    """The last help a case got, stored in its checkpoint.
+
+    Written by ``projects`` when a person continues the case or the setup
+    agent reports the machine fixed; read by the orchestrator on resume.
+    """
+
+    # 1-based step the case stopped at and re-runs.
+    step_num: int
+    # ``projects.CaseHelpRequest`` id; None when unknown.
+    request_id: int | None
+    # The person's note, or the setup agent's summary; may be empty.
+    note: str
+    source: HelpSource
+    # True until the resumed case writes its first checkpoint: the pre-case
+    # cleanup and the restore sub-task are skipped while it is set.
+    continue_pending: bool
 
 
 @dataclass(frozen=True)
@@ -230,6 +285,7 @@ class OrchestratorCheckpoint:
     decisions: tuple[StepDecision, ...] = ()
     phase: OrchestratorPhase = "step"
     phase_started_at: datetime | None = None
+    help: CheckpointHelp | None = None
 
 
 CheckpointCallback = Callable[[OrchestratorCheckpoint], None]
