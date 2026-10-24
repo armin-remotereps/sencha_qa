@@ -90,13 +90,23 @@ def _send_one(
     client: httpx.Client,
     target: _Target,
     base_payload: dict[str, object],
-    rate_limited: threading.Event,
+    stop_batch: threading.Event,
 ) -> _Outcome:
-    # A 429 already seen stops the rest of the batch: no retry storm.
-    if rate_limited.is_set():
+    # A 429 or a transport error (unreachable, slow or dropping server) stops
+    # the rest of the batch: no retry storm, and a bad server costs at most one
+    # timeout per worker, not one per user.
+    if stop_batch.is_set():
         return _Outcome.SKIPPED
     try:
         response = client.post("/", json={**base_payload, "topic": target.topic})
+    except httpx.TransportError as exc:
+        stop_batch.set()
+        logger.warning(
+            "ntfy server unreachable or slow: user %s %s",
+            target.user_id,
+            type(exc).__name__,
+        )
+        return _Outcome.FAILED
     except httpx.HTTPError as exc:
         # The exception text can carry the request; log only its type.
         logger.warning(
@@ -106,7 +116,7 @@ def _send_one(
     if response.is_success:
         return _Outcome.SENT
     if response.status_code == RATE_LIMITED_STATUS:
-        rate_limited.set()
+        stop_batch.set()
         return _Outcome.RATE_LIMITED
     # The response body can echo the request (and so the topic); log the status.
     logger.warning(
@@ -131,23 +141,23 @@ def send_to_users(*, user_ids: list[int], message: NotificationMessage) -> int:
         return 0
 
     base_payload = _base_payload(message)
-    rate_limited = threading.Event()
+    stop_batch = threading.Event()
     with (
         _client() as client,
         ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_SENDS, len(targets))) as pool,
     ):
         outcomes = list(
             pool.map(
-                lambda target: _send_one(client, target, base_payload, rate_limited),
+                lambda target: _send_one(client, target, base_payload, stop_batch),
                 targets,
             )
         )
 
     sent = outcomes.count(_Outcome.SENT)
-    if rate_limited.is_set():
+    if stop_batch.is_set():
         logger.warning(
-            "ntfy rate limited the %s notification: %d sent, %d rate limited, "
-            "%d skipped",
+            "ntfy batch stopped early for the %s notification: %d sent, "
+            "%d rate limited, %d skipped",
             message.kind,
             sent,
             outcomes.count(_Outcome.RATE_LIMITED),
