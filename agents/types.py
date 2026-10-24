@@ -261,12 +261,19 @@ class CheckpointHelp:
     step_num: int
     # ``projects.CaseHelpRequest`` id; None when unknown.
     request_id: int | None
-    # The person's note, or the setup agent's summary; may be empty.
+    # The person's note; empty when the setup agent continued the case.
     note: str
+    # ``human`` when a person continued the case (after an auto-fix that did not
+    # fix it, when ``auto_fix_summary`` is set), ``auto_fix`` when the setup
+    # agent reported the machine fixed.
     source: HelpSource
     # True until the resumed case writes its first checkpoint: the pre-case
     # cleanup and the restore sub-task are skipped while it is set.
     continue_pending: bool
+    # What the agent asked to fix; may be empty (older checkpoints).
+    ask: str = ""
+    # The setup agent's report when an auto-fix ran for this request; may be empty.
+    auto_fix_summary: str = ""
 
 
 @dataclass(frozen=True)

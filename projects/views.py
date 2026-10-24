@@ -56,6 +56,7 @@ from projects.forms import (
     ProjectForm,
     RunCaseSelectionForm,
     RunCasesRerunForm,
+    RunHelpModeChangeForm,
     RunHelpModeForm,
     TestCaseForm,
     TestRunCreateForm,
@@ -79,6 +80,7 @@ from projects.run_case_check_services import (
     list_uncheckable_pivot_ids,
     uncheck_run_cases,
 )
+from projects.run_help_mode_services import change_run_help_mode
 from projects.run_rerun_services import (
     format_rerun_message,
     get_rerun_panel,
@@ -1387,6 +1389,48 @@ def test_run_continue(
     return redirect(
         "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
     )
+
+
+@project_membership_required
+@require_POST
+def test_run_help_mode(
+    request: AuthenticatedRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    run_page = redirect(
+        "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
+    )
+    form = RunHelpModeChangeForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return run_page
+    try:
+        change = change_run_help_mode(
+            test_run=test_run,
+            user=request.user,
+            help_mode=form.cleaned_data["help_mode"],
+        )
+    except RunHelpError as exc:
+        messages.error(request, exc.message)
+        return run_page
+    label = RunHelpMode(change.help_mode).label
+    if not change.changed:
+        messages.info(request, f"The help mode already is {label}.")
+    elif change.auto_fix_started:
+        messages.success(
+            request,
+            f"Help mode changed to {label}. The Machine setup agent now tries to "
+            "fix the case that needs help.",
+        )
+    else:
+        messages.success(
+            request,
+            f"Help mode changed to {label}. It applies from the next case that "
+            "needs help.",
+        )
+    return run_page
 
 
 # ============================================================================

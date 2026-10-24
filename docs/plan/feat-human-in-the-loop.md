@@ -532,6 +532,22 @@ Manual checks; this project has no automated tests.
 15. Notifications page: enable, test, remove; a disallowed endpoint host → 400; a 410 deletes the row; an iOS home-screen push.
 16. Run the `reviewer` and `verifier` agents in parallel.
 
+## Follow-ups (2026-10-24)
+
+**F1. The tester sees both the setup agent's and the person's message.**
+- `CaseHelpRequest.auto_fix_summary` (text, ≤ 2000, blank; `projects/0028_case_help_auto_fix_summary`, which also moves the summary of existing `auto_fixed` rows out of `note`). `note` is now the person's note only.
+- `finish_case_auto_fix` stores the setup agent's summary in `auto_fix_summary` for fixed and not fixed (also when the run is no longer paused, and when a person resolved the request during the auto-fix; then, for a Continue, the waiting case's help key is rewritten with the summary).
+- `CheckpointHelp` gains `ask` and `auto_fix_summary` (default `""`; older help keys and bad values parse to `""`). Continue and auto-continue both write the help key from the request (`case_help_services._write_help_key`): ask, the person's note (empty for auto-continue), the summary.
+- `orchestrator_prompts.format_help_state_line` / `help_verdict_note`: "the test machine was fixed by <the machine setup agent | a person | a person (the machine setup agent could not)>", then "The agent had asked: <ask, or the need_help reason>", "Machine setup agent: <summary>", "Person: <note>" when present. `_applied_help` fills a missing ask from the decision reason for the verdict.
+- Case page: the Continue form shows "What the Machine setup agent tried" above the note once an auto-fix has ended; Help history shows both texts. Autoescaped.
+
+**F2. Change the help mode of an active run.**
+- `projects/run_help_mode_services.change_run_help_mode(*, test_run, user, help_mode) -> HelpModeChange`: locks project → run; WAITING, STARTED or PAUSED only (`RunHelpError` otherwise); validates with `is_valid_help_mode`; same mode is a no-op.
+- Applies from the next Need help. Exception: a PAUSED run whose open request has `auto_fix_state` none, switched to Night and `auto_fix_eligible`: state → running and, on commit, `services.enqueue_case_auto_fix` (renamed from `_enqueue_case_auto_fix`; same broker-failure fallback to not_fixed + notify), then broadcast. Switching to Attended never stops a running auto-fix.
+- `TestRunStatusEvent` and the consumer's `current_state` / `test_run_status` gain `help_mode`, so open run pages follow the change without a reload.
+- POST `projects:test_run_help_mode` (`.../test-runs/<id>/help-mode/`, `RunHelpModeChangeForm`, required) redirects to the run page with a message.
+- Run page header: for a running or paused run, a "Help mode" select + Save (`.help-mode-form`, `.select-sm`); Save is disabled until the pick differs. A draft keeps its Start radio; a finished run shows the mode as text.
+
 ## Decisions (answered 2026-10-24)
 
 - Q1. Notify every project member who enabled notifications on at least one device.
@@ -556,3 +572,4 @@ None.
 - 2026-10-24: created (Draft).
 - 2026-10-24: Q1–Q9 answered with the defaults. Q5 was replaced by a per-run help mode (Attended / Night), and the global `HUMAN_HELP_ENABLED` setting was dropped. Night auto-fix was added: a new `auto_fix` Machine setup thread reusing the existing turn machinery and limits, a `report_case_fix` tool, `finish_case_auto_fix` settling to auto-continue or the Attended fallback, and human actions during the auto-fix. `SetupConversation.kind` / `help_request` / `fix_result`, `SetupTurn.auto_fix`, `TestRun.help_mode` and `CaseHelpRequest.auto_fix_state` were added. Q10 (the auto-fix loop limit) was raised; the plan stays Draft until it is answered.
 - 2026-10-24: Q10 answered (go to a person). Status In progress.
+- 2026-10-24: follow-ups F1 (setup agent summary and person note both reach the tester; `CaseHelpRequest.auto_fix_summary`, `CheckpointHelp.ask` / `auto_fix_summary`) and F2 (change the help mode mid-run, `change_run_help_mode`, `projects:test_run_help_mode`, `help_mode` on the run status event).

@@ -5,6 +5,8 @@
      help_panel — projects.case_help_services.HelpPanel for this case (the
                   run is paused on it): request, thread (auto-fix
                   SetupConversation or None; fix_result, fix_summary),
+                  request.auto_fix_summary (the setup agent's report, shown
+                  next to the note once the auto-fix has ended),
                   auto_fix_live, blockers, is_open, can_continue,
                   can_continue_run, waiting_for_auto_fix_stop
      help_form  — CaseHelpResolutionForm (the optional note)
@@ -12,6 +14,7 @@
    own URL via formaction. Abort opens the page's "abort-run" dialog.
    Agent and human text is autoescaped, never |safe. {% endcomment %}
 {% with help_request=help_panel.request thread=help_panel.thread %}
+{% with auto_fix_summary=help_panel.request.auto_fix_summary|default:help_panel.thread.fix_summary %}
 <section aria-labelledby="help-h" class="card card-tone-need-help">
   <div class="card-header">
     <h2 id="help-h">{% if help_panel.is_open %}This case needs help{% else %}Help given: {{ help_request.get_resolution_display }}{% endif %}</h2>
@@ -54,8 +57,8 @@
       <div class="alert alert-warning">
         <span class="alert-icon" aria-hidden="true">⚠</span>
         <div>
-          <strong>Auto-fix could not fix it{% if thread.fix_summary %}:{% endif %}</strong>
-          {% if thread.fix_summary %}<p class="pre-wrap">{{ thread.fix_summary }}</p>{% endif %}
+          <strong>Auto-fix could not fix it</strong>
+          <p>Its report is next to the note below; the test agent gets it too.</p>
           {% if thread %}<a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id thread.id %}">View the auto-fix thread</a>{% endif %}
         </div>
       </div>
@@ -64,7 +67,6 @@
         <span class="alert-icon" aria-hidden="true">⚠</span>
         <div>
           <strong>The auto-fix reported the machine fixed, but the run could not continue</strong>
-          {% if thread.fix_summary %}<p class="pre-wrap">{{ thread.fix_summary }}</p>{% endif %}
           {% if thread %}<a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id thread.id %}">View the auto-fix thread</a>{% endif %}
         </div>
       </div>
@@ -72,10 +74,14 @@
 
     <form method="post" action="{% url 'projects:test_run_case_help_continue' project.id test_run.id pivot.id %}">
       {% csrf_token %}
+      {% if auto_fix_summary and help_request.auto_fix_state != "running" %}
+        <div class="label">What the Machine setup agent tried</div>
+        <p class="help-quote pre-wrap">{{ auto_fix_summary }}</p>
+      {% endif %}
       <div class="field">
         <label class="label" for="{{ help_form.note.id_for_label }}">{{ help_form.note.label }}</label>
         {{ help_form.note }}
-        <p class="hint">Continue re-runs step {{ help_request.step_num }} from the current screen, with your note. Mark failed records a Failed verdict. Skip leaves the case Blocked so it can be resumed later. In every case the rest of the run then continues.</p>
+        <p class="hint">Continue re-runs step {{ help_request.step_num }} from the current screen, with your note{% if auto_fix_summary and help_request.auto_fix_state != "running" %} and the Machine setup agent's report{% endif %}. Mark failed records a Failed verdict. Skip leaves the case Blocked so it can be resumed later. In every case the rest of the run then continues.</p>
       </div>
       {% if help_panel.blockers %}
         <p class="hint" id="help-continue-blockers">Continue is unavailable: {{ help_panel.blockers|join:" " }}</p>
@@ -95,4 +101,5 @@
     <a class="btn btn-sm btn-primary" href="{% url 'projects:test_run_detail' project.id test_run.id %}">Continue it from the run page</a>
   {% endif %}
 </section>
+{% endwith %}
 {% endwith %}

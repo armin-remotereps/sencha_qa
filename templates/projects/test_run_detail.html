@@ -44,10 +44,13 @@
      banner and "Continue run" (projects:test_run_continue). start_form
      (TestRunStartForm, waiting runs only: the help_mode radio, initial = the
      run's mode). help_mode_form (RunHelpModeForm: the choices of the help
-     mode select in the Resume / Re-run dialogs, pre-set to the run's mode).
+     mode select in the Resume / Re-run dialogs, pre-set to the run's mode, and
+     of the header's help mode switch for a running or paused run, which posts
+     to projects:test_run_help_mode).
      summary also carries need_help. The run WS events carry help_state
      ("none" | "auto_fixing" | "waiting_for_person"; the context key
-     help_state is the page's baseline); the page reloads when
+     help_state is the page's baseline) and help_mode (the header switch
+     follows it without a reload); the page reloads when
      the run moves into or out of "paused" or help_state changes, since the
      banner is server-rendered. Agent and human text is autoescaped.
 
@@ -101,8 +104,30 @@
         <template x-if="testRunStatus === 'done' || testRunStatus === 'cancelled'">
           <span>Finished <time datetime="{{ test_run.finished_at|date:'c' }}">{{ test_run.finished_at|date:"M j, H:i" }}</time>{% if test_run.finished_at and test_run.started_at %} · {{ test_run.started_at|timesince:test_run.finished_at }}{% endif %} · <span x-text="summary.total"></span> cases</span>
         </template>
-        <span x-show="testRunStatus !== 'waiting'" x-cloak> · Help mode: {{ test_run.get_help_mode_display }}</span>
+        <span x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak> · Help mode: <span x-text="helpModeLabel(runHelpMode)">{{ test_run.get_help_mode_display }}</span></span>
       </p>
+      {% comment %} Switch the help mode of a running or paused run. It applies from
+         the next Need help; a paused case waiting for a person (never
+         auto-fixed) is handed to the auto-fix at once when switched to Night.
+         runHelpMode follows the run's WS events; the select keeps the
+         person's pick until it is saved. {% endcomment %}
+      <form
+        method="post"
+        action="{% url 'projects:test_run_help_mode' project.id test_run.id %}"
+        class="help-mode-form"
+        x-show="testRunStatus === 'started' || testRunStatus === 'paused'"
+        x-cloak
+      >
+        {% csrf_token %}
+        <label class="small muted" for="run-help-mode">Help mode</label>
+        <select class="select select-sm" id="run-help-mode" name="help_mode" x-model="helpModeChoice" aria-describedby="run-help-mode-hint">
+          {% for value, label in help_mode_form.fields.help_mode.choices %}
+          <option value="{{ value }}"{% if value == test_run.help_mode %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn btn-sm btn-secondary" :disabled="helpModeChoice === runHelpMode" :aria-disabled="(helpModeChoice === runHelpMode).toString()">Save</button>
+        <span class="visually-hidden" id="run-help-mode-hint">Applies from the next case that needs help. Night also hands a case waiting for a person to the Machine setup agent.</span>
+      </form>
     </div>
     <div class="actions">
       <a class="btn btn-secondary" x-show="testRunStatus === 'waiting'" x-cloak href="{% url 'projects:test_case_list' project.id %}">Add cases</a>
@@ -675,6 +700,14 @@ document.addEventListener('alpine:init', () => {
     testrailSourcePushStatus: '{{ testrail_checked_push.status }}',
     helpState: '{{ help_state }}',
     helpMode: '{{ test_run.help_mode|escapejs }}',
+    // The run's saved help mode (follows WS events) and the header select.
+    runHelpMode: '{{ test_run.help_mode|escapejs }}',
+    helpModeChoice: '{{ test_run.help_mode|escapejs }}',
+    helpModeLabels: {
+      {% for value, label in help_mode_form.fields.help_mode.choices %}
+      '{{ value|escapejs }}': '{{ label|escapejs }}'{% if not forloop.last %},{% endif %}
+      {% endfor %}
+    },
     summary: {
       total: {{ summary.total }},
       created: {{ summary.created }},
@@ -715,6 +748,18 @@ document.addEventListener('alpine:init', () => {
       }[status] || status;
     },
 
+    helpModeLabel(mode) {
+      return this.helpModeLabels[mode] || mode;
+    },
+
+    // Another member (or this one in another tab) changed the mode: follow
+    // it, unless this select holds an unsaved pick.
+    syncHelpMode(data) {
+      if (!data.help_mode || data.help_mode === this.runHelpMode) return;
+      if (this.helpModeChoice === this.runHelpMode) this.helpModeChoice = data.help_mode;
+      this.runHelpMode = data.help_mode;
+    },
+
     // The paused banner and "Continue run" are server-rendered: reload when
     // the run moves into or out of "paused", or its help_state changes. The
     // server-rendered help_state is the baseline.
@@ -737,6 +782,7 @@ document.addEventListener('alpine:init', () => {
         const data = JSON.parse(event.data);
 
         if (data.type === 'current_state') {
+          this.syncHelpMode(data);
           if (this.helpChanged(data)) return;
           this.testRunStatus = data.test_run_status;
           this.summary = data.summary;
@@ -783,6 +829,7 @@ document.addEventListener('alpine:init', () => {
         }
 
         if (data.type === 'test_run_status') {
+          this.syncHelpMode(data);
           if (this.helpChanged(data)) return;
           const previousStatus = this.testRunStatus;
           this.testRunStatus = data.test_run_status;

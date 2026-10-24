@@ -1519,6 +1519,25 @@ a.stat-card:hover {
   margin-top: 0;
 }
 
+/* Run page header: switch the help mode of a running or paused run. */
+.help-mode-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.help-mode-form .select {
+  width: auto;
+}
+
+.select-sm {
+  padding-top: 5px;
+  padding-bottom: 5px;
+  font-size: 0.83rem;
+}
+
 .per-page-form {
   display: flex;
   align-items: center;

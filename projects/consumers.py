@@ -140,6 +140,7 @@ class TestRunConsumer(AuthenticatedConsumer):
                     "test_run_status": test_run.status,
                     "summary": summary,
                     "help_state": help_state,
+                    "help_mode": test_run.help_mode,
                     "pivots": [
                         {"pivot_id": pid, "status": status} for pid, status in pivots
                     ],
@@ -171,6 +172,7 @@ class TestRunConsumer(AuthenticatedConsumer):
                     "test_run_status": event["test_run_status"],
                     "summary": event["summary"],
                     "help_state": event.get("help_state", "none"),
+                    "help_mode": event.get("help_mode", ""),
                 }
             )
         )

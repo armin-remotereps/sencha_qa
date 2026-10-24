@@ -361,9 +361,15 @@ def _help_reason(decisions: Sequence[StepDecision], step_num: int) -> str:
 
 
 def _applied_help(
-    help: CheckpointHelp | None, attempts: Sequence[SubTaskAttempt]
+    help: CheckpointHelp | None,
+    attempts: Sequence[SubTaskAttempt],
+    decisions: Sequence[StepDecision],
 ) -> CheckpointHelp | None:
-    """``help`` when its step's failed attempt is still in the attempts."""
+    """``help`` when its step's failed attempt is still in the attempts.
+
+    A help without an ask gets the need_help decision's reason as its ask, as
+    the state line does.
+    """
     if help is None:
         return None
     for attempt in attempts:
@@ -372,7 +378,9 @@ def _applied_help(
             and attempt.step_num == help.step_num
             and attempt.result.status != "pass"
         ):
-            return help
+            if help.ask.strip():
+                return help
+            return replace(help, ask=_help_reason(decisions, help.step_num))
     return None
 
 
@@ -734,7 +742,7 @@ def _execute_sub_tasks(
         attempts,
         sub_tasks,
         progress.total_iterations,
-        helped=_applied_help(progress.help, attempts),
+        helped=_applied_help(progress.help, attempts, progress.decisions),
     )
 
 

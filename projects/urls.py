@@ -201,6 +201,11 @@ urlpatterns: list[URLPattern] = [
         name="test_run_continue",
     ),
     path(
+        "<int:project_id>/test-runs/<int:test_run_id>/help-mode/",
+        views.test_run_help_mode,
+        name="test_run_help_mode",
+    ),
+    path(
         "<int:project_id>/test-runs/<int:test_run_id>/resume/",
         views.test_run_resume,
         name="test_run_resume",

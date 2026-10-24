@@ -241,7 +241,7 @@ def continue_after_help(
 
         note = _cap_note(note)
         _resolve(request, HelpResolution.CONTINUED, user, note, now, auto_fix_live)
-        _set_continue_pending(locked_pivot, request, note, "human")
+        _set_continue_pending(locked_pivot, request, "human")
         return _queue_or_wait(test_run, request, locked_pivot, auto_fix_live)
 
 
@@ -379,6 +379,9 @@ def finish_case_auto_fix(*, help_request_id: int, fixed: bool, summary: str) -> 
     if test_run_id is None:
         return
     final_state = HelpAutoFixState.FIXED if fixed else HelpAutoFixState.NOT_FIXED
+    # Kept on the request for both outcomes: the tester and the person who
+    # continues see what the setup agent did. ``note`` stays the person's.
+    auto_fix_summary = _cap_note(summary)
     with transaction.atomic():
         _, test_run = lock_project_and_run(test_run_id)
         if test_run.status != TestRunStatus.PAUSED:
@@ -386,7 +389,7 @@ def finish_case_auto_fix(*, help_request_id: int, fixed: bool, summary: str) -> 
             # (Abort leaves the state "running"); no queue, no notification.
             CaseHelpRequest.objects.filter(
                 pk=help_request_id, auto_fix_state=HelpAutoFixState.RUNNING
-            ).update(auto_fix_state=final_state)
+            ).update(auto_fix_state=final_state, auto_fix_summary=auto_fix_summary)
             return
         request = CaseHelpRequest.objects.select_for_update().get(pk=help_request_id)
         pivot = (
@@ -402,41 +405,50 @@ def finish_case_auto_fix(*, help_request_id: int, fixed: bool, summary: str) -> 
             # turn to end. A failing gate leaves "Continue run" on the page.
             if request.auto_fix_state == HelpAutoFixState.RUNNING:
                 request.auto_fix_state = final_state
-                request.save(update_fields=["auto_fix_state"])
+                request.auto_fix_summary = auto_fix_summary
+                request.save(update_fields=["auto_fix_state", "auto_fix_summary"])
+                if (
+                    request.resolution == HelpResolution.CONTINUED
+                    and pivot.status == TestRunTestCaseStatus.CREATED
+                ):
+                    # The person's Continue wrote the help key before the
+                    # agent reported; add its summary for the tester.
+                    _write_help_key(pivot, request, "human")
+                    pivot.save(update_fields=["execution_checkpoint", "updated_at"])
             _try_queue(test_run)
             return
 
+        request.auto_fix_summary = auto_fix_summary
         if not fixed:
             request.auto_fix_state = HelpAutoFixState.NOT_FIXED
-            request.save(update_fields=["auto_fix_state"])
+            request.save(update_fields=["auto_fix_state", "auto_fix_summary"])
             notify_case_needs_help(request.pk, after_auto_fix=True)
             return
 
-        note = _cap_note(summary)
         try:
             with transaction.atomic():
                 request.auto_fix_state = HelpAutoFixState.FIXED
                 request.resolution = HelpResolution.AUTO_FIXED
                 request.resolved_by = None
                 request.resolved_at = timezone.now()
-                request.note = note
                 request.save(
                     update_fields=[
                         "auto_fix_state",
+                        "auto_fix_summary",
                         "resolution",
                         "resolved_by",
                         "resolved_at",
-                        "note",
                     ]
                 )
-                _set_continue_pending(pivot, request, note, "auto_fix")
+                _set_continue_pending(pivot, request, "auto_fix")
                 queue_pending_cases(test_run)
         except RunHelpError:
             # The gates refused (runner gone, ...): back to a person, with the
             # agent's report kept on the request.
             _reload_after_rollback(test_run, pivot)
             CaseHelpRequest.objects.filter(pk=request.pk).update(
-                auto_fix_state=HelpAutoFixState.FIXED
+                auto_fix_state=HelpAutoFixState.FIXED,
+                auto_fix_summary=auto_fix_summary,
             )
             notify_case_needs_help(request.pk)
 
@@ -506,20 +518,33 @@ def _resolve(
     request.save(update_fields=update_fields)
 
 
-def _set_continue_pending(
-    pivot: TestRunTestCase, request: CaseHelpRequest, note: str, source: HelpSource
+def _write_help_key(
+    pivot: TestRunTestCase, request: CaseHelpRequest, source: HelpSource
 ) -> None:
-    """Write the checkpoint's help key and put the case back to Created."""
+    """Set the checkpoint's help key from the request (not saved).
+
+    Carries the ask, the person's note (empty when the setup agent continued)
+    and the setup agent's summary (empty when no auto-fix reported).
+    """
     pivot.execution_checkpoint = with_help(
         pivot.execution_checkpoint,
         CheckpointHelp(
             step_num=request.step_num,
             request_id=request.pk,
-            note=note,
+            note=request.note,
             source=source,
             continue_pending=True,
+            ask=request.ask,
+            auto_fix_summary=request.auto_fix_summary,
         ),
     )
+
+
+def _set_continue_pending(
+    pivot: TestRunTestCase, request: CaseHelpRequest, source: HelpSource
+) -> None:
+    """Write the checkpoint's help key and put the case back to Created."""
+    _write_help_key(pivot, request, source)
     pivot.status = TestRunTestCaseStatus.CREATED
     pivot.blocked_reason = ""
     pivot.result = ""

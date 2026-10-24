@@ -5,7 +5,6 @@ from typing import Final, Literal
 
 from agents.types import (
     CheckpointHelp,
-    HelpSource,
     SubTask,
     SubTaskAttempt,
     SubTaskResult,
@@ -205,32 +204,60 @@ def format_failed_attempt_state(
     )
 
 
-def helper_name(source: HelpSource) -> str:
+def helper_name(help: CheckpointHelp) -> str:
     """Who fixed the machine, as the prompts name them."""
-    return "the machine setup agent" if source == "auto_fix" else "a person"
+    if help.source == "auto_fix":
+        return "the machine setup agent"
+    if help.auto_fix_summary.strip():
+        return "a person (the machine setup agent could not)"
+    return "a person"
+
+
+def _sentence(text: str) -> str:
+    return text.strip().rstrip(".")
+
+
+def _help_details(help: CheckpointHelp, reason: str) -> str:
+    """The ask and the helpers' messages, each as a sentence; may be empty.
+
+    ``reason`` stands in for the ask when the help key has none (older
+    checkpoints, or the agent asked without one).
+    """
+    parts: list[str] = []
+    ask = _sentence(help.ask) or _sentence(reason)
+    if ask:
+        parts.append(f"The agent had asked: {ask}.")
+    summary = _sentence(help.auto_fix_summary)
+    if summary:
+        parts.append(f"Machine setup agent: {summary}.")
+    note = _sentence(help.note)
+    if note:
+        parts.append(f"Person: {note}.")
+    return " ".join(parts)
 
 
 def format_help_state_line(step_num: int, help: CheckpointHelp, reason: str) -> str:
     """State line for a step that failed, paused for help and is retried after it.
 
-    ``reason`` is why the orchestrator asked for help at that step. Shared by
-    the live continue and the resume rebuild so both write the same state.
+    ``reason`` is why the orchestrator asked for help at that step, used when
+    the help key carries no ask. Shared by the live continue and the resume
+    rebuild so both write the same state.
     """
-    asked = f" after the agent asked for help: {reason}" if reason else ""
-    note_text = help.note.strip().rstrip(".")
-    note = f" Note: {note_text}." if note_text else ""
+    details = _help_details(help, reason)
     return (
-        f"Step {step_num}: {helper_name(help.source)} fixed the test machine"
-        f"{asked}.{note} Check the screen: the fix may have changed it."
+        f"Step {step_num}: the test machine was fixed by {helper_name(help)}."
+        f"{' ' + details if details else ''} Check the screen: the fix may have "
+        "changed it."
     )
 
 
-def help_verdict_note(help: CheckpointHelp) -> str:
-    """One sentence saying who fixed the machine at which step."""
+def help_verdict_note(help: CheckpointHelp, reason: str = "") -> str:
+    """Who fixed the machine at which step, with the ask and their messages."""
+    details = _help_details(help, reason)
     return (
-        f"The case paused at step {help.step_num} for help, and "
-        f"{helper_name(help.source)} fixed the test machine before the step was "
-        "retried."
+        f"The case paused at step {help.step_num} for help, and the test machine "
+        f"was fixed by {helper_name(help)} before the step was retried."
+        f"{' ' + details if details else ''}"
     )
 
 

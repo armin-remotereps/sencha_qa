@@ -280,6 +280,20 @@ class RunHelpModeForm(forms.Form):
         return value or None
 
 
+class RunHelpModeChangeForm(forms.Form):
+    """Switch an active run's help mode; applies from the next Need help."""
+
+    help_mode = forms.ChoiceField(
+        label="When a case needs help",
+        choices=RunHelpMode.choices,
+        widget=forms.Select(attrs={"class": "select"}),
+        error_messages={
+            "required": "Choose what happens when a case needs help.",
+            "invalid_choice": "Choose Attended or Night.",
+        },
+    )
+
+
 class CaseHelpResolutionForm(forms.Form):
     """Continue / Mark failed / Skip on a Need help case, with an optional note."""
 

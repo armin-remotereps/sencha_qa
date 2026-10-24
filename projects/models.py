@@ -589,8 +589,13 @@ class CaseHelpRequest(models.Model):
         related_name="+",
     )
     resolved_at = models.DateTimeField(null=True, blank=True)
-    # The person's note, or the setup agent's summary for ``auto_fixed``.
+    # The person's note; empty for ``auto_fixed`` and while open.
     note = models.TextField(max_length=HELP_NOTE_MAX_LENGTH, blank=True, default="")
+    # The setup agent's report of its auto-fix (fixed or not fixed); empty when
+    # no auto-fix ran or it has not ended yet. Shown escaped.
+    auto_fix_summary = models.TextField(
+        max_length=HELP_NOTE_MAX_LENGTH, blank=True, default=""
+    )
 
     class Meta:
         constraints = [

@@ -259,7 +259,8 @@
             {% endif %}
             {% with thread=help_request.auto_fix_threads.0 %}{% if thread %} · <a href="{% url 'machine_setup:thread' project.id thread.id %}">auto-fix thread</a>{% endif %}{% endwith %}
           </div>
-          {% if help_request.note %}<p class="pre-wrap small">{{ help_request.note|truncatechars:600 }}</p>{% endif %}
+          {% if help_request.auto_fix_summary %}<p class="pre-wrap small"><span class="muted">Machine setup agent:</span> {{ help_request.auto_fix_summary|truncatechars:600 }}</p>{% endif %}
+          {% if help_request.note %}<p class="pre-wrap small"><span class="muted">Person:</span> {{ help_request.note|truncatechars:600 }}</p>{% endif %}
         </div>
       </li>
       {% endfor %}

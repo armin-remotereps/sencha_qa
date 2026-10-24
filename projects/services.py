@@ -2687,6 +2687,8 @@ class TestRunStatusEvent(TypedDict):
     summary: dict[str, int]
     # A ``RunHelpState`` value.
     help_state: str
+    # A ``RunHelpMode`` value; it can change while the run is active.
+    help_mode: str
 
 
 class CaseLogEvent(TypedDict):
@@ -2737,6 +2739,7 @@ def broadcast_run_and_pivots(
         "test_run_status": test_run.status,
         "summary": summary,
         "help_state": get_run_help_state(test_run),
+        "help_mode": test_run.help_mode,
     }
     async_to_sync(layer.group_send)(_test_run_group(test_run.id), run_event)
     for pivot in pivots:
@@ -2796,6 +2799,7 @@ def broadcast_test_run_status(test_run: TestRun) -> None:
         "test_run_status": test_run.status,
         "summary": get_test_run_summary(test_run),
         "help_state": get_run_help_state(test_run),
+        "help_mode": test_run.help_mode,
     }
     async_to_sync(layer.group_send)(_test_run_group(test_run.id), event)
 
@@ -3262,7 +3266,7 @@ def _pause_run_for_help(
                 _broadcast_log(pivot, log_line)
             broadcast_run_and_pivots(test_run, [pivot])
             if auto_fix:
-                _enqueue_case_auto_fix(help_request_id)
+                enqueue_case_auto_fix(help_request_id)
             else:
                 notify_case_needs_help(help_request_id)
 
@@ -3270,7 +3274,7 @@ def _pause_run_for_help(
     return True
 
 
-def _enqueue_case_auto_fix(help_request_id: int) -> None:
+def enqueue_case_auto_fix(help_request_id: int) -> None:
     """Hand the request to the auto-fix; on a broker error, fall back to people."""
     try:
         celery_app.send_task(START_CASE_AUTO_FIX, args=[help_request_id])

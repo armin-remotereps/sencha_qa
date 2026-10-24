@@ -113,6 +113,8 @@ def help_to_json(help: CheckpointHelp) -> dict[str, object]:
         "note": help.note,
         "source": help.source,
         "continue_pending": help.continue_pending,
+        "ask": help.ask,
+        "auto_fix_summary": help.auto_fix_summary,
     }
 
 
@@ -284,12 +286,18 @@ def _parse_help(value: object) -> CheckpointHelp | None:
         return None
     if isinstance(request_id, bool) or not isinstance(request_id, int):
         request_id = None
+    # ``ask`` and ``auto_fix_summary`` are absent from older help keys.
+    ask, auto_fix_summary = item.get("ask"), item.get("auto_fix_summary")
     return CheckpointHelp(
         step_num=step_num,
         request_id=request_id,
         note=note if isinstance(note, str) else "",
         source=cast(HelpSource, source),
         continue_pending=continue_pending is True,
+        ask=ask if isinstance(ask, str) else "",
+        auto_fix_summary=(
+            auto_fix_summary if isinstance(auto_fix_summary, str) else ""
+        ),
     )
 
 
