@@ -5,8 +5,9 @@
      help_panel — projects.case_help_services.HelpPanel for this case (the
                   run is paused on it): request, thread (auto-fix
                   SetupConversation or None; fix_result, fix_summary),
-                  request.auto_fix_summary (the setup agent's report, shown
-                  next to the note once the auto-fix has ended),
+                  auto_fix_summary (the setup agent's report, request copy
+                  else thread; shown next to the note once the auto-fix
+                  has ended),
                   auto_fix_live, blockers, is_open, can_continue,
                   can_continue_run, waiting_for_auto_fix_stop
      help_form  — CaseHelpResolutionForm (the optional note)
@@ -14,7 +15,7 @@
    own URL via formaction. Abort opens the page's "abort-run" dialog.
    Agent and human text is autoescaped, never |safe. {% endcomment %}
 {% with help_request=help_panel.request thread=help_panel.thread %}
-{% with auto_fix_summary=help_panel.request.auto_fix_summary|default:help_panel.thread.fix_summary %}
+{% with auto_fix_summary=help_panel.auto_fix_summary %}
 <section aria-labelledby="help-h" class="card card-tone-need-help">
   <div class="card-header">
     <h2 id="help-h">{% if help_panel.is_open %}This case needs help{% else %}Help given: {{ help_request.get_resolution_display }}{% endif %}</h2>

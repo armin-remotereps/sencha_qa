@@ -109,6 +109,13 @@ class HelpPanel:
     def waiting_for_auto_fix_stop(self) -> bool:
         return not self.request.is_open and self.auto_fix_live
 
+    @property
+    def auto_fix_summary(self) -> str:
+        """The setup agent's report: the request's copy, else the thread's."""
+        if self.request.auto_fix_summary:
+            return self.request.auto_fix_summary
+        return self.thread.fix_summary if self.thread is not None else ""
+
 
 # ---------------------------------------------------------------------------
 # Read side
