@@ -51,6 +51,8 @@ class ToolParameter:
     # (strict mode is off, so the handler enforces the cap).
     items_type: str | None = None
     max_items: int | None = None
+    # Full JSON schema of the elements (e.g. objects); wins over ``items_type``.
+    items_schema: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -197,6 +199,9 @@ class SubTaskAttempt:
     # Wall-clock seconds the sub-agent ran; None for checkpoints written before
     # durations were recorded.
     duration_seconds: int | None = None
+    # Set on a synthetic passing ``step`` attempt written when a help chat
+    # redesigned the plan: the earlier plan's step this one was carried from.
+    carried_from: int | None = None
 
 
 # What the orchestrator decides after a failed step.
@@ -280,6 +285,34 @@ class CheckpointHelp:
 
 
 @dataclass(frozen=True)
+class PlanRevisionRecord:
+    """An earlier plan replaced by a help-chat redesign (display and prompt data).
+
+    ``attempts``/``decisions`` of the checkpoint describe the current plan only;
+    the earlier plan's moved here when the revision was applied.
+    """
+
+    # ``plan_version`` the checkpoint got when this revision was applied.
+    version: int
+    # ``projects.CasePlanRevision`` / ``CaseHelpRequest`` ids.
+    revision_id: int
+    help_request_id: int
+    reason: str
+    # (description, expected_result) of every earlier step.
+    previous_plan: tuple[tuple[str, str], ...]
+    # The earlier plan's attempts, without actions digests.
+    earlier_attempts: tuple[SubTaskAttempt, ...]
+    earlier_decisions: tuple[StepDecision, ...]
+    # (new step, earlier step) for every carried step.
+    mapping: tuple[tuple[int, int], ...]
+    # The earlier step the case paused at, and its failed attempt's digest.
+    paused_step: int
+    paused_digest: str
+    # First new step that was not carried (where the case resumed).
+    resume_step: int
+
+
+@dataclass(frozen=True)
 class OrchestratorCheckpoint:
     """Progress of one case, persisted so a blocked case can resume in place.
 
@@ -296,6 +329,9 @@ class OrchestratorCheckpoint:
     phase: OrchestratorPhase = "step"
     phase_started_at: datetime | None = None
     help: CheckpointHelp | None = None
+    # Number of help-chat redesigns applied, and the newest earlier plans.
+    plan_version: int = 0
+    plan_revisions: tuple[PlanRevisionRecord, ...] = ()
 
 
 CheckpointCallback = Callable[[OrchestratorCheckpoint], None]

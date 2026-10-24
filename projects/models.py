@@ -558,6 +558,15 @@ class HelpResolution(models.TextChoices):
     CANCELLED = "cancelled", "Cancelled"
 
 
+class HelpProposalAction(models.TextChoices):
+    """What the help-chat agent suggests; blank when it suggests nothing."""
+
+    NONE = "", "None"
+    CONTINUE = "continue", "Continue"
+    MARK_FAILED = "mark_failed", "Mark failed"
+    SKIP = "skip", "Skip"
+
+
 class CaseHelpRequest(models.Model):
     """One Need help event of a run case: the failing step and the agent's ask."""
 
@@ -599,6 +608,14 @@ class CaseHelpRequest(models.Model):
     auto_fix_summary = models.TextField(
         max_length=HELP_NOTE_MAX_LENGTH, blank=True, default=""
     )
+    # What the help-chat agent suggests the person do; only the person acts.
+    agent_proposal_action = models.CharField(
+        max_length=16, choices=HelpProposalAction.choices, blank=True, default=""
+    )
+    agent_proposal_note = models.TextField(
+        max_length=HELP_NOTE_MAX_LENGTH, blank=True, default=""
+    )
+    agent_proposal_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
@@ -621,6 +638,78 @@ class CaseHelpRequest(models.Model):
 
     def __str__(self) -> str:
         return f"Help request #{self.pk} of TRTC #{self.test_run_test_case_id}"
+
+
+PLAN_REVISION_REASON_MAX_LENGTH = 1000
+
+
+class PlanRevisionStatus(models.TextChoices):
+    PROPOSED = "proposed", "Proposed"
+    APPLIED = "applied", "Applied"
+    # By a person.
+    DISCARDED = "discarded", "Discarded"
+    # By a newer draft, or the request was resolved without applying it.
+    SUPERSEDED = "superseded", "Superseded"
+
+
+class CasePlanRevision(models.Model):
+    """A help-chat agent's redesign of a case's whole test plan (a draft until applied).
+
+    ``steps`` / ``previous_steps`` use the JSON forms of ``agents.plan_revision``
+    (``revision_steps_to_json`` / ``snapshots_to_json``).
+    """
+
+    test_run_test_case = models.ForeignKey(
+        TestRunTestCase, on_delete=models.CASCADE, related_name="plan_revisions"
+    )
+    help_request = models.ForeignKey(
+        CaseHelpRequest, on_delete=models.CASCADE, related_name="plan_revisions"
+    )
+    # ``agents.plan_revision.plan_fingerprint`` of the checkpoint it was built on.
+    base_fingerprint = models.CharField(max_length=64)
+    steps = models.JSONField(default=list)
+    previous_steps = models.JSONField(default=list)
+    # First new step that is not carried.
+    resume_step = models.PositiveSmallIntegerField()
+    # Model-written; shown escaped.
+    reason = models.TextField(
+        max_length=PLAN_REVISION_REASON_MAX_LENGTH, blank=True, default=""
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=PlanRevisionStatus.choices,
+        default=PlanRevisionStatus.PROPOSED,
+    )
+    proposed_at = models.DateTimeField(auto_now_add=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    # ``machine_setup.SetupConversation`` id, kept as a plain id so ``projects``
+    # has no schema dependency on ``machine_setup``.
+    conversation_id = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["help_request"],
+                condition=models.Q(status="proposed"),
+                name="plan_revision_one_pending",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["help_request", "-proposed_at"],
+                name="plan_revision_request_idx",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"Plan revision #{self.pk} of help request #{self.help_request_id}"
 
 
 def _screenshot_upload_path(instance: "TestRunScreenshot", filename: str) -> str:

@@ -168,3 +168,11 @@ class ApplicationContextVersionNotFoundError(ApplicationContextError):
 
     def __init__(self) -> None:
         super().__init__("That application context version no longer exists.")
+
+
+class PlanRevisionError(Exception):
+    """A plan redesign cannot be proposed or discarded; ``message`` is safe to show."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message

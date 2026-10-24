@@ -57,6 +57,8 @@ class SetupConversationKind(models.TextChoices):
     CHAT = "chat", "Chat"
     # Opened by the server for a Night-mode run case that needs help.
     AUTO_FIX = "auto_fix", "Auto-fix"
+    # Opened by a person from a run case that needs help.
+    CASE_HELP = "case_help", "Help chat"
 
 
 class SetupFixResult(models.TextChoices):
@@ -124,7 +126,13 @@ class SetupConversation(models.Model):
                 fields=["project"],
                 condition=Q(archived_at__isnull=True, kind="chat"),
                 name="setup_one_active_conversation",
-            )
+            ),
+            # One thread (auto-fix or help chat) per help request.
+            models.UniqueConstraint(
+                fields=["help_request"],
+                condition=Q(help_request__isnull=False),
+                name="setup_one_thread_per_help_request",
+            ),
         ]
 
     def __str__(self) -> str:

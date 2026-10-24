@@ -21,6 +21,7 @@ from agents.types import (
     HelpSource,
     OrchestratorCheckpoint,
     OrchestratorPhase,
+    PlanRevisionRecord,
     StepDecision,
     SubTask,
     SubTaskAttempt,
@@ -38,6 +39,10 @@ _DECISION_ACTIONS = ("continue", "recover", "stop", "need_help")
 _PHASES = ("step", "evaluating", "recovery", "resume", "verdict", "awaiting_help")
 _HELP_SOURCES = ("human", "auto_fix")
 _HELP_KEY = "help"
+_PLAN_VERSION_KEY = "plan_version"
+_PLAN_REVISIONS_KEY = "plan_revisions"
+# Only the newest earlier plans are kept (display and prompt data).
+MAX_PLAN_REVISION_RECORDS = 5
 
 
 class _MalformedCheckpoint(Exception):
@@ -48,7 +53,61 @@ def checkpoint_to_json(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
     data = _checkpoint_body(checkpoint)
     if checkpoint.help is not None:
         data[_HELP_KEY] = help_to_json(checkpoint.help)
+    if checkpoint.plan_version:
+        data[_PLAN_VERSION_KEY] = checkpoint.plan_version
+    if checkpoint.plan_revisions:
+        data[_PLAN_REVISIONS_KEY] = [
+            _revision_to_json(record)
+            for record in checkpoint.plan_revisions[-MAX_PLAN_REVISION_RECORDS:]
+        ]
     return data
+
+
+def _attempt_to_json(attempt: SubTaskAttempt) -> dict[str, object]:
+    data: dict[str, object] = {
+        "step_num": attempt.step_num,
+        "kind": attempt.kind,
+        "status": attempt.result.status,
+        "summary": attempt.result.summary,
+        "iterations": attempt.result.iterations,
+        "error": attempt.result.error,
+        "actions_digest": attempt.result.actions_digest,
+        "duration_seconds": attempt.duration_seconds,
+    }
+    if attempt.carried_from is not None:
+        data["carried_from"] = attempt.carried_from
+    return data
+
+
+def _decision_to_json(decision: StepDecision) -> dict[str, object]:
+    return {
+        "step_num": decision.step_num,
+        "action": decision.action,
+        "reason": decision.reason,
+    }
+
+
+def _revision_to_json(record: PlanRevisionRecord) -> dict[str, object]:
+    return {
+        "version": record.version,
+        "revision_id": record.revision_id,
+        "help_request_id": record.help_request_id,
+        "reason": record.reason,
+        "previous_plan": [
+            {"description": description, "expected_result": expected}
+            for description, expected in record.previous_plan
+        ],
+        "earlier_attempts": [
+            _attempt_to_json(attempt) for attempt in record.earlier_attempts
+        ],
+        "earlier_decisions": [
+            _decision_to_json(decision) for decision in record.earlier_decisions
+        ],
+        "mapping": [[new_step, old_step] for new_step, old_step in record.mapping],
+        "paused_step": record.paused_step,
+        "paused_digest": record.paused_digest,
+        "resume_step": record.resume_step,
+    }
 
 
 def _checkpoint_body(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
@@ -62,30 +121,11 @@ def _checkpoint_body(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
             }
             for task in checkpoint.plan
         ],
-        "attempts": [
-            {
-                "step_num": attempt.step_num,
-                "kind": attempt.kind,
-                "status": attempt.result.status,
-                "summary": attempt.result.summary,
-                "iterations": attempt.result.iterations,
-                "error": attempt.result.error,
-                "actions_digest": attempt.result.actions_digest,
-                "duration_seconds": attempt.duration_seconds,
-            }
-            for attempt in checkpoint.attempts
-        ],
+        "attempts": [_attempt_to_json(attempt) for attempt in checkpoint.attempts],
         "next_step": checkpoint.next_step,
         "browser": checkpoint.browser.value,
         "total_iterations": checkpoint.total_iterations,
-        "decisions": [
-            {
-                "step_num": decision.step_num,
-                "action": decision.action,
-                "reason": decision.reason,
-            }
-            for decision in checkpoint.decisions
-        ],
+        "decisions": [_decision_to_json(decision) for decision in checkpoint.decisions],
         "phase": checkpoint.phase,
         "phase_started_at": (
             checkpoint.phase_started_at.isoformat()
@@ -205,6 +245,8 @@ def _parse(data: object) -> OrchestratorCheckpoint:
         phase=_parse_phase(root.get("phase")),
         phase_started_at=_parse_datetime(root.get("phase_started_at")),
         help=_parse_help(root.get(_HELP_KEY)),
+        plan_version=_parse_plan_version(root.get(_PLAN_VERSION_KEY)),
+        plan_revisions=_parse_revisions(root.get(_PLAN_REVISIONS_KEY)),
     )
 
 
@@ -227,6 +269,8 @@ def _parse_attempt(item: dict[str, object]) -> SubTaskAttempt:
             actions_digest=_parse_digest(item.get("actions_digest")),
         ),
         duration_seconds=_parse_duration(item.get("duration_seconds")),
+        # Absent from attempts that were not carried over a plan redesign.
+        carried_from=_parse_positive_int(item.get("carried_from")),
     )
 
 
@@ -302,6 +346,64 @@ def _parse_help(value: object) -> CheckpointHelp | None:
         ),
         auto_fix_fixed=item.get("auto_fix_fixed") is True,
     )
+
+
+def _parse_plan_version(value: object) -> int:
+    return _parse_positive_int(value) or 0
+
+
+def _parse_revisions(value: object) -> tuple[PlanRevisionRecord, ...]:
+    # Absent from checkpoints never redesigned; a malformed record is dropped.
+    if not isinstance(value, list):
+        return ()
+    records: list[PlanRevisionRecord] = []
+    for raw in cast(list[object], value):
+        try:
+            records.append(_parse_revision(_as_dict(raw, "plan revision")))
+        except _MalformedCheckpoint as exc:
+            logger.warning("Dropping malformed plan revision record: %s", exc)
+    return tuple(records[-MAX_PLAN_REVISION_RECORDS:])
+
+
+def _parse_revision(item: dict[str, object]) -> PlanRevisionRecord:
+    previous_plan = tuple(
+        (
+            _as_str(step.get("description"), "description"),
+            _as_str(step.get("expected_result"), "expected_result"),
+        )
+        for step in (
+            _as_dict(raw, "previous plan step")
+            for raw in _as_list(item, "previous_plan")
+        )
+    )
+    mapping: list[tuple[int, int]] = []
+    for raw in _as_list(item, "mapping"):
+        if not isinstance(raw, list) or len(cast(list[object], raw)) != 2:
+            raise _MalformedCheckpoint("bad mapping pair")
+        pair = cast(list[object], raw)
+        mapping.append((_as_int(pair[0], "new step"), _as_int(pair[1], "old step")))
+    return PlanRevisionRecord(
+        version=_as_int(item.get("version"), "version"),
+        revision_id=_as_int(item.get("revision_id"), "revision_id"),
+        help_request_id=_as_int(item.get("help_request_id"), "help_request_id"),
+        reason=_as_str(item.get("reason"), "reason"),
+        previous_plan=previous_plan,
+        earlier_attempts=tuple(
+            _parse_attempt(_as_dict(raw, "attempt"))
+            for raw in _as_list(item, "earlier_attempts")
+        ),
+        earlier_decisions=_parse_decisions(item.get("earlier_decisions")),
+        mapping=tuple(mapping),
+        paused_step=_as_int(item.get("paused_step"), "paused_step"),
+        paused_digest=_parse_digest(item.get("paused_digest")),
+        resume_step=_as_int(item.get("resume_step"), "resume_step"),
+    )
+
+
+def _parse_positive_int(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
 
 
 def _parse_digest(value: object) -> str:

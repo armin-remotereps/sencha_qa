@@ -143,7 +143,9 @@ def _serialize_tools(
             }
             if param.enum is not None:
                 parameter_schema["enum"] = list(param.enum)
-            if param.items_type is not None:
+            if param.items_schema is not None:
+                parameter_schema["items"] = param.items_schema
+            elif param.items_type is not None:
                 parameter_schema["items"] = {"type": param.items_type}
             if param.max_items is not None:
                 parameter_schema["maxItems"] = param.max_items

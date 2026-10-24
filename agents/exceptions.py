@@ -70,3 +70,11 @@ class OrchestratorPlanError(AIServiceError):
 class OrchestratorParseError(AIServiceError):
     def __init__(self, message: str) -> None:
         super().__init__(AIServiceErrorKind.BAD_RESPONSE, message)
+
+
+class PlanRevisionInvalid(Exception):
+    """A proposed plan redesign breaks a rule; ``message`` is written for the model."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
