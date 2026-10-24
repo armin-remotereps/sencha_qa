@@ -1,0 +1,37 @@
+{% comment %}
+  Machine setup threads: the main chat, then the newest auto-fix threads
+  (opened by the server for a Night-mode case that needs help). Shown only
+  when there is an auto-fix thread. Server-rendered; a thread opened after
+  the page loaded appears on the next load.
+
+  Context contract:
+    project    — the current Project
+    threads    — list[machine_setup.services.chat_page.AutoFixThread], newest
+                 first (conversation_id, case_title, step_num, state_label,
+                 created_at)
+    conversation — the shown SetupConversation, or None for the main chat
+{% endcomment %}
+{% if threads %}
+<nav class="card" aria-label="Machine setup threads">
+  <ul class="chat-thread-list">
+    <li>
+      <a class="chat-thread-list__item{% if not conversation %} chat-thread-list__item--active{% endif %}"
+         href="{% url 'machine_setup:chat' project_id=project.id %}"
+         {% if not conversation %}aria-current="page"{% endif %}>
+        Main chat
+        <span class="chat-thread-meta">Your conversation with the setup agent</span>
+      </a>
+    </li>
+    {% for thread in threads %}
+    <li>
+      <a class="chat-thread-list__item{% if conversation and conversation.pk == thread.conversation_id %} chat-thread-list__item--active{% endif %}"
+         href="{% url 'machine_setup:thread' project_id=project.id conversation_id=thread.conversation_id %}"
+         {% if conversation and conversation.pk == thread.conversation_id %}aria-current="page"{% endif %}>
+        Auto-fix · {{ thread.case_title|default:"Deleted case" }}{% if thread.step_num %} · step {{ thread.step_num }}{% endif %} · {{ thread.state_label }}
+        <span class="chat-thread-meta"><time datetime="{{ thread.created_at|date:'c' }}">{{ thread.created_at|date:"M j, H:i" }}</time></span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+</nav>
+{% endif %}

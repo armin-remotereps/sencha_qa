@@ -1,6 +1,8 @@
 """The project's live turn: find it (closing it when its worker is gone) and stop it.
 
-Shared by send, stop and reset, which all run under the project row lock.
+Shared by send, stop, reset and the auto-fix start, which all run under the
+project row lock. Closing an auto-fix turn here also settles its help request
+(``settle_case_auto_fix``), since its worker never will.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from machine_setup.services.activity_recorder import (
     TOOL_INTERRUPTED_TEXT,
     fail_running_rows,
 )
+from machine_setup.services.auto_fix_settlement import settle_case_auto_fix
 from machine_setup.turn_outcome import stopped_outcome
 from machine_setup.turn_state import is_turn_stale
 
@@ -81,6 +84,8 @@ def _close_lost_turn(turn: SetupTurn, now: datetime) -> None:
         broadcast_turn(turn.project_id, turn_payload(turn))
 
     transaction.on_commit(_broadcast)
+    # A killed auto-fix worker falls back to a person.
+    settle_case_auto_fix(turn)
 
 
 def mark_stop_requested(
@@ -135,4 +140,6 @@ def _close_queued_turn(turn: SetupTurn, user: CustomUser, *, reset: bool) -> boo
         broadcast_turn(turn.project_id, turn_payload(turn))
 
     transaction.on_commit(_broadcast)
+    # The worker never claims a closed queued turn, so it never settles it.
+    settle_case_auto_fix(turn)
     return True

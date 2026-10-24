@@ -2,48 +2,50 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 
 from django.db import transaction
 from django.utils import timezone
 
 from accounts.models import CustomUser
-from machine_setup.events import broadcast_message, broadcast_turn
 from machine_setup.exceptions import (
     MachineSetupError,
     SetupMachineNotReadyError,
     SetupRunActiveError,
     SetupTurnActiveError,
 )
-from machine_setup.models import (
-    SetupConversation,
-    SetupMessage,
-    SetupMessageKind,
-    SetupTurn,
-    SetupTurnEndReason,
-    SetupTurnStatus,
-)
-from machine_setup.payloads import message_payload, turn_payload
+from machine_setup.models import SetupConversation, SetupConversationKind, SetupTurn
 from machine_setup.services.live_turn import resolve_live_turn
-from machine_setup.tasks import run_setup_turn
+from machine_setup.services.queue_turn import broadcast_and_enqueue, create_turn
 from projects.models import Project, TestRun, TestRunStatus
 from projects.services import MachineState, get_machine_state
 from visual_engine.services.pool_status import get_visual_engine_status
 
-logger = logging.getLogger(__name__)
+THREAD_CLOSED_MESSAGE = (
+    "This conversation was reset. Send your message in the current chat."
+)
 
-ENQUEUE_FAILED_MESSAGE = "The setup agent could not be started. Try again."
 
-
-def send_setup_message(*, project: Project, user: CustomUser, text: str) -> SetupTurn:
+def send_setup_message(
+    *,
+    project: Project,
+    user: CustomUser,
+    text: str,
+    conversation: SetupConversation | None = None,
+) -> SetupTurn:
     """Record the user's message and queue a turn for it.
 
-    Raises ``SetupTurnActiveError``, ``SetupRunActiveError`` or
-    ``SetupMachineNotReadyError``. A stale live turn is closed as
-    ``worker_lost`` first, and stays closed even when the send is refused.
+    ``conversation`` is a thread of this project to reply in (the main chat or
+    an auto-fix thread); ``None`` means the main chat, created when missing.
+    Raises ``SetupTurnActiveError``, ``SetupRunActiveError``,
+    ``SetupMachineNotReadyError``, or ``MachineSetupError`` when the thread was
+    archived meanwhile. A stale live turn is closed as ``worker_lost`` first,
+    and stays closed even when the send is refused. A paused (Needs help) run
+    does not block sending; a started one does.
     """
-    outcome = _send_locked(project=project, user=user, text=text)
+    outcome = _send_locked(
+        project=project, user=user, text=text, conversation=conversation
+    )
     if isinstance(outcome, MachineSetupError):
         raise outcome
     return outcome
@@ -51,7 +53,11 @@ def send_setup_message(*, project: Project, user: CustomUser, text: str) -> Setu
 
 @transaction.atomic
 def _send_locked(
-    *, project: Project, user: CustomUser, text: str
+    *,
+    project: Project,
+    user: CustomUser,
+    text: str,
+    conversation: SetupConversation | None,
 ) -> SetupTurn | MachineSetupError:
     # Same lock as start_test_run and resume (project row first), so a send
     # and a run start cannot both pass their "nothing else is live" checks.
@@ -64,8 +70,11 @@ def _send_locked(
     if refusal is not None:
         # Returned, not raised: a stale turn closed above must still commit.
         return refusal
-    turn, message = _create_turn(project=locked, user=user, text=text)
-    transaction.on_commit(lambda: _broadcast_and_enqueue(turn, message))
+    target = _target_conversation(locked, user, conversation)
+    if target is None:
+        return MachineSetupError(THREAD_CLOSED_MESSAGE)
+    turn, message = create_turn(conversation=target, requested_by=user, text=text)
+    transaction.on_commit(lambda: broadcast_and_enqueue(turn, message))
     return turn
 
 
@@ -80,67 +89,27 @@ def _refusal(project: Project, now: datetime) -> MachineSetupError | None:
     return None
 
 
-def _create_turn(
-    *, project: Project, user: CustomUser, text: str
-) -> tuple[SetupTurn, SetupMessage]:
-    conversation = (
-        SetupConversation.objects.filter(project=project, archived_at__isnull=True)
+def _target_conversation(
+    project: Project, user: CustomUser, conversation: SetupConversation | None
+) -> SetupConversation | None:
+    """The thread to write to; ``None`` when the given thread was archived."""
+    if conversation is not None:
+        return (
+            SetupConversation.objects.filter(
+                pk=conversation.pk, project=project, archived_at__isnull=True
+            )
+            .defer("llm_transcript")
+            .first()
+        )
+    chat = (
+        SetupConversation.objects.filter(
+            project=project,
+            kind=SetupConversationKind.CHAT,
+            archived_at__isnull=True,
+        )
         .defer("llm_transcript")
         .first()
     )
-    if conversation is None:
-        conversation = SetupConversation.objects.create(
-            project=project, created_by=user
-        )
-    turn = SetupTurn.objects.create(
-        conversation=conversation, project=project, requested_by=user
-    )
-    message = SetupMessage.objects.create(
-        conversation=conversation,
-        turn=turn,
-        kind=SetupMessageKind.USER,
-        author=user,
-        text=text,
-    )
-    return turn, message
-
-
-def _broadcast_and_enqueue(turn: SetupTurn, message: SetupMessage) -> None:
-    # Broadcast the queued turn before enqueueing, so a fast worker's
-    # "running" broadcast cannot be overtaken by a stale "queued" one.
-    broadcast_message(turn.project_id, message_payload(message, screenshots=[]))
-    broadcast_turn(turn.project_id, turn_payload(turn))
-    try:
-        result = run_setup_turn.delay(turn.pk)
-    except Exception:
-        logger.exception("Could not queue setup turn %d", turn.pk)
-        _fail_unqueued_turn(turn)
-        return
-    SetupTurn.objects.filter(pk=turn.pk).update(celery_task_id=result.id or "")
-
-
-def _fail_unqueued_turn(turn: SetupTurn) -> None:
-    now = timezone.now()
-    with transaction.atomic():
-        failed = SetupTurn.objects.filter(
-            pk=turn.pk, status=SetupTurnStatus.QUEUED
-        ).update(
-            status=SetupTurnStatus.FAILED,
-            ended_reason=SetupTurnEndReason.INTERNAL_ERROR,
-            error_message=ENQUEUE_FAILED_MESSAGE,
-            finished_at=now,
-        )
-        if not failed:
-            return
-        notice = SetupMessage.objects.create(
-            conversation_id=turn.conversation_id,
-            turn=turn,
-            kind=SetupMessageKind.NOTICE,
-            text=ENQUEUE_FAILED_MESSAGE,
-        )
-    turn.status = SetupTurnStatus.FAILED
-    turn.ended_reason = SetupTurnEndReason.INTERNAL_ERROR
-    turn.error_message = ENQUEUE_FAILED_MESSAGE
-    turn.finished_at = now
-    broadcast_message(turn.project_id, message_payload(notice, screenshots=[]))
-    broadcast_turn(turn.project_id, turn_payload(turn))
+    if chat is None:
+        chat = SetupConversation.objects.create(project=project, created_by=user)
+    return chat

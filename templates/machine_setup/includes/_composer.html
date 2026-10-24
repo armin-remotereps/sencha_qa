@@ -11,12 +11,16 @@
 
   Context contract:
     project — the current Project
+    conversation — the shown thread (SetupConversation) on a thread page, None
+                 on the main chat; posted as conversation_id so the message
+                 goes to that thread and both forms return to it
 {% endcomment %}
 <div class="chat-composer">
   <p class="chat-status small" x-show="statusText" x-cloak x-text="statusText"></p>
   <div class="chat-composer-row">
     <form class="chat-composer-form" method="post" action="{% url 'machine_setup:send' project_id=project.id %}" @submit="onSubmit($event)">
       {% csrf_token %}
+      {% if conversation %}<input type="hidden" name="conversation_id" value="{{ conversation.pk }}">{% endif %}
       <label for="setup-message-text" class="visually-hidden">Message the setup agent</label>
       <textarea
         id="setup-message-text"
@@ -34,6 +38,7 @@
     </form>
     <form method="post" action="{% url 'machine_setup:stop' project_id=project.id %}" x-show="turnLive" x-cloak>
       {% csrf_token %}
+      {% if conversation %}<input type="hidden" name="conversation_id" value="{{ conversation.pk }}">{% endif %}
       <button
         type="submit"
         class="btn btn-danger"

@@ -5,15 +5,24 @@ import logging
 from celery import shared_task
 from celery.app.task import Task
 
+from machine_setup.services.case_auto_fix import (
+    start_case_auto_fix as start_case_auto_fix_service,
+)
+from machine_setup.services.queue_turn import RUN_SETUP_TURN_TASK
 from machine_setup.services.run_turn import run_setup_turn as run_setup_turn_service
+from machine_setup.task_names import START_CASE_AUTO_FIX
 from machine_setup.turn_state import SETUP_TURN_SOFT_TIME_LIMIT, SETUP_TURN_TIME_LIMIT
 
 logger = logging.getLogger(__name__)
 
+# start_case_auto_fix only creates rows and enqueues the setup turn.
+_AUTO_FIX_START_SOFT_TIME_LIMIT = 60
+_AUTO_FIX_START_TIME_LIMIT = 90
+
 
 @shared_task(
     bind=True,
-    name="machine_setup.tasks.run_setup_turn",
+    name=RUN_SETUP_TURN_TASK,
     queue="execution",
     max_retries=0,
     acks_late=True,
@@ -31,3 +40,25 @@ def run_setup_turn(self: Task[[int], None], turn_id: int) -> None:
     logger.info(
         "run_setup_turn finished: task_id=%s turn_id=%s", self.request.id, turn_id
     )
+
+
+@shared_task(
+    bind=True,
+    # Sent by name from projects (machine_setup.task_names).
+    name=START_CASE_AUTO_FIX,
+    queue="execution",
+    max_retries=0,
+    # Idempotent (a second delivery finds the thread and does nothing), so a
+    # lost worker's task is redelivered rather than leaving the case waiting.
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=_AUTO_FIX_START_SOFT_TIME_LIMIT,
+    time_limit=_AUTO_FIX_START_TIME_LIMIT,
+)
+def start_case_auto_fix(self: Task[[int], None], help_request_id: int) -> None:
+    logger.info(
+        "start_case_auto_fix: task_id=%s help_request_id=%s",
+        self.request.id,
+        help_request_id,
+    )
+    start_case_auto_fix_service(help_request_id)

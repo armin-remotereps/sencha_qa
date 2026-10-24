@@ -1,7 +1,7 @@
 {% load static %}
 {% comment %}
   Machine setup transcript. Reads blocks, working, latestReplyText, loaded,
-  messages, hiddenMessageCount, toolTitle, toolDetail, toolBadgeClass,
+  messages, hiddenMessageCount, threadKind, toolTitle, toolDetail, toolBadgeClass,
   toolBadgeLabel, formatClock and openLightbox from the ancestor
   machineSetupChat scope (machine_setup/chat.html; `blocks` is documented
   there; sub-task blocks render through _subtask.html). Every field is model
@@ -25,7 +25,7 @@
       <template x-if="block.kind === 'row' && block.role === 'user'">
         <div class="chat-msg chat-msg-user">
           <div class="chat-meta">
-            <span x-text="block.message.author_name || 'You'"></span>
+            <span x-text="block.message.author_name || (threadKind === 'auto_fix' ? 'Paused test run' : 'You')"></span>
             <time :datetime="block.message.created_at" x-text="formatClock(block.message.created_at)"></time>
           </div>
           <div class="pre-wrap" x-text="block.message.text"></div>

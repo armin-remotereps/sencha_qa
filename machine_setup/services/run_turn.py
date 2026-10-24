@@ -44,6 +44,7 @@ from machine_setup.services.activity_recorder import (
     ActivityRecorder,
     fail_running_rows,
 )
+from machine_setup.services.auto_fix_settlement import settle_case_auto_fix
 from machine_setup.services.run_setup_task import SetupTaskRuntime, run_setup_task
 from machine_setup.services.setup_prompt import build_setup_system_prompt
 from machine_setup.services.setup_tools import (
@@ -167,6 +168,7 @@ class _TurnRunner:
             system_info=system_info,
             project_prompt=project_prompt,
             max_iterations=settings.MACHINE_SETUP_MAX_ITERATIONS,
+            auto_fix=turn.auto_fix,
         )
         llm_config = build_llm_config()
         self.subtask_runtime = SetupTaskRuntime(
@@ -200,12 +202,13 @@ class _TurnRunner:
             author=turn.requested_by,
             on_context_updated=self._on_context_updated,
             run_subtask=self._run_subtask,
+            auto_fix_conversation_id=self.conversation_id if turn.auto_fix else None,
         )
         result = run_tool_loop(
             [ChatMessage(role="system", content=system_prompt), *history],
             context,
             config=config,
-            tool_definitions=main_tool_definitions(),
+            tool_definitions=main_tool_definitions(auto_fix=turn.auto_fix),
             dispatch=self.recorder.wrap(dispatch),
             on_transcript=self._on_transcript,
         )
@@ -305,8 +308,9 @@ class _TurnRunner:
                 )
 
         finished_at = timezone.now()
-        # Conditional: a stale turn may already have been closed as worker_lost.
-        SetupTurn.objects.filter(
+        # Conditional: a stale turn may already have been closed as worker_lost
+        # (and then settled there).
+        ended = SetupTurn.objects.filter(
             pk=self.turn.pk, status=SetupTurnStatus.RUNNING
         ).update(
             status=outcome.status,
@@ -331,6 +335,10 @@ class _TurnRunner:
             broadcast_turn(self.project_id, turn_payload(self.turn))
         except Exception:
             logger.exception("Setup turn %s: final broadcast failed", self.turn.pk)
+        if ended:
+            # Last: the turn is no longer live, so the run's gates pass.
+            # Never raises.
+            settle_case_auto_fix(self.turn)
 
     def _close_transcript(self) -> None:
         if self.transcript is None:

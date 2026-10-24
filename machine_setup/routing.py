@@ -15,4 +15,10 @@ websocket_urlpatterns: list[URLPattern | Any] = [
         # whole stack, because the Test Runner's socket sends no Origin.
         AllowedHostsOriginValidator(consumers.MachineSetupConsumer.as_asgi()),
     ),
+    path(
+        # One thread (an auto-fix thread, or the main chat by id): same group
+        # and events; current_state loads that thread.
+        "ws/projects/<int:project_id>/machine-setup/threads/<int:conversation_id>/",
+        AllowedHostsOriginValidator(consumers.MachineSetupConsumer.as_asgi()),
+    ),
 ]

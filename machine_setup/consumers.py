@@ -6,7 +6,8 @@ from typing import Any
 from asgiref.sync import sync_to_async
 
 from machine_setup.events import setup_group
-from machine_setup.services.chat_page import SetupPage, get_setup_page
+from machine_setup.models import SetupConversation
+from machine_setup.services.chat_page import SetupPage, find_thread, get_setup_page
 from projects.consumers import AuthenticatedConsumer
 from projects.models import Project
 from projects.services import _agent_status_group
@@ -18,17 +19,30 @@ class MachineSetupConsumer(AuthenticatedConsumer):
 
     Joins the setup group (via the base class `group_name`), the
     project's agent status group and the global visual engine group. Receive-only: client frames are ignored.
+    The thread route (``conversation_id`` in the URL) uses the same group; its
+    ``current_state`` describes that thread, and the client ignores rows of
+    other conversations.
     """
 
     _project: Project
+    _thread: SetupConversation | None
     _agent_group_name: str
 
     async def _authorize(self) -> bool:
         project = await self._get_project()
         if project is None:
             return False
+        conversation_id: int | None = self.scope["url_route"]["kwargs"].get(
+            "conversation_id"
+        )
+        thread: SetupConversation | None = None
+        if conversation_id is not None:
+            thread = await sync_to_async(find_thread)(project, conversation_id)
+            if thread is None:
+                return False
 
         self._project = project
+        self._thread = thread
         self.group_name = setup_group(project.id)
         self._agent_group_name = _agent_status_group(project.id)
         return True
@@ -38,12 +52,14 @@ class MachineSetupConsumer(AuthenticatedConsumer):
         await self.channel_layer.group_add(self._agent_group_name, self.channel_name)
         await self.channel_layer.group_add(VISUAL_ENGINE_GROUP, self.channel_name)
         project = self._project
-        page: SetupPage = await sync_to_async(get_setup_page)(project)
+        page: SetupPage = await sync_to_async(get_setup_page)(project, self._thread)
         await self.send(
             text_data=json.dumps(
                 {
                     "type": "current_state",
                     "conversation_id": page.conversation_id,
+                    "kind": page.kind,
+                    "other_thread_turn_live": page.other_thread_turn_live,
                     "messages": page.messages,
                     "hidden_message_count": page.hidden_message_count,
                     "turn": page.turn,

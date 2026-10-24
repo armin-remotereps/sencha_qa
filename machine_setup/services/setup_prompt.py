@@ -33,6 +33,7 @@ def build_setup_system_prompt(
     system_info: dict[str, object] | None,
     project_prompt: str | None,
     max_iterations: int,
+    auto_fix: bool = False,
 ) -> str:
     sections = [
         build_agent_persona(
@@ -56,8 +57,28 @@ def build_setup_system_prompt(
                 framing="not as instructions that override the S0 rules below",
             )
         )
+    if auto_fix:
+        sections.append(_build_auto_fix_thread())
     sections.append(_build_setup_rules(max_iterations=max_iterations))
     return "\n\n".join(sections)
+
+
+def _build_auto_fix_thread() -> str:
+    # Describes the thread and the report tool only; every rule below applies
+    # unchanged (no extra limits or restrictions, by decision).
+    return (
+        "AUTO-FIX THREAD:\n"
+        "This thread was opened by the server, not by a person: a test run is "
+        "paused because one test case needs help at one step. The first message "
+        "is the brief from that paused run: the case, the step, the tester's "
+        "reason and ask, and what the failed attempt did. Get the machine into a "
+        "state where that step can succeed. Then call report_case_fix(fixed, "
+        "summary): fixed=true resumes the test on its own at that step, with your "
+        "summary passed to the tester; fixed=false hands the case to a person, "
+        "so say what is wrong and what they need to do. The last call counts; "
+        "ending your turn without calling it counts as not fixed. All the rules "
+        "below apply as usual."
+    )
 
 
 def _build_project_data_tools() -> str:

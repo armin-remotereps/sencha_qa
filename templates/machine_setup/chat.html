@@ -9,18 +9,25 @@
   is overridden wholesale (re-including the project tabs) so everything shares
   one `x-data="machineSetupChat"` root.
 
-  Context contract (machine_setup.views.chat):
+  Context contract (machine_setup.views.setup_chat / setup_thread):
     project    — the current Project (agent_connected)
+    conversation — the shown thread (SetupConversation) on the thread page,
+                 None on the main chat
+    thread_kind — "chat" or "auto_fix" (page.kind)
+    help_case_url — auto-fix thread only: the case page it was opened for
+                 ("" when the case is gone)
+    threads    — list[AutoFixThread] for the thread list (_threads.html)
     visual_engine — VisualEngineStatusPayload (state, ready_count,
                  connected_count, workers)
     active_tab — "machine_setup"
     page       — machine_setup.services.chat_page.SetupPage (conversation_id,
-                 messages, hidden_message_count, turn, send_blockers, can_send,
-                 finishing_previous_turn, …)
+                 kind, thread, messages, hidden_message_count, turn,
+                 send_blockers, can_send, finishing_previous_turn,
+                 other_thread_turn_live, …)
     form       — SetupMessageForm (field `text`, max_length 8000); only its
                  errors arrive via messages after PRG, so it is not rendered
-    blocker_texts — {machine_not_ready, turn_active}: the exceptions' default
-                 messages, which the client recomputes from live state
+    blocker_texts — {machine_not_ready, turn_active, other_thread}: the
+                 blocker messages the client recomputes from live state
 
   Initial state (json_script, replaced by the socket's current_state). The
   rows themselves arrive only with current_state (page.messages is empty here),
@@ -29,8 +36,12 @@
     setup-blocker-texts    — blocker_texts
     setup-blockers         — page.send_blockers (list[str])
     setup-visual-engine    — visual_engine (object)
+    setup-thread-ids       — conversation ids of the listed auto-fix threads
 
-  WebSocket /ws/projects/<id>/machine-setup/ (machine_setup.consumers):
+  WebSocket /ws/projects/<id>/machine-setup/, or on the thread page
+  /ws/projects/<id>/machine-setup/threads/<conversation_id>/ (same group, so
+  rows of every thread arrive; only the shown conversation's rows are kept;
+  machine_setup.consumers):
   current_state, message, screenshot, turn, reset, agent_status,
   visual_engine. All dynamic text is rendered with x-text; never x-html.
 
@@ -59,31 +70,46 @@
 {{ page.turn|json_script:"setup-turn" }}
 {{ page.send_blockers|json_script:"setup-blockers" }}
 {{ visual_engine|json_script:"setup-visual-engine" }}
+{{ thread_ids|json_script:"setup-thread-ids" }}
 <div x-data="machineSetupChat">
   <div class="page-header">
     <div>
+      {% if thread_kind == "auto_fix" %}
+      <h1>Auto-fix thread</h1>
+      <p class="subtitle">
+        {% if page.thread %}{{ page.thread.case_title|default:"Deleted case" }}{% if page.thread.step_num %} · step {{ page.thread.step_num }}{% endif %} · {{ page.thread.state_label }}{% else %}Opened for a test case that needed help{% endif %}
+        {% if help_case_url %} · <a href="{{ help_case_url }}">Open the test case</a>{% endif %}
+      </p>
+      {% else %}
       <h1>Machine setup</h1>
       <p class="subtitle">Bring the test machine to state 0 (S0) before runs</p>
+      {% endif %}
     </div>
     <div class="actions">
       <span class="badge" :class="'badge-' + machineBadgeClass" x-text="machineBadgeLabel"></span>
       <span class="badge" x-show="turn" x-cloak :class="turnBadgeClass" x-text="turn ? turn.status_label : ''"></span>
+      {% if thread_kind != "auto_fix" %}
       <button type="button" class="btn btn-secondary" @click="$dispatch('open-reset-machine-setup')">Reset</button>
+      {% endif %}
     </div>
   </div>
 
   {% include "partials/project_tabs.html" with project=project active_tab=active_tab only %}
 
-  <section class="chat" aria-label="Machine setup conversation">
+  {% include "machine_setup/includes/_threads.html" with project=project threads=threads conversation=conversation only %}
+
+  <section class="chat" aria-label="{% if thread_kind == 'auto_fix' %}Auto-fix thread{% else %}Machine setup conversation{% endif %}">
     <p class="chat-connection muted small" x-show="!socketOpen" x-cloak>Live updates paused — reconnecting…</p>
     {% include "machine_setup/includes/_transcript.html" %}
-    {% include "machine_setup/includes/_composer.html" with project=project %}
+    {% include "machine_setup/includes/_composer.html" with project=project conversation=conversation %}
   </section>
 
   {% include "machine_setup/includes/_lightbox.html" %}
 
+  {% if thread_kind != "auto_fix" %}
   {% url 'machine_setup:reset' project_id=project.id as reset_url %}
-  {% include "partials/confirm_dialog.html" with dialog_id="reset-machine-setup" title="Reset the conversation?" body="Starts a new conversation. The agent forgets this chat. Changes already made to the test machine stay." confirm_label="Reset" action_url=reset_url csrf_token=csrf_token only %}
+  {% include "partials/confirm_dialog.html" with dialog_id="reset-machine-setup" title="Reset the conversation?" body="Starts a new conversation. The agent forgets this chat. Changes already made to the test machine stay. Auto-fix threads are kept." confirm_label="Reset" action_url=reset_url csrf_token=csrf_token only %}
+  {% endif %}
 </div>
 {% endblock %}
 
@@ -98,7 +124,12 @@ document.addEventListener('alpine:init', () => {
   const BLOCKER_TEXTS = readJson('setup-blocker-texts');
   const MACHINE_NOT_READY = BLOCKER_TEXTS.machine_not_ready;
   const TURN_ACTIVE = BLOCKER_TEXTS.turn_active;
+  const OTHER_THREAD = BLOCKER_TEXTS.other_thread;
   const FINISHING = 'Finishing the previous turn…';
+  // On a thread page the shown conversation is fixed; the main chat may
+  // adopt a new conversation (after a reset) but never an auto-fix thread.
+  const THREAD_VIEW = {% if conversation %}true{% else %}false{% endif %};
+  const THREAD_KIND = '{{ thread_kind|escapejs }}';
 
   // --- Tool wording: the only place tool labels live. -----------------------
   // Every function returns a plain string that the templates render with
@@ -204,6 +235,7 @@ document.addEventListener('alpine:init', () => {
     browser_list_downloads: plain('Listed downloads', () => 'Listing downloads…'),
     web_search: plain('Searched the web', (args) => withDetail('Searching the web for', quoted(args.query)) + '…', (args) => quoted(args.query)),
     wait: plain('Waited', () => 'Waiting…', (args) => (args.seconds !== undefined && args.seconds !== null ? oneLine(args.seconds, 12) + 's' : '')),
+    report_case_fix: plain('Reported the fix result', () => 'Reporting the fix result…', (args) => (args.fixed === true ? 'Fixed' : args.fixed === false ? 'Not fixed' : '')),
     run_setup_task: {
       summary: (count) => times('Ran a sub-task', count),
       live: (args) => withDetail('Working on:', oneLine(args.goal, 60)) + '…',
@@ -387,6 +419,11 @@ document.addEventListener('alpine:init', () => {
     // Rows of these conversations are ignored: archived here by a reset, or
     // the archived conversation whose turn is still finishing.
     archivedConversationIds: [{{ page.finishing_conversation_id|default_if_none:"" }}],
+    // Auto-fix threads: never adopted as the main chat.
+    otherThreadIds: readJson('setup-thread-ids') || [],
+    // A turn is live in another, not archived, thread.
+    otherThreadTurnLive: {{ page.other_thread_turn_live|yesno:'true,false' }},
+    threadKind: THREAD_KIND,
     loaded: false,
     messages: [],
     hiddenMessageCount: {{ page.hidden_message_count }},
@@ -409,7 +446,7 @@ document.addEventListener('alpine:init', () => {
     },
 
     connect() {
-      const ws = new WebSocket(window.punkHazard.wsUrl('/ws/projects/{{ project.id }}/machine-setup/'));
+      const ws = new WebSocket(window.punkHazard.wsUrl({% if conversation %}'/ws/projects/{{ project.id }}/machine-setup/threads/{{ conversation.pk }}/'{% else %}'/ws/projects/{{ project.id }}/machine-setup/'{% endif %}));
       ws.onopen = () => {
         this.socketOpen = true;
         this.reconnectDelay = 1000;
@@ -436,6 +473,7 @@ document.addEventListener('alpine:init', () => {
         this.turn = data.turn;
         this.serverBlockers = data.send_blockers || [];
         this.finishingPreviousTurn = !!data.finishing_previous_turn;
+        this.otherThreadTurnLive = !!data.other_thread_turn_live;
         this.agentConnected = !!data.agent_connected;
         if (data.visual_engine) this.visualEngine = data.visual_engine;
       } else if (data.type === 'message') {
@@ -448,6 +486,8 @@ document.addEventListener('alpine:init', () => {
       } else if (data.type === 'turn') {
         this.applyTurn(data.turn);
       } else if (data.type === 'reset') {
+        // Reset archives the main chat only; a thread page keeps its rows.
+        if (THREAD_VIEW) return;
         if (this.conversationId !== null) this.archivedConversationIds.push(this.conversationId);
         if (this.turnLive) this.finishingPreviousTurn = true;
         this.conversationId = null;
@@ -463,18 +503,27 @@ document.addEventListener('alpine:init', () => {
       if (stick) this.$nextTick(() => this.scrollToBottom());
     },
 
-    // A row belongs to the shown conversation; with none shown yet (after a
-    // reset), the first row of a conversation that was not archived here
-    // starts it.
-    belongs(conversationId) {
-      if (this.conversationId === null && !this.archivedConversationIds.includes(conversationId)) {
-        this.conversationId = conversationId;
+    // A row belongs to the shown conversation. On the main chat with none
+    // shown yet (after a reset), the first row of a conversation that is not
+    // archived here and not an auto-fix thread starts it. An auto-fix thread
+    // opens with a user row without an author (the server's brief), so such
+    // a row marks its conversation as another thread.
+    belongs(message) {
+      const conversationId = message.conversation_id;
+      if (conversationId === this.conversationId) return true;
+      if (THREAD_VIEW) return false;
+      if (message.kind === 'user' && !message.author_name && !this.otherThreadIds.includes(conversationId)) {
+        this.otherThreadIds.push(conversationId);
       }
-      return conversationId === this.conversationId;
+      if (this.conversationId === null && !this.archivedConversationIds.includes(conversationId) && !this.otherThreadIds.includes(conversationId)) {
+        this.conversationId = conversationId;
+        return true;
+      }
+      return false;
     },
 
     upsertMessage(message) {
-      if (!this.belongs(message.conversation_id)) return;
+      if (!this.belongs(message)) return;
       withArgs(message);
       const index = this.messages.findIndex((m) => m.id === message.id);
       if (index === -1) {
@@ -495,12 +544,20 @@ document.addEventListener('alpine:init', () => {
     },
 
     applyTurn(turn) {
-      if (this.belongs(turn.conversation_id)) {
+      if (turn.conversation_id === this.conversationId) {
         this.turn = turn;
         return;
       }
-      // A turn of an archived conversation: the agent is still finishing it.
-      this.finishingPreviousTurn = LIVE_STATUSES.includes(turn.status);
+      const live = LIVE_STATUSES.includes(turn.status);
+      if (this.archivedConversationIds.includes(turn.conversation_id)) {
+        // A turn of an archived conversation: the agent is still finishing it.
+        this.finishingPreviousTurn = live;
+        return;
+      }
+      // A turn in another thread (an auto-fix, or the main chat seen from a
+      // thread page). One turn is live per project, so this tracks it.
+      this.otherThreadTurnLive = live;
+      if (live) this.finishingPreviousTurn = false;
     },
 
     get turnLive() {
@@ -538,10 +595,11 @@ document.addEventListener('alpine:init', () => {
     },
 
     get blockers() {
-      const blockers = this.serverBlockers.filter((b) => b !== MACHINE_NOT_READY && b !== TURN_ACTIVE && b !== FINISHING);
+      const blockers = this.serverBlockers.filter((b) => b !== MACHINE_NOT_READY && b !== TURN_ACTIVE && b !== FINISHING && b !== OTHER_THREAD);
       if (this.machineState !== 'ready') blockers.unshift(MACHINE_NOT_READY);
       if (this.turnLive) blockers.unshift(TURN_ACTIVE);
       else if (this.finishingPreviousTurn) blockers.unshift(FINISHING);
+      else if (this.otherThreadTurnLive) blockers.unshift(OTHER_THREAD);
       return blockers;
     },
 

@@ -24,6 +24,11 @@ from agents.types import (
     ToolResult,
 )
 from machine_setup.exceptions import SetupRunnerLostError
+from machine_setup.models import (
+    SETUP_FIX_SUMMARY_MAX_LENGTH,
+    SetupConversation,
+    SetupFixResult,
+)
 from machine_setup.services.case_catalog import (
     MAX_CASES_PER_BATCH,
     CatalogPage,
@@ -60,14 +65,23 @@ from projects.models import (
 # Called after a successful context write with the new revision and summary.
 ContextUpdatedCallback = Callable[[int, str], None]
 
+# Auto-fix turns only: the structured "fixed / not fixed" report.
+REPORT_CASE_FIX_TOOL = "report_case_fix"
+
 
 class _InvalidArgumentError(Exception):
     pass
 
 
-def main_tool_definitions() -> tuple[ToolDefinition, ...]:
-    """The main setup agent's tools: project data plus delegation."""
-    return _project_data_tool_definitions() + (_run_setup_task_definition(),)
+def main_tool_definitions(*, auto_fix: bool = False) -> tuple[ToolDefinition, ...]:
+    """The main setup agent's tools: project data plus delegation.
+
+    An auto-fix turn also gets ``report_case_fix``.
+    """
+    tools = _project_data_tool_definitions() + (_run_setup_task_definition(),)
+    if auto_fix:
+        tools += (_report_case_fix_definition(),)
+    return tools
 
 
 def machine_tool_definitions() -> tuple[ToolDefinition, ...]:
@@ -135,6 +149,38 @@ def _run_setup_task_definition() -> ToolDefinition:
                     "installs, writes or settings changes."
                 ),
                 required=False,
+            ),
+        ),
+    )
+
+
+def _report_case_fix_definition() -> ToolDefinition:
+    return ToolDefinition(
+        name=REPORT_CASE_FIX_TOOL,
+        description=(
+            "Report whether the machine is fixed for the paused test case of this "
+            "thread. fixed=true resumes the test on its own at the step that "
+            "needed help; fixed=false hands the case to a person. You may call it "
+            "again; the last call counts. Ending without calling it counts as not "
+            "fixed."
+        ),
+        category=ToolCategory.UTILITY,
+        parameters=(
+            ToolParameter(
+                name="fixed",
+                type="boolean",
+                description="true when the step can now succeed; otherwise false.",
+                required=True,
+            ),
+            ToolParameter(
+                name="summary",
+                type="string",
+                description=(
+                    "What you found and changed, or what is still wrong and what a "
+                    f"person must do (at most {SETUP_FIX_SUMMARY_MAX_LENGTH} "
+                    "characters). The tester reads it before re-running the step."
+                ),
+                required=True,
             ),
         ),
     )
@@ -288,12 +334,40 @@ def build_setup_dispatcher(
     author: CustomUser | None,
     on_context_updated: ContextUpdatedCallback,
     run_subtask: SubtaskRunner,
+    auto_fix_conversation_id: int | None = None,
 ) -> ToolDispatcher:
     """The main agent's per-turn dispatcher.
 
     ``author`` is recorded on context writes; ``run_subtask`` runs a validated
-    ``run_setup_task`` call. Machine tools are refused.
+    ``run_setup_task`` call. Machine tools are refused. With
+    ``auto_fix_conversation_id`` (an auto-fix turn), ``report_case_fix``
+    records its report on that conversation.
     """
+
+    def _handle_report_case_fix(arguments: dict[str, object]) -> str:
+        fixed = arguments.get("fixed")
+        if not isinstance(fixed, bool):
+            raise _InvalidArgumentError("fixed is required and must be true or false.")
+        summary = _required_str(arguments, "summary").strip()
+        if not summary:
+            raise _InvalidArgumentError(
+                "summary is empty. Say what you found and changed, or what is "
+                "still wrong."
+            )
+        _check_length("summary", summary, SETUP_FIX_SUMMARY_MAX_LENGTH)
+        if auto_fix_conversation_id is None:
+            # Not registered outside auto-fix turns; kept for the type checker.
+            raise _InvalidArgumentError(f"{REPORT_CASE_FIX_TOOL} is not available.")
+        SetupConversation.objects.filter(pk=auto_fix_conversation_id).update(
+            fix_result=SetupFixResult.FIXED if fixed else SetupFixResult.NOT_FIXED,
+            fix_summary=summary,
+        )
+        if fixed:
+            return (
+                "Recorded: fixed. The test resumes at the step that needed help "
+                "once you end your turn."
+            )
+        return "Recorded: not fixed. A person takes over once you end your turn."
 
     def _handle_update_context(arguments: dict[str, object]) -> str:
         text = _required_str(arguments, "text")
@@ -380,7 +454,8 @@ def build_setup_dispatcher(
             "---"
         )
 
-    # Every project data tool; anything else but run_setup_task is refused.
+    # Every project data tool (and report_case_fix in an auto-fix turn);
+    # anything else but run_setup_task is refused.
     project_data_handlers: dict[str, Callable[[dict[str, object]], str]] = {
         "list_test_case_preconditions": _handle_list_preconditions,
         "search_test_cases": _handle_search_cases,
@@ -389,6 +464,8 @@ def build_setup_dispatcher(
         "get_application_context": _handle_get_context,
         "update_application_context": _handle_update_context,
     }
+    if auto_fix_conversation_id is not None:
+        project_data_handlers[REPORT_CASE_FIX_TOOL] = _handle_report_case_fix
 
     def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
         if tool_call.tool_name == RUN_SETUP_TASK_TOOL:

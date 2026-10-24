@@ -14,3 +14,15 @@ class SetupMessageForm(forms.Form):
         required=True,
         widget=forms.Textarea(attrs={"rows": 3}),
     )
+    # The thread replied in; empty for the main chat.
+    conversation_id = forms.IntegerField(
+        required=False, min_value=1, widget=forms.HiddenInput
+    )
+
+
+class SetupThreadForm(forms.Form):
+    """The thread a Stop was pressed in, so the page returns to it."""
+
+    conversation_id = forms.IntegerField(
+        required=False, min_value=1, widget=forms.HiddenInput
+    )
