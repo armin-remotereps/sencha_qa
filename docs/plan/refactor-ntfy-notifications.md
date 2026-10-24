@@ -1,6 +1,6 @@
 # refactor: Replace Web Push with ntfy, and add Failed case notifications
 
-Status: In progress
+Status: Done
 Created: 2026-10-24
 Request: Swap the Web Push notifications from `feat-human-in-the-loop` for
 [ntfy](https://ntfy.sh). People install the ntfy phone or desktop app and
@@ -393,3 +393,4 @@ Manual checks; this project has no tests.
 
 - 2026-10-24: created. Extended the same day with Failed case notifications (`notify_case_failed`), per-user kind choices, and Q2, Q3 and Q5, on the user's added requirement.
 - 2026-10-24: Q1–Q8 answered with the defaults (production SITE_URL `https://sench.remotereps.com`, set in `.env`; the setting defaults to empty). Status In progress.
+- 2026-10-24: Review: a transport error stops the batch (reviewer finding). Status Done.
