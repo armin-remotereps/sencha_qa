@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from django.db.models import F, Q, Subquery
 
+from machine_setup.models import SetupFixResult
 from projects.models import (
     CaseHelpRequest,
     CaseRestartKind,
@@ -24,9 +25,15 @@ def auto_fix_eligible(pivot_id: int, step_num: int) -> bool:
     """False when this step already got a fixed auto-fix since the case last
     started from scratch (Start, or a re-run in place); a repeat goes to a person.
 
-    One query: an EXISTS over the pivot's earlier fixed requests for the step,
-    bounded below by the run's start (a join) and the latest re-run (a
-    correlated subquery). A NULL bound imposes no limit.
+    A request counts as fixed when its auto-fix settled ``fixed``, or when its
+    auto-fix thread's ``report_case_fix`` said fixed even though the turn did
+    not end with an answer (stopped, limit, lost worker): the agent believed
+    the machine fixed, so a repeat failure is not handed to it again.
+
+    One query: an EXISTS over the pivot's earlier fixed requests for the step
+    (joined to their auto-fix threads), bounded below by the run's start (a
+    join) and the latest re-run (a correlated subquery). A NULL bound imposes
+    no limit.
     """
     last_rerun_at = Subquery(
         TestRunCaseResume.objects.filter(
@@ -37,9 +44,10 @@ def auto_fix_eligible(pivot_id: int, step_num: int) -> bool:
     )
     fixed_since_scratch = (
         CaseHelpRequest.objects.filter(
+            Q(auto_fix_state=HelpAutoFixState.FIXED)
+            | Q(setup_conversations__fix_result=SetupFixResult.FIXED),
             test_run_test_case_id=pivot_id,
             step_num=step_num,
-            auto_fix_state=HelpAutoFixState.FIXED,
         )
         .annotate(last_rerun_at=last_rerun_at)
         .filter(

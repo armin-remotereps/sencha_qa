@@ -18,23 +18,15 @@ from datetime import datetime
 from enum import StrEnum
 
 from django.db import transaction
-from django.db.models import Prefetch, Q, QuerySet
+from django.db.models import Prefetch, QuerySet
 from django.utils import timezone
 
 from accounts.models import CustomUser
 from agents.checkpoint import with_help
 from agents.types import CheckpointHelp, HelpSource
 from machine_setup.auto_fix_stop import request_auto_fix_stop
-from machine_setup.models import (
-    LIVE_TURN_STATUSES,
-    SetupConversation,
-    SetupConversationKind,
-    SetupTurn,
-)
-from machine_setup.turn_state import (
-    MACHINE_SETUP_RUNNING_MESSAGE,
-    SETUP_TURN_STALE_AFTER,
-)
+from machine_setup.models import SetupConversation, SetupConversationKind
+from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, auto_fix_turn_live
 from projects.case_help_notifications import notify_case_needs_help
 from projects.exceptions import RunHelpError
 from projects.models import (
@@ -158,7 +150,7 @@ def get_help_panel(
         return None
     if pivot_id is not None and request.test_run_test_case_id != pivot_id:
         return None
-    auto_fix_live = _auto_fix_turn_live(request.pk, timezone.now())
+    auto_fix_live = auto_fix_turn_live(request.pk)
     blockers = list_reopen_blockers(test_run, project)
     if auto_fix_live:
         # The live turn is this request's auto-fix: resolving the request
@@ -232,7 +224,7 @@ def continue_after_help(
         project, test_run = _lock_paused_run(pivot.test_run_id)
         locked_pivot, request = _lock_open_request(test_run, pivot.pk)
         now = timezone.now()
-        auto_fix_live = _auto_fix_turn_live(request.pk, now)
+        auto_fix_live = auto_fix_turn_live(request.pk)
         blockers = list_reopen_blockers(test_run, project)
         if auto_fix_live:
             blockers = [b for b in blockers if b != MACHINE_SETUP_RUNNING_MESSAGE]
@@ -253,7 +245,7 @@ def mark_failed_after_help(
         _, test_run = _lock_paused_run(pivot.test_run_id)
         locked_pivot, request = _lock_open_request(test_run, pivot.pk)
         now = timezone.now()
-        auto_fix_live = _auto_fix_turn_live(request.pk, now)
+        auto_fix_live = auto_fix_turn_live(request.pk)
         note = _cap_note(note)
         _resolve(request, HelpResolution.MARKED_FAILED, user, note, now, auto_fix_live)
         locked_pivot.status = TestRunTestCaseStatus.FAILED
@@ -285,7 +277,7 @@ def skip_after_help(
         _, test_run = _lock_paused_run(pivot.test_run_id)
         locked_pivot, request = _lock_open_request(test_run, pivot.pk)
         now = timezone.now()
-        auto_fix_live = _auto_fix_turn_live(request.pk, now)
+        auto_fix_live = auto_fix_turn_live(request.pk)
         note = _cap_note(note)
         _resolve(request, HelpResolution.SKIPPED, user, note, now, auto_fix_live)
         locked_pivot.status = TestRunTestCaseStatus.BLOCKED
@@ -313,8 +305,9 @@ def stop_auto_fix(*, pivot: TestRunTestCase, user: CustomUser) -> None:
     """Ask the running auto-fix of the case to stop; a person takes over.
 
     The turn stops at its next tool boundary and its end settles the request
-    (not fixed: the members are notified). When no turn exists yet (the start
-    task is still queued), the request falls back to a person at once.
+    (not fixed: the members are notified then). When no turn exists yet (the
+    start task is still queued), the request falls back to a person at once
+    and the members are notified on commit; the late start task is a no-op.
     """
     with transaction.atomic():
         _, test_run = _lock_paused_run(pivot.test_run_id)
@@ -325,9 +318,13 @@ def stop_auto_fix(*, pivot: TestRunTestCase, user: CustomUser) -> None:
             return
         request.auto_fix_state = HelpAutoFixState.NOT_FIXED
         request.save(update_fields=["auto_fix_state"])
-        transaction.on_commit(
-            lambda: broadcast_run_and_pivots(test_run, [locked_pivot])
-        )
+        request_id = request.pk
+
+        def _after_commit() -> None:
+            broadcast_run_and_pivots(test_run, [locked_pivot])
+            notify_case_needs_help(request_id, after_auto_fix=True)
+
+        transaction.on_commit(_after_commit)
 
 
 def continue_paused_run(*, test_run: TestRun, user: CustomUser) -> None:
@@ -351,7 +348,7 @@ def continue_paused_run(*, test_run: TestRun, user: CustomUser) -> None:
             .values_list("id", flat=True)
             .first()
         )
-        if latest_id is not None and _auto_fix_turn_live(latest_id, timezone.now()):
+        if latest_id is not None and auto_fix_turn_live(latest_id):
             raise RunHelpError("The run continues as soon as the auto-fix agent stops.")
         queue_pending_cases(locked_run)
 
@@ -486,17 +483,6 @@ def _lock_open_request(
     return pivot, request
 
 
-def _auto_fix_turn_live(help_request_id: int, now: datetime) -> bool:
-    """Whether an auto-fix turn of the request is queued or running (not stale)."""
-    cutoff = now - SETUP_TURN_STALE_AFTER
-    return SetupTurn.objects.filter(
-        Q(started_at__gte=cutoff) | Q(started_at__isnull=True, created_at__gte=cutoff),
-        auto_fix=True,
-        conversation__help_request_id=help_request_id,
-        status__in=LIVE_TURN_STATUSES,
-    ).exists()
-
-
 def _resolve(
     request: CaseHelpRequest,
     resolution: HelpResolution,
@@ -523,8 +509,9 @@ def _write_help_key(
 ) -> None:
     """Set the checkpoint's help key from the request (not saved).
 
-    Carries the ask, the person's note (empty when the setup agent continued)
-    and the setup agent's summary (empty when no auto-fix reported).
+    Carries the ask, the person's note (empty when the setup agent continued),
+    the setup agent's summary (empty when no auto-fix reported) and whether
+    that auto-fix reported the machine fixed.
     """
     pivot.execution_checkpoint = with_help(
         pivot.execution_checkpoint,
@@ -536,6 +523,7 @@ def _write_help_key(
             continue_pending=True,
             ask=request.ask,
             auto_fix_summary=request.auto_fix_summary,
+            auto_fix_fixed=request.auto_fix_state == HelpAutoFixState.FIXED,
         ),
     )
 

@@ -176,7 +176,21 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "projects.tasks.push_checked_results_to_testrail": {"queue": "upload"},
     "machine_setup.tasks.run_setup_turn": {"queue": "execution"},
     "machine_setup.tasks.start_case_auto_fix": {"queue": "execution"},
-    "notifications.tasks.send_push": {"queue": "upload"},
+    "machine_setup.tasks.sweep_stale_auto_fixes": {"queue": "execution"},
+    # Its own small worker, so a push is never stuck behind TestRail imports.
+    "notifications.tasks.send_push": {"queue": "notify"},
+}
+# Installed into django-celery-beat's tables by its DatabaseScheduler when
+# beat starts (machine_setup.task_names.SWEEP_STALE_AUTO_FIXES).
+CELERY_BEAT_SCHEDULE: dict[str, dict[str, object]] = {
+    # A Night auto-fix whose worker died or whose start task was lost falls
+    # back to a person without anyone opening a page.
+    "machine-setup-sweep-stale-auto-fixes": {
+        "task": "machine_setup.tasks.sweep_stale_auto_fixes",
+        "schedule": 120.0,
+        # A sweep not picked up before the next one is due is dropped.
+        "options": {"expire_seconds": 110},
+    },
 }
 
 # Channels

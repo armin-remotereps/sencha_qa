@@ -1,6 +1,6 @@
 """Time limits of a setup turn and the "is a turn live" test built on them.
 
-A leaf module (imports only ``machine_setup.models``) so ``projects`` can gate
+A leaf module (imports only ``machine_setup.models`` and settings) so ``projects`` can gate
 run start and resume on it without importing the agent runtime.
 """
 
@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 from django.conf import settings
 from django.db.models import Q
+from django.utils import timezone
 
 from machine_setup.models import LIVE_TURN_STATUSES, SetupTurn
 
@@ -35,11 +36,28 @@ def is_turn_stale(turn: SetupTurn, now: datetime) -> bool:
     return since < now - SETUP_TURN_STALE_AFTER
 
 
+def _not_stale(now: datetime) -> Q:
+    """Turns started (or, still queued, created) within the stale window."""
+    cutoff = now - SETUP_TURN_STALE_AFTER
+    return Q(started_at__gte=cutoff) | Q(
+        started_at__isnull=True, created_at__gte=cutoff
+    )
+
+
 def live_turn_exists(project_id: int, now: datetime) -> bool:
     """Whether a queued or running, non-stale turn exists for the project."""
-    cutoff = now - SETUP_TURN_STALE_AFTER
     return SetupTurn.objects.filter(
-        Q(started_at__gte=cutoff) | Q(started_at__isnull=True, created_at__gte=cutoff),
+        _not_stale(now),
         project_id=project_id,
+        status__in=LIVE_TURN_STATUSES,
+    ).exists()
+
+
+def auto_fix_turn_live(help_request_id: int) -> bool:
+    """Whether an auto-fix turn of the help request is queued or running (not stale)."""
+    return SetupTurn.objects.filter(
+        _not_stale(timezone.now()),
+        auto_fix=True,
+        conversation__help_request_id=help_request_id,
         status__in=LIVE_TURN_STATUSES,
     ).exists()

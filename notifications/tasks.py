@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 
 @shared_task(
     name="notifications.tasks.send_push",
-    queue="upload",
+    # Its own queue and worker (CELERY_TASK_ROUTES): pushes are time-sensitive.
+    queue="notify",
     max_retries=0,
     # Each request has WEBPUSH_REQUEST_TIMEOUT; sends run in parallel.
     soft_time_limit=120,

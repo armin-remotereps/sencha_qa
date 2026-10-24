@@ -6,7 +6,8 @@ open request waits for a person and never had an auto-fix gets one at once
 when switched to Night, if the step is eligible. Switching to Attended never
 stops a running auto-fix; Stop auto-fix on the case page does that.
 
-Imports the leaf ``machine_setup`` modules only (through ``services``), never
+Imports the leaf ``machine_setup`` modules only (through ``services`` and
+``case_help_state``), never
 ``machine_setup.services`` (that package imports ``projects``).
 """
 
@@ -18,6 +19,7 @@ from django.db import transaction
 
 from accounts.models import CustomUser
 from projects.case_help_policy import auto_fix_eligible
+from projects.case_help_state import enqueue_case_auto_fix, mark_auto_fix_running
 from projects.exceptions import RunHelpError
 from projects.models import (
     CaseHelpRequest,
@@ -28,11 +30,7 @@ from projects.models import (
     TestRunStatus,
 )
 from projects.run_reopen_services import is_valid_help_mode, lock_project_and_run
-from projects.services import (
-    broadcast_run_and_pivots,
-    broadcast_test_run_status,
-    enqueue_case_auto_fix,
-)
+from projects.services import broadcast_run_and_pivots, broadcast_test_run_status
 
 _CHANGEABLE_STATUSES = (
     TestRunStatus.WAITING,
@@ -75,8 +73,8 @@ def change_run_help_mode(
             transaction.on_commit(lambda: broadcast_test_run_status(locked_run))
             return HelpModeChange(help_mode, changed=True, auto_fix_started=False)
 
-        request.auto_fix_state = HelpAutoFixState.RUNNING
-        request.save(update_fields=["auto_fix_state"])
+        mark_auto_fix_running(request)
+        request.save(update_fields=["auto_fix_state", "auto_fix_started_at"])
         pivot = request.test_run_test_case
         request_id = request.pk
 

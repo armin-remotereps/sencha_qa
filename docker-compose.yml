@@ -105,6 +105,20 @@ services:
             - "MEDIA:/src/media"
         entrypoint: "python -m celery -A auto_tester worker -l INFO -Q execution --concurrency=10"
 
+    notify-celery:
+        hostname: notify
+        image: local/auto_tester:latest
+        build: .
+        env_file:
+            - "./.env"
+        restart: always
+        depends_on:
+            - "db"
+            - "redis"
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
+        entrypoint: "python -m celery -A auto_tester worker -l INFO -Q notify --concurrency=2"
+
     beat-celery:
         hostname: execute
         image: local/auto_tester:latest
@@ -128,6 +142,7 @@ services:
         depends_on:
             - "upload-celery"
             - "execution-celery"
+            - "notify-celery"
             - "beat-celery"
         ports:
             - "127.0.0.1:5555:5555"

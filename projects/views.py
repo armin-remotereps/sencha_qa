@@ -20,7 +20,6 @@ from django.views.decorators.http import require_GET, require_POST
 
 from accounts.models import CustomUser
 from accounts.types import AuthenticatedRequest
-from machine_setup.services.case_auto_fix import settle_stale_auto_fix_turn
 from projects.application_context_services import (
     get_context_provenance,
     list_context_versions,
@@ -39,6 +38,7 @@ from projects.case_help_services import (
     skip_after_help,
     stop_auto_fix,
 )
+from projects.case_help_state import get_run_help_state
 from projects.case_step_progress import pivot_step_payload
 from projects.decorators import project_membership_required
 from projects.exceptions import (
@@ -129,7 +129,6 @@ from projects.services import (
     get_project_overview,
     get_project_tag_names,
     get_run_case_picker,
-    get_run_help_state,
     get_run_readiness,
     get_test_case_for_project,
     get_test_run_case_detail,
@@ -1030,8 +1029,6 @@ def test_run_detail(
 def test_run_case_detail(
     request: HttpRequest, project: Project, test_run_id: int, pivot_id: int
 ) -> HttpResponse:
-    # A killed auto-fix worker falls back to a person before the case is read.
-    settle_stale_auto_fix_turn(project)
     pivot = get_test_run_case_detail(pivot_id, project)
     if pivot is None or pivot.test_run_id != test_run_id:
         raise Http404

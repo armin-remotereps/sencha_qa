@@ -8,3 +8,6 @@ A leaf module (no imports): ``projects`` enqueues these with
 from __future__ import annotations
 
 START_CASE_AUTO_FIX = "machine_setup.tasks.start_case_auto_fix"
+
+# Scheduled by CELERY_BEAT_SCHEDULE in settings (by this name).
+SWEEP_STALE_AUTO_FIXES = "machine_setup.tasks.sweep_stale_auto_fixes"

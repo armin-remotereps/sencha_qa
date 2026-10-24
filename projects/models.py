@@ -577,6 +577,9 @@ class CaseHelpRequest(models.Model):
     auto_fix_state = models.CharField(
         max_length=16, choices=HelpAutoFixState.choices, blank=True, default=""
     )
+    # When ``auto_fix_state`` last became ``running``; null before (and on rows
+    # older than the field). The stale sweep measures a lost start task from it.
+    auto_fix_started_at = models.DateTimeField(null=True, blank=True)
     resolution = models.CharField(
         max_length=16, choices=HelpResolution.choices, blank=True, default=""
     )

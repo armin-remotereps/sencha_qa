@@ -8,12 +8,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from django.db import transaction
+
 from accounts.models import CustomUser
 from notifications.models import PushSubscription
 from notifications.services.endpoint_policy import ensure_endpoint_allowed
 from notifications.services.push_config import ensure_push_configured
 
 USER_AGENT_MAX_LENGTH = 255
+# Devices kept per user; saving one more evicts that user's oldest.
+MAX_SUBSCRIPTIONS_PER_USER = 20
 
 
 @dataclass(frozen=True)
@@ -37,19 +41,30 @@ def save_subscription(
     """Store (or refresh) a browser's subscription for ``user``.
 
     An endpoint belongs to one browser profile; when another account signed in
-    there subscribes, the device moves to that account.
+    there subscribes, the device moves to that account. A user keeps at most
+    ``MAX_SUBSCRIPTIONS_PER_USER`` devices: beyond that, their oldest other
+    devices are removed in the same transaction.
     """
     ensure_push_configured()
     ensure_endpoint_allowed(endpoint)
-    PushSubscription.objects.update_or_create(
-        endpoint=endpoint,
-        defaults={
-            "user": user,
-            "p256dh": p256dh,
-            "auth": auth,
-            "user_agent": user_agent[:USER_AGENT_MAX_LENGTH],
-        },
-    )
+    with transaction.atomic():
+        saved, _ = PushSubscription.objects.update_or_create(
+            endpoint=endpoint,
+            defaults={
+                "user": user,
+                "p256dh": p256dh,
+                "auth": auth,
+                "user_agent": user_agent[:USER_AGENT_MAX_LENGTH],
+            },
+        )
+        evicted = list(
+            PushSubscription.objects.filter(user=user)
+            .exclude(pk=saved.pk)
+            .order_by("-created_at", "-id")
+            .values_list("id", flat=True)[MAX_SUBSCRIPTIONS_PER_USER - 1 :]
+        )
+        if evicted:
+            PushSubscription.objects.filter(pk__in=evicted).delete()
 
 
 def delete_subscription_by_endpoint(*, user: CustomUser, endpoint: str) -> bool:

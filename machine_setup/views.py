@@ -36,7 +36,7 @@ from projects.models import Project
 def setup_chat(request: AuthenticatedRequest, project: Project) -> HttpResponse:
     # A killed worker's turn (an auto-fix one falls back to a person) is
     # closed when someone looks.
-    settle_stale_auto_fix_turn(project)
+    settle_stale_auto_fix_turn(project.pk)
     page = get_setup_page(project, include_messages=False)
     return _render_chat(request, project, page, conversation=None)
 
@@ -51,7 +51,7 @@ def setup_thread(
         raise Http404("No such thread.")
     if thread.kind == SetupConversationKind.CHAT:
         return redirect("machine_setup:chat", project_id=project.id)
-    settle_stale_auto_fix_turn(project)
+    settle_stale_auto_fix_turn(project.pk)
     page = get_setup_page(project, thread, include_messages=False)
     return _render_chat(request, project, page, conversation=thread)
 

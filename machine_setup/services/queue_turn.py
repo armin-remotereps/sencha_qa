@@ -63,19 +63,34 @@ def broadcast_and_enqueue(turn: SetupTurn, message: SetupMessage) -> bool:
     """Run on commit. Returns False when the task could not be queued.
 
     The turn is then closed as ``failed/internal_error`` with a notice row.
+    A failed broadcast is logged and never stops the enqueue: the page only
+    misses a live update, while an unqueued turn would sit queued until stale.
     """
     # Broadcast the queued turn before enqueueing, so a fast worker's
     # "running" broadcast cannot be overtaken by a stale "queued" one.
-    broadcast_message(turn.project_id, message_payload(message, screenshots=[]))
-    broadcast_turn(turn.project_id, turn_payload(turn))
+    _broadcast(turn, message)
     try:
         result = celery_app.send_task(RUN_SETUP_TURN_TASK, args=[turn.pk])
     except Exception:
         logger.exception("Could not queue setup turn %d", turn.pk)
         _fail_unqueued_turn(turn)
         return False
-    SetupTurn.objects.filter(pk=turn.pk).update(celery_task_id=result.id or "")
+    try:
+        SetupTurn.objects.filter(pk=turn.pk).update(celery_task_id=result.id or "")
+    except Exception:
+        # Queued all the same; the id only serves revocation and diagnostics.
+        logger.exception("Setup turn %d: storing its task id failed", turn.pk)
     return True
+
+
+def _broadcast(turn: SetupTurn, message: SetupMessage | None) -> None:
+    """Send the turn (and its message) to the chat page; never raises."""
+    try:
+        if message is not None:
+            broadcast_message(turn.project_id, message_payload(message, screenshots=[]))
+        broadcast_turn(turn.project_id, turn_payload(turn))
+    except Exception:
+        logger.exception("Setup turn %d: broadcast failed", turn.pk)
 
 
 def _fail_unqueued_turn(turn: SetupTurn) -> None:
@@ -101,5 +116,4 @@ def _fail_unqueued_turn(turn: SetupTurn) -> None:
     turn.ended_reason = SetupTurnEndReason.INTERNAL_ERROR
     turn.error_message = ENQUEUE_FAILED_MESSAGE
     turn.finished_at = now
-    broadcast_message(turn.project_id, message_payload(notice, screenshots=[]))
-    broadcast_turn(turn.project_id, turn_payload(turn))
+    _broadcast(turn, notice)

@@ -4,7 +4,8 @@
 its first message and queues the existing setup turn for it (same machinery
 and limits as a person's chat). ``settle_case_auto_fix`` hands the turn's end
 back to the paused run. ``settle_stale_auto_fix_turn`` closes a turn whose
-worker was killed, so the case falls back to a person.
+worker was killed, so the case falls back to a person (the Machine setup pages
+and ``sweep_stale_auto_fixes`` call it).
 """
 
 from __future__ import annotations
@@ -147,15 +148,20 @@ def _start_locked(help_request_id: int) -> str | None:
 
 
 def _enqueue(turn: SetupTurn, message: SetupMessage) -> None:
+    """Queue the turn; when it cannot be queued, a person takes over.
+
+    ``broadcast_and_enqueue`` isolates its broadcasts, so a page update that
+    fails never blocks the enqueue. When the enqueue fails it closes the turn
+    as failed; the request is then settled not fixed.
+    """
     try:
         enqueued = broadcast_and_enqueue(turn, message)
     except Exception:
-        # A broadcast failed; the turn stays queued and, if no worker ever
-        # runs it, the stale-turn close settles it later.
-        logger.exception("Auto-fix turn %s: broadcast failed", turn.pk)
-        return
+        # Closing the unqueued turn failed too; settle all the same, and the
+        # stale sweep closes the turn row later.
+        logger.exception("Auto-fix turn %s: enqueue failed", turn.pk)
+        enqueued = False
     if not enqueued:
-        # The turn was closed as failed; the person takes over.
         settle_case_auto_fix(turn)
 
 
@@ -201,17 +207,20 @@ def _failed_attempt_digest(
     return ""
 
 
-def settle_stale_auto_fix_turn(project: Project) -> None:
+def settle_stale_auto_fix_turn(project_id: int) -> None:
     """Close the project's live turn if its worker is gone; never raises.
 
     A closed auto-fix turn settles its help request as not fixed (through
     ``live_turn``), so the case falls back to a person. One cheap query when
     nothing is stale; the project row is locked only when something is.
+    Called by the Machine setup pages and the periodic stale sweep.
     """
     try:
         now = timezone.now()
         live = (
-            SetupTurn.objects.filter(project=project, status__in=LIVE_TURN_STATUSES)
+            SetupTurn.objects.filter(
+                project_id=project_id, status__in=LIVE_TURN_STATUSES
+            )
             .only("id", "status", "started_at", "created_at")
             .order_by("-id")
             .first()
@@ -219,7 +228,7 @@ def settle_stale_auto_fix_turn(project: Project) -> None:
         if live is None or not is_turn_stale(live, now):
             return
         with transaction.atomic():
-            Project.objects.select_for_update().only("id").get(pk=project.pk)
-            resolve_live_turn(project_id=project.pk, now=now)
+            Project.objects.select_for_update().only("id").get(pk=project_id)
+            resolve_live_turn(project_id=project_id, now=now)
     except Exception:
-        logger.exception("Closing a stale setup turn of project %s failed", project.pk)
+        logger.exception("Closing a stale setup turn of project %s failed", project_id)

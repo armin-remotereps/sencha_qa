@@ -62,7 +62,6 @@ from controller_client.protocol import (
     ErrorCode,
 )
 from machine_setup.auto_fix_stop import request_auto_fix_stop
-from machine_setup.task_names import START_CASE_AUTO_FIX
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from projects.application_context_services import write_application_context
 from projects.case_blocking import blocked_message, classify_case_exception
@@ -72,6 +71,12 @@ from projects.case_checkpoint_services import (
 )
 from projects.case_help_notifications import notify_case_needs_help
 from projects.case_help_policy import auto_fix_eligible
+from projects.case_help_state import (
+    RunHelpState,
+    enqueue_case_auto_fix,
+    get_run_help_state,
+    mark_auto_fix_running,
+)
 from projects.case_step_progress import (
     StepProgressPayload,
     case_step_payload,
@@ -2475,32 +2480,6 @@ def get_test_run_summary(test_run: TestRun) -> dict[str, int]:
     return {k: v or 0 for k, v in result.items()}
 
 
-class RunHelpState(StrEnum):
-    """The run page's view of a sleeping run (``TestRunStatusEvent.help_state``)."""
-
-    NONE = "none"
-    AUTO_FIXING = "auto_fixing"
-    WAITING_FOR_PERSON = "waiting_for_person"
-
-
-def get_run_help_state(test_run: TestRun) -> RunHelpState:
-    """Whether a PAUSED run's help is with the auto-fix agent or a person.
-
-    ``none`` (no query) unless the run is PAUSED. ``auto_fixing`` while an
-    auto-fix of the run is running, even when a person already resolved its
-    request (the run continues when that agent stops). Otherwise
-    ``waiting_for_person``: an open request, or a resolved one whose queueing
-    waits for the gates ("Continue run"). One query.
-    """
-    if test_run.status != TestRunStatus.PAUSED:
-        return RunHelpState.NONE
-    auto_fixing = CaseHelpRequest.objects.filter(
-        test_run_test_case__test_run_id=test_run.pk,
-        auto_fix_state=HelpAutoFixState.RUNNING,
-    ).exists()
-    return RunHelpState.AUTO_FIXING if auto_fixing else RunHelpState.WAITING_FOR_PERSON
-
-
 class RerunScope(StrEnum):
     """Which cases of a finished run a re-run copies."""
 
@@ -3229,15 +3208,12 @@ def _pause_run_for_help(
         CaseHelpRequest.objects.filter(
             test_run_test_case_id=pivot.pk, resolution=HelpResolution.OPEN
         ).update(resolution=HelpResolution.CANCELLED, resolved_at=now)
-        help_request = CaseHelpRequest.objects.create(
-            test_run_test_case=pivot,
-            step_num=step_num,
-            reason=reason,
-            ask=ask,
-            auto_fix_state=(
-                HelpAutoFixState.RUNNING if auto_fix else HelpAutoFixState.NONE
-            ),
+        help_request = CaseHelpRequest(
+            test_run_test_case=pivot, step_num=step_num, reason=reason, ask=ask
         )
+        if auto_fix:
+            mark_auto_fix_running(help_request)
+        help_request.save()
 
         pivot.status = TestRunTestCaseStatus.NEED_HELP
         pivot.blocked_reason = ""
@@ -3272,18 +3248,6 @@ def _pause_run_for_help(
 
         transaction.on_commit(_after_commit)
     return True
-
-
-def enqueue_case_auto_fix(help_request_id: int) -> None:
-    """Hand the request to the auto-fix; on a broker error, fall back to people."""
-    try:
-        celery_app.send_task(START_CASE_AUTO_FIX, args=[help_request_id])
-    except Exception:
-        logger.exception("Could not enqueue the auto-fix of help %d", help_request_id)
-        CaseHelpRequest.objects.filter(
-            pk=help_request_id, auto_fix_state=HelpAutoFixState.RUNNING
-        ).update(auto_fix_state=HelpAutoFixState.NOT_FIXED)
-        notify_case_needs_help(help_request_id, after_auto_fix=True)
 
 
 def _extract_agent_summary(result: AgentResult) -> str:
@@ -3371,7 +3335,10 @@ def _cancel_run_help_requests(test_run: TestRun, now: datetime) -> None:
     """Close the run's open help request and stop its running auto-fix.
 
     The auto-fix turn honours the stop at its next tool boundary; its late
-    settle is a no-op on the cancelled run.
+    settle only records the outcome on the cancelled run. An auto-fix with no
+    live turn (its start task is still queued, or was lost) is settled not
+    fixed here, since no turn will ever settle it; the late start task is a
+    no-op on the cancelled run.
     """
     requests = CaseHelpRequest.objects.filter(test_run_test_case__test_run=test_run)
     requests.filter(resolution=HelpResolution.OPEN).update(
@@ -3382,8 +3349,15 @@ def _cancel_run_help_requests(test_run: TestRun, now: datetime) -> None:
             "id", flat=True
         )
     )
-    for help_request_id in auto_fixing_ids:
-        request_auto_fix_stop(help_request_id)
+    turnless_ids = [
+        help_request_id
+        for help_request_id in auto_fixing_ids
+        if not request_auto_fix_stop(help_request_id)
+    ]
+    if turnless_ids:
+        CaseHelpRequest.objects.filter(
+            pk__in=turnless_ids, auto_fix_state=HelpAutoFixState.RUNNING
+        ).update(auto_fix_state=HelpAutoFixState.NOT_FIXED)
 
 
 def abort_active_test_run_on_disconnect(project: Project) -> None:

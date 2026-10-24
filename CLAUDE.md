@@ -65,9 +65,10 @@ until clean -> document in `docs/changed/`.
 python -m daphne -b 0.0.0.0 -p 8000 --websocket-max-message-size 33554432 --websocket-max-frame-size 33554432 auto_tester.asgi:application
 python manage.py runserver              # no controller traffic only (1 MiB WebSocket cap)
 
-# Celery workers (two separate queues)
+# Celery workers (three separate queues)
 celery -A auto_tester worker -Q upload -l info -n upload@%h
 celery -A auto_tester worker -Q execution -l info -n execution@%h
+celery -A auto_tester worker -Q notify -l info -n notify@%h
 celery -A auto_tester beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
 
 # Type checking (strict mode)

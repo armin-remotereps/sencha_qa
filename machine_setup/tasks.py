@@ -10,7 +10,10 @@ from machine_setup.services.case_auto_fix import (
 )
 from machine_setup.services.queue_turn import RUN_SETUP_TURN_TASK
 from machine_setup.services.run_turn import run_setup_turn as run_setup_turn_service
-from machine_setup.task_names import START_CASE_AUTO_FIX
+from machine_setup.services.sweep_stale_auto_fixes import (
+    sweep_stale_auto_fixes as sweep_stale_auto_fixes_service,
+)
+from machine_setup.task_names import START_CASE_AUTO_FIX, SWEEP_STALE_AUTO_FIXES
 from machine_setup.turn_state import SETUP_TURN_SOFT_TIME_LIMIT, SETUP_TURN_TIME_LIMIT
 
 logger = logging.getLogger(__name__)
@@ -18,6 +21,9 @@ logger = logging.getLogger(__name__)
 # start_case_auto_fix only creates rows and enqueues the setup turn.
 _AUTO_FIX_START_SOFT_TIME_LIMIT = 60
 _AUTO_FIX_START_TIME_LIMIT = 90
+# The sweep only reads and settles rows; it runs every two minutes.
+_SWEEP_SOFT_TIME_LIMIT = 60
+_SWEEP_TIME_LIMIT = 90
 
 
 @shared_task(
@@ -62,3 +68,17 @@ def start_case_auto_fix(self: Task[[int], None], help_request_id: int) -> None:
         help_request_id,
     )
     start_case_auto_fix_service(help_request_id)
+
+
+@shared_task(
+    bind=True,
+    # Scheduled by CELERY_BEAT_SCHEDULE (settings) every two minutes.
+    name=SWEEP_STALE_AUTO_FIXES,
+    queue="execution",
+    max_retries=0,
+    soft_time_limit=_SWEEP_SOFT_TIME_LIMIT,
+    time_limit=_SWEEP_TIME_LIMIT,
+)
+def sweep_stale_auto_fixes(self: Task[[], None]) -> None:
+    logger.debug("sweep_stale_auto_fixes: task_id=%s", self.request.id)
+    sweep_stale_auto_fixes_service()

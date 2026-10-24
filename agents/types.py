@@ -274,6 +274,9 @@ class CheckpointHelp:
     ask: str = ""
     # The setup agent's report when an auto-fix ran for this request; may be empty.
     auto_fix_summary: str = ""
+    # That auto-fix reported the machine fixed (with ``source`` ``human`` when a
+    # person continued during it, or after its fix failed the run's gates).
+    auto_fix_fixed: bool = False
 
 
 @dataclass(frozen=True)

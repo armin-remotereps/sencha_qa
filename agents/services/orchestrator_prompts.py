@@ -205,8 +205,16 @@ def format_failed_attempt_state(
 
 
 def helper_name(help: CheckpointHelp) -> str:
-    """Who fixed the machine, as the prompts name them."""
-    if help.source == "auto_fix":
+    """Who fixed the machine, as the prompts name them.
+
+    The setup agent when its auto-fix reported the machine fixed, also when a
+    person then continued the case (during the auto-fix, or after the fix
+    failed the run's gates); a person otherwise, noting when the setup agent
+    tried first and could not.
+    """
+    if help.source == "auto_fix" or help.auto_fix_fixed:
+        if help.note.strip():
+            return "the machine setup agent (a person also added a note)"
         return "the machine setup agent"
     if help.auto_fix_summary.strip():
         return "a person (the machine setup agent could not)"
