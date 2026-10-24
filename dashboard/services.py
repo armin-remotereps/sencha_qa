@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from accounts.models import CustomUser
 from projects.models import (
+    ACTIVE_RUN_STATUSES,
     Project,
     TestCase,
     TestCaseUpload,
@@ -113,7 +114,7 @@ def _empty_dashboard_data() -> DashboardData:
 
 def _build_run_summary(project_ids: list[int], since: datetime) -> RunSummary:
     runs_in_progress = TestRun.objects.filter(
-        project_id__in=project_ids, status=TestRunStatus.STARTED
+        project_id__in=project_ids, status__in=ACTIVE_RUN_STATUSES
     ).count()
 
     finished_counts = TestRunTestCase.objects.filter(
@@ -148,6 +149,29 @@ def _build_run_summary(project_ids: list[int], since: datetime) -> RunSummary:
         pass_rate_7d=pass_rate,
         never_run_cases=never_run_cases,
     )
+
+
+def _need_help_run_attention_items(project_ids: list[int]) -> list[AttentionItem]:
+    """Runs asleep because a case needs help, newest first, in one query."""
+    runs = (
+        TestRun.objects.filter(project_id__in=project_ids, status=TestRunStatus.PAUSED)
+        .select_related("project")
+        .order_by("-updated_at")[:ATTENTION_LIMIT]
+    )
+    return [
+        AttentionItem(
+            kind="need_help_run",
+            project=run.project,
+            title=f"{run.display_name} needs help",
+            detail=(
+                f"A case is waiting for someone to fix the test machine "
+                f"in {run.project.name}."
+            ),
+            occurred_at=run.updated_at,
+            url=reverse("projects:test_run_detail", args=[run.project_id, run.id]),
+        )
+        for run in runs
+    ]
 
 
 def _finished_run_attention_items(
@@ -338,7 +362,7 @@ def _build_project_cards(project_ids: list[int]) -> list[ProjectCard]:
         "-created_at"
     )
     active_run_qs = TestRun.objects.filter(
-        project=OuterRef("pk"), status=TestRunStatus.STARTED
+        project=OuterRef("pk"), status__in=ACTIVE_RUN_STATUSES
     )
     projects = list(
         Project.objects.filter(id__in=project_ids)
@@ -464,9 +488,12 @@ def get_dashboard_data(
         return _empty_dashboard_data()
 
     summary = _build_run_summary(project_ids, since)
-    attention = _finished_run_attention_items(
-        project_ids, since
-    ) + _disconnected_machine_attention_items(project_ids)
+    # A sleeping run blocks the project's machine: it comes first.
+    attention = (
+        _need_help_run_attention_items(project_ids)
+        + _finished_run_attention_items(project_ids, since)
+        + _disconnected_machine_attention_items(project_ids)
+    )
     projects = _build_project_cards(project_ids)
     activity = _build_activity_items(project_ids)
 

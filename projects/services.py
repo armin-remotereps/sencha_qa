@@ -41,11 +41,13 @@ from django.urls import reverse
 from django.utils import dateformat, timezone
 
 from accounts.models import CustomUser
+from agents.checkpoint import read_checkpoint_help
 from agents.types import (
     AgentCancelledError,
     AgentResult,
     AgentStopReason,
     CancellationCheck,
+    HelpRequestInfo,
     LogCallback,
     OrchestratorCheckpoint,
     PixelParseResult,
@@ -59,6 +61,8 @@ from controller_client.protocol import (
     ClientCapability,
     ErrorCode,
 )
+from machine_setup.auto_fix_stop import request_auto_fix_stop
+from machine_setup.task_names import START_CASE_AUTO_FIX
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from projects.application_context_services import write_application_context
 from projects.case_blocking import blocked_message, classify_case_exception
@@ -66,6 +70,8 @@ from projects.case_checkpoint_services import (
     build_checkpoint_callback,
     load_resume_checkpoint,
 )
+from projects.case_help_notifications import notify_case_needs_help
+from projects.case_help_policy import auto_fix_eligible
 from projects.case_step_progress import (
     StepProgressPayload,
     case_step_payload,
@@ -88,10 +94,16 @@ from projects.exceptions import (
     TestRunnerUnresponsiveError,
 )
 from projects.models import (
+    ACTIVE_RUN_STATUSES,
+    HELP_REQUEST_TEXT_MAX_LENGTH,
     ApplicationPlatform,
     BlockedReason,
+    CaseHelpRequest,
     ContextWriteSource,
+    HelpAutoFixState,
+    HelpResolution,
     Project,
+    RunHelpMode,
     Tag,
     TestCase,
     TestCaseData,
@@ -502,7 +514,7 @@ def get_project_overview(
     never_run_count = project.test_cases.filter(run_entries__isnull=True).count()
     machine_state = get_machine_state(project, visual_engine)
     active_run = TestRun.objects.filter(
-        project=project, status=TestRunStatus.STARTED
+        project=project, status__in=ACTIVE_RUN_STATUSES
     ).first()
     latest_run = TestRun.objects.filter(project=project).order_by("-created_at").first()
     latest_run_summary = (
@@ -646,7 +658,9 @@ def _visual_engine_ready_check(visual_engine: VisualEngineStatus) -> ReadinessCh
 
 
 def _no_active_run_check(project: Project, test_run: TestRun | None) -> ReadinessCheck:
-    active_runs = TestRun.objects.filter(project=project, status=TestRunStatus.STARTED)
+    active_runs = TestRun.objects.filter(
+        project=project, status__in=ACTIVE_RUN_STATUSES
+    )
     if test_run is not None:
         active_runs = active_runs.exclude(id=test_run.id)
     passed = not active_runs.exists()
@@ -1992,7 +2006,7 @@ def create_test_case(*, project: Project, data: TestCaseData) -> TestCase:
 
 
 def can_edit_test_case_in_run(test_run: TestRun) -> bool:
-    return test_run.status != TestRunStatus.STARTED
+    return test_run.status not in ACTIVE_RUN_STATUSES
 
 
 def update_test_case(*, test_case: TestCase, data: TestCaseData) -> TestCase:
@@ -2362,15 +2376,18 @@ def reset_test_run(test_run: TestRun) -> None:
 
 def _has_active_test_run(project: Project) -> bool:
     return TestRun.objects.filter(
-        project=project, status=TestRunStatus.STARTED
+        project=project, status__in=ACTIVE_RUN_STATUSES
     ).exists()
 
 
 @transaction.atomic
-def start_test_run(test_run: TestRun) -> None:
+def start_test_run(test_run: TestRun, *, help_mode: str) -> None:
+    """Start a WAITING run with ``help_mode`` (a ``RunHelpMode`` value)."""
+    if help_mode not in RunHelpMode.values:
+        raise ValueError("Choose what happens when a case needs help.")
     # Same lock order as resume (project, then run): it serializes a Start
     # against another Start or Resume in the project, so the "no other run is
-    # STARTED" check below cannot race.
+    # active" check below cannot race.
     Project.objects.select_for_update().only("id").get(pk=test_run.project_id)
     locked_status = (
         TestRun.objects.select_for_update()
@@ -2391,12 +2408,14 @@ def start_test_run(test_run: TestRun) -> None:
         raise ValueError(MACHINE_SETUP_RUNNING_MESSAGE)
 
     test_run.status = TestRunStatus.STARTED
+    test_run.help_mode = help_mode
     test_run.started_at = timezone.now()
     test_run.finished_at = None
     test_run.execution_generation += 1
     test_run.save(
         update_fields=[
             "status",
+            "help_mode",
             "started_at",
             "finished_at",
             "execution_generation",
@@ -2406,7 +2425,7 @@ def start_test_run(test_run: TestRun) -> None:
 
     def _enqueue() -> None:
         if queue_test_run_cases(test_run, pivot_ids):
-            _broadcast_test_run_status(test_run)
+            broadcast_test_run_status(test_run)
 
     # Workers must see the STARTED run, so the chain is queued after commit.
     transaction.on_commit(_enqueue)
@@ -2451,8 +2470,35 @@ def get_test_run_summary(test_run: TestRun) -> dict[str, int]:
         failed=Count("id", filter=Q(status=TestRunTestCaseStatus.FAILED)),
         blocked=Count("id", filter=Q(status=TestRunTestCaseStatus.BLOCKED)),
         cancelled=Count("id", filter=Q(status=TestRunTestCaseStatus.CANCELLED)),
+        need_help=Count("id", filter=Q(status=TestRunTestCaseStatus.NEED_HELP)),
     )
     return {k: v or 0 for k, v in result.items()}
+
+
+class RunHelpState(StrEnum):
+    """The run page's view of a sleeping run (``TestRunStatusEvent.help_state``)."""
+
+    NONE = "none"
+    AUTO_FIXING = "auto_fixing"
+    WAITING_FOR_PERSON = "waiting_for_person"
+
+
+def get_run_help_state(test_run: TestRun) -> RunHelpState:
+    """Whether a PAUSED run's help is with the auto-fix agent or a person.
+
+    ``none`` (no query) unless the run is PAUSED. ``auto_fixing`` while an
+    auto-fix of the run is running, even when a person already resolved its
+    request (the run continues when that agent stops). Otherwise
+    ``waiting_for_person``: an open request, or a resolved one whose queueing
+    waits for the gates ("Continue run"). One query.
+    """
+    if test_run.status != TestRunStatus.PAUSED:
+        return RunHelpState.NONE
+    auto_fixing = CaseHelpRequest.objects.filter(
+        test_run_test_case__test_run_id=test_run.pk,
+        auto_fix_state=HelpAutoFixState.RUNNING,
+    ).exists()
+    return RunHelpState.AUTO_FIXING if auto_fixing else RunHelpState.WAITING_FOR_PERSON
 
 
 class RerunScope(StrEnum):
@@ -2496,6 +2542,8 @@ def rerun_cases(test_run: TestRun, scope: RerunScope) -> TestRun:
 
     new_run = TestRun.objects.create(
         project=test_run.project,
+        # Pre-selects the source run's mode at Start.
+        help_mode=test_run.help_mode,
         name=f"{test_run.display_name} — {scope.value} rerun",
         testrail_project_id=test_run.testrail_project_id,
         testrail_suite_id=test_run.testrail_suite_id,
@@ -2546,6 +2594,13 @@ def _build_narrative_for_active_run(test_run: TestRun, summary: dict[str, int]) 
     )
     if test_run.status == TestRunStatus.CANCELLED:
         return f"Run cancelled after {finished} of {total} cases finished."
+    if test_run.status == TestRunStatus.PAUSED:
+        need_help = summary.get("need_help", 0)
+        noun = "case needs" if need_help == 1 else "cases need"
+        return (
+            f"Paused: {need_help} {noun} help. "
+            f"{finished} of {total} cases finished so far."
+        )
     return f"{finished} of {total} cases finished so far."
 
 
@@ -2587,7 +2642,7 @@ def build_run_narrative(
         return (
             f"{summary.get('total', 0)} cases selected. This run has not started yet."
         )
-    if test_run.status in (TestRunStatus.STARTED, TestRunStatus.CANCELLED):
+    if test_run.status in (*ACTIVE_RUN_STATUSES, TestRunStatus.CANCELLED):
         return _build_narrative_for_active_run(test_run, summary)
     return _build_narrative_for_finished_run(summary, failed_titles, blocked_titles)
 
@@ -2630,6 +2685,8 @@ class TestRunStatusEvent(TypedDict):
     type: str
     test_run_status: str
     summary: dict[str, int]
+    # A ``RunHelpState`` value.
+    help_state: str
 
 
 class CaseLogEvent(TypedDict):
@@ -2679,6 +2736,7 @@ def broadcast_run_and_pivots(
         "type": "test_run.status",
         "test_run_status": test_run.status,
         "summary": summary,
+        "help_state": get_run_help_state(test_run),
     }
     async_to_sync(layer.group_send)(_test_run_group(test_run.id), run_event)
     for pivot in pivots:
@@ -2727,7 +2785,8 @@ def get_blocked_reason_fields(pivot: TestRunTestCase) -> tuple[str, str]:
     return pivot.blocked_reason, BlockedReason(pivot.blocked_reason).label
 
 
-def _broadcast_test_run_status(test_run: TestRun) -> None:
+def broadcast_test_run_status(test_run: TestRun) -> None:
+    """Push the run's status, summary and help state to the run page."""
     layer: Any = get_channel_layer()
     if layer is None:
         return
@@ -2736,6 +2795,7 @@ def _broadcast_test_run_status(test_run: TestRun) -> None:
         "type": "test_run.status",
         "test_run_status": test_run.status,
         "summary": get_test_run_summary(test_run),
+        "help_state": get_run_help_state(test_run),
     }
     async_to_sync(layer.group_send)(_test_run_group(test_run.id), event)
 
@@ -2771,13 +2831,13 @@ def _broadcast_screenshot(
 
 def fetch_test_run_state(
     test_run_id: int,
-) -> tuple[TestRun, dict[str, int], list[tuple[int, str]]]:
+) -> tuple[TestRun, dict[str, int], list[tuple[int, str]], RunHelpState]:
     test_run = TestRun.objects.get(pk=test_run_id)
     summary = get_test_run_summary(test_run)
     pivot_data: list[tuple[int, str]] = list(
         test_run.pivot_entries.values_list("id", "status")
     )
-    return test_run, summary, pivot_data
+    return test_run, summary, pivot_data, get_run_help_state(test_run)
 
 
 def fetch_test_case_state(
@@ -2816,7 +2876,9 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
     """Run one case as part of the run's ``generation`` (None: the current one)."""
     reset_outage_clock()
     pivot = _fetch_pivot(pivot_id)
-    if pivot.test_run.status == TestRunStatus.CANCELLED:
+    # A paused run sleeps until its Need help case is resolved, which queues
+    # the remaining cases in a new chain; this chain's leftovers stand down.
+    if pivot.test_run.status in (TestRunStatus.CANCELLED, TestRunStatus.PAUSED):
         return
     if generation is None:
         generation = pivot.test_run.execution_generation
@@ -2837,6 +2899,15 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
     cancellation_check = _build_cancellation_check(run_id, generation)
     # A worker shutdown (BaseException) must not start an agent on its way out.
     allow_teardown = True
+    # A case paused for help keeps the machine exactly as it is: no teardown,
+    # no cleanup, so a person (or the auto-fix agent) sees what went wrong.
+    paused_for_help = False
+    # Continuing after help: the machine was fixed by hand and must not be
+    # cleaned up before the failing step re-runs.
+    checkpoint_help = read_checkpoint_help(pivot.execution_checkpoint)
+    continue_after_help = (
+        checkpoint_help is not None and checkpoint_help.continue_pending
+    )
     _mark_pivot_in_progress(pivot)
 
     try:
@@ -2847,7 +2918,8 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
             cancellation_check=cancellation_check,
         )
 
-        _safe_cleanup(project.id, wait_for_runner=True)
+        if not continue_after_help:
+            _safe_cleanup(project.id, wait_for_runner=True)
 
         on_log = _build_log_callback(pivot, generation)
         on_screenshot = _build_screenshot_callback(pivot, generation)
@@ -2878,7 +2950,12 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         # Once a Resume or Start took the run over, the pivot belongs to the
         # newer chain: this worker records nothing (here and below).
         if not _is_stale_execution(run_id, generation):
-            _finalize_pivot(pivot, result)
+            if result.stop_reason == AgentStopReason.NEEDS_HUMAN_HELP:
+                paused_for_help = _pause_run_for_help(
+                    pivot, _help_request_info(pivot, result), generation
+                )
+            else:
+                _finalize_pivot(pivot, result)
     except (AgentCancelledError, ControllerNotConnectedError):
         # Inside a case, wait_for_controller only reports "not connected" once
         # the run is no longer STARTED, i.e. it was aborted.
@@ -2909,7 +2986,11 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
     finally:
         # A newer chain may already be driving the machine: leave it alone.
         # Checked again after the teardown, which can take minutes.
-        if allow_teardown and not _is_stale_execution(run_id, generation):
+        if (
+            allow_teardown
+            and not paused_for_help
+            and not _is_stale_execution(run_id, generation)
+        ):
             _safe_teardown(
                 pivot,
                 project,
@@ -2918,7 +2999,8 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
                 run_case_teardown=run_case_teardown,
             )
         if not _is_stale_execution(run_id, generation):
-            _safe_cleanup(project.id, wait_for_runner=False)
+            if not paused_for_help:
+                _safe_cleanup(project.id, wait_for_runner=False)
             _update_test_run_status_if_needed(pivot.test_run)
 
 
@@ -2992,7 +3074,7 @@ def _mark_pivot_in_progress(pivot: TestRunTestCase) -> None:
     _broadcast_pivot_status_to_run(pivot)
     _broadcast_pivot_status_to_case(pivot)
     if status_changed:
-        _broadcast_test_run_status(test_run)
+        broadcast_test_run_status(test_run)
 
 
 def _build_log_callback(
@@ -3084,6 +3166,122 @@ def _finalize_pivot(pivot: TestRunTestCase, result: AgentResult) -> None:
     _broadcast_pivot_status_to_case(pivot)
 
 
+_HELP_FALLBACK_ASK = "Check the test machine, then continue the case."
+
+
+def _help_request_info(pivot: TestRunTestCase, result: AgentResult) -> HelpRequestInfo:
+    """The orchestrator's help request; rebuilt from the checkpoint if missing."""
+    if result.help is not None:
+        return result.help
+    logger.warning("Pivot %d needs help without a help request", pivot.pk)
+    checkpoint = load_resume_checkpoint(pivot)
+    step_num = checkpoint.next_step if checkpoint is not None else 1
+    return HelpRequestInfo(
+        step_num=step_num,
+        reason=_extract_agent_summary(result),
+        ask=_HELP_FALLBACK_ASK,
+    )
+
+
+def _truncate_help_text(text: str) -> str:
+    text = text.strip()
+    if len(text) <= HELP_REQUEST_TEXT_MAX_LENGTH:
+        return text
+    return text[: HELP_REQUEST_TEXT_MAX_LENGTH - 1].rstrip() + "…"
+
+
+def _pause_run_for_help(
+    pivot: TestRunTestCase, help: HelpRequestInfo, generation: int
+) -> bool:
+    """Put the case in Need help and the run to sleep; True when it did.
+
+    One transaction under the run lock: a stale generation does nothing, and
+    a run aborted meanwhile cancels the case instead. The case keeps its
+    checkpoint and the machine is left as it is. After commit the run page is
+    told, then either the Night auto-fix is enqueued (by task name: importing
+    ``machine_setup.tasks`` here would be an import cycle) or the project
+    members are notified.
+    """
+    reason = _truncate_help_text(help.reason)
+    ask = _truncate_help_text(help.ask) or _HELP_FALLBACK_ASK
+    step_num = max(help.step_num, 1)
+    with transaction.atomic():
+        test_run = TestRun.objects.select_for_update().get(pk=pivot.test_run_id)
+        if test_run.execution_generation != generation:
+            return False
+        pivot.refresh_from_db(fields=["status"])
+        if test_run.status != TestRunStatus.STARTED:
+            if pivot.status == TestRunTestCaseStatus.IN_PROGRESS:
+                _mark_pivot_cancelled(pivot)
+            return False
+        if pivot.status != TestRunTestCaseStatus.IN_PROGRESS:
+            return False
+
+        auto_fix = test_run.help_mode == RunHelpMode.NIGHT and auto_fix_eligible(
+            pivot.pk, step_num
+        )
+        now = timezone.now()
+        # At most one open request per case: close a leftover before opening.
+        CaseHelpRequest.objects.filter(
+            test_run_test_case_id=pivot.pk, resolution=HelpResolution.OPEN
+        ).update(resolution=HelpResolution.CANCELLED, resolved_at=now)
+        help_request = CaseHelpRequest.objects.create(
+            test_run_test_case=pivot,
+            step_num=step_num,
+            reason=reason,
+            ask=ask,
+            auto_fix_state=(
+                HelpAutoFixState.RUNNING if auto_fix else HelpAutoFixState.NONE
+            ),
+        )
+
+        pivot.status = TestRunTestCaseStatus.NEED_HELP
+        pivot.blocked_reason = ""
+        pivot.result = ask
+        pivot.finished_at = None
+        pivot.save(
+            update_fields=[
+                "status",
+                "blocked_reason",
+                "result",
+                "finished_at",
+                "updated_at",
+            ]
+        )
+        test_run.status = TestRunStatus.PAUSED
+        test_run.save(update_fields=["status", "updated_at"])
+
+        log_line = f"[Need help at step {step_num}] {ask}"
+        if auto_fix:
+            log_line += " The machine setup agent will try to fix it."
+        logged = _append_pivot_log(pivot.pk, log_line, generation)
+        help_request_id = help_request.pk
+
+        def _after_commit() -> None:
+            if logged:
+                _broadcast_log(pivot, log_line)
+            broadcast_run_and_pivots(test_run, [pivot])
+            if auto_fix:
+                _enqueue_case_auto_fix(help_request_id)
+            else:
+                notify_case_needs_help(help_request_id)
+
+        transaction.on_commit(_after_commit)
+    return True
+
+
+def _enqueue_case_auto_fix(help_request_id: int) -> None:
+    """Hand the request to the auto-fix; on a broker error, fall back to people."""
+    try:
+        celery_app.send_task(START_CASE_AUTO_FIX, args=[help_request_id])
+    except Exception:
+        logger.exception("Could not enqueue the auto-fix of help %d", help_request_id)
+        CaseHelpRequest.objects.filter(
+            pk=help_request_id, auto_fix_state=HelpAutoFixState.RUNNING
+        ).update(auto_fix_state=HelpAutoFixState.NOT_FIXED)
+        notify_case_needs_help(help_request_id, after_auto_fix=True)
+
+
 def _extract_agent_summary(result: AgentResult) -> str:
     for message in reversed(result.messages):
         if message.role == "assistant" and isinstance(message.content, str):
@@ -3133,31 +3331,60 @@ def abort_test_run(
         .values_list("status", flat=True)
         .get(pk=test_run.pk)
     )
-    if locked_status != TestRunStatus.STARTED:
+    if locked_status not in ACTIVE_RUN_STATUSES:
         return
 
+    now = timezone.now()
     test_run.status = TestRunStatus.CANCELLED
-    test_run.finished_at = timezone.now()
+    test_run.finished_at = now
     test_run.save(update_fields=["status", "finished_at", "updated_at"])
 
+    # A Need help case is Cancelled like a running one: Resume continues it.
     for pivot in test_run.pivot_entries.filter(
-        status=TestRunTestCaseStatus.IN_PROGRESS
+        status__in=[
+            TestRunTestCaseStatus.IN_PROGRESS,
+            TestRunTestCaseStatus.NEED_HELP,
+        ]
     ):
         _mark_pivot_cancelled(pivot)
 
     for pivot in test_run.pivot_entries.filter(status=TestRunTestCaseStatus.CREATED):
         _mark_pivot_cancelled(pivot)
 
-    _broadcast_test_run_status(test_run)
+    _cancel_run_help_requests(test_run, now)
+
+    broadcast_test_run_status(test_run)
 
     celery_task_id = test_run.celery_task_id
-    if revoke_task and celery_task_id:
+    # A paused run has no worker executing it: nothing to revoke.
+    if locked_status == TestRunStatus.STARTED and revoke_task and celery_task_id:
         transaction.on_commit(
             lambda: celery_app.control.revoke(celery_task_id, terminate=True)
         )
 
 
+def _cancel_run_help_requests(test_run: TestRun, now: datetime) -> None:
+    """Close the run's open help request and stop its running auto-fix.
+
+    The auto-fix turn honours the stop at its next tool boundary; its late
+    settle is a no-op on the cancelled run.
+    """
+    requests = CaseHelpRequest.objects.filter(test_run_test_case__test_run=test_run)
+    requests.filter(resolution=HelpResolution.OPEN).update(
+        resolution=HelpResolution.CANCELLED, resolved_at=now
+    )
+    auto_fixing_ids = list(
+        requests.filter(auto_fix_state=HelpAutoFixState.RUNNING).values_list(
+            "id", flat=True
+        )
+    )
+    for help_request_id in auto_fixing_ids:
+        request_auto_fix_stop(help_request_id)
+
+
 def abort_active_test_run_on_disconnect(project: Project) -> None:
+    # STARTED only: a paused run executes nothing, so a runner drop while a
+    # person fixes the machine (or the auto-fix restarts it) must not cancel it.
     active_run = TestRun.objects.filter(
         project=project, status=TestRunStatus.STARTED
     ).first()
@@ -3167,7 +3394,8 @@ def abort_active_test_run_on_disconnect(project: Project) -> None:
 
 def _update_test_run_status_if_needed(test_run: TestRun) -> None:
     test_run.refresh_from_db()
-    if test_run.status == TestRunStatus.CANCELLED:
+    # A paused run finishes only after its Need help case is resolved.
+    if test_run.status in (TestRunStatus.CANCELLED, TestRunStatus.PAUSED):
         return
 
     all_pivots = test_run.pivot_entries.all()
@@ -3176,14 +3404,18 @@ def _update_test_run_status_if_needed(test_run: TestRun) -> None:
         return
 
     all_done = not all_pivots.filter(
-        status__in=[TestRunTestCaseStatus.CREATED, TestRunTestCaseStatus.IN_PROGRESS]
+        status__in=[
+            TestRunTestCaseStatus.CREATED,
+            TestRunTestCaseStatus.IN_PROGRESS,
+            TestRunTestCaseStatus.NEED_HELP,
+        ]
     ).exists()
 
     if all_done:
         test_run.status = TestRunStatus.DONE
         test_run.finished_at = timezone.now()
         test_run.save(update_fields=["status", "finished_at", "updated_at"])
-        _broadcast_test_run_status(test_run)
+        broadcast_test_run_status(test_run)
 
 
 # ============================================================================

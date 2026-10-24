@@ -8,6 +8,11 @@ engine and the AI service still work:
 - ``visual_engine``: nothing can read the screen.
 - ``ai_service``: there is no model to run the teardown.
 - ``time_limit``: the hard kill is 60 s away; that time belongs to the cleanup.
+
+A Need help case gets no teardown (and no cleanup): the machine is kept as it
+is for the person or auto-fix agent who fixes it, and the case re-runs its
+failing step from there. ``help_skipped`` (Skip after help) is not set by a
+worker, so it never reaches the teardown either.
 """
 
 from __future__ import annotations

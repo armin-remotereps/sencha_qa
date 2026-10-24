@@ -31,6 +31,7 @@ from projects.models import (
 from projects.run_case_order import RUN_CASE_ORDERING
 from projects.run_reopen_services import (
     REOPENABLE_RUN_STATUSES,
+    is_valid_help_mode,
     list_reopen_blockers,
     lock_project_and_run,
     reopen_run,
@@ -40,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 _NOT_FINISHED = "Only a finished or cancelled run can be re-run."
 _NOTHING_SELECTED = "None of the selected cases belong to this run."
+_INVALID_HELP_MODE = "Choose what happens when a case needs help."
 
 
 @dataclass(frozen=True)
@@ -88,9 +90,19 @@ def get_rerun_panel(test_run: TestRun, project: Project) -> RerunPanel:
 
 
 def rerun_test_run_cases(
-    *, test_run: TestRun, pivot_ids: Sequence[int], user: CustomUser
+    *,
+    test_run: TestRun,
+    pivot_ids: Sequence[int],
+    user: CustomUser,
+    help_mode: str | None = None,
 ) -> RerunOutcome:
-    """Re-run the selected cases of the run from step 1, in run order."""
+    """Re-run the selected cases of the run from step 1, in run order.
+
+    ``help_mode`` (a ``RunHelpMode`` value) changes the run's mode; ``None``
+    keeps it.
+    """
+    if help_mode is not None and not is_valid_help_mode(help_mode):
+        raise RunRerunError(_INVALID_HELP_MODE)
     with transaction.atomic():
         project, locked_run = lock_project_and_run(test_run.pk)
         if not is_rerun_open(locked_run):
@@ -141,7 +153,7 @@ def rerun_test_run_cases(
         for pivot in pivots:
             _reset_in_memory(pivot, now)
 
-        reopen_run(locked_run, pivots)
+        reopen_run(locked_run, pivots, help_mode=help_mode)
         # A rolled-back re-run keeps its evidence.
         transaction.on_commit(lambda: _delete_screenshot_files(file_names))
     return RerunOutcome(queued=len(pivots), skipped=len(set(pivot_ids)) - len(pivots))

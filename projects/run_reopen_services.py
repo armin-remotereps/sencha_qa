@@ -14,16 +14,22 @@ from django.utils import timezone
 
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from projects.checked_push_limits import is_checked_push_live
+from projects.exceptions import RunHelpError
 from projects.models import (
+    ACTIVE_RUN_STATUSES,
     Project,
+    RunHelpMode,
     TestRailPushStatus,
     TestRun,
     TestRunStatus,
     TestRunTestCase,
+    TestRunTestCaseStatus,
 )
+from projects.run_case_order import RUN_CASE_ORDERING
 from projects.services import (
     MachineState,
     broadcast_run_and_pivots,
+    broadcast_test_run_status,
     get_machine_state,
     queue_test_run_cases,
 )
@@ -40,6 +46,8 @@ _MACHINE_FAILED = (
     "Check the vision workers on the Environment page."
 )
 _VISUAL_ENGINE_OFFLINE = "Start a vision worker."
+_NOT_PAUSED = "This run is not waiting for help."
+_STILL_NEEDS_HELP = "A case of this run still needs help."
 
 
 def lock_project_and_run(test_run_id: int) -> tuple[Project, TestRun]:
@@ -72,24 +80,34 @@ def list_reopen_blockers(test_run: TestRun, project: Project) -> list[str]:
     return blockers
 
 
-def reopen_run(test_run: TestRun, pivots: Sequence[TestRunTestCase]) -> None:
+def is_valid_help_mode(help_mode: str) -> bool:
+    return help_mode in RunHelpMode.values
+
+
+def reopen_run(
+    test_run: TestRun,
+    pivots: Sequence[TestRunTestCase],
+    *,
+    help_mode: str | None = None,
+) -> None:
     """Restart the locked run and queue ``pivots`` (in run order) after commit.
 
     The pivots must already be saved as CREATED and carry those values in
-    memory, since they are broadcast as they are.
+    memory, since they are broadcast as they are. ``help_mode`` (a
+    ``RunHelpMode`` value) changes the run's mode; ``None`` keeps it. Callers
+    validate it with `is_valid_help_mode` before any write.
     """
+    update_fields = ["status", "finished_at", "execution_generation", "updated_at"]
+    if help_mode is not None:
+        if not is_valid_help_mode(help_mode):
+            raise ValueError(f"Unknown help mode {help_mode!r}")
+        test_run.help_mode = help_mode
+        update_fields.append("help_mode")
     test_run.status = TestRunStatus.STARTED
     test_run.finished_at = None
     # Workers of the earlier chain see the new generation and stand down.
     test_run.execution_generation += 1
-    test_run.save(
-        update_fields=[
-            "status",
-            "finished_at",
-            "execution_generation",
-            "updated_at",
-        ]
-    )
+    test_run.save(update_fields=update_fields)
 
     pivot_ids = [pivot.pk for pivot in pivots]
 
@@ -102,17 +120,51 @@ def reopen_run(test_run: TestRun, pivots: Sequence[TestRunTestCase]) -> None:
 
 
 def queue_pending_cases(test_run: TestRun) -> None:
-    """Queue every CREATED case of the locked run, in run order, after commit.
+    """Wake a PAUSED run: queue its CREATED cases in run order after commit.
 
     Used when a Need help case is resolved: the helped case is CREATED and
-    earlier than the rest, so it runs first.
+    earlier than the rest, so it runs first. The caller holds the project and
+    run locks (`lock_project_and_run`). With no CREATED case left the run is
+    finished (DONE) instead, without the gates.
+
+    Raises ``RunHelpError`` (user-safe) when the run is not PAUSED, a case of
+    it still needs help, or a reopen gate fails (`list_reopen_blockers`).
     """
-    raise NotImplementedError
+    if test_run.status != TestRunStatus.PAUSED:
+        raise RunHelpError(_NOT_PAUSED)
+    # Logs can be large and are never touched here.
+    open_pivots = list(
+        TestRunTestCase.objects.filter(
+            test_run_id=test_run.pk,
+            status__in=[TestRunTestCaseStatus.CREATED, TestRunTestCaseStatus.NEED_HELP],
+        )
+        .defer("logs")
+        .order_by(*RUN_CASE_ORDERING)
+    )
+    if any(pivot.status == TestRunTestCaseStatus.NEED_HELP for pivot in open_pivots):
+        raise RunHelpError(_STILL_NEEDS_HELP)
+    if not open_pivots:
+        _finish_run(test_run)
+        return
+
+    blockers = list_reopen_blockers(test_run, test_run.project)
+    if blockers:
+        raise RunHelpError(blockers[0])
+    reopen_run(test_run, open_pivots)
+
+
+def _finish_run(test_run: TestRun) -> None:
+    """Every case of the woken run is settled: the run is DONE."""
+    test_run.status = TestRunStatus.DONE
+    test_run.finished_at = timezone.now()
+    test_run.save(update_fields=["status", "finished_at", "updated_at"])
+    transaction.on_commit(lambda: broadcast_test_run_status(test_run))
 
 
 def _has_other_started_run(project_id: int, test_run_id: int) -> bool:
+    """Another run is Started or Paused: it holds the project's machine."""
     return (
-        TestRun.objects.filter(project_id=project_id, status=TestRunStatus.STARTED)
+        TestRun.objects.filter(project_id=project_id, status__in=ACTIVE_RUN_STATUSES)
         .exclude(pk=test_run_id)
         .exists()
     )

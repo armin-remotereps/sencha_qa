@@ -33,6 +33,8 @@ class StepStatus(StrEnum):
     FAILED = "failed"
     INTERRUPTED = "interrupted"
     NOT_RUN = "not_run"
+    # The case is Need help at this step: it re-runs once the machine is fixed.
+    AWAITING_HELP = "awaiting_help"
 
 
 STEP_STATUS_LABELS: dict[StepStatus, str] = {
@@ -42,6 +44,7 @@ STEP_STATUS_LABELS: dict[StepStatus, str] = {
     StepStatus.FAILED: "Failed",
     StepStatus.INTERRUPTED: "Interrupted",
     StepStatus.NOT_RUN: "Not run",
+    StepStatus.AWAITING_HELP: "Needs help",
 }
 
 
@@ -53,6 +56,7 @@ class StepActivity(StrEnum):
     RECOVERING = "recovering"
     RESTORING = "restoring"
     VERDICT = "verdict"
+    AWAITING_HELP = "awaiting_help"
 
 
 _ACTIVITY_LABELS: dict[StepActivity, str] = {
@@ -63,6 +67,7 @@ _ACTIVITY_LABELS: dict[StepActivity, str] = {
     StepActivity.RECOVERING: "Recovering",
     StepActivity.RESTORING: "Restoring state before resuming",
     StepActivity.VERDICT: "Writing the verdict",
+    StepActivity.AWAITING_HELP: "Waiting for help",
 }
 
 _PHASE_ACTIVITIES: dict[OrchestratorPhase, StepActivity] = {
@@ -71,6 +76,7 @@ _PHASE_ACTIVITIES: dict[OrchestratorPhase, StepActivity] = {
     "recovery": StepActivity.RECOVERING,
     "resume": StepActivity.RESTORING,
     "verdict": StepActivity.VERDICT,
+    "awaiting_help": StepActivity.AWAITING_HELP,
 }
 
 
@@ -127,7 +133,9 @@ def build_case_step_progress(
     if checkpoint is None:
         return None
     running = case_status == TestRunTestCaseStatus.IN_PROGRESS
-    open_case = running or case_status == TestRunTestCaseStatus.CREATED
+    awaiting_help = case_status == TestRunTestCaseStatus.NEED_HELP
+    # A Need help case continues later: its later steps are still pending.
+    open_case = running or awaiting_help or case_status == TestRunTestCaseStatus.CREATED
     interrupted = case_status in (
         TestRunTestCaseStatus.BLOCKED,
         TestRunTestCaseStatus.CANCELLED,
@@ -150,6 +158,7 @@ def build_case_step_progress(
             cursor=cursor,
             open_case=open_case,
             interrupted=interrupted,
+            awaiting_help=awaiting_help,
             activity=activity,
         )
         decision = next(
@@ -213,12 +222,15 @@ def _row_status(
     cursor: int,
     open_case: bool,
     interrupted: bool,
+    awaiting_help: bool,
     activity: StepActivity | None,
 ) -> tuple[StepStatus, StepActivity]:
     if final is not None and final.result.status == "pass":
         return StepStatus.PASSED, StepActivity.NONE
     if num == cursor and activity is not None:
         return StepStatus.RUNNING, activity
+    if num == cursor and awaiting_help:
+        return StepStatus.AWAITING_HELP, StepActivity.AWAITING_HELP
     if num == cursor and interrupted:
         return StepStatus.INTERRUPTED, StepActivity.NONE
     if final is not None:

@@ -130,15 +130,16 @@ class TestRunConsumer(AuthenticatedConsumer):
         return True
 
     async def _send_initial_state(self) -> None:
-        test_run, summary, pivots = await sync_to_async(fetch_test_run_state)(
-            self._test_run_id
-        )
+        test_run, summary, pivots, help_state = await sync_to_async(
+            fetch_test_run_state
+        )(self._test_run_id)
         await self.send(
             text_data=json.dumps(
                 {
                     "type": "current_state",
                     "test_run_status": test_run.status,
                     "summary": summary,
+                    "help_state": help_state,
                     "pivots": [
                         {"pivot_id": pid, "status": status} for pid, status in pivots
                     ],
@@ -169,6 +170,7 @@ class TestRunConsumer(AuthenticatedConsumer):
                     "type": "test_run_status",
                     "test_run_status": event["test_run_status"],
                     "summary": event["summary"],
+                    "help_state": event.get("help_state", "none"),
                 }
             )
         )
