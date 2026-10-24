@@ -35,22 +35,16 @@ from machine_setup.models import (
     SetupTurn,
 )
 from machine_setup.payloads import (
-    HelpThreadPayload,
     SetupMessagePayload,
     SetupTurnPayload,
-    help_thread_payload,
     message_payload,
     turn_payload,
 )
-from machine_setup.services.case_help_context import help_request_is_waiting
 from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 from machine_setup.turn_state import is_turn_stale
 from projects.case_help_services import HelpPanel, get_help_panel
-from projects.case_plan_revision_services import get_pending_plan_draft
 from projects.models import (
-    CaseHelpRequest,
     HelpAutoFixState,
-    HelpProposalAction,
     HelpResolution,
     Project,
     TestRun,
@@ -232,59 +226,6 @@ def get_thread_help_panel(project: Project, thread: HelpThread) -> HelpPanel | N
     if panel is None or panel.request.pk != thread.help_request_id:
         return None
     return panel
-
-
-def help_panel_payload(conversation_id: int, panel: HelpPanel) -> HelpThreadPayload:
-    """The initial help state of a thread page, from its loaded panel (no query)."""
-    request = panel.request
-    waiting = panel.is_open
-    action = request.agent_proposal_action if waiting else ""
-    return help_thread_payload(
-        conversation_id=conversation_id,
-        request_open=waiting,
-        resolution_label=request.get_resolution_display(),
-        proposal_action=action,
-        proposal_action_label=HelpProposalAction(action).label if action else "",
-        proposal_note=request.agent_proposal_note if waiting else "",
-        draft=panel.pending_draft if waiting else None,
-    )
-
-
-def load_help_thread_payload(
-    conversation_id: int, help_request_id: int
-) -> HelpThreadPayload | None:
-    """The help panel state of a help thread; two queries (one when resolved).
-
-    None when the request row is gone.
-    """
-    request = (
-        CaseHelpRequest.objects.select_related("test_run_test_case__test_run")
-        .only(
-            "id",
-            "resolution",
-            "agent_proposal_action",
-            "agent_proposal_note",
-            "test_run_test_case__id",
-            "test_run_test_case__status",
-            "test_run_test_case__test_run__id",
-            "test_run_test_case__test_run__status",
-        )
-        .filter(pk=help_request_id)
-        .first()
-    )
-    if request is None:
-        return None
-    waiting = help_request_is_waiting(request)
-    action = request.agent_proposal_action if waiting else ""
-    return help_thread_payload(
-        conversation_id=conversation_id,
-        request_open=waiting,
-        resolution_label=request.get_resolution_display(),
-        proposal_action=action,
-        proposal_action_label=(HelpProposalAction(action).label if action else ""),
-        proposal_note=request.agent_proposal_note if waiting else "",
-        draft=get_pending_plan_draft(request.pk) if waiting else None,
-    )
 
 
 def get_setup_page(

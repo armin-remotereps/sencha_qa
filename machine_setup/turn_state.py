@@ -55,9 +55,18 @@ def live_turn_exists(project_id: int, now: datetime) -> bool:
 
 def auto_fix_turn_live(help_request_id: int) -> bool:
     """Whether an auto-fix turn of the help request is queued or running (not stale)."""
+    return _help_turn_live(help_request_id, auto_fix=True)
+
+
+def person_turn_live(help_request_id: int) -> bool:
+    """Whether a person's (help chat) turn of the help request is live (not stale)."""
+    return _help_turn_live(help_request_id, auto_fix=False)
+
+
+def _help_turn_live(help_request_id: int, *, auto_fix: bool) -> bool:
     return SetupTurn.objects.filter(
         _not_stale(timezone.now()),
-        auto_fix=True,
+        auto_fix=auto_fix,
         conversation__help_request_id=help_request_id,
         status__in=LIVE_TURN_STATUSES,
     ).exists()

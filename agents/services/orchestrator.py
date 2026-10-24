@@ -35,6 +35,7 @@ from agents.services.orchestrator_prompts import (
     help_verdict_note,
     redesign_for_help,
     redesign_verdict_note,
+    verdict_redesign,
     was_resumed,
 )
 from agents.services.sub_agent import run_sub_agent
@@ -1056,11 +1057,11 @@ def _deterministic_summary(
     ]
     if was_resumed(attempts):
         lines.append("The case was interrupted and resumed.")
-    redesign = redesign_for_help(helped, revisions)
+    redesign, own_redesign = verdict_redesign(helped, attempts, revisions)
     if helped is not None:
-        lines.append(help_verdict_note(helped, redesigned=redesign is not None))
+        lines.append(help_verdict_note(helped, redesigned=own_redesign))
     if redesign is not None:
-        lines.append(redesign_verdict_note(redesign))
+        lines.append(redesign_verdict_note(redesign, during_this_help=own_redesign))
     lines.extend(format_attempt_lines(attempts, plan, revisions))
     return "\n".join(lines)
 

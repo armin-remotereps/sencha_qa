@@ -14,8 +14,8 @@
                   has ended),
                   auto_fix_live, blockers, is_open, can_continue,
                   can_continue_run, waiting_for_auto_fix_stop
-     help_form  — CaseHelpResolutionForm (the optional note, pre-filled from
-                  the agent's suggestion; use_plan_revision)
+     help_form  — CaseHelpResolutionForm (the person's optional note, never
+                  pre-filled from the agent's suggestion; use_plan_revision)
    Continue / Mark failed / Skip share one form (the note) and post to their
    own URL via formaction. Abort opens the page's "abort-run" dialog. With a
    pending draft the form carries its hidden plan_revision_id and the
@@ -108,7 +108,7 @@
       <div class="help-suggestion">
         <strong>The agent suggests: {{ help_request.get_agent_proposal_action_display }}</strong>
         {% if help_request.agent_proposal_note %}<p class="pre-wrap small">{{ help_request.agent_proposal_note }}</p>{% endif %}
-        <p class="hint">Only you resolve the case; its note is pre-filled below.</p>
+        <p class="hint">Only you resolve the case. The agent's note is not sent to the test; write your own note below if you want one.</p>
       </div>
     {% endif %}
 

@@ -52,7 +52,8 @@
      carried_label ("Passed under the earlier plan as step k: …"); its
      history lists the earlier attempts ("Earlier plan · …").
      earlier_plans (tuple[projects.case_step_progress.EarlierPlan]: version,
-     reason, help_request_id, resume_step, steps (num, description,
+     reason, help_request_id, help_step_num (the earlier plan's step the
+     case waited for help at), resume_step, steps (num, description,
      status_label, carried_to)): the plans replaced by redesigns, rendered
      server-side (the page reloads when the case leaves "need_help").
 
@@ -227,7 +228,7 @@
       <p class="hint">The test plan was redesigned in a help chat. Steps carried over count as passed and were not re-run.</p>
       {% for plan in earlier_plans reversed %}
       <section class="earlier-plans-item" aria-label="Plan replaced by redesign {{ plan.version }}">
-        <h3>Replaced by redesign {{ plan.version }}{% for help_request in help_requests %}{% if help_request.id == plan.help_request_id %} · help at step {{ help_request.step_num }}{% endif %}{% endfor %} · resumed at step {{ plan.resume_step }}</h3>
+        <h3>Replaced by redesign {{ plan.version }} · help at step {{ plan.help_step_num }} · resumed at step {{ plan.resume_step }}</h3>
         {% if plan.reason %}<p class="pre-wrap small">{{ plan.reason }}</p>{% endif %}
         <ol>
           {% for step in plan.steps %}

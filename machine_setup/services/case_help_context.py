@@ -1,7 +1,8 @@
 """Load a help request's brief data: shared by the auto-fix, the help chat and its tools.
 
-One query for the request with its case and run; the person brief adds one
-for the case's help history and one for the pending redesign draft.
+One query for the request with its case and run; the person brief and the
+case update (``get_help_case``) add one for the case's help history and one
+for the pending redesign draft.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from machine_setup.case_help_brief import (
     HelpHistoryEntry,
     PlanStep,
     build_case_help_brief,
+    build_case_help_update,
 )
 from projects.case_plan_revision_services import get_pending_plan_draft
 from projects.models import (
@@ -65,6 +67,14 @@ def build_help_brief(request: CaseHelpRequest, *, audience: BriefAudience) -> st
     return build_case_help_brief(
         case_help_brief_data(request, audience=audience), audience=audience
     )
+
+
+def build_help_case_update(request: CaseHelpRequest) -> str:
+    """The ``get_help_case`` result of ``request`` (loaded by ``load_help_request``).
+
+    Same queries as the person brief, without the case text.
+    """
+    return build_case_help_update(case_help_brief_data(request, audience="person"))
 
 
 def case_help_brief_data(

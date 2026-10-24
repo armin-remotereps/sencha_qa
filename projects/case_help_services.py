@@ -5,6 +5,7 @@ Imports ``run_reopen_services``, ``services`` and the leaf
 ``machine_setup.services`` (that package imports this one).
 
 Every action locks the project, then the run (the order Start and Resume use),
+then the help request, then the case (the order every help writer uses),
 requires the run to be PAUSED, and resolves the case's open help request. The
 remaining cases are then queued (the helped case first), unless the auto-fix
 turn of the request is still live: it is asked to stop, and the run is queued
@@ -22,7 +23,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from django.db import transaction
-from django.db.models import Prefetch, Q, QuerySet, Subquery
+from django.db.models import Prefetch, QuerySet, Subquery
 from django.utils import timezone
 
 from accounts.models import CustomUser
@@ -30,16 +31,11 @@ from agents.checkpoint import with_help
 from agents.plan_revision import PlanDraftView
 from agents.types import CheckpointHelp, HelpSource
 from machine_setup.auto_fix_stop import request_auto_fix_stop
-from machine_setup.models import (
-    LIVE_TURN_STATUSES,
-    SetupConversation,
-    SetupConversationKind,
-    SetupTurn,
-)
+from machine_setup.models import SetupConversation, SetupConversationKind
 from machine_setup.turn_state import (
     MACHINE_SETUP_RUNNING_MESSAGE,
-    SETUP_TURN_STALE_AFTER,
     auto_fix_turn_live,
+    person_turn_live,
 )
 from projects.case_help_notifications import notify_case_needs_help
 from projects.case_help_proposal_services import clear_agent_proposal
@@ -227,16 +223,6 @@ def list_case_help_requests(pivot: TestRunTestCase) -> list[CaseHelpRequest]:
     )
 
 
-def help_request_waiting(help_request_id: int) -> bool:
-    """Whether the request is open, its case Need help and its run PAUSED."""
-    return CaseHelpRequest.objects.filter(
-        pk=help_request_id,
-        resolution=HelpResolution.OPEN,
-        test_run_test_case__status=TestRunTestCaseStatus.NEED_HELP,
-        test_run_test_case__test_run__status=TestRunStatus.PAUSED,
-    ).exists()
-
-
 def resolve_return_thread(
     *, pivot: TestRunTestCase, thread_id: int | None
 ) -> int | None:
@@ -325,7 +311,7 @@ def continue_after_help(
         project, test_run = _lock_paused_run(pivot.test_run_id)
         locked_pivot, request = _lock_open_request(test_run, pivot.pk)
         now = timezone.now()
-        if _person_turn_live(request.pk, now):
+        if person_turn_live(request.pk):
             raise RunHelpError(_AGENT_REPLYING)
         auto_fix_live = auto_fix_turn_live(request.pk)
         blockers = list_reopen_blockers(test_run, project)
@@ -449,8 +435,8 @@ def stop_auto_fix(*, pivot: TestRunTestCase, user: CustomUser) -> None:
 def lock_help_request_for_chat(*, project: Project, pivot_id: int) -> CaseHelpRequest:
     """Lock the case's open help request for opening its help chat.
 
-    Must be called inside ``transaction.atomic()``. Locks project, run, case
-    and request; raises ``RunHelpError`` unless the run is PAUSED with an open
+    Must be called inside ``transaction.atomic()``. Locks project, run, request
+    and case; raises ``RunHelpError`` unless the run is PAUSED with an open
     request for that case of ``project``. A running auto-fix that has no
     thread yet (its start task is still queued) is released to the person:
     it becomes not fixed without a notification (the person is here), and
@@ -628,6 +614,18 @@ def _lock_paused_run(test_run_id: int) -> tuple[Project, TestRun]:
 def _lock_open_request(
     test_run: TestRun, pivot_id: int
 ) -> tuple[TestRunTestCase, CaseHelpRequest]:
+    """Lock the case's open help request, then the case (after project and run).
+
+    The order of ``case_plan_revision_services.lock_waiting_help_request``.
+    Raises ``RunHelpError`` unless the request is open and the case Need help.
+    """
+    request = (
+        CaseHelpRequest.objects.select_for_update()
+        .filter(test_run_test_case_id=pivot_id, resolution=HelpResolution.OPEN)
+        .first()
+    )
+    if request is None:
+        raise RunHelpError(_NO_OPEN_REQUEST)
     pivot = (
         TestRunTestCase.objects.select_for_update()
         .defer("logs")
@@ -635,13 +633,6 @@ def _lock_open_request(
         .first()
     )
     if pivot is None or pivot.status != TestRunTestCaseStatus.NEED_HELP:
-        raise RunHelpError(_NO_OPEN_REQUEST)
-    request = (
-        CaseHelpRequest.objects.select_for_update()
-        .filter(test_run_test_case_id=pivot.pk, resolution=HelpResolution.OPEN)
-        .first()
-    )
-    if request is None:
         raise RunHelpError(_NO_OPEN_REQUEST)
     return pivot, request
 
@@ -666,20 +657,6 @@ def _resolve(
         update_fields.append("auto_fix_state")
     request.save(update_fields=update_fields)
     clear_agent_proposal(request)
-
-
-def _person_turn_live(help_request_id: int, now: datetime) -> bool:
-    """Whether a person's (not auto-fix) turn of the request's thread is live.
-
-    Queued or running and not stale, as ``turn_state.live_turn_exists``.
-    """
-    cutoff = now - SETUP_TURN_STALE_AFTER
-    return SetupTurn.objects.filter(
-        Q(started_at__gte=cutoff) | Q(started_at__isnull=True, created_at__gte=cutoff),
-        auto_fix=False,
-        conversation__help_request_id=help_request_id,
-        status__in=LIVE_TURN_STATUSES,
-    ).exists()
 
 
 def _latest_screenshot_url(pivot_id: int) -> str:
@@ -719,7 +696,11 @@ def _write_help_key(
 def _set_continue_pending(
     pivot: TestRunTestCase, request: CaseHelpRequest, source: HelpSource
 ) -> None:
-    """Write the checkpoint's help key and put the case back to Created."""
+    """Write the checkpoint's help key and put the case back to Created.
+
+    Writes the help key onto the in-memory ``execution_checkpoint`` (a redesign
+    applied just before is only assigned there) and saves the case once.
+    """
     _write_help_key(pivot, request, source)
     pivot.status = TestRunTestCaseStatus.CREATED
     pivot.blocked_reason = ""

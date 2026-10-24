@@ -105,9 +105,12 @@ from projects.models import (
     ApplicationPlatform,
     BlockedReason,
     CaseHelpRequest,
+    CasePlanRevision,
     ContextWriteSource,
     HelpAutoFixState,
+    HelpProposalAction,
     HelpResolution,
+    PlanRevisionStatus,
     Project,
     RunHelpMode,
     Tag,
@@ -3312,6 +3315,9 @@ def abort_test_run(
     test_run.finished_at = now
     test_run.save(update_fields=["status", "finished_at", "updated_at"])
 
+    # Help requests before cases: the lock order of every help writer.
+    _cancel_run_help_requests(test_run, now)
+
     # A Need help case is Cancelled like a running one: Resume continues it.
     for pivot in test_run.pivot_entries.filter(
         status__in=[
@@ -3323,8 +3329,6 @@ def abort_test_run(
 
     for pivot in test_run.pivot_entries.filter(status=TestRunTestCaseStatus.CREATED):
         _mark_pivot_cancelled(pivot)
-
-    _cancel_run_help_requests(test_run, now)
 
     broadcast_test_run_status(test_run)
 
@@ -3339,15 +3343,31 @@ def abort_test_run(
 def _cancel_run_help_requests(test_run: TestRun, now: datetime) -> None:
     """Close the run's open help request and stop its running auto-fix.
 
-    The auto-fix turn honours the stop at its next tool boundary; its late
+    Its pending redesign drafts are superseded (step lists cleared, as
+    ``case_plan_revision_services.supersede_pending_revisions`` does) and the
+    help-chat agent's suggestion is cleared, as every resolution does. Done
+    with direct updates: that module imports this one. The auto-fix turn honours the stop at its next tool boundary; its late
     settle only records the outcome on the cancelled run. An auto-fix with no
     live turn (its start task is still queued, or was lost) is settled not
     fixed here, since no turn will ever settle it; the late start task is a
     no-op on the cancelled run.
     """
     requests = CaseHelpRequest.objects.filter(test_run_test_case__test_run=test_run)
-    requests.filter(resolution=HelpResolution.OPEN).update(
-        resolution=HelpResolution.CANCELLED, resolved_at=now
+    open_requests = requests.filter(resolution=HelpResolution.OPEN)
+    CasePlanRevision.objects.filter(
+        help_request__in=open_requests, status=PlanRevisionStatus.PROPOSED
+    ).update(
+        status=PlanRevisionStatus.SUPERSEDED,
+        decided_at=now,
+        steps=[],
+        previous_steps=[],
+    )
+    open_requests.update(
+        resolution=HelpResolution.CANCELLED,
+        resolved_at=now,
+        agent_proposal_action=HelpProposalAction.NONE,
+        agent_proposal_note="",
+        agent_proposal_at=None,
     )
     auto_fixing_ids = list(
         requests.filter(auto_fix_state=HelpAutoFixState.RUNNING).values_list(

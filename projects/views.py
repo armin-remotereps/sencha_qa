@@ -44,10 +44,7 @@ from projects.case_plan_revision_services import (
     discard_plan_revision,
     plan_revision_belongs_to,
 )
-from projects.case_step_progress import (
-    build_case_step_progress,
-    step_progress_payload,
-)
+from projects.case_step_progress import case_step_view
 from projects.decorators import project_membership_required
 from projects.exceptions import (
     ApplicationContextVersionNotFoundError,
@@ -80,7 +77,6 @@ from projects.models import (
     TestRun,
     TestRunStatus,
     TestRunTestCase,
-    TestRunTestCaseStatus,
 )
 from projects.run_case_check_services import (
     check_run_cases,
@@ -1051,14 +1047,7 @@ def test_run_case_detail(
     source_run_url = get_source_run_url(pivot, project)
     can_resume = can_resume_case(pivot)
     resume_steps = list_resume_steps(pivot) if can_resume else []
-    # One checkpoint parse for the live Steps payload and the Earlier plans.
-    progress = build_case_step_progress(
-        pivot.execution_checkpoint, pivot.status, pivot.started_at
-    )
-    step_progress = step_progress_payload(
-        progress,
-        planning=progress is None and pivot.status == TestRunTestCaseStatus.IN_PROGRESS,
-    )
+    step_progress, earlier_plans = case_step_view(pivot)
     return render(
         request,
         "projects/test_run_case_detail.html",
@@ -1088,18 +1077,12 @@ def test_run_case_detail(
             ),
             "help_panel": help_panel,
             "help_requests": list_case_help_requests(pivot),
-            "help_form": CaseHelpResolutionForm(
-                initial={
-                    "note": (
-                        help_panel.request.agent_proposal_note
-                        if help_panel is not None and help_panel.is_open
-                        else ""
-                    )
-                }
-            ),
+            # The agent's suggested note is shown, never pre-filled: the
+            # Continue note reaches the tester as the person's own words.
+            "help_form": CaseHelpResolutionForm(),
             "resumes": list_case_resumes(pivot),
             "step_progress": step_progress,
-            "earlier_plans": progress.earlier_plans if progress is not None else (),
+            "earlier_plans": earlier_plans,
             "active_tab": "runs",
             "active_nav": "projects",
         },

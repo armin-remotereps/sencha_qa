@@ -319,8 +319,33 @@ def format_redesign_state_line(record: PlanRevisionRecord) -> str:
     )
 
 
-def redesign_verdict_note(record: PlanRevisionRecord) -> str:
-    """Verdict sentence for a help that redesigned the test plan."""
+def verdict_redesign(
+    helped: CheckpointHelp | None,
+    attempts: Sequence[SubTaskAttempt],
+    revisions: Sequence[PlanRevisionRecord],
+) -> tuple[PlanRevisionRecord | None, bool]:
+    """The redesign the verdict mentions, and whether this help made it.
+
+    This help's redesign when it made one; otherwise the newest redesign while
+    the attempts still hold a carried step (a later help without a redesign of
+    its own); otherwise none.
+    """
+    own = redesign_for_help(helped, revisions)
+    if own is not None:
+        return own, True
+    if revisions and any(attempt.carried_from is not None for attempt in attempts):
+        return revisions[-1], False
+    return None, False
+
+
+def redesign_verdict_note(
+    record: PlanRevisionRecord, *, during_this_help: bool = True
+) -> str:
+    """Verdict sentence for a redesigned test plan.
+
+    ``during_this_help``: the help the verdict mentions made the redesign;
+    otherwise an earlier help did.
+    """
     reason = _sentence(record.reason)
     carried = record.resume_step - 1
     if carried <= 0:
@@ -332,8 +357,9 @@ def redesign_verdict_note(record: PlanRevisionRecord) -> str:
             f"{_carried_range(record)} from the earlier plan, where they had "
             "passed; they were not re-run"
         )
+    when = "during help" if during_this_help else "earlier in this case"
     return (
-        f"The test plan was redesigned during help"
+        f"The test plan was redesigned {when}"
         f"{' (' + reason + ')' if reason else ''}. {carried_text}."
     )
 
@@ -357,15 +383,15 @@ def build_verdict_prompt(
         if was_resumed(attempts)
         else ""
     )
-    redesign = redesign_for_help(helped, revisions)
+    redesign, own_redesign = verdict_redesign(helped, attempts, revisions)
     helped_note = (
-        f"{help_verdict_note(helped, redesigned=redesign is not None)} "
-        "Mention that help. "
+        f"{help_verdict_note(helped, redesigned=own_redesign)} " "Mention that help. "
         if helped is not None
         else ""
     )
     redesign_note = (
-        f"{redesign_verdict_note(redesign)} Mention this; the carried steps count "
+        f"{redesign_verdict_note(redesign, during_this_help=own_redesign)} "
+        "Mention this; the carried steps count "
         "as passed. "
         if redesign is not None
         else ""

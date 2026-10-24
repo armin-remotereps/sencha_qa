@@ -443,15 +443,17 @@ document.addEventListener('alpine:init', () => {
 
   Alpine.data('helpPanel', () => {
     const initial = readOptionalJson('help-initial') || {};
-    const proposal = initial.agent_proposal || null;
     return {
       requestOpen: !!initial.request_open,
       resolutionLabel: initial.resolution_label || '',
       draft: initial.plan_draft || null,
-      proposal,
-      note: proposal ? proposal.note : '',
-      noteEdited: false,
+      // The agent's suggestion is shown as text only; it never fills the
+      // note, which reaches the tester as the person's words.
+      proposal: initial.agent_proposal || null,
       usePlan: true,
+      // Set when a help event swapped in a different draft: the person must
+      // review it and tick "Use the redesigned plan" again.
+      draftChanged: false,
       stepNum: readOptionalJson('help-step-num'),
       gateBlockers: readOptionalJson('help-blockers') || [],
       turnBlocker: readOptionalJson('help-turn-blocker') || '',
@@ -467,10 +469,14 @@ document.addEventListener('alpine:init', () => {
         this.resolutionLabel = help.resolution_label || '';
         const previousDraftId = this.draft ? this.draft.revision_id : null;
         this.draft = help.plan_draft || null;
-        // A new draft is offered ticked again.
-        if (this.draft && this.draft.revision_id !== previousDraftId) this.usePlan = true;
+        if (!this.draft) {
+          this.draftChanged = false;
+        } else if (this.draft.revision_id !== previousDraftId) {
+          // Never apply a draft the person has not seen: untick it.
+          this.usePlan = false;
+          this.draftChanged = true;
+        }
         this.proposal = help.agent_proposal || null;
-        if (!this.noteEdited && this.proposal) this.note = this.proposal.note;
       },
 
       // The server's gates without the "setup turn live" one: this page

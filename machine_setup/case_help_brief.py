@@ -3,9 +3,14 @@
 Two audiences:
 
 - ``auto_fix``: the unattended Night auto-fix (unchanged wording);
-- ``person``: a help chat a person opened, and the ``get_help_case`` tool. It
-  adds every plan step's status, the steps that can be carried into a
-  redesigned plan, the help history, earlier redesigns and the pending draft.
+- ``person``: the first message of a help chat a person opened. It adds every
+  plan step's status, the steps that can be carried into a redesigned plan,
+  the help history, earlier redesigns and the pending draft.
+
+``build_case_help_update`` is the ``get_help_case`` tool's result: only what
+changes while the chat runs (status, plan statuses, carriable steps, pending
+draft, help history, earlier redesigns), not the case text the first message
+already holds, so each call adds little to the thread's transcript.
 
 Pure: the caller (``services/case_help_context``) loads the rows and the
 checkpoint. Every field is model, TestRail or agent text; it is framed as data,
@@ -33,8 +38,13 @@ _PERSON_DIGEST_MAX = 4000
 _HISTORY_TEXT_MAX = 300
 _REVISION_STEP_MAX = 150
 _DRAFT_STEP_MAX = 300
-# The whole person brief (and every ``get_help_case`` result).
+# The whole person brief (the help chat's first message).
 PERSON_BRIEF_MAX_CHARS = 24_000
+# Case update (every ``get_help_case`` result): tighter, since each call is
+# kept in the thread's transcript.
+CASE_UPDATE_MAX_CHARS = 8_000
+_UPDATE_STEP_MAX = 200
+_UPDATE_EXPECTED_MAX = 120
 _CUT_NOTE = "\n\n(The brief was cut here to stay within its size limit.)"
 
 
@@ -148,23 +158,7 @@ def _person_brief(data: CaseHelpBriefData) -> str:
     ]
     if data.plan:
         sections.append(_person_plan_block(data.plan))
-        carriable = [
-            str(num) for num, item in enumerate(data.plan, start=1) if item.carriable
-        ]
-        sections.append(
-            _block(
-                "STEPS THAT CAN BE CARRIED INTO A REDESIGNED PLAN",
-                (
-                    (
-                        ", ".join(carriable)
-                        + " (their final attempt passed; carried steps come first, "
-                        "in this order)"
-                    )
-                    if carriable
-                    else "none (no step's final attempt passed)"
-                ),
-            )
-        )
+        sections.append(_carriable_block(data.plan))
     else:
         sections.append(
             _block("TESTER'S PLAN", "(the tester has no plan yet: nothing to redesign)")
@@ -175,10 +169,49 @@ def _person_brief(data: CaseHelpBriefData) -> str:
     if data.revisions:
         sections.append(_revisions_block(data.revisions))
     sections.append(_draft_block(data.pending_draft))
-    text = "\n\n".join(sections)
-    if len(text) > PERSON_BRIEF_MAX_CHARS:
-        text = text[: PERSON_BRIEF_MAX_CHARS - len(_CUT_NOTE)] + _CUT_NOTE
-    return text
+    return _fit("\n\n".join(sections), PERSON_BRIEF_MAX_CHARS)
+
+
+def build_case_help_update(data: CaseHelpBriefData) -> str:
+    """The case as it stands now, without the case text (``get_help_case``).
+
+    The pending draft comes right after the plan so a cut drops the history
+    and earlier redesigns first.
+    """
+    sections = [
+        (
+            "The paused case as it stands now. The case text, preconditions, "
+            "the tester's reason and ask are in this chat's first message and "
+            "are not repeated here."
+        ),
+        _DATA_FRAMING,
+        _block("STATUS", data.status_text or _default_status(data)),
+    ]
+    if data.plan:
+        sections.append(
+            _person_plan_block(
+                data.plan,
+                step_max=_UPDATE_STEP_MAX,
+                expected_max=_UPDATE_EXPECTED_MAX,
+            )
+        )
+        sections.append(_carriable_block(data.plan))
+    else:
+        sections.append(
+            _block("TESTER'S PLAN", "(the tester has no plan yet: nothing to redesign)")
+        )
+    sections.append(_draft_block(data.pending_draft))
+    if data.help_history:
+        sections.append(_history_block(data.help_history))
+    if data.revisions:
+        sections.append(_revisions_block(data.revisions))
+    return _fit("\n\n".join(sections), CASE_UPDATE_MAX_CHARS)
+
+
+def _fit(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - len(_CUT_NOTE)] + _CUT_NOTE
 
 
 _DATA_FRAMING = (
@@ -233,17 +266,38 @@ def _auto_fix_plan_block(plan: tuple[PlanStep, ...], step_num: int) -> str:
     return _block("TESTER'S PLAN", "\n".join(lines))
 
 
-def _person_plan_block(plan: tuple[PlanStep, ...]) -> str:
+def _person_plan_block(
+    plan: tuple[PlanStep, ...],
+    *,
+    step_max: int = _PLAN_STEP_MAX,
+    expected_max: int = _PERSON_EXPECTED_MAX,
+) -> str:
     lines = []
     for index, item in enumerate(plan, start=1):
         state = item.status_label or "not run"
         if item.carriable:
             state += ", can be carried"
-        line = f"{index}. [{state}] {_cap(item.description, _PLAN_STEP_MAX)}"
+        line = f"{index}. [{state}] {_cap(item.description, step_max)}"
         if item.expected_result.strip():
-            line += f"\n   Expected: {_cap(item.expected_result, _PERSON_EXPECTED_MAX)}"
+            line += f"\n   Expected: {_cap(item.expected_result, expected_max)}"
         lines.append(line)
     return _block("TESTER'S PLAN (each step with its status)", "\n".join(lines))
+
+
+def _carriable_block(plan: tuple[PlanStep, ...]) -> str:
+    carriable = [str(num) for num, item in enumerate(plan, start=1) if item.carriable]
+    return _block(
+        "STEPS THAT CAN BE CARRIED INTO A REDESIGNED PLAN",
+        (
+            (
+                ", ".join(carriable)
+                + " (their final attempt passed; carried steps come first, "
+                "in this order)"
+            )
+            if carriable
+            else "none (no step's final attempt passed)"
+        ),
+    )
 
 
 def _history_block(history: tuple[HelpHistoryEntry, ...]) -> str:

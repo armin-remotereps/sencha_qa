@@ -7,9 +7,9 @@
     help_panel — projects.case_help_services.HelpPanel (request with
                  test_run_test_case__test_case, blockers, is_open,
                  latest_screenshot_url, pending_draft)
-    help_form  — projects.forms.CaseHelpResolutionForm (note pre-filled from
-                 the agent's suggestion, use_plan_revision initially True,
-                 return_thread_id, plan_revision_id)
+    help_form  — projects.forms.CaseHelpResolutionForm (labels only; the
+                 note starts empty and is never pre-filled from the agent's
+                 suggestion, since it reaches the tester as the person's words)
     help_case_url — the case page
     help_turn_blocker — the gate a live setup turn raises; the page tracks
                  that turn itself (turnLive / otherThreadTurnLive of the
@@ -20,8 +20,9 @@
   component (chat.html): initial state from the `help-initial` json_script,
   then `help` socket messages (machineSetupChat re-dispatches them as the
   `help-state` window event). The hidden plan_revision_id follows the shown
-  draft. All model and agent text is autoescaped or x-text; never |safe or
-  x-html.
+  draft. A help event that brings a different draft unticks "use the
+  redesigned plan" and shows a notice until the person ticks it again. All
+  model and agent text is autoescaped or x-text; never |safe or x-html.
 {% endcomment %}
 {% with help_request=help_panel.request %}
 {% with pivot=help_request.test_run_test_case %}
@@ -82,7 +83,7 @@
     <div class="help-suggestion">
       <strong x-text="'The agent suggests: ' + proposal.action_label"></strong>
       <p class="pre-wrap small" x-show="proposal.note" x-text="proposal.note"></p>
-      <p class="hint">Only you resolve the case; its note is pre-filled below.</p>
+      <p class="hint">Only you resolve the case. The agent's note is not sent to the tester; write your own note below if it should know something.</p>
     </div>
   </template>
 
@@ -92,13 +93,14 @@
     <input type="hidden" name="plan_revision_id" :value="draft ? draft.revision_id : ''">
     <div class="field">
       <label class="label" for="help-panel-note">{{ help_form.note.label }}</label>
-      <textarea id="help-panel-note" class="textarea" name="note" rows="3" maxlength="2000" x-model="note" @input="noteEdited = true" placeholder="Optional: what you fixed, or what the agent should know"></textarea>
+      <textarea id="help-panel-note" class="textarea" name="note" rows="3" maxlength="2000" placeholder="Optional: what you fixed, or what the agent should know"></textarea>
     </div>
     <div class="field" x-show="draft">
       <label class="checkbox" for="help-panel-use-plan">
-        <input type="checkbox" id="help-panel-use-plan" name="use_plan_revision" value="on" x-model="usePlan">
+        <input type="checkbox" id="help-panel-use-plan" name="use_plan_revision" value="on" x-model="usePlan" @change="if ($event.target.checked) draftChanged = false">
         <span>{{ help_form.use_plan_revision.label }}</span>
       </label>
+      <p class="hint" role="status" x-show="draftChanged">The agent proposed a new draft. Review it before continuing.</p>
     </div>
     <p class="hint" x-text="continueHint"></p>
     <p class="hint" id="help-panel-blockers" x-show="continueBlockers.length" x-text="'Continue is unavailable: ' + continueBlockers.join(' ')"></p>

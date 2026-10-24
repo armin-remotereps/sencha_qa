@@ -24,9 +24,9 @@ from machine_setup.services.chat_page import (
     find_thread,
     get_setup_page,
     get_thread_help_panel,
-    help_panel_payload,
     list_help_threads,
 )
+from machine_setup.services.help_thread_state import help_panel_payload
 from machine_setup.services.open_help_chat import find_help_case, open_help_chat
 from machine_setup.services.reset_conversation import reset_conversation
 from machine_setup.services.send_message import send_setup_message
@@ -89,9 +89,10 @@ def _render_chat(
     if help_panel is not None and conversation is not None:
         help_state = help_panel_payload(conversation.pk, help_panel)
         draft = help_panel.pending_draft
+        # The note is never pre-filled from the agent's suggestion: whatever
+        # is submitted reaches the tester as the person's words.
         help_form = CaseHelpResolutionForm(
             initial={
-                "note": help_panel.request.agent_proposal_note,
                 "use_plan_revision": True,
                 "return_thread_id": conversation.pk,
                 "plan_revision_id": draft.revision_id if draft is not None else None,

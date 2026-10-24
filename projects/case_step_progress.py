@@ -148,6 +148,8 @@ class EarlierPlan:
     version: int
     reason: str
     help_request_id: int
+    # Step of that plan the case was waiting for help at when it was redesigned.
+    help_step_num: int
     resume_step: int
     steps: tuple[EarlierPlanStep, ...]
 
@@ -297,6 +299,7 @@ def _earlier_plan(record: PlanRevisionRecord) -> EarlierPlan:
         version=record.version,
         reason=record.reason,
         help_request_id=record.help_request_id,
+        help_step_num=record.paused_step,
         resume_step=record.resume_step,
         steps=tuple(steps),
     )
@@ -483,15 +486,30 @@ def case_step_payload(
 ) -> StepProgressPayload:
     """Payload for a case straight from its stored checkpoint and status."""
     progress = build_case_step_progress(checkpoint_data, case_status, case_started_at)
-    return step_progress_payload(
-        progress,
-        planning=progress is None and case_status == TestRunTestCaseStatus.IN_PROGRESS,
-    )
+    return step_progress_payload(progress, planning=_is_planning(progress, case_status))
 
 
 def pivot_step_payload(pivot: TestRunTestCase) -> StepProgressPayload:
     """The case's step rows from its loaded checkpoint and status (no query)."""
     return case_step_payload(pivot.execution_checkpoint, pivot.status, pivot.started_at)
+
+
+def case_step_view(
+    pivot: TestRunTestCase,
+) -> tuple[StepProgressPayload, tuple[EarlierPlan, ...]]:
+    """The case page's step rows and earlier plans from one checkpoint parse."""
+    progress = build_case_step_progress(
+        pivot.execution_checkpoint, pivot.status, pivot.started_at
+    )
+    payload = step_progress_payload(
+        progress, planning=_is_planning(progress, pivot.status)
+    )
+    return payload, progress.earlier_plans if progress is not None else ()
+
+
+def _is_planning(progress: CaseStepProgress | None, case_status: str) -> bool:
+    """A running case without a checkpoint yet is still planning its steps."""
+    return progress is None and case_status == TestRunTestCaseStatus.IN_PROGRESS
 
 
 def _row_payload(row: CaseStepRow) -> StepRowPayload:

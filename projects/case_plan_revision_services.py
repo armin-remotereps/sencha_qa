@@ -6,11 +6,11 @@ discards it (``discard_plan_revision``) or applies it with Continue, which calls
 ``apply_plan_revision_locked`` under its own locks. Mark failed, Skip and a
 Continue without the draft supersede it (``supersede_pending_revisions``).
 
-Every write locks the project, then the run, then the help request (the order
-``case_help_services`` uses) and requires the run PAUSED, the request open and
-the case Need help. Abort resolves the request ``cancelled`` without touching
-its drafts, so a PROPOSED draft of a resolved request is dead: every read here
-filters on an open request.
+Every write locks the project, then the run, then the help request, then the
+case (the order every help writer uses) and requires the run PAUSED, the request
+open and the case Need help. Abort supersedes the drafts of the request it
+cancels; every read here still filters on an open request. A superseded draft
+is never displayed, so its ``steps`` / ``previous_steps`` are cleared.
 """
 
 from __future__ import annotations
@@ -206,7 +206,7 @@ def discard_plan_revision(
 
 # ---------------------------------------------------------------------------
 # Internal: called by case_help_services / case_help_proposal_services under
-# their locks (project -> run -> request).
+# their locks (project -> run -> request -> case).
 # ---------------------------------------------------------------------------
 
 
@@ -267,10 +267,11 @@ def apply_plan_revision_locked(
 ) -> None:
     """Apply the pending draft the person saw to the locked case's checkpoint.
 
-    The caller holds the project, run, case and request locks and then writes
-    the help key (``with_help`` copies the revised ``execution_checkpoint``).
-    Raises ``RunHelpError`` when the draft is not the pending one, the case
-    changed since it was proposed, or it no longer validates.
+    The caller holds the project, run, request and case locks. Only assigns
+    ``pivot.execution_checkpoint`` (not saved): the caller then writes the help
+    key onto that in-memory checkpoint and saves the case once. Raises
+    ``RunHelpError`` when the draft is not the pending one, the case changed
+    since it was proposed, or it no longer validates.
     """
     revision = (
         CasePlanRevision.objects.select_for_update()
@@ -310,7 +311,6 @@ def apply_plan_revision_locked(
         reason=revision.reason,
     )
     pivot.execution_checkpoint = checkpoint_to_json(revised)
-    pivot.save(update_fields=["execution_checkpoint", "updated_at"])
     revision.status = PlanRevisionStatus.APPLIED
     revision.decided_by = user
     revision.decided_at = timezone.now()
@@ -318,10 +318,18 @@ def apply_plan_revision_locked(
 
 
 def supersede_pending_revisions(request: CaseHelpRequest) -> None:
-    """Retire the request's pending draft (a newer one, or resolved without it)."""
+    """Retire the request's pending draft (a newer one, or resolved without it).
+
+    A superseded draft is never displayed: its step lists are cleared.
+    """
     CasePlanRevision.objects.filter(
         help_request_id=request.pk, status=PlanRevisionStatus.PROPOSED
-    ).update(status=PlanRevisionStatus.SUPERSEDED, decided_at=timezone.now())
+    ).update(
+        status=PlanRevisionStatus.SUPERSEDED,
+        decided_at=timezone.now(),
+        steps=[],
+        previous_steps=[],
+    )
 
 
 # ---------------------------------------------------------------------------

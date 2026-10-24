@@ -26,7 +26,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
-from agents.checkpoint import MAX_PLAN_REVISION_RECORDS, checkpoint_to_json
+from agents.checkpoint import MAX_PLAN_REVISION_RECORDS
 from agents.exceptions import PlanRevisionInvalid
 from agents.timeout_bounds import TimeoutBounds, resolve_timeout_seconds
 from agents.types import (
@@ -41,8 +41,10 @@ MAX_DESCRIPTION_CHARS = 2000
 MAX_EXPECTED_RESULT_CHARS = 1000
 MAX_TOTAL_TEXT_CHARS = 24_000
 MAX_REASON_CHARS = 1000
-# Caps for the earlier plan kept in a revision record.
+# Caps for the earlier plan kept in a revision record and in a draft snapshot.
 _RECORD_STEP_TEXT_CHARS = 500
+# Cap for each earlier attempt's summary / error and decision's reason in a record.
+_RECORD_RESULT_TEXT_CHARS = 500
 _RECORD_PAUSED_DIGEST_CHARS = 6000
 
 OldStepStatus = Literal["passed", "failed", "not_run", "needs_help"]
@@ -125,11 +127,34 @@ class PlanDraftView:
 
 
 def plan_fingerprint(checkpoint: OrchestratorCheckpoint) -> str:
-    """sha256 of the plan, attempts, cursor and plan version."""
-    data = checkpoint_to_json(checkpoint)
+    """sha256 of the plan, attempts, cursor and plan version.
+
+    Built from those fields only (not the whole checkpoint, whose revision
+    history can be large); the attempt fields are the ones the checkpoint stores.
+    """
     canonical = {
-        "plan": data["plan"],
-        "attempts": data["attempts"],
+        "plan": [
+            {
+                "description": task.description,
+                "expected_result": task.expected_result,
+                "timeout_seconds": task.timeout_seconds,
+            }
+            for task in checkpoint.plan
+        ],
+        "attempts": [
+            {
+                "step_num": attempt.step_num,
+                "kind": attempt.kind,
+                "status": attempt.result.status,
+                "summary": attempt.result.summary,
+                "iterations": attempt.result.iterations,
+                "error": attempt.result.error,
+                "actions_digest": attempt.result.actions_digest,
+                "duration_seconds": attempt.duration_seconds,
+                "carried_from": attempt.carried_from,
+            }
+            for attempt in checkpoint.attempts
+        ],
         "next_step": checkpoint.next_step,
         "plan_version": checkpoint.plan_version,
     }
@@ -171,8 +196,8 @@ def snapshot_plan(
             status = "failed"
         snapshots.append(
             PlanStepSnapshot(
-                description=task.description,
-                expected_result=task.expected_result,
+                description=task.description[:_RECORD_STEP_TEXT_CHARS],
+                expected_result=task.expected_result[:_RECORD_STEP_TEXT_CHARS],
                 status=status,
             )
         )
@@ -310,11 +335,25 @@ def apply_plan_revision(
         earlier_attempts=tuple(
             dataclasses.replace(
                 attempt,
-                result=dataclasses.replace(attempt.result, actions_digest=""),
+                result=dataclasses.replace(
+                    attempt.result,
+                    summary=attempt.result.summary[:_RECORD_RESULT_TEXT_CHARS],
+                    error=(
+                        attempt.result.error[:_RECORD_RESULT_TEXT_CHARS]
+                        if attempt.result.error is not None
+                        else None
+                    ),
+                    actions_digest="",
+                ),
             )
             for attempt in checkpoint.attempts
         ),
-        earlier_decisions=checkpoint.decisions,
+        earlier_decisions=tuple(
+            dataclasses.replace(
+                decision, reason=decision.reason[:_RECORD_RESULT_TEXT_CHARS]
+            )
+            for decision in checkpoint.decisions
+        ),
         mapping=tuple(mapping),
         paused_step=checkpoint.next_step,
         paused_digest=_paused_digest(checkpoint)[:_RECORD_PAUSED_DIGEST_CHARS],

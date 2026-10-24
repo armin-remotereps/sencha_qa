@@ -1,8 +1,10 @@
 """The help-chat agent's suggested resolution of a Need help case.
 
 The agent only suggests (Continue / Mark failed / Skip, with a note); the
-suggestion pre-selects and pre-fills the person's form, and only the person
-acts. Every resolution clears it (``clear_agent_proposal``).
+suggestion is shown next to the person's form, never copied into it or into
+the help key's ``note`` (that note reaches the tester as the person's own
+words), and only the person acts. Every resolution clears it
+(``clear_agent_proposal``).
 """
 
 from __future__ import annotations

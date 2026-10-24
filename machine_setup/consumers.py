@@ -8,12 +8,8 @@ from asgiref.sync import sync_to_async
 from machine_setup.events import setup_group
 from machine_setup.models import SetupConversation
 from machine_setup.payloads import HelpThreadPayload
-from machine_setup.services.chat_page import (
-    SetupPage,
-    find_thread,
-    get_setup_page,
-    load_help_thread_payload,
-)
+from machine_setup.services.chat_page import SetupPage, find_thread, get_setup_page
+from machine_setup.services.help_thread_state import load_help_thread_payload
 from projects.consumers import AuthenticatedConsumer
 from projects.models import Project
 from projects.services import _agent_status_group
