@@ -3,7 +3,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Final, Literal
 
-from agents.types import SubTask, SubTaskAttempt, SubTaskResult
+from agents.types import (
+    CheckpointHelp,
+    HelpSource,
+    SubTask,
+    SubTaskAttempt,
+    SubTaskResult,
+)
 
 # Step descriptions in the verdict input are shortened to this many characters:
 # enough to name the step, not to repeat it.
@@ -110,7 +116,9 @@ def _build_timeout_rule(min_timeout_seconds: int, max_timeout_seconds: int) -> s
 def build_evaluate_system_prompt() -> str:
     return (
         "You are a QA test orchestrator evaluating sub-task failures. "
-        "Decide whether to continue, recover, or stop."
+        "Decide whether to continue, recover, ask for help, or stop. Most failures "
+        "on a test machine are environmental, not product defects: do not hesitate "
+        "to ask for help."
     )
 
 
@@ -137,23 +145,42 @@ def build_evaluate_prompt(
         f"REMAINING SUB-TASKS: {remaining_tasks}\n\n"
         "Decide what to do:\n"
         '- "continue": skip this failure and proceed to the next sub-task\n'
-        '- "recover": create a recovery sub-task to fix the issue, then retry the failed sub-task\n'
-        '- "stop": the failure is non-recoverable, fail the entire test case\n\n'
-        "If the sub-task timed out while a long operation was still legitimately in progress, "
-        "the recovery sub-task should simply resume observing that operation with a larger "
-        "timeout_seconds (between "
-        f"{min_timeout_seconds} and {max_timeout_seconds}) — do not add verification steps "
-        "the test case never asked for.\n\n"
+        '- "recover": create a recovery sub-task to fix the issue, then retry the '
+        "failed sub-task\n"
+        '- "need_help": the failure is caused by the test machine or environment, not '
+        "by the application under test, and a person at the machine can likely fix it "
+        "quickly (an install/download/build that timed out or stalled, a "
+        "permission/UAC/admin prompt, an unexpected dialog or popup, an element that is "
+        "on screen but does not react to clicks, a missing tool or file, a network "
+        "hiccup, a slow or frozen machine). The run pauses, someone fixes the machine, "
+        "and this sub-task is retried from the current state.\n"
+        '- "stop": ONLY when the application under test itself behaves contrary to the '
+        "expected result (a real product defect). This fails the entire test case.\n\n"
+        'Prefer "need_help" over "stop" whenever you are not sure the application is at '
+        "fault: a wrong Failed costs a bug ticket; a Need help costs a person one "
+        "minute. A RESULT that starts with ENVIRONMENT: means the executor saw an "
+        "environmental obstacle.\n"
+        'Use "recover" only when the agent itself can clearly fix it (it clicked the '
+        "wrong thing, or a long operation is still legitimately running and needs more "
+        "time), and never more than once for the same environmental problem.\n\n"
+        "If the sub-task timed out while a long operation was still legitimately in "
+        "progress, the recovery sub-task should simply resume observing that operation "
+        "with a larger timeout_seconds (between "
+        f"{min_timeout_seconds} and {max_timeout_seconds}) — do not add verification "
+        "steps the test case never asked for.\n\n"
         "The recovery sub-agent and the retried sub-task see the failed attempt's "
         "actions too. Write the recovery_task so it does not repeat actions whose "
         "effect is already in place (text already typed, forms already submitted, "
         "apps already opened), and say what the attempt already did when that "
         "matters.\n\n"
         "OUTPUT FORMAT — respond with ONLY this JSON, no other text:\n"
-        '{"decision": "continue"|"recover"|"stop", "reason": "...", '
+        '{"decision": "continue"|"recover"|"need_help"|"stop", "reason": "...", '
+        '"cause": "environment"|"agent"|"product"|"unclear", '
+        '"help_ask": "<one or two imperative sentences: what to fix on the machine>", '
         '"recovery_task": {"description": "...", "expected_result": "...", '
-        '"timeout_seconds": N}}  '
-        "(recovery_task only when decision is recover)"
+        '"timeout_seconds": N}}\n'
+        "(help_ask only when decision is need_help or recover; recovery_task only "
+        "when decision is recover)"
     )
 
 
@@ -178,10 +205,41 @@ def format_failed_attempt_state(
     )
 
 
+def helper_name(source: HelpSource) -> str:
+    """Who fixed the machine, as the prompts name them."""
+    return "the machine setup agent" if source == "auto_fix" else "a person"
+
+
+def format_help_state_line(step_num: int, help: CheckpointHelp, reason: str) -> str:
+    """State line for a step that failed, paused for help and is retried after it.
+
+    ``reason`` is why the orchestrator asked for help at that step. Shared by
+    the live continue and the resume rebuild so both write the same state.
+    """
+    asked = f" after the agent asked for help: {reason}" if reason else ""
+    note_text = help.note.strip().rstrip(".")
+    note = f" Note: {note_text}." if note_text else ""
+    return (
+        f"Step {step_num}: {helper_name(help.source)} fixed the test machine"
+        f"{asked}.{note} Check the screen: the fix may have changed it."
+    )
+
+
+def help_verdict_note(help: CheckpointHelp) -> str:
+    """One sentence saying who fixed the machine at which step."""
+    return (
+        f"The case paused at step {help.step_num} for help, and "
+        f"{helper_name(help.source)} fixed the test machine before the step was "
+        "retried."
+    )
+
+
 def build_verdict_prompt(
     attempts: tuple[SubTaskAttempt, ...],
     overall_status: Literal["pass", "fail"],
     plan: Sequence[SubTask],
+    *,
+    helped: CheckpointHelp | None = None,
 ) -> str:
     results_text = "\n".join(
         f"  {line}" for line in format_attempt_lines(attempts, plan)
@@ -194,12 +252,16 @@ def build_verdict_prompt(
         if was_resumed(attempts)
         else ""
     )
+    helped_note = (
+        f"{help_verdict_note(helped)} Mention that help. " if helped is not None else ""
+    )
     return (
         f"Sub-task execution finished. Results:\n{results_text}\n\n"
         "Provide a final summary of the test case execution in 2-4 sentences. "
         f"The overall result is {outcome}. It is decided from the final attempt of "
         "each step, and recovery steps do not count. "
         f"{resumed_note}"
+        f"{helped_note}"
         "State that result and do not "
         "contradict it. Highlight any key observations, including recoveries. "
         "Readers never see the numbered step list, so whenever you mention a step "

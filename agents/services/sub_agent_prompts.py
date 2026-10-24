@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from agents.services.prompt_parts import (
+    ENVIRONMENT_SUMMARY_PREFIX,
     build_agent_persona,
     build_app_lifecycle_rules,
     build_environment_context,
+    build_environment_obstacle_rules,
     build_qa_rules,
     build_tool_guidelines,
     build_tool_taxonomy,
@@ -27,6 +29,7 @@ def build_sub_agent_system_prompt(
         sections = [
             _build_sub_agent_persona(system_info=system_info),
             build_qa_rules(),
+            build_environment_obstacle_rules(),
             build_tool_taxonomy(),
             build_environment_context(system_info=system_info),
             build_tool_guidelines(),
@@ -94,7 +97,9 @@ def _build_result_format_instructions() -> str:
         "(no tool calls, just text):\n"
         "RESULT: PASS or FAIL\n"
         "SUMMARY: <1-3 sentences describing what happened>\n\n"
-        "If you cannot execute the step, respond with FAIL and explain why in the SUMMARY."
+        "If you cannot execute the step, respond with FAIL and explain why in the "
+        "SUMMARY. When the test machine or environment, not the application, stopped "
+        f"you, start the SUMMARY with '{ENVIRONMENT_SUMMARY_PREFIX}'."
     )
 
 

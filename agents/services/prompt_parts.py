@@ -61,6 +61,28 @@ def build_qa_rules() -> str:
     )
 
 
+ENVIRONMENT_SUMMARY_PREFIX = "ENVIRONMENT:"
+
+
+def build_environment_obstacle_rules() -> str:
+    return (
+        "ENVIRONMENT OBSTACLES:\n"
+        "- When the test machine, not the application under test, stops you (an "
+        "install, download or build that stalls or times out, a permission/UAC/admin "
+        "prompt, an unexpected dialog or popup you cannot safely dismiss, an element "
+        "that is on screen but does not react, a missing tool or file, a network "
+        "failure, a slow or frozen machine), FAIL fast: try one sensible fix at most, "
+        "then stop instead of spending the rest of your time budget on workarounds.\n"
+        f"- Then start the SUMMARY with '{ENVIRONMENT_SUMMARY_PREFIX}' and say what is "
+        "wrong on the machine and what a person at the machine would need to do, e.g. "
+        f"'SUMMARY: {ENVIRONMENT_SUMMARY_PREFIX} a Windows UAC prompt for setup.exe is "
+        "blocking the screen; a person must approve it.' A person will fix it and the "
+        "step will be retried.\n"
+        "- Never use this for the application under test behaving differently from "
+        "the expected result: that is a normal FAIL."
+    )
+
+
 def build_tool_taxonomy() -> str:
     return (
         "You have the following tools:\n\n"

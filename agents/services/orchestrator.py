@@ -30,6 +30,8 @@ from agents.services.orchestrator_prompts import (
     final_step_indices,
     format_attempt_lines,
     format_failed_attempt_state,
+    format_help_state_line,
+    help_verdict_note,
     was_resumed,
 )
 from agents.services.sub_agent import run_sub_agent
@@ -47,6 +49,10 @@ from agents.types import (
     CancellationCheck,
     ChatMessage,
     CheckpointCallback,
+    CheckpointHelp,
+    DecisionAction,
+    FailureCause,
+    HelpRequestInfo,
     LLMConfig,
     LogCallback,
     OrchestratorCheckpoint,
@@ -63,6 +69,13 @@ from agents.types import (
 logger = logging.getLogger(__name__)
 
 _JSON_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+
+_FAILURE_CAUSES: tuple[FailureCause, ...] = (
+    "environment",
+    "agent",
+    "product",
+    "unclear",
+)
 
 
 def run_orchestrator(
@@ -86,6 +99,11 @@ def run_orchestrator(
     _log(on_log, f"[Orchestrator] Model: {orchestrator_llm.model}")
 
     bounds = build_timeout_bounds()
+    # A person or the setup agent fixed the machine at the cursor step and left
+    # it as it is: re-run that step from the current screen, without a restore.
+    continuing_after_help = (
+        resume is not None and resume.help is not None and resume.help.continue_pending
+    )
     if resume is None:
         _log(on_log, "[Orchestrator] Planning: decomposing test case into sub-tasks...")
         sub_tasks = _plan_sub_tasks(
@@ -102,6 +120,12 @@ def run_orchestrator(
             f"[Orchestrator] Resuming at step {resume.next_step} of "
             f"{len(sub_tasks)} from the saved plan.",
         )
+        if continuing_after_help:
+            _log(
+                on_log,
+                "[Orchestrator] Continuing after help: the machine was fixed, "
+                "so the state is not restored.",
+            )
 
     _check_cancelled(cancellation_check, on_log)
 
@@ -133,17 +157,26 @@ def run_orchestrator(
         sub_agent_config=sub_agent_config,
         bounds=bounds,
         resuming=resume is not None,
+        continuing_after_help=continuing_after_help,
         system_info=system_info,
         project_prompt=project_prompt,
         on_log=on_log,
         cancellation_check=cancellation_check,
     )
 
-    _log(
-        on_log,
-        f"[Orchestrator] Verdict: {orchestrator_result.status.upper()} "
-        f"({orchestrator_result.total_iterations} total iterations)",
-    )
+    if orchestrator_result.help is not None:
+        _log(
+            on_log,
+            f"[Orchestrator] Paused for help at step "
+            f"{orchestrator_result.help.step_num} "
+            f"({orchestrator_result.total_iterations} total iterations)",
+        )
+    else:
+        _log(
+            on_log,
+            f"[Orchestrator] Verdict: {orchestrator_result.status.upper()} "
+            f"({orchestrator_result.total_iterations} total iterations)",
+        )
 
     return _to_agent_result(orchestrator_result)
 
@@ -168,6 +201,9 @@ class _Progress:
     decisions: list[StepDecision] = field(default_factory=list)
     phase: OrchestratorPhase = "step"
     phase_started_at: datetime | None = None
+    # The last help this case got, carried into every checkpoint so a later
+    # resume still names it; never marked continue_pending once running.
+    help: CheckpointHelp | None = None
 
     def set_phase(self, phase: OrchestratorPhase) -> None:
         # Every call enters a new phase (a new step is a new "step" phase), so
@@ -189,6 +225,7 @@ class _Progress:
                 decisions=tuple(self.decisions),
                 phase=self.phase,
                 phase_started_at=self.phase_started_at,
+                help=self.help,
             )
         )
 
@@ -210,23 +247,34 @@ def _new_progress(
     progress.total_iterations = resume.total_iterations
     progress.next_step = resume.next_step
     progress.decisions = list(resume.decisions)
+    # The first checkpoint below already clears continue_pending: an
+    # interruption after it resumes normally, with a restore.
+    progress.help = (
+        None if resume.help is None else replace(resume.help, continue_pending=False)
+    )
     progress.state_lines, progress.retry_notes = _rebuild_state(
-        resume.attempts, resume.next_step
+        resume.attempts, resume.next_step, resume.help, resume.decisions
     )
     return progress
 
 
 def _rebuild_state(
-    attempts: tuple[SubTaskAttempt, ...], next_step: int
+    attempts: tuple[SubTaskAttempt, ...],
+    next_step: int,
+    help: CheckpointHelp | None = None,
+    decisions: Sequence[StepDecision] = (),
 ) -> tuple[list[str], dict[int, str]]:
     """Rebuild the state lines and retry notes ``_execute_sub_tasks`` wrote.
 
     A failed step got a plain line when the run moved past it ("continue"); one
     followed by a passed recovery got the failed-attempt line just before the
     recovery line, plus a retry note with its actions; one still at the cursor
-    got none.
+    got none. The failed attempt the case paused at for ``help`` gets the
+    failed-attempt line, the help line and a retry note, as a passed recovery
+    does.
     """
     final_index = final_step_indices(attempts)
+    help_anchor = _help_anchor_index(attempts, help, next_step, final_index)
     last_failed: dict[int, SubTaskResult] = {}
     lines: list[str] = []
     notes: dict[int, str] = {}
@@ -235,7 +283,23 @@ def _rebuild_state(
         if attempt.kind == "step":
             if result.status != "pass":
                 last_failed[attempt.step_num] = result
-            if result.status == "pass":
+            if help is not None and index == help_anchor:
+                lines.append(
+                    format_failed_attempt_state(
+                        attempt.step_num, result, with_actions=False
+                    )
+                )
+                lines.append(
+                    format_help_state_line(
+                        attempt.step_num,
+                        help,
+                        _help_reason(decisions, attempt.step_num),
+                    )
+                )
+                notes[attempt.step_num] = format_failed_attempt_state(
+                    attempt.step_num, result, with_actions=True
+                )
+            elif result.status == "pass":
                 lines.append(f"Step {attempt.step_num}: {result.summary}")
             elif (
                 final_index[attempt.step_num] == index and attempt.step_num < next_step
@@ -258,6 +322,58 @@ def _rebuild_state(
         else:
             lines.append(_resume_state_line(attempt.step_num, result.summary))
     return lines, notes
+
+
+def _help_anchor_index(
+    attempts: tuple[SubTaskAttempt, ...],
+    help: CheckpointHelp | None,
+    next_step: int,
+    final_index: dict[int, int],
+) -> int | None:
+    """Index of the failed step attempt the case paused at for ``help``.
+
+    That is the last failed attempt of the helped step that was retried
+    afterwards, or that is still at the cursor waiting for its retry. None
+    when the attempt is gone (a re-run in place dropped it).
+    """
+    if help is None:
+        return None
+    anchor: int | None = None
+    for index, attempt in enumerate(attempts):
+        if (
+            attempt.kind == "step"
+            and attempt.step_num == help.step_num
+            and attempt.result.status != "pass"
+            and (
+                final_index[attempt.step_num] != index or attempt.step_num == next_step
+            )
+        ):
+            anchor = index
+    return anchor
+
+
+def _help_reason(decisions: Sequence[StepDecision], step_num: int) -> str:
+    """Why the orchestrator last asked for help at ``step_num``."""
+    for decision in reversed(decisions):
+        if decision.step_num == step_num and decision.action == "need_help":
+            return decision.reason
+    return ""
+
+
+def _applied_help(
+    help: CheckpointHelp | None, attempts: Sequence[SubTaskAttempt]
+) -> CheckpointHelp | None:
+    """``help`` when its step's failed attempt is still in the attempts."""
+    if help is None:
+        return None
+    for attempt in attempts:
+        if (
+            attempt.kind == "step"
+            and attempt.step_num == help.step_num
+            and attempt.result.status != "pass"
+        ):
+            return help
+    return None
 
 
 def _resume_state_line(step_num: int, summary: str) -> str:
@@ -441,6 +557,7 @@ def _execute_sub_tasks(
     sub_agent_config: AgentConfig,
     bounds: TimeoutBounds,
     resuming: bool,
+    continuing_after_help: bool = False,
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
     on_log: LogCallback | None = None,
@@ -461,7 +578,8 @@ def _execute_sub_tasks(
     i = progress.next_step - 1
 
     # Every step already had an attempt: there is nothing to restore or run.
-    if resuming and 0 < i < total:
+    # After help the machine is exactly as the person or setup agent left it.
+    if resuming and not continuing_after_help and 0 < i < total:
         _check_cancelled(cancellation_check, on_log)
         _restore_resumed_state(
             progress=progress,
@@ -548,6 +666,16 @@ def _execute_sub_tasks(
             )
         )
 
+        if decision.action == "need_help":
+            return _pause_for_help(
+                progress,
+                step_num=step_num,
+                reason=decision.reason,
+                ask=decision.help_ask,
+                failed_result=result,
+                on_log=on_log,
+            )
+
         if decision.action == "continue":
             state_lines.append(f"Step {step_num}: FAILED — {result.summary}")
             progress.next_step = step_num + 1
@@ -555,7 +683,7 @@ def _execute_sub_tasks(
             i += 1
             continue
 
-        recovered = _attempt_recovery(
+        recovery = _attempt_recovery(
             decision=decision,
             step_index=i,
             step_num=step_num,
@@ -571,8 +699,27 @@ def _execute_sub_tasks(
             on_log=on_log,
         )
 
-        if recovered:
+        if recovery.recovered:
             continue
+
+        if decision.action == "recover":
+            # A recovery that cannot go ahead for a problem the application is
+            # not known to cause goes to a person instead of failing the case.
+            if decision.cause != "product":
+                reason = f"{recovery.failure}: {decision.reason}"
+                progress.decisions.append(
+                    StepDecision(step_num=step_num, action="need_help", reason=reason)
+                )
+                _log(on_log, f"[Orchestrator]   Escalating to help: {reason}")
+                return _pause_for_help(
+                    progress,
+                    step_num=step_num,
+                    reason=reason,
+                    ask=decision.help_ask,
+                    failed_result=result,
+                    on_log=on_log,
+                )
+            _record_stop(progress, step_num, recovery.failure)
 
         _log(on_log, f"[Orchestrator]   Stopping: {decision.reason}")
         state_lines.append(f"Step {step_num}: FAILED (stopped) — {result.summary}")
@@ -583,8 +730,49 @@ def _execute_sub_tasks(
 
     progress.set_phase("verdict")
     return _build_verdict(
-        orchestrator_llm, attempts, sub_tasks, progress.total_iterations
+        orchestrator_llm,
+        attempts,
+        sub_tasks,
+        progress.total_iterations,
+        helped=_applied_help(progress.help, attempts),
     )
+
+
+def _pause_for_help(
+    progress: _Progress,
+    *,
+    step_num: int,
+    reason: str,
+    ask: str,
+    failed_result: SubTaskResult,
+    on_log: LogCallback | None,
+) -> OrchestratorResult:
+    """Stop the case at ``step_num`` for help, without a verdict.
+
+    The cursor stays on the failed step and the awaiting_help checkpoint
+    persists it, so the case continues by re-running that step once someone
+    has fixed the machine.
+    """
+    progress.next_step = step_num
+    progress.set_phase("awaiting_help")
+    help_ask = ask.strip() or (
+        f"Check the test machine at step {step_num}: {failed_result.summary}"
+    )
+    _log(on_log, f"[Orchestrator]   Needs help at step {step_num}: {help_ask}")
+    return OrchestratorResult(
+        status="need_help",
+        summary=f"Paused at step {step_num} for help: {reason}",
+        attempts=tuple(progress.attempts),
+        total_iterations=progress.total_iterations,
+        help=HelpRequestInfo(step_num=step_num, reason=reason, ask=help_ask),
+    )
+
+
+@dataclass(frozen=True)
+class _RecoveryOutcome:
+    recovered: bool
+    # Why a recover decision could not go ahead; empty when it did not apply.
+    failure: str = ""
 
 
 def _attempt_recovery(
@@ -602,23 +790,22 @@ def _attempt_recovery(
     recovery_counts: dict[int, int],
     max_recovery: int,
     on_log: LogCallback | None,
-) -> bool:
+) -> _RecoveryOutcome:
     if decision.action != "recover":
-        return False
+        return _RecoveryOutcome(recovered=False)
 
     recoveries = recovery_counts.get(step_index, 0)
     if recoveries >= max_recovery:
-        _log(on_log, "[Orchestrator]   Max recovery attempts reached — stopping test.")
-        _record_stop(progress, step_num, "Max recovery attempts reached")
-        return False
+        _log(on_log, "[Orchestrator]   Max recovery attempts reached.")
+        return _RecoveryOutcome(
+            recovered=False, failure="Max recovery attempts reached"
+        )
 
     if decision.recovery_task is None:
-        _log(
-            on_log,
-            "[Orchestrator]   Recovery requested but no task provided — stopping test.",
+        _log(on_log, "[Orchestrator]   Recovery requested but no task provided.")
+        return _RecoveryOutcome(
+            recovered=False, failure="Recovery requested but no task provided"
         )
-        _record_stop(progress, step_num, "Recovery requested but no task provided")
-        return False
 
     recovery_counts[step_index] = recoveries + 1
 
@@ -673,18 +860,17 @@ def _attempt_recovery(
             f"Recovery for step {step_num}: {recovery_result.summary}"
         )
         progress.checkpoint()
-        return True
+        return _RecoveryOutcome(recovered=True)
 
-    _record_stop(progress, step_num, "Recovery failed")
     progress.checkpoint()
-    _log(on_log, "[Orchestrator]   Recovery failed — stopping test.")
-    return False
+    _log(on_log, "[Orchestrator]   Recovery failed.")
+    return _RecoveryOutcome(recovered=False, failure="Recovery failed")
 
 
 def _record_stop(progress: _Progress, step_num: int, reason: str) -> None:
-    # A recover decision that cannot go ahead ends the case: record the final
-    # stop so the step shows why it stopped. The caller's next checkpoint
-    # persists it.
+    # A recover decision that cannot go ahead for a product defect ends the
+    # case: record the final stop so the step shows why it stopped. The
+    # caller's next checkpoint persists it.
     progress.decisions.append(
         StepDecision(step_num=step_num, action="stop", reason=reason)
     )
@@ -699,6 +885,8 @@ def _build_verdict(
     attempts: list[SubTaskAttempt],
     plan: Sequence[SubTask],
     total_iterations: int,
+    *,
+    helped: CheckpointHelp | None = None,
 ) -> OrchestratorResult:
     # A step that failed, was recovered and then passed on retry counts as passed:
     # only each planned step's final attempt decides, recoveries never do.
@@ -711,7 +899,9 @@ def _build_verdict(
     error = finals[max(failed_steps)].summary if failed_steps else None
 
     attempts_tuple = tuple(attempts)
-    verdict_prompt = build_verdict_prompt(attempts_tuple, overall_status, plan)
+    verdict_prompt = build_verdict_prompt(
+        attempts_tuple, overall_status, plan, helped=helped
+    )
     verdict_messages = (
         ChatMessage(role="system", content="Summarize the test case execution."),
         ChatMessage(role="user", content=verdict_prompt),
@@ -725,7 +915,9 @@ def _build_verdict(
         logger.warning(
             "Verdict summary failed (%s), using deterministic summary", exc.kind
         )
-        summary = _deterministic_summary(attempts_tuple, overall_status, plan)
+        summary = _deterministic_summary(
+            attempts_tuple, overall_status, plan, helped=helped
+        )
 
     return OrchestratorResult(
         status=overall_status,
@@ -747,6 +939,8 @@ def _deterministic_summary(
     attempts: tuple[SubTaskAttempt, ...],
     overall_status: Literal["pass", "fail"],
     plan: Sequence[SubTask],
+    *,
+    helped: CheckpointHelp | None = None,
 ) -> str:
     lines = [
         f"Test {'passed' if overall_status == 'pass' else 'failed'} "
@@ -754,6 +948,8 @@ def _deterministic_summary(
     ]
     if was_resumed(attempts):
         lines.append("The case was interrupted and resumed.")
+    if helped is not None:
+        lines.append(help_verdict_note(helped))
     lines.extend(format_attempt_lines(attempts, plan))
     return "\n".join(lines)
 
@@ -787,15 +983,26 @@ def _evaluate_failure(
     raw_action = str(parsed.get("decision", "stop"))
     reason = str(parsed.get("reason", ""))
 
-    action: Literal["continue", "recover", "stop"]
+    action: DecisionAction
     if raw_action == "continue":
         action = "continue"
     elif raw_action == "recover":
         action = "recover"
+    elif raw_action == "need_help":
+        action = "need_help"
     else:
         action = "stop"
+    cause = _parse_cause(parsed.get("cause"))
+    help_ask = (
+        str(parsed.get("help_ask") or "").strip()
+        if action in ("need_help", "recover")
+        else ""
+    )
 
-    _log(on_log, f"[Orchestrator]   Decision: {action} — {reason}")
+    _log(
+        on_log,
+        f"[Orchestrator]   Decision: {action} (cause: {cause or 'unknown'}) — {reason}",
+    )
 
     recovery_task: SubTask | None = None
     if action == "recover":
@@ -807,12 +1014,23 @@ def _evaluate_failure(
         action=action,
         reason=reason,
         recovery_task=recovery_task,
+        cause=cause,
+        help_ask=help_ask,
     )
+
+
+def _parse_cause(value: object) -> FailureCause | None:
+    for cause in _FAILURE_CAUSES:
+        if value == cause:
+            return cause
+    return None
 
 
 def _to_agent_result(orchestrator_result: OrchestratorResult) -> AgentResult:
     if orchestrator_result.status == "pass":
         stop_reason = AgentStopReason.TASK_COMPLETE
+    elif orchestrator_result.status == "need_help":
+        stop_reason = AgentStopReason.NEEDS_HUMAN_HELP
     else:
         stop_reason = AgentStopReason.ERROR
 
@@ -823,6 +1041,7 @@ def _to_agent_result(orchestrator_result: OrchestratorResult) -> AgentResult:
         iterations=orchestrator_result.total_iterations,
         messages=messages,
         error=orchestrator_result.error,
+        help=orchestrator_result.help,
     )
 
 
