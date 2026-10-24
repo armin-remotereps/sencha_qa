@@ -149,7 +149,6 @@ def describe_help_status(help_request_id: int) -> str:
             "test_run_test_case__test_run__id",
             "test_run_test_case__test_run__status",
         )
-        .defer("test_run_test_case__logs")
         .filter(pk=help_request_id)
         .first()
     )

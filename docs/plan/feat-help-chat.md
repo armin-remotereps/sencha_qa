@@ -1,6 +1,6 @@
 # feat: Help chat (talk to the agent about a case that needs help; redesign its test plan)
 
-Status: In progress
+Status: Done
 Created: 2026-10-24
 Request: "I want ability to chat with the test agent when it needs help, sometimes I need more info or I need to discuss something with it which needs more than single message. On that chat, it should be able to re design the steps or have the full access to the test machine."
 Follow-up (Q5): "I want it to be able to re design the whole test, maybe it misunderstood the whole test, and be able to map the old done steps to new one and mark them as passed."
@@ -473,7 +473,7 @@ Manual; this project has no automated tests.
 
 ## Decisions (answered 2026-10-24)
 
-- **Q1.** The agent only drafts. Continue applies the draft the person sees ("Use the redesigned plan", ticked by default).
+- **Q1.** The agent only drafts. Continue applies the draft the person sees ("Use the redesigned plan": ticked by default on the help chat page, which shows it side by side; unticked on the case page, which only summarises it).
 - **Q2.** No plan tools in the unattended Night auto-fix turn; only turns a person starts get them.
 - **Q3.** Opening the help chat starts the agent at once (optional first message; the default asks for a read-only look and a summary).
 - **Q4.** The chat lives on the Machine setup thread page, with the help panel and the actions there, linked from the case page and the run banner.
@@ -505,7 +505,7 @@ None.
   - record/snapshot text caps, fingerprint without `checkpoint_to_json`, `get_help_case` returns an ≤ 8k case update, superseded drafts drop their step JSON, abort supersedes drafts and clears the proposal;
   - verdict keeps the redesign sentence after a later help; `person_turn_live` in `machine_setup/turn_state.py`; lock order project → run → request → case everywhere; single save on Continue; `help_thread_state.py`.
   - Accepted (not changed): no `help` broadcast from `projects` on resolve/discard (pages redirect back); `case_step_progress` builds the carried label locally (import cycle); Continue refuses whenever the pending draft differs from the shown one.
-- 2026-10-24: review pass 2: setup prompt no longer says the suggestion pre-fills the form; the case page leaves "Use the redesigned plan" unticked (it shows only a summary); help reads defer `logs`. Rejected: annotating the help-history step count instead of loading `steps` (bounded by person discards, not worth the complexity).
+- 2026-10-24: review pass 2: setup prompt no longer says the suggestion pre-fills the form; the case page leaves "Use the redesigned plan" unticked (it shows only a summary); help reads defer `logs`. Pass 3 (reviewer + verifier) clean. Rejected: annotating the help-history step count instead of loading `steps` (bounded by person discards, not worth the complexity).
 
 ## Frozen contracts (Foundation, written 2026-10-24)
 
