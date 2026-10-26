@@ -1,8 +1,18 @@
 {% comment %}
   Machine setup composer: a plain form POST to machine_setup:send (PRG), plus
   a Stop form that replaces Send while a turn is queued or running. Reads
-  draft, canSend, statusText, turn, turnLive, submitting, onEnter and onSubmit
-  from the ancestor machineSetupChat scope (machine_setup/chat.html).
+  draft, canSend, hasContent, statusText, turn, turnLive, submitting, onEnter,
+  onSubmit, attachment, attachmentError, onAttach, clearAttachment and
+  formatBytes from the ancestor machineSetupChat scope
+  (machine_setup/chat.html).
+
+  Main chat only: one optional Markdown / text file (field `document`,
+  multipart). The file input is visually hidden behind the "Attach .md"
+  button; Alpine's x-model does not support file inputs, so @change keeps
+  `attachment` ({name, size}) in step. The client size check against
+  document_max_bytes is a hint only; the server form validates the file.
+  The text is optional when a file is attached. Thread composers are text
+  only (text required).
 
   The textarea stays editable during a turn so the next message can be
   drafted; sending stays blocked (canSend) on the client and the server. The
@@ -18,9 +28,10 @@
 <div class="chat-composer">
   <p class="chat-status small" x-show="statusText" x-cloak x-text="statusText"></p>
   <div class="chat-composer-row">
-    <form class="chat-composer-form" method="post" action="{% url 'machine_setup:send' project_id=project.id %}" @submit="onSubmit($event)">
+    <form class="chat-composer-form" method="post" action="{% url 'machine_setup:send' project_id=project.id %}"{% if not conversation %} enctype="multipart/form-data"{% endif %} @submit="onSubmit($event)">
       {% csrf_token %}
       {% if conversation %}<input type="hidden" name="conversation_id" value="{{ conversation.pk }}">{% endif %}
+      <div class="chat-composer-input">
       <label for="setup-message-text" class="visually-hidden">Message the setup agent</label>
       <textarea
         id="setup-message-text"
@@ -28,13 +39,26 @@
         name="text"
         rows="2"
         maxlength="8000"
-        required
+        {% if conversation %}required{% endif %}
         :placeholder="turnLive ? 'The agent is working. You can send when it finishes.' : 'Describe what the test machine needs… (Enter to send, Shift+Enter for a new line)'"
         placeholder="Describe what the test machine needs… (Enter to send, Shift+Enter for a new line)"
         x-model="draft"
         @keydown.enter="onEnter($event)"
       ></textarea>
-      <button type="submit" class="btn btn-primary" x-show="!turnLive" :disabled="!canSend || submitting || !draft.trim()">Send</button>
+      {% if not conversation %}
+      <div class="chat-composer-tools">
+        <input type="file" id="setup-message-document" name="document" class="visually-hidden" tabindex="-1" aria-label="Attach a Markdown or text file" accept=".md,.markdown,.txt,text/markdown,text/plain" @change="onAttach($event)">
+        <button type="button" class="btn btn-secondary btn-sm chat-composer-attach" title="Attach one Markdown or text file the agent can read" @click="$el.form.elements.document.click()" x-text="attachment ? 'Replace file' : 'Attach .md'">Attach .md</button>
+        <span class="chat-attachment chat-attachment-pending" x-show="attachment" x-cloak>
+          <span class="chat-attachment-name" x-text="attachment ? attachment.name : ''" :title="attachment ? attachment.name : ''"></span>
+          <span class="chat-attachment-meta" x-text="attachment ? formatBytes(attachment.size) : ''"></span>
+          <button type="button" class="chat-attachment-remove" aria-label="Remove the attached file" title="Remove" @click="clearAttachment($el.form.elements.document)">&times;</button>
+        </span>
+        <span class="chat-attachment-error small" role="alert" x-show="attachmentError" x-cloak x-text="attachmentError"></span>
+      </div>
+      {% endif %}
+      </div>
+      <button type="submit" class="btn btn-primary" x-show="!turnLive" :disabled="!canSend || submitting || !hasContent">Send</button>
     </form>
     <form method="post" action="{% url 'machine_setup:stop' project_id=project.id %}" x-show="turnLive" x-cloak>
       {% csrf_token %}

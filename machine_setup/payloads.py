@@ -10,9 +10,22 @@ import json
 from typing import TypedDict
 
 from django.conf import settings
+from django.urls import reverse
 
 from agents.plan_revision import PlanDraftView
-from machine_setup.models import SetupMessage, SetupScreenshot, SetupTurn
+from machine_setup.models import (
+    SetupDocument,
+    SetupMessage,
+    SetupMessageKind,
+    SetupRunProposal,
+    SetupScreenshot,
+    SetupTurn,
+)
+from machine_setup.run_proposal_types import (
+    PROPOSAL_NOTE_MAX,
+    RUN_NAME_MAX,
+    SAMPLE_TITLES,
+)
 from machine_setup.subtask_types import (
     DONE_WHEN_MAX_CHARS,
     GOAL_MAX_CHARS,
@@ -26,12 +39,45 @@ _HELP_NOTE_LIMIT = 2000
 _HELP_REASON_LIMIT = 1000
 _HELP_STEP_TEXT_LIMIT = 2000
 _HELP_ROWS_LIMIT = 60
+_SAMPLE_TITLE_LIMIT = 200
+_PROPOSAL_ROWS_LIMIT = 50
 
 
 class SetupScreenshotPayload(TypedDict):
     id: int
     url: str
     tool_name: str
+
+
+class SetupAttachmentPayload(TypedDict):
+    id: int
+    file_name: str
+    size_bytes: int
+    char_count: int
+
+
+class ProposedRunPayload(TypedDict):
+    name: str
+    case_count: int
+    sample_titles: list[str]
+    # A run of this project already has this name.
+    name_exists: bool
+
+
+class CreatedRunPayload(TypedDict):
+    name: str
+    case_count: int
+    url: str
+
+
+class RunProposalPayload(TypedDict):
+    id: int
+    status: str
+    status_label: str
+    note: str
+    runs: list[ProposedRunPayload]
+    created_runs: list[CreatedRunPayload]
+    skipped: list[str]
 
 
 class SetupMessagePayload(TypedDict):
@@ -53,6 +99,10 @@ class SetupMessagePayload(TypedDict):
     subtask_result_label: str
     # Sub-agent rows of a run_setup_task row left out of the page load.
     hidden_child_count: int
+    # USER rows only: documents attached to the message.
+    attachments: list[SetupAttachmentPayload]
+    # NOTICE rows that show a run proposal card.
+    run_proposal: RunProposalPayload | None
 
 
 class SetupTurnPayload(TypedDict):
@@ -81,9 +131,22 @@ def message_payload(
     screenshots: list[SetupScreenshot] | None = None,
     *,
     hidden_child_count: int = 0,
+    attachments: list[SetupDocument] | None = None,
 ) -> SetupMessagePayload:
-    """``screenshots`` defaults to the prefetched ``message.screenshots``."""
+    """``screenshots`` defaults to the prefetched ``message.screenshots``.
+
+    ``attachments`` defaults to the prefetched ``message.documents``, read for
+    USER rows only; the proposal is read only when ``run_proposal_id`` is set
+    (load it with ``select_related`` and ``case_ids`` deferred). Both rules keep
+    tool and child rows free of extra queries.
+    """
     rows = screenshots if screenshots is not None else list(message.screenshots.all())
+    if attachments is None:
+        attachments = (
+            list(message.documents.all())
+            if message.kind == SetupMessageKind.USER
+            else []
+        )
     author = message.author
     return {
         "id": message.pk,
@@ -108,7 +171,78 @@ def message_payload(
             message.get_subtask_result_display() if message.subtask_result else ""
         ),
         "hidden_child_count": hidden_child_count,
+        "attachments": [attachment_payload(row) for row in attachments],
+        "run_proposal": (
+            run_proposal_payload(message.run_proposal)
+            if message.run_proposal_id is not None and message.run_proposal
+            else None
+        ),
     }
+
+
+def attachment_payload(document: SetupDocument) -> SetupAttachmentPayload:
+    """Needs only the ``id``, ``file_name``, ``size_bytes`` and ``char_count``
+    columns. The page builds the download link from ``document_url_template``."""
+    return {
+        "id": document.pk,
+        "file_name": document.file_name[:255],
+        "size_bytes": document.size_bytes,
+        "char_count": document.char_count,
+    }
+
+
+def run_proposal_payload(proposal: SetupRunProposal) -> RunProposalPayload:
+    """Never touches ``case_ids`` (deferred on display loads)."""
+    runs: list[ProposedRunPayload] = []
+    for row in _dict_rows(proposal.runs)[:_PROPOSAL_ROWS_LIMIT]:
+        runs.append(
+            {
+                "name": str(row.get("name", ""))[:RUN_NAME_MAX],
+                "case_count": _int(row.get("case_count")),
+                "sample_titles": [
+                    str(title)[:_SAMPLE_TITLE_LIMIT]
+                    for title in _list(row.get("sample_titles"))[:SAMPLE_TITLES]
+                ],
+                "name_exists": bool(row.get("name_exists")),
+            }
+        )
+    created: list[CreatedRunPayload] = []
+    for row in _dict_rows(proposal.created_runs)[:_PROPOSAL_ROWS_LIMIT]:
+        run_id = _int(row.get("run_id"))
+        created.append(
+            {
+                "name": str(row.get("name", ""))[:RUN_NAME_MAX],
+                "case_count": _int(row.get("case_count")),
+                "url": reverse(
+                    "projects:test_run_detail",
+                    kwargs={"project_id": proposal.project_id, "test_run_id": run_id},
+                ),
+            }
+        )
+    return {
+        "id": proposal.pk,
+        "status": proposal.status,
+        "status_label": proposal.get_status_display(),
+        "note": proposal.note[:PROPOSAL_NOTE_MAX],
+        "runs": runs,
+        "created_runs": created,
+        "skipped": [
+            str(name)[:RUN_NAME_MAX]
+            for name in _list(proposal.skipped)[:_PROPOSAL_ROWS_LIMIT]
+        ],
+    }
+
+
+def _list(value: object) -> list[object]:
+    return value if isinstance(value, list) else []
+
+
+def _dict_rows(value: object) -> list[dict[str, object]]:
+    return [row for row in _list(value) if isinstance(row, dict)]
+
+
+def _int(value: object) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
 
 def turn_payload(turn: SetupTurn) -> SetupTurnPayload:

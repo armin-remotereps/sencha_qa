@@ -33,6 +33,12 @@
                  errors arrive via messages after PRG, so it is not rendered
     blocker_texts — {machine_not_ready, turn_active, other_thread}: the
                  blocker messages the client recomputes from live state
+    document_max_bytes — int, the attachment size cap (client hint only)
+    document_url_template — machine_setup:document reversed with id 0
+                 (ends /documents/0/)
+    run_proposal_create_url_template, run_proposal_discard_url_template —
+                 machine_setup:run_proposal_create / _discard reversed with
+                 id 0 (end /run-proposals/0/create/ and /0/discard/)
 
   Initial state (json_script, replaced by the socket's current_state). The
   rows themselves arrive only with current_state (page.messages is empty here),
@@ -43,6 +49,10 @@
     setup-visual-engine    — visual_engine (object)
     setup-thread-ids       — conversation ids of the listed help threads
     help-initial           — help_state (help threads with a panel only)
+    setup-document-max-bytes — document_max_bytes
+    setup-document-url     — document_url_template
+    run-proposal-create-url, run-proposal-discard-url — the proposal URL
+                             templates
 
   WebSocket /ws/projects/<id>/machine-setup/, or on the thread page
   /ws/projects/<id>/machine-setup/threads/<conversation_id>/ (same group, so
@@ -61,8 +71,9 @@
   Client model (machineSetupChat): every row gets a client-only `args` (its
   tool_arguments_text parsed once on arrival, {} if it does not parse).
   `blocks` folds the rows into {kind:'row', key, role, message} (role user,
-  reply, narration or notice; an assistant row is narration when a later row
-  of its turn is a tool row) and {kind:'activity', key:'act-<first row id>',
+  reply, narration, notice or run_proposal; an assistant row is narration
+  when a later row of its turn is a tool row; a notice row with run_proposal
+  set is role run_proposal and carries `proposal`, see _run_proposal.html) and {kind:'activity', key:'act-<first row id>',
   turnId, rows, running, liveText, failedCount, screenshotCount, summaryText,
   dotClass} for each run of consecutive tool rows of one turn. Sub-agent rows
   (parent_id set) are grouped under their delegation row: each
@@ -85,6 +96,10 @@
 {{ visual_engine|json_script:"setup-visual-engine" }}
 {{ thread_ids|json_script:"setup-thread-ids" }}
 {% if help_panel %}{{ help_state|json_script:"help-initial" }}{% endif %}
+{{ document_max_bytes|json_script:"setup-document-max-bytes" }}
+{{ document_url_template|json_script:"setup-document-url" }}
+{{ run_proposal_create_url_template|json_script:"run-proposal-create-url" }}
+{{ run_proposal_discard_url_template|json_script:"run-proposal-discard-url" }}
 <div x-data="machineSetupChat">
   <div class="page-header">
     <div>
@@ -158,6 +173,20 @@ document.addEventListener('alpine:init', () => {
   // Unread badge: '(N) ' before the page title while the tab is hidden.
   const BASE_TITLE = document.title;
   const REPLY_END_STATUSES = ['completed', 'failed'];
+  // Attachments and run proposals (main chat). URL templates are reversed
+  // with id 0; the id segment is swapped in client side.
+  const DOCUMENT_MAX_BYTES = readJson('setup-document-max-bytes') || 0;
+  const DOCUMENT_URL_TEMPLATE = readJson('setup-document-url') || '';
+  const PROPOSAL_CREATE_URL_TEMPLATE = readJson('run-proposal-create-url') || '';
+  const PROPOSAL_DISCARD_URL_TEMPLATE = readJson('run-proposal-discard-url') || '';
+  const withId = (template, pattern, id) => template.replace(pattern, (match) => match.replace('/0/', '/' + Number(id) + '/'));
+  // Badge class per run proposal status: a fixed map keyed by the enum.
+  const PROPOSAL_BADGES = {
+    pending: 'badge-warning',
+    created: 'badge-passed',
+    superseded: 'badge-cancelled',
+    discarded: 'badge-cancelled',
+  };
 
   // --- Tool wording: the only place tool labels live. -----------------------
   // Every function returns a plain string that the templates render with
@@ -187,6 +216,15 @@ document.addEventListener('alpine:init', () => {
     const shown = ids.slice(0, 2).map((id) => '#' + oneLine(id, 12)).join(', ');
     return ids.length > 2 ? shown + ' +' + (ids.length - 2) : shown;
   };
+  // read_document: 'document #12 · page 2' (the id and page are numbers the
+  // model chose; oneLine keeps them short and plain).
+  const documentRef = (args) => {
+    if (args.document_id === undefined || args.document_id === null) return '';
+    const page = args.page !== undefined && args.page !== null ? ' · page ' + oneLine(args.page, 12) : '';
+    return 'document #' + oneLine(args.document_id, 12) + page;
+  };
+  // propose_test_runs: the number of runs; 0 when the arguments did not parse.
+  const runCount = (args) => (Array.isArray(args.runs) ? args.runs.length : 0);
   const caseCount = (rows) => rows.reduce((total, row) => total + Math.max(caseIds(row.args).length, 1), 0);
   const readCases = {
     bucket: 'read_cases',
@@ -264,6 +302,18 @@ document.addEventListener('alpine:init', () => {
     web_search: plain('Searched the web', (args) => withDetail('Searching the web for', quoted(args.query)) + '…', (args) => quoted(args.query)),
     wait: plain('Waited', () => 'Waiting…', (args) => (args.seconds !== undefined && args.seconds !== null ? oneLine(args.seconds, 12) + 's' : '')),
     report_case_fix: plain('Reported the fix result', () => 'Reporting the fix result…', (args) => (args.fixed === true ? 'Fixed' : args.fixed === false ? 'Not fixed' : '')),
+    read_document: {
+      summary: (count) => 'Read ' + plural(count, 'document page', 'document pages'),
+      live: (args) => withDetail('Reading', documentRef(args)) + '…',
+      detail: (args) => documentRef(args),
+    },
+    list_test_runs: plain('Listed test runs', () => 'Listing test runs…', (args) => (args.page !== undefined && args.page !== null ? 'page ' + oneLine(args.page, 12) : '')),
+    list_test_case_groups: plain('Looked at how the test cases group', () => 'Looking at how the test cases group…'),
+    propose_test_runs: {
+      summary: (count) => times('Proposed test runs', count),
+      live: (args) => (runCount(args) > 0 ? 'Proposing ' + plural(runCount(args), 'test run', 'test runs') : 'Proposing test runs') + '…',
+      detail: (args) => (runCount(args) > 0 ? plural(runCount(args), 'run', 'runs') : ''),
+    },
     run_setup_task: {
       summary: (count) => times('Ran a sub-task', count),
       live: (args) => withDetail('Working on:', oneLine(args.goal, 60)) + '…',
@@ -363,6 +413,10 @@ document.addEventListener('alpine:init', () => {
       current = null;
       let role = message.kind;
       if (message.kind === 'assistant') role = nested || narration.has(message.id) ? 'narration' : 'reply';
+      if (message.kind === 'notice' && message.run_proposal) {
+        blocks.push({ kind: 'row', key: 'msg-' + message.id, role: 'run_proposal', message, proposal: message.run_proposal });
+        continue;
+      }
       blocks.push({ kind: 'row', key: 'msg-' + message.id, role, message });
     }
     for (const block of blocks) {
@@ -570,6 +624,10 @@ document.addEventListener('alpine:init', () => {
     visualEngine: readJson('setup-visual-engine') || {},
     draft: '',
     submitting: false,
+    // The chosen document ({name, size}) or null; main chat only.
+    attachment: null,
+    attachmentError: '',
+    proposalSubmitting: false,
     socketOpen: true,
     reconnectDelay: 1000,
     lightboxShots: [],
@@ -863,14 +921,19 @@ document.addEventListener('alpine:init', () => {
       return labelsFor(row.tool_name).detail(row.args || {});
     },
 
+    // Text or an attached document: either is enough to send.
+    get hasContent() {
+      return this.draft.trim() !== '' || this.attachment !== null;
+    },
+
     submit(form) {
-      if (!this.canSend || this.submitting || !this.draft.trim()) return;
+      if (!this.canSend || this.submitting || !this.hasContent) return;
       this.submitting = true;
       form.requestSubmit();
     },
 
     onSubmit(event) {
-      if (!this.canSend || !this.draft.trim()) {
+      if (!this.canSend || !this.hasContent) {
         event.preventDefault();
         return;
       }
@@ -881,6 +944,54 @@ document.addEventListener('alpine:init', () => {
       if (event.shiftKey || event.isComposing) return;
       event.preventDefault();
       this.submit(event.target.form);
+    },
+
+    // The file input's change: keeps `attachment` in step (x-model does not
+    // support file inputs). The size check is a hint; the server validates.
+    onAttach(event) {
+      const input = event.target;
+      const file = input.files && input.files.length > 0 ? input.files[0] : null;
+      this.attachmentError = '';
+      if (!file) {
+        this.attachment = null;
+        return;
+      }
+      if (DOCUMENT_MAX_BYTES > 0 && file.size > DOCUMENT_MAX_BYTES) {
+        this.attachmentError = file.name + ' is ' + this.formatBytes(file.size) + '; the limit is ' + this.formatBytes(DOCUMENT_MAX_BYTES) + '.';
+        input.value = '';
+        this.attachment = null;
+        return;
+      }
+      this.attachment = { name: file.name, size: file.size };
+    },
+
+    clearAttachment(input) {
+      if (input) input.value = '';
+      this.attachment = null;
+      this.attachmentError = '';
+    },
+
+    formatBytes(bytes) {
+      const value = Number(bytes) || 0;
+      if (value < 1024) return value + ' B';
+      if (value < 1024 * 1024) return (value / 1024).toFixed(value < 10 * 1024 ? 1 : 0) + ' KB';
+      return (value / (1024 * 1024)).toFixed(1) + ' MB';
+    },
+
+    documentUrl(id) {
+      return withId(DOCUMENT_URL_TEMPLATE, /\/documents\/0\/$/, id);
+    },
+
+    proposalCreateUrl(id) {
+      return withId(PROPOSAL_CREATE_URL_TEMPLATE, /\/run-proposals\/0\/create\/$/, id);
+    },
+
+    proposalDiscardUrl(id) {
+      return withId(PROPOSAL_DISCARD_URL_TEMPLATE, /\/run-proposals\/0\/discard\/$/, id);
+    },
+
+    proposalBadgeClass(status) {
+      return (Object.hasOwn(PROPOSAL_BADGES, status) && PROPOSAL_BADGES[status]) || 'badge-draft';
     },
 
     toolBadgeClass(status) {

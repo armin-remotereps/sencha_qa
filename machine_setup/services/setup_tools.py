@@ -44,6 +44,12 @@ from machine_setup.services.help_chat_tools import (
     build_help_chat_handlers,
     help_chat_tool_definitions,
 )
+from machine_setup.services.main_chat_tools import (
+    MainChatToolError,
+    RunsProposedCallback,
+    build_main_chat_handlers,
+    main_chat_tool_definitions,
+)
 from machine_setup.subtask_types import (
     DONE_WHEN_MAX_CHARS,
     GOAL_MAX_CHARS,
@@ -68,6 +74,7 @@ from projects.models import (
     CONTEXT_CHANGE_SUMMARY_MAX_LENGTH,
     PROJECT_PROMPT_MAX_LENGTH,
     ContextWriteSource,
+    Project,
 )
 
 # Called after a successful context write with the new revision and summary.
@@ -84,11 +91,14 @@ class _InvalidArgumentError(Exception):
 def main_tool_definitions(role: ThreadRole) -> tuple[ToolDefinition, ...]:
     """The main setup agent's tools: project data plus delegation.
 
-    An auto-fix turn also gets ``report_case_fix``; a person's turn in a help
-    thread gets the help-chat tools.
+    The main chat also gets the document and test run tools; an auto-fix turn
+    gets ``report_case_fix``; a person's turn in a help thread gets the
+    help-chat tools.
     """
     tools = _project_data_tool_definitions() + (_run_setup_task_definition(),)
-    if role == ThreadRole.AUTO_FIX:
+    if role == ThreadRole.MAIN:
+        tools += main_chat_tool_definitions()
+    elif role == ThreadRole.AUTO_FIX:
         tools += (_report_case_fix_definition(),)
     elif role == ThreadRole.CASE_HELP:
         tools += help_chat_tool_definitions()
@@ -354,21 +364,27 @@ def _project_data_tool_definitions() -> tuple[ToolDefinition, ...]:
 
 def build_setup_dispatcher(
     *,
-    project_id: int,
+    project: Project,
     author: CustomUser | None,
     on_context_updated: ContextUpdatedCallback,
+    on_runs_proposed: RunsProposedCallback,
     run_subtask: SubtaskRunner,
     role: ThreadRole,
     conversation_id: int,
+    turn_id: int | None,
     help_request_id: int | None,
 ) -> ToolDispatcher:
     """The main agent's per-turn dispatcher.
 
     ``author`` is recorded on context writes; ``run_subtask`` runs a validated
-    ``run_setup_task`` call. Machine tools are refused. In an auto-fix turn
-    ``report_case_fix`` records its report on ``conversation_id``; in a help
-    chat turn the help tools act on ``help_request_id``.
+    ``run_setup_task`` call. Machine tools are refused. In the main chat the
+    document and test run tools act on ``conversation_id`` (proposals are
+    stamped with ``turn_id``, then ``on_runs_proposed`` posts the card); in an
+    auto-fix turn ``report_case_fix`` records its report on
+    ``conversation_id``; in a help chat turn the help tools act on
+    ``help_request_id``.
     """
+    project_id = project.pk
 
     def _handle_report_case_fix(arguments: dict[str, object]) -> str:
         fixed = arguments.get("fixed")
@@ -475,9 +491,9 @@ def build_setup_dispatcher(
             "---"
         )
 
-    # Every project data tool, plus report_case_fix in an auto-fix turn or the
-    # help tools in a help chat turn; anything else but run_setup_task is
-    # refused.
+    # Every project data tool, plus the document and test run tools in the
+    # main chat, report_case_fix in an auto-fix turn or the help tools in a
+    # help chat turn; anything else but run_setup_task is refused.
     project_data_handlers: dict[str, Callable[[dict[str, object]], str]] = {
         "list_test_case_preconditions": _handle_list_preconditions,
         "search_test_cases": _handle_search_cases,
@@ -486,7 +502,16 @@ def build_setup_dispatcher(
         "get_application_context": _handle_get_context,
         "update_application_context": _handle_update_context,
     }
-    if role == ThreadRole.AUTO_FIX:
+    if role == ThreadRole.MAIN:
+        project_data_handlers.update(
+            build_main_chat_handlers(
+                project=project,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                on_runs_proposed=on_runs_proposed,
+            )
+        )
+    elif role == ThreadRole.AUTO_FIX:
         project_data_handlers[REPORT_CASE_FIX_TOOL] = _handle_report_case_fix
     elif role == ThreadRole.CASE_HELP and help_request_id is not None:
         project_data_handlers.update(
@@ -516,7 +541,7 @@ def build_setup_dispatcher(
             )
         try:
             content = handler(tool_call.arguments)
-        except (_InvalidArgumentError, HelpToolError) as exc:
+        except (_InvalidArgumentError, HelpToolError, MainChatToolError) as exc:
             return _tool_error(tool_call, str(exc))
         return ToolResult(
             tool_call_id=tool_call.tool_call_id,

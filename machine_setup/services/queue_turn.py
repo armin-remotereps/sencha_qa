@@ -9,15 +9,18 @@ it this package): a direct import would be a cycle.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
 from django.db import transaction
 from django.utils import timezone
 
 from accounts.models import CustomUser
 from auto_tester.celery import app as celery_app
+from machine_setup.document_text import UploadedDocument
 from machine_setup.events import broadcast_message, broadcast_turn
 from machine_setup.models import (
     SetupConversation,
+    SetupDocument,
     SetupMessage,
     SetupMessageKind,
     SetupTurn,
@@ -59,8 +62,41 @@ def create_turn(
     return turn, message
 
 
-def broadcast_and_enqueue(turn: SetupTurn, message: SetupMessage) -> bool:
+def create_user_turn(
+    *,
+    conversation: SetupConversation,
+    requested_by: CustomUser,
+    text: str,
+    document: UploadedDocument | None = None,
+) -> tuple[SetupTurn, SetupMessage, list[SetupDocument]]:
+    """``create_turn`` for a person's send, storing an attached document with
+    the USER row. Returns the stored documents so the broadcast needs no query.
+    Call under the project row lock."""
+    turn, message = create_turn(
+        conversation=conversation, requested_by=requested_by, text=text
+    )
+    if document is None:
+        return turn, message, []
+    stored = SetupDocument.objects.create(
+        conversation=conversation,
+        message=message,
+        uploaded_by=requested_by,
+        file_name=document.file_name,
+        text=document.text,
+        size_bytes=document.size_bytes,
+        char_count=len(document.text),
+    )
+    return turn, message, [stored]
+
+
+def broadcast_and_enqueue(
+    turn: SetupTurn,
+    message: SetupMessage,
+    documents: Sequence[SetupDocument] = (),
+) -> bool:
     """Run on commit. Returns False when the task could not be queued.
+
+    ``documents`` are the ones attached to ``message`` (already loaded).
 
     The turn is then closed as ``failed/internal_error`` with a notice row.
     A failed broadcast is logged and never stops the enqueue: the page only
@@ -68,7 +104,7 @@ def broadcast_and_enqueue(turn: SetupTurn, message: SetupMessage) -> bool:
     """
     # Broadcast the queued turn before enqueueing, so a fast worker's
     # "running" broadcast cannot be overtaken by a stale "queued" one.
-    _broadcast(turn, message)
+    _broadcast(turn, message, documents)
     try:
         result = celery_app.send_task(RUN_SETUP_TURN_TASK, args=[turn.pk])
     except Exception:
@@ -83,11 +119,18 @@ def broadcast_and_enqueue(turn: SetupTurn, message: SetupMessage) -> bool:
     return True
 
 
-def _broadcast(turn: SetupTurn, message: SetupMessage | None) -> None:
+def _broadcast(
+    turn: SetupTurn,
+    message: SetupMessage | None,
+    documents: Sequence[SetupDocument] = (),
+) -> None:
     """Send the turn (and its message) to the chat page; never raises."""
     try:
         if message is not None:
-            broadcast_message(turn.project_id, message_payload(message, screenshots=[]))
+            broadcast_message(
+                turn.project_id,
+                message_payload(message, screenshots=[], attachments=list(documents)),
+            )
         broadcast_turn(turn.project_id, turn_payload(turn))
     except Exception:
         logger.exception("Setup turn %d: broadcast failed", turn.pk)

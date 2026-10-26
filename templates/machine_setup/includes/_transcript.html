@@ -4,9 +4,14 @@
   messages, hiddenMessageCount, threadKind, toolTitle, toolDetail, toolBadgeClass,
   toolBadgeLabel, formatClock and openLightbox from the ancestor
   machineSetupChat scope (machine_setup/chat.html; `blocks` is documented
-  there; sub-task blocks render through _subtask.html). Every field is model
-  or agent text, so it is rendered with x-text
-  (and :title) only; :href is bound only to the server-built link_url.
+  there; sub-task blocks render through _subtask.html, run proposal cards
+  through _run_proposal.html). Every field is model or agent text, so it is
+  rendered with x-text (and :title) only; :href is bound only to the
+  server-built link_url, a run's server-built url, or documentUrl(id) (the
+  reversed document_url_template with the id swapped in).
+
+  A user row lists its attached documents (attachments) under the text:
+  file name, size, character count and a download link (plain text).
 
   The log itself is not a live region (tool row updates are not announced).
   The working indicator is role="status", and the visually hidden span below
@@ -28,7 +33,16 @@
             <span x-text="block.message.author_name || (threadKind === 'auto_fix' ? 'Paused test run' : 'You')"></span>
             <time :datetime="block.message.created_at" x-text="formatClock(block.message.created_at)"></time>
           </div>
-          <div class="pre-wrap" x-text="block.message.text"></div>
+          <div class="pre-wrap" x-show="block.message.text" x-text="block.message.text"></div>
+          <ul class="chat-attachments" x-show="(block.message.attachments || []).length > 0" aria-label="Attached documents">
+            <template x-for="doc in (block.message.attachments || [])" :key="doc.id">
+              <li class="chat-attachment">
+                <span class="chat-attachment-name" x-text="doc.file_name" :title="doc.file_name"></span>
+                <span class="chat-attachment-meta" x-text="formatBytes(doc.size_bytes) + ' · ' + doc.char_count.toLocaleString() + ' characters'"></span>
+                <a class="chat-attachment-link" :href="documentUrl(doc.id)" :aria-label="'Download ' + doc.file_name">Download</a>
+              </li>
+            </template>
+          </ul>
         </div>
       </template>
 
@@ -57,6 +71,10 @@
             <a :href="block.message.link_url">Open application context</a>
           </template>
         </p>
+      </template>
+
+      <template x-if="block.kind === 'row' && block.role === 'run_proposal'">
+        {% include "machine_setup/includes/_run_proposal.html" %}
       </template>
 
       <template x-if="block.kind === 'activity'">

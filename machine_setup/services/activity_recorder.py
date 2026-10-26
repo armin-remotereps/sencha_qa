@@ -27,6 +27,7 @@ from machine_setup.message_text import message_text
 from machine_setup.models import (
     SetupMessage,
     SetupMessageKind,
+    SetupRunProposal,
     SetupScreenshot,
     SetupSubtaskResult,
     SetupToolStatus,
@@ -161,8 +162,14 @@ class ActivityRecorder:
         broadcast_screenshot(self.project_id, row.pk, screenshot_payload(screenshot))
 
     def create_row(
-        self, *, kind: SetupMessageKind, text: str, link_url: str = ""
+        self,
+        *,
+        kind: SetupMessageKind,
+        text: str,
+        link_url: str = "",
+        run_proposal_id: int | None = None,
     ) -> SetupMessage:
+        """``run_proposal_id`` makes the row a run proposal card."""
         row = SetupMessage.objects.create(
             conversation_id=self.conversation_id,
             turn_id=self.turn_id,
@@ -170,7 +177,15 @@ class ActivityRecorder:
             kind=kind,
             text=text,
             link_url=link_url,
+            run_proposal_id=run_proposal_id,
         )
+        if run_proposal_id is not None:
+            # One query for the card; case_ids can be large and is not shown.
+            row.run_proposal = (
+                SetupRunProposal.objects.defer("case_ids")
+                .filter(pk=run_proposal_id)
+                .first()
+            )
         self.broadcast_row(row)
         return row
 

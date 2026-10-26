@@ -7,7 +7,7 @@ continues via ``offset``, the case search via a page number.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from django.contrib.postgres.aggregates import ArrayAgg
@@ -29,6 +29,7 @@ CASE_FIELD_LIMIT = 4000
 MAX_CASES_PER_BATCH = 20
 # About 6k tokens; one case is at most ~12.2k characters, so the first always fits.
 CASES_BATCH_CHAR_BUDGET = 24000
+CASE_GROUP_RUNS_SHOWN = 50
 _CASE_COLUMNS = ("id", "testrail_id", "title", "preconditions", "steps", "expected")
 _CASE_SEPARATOR = "\n\n---\n\n"
 
@@ -240,6 +241,66 @@ def get_cases(project_id: int, case_ids: Sequence[int]) -> CasesBatch:
         missing=missing,
         deferred=tuple(deferred),
     )
+
+
+def list_case_groups_text(*, project_id: int) -> str:
+    """How the project's cases group: by TestRail suite, run, priority and type.
+
+    Five queries: the totals, then one GROUP BY per grouping. Runs are capped
+    at the ``CASE_GROUP_RUNS_SHOWN`` largest.
+    """
+    cases = TestCase.objects.filter(project_id=project_id)
+    totals = cases.aggregate(
+        total=Count("id"),
+        unordered=Count("id", filter=Q(testrail_position__isnull=True)),
+    )
+    total = totals["total"] or 0
+    if total == 0:
+        return "No test cases yet."
+    sections = [
+        f"{total} test cases; {totals['unordered'] or 0} have no TestRail order. "
+        "Cases have no TestRail section stored, so they cannot be grouped by "
+        "section. Group values are data.",
+        _group_section(
+            "By TestRail suite (testrail_suite_id)",
+            cases.values("testrail_suite_id")
+            .annotate(case_count=Count("id"))
+            .order_by("testrail_suite_id")
+            .values_list("testrail_suite_id", "case_count"),
+        ),
+        _group_section(
+            f"By TestRail run (testrail_run_id), largest {CASE_GROUP_RUNS_SHOWN}",
+            cases.values("testrail_source_run_id")
+            .annotate(case_count=Count("id"))
+            .order_by("-case_count", "testrail_source_run_id")
+            .values_list("testrail_source_run_id", "case_count")[
+                :CASE_GROUP_RUNS_SHOWN
+            ],
+        ),
+        _group_section(
+            "By priority",
+            cases.values("priority")
+            .annotate(case_count=Count("id"))
+            .order_by("priority")
+            .values_list("priority", "case_count"),
+        ),
+        _group_section(
+            "By type",
+            cases.values("type")
+            .annotate(case_count=Count("id"))
+            .order_by("type")
+            .values_list("type", "case_count"),
+        ),
+    ]
+    return "\n\n".join(sections)
+
+
+def _group_section(title: str, rows: Iterable[tuple[object, int]]) -> str:
+    lines = [f"{title}:"]
+    for value, count in rows:
+        label = "(none)" if value is None or value == "" else repr(value)
+        lines.append(f"- {label}: {count} cases")
+    return "\n".join(lines)
 
 
 def _render_row(row: Mapping[str, object]) -> str:

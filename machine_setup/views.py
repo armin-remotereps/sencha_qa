@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from django.conf import settings
 from django.contrib import messages
 from django.http import Http404, HttpResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.utils.http import content_disposition_header
 from django.views.decorators.http import require_GET, require_POST
 
 from accounts.types import AuthenticatedRequest
@@ -26,9 +28,14 @@ from machine_setup.services.chat_page import (
     get_thread_help_panel,
     list_help_threads,
 )
+from machine_setup.services.document_download import find_document
 from machine_setup.services.help_thread_state import help_panel_payload
 from machine_setup.services.open_help_chat import find_help_case, open_help_chat
 from machine_setup.services.reset_conversation import reset_conversation
+from machine_setup.services.run_proposal_decision import (
+    create_proposed_runs,
+    discard_run_proposal,
+)
 from machine_setup.services.send_message import send_setup_message
 from machine_setup.services.stop_turn import request_stop
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE
@@ -123,6 +130,19 @@ def _render_chat(
                 "other_thread": OTHER_THREAD_TURN_MESSAGE,
             },
             "form": SetupMessageForm(),
+            "document_max_bytes": settings.MACHINE_SETUP_DOCUMENT_MAX_BYTES,
+            "document_url_template": reverse(
+                "machine_setup:document",
+                kwargs={"project_id": project.id, "document_id": 0},
+            ),
+            "run_proposal_create_url_template": reverse(
+                "machine_setup:run_proposal_create",
+                kwargs={"project_id": project.id, "proposal_id": 0},
+            ),
+            "run_proposal_discard_url_template": reverse(
+                "machine_setup:run_proposal_discard",
+                kwargs={"project_id": project.id, "proposal_id": 0},
+            ),
             "active_tab": "machine_setup",
             "active_nav": "projects",
         },
@@ -168,7 +188,7 @@ def help_chat_open(
 @project_membership_required
 @require_POST
 def setup_send(request: AuthenticatedRequest, project: Project) -> HttpResponse:
-    form = SetupMessageForm(request.POST)
+    form = SetupMessageForm(request.POST, request.FILES)
     if not form.is_valid():
         messages.error(request, form_error_text(form))
         return _back_to_chat(project, _posted_thread_id(request))
@@ -184,10 +204,63 @@ def setup_send(request: AuthenticatedRequest, project: Project) -> HttpResponse:
             user=request.user,
             text=form.cleaned_data["text"],
             conversation=thread,
+            document=form.uploaded_document(),
         )
     except MachineSetupError as exc:
         messages.error(request, exc.message)
     return _back_to_chat(project, conversation_id)
+
+
+@project_membership_required
+@require_GET
+def setup_document(
+    request: AuthenticatedRequest, project: Project, document_id: int
+) -> HttpResponse:
+    document = find_document(project=project, document_id=document_id)
+    if document is None:
+        raise Http404("No such document.")
+    response = HttpResponse(document.text, content_type="text/plain; charset=utf-8")
+    disposition = content_disposition_header(
+        as_attachment=True, filename=document.file_name
+    )
+    # Never None with as_attachment=True; narrowed for the type checker.
+    if disposition is not None:
+        response["Content-Disposition"] = disposition
+    return response
+
+
+@project_membership_required
+@require_POST
+def run_proposal_create(
+    request: AuthenticatedRequest, project: Project, proposal_id: int
+) -> HttpResponse:
+    try:
+        outcome = create_proposed_runs(
+            project=project, proposal_id=proposal_id, user=request.user
+        )
+    except MachineSetupError as exc:
+        messages.error(request, exc.message)
+    else:
+        count = outcome.created_count
+        text = f"Created {count} draft run{'s' if count != 1 else ''}."
+        if outcome.skipped_names:
+            text += f" Skipped (no cases left): {', '.join(outcome.skipped_names)}."
+        messages.success(request, text)
+    return redirect("machine_setup:chat", project_id=project.id)
+
+
+@project_membership_required
+@require_POST
+def run_proposal_discard(
+    request: AuthenticatedRequest, project: Project, proposal_id: int
+) -> HttpResponse:
+    try:
+        discard_run_proposal(
+            project=project, proposal_id=proposal_id, user=request.user
+        )
+    except MachineSetupError as exc:
+        messages.error(request, exc.message)
+    return redirect("machine_setup:chat", project_id=project.id)
 
 
 @project_membership_required

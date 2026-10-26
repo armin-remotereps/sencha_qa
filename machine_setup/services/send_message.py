@@ -8,15 +8,17 @@ from django.db import transaction
 from django.utils import timezone
 
 from accounts.models import CustomUser
+from machine_setup.document_text import UploadedDocument
 from machine_setup.exceptions import (
     MachineSetupError,
+    SetupDocumentNotAllowedError,
     SetupMachineNotReadyError,
     SetupRunActiveError,
     SetupTurnActiveError,
 )
 from machine_setup.models import SetupConversation, SetupConversationKind, SetupTurn
 from machine_setup.services.live_turn import resolve_live_turn
-from machine_setup.services.queue_turn import broadcast_and_enqueue, create_turn
+from machine_setup.services.queue_turn import broadcast_and_enqueue, create_user_turn
 from projects.models import Project, TestRun, TestRunStatus
 from projects.services import MachineState, get_machine_state
 from visual_engine.services.pool_status import get_visual_engine_status
@@ -32,6 +34,7 @@ def send_setup_message(
     user: CustomUser,
     text: str,
     conversation: SetupConversation | None = None,
+    document: UploadedDocument | None = None,
 ) -> SetupTurn:
     """Record the user's message and queue a turn for it.
 
@@ -39,12 +42,17 @@ def send_setup_message(
     an auto-fix thread); ``None`` means the main chat, created when missing.
     Raises ``SetupTurnActiveError``, ``SetupRunActiveError``,
     ``SetupMachineNotReadyError``, or ``MachineSetupError`` when the thread was
-    archived meanwhile. A stale live turn is closed as ``worker_lost`` first,
-    and stays closed even when the send is refused. A paused (Needs help) run
+    archived meanwhile, or ``SetupDocumentNotAllowedError`` when ``document``
+    targets any thread but the main chat. A stale live turn is closed as
+    ``worker_lost`` first, and stays closed even when the send is refused. A paused (Needs help) run
     does not block sending; a started one does.
     """
     outcome = _send_locked(
-        project=project, user=user, text=text, conversation=conversation
+        project=project,
+        user=user,
+        text=text,
+        conversation=conversation,
+        document=document,
     )
     if isinstance(outcome, MachineSetupError):
         raise outcome
@@ -58,6 +66,7 @@ def _send_locked(
     user: CustomUser,
     text: str,
     conversation: SetupConversation | None,
+    document: UploadedDocument | None,
 ) -> SetupTurn | MachineSetupError:
     # Same lock as start_test_run and resume (project row first), so a send
     # and a run start cannot both pass their "nothing else is live" checks.
@@ -73,8 +82,12 @@ def _send_locked(
     target = _target_conversation(locked, user, conversation)
     if target is None:
         return MachineSetupError(THREAD_CLOSED_MESSAGE)
-    turn, message = create_turn(conversation=target, requested_by=user, text=text)
-    transaction.on_commit(lambda: broadcast_and_enqueue(turn, message))
+    if document is not None and target.kind != SetupConversationKind.CHAT:
+        return SetupDocumentNotAllowedError()
+    turn, message, documents = create_user_turn(
+        conversation=target, requested_by=user, text=text, document=document
+    )
+    transaction.on_commit(lambda: broadcast_and_enqueue(turn, message, documents))
     return turn
 
 

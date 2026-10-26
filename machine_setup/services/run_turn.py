@@ -29,9 +29,11 @@ from agents.types import (
     ToolContext,
     ToolResult,
 )
+from machine_setup.document_text import AttachedDocumentNote, user_turn_content
 from machine_setup.events import broadcast_message, broadcast_turn
 from machine_setup.models import (
     SetupConversation,
+    SetupDocument,
     SetupMessage,
     SetupMessageKind,
     SetupTurn,
@@ -149,16 +151,22 @@ class _TurnRunner:
         history = transcript_from_json(turn.conversation.llm_transcript)
         if history is None:
             return transcript_invalid_outcome()
-        user_text = (
+        user_row = (
             SetupMessage.objects.filter(turn_id=turn.pk, kind=SetupMessageKind.USER)
-            .values_list("text", flat=True)
+            .values("id", "text")
             .first()
         )
-        if user_text is None:
+        if user_row is None:
             raise LookupError(f"Setup turn {turn.pk} has no user message")
 
+        # The note names each document's id, so later turns can still read it.
         history = close_dangling_tool_calls(history, _INTERRUPTED_CALL_NOTE) + (
-            ChatMessage(role="user", content=user_text),
+            ChatMessage(
+                role="user",
+                content=user_turn_content(
+                    user_row["text"], _attached_documents(user_row["id"])
+                ),
+            ),
         )
         # Persisted up front so the message stays in the history even when the
         # turn fails before the model answers.
@@ -208,12 +216,14 @@ class _TurnRunner:
             cancellation_check=self._should_stop,
         )
         dispatch = build_setup_dispatcher(
-            project_id=self.project_id,
+            project=project,
             author=turn.requested_by,
             on_context_updated=self._on_context_updated,
+            on_runs_proposed=self._on_runs_proposed,
             run_subtask=self._run_subtask,
             role=role,
             conversation_id=self.conversation_id,
+            turn_id=turn.pk,
             help_request_id=help_request_id,
         )
         result = run_tool_loop(
@@ -287,6 +297,19 @@ class _TurnRunner:
                 "projects:application_context",
                 kwargs={"project_id": self.project_id},
             ),
+        )
+
+    def _on_runs_proposed(self, proposal_id: int, run_count: int) -> None:
+        logger.info(
+            "Setup turn %s proposed %s test run(s) (proposal %s)",
+            self.turn.pk,
+            run_count,
+            proposal_id,
+        )
+        self.recorder.create_row(
+            kind=SetupMessageKind.NOTICE,
+            text=f"Proposed {run_count} test run{'s' if run_count != 1 else ''}",
+            run_proposal_id=proposal_id,
         )
 
     def _should_stop(self) -> bool:
@@ -379,6 +402,20 @@ class _TurnRunner:
         return SetupConversation.objects.filter(
             pk=self.conversation_id, archived_at__isnull=False
         ).exists()
+
+
+def _attached_documents(message_id: int) -> list[AttachedDocumentNote]:
+    """The documents of the turn's USER row, without their text; one query."""
+    return [
+        AttachedDocumentNote(
+            document_id=row["id"],
+            file_name=row["file_name"],
+            char_count=row["char_count"],
+        )
+        for row in SetupDocument.objects.filter(message_id=message_id)
+        .order_by("id")
+        .values("id", "file_name", "char_count")
+    ]
 
 
 def _log_tool_debug(message: str) -> None:

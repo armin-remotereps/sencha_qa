@@ -240,6 +240,14 @@ class SetupMessage(models.Model):
     subtask_result = models.CharField(
         max_length=20, choices=SetupSubtaskResult.choices, blank=True, default=""
     )
+    # Set on the NOTICE row that shows a run proposal card.
+    run_proposal = models.ForeignKey(
+        "SetupRunProposal",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -276,3 +284,100 @@ class SetupScreenshot(models.Model):
 
     def __str__(self) -> str:
         return f"Setup screenshot #{self.pk} — {self.tool_name}"
+
+
+class SetupDocument(models.Model):
+    """A text document a person attached to a main chat message.
+
+    Kept in the database, not MEDIA: MEDIA is served without auth.
+    """
+
+    conversation = models.ForeignKey(
+        SetupConversation, on_delete=models.CASCADE, related_name="documents"
+    )
+    # The USER row it came with.
+    message = models.ForeignKey(
+        SetupMessage, on_delete=models.CASCADE, related_name="documents"
+    )
+    uploaded_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    # Sanitised display name (machine_setup.document_text.sanitize_file_name).
+    file_name = models.CharField(max_length=255)
+    # Decoded UTF-8, LF line endings.
+    text = models.TextField()
+    size_bytes = models.PositiveIntegerField()
+    char_count = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["id"]
+
+    def __str__(self) -> str:
+        return f"Setup document #{self.pk} ({self.file_name})"
+
+
+class SetupRunProposalStatus(models.TextChoices):
+    PENDING = "pending", "Waiting for you"
+    CREATED = "created", "Created"
+    SUPERSEDED = "superseded", "Replaced"
+    DISCARDED = "discarded", "Discarded"
+
+
+class SetupRunProposal(models.Model):
+    """Test runs the main agent proposed; a person creates them as Drafts."""
+
+    # Denormalised for scoping.
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="setup_run_proposals"
+    )
+    conversation = models.ForeignKey(
+        SetupConversation, on_delete=models.CASCADE, related_name="run_proposals"
+    )
+    turn = models.ForeignKey(
+        SetupTurn,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=SetupRunProposalStatus.choices,
+        default=SetupRunProposalStatus.PENDING,
+    )
+    # The agent's one-paragraph summary.
+    note = models.TextField(max_length=1000, blank=True, default="")
+    # Display summary per run: [{name, case_count, sample_titles, name_exists}].
+    runs = models.JSONField(default=list)
+    # Case ids per run, same order as ``runs``; defer it on display loads.
+    case_ids = models.JSONField(default=list)
+    # [{run_id, name, case_count}] once created.
+    created_runs = models.JSONField(default=list, blank=True)
+    # Run names left out at creation because none of their cases exist any more.
+    skipped = models.JSONField(default=list, blank=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["conversation"],
+                condition=Q(status="pending"),
+                name="setup_one_pending_run_proposal",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"Run proposal #{self.pk} ({self.status})"

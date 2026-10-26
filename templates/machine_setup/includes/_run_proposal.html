@@ -1,0 +1,96 @@
+{% comment %}
+  One run proposal card: a NOTICE row whose run_proposal is set (block role
+  'run_proposal', block.proposal = RunProposalPayload, see
+  machine_setup/chat.html). Rendered inside `<template x-for="block in
+  blocks">` of _transcript.html; reads proposalBadgeClass,
+  proposalCreateUrl, proposalDiscardUrl and proposalSubmitting from the
+  machineSetupChat scope. The card row is re-broadcast on every status
+  change, so it is replaced live (upsert by id).
+
+  Run names, sample titles, the note and skipped names are model or user
+  text: x-text / :title only. :href is bound only to the server-built run
+  url; the form actions come from the reversed URL templates with the id
+  swapped in. The badge class comes from a fixed client map on status.
+
+  pending: Create runs / Discard (POST + CSRF, PRG back to the chat).
+  created: links to the created runs, the skipped names, View all runs.
+  superseded / discarded: muted, status only.
+  Single root element (it is the content of an x-if template).
+{% endcomment %}
+<section class="chat-proposal" :class="{ 'is-closed': block.proposal.status === 'superseded' || block.proposal.status === 'discarded' }" aria-label="Proposed test runs">
+  <header class="chat-proposal-header">
+    <h3 class="chat-proposal-title">Proposed test runs</h3>
+    <span class="badge" :class="proposalBadgeClass(block.proposal.status)" x-text="block.proposal.status_label"></span>
+  </header>
+
+  <p class="chat-proposal-note pre-wrap" x-show="block.proposal.note" x-text="block.proposal.note"></p>
+
+  <template x-if="block.proposal.status !== 'created'">
+    <table class="data-table chat-proposal-table">
+      <thead>
+        <tr>
+          <th scope="col">Run name</th>
+          <th scope="col">Cases</th>
+          <th scope="col">Sample cases</th>
+        </tr>
+      </thead>
+      <tbody>
+        <template x-for="(run, index) in block.proposal.runs" :key="index">
+          <tr>
+            <td class="cell-primary" data-label="Run name">
+              <span class="chat-proposal-name">
+                <span x-text="run.name" :title="run.name"></span>
+                <span class="badge badge-warning" x-show="run.name_exists" title="A run of this project already has this name">Name already used</span>
+              </span>
+            </td>
+            <td data-label="Cases" x-text="run.case_count"></td>
+            <td data-label="Sample cases">
+              <details class="chat-proposal-samples" x-show="run.sample_titles.length > 0">
+                <summary x-text="'First ' + run.sample_titles.length + (run.sample_titles.length === 1 ? ' case' : ' cases')"></summary>
+                <ul>
+                  <template x-for="(title, titleIndex) in run.sample_titles" :key="titleIndex">
+                    <li x-text="title"></li>
+                  </template>
+                </ul>
+              </details>
+            </td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+  </template>
+
+  <template x-if="block.proposal.status === 'pending'">
+    <div class="chat-proposal-actions">
+      <p class="chat-proposal-hint small">Nothing is created until you press Create runs. The runs are created as Drafts.</p>
+      <div class="chat-proposal-buttons">
+        <form method="post" :action="proposalDiscardUrl(block.proposal.id)" @submit="proposalSubmitting = true">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-secondary btn-sm" :disabled="proposalSubmitting">Discard</button>
+        </form>
+        <form method="post" :action="proposalCreateUrl(block.proposal.id)" @submit="proposalSubmitting = true">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-primary btn-sm" :disabled="proposalSubmitting" x-text="'Create ' + block.proposal.runs.length + (block.proposal.runs.length === 1 ? ' run' : ' runs')">Create runs</button>
+        </form>
+      </div>
+    </div>
+  </template>
+
+  <template x-if="block.proposal.status === 'created'">
+    <div class="chat-proposal-created">
+      <ul class="chat-proposal-created-list">
+        <template x-for="(run, index) in block.proposal.created_runs" :key="index">
+          <li>
+            <a :href="run.url" x-text="run.name" :title="run.name"></a>
+            <span class="muted small" x-text="run.case_count + (run.case_count === 1 ? ' case' : ' cases')"></span>
+          </li>
+        </template>
+      </ul>
+      <p class="chat-proposal-skipped small" x-show="block.proposal.skipped.length > 0">
+        <span>Skipped (no cases left):</span>
+        <span x-text="block.proposal.skipped.join(', ')"></span>
+      </p>
+      <a class="chat-proposal-all" href="{% url 'projects:test_run_list' project.id %}">View all runs</a>
+    </div>
+  </template>
+</section>

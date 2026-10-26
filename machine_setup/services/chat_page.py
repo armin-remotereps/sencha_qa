@@ -28,6 +28,7 @@ from machine_setup.models import (
     LIVE_TURN_STATUSES,
     SetupConversation,
     SetupConversationKind,
+    SetupDocument,
     SetupFixResult,
     SetupMessage,
     SetupMessageKind,
@@ -344,19 +345,28 @@ def _recent_messages(
 
     Each ``run_setup_task`` row in that window brings its newest
     ``SUBTASK_PAGE_CHILD_LIMIT`` children; the rest are counted on the row as
-    ``hidden_child_count``. One flat list in id order, in four or five queries.
+    ``hidden_child_count``. One flat list in id order, in five or six queries.
     """
     if conversation_id is None:
         return [], 0
     screenshots = Prefetch(
         "screenshots", queryset=SetupScreenshot.objects.order_by("id")
     )
+    # The payload reads documents of USER rows and the proposal of card rows;
+    # case_ids can be large and is never shown.
+    documents = Prefetch(
+        "documents",
+        queryset=SetupDocument.objects.only(
+            "id", "message_id", "file_name", "size_bytes", "char_count"
+        ),
+    )
     rows = list(
         SetupMessage.objects.filter(
             conversation_id=conversation_id, parent__isnull=True
         )
-        .select_related("author")
-        .prefetch_related(screenshots)
+        .select_related("author", "run_proposal")
+        .defer("run_proposal__case_ids")
+        .prefetch_related(screenshots, documents)
         .order_by("-id")[:SETUP_PAGE_MESSAGE_LIMIT]
     )
     rows.reverse()

@@ -311,6 +311,10 @@ MACHINE_SETUP_SUBTASK_MAX_TIMEOUT_SECONDS: int = config(
 MACHINE_SETUP_SUBTASK_MAX_ITERATIONS: int = config(
     "MACHINE_SETUP_SUBTASK_MAX_ITERATIONS", default=100, cast=int
 )
+# Largest Markdown/text document a person can attach to a main chat message.
+MACHINE_SETUP_DOCUMENT_MAX_BYTES: int = config(
+    "MACHINE_SETUP_DOCUMENT_MAX_BYTES", default=262144, cast=int
+)
 
 # SearXNG (metasearch engine)
 SEARXNG_BASE_URL: str = config(

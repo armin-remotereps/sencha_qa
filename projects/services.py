@@ -2163,7 +2163,9 @@ def create_test_run_with_cases(
     *, project: Project, test_case_ids: list[int], name: str = ""
 ) -> TestRun:
     test_run = TestRun.objects.create(project=project, name=name)
-    valid_cases = TestCase.objects.filter(id__in=test_case_ids, project=project)
+    valid_cases = TestCase.objects.filter(id__in=test_case_ids, project=project).only(
+        "id", "testrail_source_run_id"
+    )
     pivots = [
         TestRunTestCase(
             test_run=test_run,

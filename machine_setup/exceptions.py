@@ -49,3 +49,33 @@ class HelpChatSendRefusedError(MachineSetupError):
     def __init__(self, message: str, *, conversation_id: int) -> None:
         super().__init__(message)
         self.conversation_id = conversation_id
+
+
+class SetupDocumentInvalidError(MachineSetupError):
+    default_message = "The document could not be attached."
+
+
+class SetupDocumentNotAllowedError(MachineSetupError):
+    default_message = "Documents can be attached in the main chat only."
+
+
+class SetupDocumentReadError(MachineSetupError):
+    """Tool-facing: unknown document id or page out of range."""
+
+    default_message = "The document could not be read."
+
+
+class RunProposalInvalidError(MachineSetupError):
+    """Tool-facing: the proposed runs break a rule; ``message`` says which."""
+
+    default_message = "The proposed test runs are not valid."
+
+
+class RunProposalClosedError(MachineSetupError):
+    default_message = "This proposal is no longer open."
+
+
+class RunProposalEmptyError(MachineSetupError):
+    default_message = (
+        "None of the proposed runs has any case left, so nothing was created."
+    )
