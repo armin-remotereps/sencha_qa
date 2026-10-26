@@ -21,9 +21,9 @@ def safe_tool_call(
         # Cancellation, infrastructure faults (lost or unresponsive Test Runner,
         # Visual engine, AI service; ControllerReconnectTimeoutError included)
         # and the case time limit must stop the whole agent loop, not just this
-        # tool call, so the case ends Cancelled or Blocked instead of the agent
-        # judging the app on a fault that is not the app's (mirrors how
-        # agents/services/tools_utility.py:wait lets cancellation propagate).
+        # tool call, so the case ends Cancelled or pauses for help instead of
+        # the agent judging the app on a fault that is not the app's (mirrors
+        # how agents/services/tools_utility.py:wait lets cancellation propagate).
         raise
     except Exception as e:
         logger.error("%s failed: %s", operation, e)

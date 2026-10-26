@@ -2,7 +2,9 @@
 
 Two audiences:
 
-- ``auto_fix``: the unattended Night auto-fix (unchanged wording);
+- ``auto_fix``: the unattended Night auto-fix. A fault request (an
+  infrastructure fault, not the tester, paused the case) opens with the fault,
+  and the "after you report fixed" sentence follows the request's continue mode;
 - ``person``: the first message of a help chat a person opened. It adds every
   plan step's status, the steps that can be carried into a redesigned plan,
   the help history, earlier redesigns and the pending draft.
@@ -23,6 +25,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from agents.plan_revision import PlanDraftView
+from projects.models import HelpContinueMode
 
 BriefAudience = Literal["auto_fix", "person"]
 
@@ -100,6 +103,11 @@ class CaseHelpBriefData:
     ask: str
     # What the failed attempt at the step did; empty when unknown.
     actions_digest: str
+    # The fault's label when an infrastructure fault paused the case; empty
+    # when the tester asked for help.
+    fault_label: str = ""
+    # How the case goes on after a fix.
+    continue_mode: HelpContinueMode = HelpContinueMode.CURRENT_SCREEN
     # Person brief only.
     request_open: bool = True
     status_text: str = ""
@@ -116,14 +124,27 @@ def build_case_help_brief(data: CaseHelpBriefData, *, audience: BriefAudience) -
 
 def _auto_fix_brief(data: CaseHelpBriefData) -> str:
     step = data.step_num
-    sections = [
-        (
+    resume = (
+        "After you report the machine fixed, the test resumes on its own and "
+        f"{_continue_text(data.continue_mode, step)}. When you are done, call "
+        "report_case_fix."
+    )
+    if data.fault_label:
+        opening = (
+            # The reason can hold model-written text (a lost resume state's
+            # summary), so it and the ask stay below the data framing.
+            "A test run is paused. This case was not stopped by the tester. An "
+            f"infrastructure fault interrupted step {step}: {data.fault_label}. "
+            "Its details and what to fix are below. Nobody is watching this run "
+            f"right now. {resume}"
+        )
+    else:
+        opening = (
             "A test run is paused: one test case needs help at step "
-            f"{step}. Nobody is watching this run right now. After you report the "
-            "machine fixed, the test resumes on its own and re-runs step "
-            f"{step} from the current screen. When you are done, call "
-            "report_case_fix."
-        ),
+            f"{step}. Nobody is watching this run right now. {resume}"
+        )
+    sections = [
+        opening,
         _DATA_FRAMING,
         _block("TEST RUN", data.run_name or "(unnamed)"),
         _block("TEST CASE", data.case_title),
@@ -139,14 +160,21 @@ def _auto_fix_brief(data: CaseHelpBriefData) -> str:
 
 def _person_brief(data: CaseHelpBriefData) -> str:
     step = data.step_num
+    cause = (
+        f" An infrastructure fault interrupted it ({data.fault_label}); the "
+        "tester did not stop it."
+        if data.fault_label
+        else ""
+    )
     sections = [
         (
             "A test run is paused: one test case needs help at step "
-            f"{step}. A person opened this help chat to work it out with you. "
-            "You can look at and change the test machine through helpers, "
+            f"{step}.{cause} A person opened this help chat to work it out with "
+            "you. You can look at and change the test machine through helpers, "
             "redesign the test plan with propose_plan_change, and suggest an "
             "action with propose_resolution. Only the person resolves the case "
-            "(Continue, Mark failed or Skip)."
+            "(Continue, Mark failed or Mark blocked). Without a redesign, "
+            f"Continue {_continue_text(data.continue_mode, step)}."
         ),
         _DATA_FRAMING,
         _block("STATUS", data.status_text or _default_status(data)),
@@ -208,6 +236,18 @@ def build_case_help_update(data: CaseHelpBriefData) -> str:
     return _fit("\n\n".join(sections), CASE_UPDATE_MAX_CHARS)
 
 
+def _continue_text(continue_mode: HelpContinueMode, step: int) -> str:
+    if continue_mode == HelpContinueMode.RESTORE:
+        return f"first restores the earlier steps' state, then runs step {step}"
+    if continue_mode == HelpContinueMode.FROM_SCRATCH:
+        # No checkpoint, so no help key: nothing written here reaches the tester.
+        return (
+            "starts the case again from the beginning (no note or report is "
+            "passed on)"
+        )
+    return f"re-runs step {step} from the current screen"
+
+
 def _fit(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
@@ -239,10 +279,21 @@ def _current_step_sections(data: CaseHelpBriefData, *, digest_max: int) -> list[
                 f"Expected: {_cap(current.expected_result, _PLAN_STEP_MAX)}",
             )
         )
-    sections.append(_block("WHY THE TESTER STOPPED", _cap(data.reason, _HELP_TEXT_MAX)))
-    sections.append(
-        _block("WHAT THE TESTER ASKS TO FIX", _cap(data.ask, _HELP_TEXT_MAX))
-    )
+    if data.fault_label:
+        sections.append(
+            _block(
+                "WHY THE CASE STOPPED (an infrastructure fault, not the tester)",
+                f"{data.fault_label}\n{_cap(data.reason, _HELP_TEXT_MAX)}",
+            )
+        )
+        sections.append(_block("WHAT TO FIX", _cap(data.ask, _HELP_TEXT_MAX)))
+    else:
+        sections.append(
+            _block("WHY THE TESTER STOPPED", _cap(data.reason, _HELP_TEXT_MAX))
+        )
+        sections.append(
+            _block("WHAT THE TESTER ASKS TO FIX", _cap(data.ask, _HELP_TEXT_MAX))
+        )
     if data.actions_digest.strip():
         sections.append(
             _block(

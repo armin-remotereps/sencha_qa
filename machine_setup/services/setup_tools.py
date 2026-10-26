@@ -538,7 +538,7 @@ def build_machine_dispatcher(project_id: int) -> ToolDispatcher:
         try:
             return dispatch_tool_call(tool_call, context)
         except BrowserUnavailableError as exc:
-            # In a run this blocks the case; here installing the browser is often
+            # In a run this pauses the case for help; here installing the browser is often
             # exactly the job, so the agent gets to react.
             return _tool_error(tool_call, exc.safe_message)
         except RunnerOutdatedError as exc:

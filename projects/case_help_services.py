@@ -52,6 +52,7 @@ from projects.models import (
     BlockedReason,
     CaseHelpRequest,
     HelpAutoFixState,
+    HelpContinueMode,
     HelpResolution,
     Project,
     TestRun,
@@ -114,6 +115,9 @@ class HelpPanel:
     # Why the pending cases cannot be queued right now (the live auto-fix of
     # this request aside, since resolving the request stops it).
     blockers: tuple[str, ...]
+    # How Continue resumes the case: from the current screen, after restoring
+    # the earlier steps' state, or from scratch (no usable checkpoint).
+    continue_mode: HelpContinueMode
     # The help-chat agent's pending redesign of the plan (open request only).
     pending_draft: PlanDraftView | None = None
     # The case's newest screenshot ("" when none).
@@ -205,6 +209,7 @@ def get_help_panel(
         thread=_latest_thread(request),
         auto_fix_live=auto_fix_live,
         blockers=tuple(blockers),
+        continue_mode=_continue_mode(request),
         pending_draft=get_pending_plan_draft(request.pk) if request.is_open else None,
         latest_screenshot_url=_latest_screenshot_url(request.test_run_test_case_id),
     )
@@ -275,7 +280,7 @@ def get_run_case_for_help(
 
 
 def format_help_action_message(verb: str, result: HelpActionResult) -> str:
-    """The flash message after Continue / Mark failed / Skip."""
+    """The flash message after Continue / Mark failed / Mark blocked."""
     if result.outcome == HelpActionOutcome.WAITING_FOR_AUTO_FIX:
         return f"{verb}. The run continues as soon as the auto-fix agent stops."
     if result.outcome == HelpActionOutcome.WAITING_FOR_GATES:
@@ -299,7 +304,11 @@ def continue_after_help(
     plan_revision_id: int | None = None,
     use_plan_revision: bool = True,
 ) -> HelpActionResult:
-    """The machine is fixed: the case re-runs its failing step from its checkpoint.
+    """The machine is fixed: the case continues per its ``HelpContinueMode``.
+
+    It re-runs its failing step from the current screen, restores the earlier
+    steps' state first (the runner was lost), or plans from scratch (no
+    usable checkpoint).
 
     ``plan_revision_id`` is the help-chat redesign the person saw (None when
     none was shown). With ``use_plan_revision`` that draft is applied first and
@@ -373,24 +382,29 @@ def mark_failed_after_help(
         return _queue_or_wait(test_run, request, locked_pivot, auto_fix_live)
 
 
-def skip_after_help(
+def mark_blocked_after_help(
     *, pivot: TestRunTestCase, user: CustomUser, note: str
 ) -> HelpActionResult:
-    """Leave the case Blocked (resumable later); the rest of the run continues."""
+    """A person marks the case Blocked (resumable later); the run continues.
+
+    The only writer of ``BLOCKED``: the reason is always ``HELP_SKIPPED``, and
+    the request's fault, if any, appears only in the result text.
+    """
     with transaction.atomic():
         _, test_run = _lock_paused_run(pivot.test_run_id)
         locked_pivot, request = _lock_open_request(test_run, pivot.pk)
         now = timezone.now()
         auto_fix_live = auto_fix_turn_live(request.pk)
         note = _cap_note(note)
-        # The skipped case resumes later on its current (old) plan.
+        # The blocked case resumes later on its current (old) plan.
         supersede_pending_revisions(request)
         _resolve(request, HelpResolution.SKIPPED, user, note, now, auto_fix_live)
         locked_pivot.status = TestRunTestCaseStatus.BLOCKED
         locked_pivot.blocked_reason = BlockedReason.HELP_SKIPPED
+        fault = f" ({_fault_label(request)})" if request.fault else ""
         locked_pivot.result = _verdict_text(
-            f"Skipped by {_user_label(user)} at step {request.step_num} "
-            "while it was waiting for help.",
+            f"Marked blocked by {_user_label(user)} at step {request.step_num} "
+            f"while it was waiting for help{fault}.",
             request,
             note,
         )
@@ -670,15 +684,36 @@ def _latest_screenshot_url(pivot_id: int) -> str:
     return screenshot.image.url if screenshot is not None and screenshot.image else ""
 
 
+def _continue_mode(request: CaseHelpRequest) -> HelpContinueMode:
+    # Decided when the case paused; see ``projects.case_faults.help_continue_mode``.
+    return HelpContinueMode(request.continue_mode)
+
+
+def _fault_label(request: CaseHelpRequest) -> str:
+    """The fault's display label; empty when the agent asked for help."""
+    return request.get_fault_display() if request.fault else ""
+
+
 def _write_help_key(
     pivot: TestRunTestCase, request: CaseHelpRequest, source: HelpSource
 ) -> None:
-    """Set the checkpoint's help key from the request (not saved).
+    """Prepare the checkpoint for continuing, per ``HelpContinueMode`` (not saved).
 
-    Carries the ask, the person's note (empty when the setup agent continued),
-    the setup agent's summary (empty when no auto-fix reported) and whether
-    that auto-fix reported the machine fixed.
+    From scratch (no usable checkpoint): the checkpoint becomes ``{}`` with no
+    help key, so the case plans again after the normal cleanup. Restore: the
+    help key is written with ``continue_pending`` off, so the normal resume
+    runs the cleanup and the restore sub-task before the step. Current
+    screen: ``continue_pending`` on, so both are skipped.
+
+    The help key carries the ask, the person's note (empty when the setup
+    agent continued), the setup agent's summary (empty when no auto-fix
+    reported), whether that auto-fix reported the machine fixed, and the
+    fault's label (empty when the agent asked for help).
     """
+    mode = _continue_mode(request)
+    if mode == HelpContinueMode.FROM_SCRATCH:
+        pivot.execution_checkpoint = {}
+        return
     pivot.execution_checkpoint = with_help(
         pivot.execution_checkpoint,
         CheckpointHelp(
@@ -686,10 +721,11 @@ def _write_help_key(
             request_id=request.pk,
             note=request.note,
             source=source,
-            continue_pending=True,
+            continue_pending=mode == HelpContinueMode.CURRENT_SCREEN,
             ask=request.ask,
             auto_fix_summary=request.auto_fix_summary,
             auto_fix_fixed=request.auto_fix_state == HelpAutoFixState.FIXED,
+            fault=_fault_label(request),
         ),
     )
 
@@ -697,9 +733,9 @@ def _write_help_key(
 def _set_continue_pending(
     pivot: TestRunTestCase, request: CaseHelpRequest, source: HelpSource
 ) -> None:
-    """Write the checkpoint's help key and put the case back to Created.
+    """Prepare the checkpoint (``_write_help_key``) and put the case back to Created.
 
-    Writes the help key onto the in-memory ``execution_checkpoint`` (a redesign
+    Works on the in-memory ``execution_checkpoint`` (a redesign
     applied just before is only assigned there) and saves the case once.
     """
     _write_help_key(pivot, request, source)

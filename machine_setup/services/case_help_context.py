@@ -25,6 +25,7 @@ from machine_setup.case_help_brief import (
 from projects.case_plan_revision_services import get_pending_plan_draft
 from projects.models import (
     CaseHelpRequest,
+    HelpContinueMode,
     HelpResolution,
     TestRunStatus,
     TestRunTestCaseStatus,
@@ -105,6 +106,8 @@ def case_help_brief_data(
         reason=request.reason,
         ask=request.ask,
         actions_digest=failed_attempt_digest(checkpoint, request.step_num),
+        fault_label=request.get_fault_display() if request.fault else "",
+        continue_mode=HelpContinueMode(request.continue_mode),
     )
     if audience == "auto_fix":
         return base

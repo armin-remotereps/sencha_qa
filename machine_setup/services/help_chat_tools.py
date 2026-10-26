@@ -4,7 +4,7 @@
   thread's first message already holds (``build_help_case_update``).
 - ``propose_plan_change``: store a redesigned test plan as a draft; only the
   person's Continue applies it.
-- ``propose_resolution``: suggest Continue, Mark failed or Skip; only the
+- ``propose_resolution``: suggest Continue, Mark failed or Mark blocked; only the
   person acts.
 
 Every handler re-checks the request through the ``projects`` services (a
@@ -52,7 +52,8 @@ NOT_WAITING_MESSAGE = (
     "chat."
 )
 
-# The actions the agent may suggest (the person's Continue / Mark failed / Skip).
+# The actions the agent may suggest (the person's Continue / Mark failed /
+# Mark blocked; the stored value of Mark blocked stays ``skip``).
 _PROPOSAL_ACTIONS: tuple[str, ...] = (
     HelpProposalAction.CONTINUE.value,
     HelpProposalAction.MARK_FAILED.value,
@@ -131,7 +132,8 @@ def help_chat_tool_definitions() -> tuple[ToolDefinition, ...]:
                 "writes their own note. "
                 "continue: resume the test (with the draft if there is one); "
                 "mark_failed: the application under test is at fault; skip: "
-                "leave the case Blocked to resume later."
+                "mark the case Blocked (a person decides; it can be resumed "
+                "later)."
             ),
             category=ToolCategory.UTILITY,
             parameters=(

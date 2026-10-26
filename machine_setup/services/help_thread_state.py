@@ -1,4 +1,4 @@
-"""Use case: a help thread's help panel state (draft and the agent's suggestion).
+"""Use case: a help thread's help panel state (draft, suggestion, fault, continue mode).
 
 One payload builder for the three places that need it: the thread page (from
 its already loaded ``HelpPanel``), the socket's ``current_state`` and the
@@ -45,6 +45,8 @@ def load_help_thread_payload(
             "resolution",
             "agent_proposal_action",
             "agent_proposal_note",
+            "fault",
+            "continue_mode",
             "test_run_test_case__id",
             "test_run_test_case__status",
             "test_run_test_case__test_run__id",
@@ -93,4 +95,6 @@ def _payload(
         proposal_action_label=HelpProposalAction(action).label if action else "",
         proposal_note=request.agent_proposal_note if waiting else "",
         draft=draft,
+        fault_label=request.get_fault_display() if request.fault else "",
+        continue_mode=request.continue_mode,
     )

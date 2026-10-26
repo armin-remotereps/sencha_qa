@@ -136,8 +136,8 @@ def _build_help_chat_tools() -> str:
         "expected_result, timeout_seconds?, carried_from?}. The person reviews it "
         "side by side with the current plan; Continue applies it\n"
         f"- {PROPOSE_RESOLUTION_TOOL}(action, note) — suggest continue, "
-        "mark_failed or skip, with a note; the person sees it next to the chat, and it is not sent "
-        "to the tester"
+        "mark_failed or skip (Mark blocked), with a note; the person sees it "
+        "next to the chat, and it is not sent to the tester"
     )
 
 
@@ -148,14 +148,34 @@ def _build_auto_fix_thread() -> str:
         "AUTO-FIX THREAD:\n"
         "This thread was opened by the server, not by a person: a test run is "
         "paused because one test case needs help at one step. The first message "
-        "is the brief from that paused run: the case, the step, the tester's "
-        "reason and ask, and what the failed attempt did. Get the machine into a "
+        "is the brief from that paused run: the case, the step, why it stopped "
+        "(the tester's reason, or an infrastructure fault) and what to fix, and "
+        "what the failed attempt did. Get the machine into a "
         "state where that step can succeed. Then call report_case_fix(fixed, "
         "summary): fixed=true resumes the test on its own at that step, with your "
         "summary passed to the tester; fixed=false hands the case to a person, "
         "so say what is wrong and what they need to do. The last call counts; "
         "ending your turn without calling it counts as not fixed. All the rules "
-        "below apply as usual."
+        "below apply as usual.\n\n"
+        "INFRASTRUCTURE FAULTS:\n"
+        "When the brief says an infrastructure fault interrupted the step (not "
+        "the tester), decide whether its cause is on this test machine and "
+        "within your reach.\n"
+        "- What runs proves itself: this turn could only start with the Test "
+        "Runner connected and the visual engine ready, and you are answering, "
+        "so the AI service works. For a fault that may have been transient "
+        "(Test Runner unresponsive, visual engine, AI service, time limit), "
+        "check the screen and the step's preconditions with a read_only "
+        "sub-task; if the machine is fine, report fixed=true and say the fault "
+        "looked transient.\n"
+        "- Install a missing browser. When restoring the earlier steps' state "
+        "failed, bring the application to the state the step needs.\n"
+        "- Report fixed=false, with what a person must do, when the cause is "
+        "outside this machine or fixing it would end this session: a server "
+        "internal error, updating or restarting the Test Runner itself, a "
+        "vision worker on another machine that keeps failing.\n"
+        "- Never stop or restart the Test Runner process: it carries this "
+        "session."
     )
 
 
@@ -278,7 +298,8 @@ def _build_help_chat_rules(*, max_iterations: int) -> str:
     minutes = settings.MACHINE_SETUP_TURN_TIMEOUT_SECONDS // 60
     return (
         "HELP CHAT RULES:\n"
-        "- Only the person resolves the case (Continue, Mark failed or Skip). You "
+        "- Only the person resolves the case (Continue, Mark failed or Mark "
+        "blocked). You "
         f"may suggest one with {PROPOSE_RESOLUTION_TOOL}; never claim the case is "
         "resolved.\n"
         "- Check the machine first with a read_only sub-task: what is on the "

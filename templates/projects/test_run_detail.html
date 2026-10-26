@@ -40,7 +40,9 @@
      Need help: help_panel (projects.case_help_services.HelpPanel, or None
      unless the run is "paused"): request (latest CaseHelpRequest, case loaded),
      thread (auto-fix SetupConversation or None), auto_fix_live, blockers,
-     is_open, can_continue_run, waiting_for_auto_fix_stop. Drives the paused
+     is_open, can_continue_run, waiting_for_auto_fix_stop; request.fault /
+     get_fault_display name the infrastructure fault, "" when the agent
+     asked; the Reason column of that request's case shows it). Drives the paused
      banner and "Continue run" (projects:test_run_continue). start_form
      (TestRunStartForm, waiting runs only: the help_mode radio, initial = the
      run's mode). help_mode_form (RunHelpModeForm: the choices of the help
@@ -443,7 +445,7 @@
               {% endif %}
             </td>
             <td data-label="Duration">{% if pivot.finished_at and pivot.started_at %}{{ pivot.started_at|timesince:pivot.finished_at }}{% else %}—{% endif %}</td>
-            <td data-label="Reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>Needs help</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
+            <td data-label="Reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>{% if help_panel and help_panel.request.fault and help_panel.request.test_run_test_case_id == pivot.id %}{{ help_panel.request.get_fault_display }}{% else %}Needs help{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
             {% if can_edit %}
             <td data-label="" x-show="testRunStatus === 'waiting'" x-cloak>
               <div class="actions">

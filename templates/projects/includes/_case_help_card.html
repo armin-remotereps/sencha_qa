@@ -13,11 +13,15 @@
                   else thread; shown next to the note once the auto-fix
                   has ended),
                   auto_fix_live, blockers, is_open, can_continue,
-                  can_continue_run, waiting_for_auto_fix_stop
+                  can_continue_run, waiting_for_auto_fix_stop,
+                  continue_mode (HelpContinueMode: "current_screen" |
+                  "restore" | "from_scratch"; drives the Continue hint).
+                  request.fault / get_fault_display: the infrastructure
+                  fault that stopped the case ("" when the agent asked)
      help_form  — CaseHelpResolutionForm (the person's optional note, never
                   pre-filled from the agent's suggestion; use_plan_revision,
                   unticked here: the draft is only summarised on this page)
-   Continue / Mark failed / Skip share one form (the note) and post to their
+   Continue / Mark failed / Mark blocked share one form (the note) and post to their
    own URL via formaction. Abort opens the page's "abort-run" dialog. With a
    pending draft the form carries its hidden plan_revision_id and the
    "Use the redesigned plan" checkbox (Continue applies it; the others
@@ -40,12 +44,15 @@
       <time datetime="{{ help_request.requested_at|date:'c' }}">{{ help_request.requested_at|timesince }}</time>.
       The run is paused: nothing else in it executes until this case is resolved. The test machine was left exactly as it is.
     </p>
+    {% if help_request.fault %}
+      <p><span class="badge badge-warning">{{ help_request.get_fault_display }}</span></p>
+    {% endif %}
     {% if help_request.reason %}
-      <div class="label">Why the agent stopped</div>
+      <div class="label">{% if help_request.fault %}What stopped the case{% else %}Why the agent stopped{% endif %}</div>
       <p class="help-quote">{{ help_request.reason }}</p>
     {% endif %}
     {% if help_request.ask %}
-      <div class="label">What the agent asks you to do</div>
+      <div class="label">{% if help_request.fault %}What to fix{% else %}What the agent asks you to do{% endif %}</div>
       <p class="help-quote">{{ help_request.ask }}</p>
     {% endif %}
 
@@ -54,7 +61,7 @@
         <span class="alert-icon" aria-hidden="true">⚙</span>
         <div>
           <strong>The Machine setup agent is trying to fix this</strong>
-          <p>Continue, Mark failed and Skip take effect when the auto-fix agent stops. Stop auto-fix to talk to it yourself in the help chat.</p>
+          <p>Continue, Mark failed and Mark blocked take effect when the auto-fix agent stops. Stop auto-fix to talk to it yourself in the help chat.</p>
           <div class="help-actions">
             <form method="post" action="{% url 'projects:test_run_case_help_stop_auto_fix' project.id test_run.id pivot.id %}">
               {% csrf_token %}
@@ -122,7 +129,7 @@
       <div class="field">
         <label class="label" for="{{ help_form.note.id_for_label }}">{{ help_form.note.label }}</label>
         {{ help_form.note }}
-        <p class="hint">Continue re-runs step {{ help_request.step_num }} from the current screen, with your note{% if auto_fix_summary and help_request.auto_fix_state != "running" %} and the Machine setup agent's report{% endif %}. Mark failed records a Failed verdict. Skip leaves the case Blocked so it can be resumed later. In every case the rest of the run then continues.</p>
+        <p class="hint">Continue {% if help_panel.continue_mode == "from_scratch" %}starts the case again from the beginning (no step had been saved, so your note is not passed on){% else %}{% if help_panel.continue_mode == "restore" %}restores the earlier steps' state first, then runs step {{ help_request.step_num }}{% else %}re-runs step {{ help_request.step_num }} from the current screen{% endif %}, with your note{% if auto_fix_summary and help_request.auto_fix_state != "running" %} and the Machine setup agent's report{% endif %}{% endif %}. Mark failed records a Failed verdict. Mark blocked leaves the case Blocked so it can be resumed later. In every case the rest of the run then continues.</p>
       </div>
       {% if help_panel.pending_draft %}
         <input type="hidden" name="plan_revision_id" value="{{ help_panel.pending_draft.revision_id }}">
@@ -131,7 +138,7 @@
             {{ help_form.use_plan_revision }}
             <span>{{ help_form.use_plan_revision.label }}</span>
           </label>
-          <p class="hint">Review the draft side by side in the help chat before ticking this. Ticked, Continue resumes at step {{ help_panel.pending_draft.resume_step }} of the redesigned plan on the machine as it is now (no cleanup). Unticked, the draft is dropped and step {{ help_request.step_num }} re-runs. Mark failed and Skip drop it too.</p>
+          <p class="hint">Review the draft side by side in the help chat before ticking this. Ticked, Continue resumes at step {{ help_panel.pending_draft.resume_step }} of the redesigned plan {% if help_panel.continue_mode == "restore" %}after the cleanup and a restore of the carried steps' state{% else %}on the machine as it is now (no cleanup){% endif %}. Unticked, the draft is dropped and step {{ help_request.step_num }} re-runs. Mark failed and Mark blocked drop it too.</p>
         </div>
       {% endif %}
       {% if help_panel.blockers %}
@@ -140,7 +147,7 @@
       <div class="help-actions">
         <button type="submit" class="btn btn-primary"{% if not help_panel.can_continue %} disabled aria-disabled="true" aria-describedby="help-continue-blockers"{% endif %}>Continue</button>
         <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_help_fail' project.id test_run.id pivot.id %}">Mark failed</button>
-        <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_help_skip' project.id test_run.id pivot.id %}">Skip</button>
+        <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_help_block' project.id test_run.id pivot.id %}">Mark blocked</button>
         <button type="button" class="btn btn-danger" @click="$dispatch('open-abort-run')">Abort run</button>
       </div>
     </form>

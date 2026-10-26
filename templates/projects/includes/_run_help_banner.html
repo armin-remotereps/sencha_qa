@@ -5,7 +5,9 @@
      help_panel — projects.case_help_services.HelpPanel (request with
                   test_run_test_case__test_case loaded, thread (auto-fix or
                   help-chat thread; "Help chat" link), auto_fix_live,
-                  blockers, is_open, can_continue_run, waiting_for_auto_fix_stop)
+                  blockers, is_open, can_continue_run, waiting_for_auto_fix_stop;
+                  request.fault / get_fault_display: the infrastructure fault,
+                  "" when the agent asked)
    The agent's reason / ask is model text: autoescaped, never |safe. {% endcomment %}
 {% with help_request=help_panel.request %}
 {% with case=help_request.test_run_test_case %}
@@ -14,6 +16,7 @@
   <div>
     {% if help_panel.is_open %}
       <strong>Run paused: {{ case.test_case.title }} {% if help_request.auto_fix_state == "running" %}is being auto-fixed{% else %}needs help{% endif %}</strong>
+      {% if help_request.fault %}<p><span class="badge badge-warning">{{ help_request.get_fault_display }}</span></p>{% endif %}
       <p>Step {{ help_request.step_num }}{% if help_request.ask %}: {{ help_request.ask|truncatechars:240 }}{% elif help_request.reason %}: {{ help_request.reason|truncatechars:240 }}{% endif %}</p>
       {% if help_request.auto_fix_state == "running" %}
         <p>The Machine setup agent is trying to fix the machine. Nothing else in this run executes until the case is resolved.</p>

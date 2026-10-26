@@ -461,6 +461,11 @@ document.addEventListener('alpine:init', () => {
     return {
       requestOpen: !!initial.request_open,
       resolutionLabel: initial.resolution_label || '',
+      // The infrastructure fault that stopped the case ('' when the agent
+      // asked) and how Continue resumes: 'current_screen' | 'restore' |
+      // 'from_scratch'.
+      faultLabel: initial.fault_label || '',
+      continueMode: initial.continue_mode || 'current_screen',
       draft: initial.plan_draft || null,
       // The agent's suggestion is shown as text only; it never fills the
       // note, which reaches the tester as the person's words.
@@ -482,6 +487,8 @@ document.addEventListener('alpine:init', () => {
         if (!help) return;
         this.requestOpen = !!help.request_open;
         this.resolutionLabel = help.resolution_label || '';
+        this.faultLabel = help.fault_label || '';
+        this.continueMode = help.continue_mode || 'current_screen';
         const previousDraftId = this.draft ? this.draft.revision_id : null;
         this.draft = help.plan_draft || null;
         if (!this.draft) {
@@ -515,17 +522,26 @@ document.addEventListener('alpine:init', () => {
 
       get resumeText() {
         if (!this.draft) return '';
+        const where = this.continueMode === 'restore'
+          ? "after the cleanup and a restore of the carried steps' state"
+          : 'on the machine as it is now (no cleanup)';
         if (this.draft.carried_count === 0) {
-          return 'Continue resumes at step 1 on the machine as it is now (no cleanup).';
+          return 'Continue resumes at step 1 ' + where + '.';
         }
-        return 'Continue resumes at step ' + this.draft.resume_step + ' on the machine as it is now (no cleanup); steps 1–' + this.draft.carried_count + ' count as passed.';
+        return 'Continue resumes at step ' + this.draft.resume_step + ' ' + where + '; steps 1–' + this.draft.carried_count + ' count as passed.';
       },
 
       get continueHint() {
         if (this.draft && this.usePlan) {
-          return 'Continue applies the redesigned plan and resumes at its step ' + this.draft.resume_step + '. Mark failed records a Failed verdict. Skip leaves the case Blocked to resume later on its current plan.';
+          return 'Continue applies the redesigned plan and resumes at its step ' + this.draft.resume_step + '. Mark failed records a Failed verdict. Mark blocked leaves the case Blocked so it can be resumed later on its current plan.';
         }
-        return 'Continue re-runs step ' + this.stepNum + ' from the current screen with your note' + (this.draft ? ' and drops the draft' : '') + '. Mark failed records a Failed verdict. Skip leaves the case Blocked to resume later.';
+        let resume = 're-runs step ' + this.stepNum + ' from the current screen with your note';
+        if (this.continueMode === 'from_scratch') {
+          resume = 'starts the case again from the beginning (no step had been saved, so your note is not passed on)';
+        } else if (this.continueMode === 'restore') {
+          resume = "restores the earlier steps' state first, then runs step " + this.stepNum + ' with your note';
+        }
+        return 'Continue ' + resume + (this.draft ? ' and drops the draft' : '') + '. Mark failed records a Failed verdict. Mark blocked leaves the case Blocked so it can be resumed later.';
       },
 
       statusBadge(status) {

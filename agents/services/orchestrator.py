@@ -289,7 +289,9 @@ def _rebuild_state(
     recovery line, plus a retry note with its actions; one still at the cursor
     got none. The failed attempt the case paused at for ``help`` gets the
     failed-attempt line, the help line and a retry note, as a passed recovery
-    does.
+    does. A fault (runner lost, AI service, ...) may have stopped the step
+    before any attempt of it was recorded: its help line then goes just before
+    that step's first attempt, or last when the step has none yet.
 
     When that help redesigned the test plan, the failed attempt belongs to the
     earlier plan (in the newest revision record): the carried steps get their
@@ -301,6 +303,16 @@ def _rebuild_state(
     help_anchor = _help_anchor_index(
         attempts, help, next_step, final_index, redesigned=redesign is not None
     )
+    # A fault that stopped the step mid-run left no failed attempt to anchor
+    # on: the help line goes before the helped step's first attempt instead.
+    interrupted_help = (
+        help
+        if help is not None
+        and redesign is None
+        and help_anchor is None
+        and _interrupted_by_fault(help, next_step)
+        else None
+    )
     last_failed: dict[int, SubTaskResult] = {}
     lines: list[str] = []
     notes: dict[int, str] = {}
@@ -311,6 +323,13 @@ def _rebuild_state(
         if redesign_pending and attempt.carried_from is None:
             lines.extend(_redesign_state(redesign, help, notes))
             redesign_pending = False
+        if (
+            interrupted_help is not None
+            and attempt.carried_from is None
+            and attempt.step_num >= interrupted_help.step_num
+        ):
+            lines.append(_interrupted_help_line(interrupted_help, decisions))
+            interrupted_help = None
         if attempt.carried_from is not None and result.status == "pass":
             lines.append(
                 f"Step {attempt.step_num}: {result.summary} (done before the plan "
@@ -359,7 +378,27 @@ def _rebuild_state(
             lines.append(_resume_state_line(attempt.step_num, result.summary))
     if redesign_pending:
         lines.extend(_redesign_state(redesign, help, notes))
+    if interrupted_help is not None:
+        lines.append(_interrupted_help_line(interrupted_help, decisions))
     return lines, notes
+
+
+def _interrupted_by_fault(help: CheckpointHelp, next_step: int) -> bool:
+    """``help`` is for a fault at a step this execution reached.
+
+    A help the agent asked for always has its failed attempt; one without it
+    (a resume from an earlier step dropped it) is not repeated. A fault's
+    step is past the cursor only when a resume went back before it.
+    """
+    return bool(help.fault.strip()) and help.step_num <= next_step
+
+
+def _interrupted_help_line(
+    help: CheckpointHelp, decisions: Sequence[StepDecision]
+) -> str:
+    return format_help_state_line(
+        help.step_num, help, _help_reason(decisions, help.step_num)
+    )
 
 
 def _redesign_state(
@@ -455,8 +494,10 @@ def _applied_help(
 ) -> CheckpointHelp | None:
     """``help`` when its step's failed attempt is still in the attempts.
 
-    Also when the help redesigned the test plan: that attempt then moved into
-    the newest revision record. A help without an ask gets the need_help
+    For a fault, any attempt of its step will do (the step may have been
+    interrupted before an attempt was recorded). Also when the help
+    redesigned the test plan: that attempt then moved into the newest
+    revision record. A help without an ask gets the need_help
     decision's reason as its ask, as the state line does.
     """
     if help is None:
@@ -472,7 +513,9 @@ def _applied_help(
         if (
             attempt.kind == "step"
             and attempt.step_num == help.step_num
-            and attempt.result.status != "pass"
+            # A fault may have stopped the step before any attempt failed; its
+            # retry after the help is then the step's only attempt.
+            and (attempt.result.status != "pass" or help.fault.strip())
         ):
             if help.ask.strip():
                 return help
@@ -1019,7 +1062,7 @@ def _build_verdict(
         summary = _extract_text(verdict_response.message)
     except AIServiceError as exc:
         # Pass or fail is already decided from the sub-task results; the LLM only
-        # words the summary, so a provider fault here must not block the case.
+        # words the summary, so a provider fault here must not pause the case.
         logger.warning(
             "Verdict summary failed (%s), using deterministic summary", exc.kind
         )

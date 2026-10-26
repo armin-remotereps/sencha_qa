@@ -80,7 +80,12 @@ class TestRunTestCaseStatus(models.TextChoices):
 
 
 class BlockedReason(models.TextChoices):
-    """Why a case could not be executed or judged; never a verdict on the app."""
+    """Why a case could not be executed or judged; never a verdict on the app.
+
+    Also classifies the fault behind a help request (``CaseHelpRequest.fault``).
+    Only a person marks a case Blocked, always with ``HELP_SKIPPED``; the other
+    values remain on older Blocked rows.
+    """
 
     RUNNER_DISCONNECTED = "runner_disconnected", "Test Runner disconnected"
     RUNNER_UNRESPONSIVE = "runner_unresponsive", "Test Runner stopped responding"
@@ -97,7 +102,7 @@ class BlockedReason(models.TextChoices):
         "Could not restore the state to resume",
     )
     INTERNAL_ERROR = "internal_error", "Internal error"
-    HELP_SKIPPED = "help_skipped", "Skipped while waiting for help"
+    HELP_SKIPPED = "help_skipped", "Marked blocked by a person"
 
 
 class ApplicationPlatform(models.TextChoices):
@@ -554,7 +559,7 @@ class HelpResolution(models.TextChoices):
     CONTINUED = "continued", "Continued"
     AUTO_FIXED = "auto_fixed", "Fixed by the setup agent"
     MARKED_FAILED = "marked_failed", "Marked failed"
-    SKIPPED = "skipped", "Skipped"
+    SKIPPED = "skipped", "Marked blocked"
     CANCELLED = "cancelled", "Cancelled"
 
 
@@ -564,7 +569,18 @@ class HelpProposalAction(models.TextChoices):
     NONE = "", "None"
     CONTINUE = "continue", "Continue"
     MARK_FAILED = "mark_failed", "Mark failed"
-    SKIP = "skip", "Skip"
+    SKIP = "skip", "Mark blocked"
+
+
+class HelpContinueMode(models.TextChoices):
+    """How a case goes on after Continue (or a fixed auto-fix)."""
+
+    # Re-run the step the case stopped at from the screen as it is now.
+    CURRENT_SCREEN = "current_screen", "Re-run the step from the current screen"
+    # Clean up, restore the earlier steps' state, then run that step.
+    RESTORE = "restore", "Restore the earlier steps, then run the step"
+    # No usable checkpoint: plan and run the case from the beginning.
+    FROM_SCRATCH = "from_scratch", "Start the case again"
 
 
 class CaseHelpRequest(models.Model):
@@ -581,6 +597,16 @@ class CaseHelpRequest(models.Model):
     )
     ask = models.TextField(
         max_length=HELP_REQUEST_TEXT_MAX_LENGTH, blank=True, default=""
+    )
+    # The infrastructure fault that paused the case; empty when the agent asked.
+    fault = models.CharField(
+        max_length=32, choices=BlockedReason.choices, blank=True, default=""
+    )
+    # Decided when the case paused (``projects.case_faults.help_continue_mode``).
+    continue_mode = models.CharField(
+        max_length=16,
+        choices=HelpContinueMode.choices,
+        default=HelpContinueMode.CURRENT_SCREEN,
     )
     requested_at = models.DateTimeField(auto_now_add=True)
     auto_fix_state = models.CharField(

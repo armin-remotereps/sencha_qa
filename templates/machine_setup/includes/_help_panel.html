@@ -19,7 +19,10 @@
   The draft and the agent's suggestion live in the Alpine `helpPanel`
   component (chat.html): initial state from the `help-initial` json_script,
   then `help` socket messages (machineSetupChat re-dispatches them as the
-  `help-state` window event). The hidden plan_revision_id follows the shown
+  `help-state` window event). The payload's fault_label (the infrastructure
+  fault that stopped the case, "" when the agent asked) shows as a badge, and
+  its continue_mode ("current_screen" | "restore" | "from_scratch") drives
+  the Continue hint. The hidden plan_revision_id follows the shown
   draft. A help event that brings a different draft unticks "use the
   redesigned plan" and shows a notice until the person ticks it again. All
   model and agent text is autoescaped or x-text; never |safe or x-html.
@@ -37,9 +40,10 @@
     {% if help_case_url %} · <a href="{{ help_case_url }}">Open the test case</a>{% endif %}
     {% if help_panel.latest_screenshot_url %} · <a href="{{ help_panel.latest_screenshot_url }}" target="_blank" rel="noopener">Latest screenshot</a>{% endif %}
   </p>
+  <p x-show="faultLabel" x-cloak><span class="badge badge-warning" x-text="faultLabel">{{ help_request.get_fault_display }}</span></p>
   {% if help_request.ask %}
     <div>
-      <div class="label">What the tester asks</div>
+      <div class="label">{% if help_request.fault %}What to fix{% else %}What the tester asks{% endif %}</div>
       <p class="help-quote">{{ help_request.ask }}</p>
     </div>
   {% endif %}
@@ -107,7 +111,7 @@
     <div class="help-actions">
       <button type="submit" class="btn btn-primary" :disabled="!canContinue" :aria-disabled="!canContinue" aria-describedby="help-panel-blockers">Continue</button>
       <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_help_fail' project.id pivot.test_run_id pivot.pk %}">Mark failed</button>
-      <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_help_skip' project.id pivot.test_run_id pivot.pk %}">Skip</button>
+      <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_help_block' project.id pivot.test_run_id pivot.pk %}">Mark blocked</button>
     </div>
   </form>
 </section>

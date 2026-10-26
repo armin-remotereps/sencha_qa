@@ -271,9 +271,9 @@ urlpatterns: list[URLPattern] = [
         name="test_run_case_help_fail",
     ),
     path(
-        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/help/skip/",
-        views.test_run_case_help_skip,
-        name="test_run_case_help_skip",
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/help/block/",
+        views.test_run_case_help_block,
+        name="test_run_case_help_block",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/help/plan/<int:revision_id>/discard/",

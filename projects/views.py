@@ -34,9 +34,9 @@ from projects.case_help_services import (
     get_open_help_request,
     get_run_case_for_help,
     list_case_help_requests,
+    mark_blocked_after_help,
     mark_failed_after_help,
     resolve_return_thread,
-    skip_after_help,
     stop_auto_fix,
 )
 from projects.case_help_state import get_run_help_state
@@ -1366,7 +1366,7 @@ def test_run_case_help_fail(
 
 @project_membership_required
 @require_POST
-def test_run_case_help_skip(
+def test_run_case_help_block(
     request: AuthenticatedRequest, project: Project, test_run_id: int, pivot_id: int
 ) -> HttpResponse:
     pivot = _help_case_or_404(project, test_run_id, pivot_id)
@@ -1375,14 +1375,14 @@ def test_run_case_help_skip(
         messages.error(request, form_error_text(form))
         return _case_detail_redirect(project, pivot)
     try:
-        result = skip_after_help(
+        result = mark_blocked_after_help(
             pivot=pivot, user=request.user, note=form.cleaned_data["note"]
         )
     except RunHelpError as exc:
         messages.error(request, exc.message)
     else:
         messages.success(
-            request, format_help_action_message("Skipped the case", result)
+            request, format_help_action_message("Marked the case blocked", result)
         )
     return _help_return_redirect(project, pivot, form)
 

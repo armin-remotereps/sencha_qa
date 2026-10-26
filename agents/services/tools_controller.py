@@ -339,7 +339,7 @@ def double_click(
 
     def _precheck() -> None:
         # Raises RunnerOutdatedError (an InfrastructureError, so safe_tool_call
-        # re-raises it and the case ends Blocked) on a Test Runner that cannot
+        # re-raises it and the case pauses for help) on a Test Runner that cannot
         # double-click; it runs before any screen parse is spent.
         ensure_runner_supports_double_click(project_id)
 
@@ -514,7 +514,7 @@ def _action_result_to_tool_result(result: ActionResult) -> ToolResult:
 def close_app(project_id: int, *, app_name: str, force: bool = False) -> ToolResult:
     def _do() -> ToolResult:
         # Closing is housekeeping, never the verdict: an old Test Runner gets a
-        # tool error with a manual fallback rather than blocking the case.
+        # tool error with a manual fallback rather than pausing the case.
         if not runner_supports(project_id, ClientCapability.CLOSE_APP_V1):
             return ToolResult(
                 tool_call_id="", content=_CLOSE_APP_OUTDATED_MESSAGE, is_error=True
@@ -552,10 +552,10 @@ def browser_navigate(
     def _do() -> ToolResult:
         if browser is not None and browser != selection.current:
             # Raises BrowserUnavailableError (an InfrastructureError, so
-            # safe_tool_call re-raises it and the case ends Blocked) when the
+            # safe_tool_call re-raises it and the case pauses for help) when the
             # Test Runner is too old to drive anything but Chromium. The
             # selection is updated before the dispatch: a browser that turns
-            # out not to be installed blocks the case too, so nothing needs
+            # out not to be installed pauses the case too, so nothing needs
             # rolling back.
             ensure_runner_supports_browser(project_id, browser)
             selection.current = browser
@@ -598,7 +598,7 @@ def browser_double_click(
     selection: BrowserSelection,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        # Raises RunnerOutdatedError, which blocks the case (see double_click).
+        # Raises RunnerOutdatedError, which pauses the case for help (see double_click).
         ensure_runner_supports_double_click(project_id)
         idx = find_element_index(
             project_id, description, vision_config, browser=selection.current

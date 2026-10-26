@@ -218,7 +218,7 @@ def run_tool_loop(
         _debug_log(f"Agent iteration {iterations}/{config.max_iterations}", on_log)
 
         # AIServiceError propagates: a provider fault is not a verdict on the
-        # application, so the case is marked Blocked by the caller.
+        # application, so the caller pauses the case for help.
         response = send_chat_completion(
             config.llm,
             tuple(messages),

@@ -207,6 +207,10 @@ class HelpThreadPayload(TypedDict):
     resolution_label: str
     agent_proposal: HelpProposalPayload | None
     plan_draft: PlanDraftPayload | None
+    # The fault's label; empty when the tester asked for help.
+    fault_label: str
+    # A ``projects.models.HelpContinueMode`` value: how Continue goes on.
+    continue_mode: str
 
 
 def help_thread_payload(
@@ -218,11 +222,15 @@ def help_thread_payload(
     proposal_action_label: str,
     proposal_note: str,
     draft: PlanDraftView | None,
+    fault_label: str,
+    continue_mode: str,
 ) -> HelpThreadPayload:
     return {
         "conversation_id": conversation_id,
         "request_open": request_open,
         "resolution_label": resolution_label,
+        "fault_label": fault_label,
+        "continue_mode": continue_mode,
         "agent_proposal": (
             {
                 "action": proposal_action,

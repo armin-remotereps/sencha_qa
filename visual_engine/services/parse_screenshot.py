@@ -114,7 +114,7 @@ def parse_screenshot(
         candidates = _rotate(workers, start_index, excluded)
         if not candidates:
             # Every live worker was tried; give a reconnecting one the rest of
-            # the wait allowance before blocking the case.
+            # the wait allowance before the case asks for help.
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise _budget_spent(last_error)

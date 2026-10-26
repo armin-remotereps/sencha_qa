@@ -282,6 +282,9 @@ class CheckpointHelp:
     # That auto-fix reported the machine fixed (with ``source`` ``human`` when a
     # person continued during it, or after its fix failed the run's gates).
     auto_fix_fixed: bool = False
+    # Label of the infrastructure fault that interrupted the step; empty when
+    # the agent asked for help (and on older checkpoints).
+    fault: str = ""
 
 
 @dataclass(frozen=True)

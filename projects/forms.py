@@ -295,7 +295,7 @@ class RunHelpModeChangeForm(forms.Form):
 
 
 class CaseHelpResolutionForm(forms.Form):
-    """Continue / Mark failed / Skip on a Need help case, with an optional note."""
+    """Continue / Mark failed / Mark blocked on a Need help case, with an optional note."""
 
     note = forms.CharField(
         label="Note for the agent",

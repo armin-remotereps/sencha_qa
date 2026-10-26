@@ -252,7 +252,8 @@
       <span class="badge badge-blocked" x-text="blockedReasonLabel || 'Blocked'">{{ pivot.get_blocked_reason_display|default:"Blocked" }}</span>
     </div>
     <p class="pre-wrap" x-text="result || 'No details were recorded.'"></p>
-    <p class="hint">This case was not judged: an infrastructure problem stopped it before the agent could reach a verdict, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
+    <p class="hint" x-show="blockedReason === 'help_skipped'"{% if pivot.blocked_reason != "help_skipped" %} x-cloak{% endif %}>A person marked this case blocked while it was waiting for help, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
+    <p class="hint" x-show="blockedReason !== 'help_skipped'"{% if pivot.blocked_reason == "help_skipped" %} x-cloak{% endif %}>This case was not judged: an infrastructure problem stopped it before the agent could reach a verdict, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
     {% if can_resume %}
     <div class="actions card-actions">
       <button type="button" class="btn btn-primary" @click="$dispatch('open-resume-case')">Resume case</button>
@@ -586,6 +587,7 @@ document.addEventListener('alpine:init', () => {
     status: '{{ pivot.status }}',
     testRunStatus: '{{ test_run.status }}',
     result: JSON.parse(document.getElementById('initial-result').textContent),
+    blockedReason: '{{ pivot.blocked_reason|escapejs }}',
     blockedReasonLabel: '{{ pivot.get_blocked_reason_display|escapejs }}',
     logs: JSON.parse(document.getElementById('initial-logs').textContent),
     steps: JSON.parse(document.getElementById('initial-steps').textContent),
@@ -712,6 +714,7 @@ document.addEventListener('alpine:init', () => {
         if (data.type === 'current_state') {
           this.status = data.status;
           this.result = data.result;
+          this.blockedReason = data.blocked_reason || '';
           this.blockedReasonLabel = data.blocked_reason_label || '';
           this.logs = data.logs;
           this.screenshots = data.screenshots;
@@ -759,6 +762,7 @@ document.addEventListener('alpine:init', () => {
           }
           this.status = data.status;
           this.result = data.result;
+          this.blockedReason = data.blocked_reason || '';
           this.blockedReasonLabel = data.blocked_reason_label || '';
           this.steps = data.steps;
           return;

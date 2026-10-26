@@ -64,12 +64,17 @@ from controller_client.protocol import (
 from machine_setup.auto_fix_stop import request_auto_fix_stop
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from projects.application_context_services import write_application_context
-from projects.case_blocking import blocked_message, classify_case_exception
 from projects.case_checkpoint_services import (
     build_checkpoint_callback,
     load_resume_checkpoint,
 )
 from projects.case_failed_notifications import notify_case_failed
+from projects.case_faults import (
+    classify_case_fault,
+    fault_ask,
+    fault_message,
+    help_continue_mode,
+)
 from projects.case_help_notifications import notify_case_needs_help
 from projects.case_help_policy import auto_fix_eligible
 from projects.case_help_state import (
@@ -108,6 +113,7 @@ from projects.models import (
     CasePlanRevision,
     ContextWriteSource,
     HelpAutoFixState,
+    HelpContinueMode,
     HelpProposalAction,
     HelpResolution,
     PlanRevisionStatus,
@@ -1406,7 +1412,7 @@ def controller_screenshot(
 
     A multi-MiB image on a slow uplink can miss one reply window while the
     runner is fine. Screenshots
-    are idempotent, so a timeout is re-sent instead of blocking the case at
+    are idempotent, so a timeout is re-sent instead of pausing the case at
     once; only the last timeout propagates as ``TestRunnerUnresponsiveError``.
     """
     for attempt in range(1, _SCREENSHOT_ATTEMPTS):
@@ -1946,7 +1952,7 @@ def _safe_teardown(
     cancellation_check: Callable[[], bool],
     run_case_teardown: _CaseTeardown,
 ) -> None:
-    """Close the apps a Failed or Blocked case left open, never failing the case.
+    """Close the apps a Failed case left open, never failing the case.
 
     Runs after the outcome is written and before ``_safe_cleanup``, so apps that
     hold files in the cleanup folder are gone before it is emptied.
@@ -1955,8 +1961,8 @@ def _safe_teardown(
     if timeout <= 0:
         return
     try:
-        pivot.refresh_from_db(fields=["status", "blocked_reason"])
-        if not needs_teardown(pivot.status, pivot.blocked_reason):
+        pivot.refresh_from_db(fields=["status"])
+        if not needs_teardown(pivot.status):
             return
         checkpoint = load_resume_checkpoint(pivot)
         if checkpoint is None:
@@ -2895,6 +2901,17 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
     continue_after_help = (
         checkpoint_help is not None and checkpoint_help.continue_pending
     )
+    # A resumed case restores the earlier steps' state before its cursor step
+    # (``run_orchestrator``); a fault before that restore finished keeps it
+    # pending for Continue. None when no restore is due.
+    resume = load_resume_checkpoint(pivot)
+    restore_baseline = (
+        _restore_attempt_count(resume)
+        if resume is not None
+        and not continue_after_help
+        and 1 < resume.next_step <= len(resume.plan)
+        else None
+    )
     _mark_pivot_in_progress(pivot)
 
     try:
@@ -2916,7 +2933,6 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
             fields=["project_prompt", "application_url", "application_platform"]
         )
         # A resumed case keeps its log and continues the persisted plan.
-        resume = load_resume_checkpoint(pivot)
         if resume is not None:
             on_log(f"=== Resumed from step {resume.next_step} ===")
         result = run_orchestrator(
@@ -2956,14 +2972,18 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
             if pivot.status != TestRunTestCaseStatus.CANCELLED:
                 _mark_pivot_cancelled(pivot)
     except ControllerReconnectTimeoutError as exc:
-        logger.warning("Aborting test run for pivot %d: %s", pivot_id, exc)
-        if not _is_stale_execution(run_id, generation):
-            _abort_run_after_reconnect_timeout(pivot, exc)
+        # The runner stayed away past the grace period: ask for help instead of
+        # cancelling the run, so the remaining cases continue once it is back.
+        logger.warning("Runner lost for pivot %d: %s", pivot_id, exc)
+        paused_for_help = _pause_case_after_fault(
+            pivot, exc, generation, restore_baseline
+        )
     except Exception as exc:
         # Infrastructure faults, the soft time limit and bugs are never a
-        # verdict on the app: block the case and let the chain continue.
-        if not _is_stale_execution(run_id, generation):
-            _settle_pivot_after_error(pivot, exc)
+        # verdict on the app: the case asks for help and the run pauses.
+        paused_for_help = _pause_case_after_fault(
+            pivot, exc, generation, restore_baseline
+        )
     except BaseException as exc:
         allow_teardown = False
         logger.critical(
@@ -2971,8 +2991,9 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
             pivot_id,
             exc,
         )
-        if not _is_stale_execution(run_id, generation):
-            _settle_pivot_after_error(pivot, exc)
+        paused_for_help = _pause_case_after_fault(
+            pivot, exc, generation, restore_baseline
+        )
         raise
     finally:
         # A newer chain may already be driving the machine: leave it alone.
@@ -2995,29 +3016,29 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
             _update_test_run_status_if_needed(pivot.test_run)
 
 
-def _abort_run_after_reconnect_timeout(
-    pivot: TestRunTestCase, exc: ControllerReconnectTimeoutError
-) -> None:
-    """Block this case, then cancel the rest of the run without revoking this task."""
-    pivot.refresh_from_db(fields=["status"])
-    if pivot.status == TestRunTestCaseStatus.IN_PROGRESS:
-        reason = BlockedReason.RUNNER_DISCONNECTED
-        _mark_pivot_blocked(pivot, reason, blocked_message(exc, reason))
-
-    test_run = pivot.test_run
-    test_run.refresh_from_db(fields=["status"])
-    # This task may be the chain's last one (celery_task_id); revoking it would
-    # SIGTERM itself mid-cleanup. Later tasks early-exit on CANCELLED. Only
-    # pending and in-progress cases are touched, so this one stays Blocked.
-    abort_test_run(test_run, reason=str(exc), revoke_task=False)
+def _restore_attempt_count(checkpoint: OrchestratorCheckpoint) -> int:
+    return sum(1 for attempt in checkpoint.attempts if attempt.kind == "resume")
 
 
-def _settle_pivot_after_error(pivot: TestRunTestCase, exc: BaseException) -> None:
-    """Record an execution error on a case that has no verdict yet.
+def _pause_case_after_fault(
+    pivot: TestRunTestCase,
+    exc: BaseException,
+    generation: int,
+    restore_baseline: int | None,
+) -> bool:
+    """Ask for help after a fault stopped a case with no verdict yet.
 
-    A case the run's abort already settled is left alone; a run cancelled in
-    the meantime cancels the case; anything else blocks it.
+    Only a person marks a case Blocked. A case that already left In progress
+    (the run's abort settled it) is left alone, a run cancelled in the
+    meantime cancels the case, and a stale generation stands down; the last
+    two are checked again under the run lock by ``_pause_run_for_help``.
+    ``restore_baseline`` is the number of restore attempts when the case
+    started with a restore due (None otherwise): no new one means the restore
+    never finished, so Continue restores. True when the case paused (no
+    teardown and no cleanup follow).
     """
+    if _is_stale_execution(pivot.test_run_id, generation):
+        return False
     pivot.refresh_from_db(fields=["status"])
     if pivot.status != TestRunTestCaseStatus.IN_PROGRESS:
         logger.warning(
@@ -3026,21 +3047,49 @@ def _settle_pivot_after_error(pivot: TestRunTestCase, exc: BaseException) -> Non
             pivot.status,
             exc,
         )
-        return
+        return False
 
     test_run = pivot.test_run
     test_run.refresh_from_db(fields=["status"])
     if test_run.status == TestRunStatus.CANCELLED:
         logger.info("Test run cancelled for pivot %d (%r)", pivot.id, exc)
         _mark_pivot_cancelled(pivot)
-        return
+        return False
 
-    reason = classify_case_exception(exc)
+    reason = classify_case_fault(exc)
     if reason == BlockedReason.INTERNAL_ERROR:
-        logger.exception("Blocking pivot %d after an unexpected error", pivot.id)
+        logger.exception("Pivot %d needs help after an unexpected error", pivot.id)
     else:
-        logger.warning("Blocking pivot %d (%s): %s", pivot.id, reason.value, exc)
-    _mark_pivot_blocked(pivot, reason, blocked_message(exc, reason))
+        logger.warning("Pivot %d needs help (%s): %s", pivot.id, reason.value, exc)
+    # The checkpoint callback keeps the in-memory checkpoint current.
+    checkpoint = load_resume_checkpoint(pivot)
+    # A fault during the verdict leaves the cursor past the last step; the
+    # request names the last step, and Continue still goes on to the verdict.
+    step_num = (
+        min(checkpoint.next_step, max(len(checkpoint.plan), 1))
+        if checkpoint is not None
+        else 1
+    )
+    help = HelpRequestInfo(
+        step_num=step_num,
+        reason=fault_message(exc, reason),
+        ask=fault_ask(reason),
+    )
+    return _pause_run_for_help(
+        pivot,
+        help,
+        generation,
+        fault=reason,
+        continue_mode=help_continue_mode(
+            reason,
+            checkpoint,
+            restore_pending=(
+                restore_baseline is not None
+                and checkpoint is not None
+                and _restore_attempt_count(checkpoint) == restore_baseline
+            ),
+        ),
+    )
 
 
 def _fetch_pivot(pivot_id: int) -> TestRunTestCase:
@@ -3182,9 +3231,18 @@ def _truncate_help_text(text: str) -> str:
 
 
 def _pause_run_for_help(
-    pivot: TestRunTestCase, help: HelpRequestInfo, generation: int
+    pivot: TestRunTestCase,
+    help: HelpRequestInfo,
+    generation: int,
+    *,
+    fault: BlockedReason | None = None,
+    continue_mode: HelpContinueMode = HelpContinueMode.CURRENT_SCREEN,
 ) -> bool:
     """Put the case in Need help and the run to sleep; True when it did.
+
+    ``fault`` is set when an infrastructure fault (not the orchestrator)
+    stopped the case; the Night auto-fix decision is the same either way.
+    ``continue_mode`` is stored on the request and drives Continue.
 
     One transaction under the run lock: a stale generation does nothing, and
     a run aborted meanwhile cancels the case instead. The case keeps its
@@ -3217,7 +3275,12 @@ def _pause_run_for_help(
             test_run_test_case_id=pivot.pk, resolution=HelpResolution.OPEN
         ).update(resolution=HelpResolution.CANCELLED, resolved_at=now)
         help_request = CaseHelpRequest(
-            test_run_test_case=pivot, step_num=step_num, reason=reason, ask=ask
+            test_run_test_case=pivot,
+            step_num=step_num,
+            reason=reason,
+            ask=ask,
+            fault=fault or "",
+            continue_mode=continue_mode,
         )
         if auto_fix:
             mark_auto_fix_running(help_request)
@@ -3239,7 +3302,10 @@ def _pause_run_for_help(
         test_run.status = TestRunStatus.PAUSED
         test_run.save(update_fields=["status", "updated_at"])
 
-        log_line = f"[Need help at step {step_num}] {ask}"
+        if fault is None:
+            log_line = f"[Need help at step {step_num}] {ask}"
+        else:
+            log_line = f"[Need help: {fault.label} at step {step_num}] {ask}"
         if auto_fix:
             log_line += " The machine setup agent will try to fix it."
         logged = _append_pivot_log(pivot.pk, log_line, generation)
@@ -3263,30 +3329,6 @@ def _extract_agent_summary(result: AgentResult) -> str:
         if message.role == "assistant" and isinstance(message.content, str):
             return message.content
     return result.error or ""
-
-
-def _mark_pivot_blocked(
-    pivot: TestRunTestCase, reason: BlockedReason, message: str
-) -> None:
-    """Mark a case Blocked: it could not be executed or judged, no verdict."""
-    log_line = f"[Blocked: {reason.label}] {message}"
-    _append_pivot_log(pivot.pk, log_line, None)
-    pivot.status = TestRunTestCaseStatus.BLOCKED
-    pivot.blocked_reason = reason
-    pivot.result = message
-    pivot.finished_at = timezone.now()
-    pivot.save(
-        update_fields=[
-            "status",
-            "blocked_reason",
-            "result",
-            "finished_at",
-            "updated_at",
-        ]
-    )
-    _broadcast_log(pivot, log_line)
-    _broadcast_pivot_status_to_run(pivot)
-    _broadcast_pivot_status_to_case(pivot)
 
 
 def _mark_pivot_cancelled(pivot: TestRunTestCase) -> None:

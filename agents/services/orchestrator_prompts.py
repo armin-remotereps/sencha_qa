@@ -241,7 +241,9 @@ def _help_details(help: CheckpointHelp, reason: str) -> str:
     parts: list[str] = []
     ask = _sentence(help.ask) or _sentence(reason)
     if ask:
-        parts.append(f"The agent had asked: {ask}.")
+        # A fault's ask is the server's fixed text, not the agent's.
+        asker = "The help request" if help.fault.strip() else "The agent"
+        parts.append(f"{asker} had asked: {ask}.")
     summary = _sentence(help.auto_fix_summary)
     if summary:
         parts.append(f"Machine setup agent: {summary}.")
@@ -254,17 +256,25 @@ def _help_details(help: CheckpointHelp, reason: str) -> str:
 def format_help_state_line(
     step_num: int, help: CheckpointHelp, reason: str, *, step_label: str = ""
 ) -> str:
-    """State line for a step that failed, paused for help and is retried after it.
+    """State line for a step that paused for help and is retried after it.
 
-    ``reason`` is why the orchestrator asked for help at that step, used when
-    the help key carries no ask. Shared by the live continue and the resume
-    rebuild so both write the same state. ``step_label`` replaces "Step N" (an
-    earlier plan's step after a redesign).
+    The step failed and the agent asked for help, or a fault (``help.fault``)
+    interrupted it, possibly halfway. ``reason`` is why the orchestrator asked
+    for help at that step, used when the help key carries no ask. Shared by
+    the live continue and the resume rebuild so both write the same state.
+    ``step_label`` replaces "Step N" (an earlier plan's step after a redesign).
     """
+    label = step_label or f"Step {step_num}"
     details = _help_details(help, reason)
+    fault = _sentence(help.fault)
+    if fault:
+        return (
+            f"{label} was interrupted ({fault}); the test machine was fixed by "
+            f"{helper_name(help)}.{' ' + details if details else ''} Check the "
+            "screen: the step may be partly done and the fix may have changed it."
+        )
     return (
-        f"{step_label or f'Step {step_num}'}: the test machine was fixed by "
-        f"{helper_name(help)}."
+        f"{label}: the test machine was fixed by {helper_name(help)}."
         f"{' ' + details if details else ''} Check the screen: the fix may have "
         "changed it."
     )
@@ -284,8 +294,14 @@ def help_verdict_note(
         after = "before the redesigned plan continued"
     else:
         where, after = f"step {help.step_num}", "before the step was retried"
+    fault = _sentence(help.fault)
+    paused = (
+        f"The case was interrupted at {where} ({fault}) and paused for help"
+        if fault
+        else f"The case paused at {where} for help"
+    )
     return (
-        f"The case paused at {where} for help, and the test machine was fixed by "
+        f"{paused}, and the test machine was fixed by "
         f"{helper_name(help)} {after}.{' ' + details if details else ''}"
     )
 

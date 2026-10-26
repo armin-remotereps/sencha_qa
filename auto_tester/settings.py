@@ -361,7 +361,7 @@ VISION_PARSE_ATTEMPT_TIMEOUT: int = config(
 VISION_PARSE_BUDGET_SECONDS: int = config(
     "VISION_PARSE_BUDGET_SECONDS", default=90, cast=int
 )
-# Mid-case wait for any ready worker before the case is blocked.
+# Mid-case wait for any ready worker before the case asks for help.
 VISION_WORKER_WAIT_SECONDS: int = config(
     "VISION_WORKER_WAIT_SECONDS", default=30, cast=int
 )

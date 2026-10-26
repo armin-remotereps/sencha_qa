@@ -2,7 +2,7 @@
 
 An older runner does not know newer actions such as ``double_click``; it would
 reply with an unknown-message error, so the server checks the capability first
-and blocks the case with a clear "update the Test Runner" message instead.
+and pauses the case for help with a clear "update the Test Runner" message instead.
 """
 
 from __future__ import annotations
