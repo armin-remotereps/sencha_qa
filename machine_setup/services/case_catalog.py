@@ -1,7 +1,8 @@
 """Read-only, project-scoped queries over test cases for the setup agent's tools.
 
 Every query selects only the columns it renders and every output is capped, so
-a large suite cannot flood the model's context; pages continue via ``offset``.
+a large suite cannot flood the model's context; the preconditions listing
+continues via ``offset``, the case search via a page number.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from django.contrib.postgres.aggregates import ArrayAgg
+from django.core.paginator import EmptyPage, Paginator
 from django.db.models import Count, Q
 from django.db.models.functions import Substr
 
@@ -19,8 +21,10 @@ PRECONDITION_ENTRY_LIMIT = 2000
 PRECONDITION_PAGE_CHAR_LIMIT = 8000
 PRECONDITION_PAGE_SIZE = 20
 PRECONDITION_CASE_IDS_SHOWN = 5
-SEARCH_PAGE_SIZE = 50
-SEARCH_PRECONDITION_PREVIEW = 200
+# A page is at most 5 x (2 x 2000 + 500 title + heading) ~ 23k characters,
+# within CASES_BATCH_CHAR_BUDGET.
+SEARCH_PAGE_SIZE = 5
+SEARCH_FIELD_LIMIT = 2000
 CASE_FIELD_LIMIT = 4000
 MAX_CASES_PER_BATCH = 20
 # About 6k tokens; one case is at most ~12.2k characters, so the first always fits.
@@ -94,8 +98,14 @@ def list_case_preconditions(project_id: int, offset: int) -> CatalogPage:
     )
 
 
-def search_cases(project_id: int, query: str, offset: int) -> CatalogPage:
-    """Cases whose title, preconditions or steps contain ``query`` (all if empty)."""
+def search_cases(project_id: int, query: str, page: int) -> str:
+    """Page ``page`` (from 1) of the cases matching ``query`` (all if empty).
+
+    A case matches by text in its title, preconditions or steps. Each case
+    shows its preconditions and steps, each capped at ``SEARCH_FIELD_LIMIT``
+    (only that much is fetched); the header says whether a previous and a next
+    page exist. Two queries: the count and one page.
+    """
     cases = TestCase.objects.filter(project_id=project_id)
     query = query.strip()
     if query:
@@ -104,33 +114,63 @@ def search_cases(project_id: int, query: str, offset: int) -> CatalogPage:
             | Q(preconditions__icontains=query)
             | Q(steps__icontains=query)
         )
-    total = cases.count()
-    rows = list(
+    rows = (
         cases.annotate(
-            preconditions_preview=Substr(
-                "preconditions", 1, SEARCH_PRECONDITION_PREVIEW + 1
-            )
+            preconditions_head=Substr("preconditions", 1, SEARCH_FIELD_LIMIT + 1),
+            steps_head=Substr("steps", 1, SEARCH_FIELD_LIMIT + 1),
         )
-        .values("id", "testrail_id", "title", "preconditions_preview")
-        .order_by("id")[offset : offset + SEARCH_PAGE_SIZE]
+        .values("id", "testrail_id", "title", "preconditions_head", "steps_head")
+        .order_by("id")
     )
-    if not rows:
-        if total == 0:
-            text = f"No test case matches {query!r}." if query else "No test cases yet."
-        else:
-            text = f"No cases at offset {offset}; there are {total} matches."
-        return CatalogPage(text=text, total=total, next_offset=None)
-    shown_until = offset + len(rows)
-    lines = [f"Cases {offset + 1}-{shown_until} of {total}:"]
-    for row in rows:
-        lines.append(_case_heading(row["id"], row["testrail_id"], row["title"]))
-        preview = _cap(row["preconditions_preview"], SEARCH_PRECONDITION_PREVIEW)
-        if preview:
-            lines.append(f"  Preconditions: {preview}")
-    return CatalogPage(
-        text="\n".join(lines),
-        total=total,
-        next_offset=shown_until if shown_until < total else None,
+    paginator = Paginator(rows, SEARCH_PAGE_SIZE)
+    total = paginator.count
+    if total == 0:
+        return f"No test case matches {query!r}." if query else "No test cases yet."
+    try:
+        current = paginator.page(page)
+    except EmptyPage:
+        return (
+            f"There is no page {page}; the last page is {paginator.num_pages} "
+            f"({total} matching cases)."
+        )
+    previous = (
+        f"yes, page={current.previous_page_number()}"
+        if current.has_previous()
+        else "no"
+    )
+    following = (
+        f"yes, call again with page={current.next_page_number()}"
+        if current.has_next()
+        else "no"
+    )
+    header = (
+        f"Page {page} of {paginator.num_pages} (cases "
+        f"{current.start_index()}-{current.end_index()} of {total}). "
+        f"Has previous page: {previous}. Has next page: {following}."
+    )
+    entries = [
+        _search_entry(
+            case_id=row["id"],
+            testrail_id=row["testrail_id"],
+            title=row["title"],
+            preconditions=row["preconditions_head"],
+            steps=row["steps_head"],
+        )
+        for row in current.object_list
+    ]
+    return "\n\n".join([header, *entries])
+
+
+def _search_entry(
+    *, case_id: int, testrail_id: str, title: str, preconditions: str, steps: str
+) -> str:
+    """One ``search_cases`` case: heading, preconditions and steps."""
+    capped_preconditions = _cap(preconditions, SEARCH_FIELD_LIMIT)
+    capped_steps = _cap(steps, SEARCH_FIELD_LIMIT)
+    return (
+        f"{_case_heading(case_id, testrail_id, title)}\n"
+        f"  Preconditions:\n{capped_preconditions or '(none)'}\n"
+        f"  Steps:\n{capped_steps or '(none)'}"
     )
 
 

@@ -164,8 +164,8 @@ def _build_project_data_tools() -> str:
         "PROJECT DATA TOOLS (run on the server, not on the test machine):\n"
         "- list_test_case_preconditions(offset?) — the distinct preconditions of "
         "this project's test cases, most shared first, with case ids\n"
-        "- search_test_cases(query?, offset?) — find cases by text in the title, "
-        "preconditions or steps\n"
+        "- search_test_cases(query?, page?) — find cases by text in the title, "
+        "preconditions or steps; shows each case's full preconditions and steps\n"
         f"- get_test_cases(case_ids) — up to {MAX_CASES_PER_BATCH} cases in full "
         "(title, preconditions, steps, expected result) in one call\n"
         "- get_test_case(case_id) — one case in full\n"
@@ -173,8 +173,8 @@ def _build_project_data_tools() -> str:
         "their revision\n"
         "- update_application_context(text, change_summary, base_revision) — "
         "replace the notes with a complete, merged text\n"
-        "- Long listings are paged: when a result says 'call again with offset=N', "
-        "do so to read the rest."
+        "- Long listings are paged: when a result says 'call again with offset=N' "
+        "or 'call again with page=N', do so to read the rest."
     )
 
 
@@ -224,7 +224,9 @@ def _build_setup_rules(*, max_iterations: int) -> str:
         "- Prepare that state. Do NOT run the test steps and do NOT judge the "
         "application under test.\n\n" + _COMMUNICATION + "METHOD:\n"
         "- Start by reading every page of list_test_case_preconditions; it "
-        "already groups the cases by precondition and is usually enough.\n"
+        "already groups the cases by precondition and is usually enough. To see "
+        "each case's own preconditions, page through search_test_cases without "
+        "a query instead; skip the steps it also shows.\n"
         "- Read full cases only when a precondition is unclear, and then with "
         f"get_test_cases in batches of up to {MAX_CASES_PER_BATCH} ids. Never read "
         "cases one by one, and do not read test steps just to plan S0. Use "
