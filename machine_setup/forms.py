@@ -105,3 +105,24 @@ class OpenHelpChatForm(forms.Form):
             }
         ),
     )
+
+
+class OpenResultChatForm(forms.Form):
+    """Open the result chat of a finished case, with an optional first message."""
+
+    text = forms.CharField(
+        label="First message",
+        max_length=SETUP_MESSAGE_MAX_LENGTH,
+        strip=True,
+        required=False,
+        widget=forms.Textarea(
+            attrs={
+                "class": "textarea",
+                "rows": 3,
+                "placeholder": (
+                    "Optional: what looks wrong about this result. Empty asks "
+                    "the agent to review it with the evidence."
+                ),
+            }
+        ),
+    )

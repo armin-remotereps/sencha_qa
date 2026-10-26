@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime
 
 from django.db import transaction
 from django.db.models import Count, Q
@@ -38,10 +37,12 @@ from projects.models import (
 from projects.run_case_order import RUN_CASE_ORDERING
 from projects.run_reopen_services import (
     REOPENABLE_RUN_STATUSES,
+    RESTART_RESET_FIELDS,
     is_valid_help_mode,
     list_reopen_blockers,
     lock_project_and_run,
     reopen_run,
+    reset_case_for_restart,
 )
 
 RESUMABLE_STATUSES: tuple[str, ...] = (
@@ -52,23 +53,6 @@ RESUMABLE_STATUSES: tuple[str, ...] = (
 _NOT_FINISHED = "Only a finished or cancelled run can be resumed."
 _NOTHING_RESUMABLE = "There are no Blocked or Cancelled cases to resume."
 _INVALID_HELP_MODE = "Choose what happens when a case needs help."
-
-# Every execution and Checked/Sent field a resume resets, as `reset_test_run`
-# does; logs, screenshots and the checkpoint are kept (started_at is set again
-# when the worker picks the case up; the resume row keeps the earlier finish).
-_RESET_PIVOT_FIELDS: tuple[str, ...] = (
-    "status",
-    "blocked_reason",
-    "result",
-    "finished_at",
-    "checked_at",
-    "checked_by",
-    "testrail_source_result_id",
-    "testrail_source_sent_at",
-    "testrail_source_attachment_count",
-    "testrail_source_skip_reason",
-    "updated_at",
-)
 
 
 @dataclass(frozen=True)
@@ -197,14 +181,15 @@ def _resume_pivots(
         test_run, pivots = _lock_and_check(test_run_id, pivot_id)
         now = timezone.now()
         resumes: list[TestRunCaseResume] = []
-        update_fields = list(_RESET_PIVOT_FIELDS)
+        # Logs, screenshots and the checkpoint are kept.
+        update_fields = list(RESTART_RESET_FIELDS)
         for pivot in pivots:
             step, truncated = _choose_resume_step(pivot, from_step)
             cleared = _clear_pending_help(pivot)
             if (truncated or cleared) and "execution_checkpoint" not in update_fields:
                 update_fields.append("execution_checkpoint")
             resumes.append(_snapshot(pivot, user, step))
-            _reset_execution_fields(pivot, now)
+            reset_case_for_restart(pivot, now)
         TestRunCaseResume.objects.bulk_create(resumes)
         TestRunTestCase.objects.bulk_update(pivots, update_fields)
         reopen_run(test_run, pivots, help_mode=help_mode)
@@ -281,21 +266,6 @@ def _snapshot(
         previous_result=pivot.result,
         previous_finished_at=pivot.finished_at,
     )
-
-
-def _reset_execution_fields(pivot: TestRunTestCase, now: datetime) -> None:
-    pivot.status = TestRunTestCaseStatus.CREATED
-    pivot.blocked_reason = ""
-    pivot.result = ""
-    pivot.finished_at = None
-    pivot.checked_at = None
-    pivot.checked_by = None
-    pivot.testrail_source_result_id = None
-    pivot.testrail_source_sent_at = None
-    pivot.testrail_source_attachment_count = 0
-    pivot.testrail_source_skip_reason = ""
-    # bulk_update does not run auto_now.
-    pivot.updated_at = now
 
 
 def _build_confirm_body(blocked: int, cancelled: int) -> str:

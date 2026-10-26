@@ -51,6 +51,17 @@ class HelpChatSendRefusedError(MachineSetupError):
         self.conversation_id = conversation_id
 
 
+class ResultChatSendRefusedError(MachineSetupError):
+    """The result chat exists, but the message could not be sent.
+
+    ``conversation_id`` is the thread to show the person, with ``message``.
+    """
+
+    def __init__(self, message: str, *, conversation_id: int) -> None:
+        super().__init__(message)
+        self.conversation_id = conversation_id
+
+
 class SetupDocumentInvalidError(MachineSetupError):
     default_message = "The document could not be attached."
 

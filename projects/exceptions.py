@@ -176,3 +176,11 @@ class PlanRevisionError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+class ResultChangeError(Exception):
+    """A result change cannot be proposed, applied or discarded; ``message`` is safe."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message

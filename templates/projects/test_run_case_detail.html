@@ -65,7 +65,24 @@
      decided_plan_revisions, oldest first), help_mode_form (RunHelpModeForm: the help
      mode select of the Resume case dialog, pre-set to the run's mode). The
      page reloads when the case moves into, out of, or stays in "need_help"
-     (an auto-fix ended), since the help card is server-rendered. {% endcomment %}
+     (an auto-fix ended), since the help card is server-rendered.
+
+     Result chat (projects.case_result_page.get_case_result_panel):
+     can_discuss_result (bool: Passed / Failed / Blocked), result_thread_id
+     (the case's non-archived result chat thread, or None), result_chat_blocker
+     ("" or why the chat cannot take a message: a run of the project is
+     Started), result_changes (list[CaseResultChange], APPLIED, newest first,
+     decided_by loaded), current_result_change (the applied change that wrote
+     the current result, or None), current_result_from_label (the result
+     that change replaced, e.g. "Passed"; "" without one),
+     pending_review_redesign (bool). "Discuss
+     result" posts `text` (optional, at most 8000 characters) to
+     machine_setup:result_chat_open. An Earlier attempts row of kind
+     "redesign" is a re-run with a result-chat redesigned plan (from_step is
+     the first step that was not carried). An earlier plan with is_review was
+     replaced after a result review (plan.label says which). The page reloads
+     when the case moves between two finished statuses (a person applied a
+     result change), since these parts are server-rendered. {% endcomment %}
 
 {% block title %}{{ pivot.test_case.title }} · {{ test_run.display_name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -163,6 +180,34 @@
     <template x-if="!(status === 'created' && testRunStatus === 'waiting')">
       <p class="pre-wrap" x-text="result || 'No result yet.'"></p>
     </template>
+    {% if current_result_change %}
+    <p class="result-meta">
+      Changed by {{ current_result_change.decided_by.get_full_name|default:current_result_change.decided_by.email|default:"a removed user" }}
+      on {{ current_result_change.decided_at|date:"M j, Y H:i" }} after review with the agent; earlier result: {{ current_result_from_label }}.
+    </p>
+    {% endif %}
+    {% if pending_review_redesign %}
+    <p class="result-meta">
+      The agent proposed a redesigned test ·
+      {% if result_thread_id %}<a href="{% url 'machine_setup:thread' project.id result_thread_id %}">review in the result chat</a>{% else %}review in the result chat{% endif %}
+    </p>
+    {% endif %}
+    {% if result_thread_id or can_discuss_result %}
+    <div class="result-actions">
+      {% if result_thread_id %}
+      <a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id result_thread_id %}">Go to result chat</a>
+      {% elif result_chat_blocker %}
+      <button type="button" class="btn btn-sm btn-secondary" disabled aria-disabled="true" aria-describedby="result-chat-blocker" title="{{ result_chat_blocker }}">Discuss result</button>
+      {% else %}
+      <button type="button" class="btn btn-sm btn-secondary" @click="$dispatch('open-discuss-result')">Discuss result</button>
+      {% endif %}
+      {% if result_chat_blocker %}
+      <span class="hint" id="result-chat-blocker">{{ result_chat_blocker }}</span>
+      {% elif not result_thread_id %}
+      <span class="hint">Talk to the agent about this result. It can check the test machine and propose a corrected result or a redesigned re-run; nothing changes until you apply it.</span>
+      {% endif %}
+    </div>
+    {% endif %}
   </section>
 
   {% if help_panel %}
@@ -225,10 +270,10 @@
     {% if earlier_plans %}
     <details class="earlier-plans">
       <summary>Earlier plans ({{ earlier_plans|length }})</summary>
-      <p class="hint">The test plan was redesigned in a help chat. Steps carried over count as passed and were not re-run.</p>
+      <p class="hint">The test plan was redesigned in a help chat or after a result review. Steps carried over count as passed and were not re-run.</p>
       {% for plan in earlier_plans reversed %}
       <section class="earlier-plans-item" aria-label="Plan replaced by redesign {{ plan.version }}">
-        <h3>Replaced by redesign {{ plan.version }} · help at step {{ plan.help_step_num }} · resumed at step {{ plan.resume_step }}</h3>
+        <h3>Replaced by redesign {{ plan.version }} · {{ plan.label }} · {% if plan.is_review %}re-ran from step {{ plan.resume_step }}{% else %}resumed at step {{ plan.resume_step }}{% endif %}</h3>
         {% if plan.reason %}<p class="pre-wrap small">{{ plan.reason }}</p>{% endif %}
         <ol>
           {% for step in plan.steps %}
@@ -253,7 +298,8 @@
     </div>
     <p class="pre-wrap" x-text="result || 'No details were recorded.'"></p>
     <p class="hint" x-show="blockedReason === 'help_skipped'"{% if pivot.blocked_reason != "help_skipped" %} x-cloak{% endif %}>A person marked this case blocked while it was waiting for help, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
-    <p class="hint" x-show="blockedReason !== 'help_skipped'"{% if pivot.blocked_reason == "help_skipped" %} x-cloak{% endif %}>This case was not judged: an infrastructure problem stopped it before the agent could reach a verdict, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
+    <p class="hint" x-show="blockedReason === 'person_review'"{% if pivot.blocked_reason != "person_review" %} x-cloak{% endif %}>A person marked this case blocked after reviewing its result with the agent, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
+    <p class="hint" x-show="blockedReason !== 'help_skipped' && blockedReason !== 'person_review'"{% if pivot.blocked_reason == "help_skipped" or pivot.blocked_reason == "person_review" %} x-cloak{% endif %}>This case was not judged: an infrastructure problem stopped it before the agent could reach a verdict, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
     {% if can_resume %}
     <div class="actions card-actions">
       <button type="button" class="btn btn-primary" @click="$dispatch('open-resume-case')">Resume case</button>
@@ -271,6 +317,38 @@
     <div class="actions card-actions">
       <button type="button" class="btn btn-primary" @click="$dispatch('open-resume-case')">Resume case</button>
     </div>
+  </section>
+  {% endif %}
+
+  {% if result_changes %}
+  {# Section: Result changes — results a person changed after a result chat, newest first #}
+  <section aria-labelledby="result-changes-h" class="card">
+    <div class="card-header">
+      <h2 id="result-changes-h">Result changes</h2>
+    </div>
+    <ul class="result-changes">
+      {% for change in result_changes %}
+      <li>
+        <span class="result-change-arrow">
+          <span class="badge {% if change.from_status == "success" %}badge-passed{% elif change.from_status == "failed" %}badge-failed{% else %}badge-blocked{% endif %}">{% if change.from_status == "success" %}Passed{% else %}{{ change.get_from_status_display }}{% endif %}</span>
+          <span class="arrow" aria-label="to">→</span>
+          <span class="badge {% if change.to_status == "success" %}badge-passed{% elif change.to_status == "failed" %}badge-failed{% else %}badge-blocked{% endif %}">{% if change.to_status == "success" %}Passed{% else %}{{ change.get_to_status_display }}{% endif %}</span>
+        </span>
+        <span class="muted small">
+          By {{ change.decided_by.get_full_name|default:change.decided_by.email|default:"a removed user" }}
+          on {{ change.decided_at|date:"M j, Y H:i" }}{% if change.conversation_id %} · <a href="{% url 'machine_setup:thread' project.id change.conversation_id %}">result chat</a>{% endif %}
+        </span>
+        <p class="pre-wrap small">{{ change.summary|truncatechars:600 }}</p>
+        {% if change.explanation %}<p class="pre-wrap small"><span class="muted">Why:</span> {{ change.explanation|truncatechars:600 }}</p>{% endif %}
+        {% if change.from_result %}
+        <details>
+          <summary>Replaced result</summary>
+          <p class="pre-wrap small">{{ change.from_result|truncatechars:2000 }}</p>
+        </details>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
   </section>
   {% endif %}
 
@@ -323,7 +401,11 @@
         <div>
           <strong>{{ resume.get_previous_status_display }}{% if resume.previous_blocked_reason %}: {{ resume.get_previous_blocked_reason_display }}{% endif %}</strong>{% if resume.previous_result %} · {{ resume.previous_result|truncatechars:300 }}{% endif %}
           <div class="muted small">
-            {% if resume.is_rerun %}
+            {% if resume.kind == "redesign" %}
+            Re-run with a redesigned plan by {{ resume.resumed_by.get_full_name|default:resume.resumed_by.email|default:"a removed user" }}
+            on {{ resume.created_at|date:"M j, H:i" }}
+            {% if resume.from_step and resume.from_step > 1 %}from step {{ resume.from_step }} (steps 1–{{ resume.from_step|add:"-1" }} carried over){% else %}from step 1{% endif %}
+            {% elif resume.is_rerun %}
             Re-run from the start by {{ resume.resumed_by.get_full_name|default:resume.resumed_by.email|default:"a removed user" }}
             on {{ resume.created_at|date:"M j, H:i" }}
             {% else %}
@@ -476,6 +558,39 @@
         <div class="dialog-actions">
           <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
           <button type="submit" class="btn btn-primary">Resume case</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
+
+  {# Section: Discuss result dialog — opens the case's result chat #}
+  {% if can_discuss_result and not result_thread_id and not result_chat_blocker %}
+  <div
+    class="dialog-backdrop"
+    x-data="dialog()"
+    x-show="open"
+    x-cloak
+    x-on:open-discuss-result.window="show()"
+    x-on:keydown.escape.window="close()"
+    x-trap.noscroll="open"
+    @click.self="close()"
+  >
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="discuss-result-title">
+      <div class="card-header">
+        <h3 id="discuss-result-title">Discuss this result</h3>
+        <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+      </div>
+      <form method="post" action="{% url 'machine_setup:result_chat_open' project.id pivot.id %}">
+        {% csrf_token %}
+        <div class="field">
+          <label class="label" for="discuss-result-text">Your first message</label>
+          <textarea class="textarea" id="discuss-result-text" name="text" rows="4" maxlength="8000" placeholder="Optional: what looks wrong about this result? Empty asks the agent to review it and say whether it looks right, with the evidence."></textarea>
+        </div>
+        <p class="hint">The agent reads the case, its steps, log and screenshots, and can check the test machine. It may propose a corrected result or a redesigned re-run; nothing changes until you apply it.</p>
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary">Open result chat</button>
         </div>
       </form>
     </div>
@@ -746,6 +861,14 @@ document.addEventListener('alpine:init', () => {
           if (data.status === 'need_help' || this.status === 'need_help') {
             // The help card is server-rendered: reload when the case pauses,
             // is resolved, or its auto-fix ends (a need_help -> need_help event).
+            this.status = data.status;
+            window.location.reload();
+            return;
+          }
+          const finished = ['success', 'failed', 'blocked'];
+          if (finished.includes(this.status) && finished.includes(data.status) && data.status !== this.status) {
+            // A person applied a result change: the "Changed by" line and the
+            // Result changes card are server-rendered — reload once.
             this.status = data.status;
             window.location.reload();
             return;

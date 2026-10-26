@@ -36,6 +36,8 @@ from machine_setup.models import (
     SetupTurn,
 )
 from machine_setup.payloads import (
+    CARD_DEFER,
+    CARD_SELECT_RELATED,
     SetupMessagePayload,
     SetupTurnPayload,
     message_payload,
@@ -44,12 +46,14 @@ from machine_setup.payloads import (
 from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 from machine_setup.turn_state import is_turn_stale
 from projects.case_help_services import HelpPanel, get_help_panel
+from projects.case_result_text import result_status_label
 from projects.models import (
     HelpAutoFixState,
     HelpResolution,
     Project,
     TestRun,
     TestRunStatus,
+    TestRunTestCase,
 )
 from projects.services import MachineState, get_machine_state
 from visual_engine.services.pool_status import get_visual_engine_status
@@ -63,6 +67,10 @@ HELP_THREAD_LIMIT = 20
 
 # Thread kinds that belong to a help request.
 HELP_THREAD_KINDS = (SetupConversationKind.AUTO_FIX, SetupConversationKind.CASE_HELP)
+# Thread kinds listed beside the main chat: the help threads and result chats.
+CASE_THREAD_KINDS = (*HELP_THREAD_KINDS, SetupConversationKind.CASE_RESULT)
+# Characters of the result text shown in a result chat's header.
+RESULT_EXCERPT_CHARS = 300
 
 # Send blocker while a turn is live in a thread other than the one shown.
 OTHER_THREAD_TURN_MESSAGE = (
@@ -73,7 +81,8 @@ OTHER_THREAD_TURN_MESSAGE = (
 
 @dataclass(frozen=True)
 class HelpThread:
-    """A help thread (auto-fix or help chat) as listed and shown in its header."""
+    """A case thread (auto-fix, help chat or result chat) as listed and shown
+    in its header."""
 
     conversation_id: int
     # "auto_fix" or "case_help", and its label ("Auto-fix" / "Help chat").
@@ -87,7 +96,7 @@ class HelpThread:
     case_title: str
     step_num: int | None
     # Auto-fix: "running", "fixed" or "not_fixed". Help chat: "running",
-    # "open" or "resolved".
+    # "open" or "resolved". Result chat: "running" or the case's status.
     state: str
     state_label: str
 
@@ -101,13 +110,31 @@ _THREAD_STATE_LABELS = {
 
 
 @dataclass(frozen=True)
+class ResultThreadHeader:
+    """The static header of a result chat: the case and its current result."""
+
+    test_run_id: int
+    pivot_id: int
+    case_title: str
+    # A ``TestRunTestCaseStatus`` value and its result label ("Passed", …).
+    status: str
+    status_label: str
+    result_excerpt: str
+    # The run's help mode, pre-selected in the re-run dialog.
+    run_help_mode: str
+
+
+@dataclass(frozen=True)
 class SetupPage:
     conversation_id: int | None
-    # The shown thread's kind: "chat" (the main chat), "auto_fix" or
-    # "case_help".
+    # The shown thread's kind: "chat" (the main chat), "auto_fix",
+    # "case_help" or "case_result".
     kind: str
-    # Set when the shown thread is a help thread (auto-fix or help chat).
+    # Set when the shown thread is a case thread (auto-fix, help chat or
+    # result chat).
     thread: HelpThread | None
+    # Result chats only, while the case exists.
+    result_thread: ResultThreadHeader | None
     messages: list[SetupMessagePayload]
     hidden_message_count: int
     turn: SetupTurnPayload | None
@@ -139,7 +166,7 @@ def find_thread(project: Project, conversation_id: int) -> SetupConversation | N
 def list_help_threads(
     project: Project, limit: int = HELP_THREAD_LIMIT
 ) -> list[HelpThread]:
-    """The newest help threads of the project, newest first; one query."""
+    """The newest case threads of the project, newest first; one query."""
     rows = _help_threads(project).order_by("-id")[:limit]
     return [_thread_from_row(row) for row in rows]
 
@@ -153,10 +180,12 @@ def _help_threads(project: Project) -> QuerySet[SetupConversation]:
     return (
         SetupConversation.objects.filter(
             project=project,
-            kind__in=HELP_THREAD_KINDS,
+            kind__in=CASE_THREAD_KINDS,
             archived_at__isnull=True,
         )
-        .select_related("help_request__test_run_test_case__test_case")
+        .select_related(
+            "help_request__test_run_test_case__test_case", "result_case__test_case"
+        )
         .only(
             "id",
             "kind",
@@ -170,14 +199,21 @@ def _help_threads(project: Project) -> QuerySet[SetupConversation]:
             "help_request__test_run_test_case__test_run",
             "help_request__test_run_test_case__test_case__id",
             "help_request__test_run_test_case__test_case__title",
+            "result_case__id",
+            "result_case__status",
+            "result_case__test_run",
+            "result_case__test_case__id",
+            "result_case__test_case__title",
         )
         .annotate(latest_turn_status=Subquery(latest_turn_status))
     )
 
 
 def _thread_from_row(row: SetupConversation) -> HelpThread:
-    request = row.help_request
     latest_status: str | None = getattr(row, "latest_turn_status", None)
+    if row.kind == SetupConversationKind.CASE_RESULT:
+        return _result_thread_from_row(row, latest_status)
+    request = row.help_request
     state_label = ""
     if latest_status in LIVE_TURN_STATUSES:
         state = "running"
@@ -208,6 +244,68 @@ def _thread_from_row(row: SetupConversation) -> HelpThread:
         step_num=request.step_num if request is not None else None,
         state=state,
         state_label=state_label or _THREAD_STATE_LABELS[state],
+    )
+
+
+def _result_thread_from_row(
+    row: SetupConversation, latest_status: str | None
+) -> HelpThread:
+    pivot = row.result_case
+    if latest_status in LIVE_TURN_STATUSES:
+        state = "running"
+        state_label = _THREAD_STATE_LABELS[state]
+    elif pivot is not None:
+        state = pivot.status
+        state_label = result_status_label(pivot.status)
+    else:
+        state = "resolved"
+        state_label = "Closed"
+    return HelpThread(
+        conversation_id=row.pk,
+        kind=row.kind,
+        kind_label=row.get_kind_display(),
+        help_request_id=None,
+        created_at=row.created_at,
+        test_run_id=pivot.test_run_id if pivot is not None else None,
+        pivot_id=pivot.pk if pivot is not None else None,
+        case_title=pivot.test_case.title if pivot is not None else "",
+        step_num=None,
+        state=state,
+        state_label=state_label,
+    )
+
+
+def _result_thread_header(pivot_id: int | None) -> ResultThreadHeader | None:
+    """The result chat's header; one query (the log is not loaded)."""
+    if pivot_id is None:
+        return None
+    pivot = (
+        TestRunTestCase.objects.select_related("test_case", "test_run")
+        .only(
+            "id",
+            "status",
+            "result",
+            "test_case__id",
+            "test_case__title",
+            "test_run__id",
+            "test_run__help_mode",
+        )
+        .filter(pk=pivot_id)
+        .first()
+    )
+    if pivot is None:
+        return None
+    result = pivot.result.strip()
+    if len(result) > RESULT_EXCERPT_CHARS:
+        result = result[: RESULT_EXCERPT_CHARS - 1] + "…"
+    return ResultThreadHeader(
+        test_run_id=pivot.test_run_id,
+        pivot_id=pivot.pk,
+        case_title=pivot.test_case.title,
+        status=pivot.status,
+        status_label=result_status_label(pivot.status),
+        result_excerpt=result,
+        run_help_mode=pivot.test_run.help_mode,
     )
 
 
@@ -242,6 +340,7 @@ def get_setup_page(
     rows, so they are built once per load.
     """
     thread: HelpThread | None = None
+    result_thread: ResultThreadHeader | None = None
     if conversation is None:
         kind: str = SetupConversationKind.CHAT
         conversation_id = (
@@ -256,9 +355,11 @@ def get_setup_page(
     else:
         kind = conversation.kind
         conversation_id = conversation.pk
-        if kind in HELP_THREAD_KINDS:
+        if kind in CASE_THREAD_KINDS:
             row = _help_threads(project).filter(pk=conversation_id).first()
             thread = _thread_from_row(row) if row is not None else None
+        if kind == SetupConversationKind.CASE_RESULT:
+            result_thread = _result_thread_header(conversation.result_case_id)
     live_turn = (
         SetupTurn.objects.filter(project=project, status__in=LIVE_TURN_STATUSES)
         .order_by("-id")
@@ -301,7 +402,7 @@ def get_setup_page(
         )
 
     messages, hidden_count = (
-        _recent_messages(conversation_id) if include_messages else ([], 0)
+        _recent_messages(conversation_id, project.pk) if include_messages else ([], 0)
     )
     visual_engine = get_visual_engine_status()
     machine_state = get_machine_state(project, visual_engine)
@@ -323,6 +424,7 @@ def get_setup_page(
         conversation_id=conversation_id,
         kind=kind,
         thread=thread,
+        result_thread=result_thread,
         messages=messages,
         hidden_message_count=hidden_count,
         turn=turn_payload(shown_turn) if shown_turn is not None else None,
@@ -339,7 +441,7 @@ def get_setup_page(
 
 
 def _recent_messages(
-    conversation_id: int | None,
+    conversation_id: int | None, project_id: int
 ) -> tuple[list[SetupMessagePayload], int]:
     """The last ``SETUP_PAGE_MESSAGE_LIMIT`` top-level rows, and how many are older.
 
@@ -352,8 +454,9 @@ def _recent_messages(
     screenshots = Prefetch(
         "screenshots", queryset=SetupScreenshot.objects.order_by("id")
     )
-    # The payload reads documents of USER rows and the proposal of card rows;
-    # case_ids can be large and is never shown.
+    # The payload reads documents of USER rows and the proposal or result
+    # card of card rows; case_ids and the case log can be large and are never
+    # shown.
     documents = Prefetch(
         "documents",
         queryset=SetupDocument.objects.only(
@@ -364,8 +467,8 @@ def _recent_messages(
         SetupMessage.objects.filter(
             conversation_id=conversation_id, parent__isnull=True
         )
-        .select_related("author", "run_proposal")
-        .defer("run_proposal__case_ids")
+        .select_related("author", "run_proposal", *CARD_SELECT_RELATED)
+        .defer("run_proposal__case_ids", *CARD_DEFER)
         .prefetch_related(screenshots, documents)
         .order_by("-id")[:SETUP_PAGE_MESSAGE_LIMIT]
     )
@@ -410,6 +513,7 @@ def _recent_messages(
         message_payload(
             row,
             hidden_child_count=child_totals.get(row.pk, 0) - loaded.get(row.pk, 0),
+            project_id=project_id,
         )
         for row in ordered
     ], hidden_count

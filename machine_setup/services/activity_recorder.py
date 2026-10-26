@@ -32,7 +32,12 @@ from machine_setup.models import (
     SetupSubtaskResult,
     SetupToolStatus,
 )
-from machine_setup.payloads import message_payload, screenshot_payload
+from machine_setup.payloads import (
+    CARD_DEFER,
+    CARD_SELECT_RELATED,
+    message_payload,
+    screenshot_payload,
+)
 from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 
 logger = logging.getLogger(__name__)
@@ -168,8 +173,11 @@ class ActivityRecorder:
         text: str,
         link_url: str = "",
         run_proposal_id: int | None = None,
+        result_change_id: int | None = None,
+        plan_revision_id: int | None = None,
     ) -> SetupMessage:
-        """``run_proposal_id`` makes the row a run proposal card."""
+        """``run_proposal_id`` makes the row a run proposal card;
+        ``result_change_id`` / ``plan_revision_id`` a result-chat card."""
         row = SetupMessage.objects.create(
             conversation_id=self.conversation_id,
             turn_id=self.turn_id,
@@ -178,6 +186,8 @@ class ActivityRecorder:
             text=text,
             link_url=link_url,
             run_proposal_id=run_proposal_id,
+            result_change_id=result_change_id,
+            plan_revision_id=plan_revision_id,
         )
         if run_proposal_id is not None:
             # One query for the card; case_ids can be large and is not shown.
@@ -186,13 +196,28 @@ class ActivityRecorder:
                 .filter(pk=run_proposal_id)
                 .first()
             )
+        if result_change_id is not None or plan_revision_id is not None:
+            # One query for the card with its case (log deferred).
+            loaded = (
+                SetupMessage.objects.select_related(*CARD_SELECT_RELATED)
+                .defer(*CARD_DEFER)
+                .filter(pk=row.pk)
+                .first()
+            )
+            if loaded is not None:
+                row.result_change = loaded.result_change
+                row.plan_revision = loaded.plan_revision
         self.broadcast_row(row)
         return row
 
     def broadcast_row(self, row: SetupMessage) -> None:
         broadcast_message(
             self.project_id,
-            message_payload(row, screenshots=self.row_screenshots.get(row.pk, [])),
+            message_payload(
+                row,
+                screenshots=self.row_screenshots.get(row.pk, []),
+                project_id=self.project_id,
+            ),
         )
 
 

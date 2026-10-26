@@ -48,6 +48,7 @@ from machine_setup.services.activity_recorder import (
 )
 from machine_setup.services.auto_fix_settlement import settle_case_auto_fix
 from machine_setup.services.case_help_context import describe_help_status
+from machine_setup.services.case_result_context import describe_result_status
 from machine_setup.services.run_setup_task import SetupTaskRuntime, run_setup_task
 from machine_setup.services.setup_prompt import build_setup_system_prompt
 from machine_setup.services.setup_tools import (
@@ -176,17 +177,18 @@ class _TurnRunner:
         system_info = project.agent_system_info or None
         project_prompt = build_agent_project_context(project)
         help_request_id = turn.conversation.help_request_id
-        role = thread_role(auto_fix_turn=turn.auto_fix, help_request_id=help_request_id)
+        result_case_id = turn.conversation.result_case_id
+        role = thread_role(
+            auto_fix_turn=turn.auto_fix,
+            help_request_id=help_request_id,
+            result_case_id=result_case_id,
+        )
         system_prompt = build_setup_system_prompt(
             system_info=system_info,
             project_prompt=project_prompt,
             max_iterations=settings.MACHINE_SETUP_MAX_ITERATIONS,
             role=role,
-            help_status=(
-                describe_help_status(help_request_id)
-                if role == ThreadRole.CASE_HELP and help_request_id is not None
-                else ""
-            ),
+            help_status=_role_status(role, help_request_id, result_case_id),
         )
         llm_config = build_llm_config()
         self.subtask_runtime = SetupTaskRuntime(
@@ -225,6 +227,9 @@ class _TurnRunner:
             conversation_id=self.conversation_id,
             turn_id=turn.pk,
             help_request_id=help_request_id,
+            result_case_id=result_case_id,
+            on_result_change_proposed=self._on_result_change_proposed,
+            on_plan_revision_proposed=self._on_plan_revision_proposed,
         )
         result = run_tool_loop(
             [ChatMessage(role="system", content=system_prompt), *history],
@@ -310,6 +315,24 @@ class _TurnRunner:
             kind=SetupMessageKind.NOTICE,
             text=f"Proposed {run_count} test run{'s' if run_count != 1 else ''}",
             run_proposal_id=proposal_id,
+        )
+
+    def _on_result_change_proposed(self, change_id: int) -> None:
+        logger.info("Setup turn %s proposed result change %s", self.turn.pk, change_id)
+        self.recorder.create_row(
+            kind=SetupMessageKind.NOTICE,
+            text="Proposed a result change",
+            result_change_id=change_id,
+        )
+
+    def _on_plan_revision_proposed(self, revision_id: int) -> None:
+        logger.info(
+            "Setup turn %s proposed redesigned plan %s", self.turn.pk, revision_id
+        )
+        self.recorder.create_row(
+            kind=SetupMessageKind.NOTICE,
+            text="Proposed a redesigned test plan",
+            plan_revision_id=revision_id,
         )
 
     def _should_stop(self) -> bool:
@@ -402,6 +425,17 @@ class _TurnRunner:
         return SetupConversation.objects.filter(
             pk=self.conversation_id, archived_at__isnull=False
         ).exists()
+
+
+def _role_status(
+    role: ThreadRole, help_request_id: int | None, result_case_id: int | None
+) -> str:
+    """The one-line status the help or result chat prompt shows; one query."""
+    if role == ThreadRole.CASE_HELP and help_request_id is not None:
+        return describe_help_status(help_request_id)
+    if role == ThreadRole.CASE_RESULT and result_case_id is not None:
+        return describe_result_status(result_case_id)
+    return ""
 
 
 def _attached_documents(message_id: int) -> list[AttachedDocumentNote]:

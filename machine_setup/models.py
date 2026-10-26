@@ -4,7 +4,13 @@ from django.conf import settings
 from django.db import models
 from django.db.models import Q
 
-from projects.models import CaseHelpRequest, Project
+from projects.models import (
+    CaseHelpRequest,
+    CasePlanRevision,
+    CaseResultChange,
+    Project,
+    TestRunTestCase,
+)
 
 
 class SetupTurnStatus(models.TextChoices):
@@ -59,6 +65,8 @@ class SetupConversationKind(models.TextChoices):
     AUTO_FIX = "auto_fix", "Auto-fix"
     # Opened by a person from a run case that needs help.
     CASE_HELP = "case_help", "Help chat"
+    # Opened by a person from a finished run case to discuss its result.
+    CASE_RESULT = "case_result", "Result chat"
 
 
 class SetupFixResult(models.TextChoices):
@@ -111,6 +119,15 @@ class SetupConversation(models.Model):
         blank=True,
         related_name="setup_conversations",
     )
+    # Result chats only: the run case whose result is discussed (one thread per
+    # case, reused across executions).
+    result_case = models.ForeignKey(
+        TestRunTestCase,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="result_conversations",
+    )
     # Auto-fix threads only: the agent's last ``report_case_fix`` call.
     fix_result = models.CharField(
         max_length=16, choices=SetupFixResult.choices, blank=True, default=""
@@ -132,6 +149,12 @@ class SetupConversation(models.Model):
                 fields=["help_request"],
                 condition=Q(help_request__isnull=False),
                 name="setup_one_thread_per_help_request",
+            ),
+            # One active result chat per run case.
+            models.UniqueConstraint(
+                fields=["result_case"],
+                condition=Q(result_case__isnull=False, archived_at__isnull=True),
+                name="setup_one_result_thread_per_case",
             ),
         ]
 
@@ -243,6 +266,22 @@ class SetupMessage(models.Model):
     # Set on the NOTICE row that shows a run proposal card.
     run_proposal = models.ForeignKey(
         "SetupRunProposal",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    # Set on the NOTICE row that shows a result-change card (result chat).
+    result_change = models.ForeignKey(
+        CaseResultChange,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    # Set on the NOTICE row that shows a redesign card (result chat).
+    plan_revision = models.ForeignKey(
+        CasePlanRevision,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

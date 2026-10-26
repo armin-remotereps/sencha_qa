@@ -126,7 +126,7 @@ class CaseStepProgress:
     not_run: int
     total: int
     resumed: bool
-    # Plans replaced by help-chat redesigns, oldest first (the checkpoint keeps
+    # Plans replaced by help-chat or result-chat redesigns, oldest first (the checkpoint keeps
     # the newest few).
     earlier_plans: tuple[EarlierPlan, ...] = ()
 
@@ -142,16 +142,31 @@ class EarlierPlanStep:
 
 @dataclass(frozen=True)
 class EarlierPlan:
-    """A plan a help chat redesigned, with how its steps ended."""
+    """A plan a help chat or a result chat redesigned, with how its steps ended."""
 
     # ``plan_version`` the redesign gave the checkpoint.
     version: int
     reason: str
-    help_request_id: int
-    # Step of that plan the case was waiting for help at when it was redesigned.
+    # None for a result-chat (review) redesign.
+    help_request_id: int | None
+    # Step of that plan the case was waiting for help at when it was
+    # redesigned; for a review redesign, its last failed step (0 when none).
     help_step_num: int
     resume_step: int
     steps: tuple[EarlierPlanStep, ...]
+    # ``help``: redesigned in a help chat; ``review``: after a result review.
+    source: str = "help"
+
+    @property
+    def is_review(self) -> bool:
+        return self.source == "review"
+
+    @property
+    def label(self) -> str:
+        """ "help at step N" or "after result review" (plain text)."""
+        if self.is_review:
+            return "after result review"
+        return f"help at step {self.help_step_num}"
 
 
 def build_case_step_progress(
@@ -280,7 +295,7 @@ def _earlier_plan(record: PlanRevisionRecord) -> EarlierPlan:
         final = finals.get(num)
         if final is not None and final.result.status == "pass":
             status = StepStatus.PASSED
-        elif num == record.paused_step:
+        elif num == record.paused_step and record.source == "help":
             # The case was waiting for help here when the plan was redesigned.
             status = StepStatus.AWAITING_HELP
         elif final is not None:
@@ -302,6 +317,7 @@ def _earlier_plan(record: PlanRevisionRecord) -> EarlierPlan:
         help_step_num=record.paused_step,
         resume_step=record.resume_step,
         steps=tuple(steps),
+        source=record.source,
     )
 
 

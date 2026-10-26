@@ -252,13 +252,15 @@ def format_step_breakdown(progress: CaseStepProgress) -> str:
     Numbered like the verdict text ("Steps 4–7 were not run"), so a reader can
     see what those steps were. Capped at ``STEP_BREAKDOWN_MAX``: trailing rows
     that do not fit collapse into "… and N more steps, see Details". A plan a
-    help chat redesigned says so under the header.
+    help chat or a result review redesigned says so under the header.
     """
     if not progress.rows:
         return ""
     header = f"Steps planned by the agent ({progress.total}):"
-    if progress.earlier_plans:
+    if any(not plan.is_review for plan in progress.earlier_plans):
         header += "\nThe test plan was redesigned during help."
+    if any(plan.is_review for plan in progress.earlier_plans):
+        header += "\nThe test plan was redesigned after a result review."
     entries = [_step_lines(row) for row in progress.rows]
     text = "\n".join([header, *entries])
     if len(text) <= STEP_BREAKDOWN_MAX:

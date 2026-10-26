@@ -3537,3 +3537,130 @@ details.card[open] > summary,
   flex: 1 1 14rem;
   min-width: 0;
 }
+
+/* --------------------------------------------------------------------------
+   Result chat: the result change and redesigned re-run cards on the Machine
+   setup thread page, the thread's result header, and the case page's Result
+   changes history. All text in them is model or user text, rendered escaped
+   / x-text.
+   -------------------------------------------------------------------------- */
+
+/* A proposed (or decided) result change: from → to, summary, explanation. */
+.result-change-card,
+.plan-redesign-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--brand-cyan) 35%, transparent);
+  border-left: 3px solid var(--brand-cyan);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.result-change-card p,
+.plan-redesign-card p {
+  margin: 0;
+}
+
+.result-change-card.is-decided,
+.plan-redesign-card.is-decided,
+.result-change-card.is-outdated,
+.plan-redesign-card.is-outdated {
+  border-color: var(--border);
+  border-left-color: var(--text-muted);
+}
+
+.result-change-card.is-outdated,
+.plan-redesign-card.is-outdated {
+  opacity: 0.8;
+}
+
+/* "Failed → Passed": two status badges with an arrow between them. */
+.result-change-arrow {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.result-change-arrow > .arrow {
+  color: var(--text-muted);
+}
+
+/* Machine setup thread page: which case and result the thread discusses. */
+.result-header {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand-cyan);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.result-header-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.result-header p {
+  margin: 0;
+}
+
+/* Case page: applied result changes, newest first. */
+.result-changes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.result-changes > li {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.result-changes > li:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.result-changes p {
+  margin: 0;
+}
+
+.result-changes details > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+}
+
+/* Result card: "Changed by …" and the pending redesign line. */
+.result-meta {
+  margin: 8px 0 0;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+.result-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-top: 12px;
+}

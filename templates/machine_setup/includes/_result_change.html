@@ -1,0 +1,57 @@
+{% comment %}
+  One result change card of a result chat: a NOTICE row whose result_change
+  is set (block role 'result_change', block.change =
+  ResultChangeCardPayload, see machine_setup/chat.html). Rendered inside
+  `<template x-for="block in blocks">` of _transcript.html; reads
+  resultLabelBadge, cardStatusBadge, cardSubmitting and openApplyResult from
+  the machineSetupChat scope. Every status change re-broadcasts the row, so
+  the card is replaced live (upsert by id).
+
+  from/to labels, the summary, the explanation and the effects are model or
+  server text: x-text only. The form actions are the server-built
+  apply_url / discard_url. Badge classes come from fixed client maps.
+
+  proposed: Apply (opens the confirm dialog in chat.html) / Discard; an
+  outdated card (the case changed since) offers Discard only.
+  applied / discarded / superseded: state only.
+  Single root element (it is the content of an x-if template).
+{% endcomment %}
+<section class="chat-proposal result-change-card" :class="{ 'is-closed': block.change.status === 'superseded' || block.change.status === 'discarded' }" aria-label="Proposed result change">
+  <header class="chat-proposal-header">
+    <h3 class="chat-proposal-title">Proposed result change</h3>
+    <span class="badge" :class="cardStatusBadge(block.change.status)" x-text="block.change.outdated && block.change.status === 'proposed' ? 'Outdated' : block.change.status_label"></span>
+  </header>
+
+  <p class="result-change-arrow">
+    <span class="badge" :class="resultLabelBadge(block.change.from_label)" x-text="block.change.from_label"></span>
+    <span aria-hidden="true">→</span>
+    <span class="visually-hidden">to</span>
+    <span class="badge" :class="resultLabelBadge(block.change.to_label)" x-text="block.change.to_label"></span>
+  </p>
+
+  <div>
+    <div class="label">New result text</div>
+    <p class="pre-wrap small" x-text="block.change.summary"></p>
+  </div>
+  <div x-show="block.change.explanation">
+    <div class="label">Why</div>
+    <p class="pre-wrap small" x-text="block.change.explanation"></p>
+  </div>
+  <p class="hint" x-show="block.change.effects" x-text="block.change.effects"></p>
+
+  <template x-if="block.change.status === 'proposed'">
+    <div class="chat-proposal-actions">
+      <p class="chat-proposal-hint small" x-show="block.change.outdated">The case changed since this was proposed: it was re-run, resumed or its result changed. Ask the agent again.</p>
+      <p class="chat-proposal-hint small" x-show="!block.change.outdated">Nothing changes until you press Apply. The earlier result is kept in the case's history.</p>
+      <div class="chat-proposal-buttons">
+        <form method="post" :action="block.change.discard_url" @submit="cardSubmitting = true">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-secondary btn-sm" :disabled="cardSubmitting">Discard</button>
+        </form>
+        <button type="button" class="btn btn-primary btn-sm" x-show="!block.change.outdated" :disabled="cardSubmitting" @click="openApplyResult(block.change)">Apply</button>
+      </div>
+    </div>
+  </template>
+
+  <p class="muted small" x-show="block.change.status === 'applied'" x-text="'Applied' + (block.change.decided_by_name ? ' by ' + block.change.decided_by_name : '') + '.'"></p>
+</section>

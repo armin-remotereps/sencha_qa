@@ -107,6 +107,7 @@ def _revision_to_json(record: PlanRevisionRecord) -> dict[str, object]:
         "paused_step": record.paused_step,
         "paused_digest": record.paused_digest,
         "resume_step": record.resume_step,
+        "source": record.source,
     }
 
 
@@ -388,7 +389,7 @@ def _parse_revision(item: dict[str, object]) -> PlanRevisionRecord:
     return PlanRevisionRecord(
         version=_as_int(item.get("version"), "version"),
         revision_id=_as_int(item.get("revision_id"), "revision_id"),
-        help_request_id=_as_int(item.get("help_request_id"), "help_request_id"),
+        help_request_id=_optional_int(item.get("help_request_id"), "help_request_id"),
         reason=_as_str(item.get("reason"), "reason"),
         previous_plan=previous_plan,
         earlier_attempts=tuple(
@@ -400,7 +401,17 @@ def _parse_revision(item: dict[str, object]) -> PlanRevisionRecord:
         paused_step=_as_int(item.get("paused_step"), "paused_step"),
         paused_digest=_parse_digest(item.get("paused_digest")),
         resume_step=_as_int(item.get("resume_step"), "resume_step"),
+        source=_parse_revision_source(item.get("source")),
     )
+
+
+def _parse_revision_source(value: object) -> Literal["help", "review"]:
+    # Records written before result-chat redesigns have no key: help.
+    if value is None or value == "help":
+        return "help"
+    if value == "review":
+        return "review"
+    raise _MalformedCheckpoint("unknown plan revision source")
 
 
 def _parse_positive_int(value: object) -> int | None:
@@ -452,3 +463,7 @@ def _as_int(value: object, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise _MalformedCheckpoint(f"{name} is not an integer")
     return value
+
+
+def _optional_int(value: object, name: str) -> int | None:
+    return None if value is None else _as_int(value, name)

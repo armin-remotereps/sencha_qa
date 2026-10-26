@@ -50,6 +50,13 @@ from machine_setup.services.main_chat_tools import (
     build_main_chat_handlers,
     main_chat_tool_definitions,
 )
+from machine_setup.services.plan_step_args import PlanStepArgumentError
+from machine_setup.services.result_chat_tools import (
+    CardProposedCallback,
+    ResultToolError,
+    build_result_chat_handlers,
+    result_chat_tool_definitions,
+)
 from machine_setup.subtask_types import (
     DONE_WHEN_MAX_CHARS,
     GOAL_MAX_CHARS,
@@ -93,7 +100,7 @@ def main_tool_definitions(role: ThreadRole) -> tuple[ToolDefinition, ...]:
 
     The main chat also gets the document and test run tools; an auto-fix turn
     gets ``report_case_fix``; a person's turn in a help thread gets the
-    help-chat tools.
+    help-chat tools, and one in a result chat the result-chat tools.
     """
     tools = _project_data_tool_definitions() + (_run_setup_task_definition(),)
     if role == ThreadRole.MAIN:
@@ -102,6 +109,8 @@ def main_tool_definitions(role: ThreadRole) -> tuple[ToolDefinition, ...]:
         tools += (_report_case_fix_definition(),)
     elif role == ThreadRole.CASE_HELP:
         tools += help_chat_tool_definitions()
+    elif role == ThreadRole.CASE_RESULT:
+        tools += result_chat_tool_definitions()
     return tools
 
 
@@ -373,6 +382,9 @@ def build_setup_dispatcher(
     conversation_id: int,
     turn_id: int | None,
     help_request_id: int | None,
+    result_case_id: int | None,
+    on_result_change_proposed: CardProposedCallback,
+    on_plan_revision_proposed: CardProposedCallback,
 ) -> ToolDispatcher:
     """The main agent's per-turn dispatcher.
 
@@ -382,7 +394,8 @@ def build_setup_dispatcher(
     stamped with ``turn_id``, then ``on_runs_proposed`` posts the card); in an
     auto-fix turn ``report_case_fix`` records its report on
     ``conversation_id``; in a help chat turn the help tools act on
-    ``help_request_id``.
+    ``help_request_id``; in a result chat turn the result tools act on
+    ``result_case_id`` and post their cards through the two callbacks.
     """
     project_id = project.pk
 
@@ -492,8 +505,9 @@ def build_setup_dispatcher(
         )
 
     # Every project data tool, plus the document and test run tools in the
-    # main chat, report_case_fix in an auto-fix turn or the help tools in a
-    # help chat turn; anything else but run_setup_task is refused.
+    # main chat, report_case_fix in an auto-fix turn, the help tools in a
+    # help chat turn or the result tools in a result chat turn; anything else
+    # but run_setup_task is refused.
     project_data_handlers: dict[str, Callable[[dict[str, object]], str]] = {
         "list_test_case_preconditions": _handle_list_preconditions,
         "search_test_cases": _handle_search_cases,
@@ -521,6 +535,15 @@ def build_setup_dispatcher(
                 project_id=project_id,
             )
         )
+    elif role == ThreadRole.CASE_RESULT and result_case_id is not None:
+        project_data_handlers.update(
+            build_result_chat_handlers(
+                pivot_id=result_case_id,
+                conversation_id=conversation_id,
+                on_result_change_proposed=on_result_change_proposed,
+                on_plan_revision_proposed=on_plan_revision_proposed,
+            )
+        )
 
     def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
         if tool_call.tool_name == RUN_SETUP_TASK_TOOL:
@@ -541,7 +564,13 @@ def build_setup_dispatcher(
             )
         try:
             content = handler(tool_call.arguments)
-        except (_InvalidArgumentError, HelpToolError, MainChatToolError) as exc:
+        except (
+            _InvalidArgumentError,
+            HelpToolError,
+            MainChatToolError,
+            PlanStepArgumentError,
+            ResultToolError,
+        ) as exc:
             return _tool_error(tool_call, str(exc))
         return ToolResult(
             tool_call_id=tool_call.tool_call_id,

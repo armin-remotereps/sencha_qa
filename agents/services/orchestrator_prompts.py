@@ -313,7 +313,19 @@ def redesign_for_help(
     if help is None or help.request_id is None or not revisions:
         return None
     latest = revisions[-1]
+    if latest.source != "help":
+        return None
     return latest if latest.help_request_id == help.request_id else None
+
+
+def redesign_for_review(
+    revisions: Sequence[PlanRevisionRecord],
+) -> PlanRevisionRecord | None:
+    """The newest revision when a person's result review redesigned the plan."""
+    if not revisions:
+        return None
+    latest = revisions[-1]
+    return latest if latest.source == "review" else None
 
 
 def _carried_range(record: PlanRevisionRecord) -> str:
@@ -335,6 +347,26 @@ def format_redesign_state_line(record: PlanRevisionRecord) -> str:
     )
 
 
+def format_review_redesign_state_line(record: PlanRevisionRecord) -> str:
+    """State line after the carried steps when a result review redesigned the plan.
+
+    The re-run's cleanup and restore sub-task recreate the carried steps' state.
+    """
+    reason = _sentence(record.reason)
+    intro = (
+        "The test plan was redesigned after a person reviewed the earlier result"
+        f"{': ' + reason if reason else ''}."
+    )
+    carried = record.resume_step - 1
+    if carried <= 0:
+        return f"{intro} No step was carried over; the case runs again from step 1."
+    their = "its" if carried == 1 else "their"
+    return (
+        f"{intro} {_carried_range(record)}; {their} state is restored before "
+        f"step {record.resume_step}, then continue at step {record.resume_step}."
+    )
+
+
 def verdict_redesign(
     helped: CheckpointHelp | None,
     attempts: Sequence[SubTaskAttempt],
@@ -342,13 +374,17 @@ def verdict_redesign(
 ) -> tuple[PlanRevisionRecord | None, bool]:
     """The redesign the verdict mentions, and whether this help made it.
 
-    This help's redesign when it made one; otherwise the newest redesign while
-    the attempts still hold a carried step (a later help without a redesign of
-    its own); otherwise none.
+    This help's redesign when it made one; otherwise the newest redesign when
+    a result review made it (also with no step carried) or while the attempts
+    still hold a carried step (a later help without a redesign of its own);
+    otherwise none.
     """
     own = redesign_for_help(helped, revisions)
     if own is not None:
         return own, True
+    review = redesign_for_review(revisions)
+    if review is not None:
+        return review, False
     if revisions and any(attempt.carried_from is not None for attempt in attempts):
         return revisions[-1], False
     return None, False
@@ -360,7 +396,8 @@ def redesign_verdict_note(
     """Verdict sentence for a redesigned test plan.
 
     ``during_this_help``: the help the verdict mentions made the redesign;
-    otherwise an earlier help did.
+    otherwise an earlier help did. A result-review redesign (``source``
+    ``review``) says so instead, and that the carried steps' state was restored.
     """
     reason = _sentence(record.reason)
     carried = record.resume_step - 1
@@ -368,12 +405,23 @@ def redesign_verdict_note(
         carried_text = (
             "No step of the earlier plan was carried over; every step ran again"
         )
+    elif record.source == "review":
+        they, their = ("it", "its") if carried == 1 else ("they", "their")
+        carried_text = (
+            f"{_carried_range(record)} from the earlier plan, where {they} had "
+            f"passed; {their} state was restored, and {they} {'was' if carried == 1 else 'were'} not re-run"
+        )
     else:
         carried_text = (
             f"{_carried_range(record)} from the earlier plan, where they had "
             "passed; they were not re-run"
         )
-    when = "during help" if during_this_help else "earlier in this case"
+    if record.source == "review":
+        when = "after a person reviewed the earlier result"
+    elif during_this_help:
+        when = "during help"
+    else:
+        when = "earlier in this case"
     return (
         f"The test plan was redesigned {when}"
         f"{' (' + reason + ')' if reason else ''}. {carried_text}."

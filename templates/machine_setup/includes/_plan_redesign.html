@@ -1,0 +1,66 @@
+{% comment %}
+  One redesign card of a result chat: a NOTICE row whose plan_redesign is set
+  (block role 'plan_redesign', block.redesign = PlanRedesignCardPayload, see
+  machine_setup/chat.html). Rendered inside `<template x-for="block in
+  blocks">` of _transcript.html; reads planRowBadge, cardStatusBadge,
+  cardSubmitting and openRedesignRerun from the machineSetupChat scope. Every status change re-broadcasts the row, so
+  the card is replaced live (upsert by id).
+
+  The side-by-side .plan-diff reuses the help panel's classes. Step texts and
+  the reason are model text: x-text only. confirm_body is server text built
+  from counts only. The form actions are the server-built rerun_url /
+  discard_url.
+
+  proposed: "Re-run with redesigned plan" (opens the confirm dialog with the
+  help mode select in chat.html) / Discard; an outdated card offers Discard
+  only. applied / discarded / superseded: state only.
+  Single root element (it is the content of an x-if template).
+{% endcomment %}
+<section class="chat-proposal plan-redesign-card" :class="{ 'is-closed': block.redesign.status === 'superseded' || block.redesign.status === 'discarded' }" aria-label="Redesigned test plan">
+  <header class="chat-proposal-header">
+    <h3 class="chat-proposal-title">Redesigned test plan</h3>
+    <span class="badge" :class="cardStatusBadge(block.redesign.status)" x-text="block.redesign.outdated && block.redesign.status === 'proposed' ? 'Outdated' : block.redesign.status_label"></span>
+  </header>
+
+  <p class="chat-proposal-note pre-wrap" x-show="block.redesign.reason" x-text="block.redesign.reason"></p>
+
+  <p class="hint" x-show="block.redesign.status === 'superseded'">Replaced by a newer redesign or a later change to the case.</p>
+  <div class="plan-diff" x-show="block.redesign.status !== 'superseded'">
+    <div class="plan-diff-col">
+      <h3>Current plan</h3>
+      <template x-for="row in block.redesign.old_rows" :key="'old-' + row.num">
+        <div class="plan-diff-row" :class="row.carried_to ? 'plan-diff-row--carried' : 'plan-diff-row--dropped'">
+          <span x-text="row.num + '. ' + row.description"></span>
+          <span class="badge" :class="planRowBadge(row.status)" x-text="row.status_label"></span>
+          <span class="plan-diff-map" x-text="row.carried_to ? '→ new step ' + row.carried_to : 'Dropped'"></span>
+        </div>
+      </template>
+    </div>
+    <div class="plan-diff-col">
+      <h3>Redesigned plan</h3>
+      <template x-for="row in block.redesign.new_rows" :key="'new-' + row.num">
+        <div class="plan-diff-row" :class="{ 'plan-diff-row--carried': row.state === 'carried', 'plan-diff-row--resume': row.state === 'resume' }">
+          <span x-text="row.num + '. ' + row.description"></span>
+          <span class="plan-diff-map" x-text="row.state_label"></span>
+          <span class="hint" x-show="row.expected_result" x-text="'Expected: ' + row.expected_result"></span>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <template x-if="block.redesign.status === 'proposed'">
+    <div class="chat-proposal-actions">
+      <p class="chat-proposal-hint small" x-show="block.redesign.outdated">The case changed since this was proposed. Ask the agent again.</p>
+      <p class="chat-proposal-hint small" x-show="!block.redesign.outdated" x-text="block.redesign.confirm_body"></p>
+      <div class="chat-proposal-buttons">
+        <form method="post" :action="block.redesign.discard_url" @submit="cardSubmitting = true">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-secondary btn-sm" :disabled="cardSubmitting">Discard</button>
+        </form>
+        <button type="button" class="btn btn-primary btn-sm" x-show="!block.redesign.outdated" :disabled="cardSubmitting" @click="openRedesignRerun(block.redesign)">Re-run with redesigned plan</button>
+      </div>
+    </div>
+  </template>
+
+  <p class="muted small" x-show="block.redesign.status === 'applied'">The case was re-run with this plan.</p>
+</section>

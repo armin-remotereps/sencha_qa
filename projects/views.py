@@ -44,6 +44,7 @@ from projects.case_plan_revision_services import (
     discard_plan_revision,
     plan_revision_belongs_to,
 )
+from projects.case_result_page import get_case_result_panel
 from projects.case_step_progress import case_step_view
 from projects.decorators import project_membership_required
 from projects.exceptions import (
@@ -1048,6 +1049,7 @@ def test_run_case_detail(
     can_resume = can_resume_case(pivot)
     resume_steps = list_resume_steps(pivot) if can_resume else []
     step_progress, earlier_plans = case_step_view(pivot)
+    result_panel = get_case_result_panel(pivot)
     return render(
         request,
         "projects/test_run_case_detail.html",
@@ -1084,6 +1086,13 @@ def test_run_case_detail(
             "resumes": list_case_resumes(pivot),
             "step_progress": step_progress,
             "earlier_plans": earlier_plans,
+            "can_discuss_result": result_panel.can_discuss_result,
+            "result_thread_id": result_panel.result_thread_id,
+            "result_chat_blocker": result_panel.result_chat_blocker,
+            "result_changes": result_panel.result_changes,
+            "current_result_change": result_panel.current_result_change,
+            "current_result_from_label": result_panel.current_result_from_label,
+            "pending_review_redesign": result_panel.pending_review_redesign,
             "active_tab": "runs",
             "active_nav": "projects",
         },

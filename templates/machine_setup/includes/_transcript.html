@@ -5,9 +5,11 @@
   toolBadgeLabel, formatClock and openLightbox from the ancestor
   machineSetupChat scope (machine_setup/chat.html; `blocks` is documented
   there; sub-task blocks render through _subtask.html, run proposal cards
-  through _run_proposal.html). Every field is model or agent text, so it is
+  through _run_proposal.html, result chat cards through _result_change.html
+  and _plan_redesign.html). Every field is model or agent text, so it is
   rendered with x-text (and :title) only; :href is bound only to the
-  server-built link_url, a run's server-built url, or documentUrl(id) (the
+  server-built link_url, a run's server-built url, a card's server-built
+  form URLs, or documentUrl(id) (the
   reversed document_url_template with the id swapped in).
 
   A user row lists its attached documents (attachments) under the text:
@@ -30,7 +32,7 @@
       <template x-if="block.kind === 'row' && block.role === 'user'">
         <div class="chat-msg chat-msg-user">
           <div class="chat-meta">
-            <span x-text="block.message.author_name || (threadKind === 'auto_fix' ? 'Paused test run' : 'You')"></span>
+            <span x-text="block.message.author_name || (threadKind === 'auto_fix' ? 'Paused test run' : threadKind === 'case_result' ? 'Case brief' : 'You')"></span>
             <time :datetime="block.message.created_at" x-text="formatClock(block.message.created_at)"></time>
           </div>
           <div class="pre-wrap" x-show="block.message.text" x-text="block.message.text"></div>
@@ -75,6 +77,14 @@
 
       <template x-if="block.kind === 'row' && block.role === 'run_proposal'">
         {% include "machine_setup/includes/_run_proposal.html" %}
+      </template>
+
+      <template x-if="block.kind === 'row' && block.role === 'result_change'">
+        {% include "machine_setup/includes/_result_change.html" %}
+      </template>
+
+      <template x-if="block.kind === 'row' && block.role === 'plan_redesign'">
+        {% include "machine_setup/includes/_plan_redesign.html" %}
       </template>
 
       <template x-if="block.kind === 'activity'">

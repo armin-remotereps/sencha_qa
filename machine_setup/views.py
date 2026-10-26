@@ -12,11 +12,17 @@ from accounts.types import AuthenticatedRequest
 from machine_setup.exceptions import (
     HelpChatSendRefusedError,
     MachineSetupError,
+    ResultChatSendRefusedError,
     SetupMachineNotReadyError,
     SetupNoActiveTurnError,
     SetupTurnActiveError,
 )
-from machine_setup.forms import OpenHelpChatForm, SetupMessageForm, SetupThreadForm
+from machine_setup.forms import (
+    OpenHelpChatForm,
+    OpenResultChatForm,
+    SetupMessageForm,
+    SetupThreadForm,
+)
 from machine_setup.models import SetupConversation, SetupConversationKind
 from machine_setup.payloads import HelpThreadPayload
 from machine_setup.services.case_auto_fix import settle_stale_auto_fix_turn
@@ -31,7 +37,20 @@ from machine_setup.services.chat_page import (
 from machine_setup.services.document_download import find_document
 from machine_setup.services.help_thread_state import help_panel_payload
 from machine_setup.services.open_help_chat import find_help_case, open_help_chat
+from machine_setup.services.open_result_chat import (
+    find_result_case,
+    open_result_chat,
+)
 from machine_setup.services.reset_conversation import reset_conversation
+from machine_setup.services.result_card_decision import (
+    ResultCard,
+    apply_result_change_from_chat,
+    discard_redesign_from_chat,
+    discard_result_change_from_chat,
+    find_redesign_card,
+    find_result_change_card,
+    rerun_redesign_from_chat,
+)
 from machine_setup.services.run_proposal_decision import (
     create_proposed_runs,
     discard_run_proposal,
@@ -41,8 +60,13 @@ from machine_setup.services.stop_turn import request_stop
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE
 from projects.case_help_services import HelpPanel
 from projects.decorators import project_membership_required
-from projects.exceptions import RunHelpError
-from projects.forms import CaseHelpResolutionForm, form_error_text
+from projects.exceptions import (
+    PlanRevisionError,
+    ResultChangeError,
+    RunHelpError,
+    RunResumeError,
+)
+from projects.forms import CaseHelpResolutionForm, RunHelpModeForm, form_error_text
 from projects.models import Project
 
 
@@ -143,6 +167,12 @@ def _render_chat(
                 "machine_setup:run_proposal_discard",
                 kwargs={"project_id": project.id, "proposal_id": 0},
             ),
+            # Result chats: the static case header and the re-run dialog's
+            # help mode select.
+            "result_thread": page.result_thread,
+            "help_mode_form": (
+                RunHelpModeForm() if page.result_thread is not None else None
+            ),
             "active_tab": "machine_setup",
             "active_nav": "projects",
         },
@@ -183,6 +213,107 @@ def help_chat_open(
         messages.error(request, exc.message)
         return redirect(case_url)
     return _back_to_chat(project, thread.pk)
+
+
+@project_membership_required
+@require_POST
+def result_chat_open(
+    request: AuthenticatedRequest, project: Project, pivot_id: int
+) -> HttpResponse:
+    pivot = find_result_case(project, pivot_id)
+    if pivot is None:
+        raise Http404("No such test case.")
+    case_url = _case_url(project, pivot.test_run_id, pivot.pk)
+    form = OpenResultChatForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return redirect(case_url)
+    try:
+        thread = open_result_chat(
+            project=project,
+            pivot=pivot,
+            user=request.user,
+            text=form.cleaned_data["text"],
+        )
+    except ResultChatSendRefusedError as exc:
+        messages.error(request, exc.message)
+        return _back_to_chat(project, exc.conversation_id)
+    except MachineSetupError as exc:
+        messages.error(request, exc.message)
+        return redirect(case_url)
+    return _back_to_chat(project, thread.pk)
+
+
+@project_membership_required
+@require_POST
+def result_change_apply(
+    request: AuthenticatedRequest, project: Project, change_id: int
+) -> HttpResponse:
+    card = find_result_change_card(project, change_id)
+    if card is None:
+        raise Http404("No such result change.")
+    try:
+        apply_result_change_from_chat(card=card, user=request.user)
+    except ResultChangeError as exc:
+        messages.error(request, exc.message)
+    else:
+        messages.success(request, "The result was changed.")
+    return _back_to_card(project, card)
+
+
+@project_membership_required
+@require_POST
+def result_change_discard(
+    request: AuthenticatedRequest, project: Project, change_id: int
+) -> HttpResponse:
+    card = find_result_change_card(project, change_id)
+    if card is None:
+        raise Http404("No such result change.")
+    try:
+        discard_result_change_from_chat(card=card, user=request.user)
+    except ResultChangeError as exc:
+        messages.error(request, exc.message)
+    return _back_to_card(project, card)
+
+
+@project_membership_required
+@require_POST
+def plan_redesign_rerun(
+    request: AuthenticatedRequest, project: Project, revision_id: int
+) -> HttpResponse:
+    card = find_redesign_card(project, revision_id)
+    if card is None:
+        raise Http404("No such redesign.")
+    form = RunHelpModeForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return _back_to_card(project, card)
+    try:
+        rerun_redesign_from_chat(
+            card=card,
+            user=request.user,
+            help_mode=form.cleaned_data["help_mode"],
+        )
+    except (RunResumeError, PlanRevisionError) as exc:
+        messages.error(request, exc.message)
+        return _back_to_card(project, card)
+    messages.success(request, f"Re-running from step {card.resume_step}.")
+    return redirect(_case_url(project, card.pivot.test_run_id, card.pivot.pk))
+
+
+@project_membership_required
+@require_POST
+def plan_redesign_discard(
+    request: AuthenticatedRequest, project: Project, revision_id: int
+) -> HttpResponse:
+    card = find_redesign_card(project, revision_id)
+    if card is None:
+        raise Http404("No such redesign.")
+    try:
+        discard_redesign_from_chat(card=card, user=request.user)
+    except PlanRevisionError as exc:
+        messages.error(request, exc.message)
+    return _back_to_card(project, card)
 
 
 @project_membership_required
@@ -289,6 +420,24 @@ def _posted_thread_id(request: AuthenticatedRequest) -> int | None:
         return None
     conversation_id: int | None = form.cleaned_data["conversation_id"]
     return conversation_id
+
+
+def _case_url(project: Project, test_run_id: int, pivot_id: int) -> str:
+    return reverse(
+        "projects:test_run_case_detail",
+        kwargs={
+            "project_id": project.id,
+            "test_run_id": test_run_id,
+            "pivot_id": pivot_id,
+        },
+    )
+
+
+def _back_to_card(project: Project, card: ResultCard) -> HttpResponse:
+    """The card's result chat, or the case page when that chat is gone."""
+    if card.conversation_id is None:
+        return redirect(_case_url(project, card.pivot.test_run_id, card.pivot.pk))
+    return _back_to_chat(project, card.conversation_id)
 
 
 def _back_to_chat(project: Project, conversation_id: int | None) -> HttpResponse:

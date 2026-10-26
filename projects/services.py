@@ -83,6 +83,7 @@ from projects.case_help_state import (
     get_run_help_state,
     mark_auto_fix_running,
 )
+from projects.case_review_redesign_store import supersede_run_review_drafts
 from projects.case_step_progress import (
     StepProgressPayload,
     case_step_payload,
@@ -111,6 +112,7 @@ from projects.models import (
     BlockedReason,
     CaseHelpRequest,
     CasePlanRevision,
+    CaseResultChange,
     ContextWriteSource,
     HelpAutoFixState,
     HelpContinueMode,
@@ -2358,6 +2360,10 @@ def reset_test_run(test_run: TestRun) -> None:
             ]
         )
     TestRunCaseResume.objects.filter(test_run_test_case__test_run=test_run).delete()
+    # Result changes describe results the reset discards; a pending review
+    # redesign was built on a checkpoint that is gone.
+    CaseResultChange.objects.filter(test_run_test_case__test_run=test_run).delete()
+    supersede_run_review_drafts(test_run.pk)
     test_run.status = TestRunStatus.WAITING
     test_run.celery_task_id = ""
     test_run.started_at = None

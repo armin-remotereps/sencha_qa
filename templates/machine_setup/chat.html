@@ -13,7 +13,7 @@
     project    — the current Project (agent_connected)
     conversation — the shown thread (SetupConversation) on the thread page,
                  None on the main chat
-    thread_kind — "chat", "auto_fix" or "case_help" (page.kind)
+    thread_kind — "chat", "auto_fix", "case_help" or "case_result" (page.kind)
     help_case_url — help threads only: the case page it was opened for
                  ("" when the case is gone)
     help_panel, help_form, help_turn_blocker — help threads only, while the
@@ -22,6 +22,11 @@
     help_state — HelpThreadPayload | None: the panel's initial draft and
                  suggestion (json_script help-initial)
     threads    — list[HelpThread] for the thread list (_threads.html)
+    result_thread — result chats only: ResultThreadHeader (test_run_id,
+                 pivot_id, case_title, status, status_label, result_excerpt,
+                 run_help_mode) for the static header, else None
+    help_mode_form — result chats only: projects.forms.RunHelpModeForm for
+                 the re-run dialog's help mode select, else None
     visual_engine — VisualEngineStatusPayload (state, ready_count,
                  connected_count, workers)
     active_tab — "machine_setup"
@@ -71,9 +76,15 @@
   Client model (machineSetupChat): every row gets a client-only `args` (its
   tool_arguments_text parsed once on arrival, {} if it does not parse).
   `blocks` folds the rows into {kind:'row', key, role, message} (role user,
-  reply, narration, notice or run_proposal; an assistant row is narration
-  when a later row of its turn is a tool row; a notice row with run_proposal
-  set is role run_proposal and carries `proposal`, see _run_proposal.html) and {kind:'activity', key:'act-<first row id>',
+  reply, narration, notice, run_proposal, result_change or plan_redesign; an
+  assistant row is narration when a later row of its turn is a tool row; a
+  notice row with run_proposal set is role run_proposal and carries
+  `proposal`, see _run_proposal.html; one with result_change is role
+  result_change and carries `change`, see _result_change.html; one with
+  plan_redesign is role plan_redesign and carries `redesign`, see
+  _plan_redesign.html. Apply and Re-run open one page-level confirm dialog
+  each (result chats only), whose form action is the card's server-built
+  URL) and {kind:'activity', key:'act-<first row id>',
   turnId, rows, running, liveText, failedCount, screenshotCount, summaryText,
   dotClass} for each run of consecutive tool rows of one turn. Sub-agent rows
   (parent_id set) are grouped under their delegation row: each
@@ -103,7 +114,21 @@
 <div x-data="machineSetupChat">
   <div class="page-header">
     <div>
-      {% if thread_kind == "auto_fix" or thread_kind == "case_help" %}
+      {% if thread_kind == "case_result" %}
+      <h1>Result chat</h1>
+      {% if result_thread %}
+      <div class="result-header">
+        <p class="subtitle">
+          {{ result_thread.case_title }}
+          {% include "partials/badge_case_status.html" with status=result_thread.status only %}
+          {% if help_case_url %} · <a href="{{ help_case_url }}">Open the test case</a>{% endif %}
+        </p>
+        {% if result_thread.result_excerpt %}<p class="help-quote pre-wrap small">{{ result_thread.result_excerpt }}</p>{% endif %}
+      </div>
+      {% else %}
+      <p class="subtitle">Opened for a test case that no longer exists</p>
+      {% endif %}
+      {% elif thread_kind == "auto_fix" or thread_kind == "case_help" %}
       <h1>{% if thread_kind == "case_help" %}Help chat{% else %}Auto-fix thread{% endif %}</h1>
       <p class="subtitle">
         {% if page.thread %}{{ page.thread.case_title|default:"Deleted case" }}{% if page.thread.step_num %} · step {{ page.thread.step_num }}{% endif %} · {{ page.thread.state_label }}{% else %}Opened for a test case that needed help{% endif %}
@@ -131,13 +156,70 @@
   {% include "machine_setup/includes/_help_panel.html" %}
   {% endif %}
 
-  <section class="chat" aria-label="{% if thread_kind == 'case_help' %}Help chat{% elif thread_kind == 'auto_fix' %}Auto-fix thread{% else %}Machine setup conversation{% endif %}">
+  <section class="chat" aria-label="{% if thread_kind == 'case_help' %}Help chat{% elif thread_kind == 'case_result' %}Result chat{% elif thread_kind == 'auto_fix' %}Auto-fix thread{% else %}Machine setup conversation{% endif %}">
     <p class="chat-connection muted small" x-show="!socketOpen" x-cloak>Live updates paused — reconnecting…</p>
     {% include "machine_setup/includes/_transcript.html" %}
     {% include "machine_setup/includes/_composer.html" with project=project conversation=conversation %}
   </section>
 
   {% include "machine_setup/includes/_lightbox.html" %}
+
+  {% if thread_kind == "case_result" %}
+  {# Section: Apply result change confirm (opened by a result change card) #}
+  <div
+    class="dialog-backdrop"
+    x-data="dialog()"
+    x-show="open"
+    x-cloak
+    x-on:open-apply-result-change.window="show()"
+    x-on:keydown.escape.window="close()"
+    x-trap.noscroll="open"
+    @click.self="close()"
+  >
+    <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="apply-result-change-title" aria-describedby="apply-result-change-desc">
+      <h3 id="apply-result-change-title">Apply this result change?</h3>
+      <p id="apply-result-change-desc" x-text="applyCard ? 'The case becomes ' + applyCard.to_label + ' (now ' + applyCard.from_label + '). ' + applyCard.effects : ''"></p>
+      <form method="post" :action="applyCard ? applyCard.apply_url : ''" @submit="cardSubmitting = true">
+        {% csrf_token %}
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary" :disabled="!applyCard || cardSubmitting">Apply</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {# Section: Re-run with redesigned plan confirm (opened by a redesign card) #}
+  <div
+    class="dialog-backdrop"
+    x-data="dialog()"
+    x-show="open"
+    x-cloak
+    x-on:open-redesign-rerun.window="show()"
+    x-on:keydown.escape.window="close()"
+    x-trap.noscroll="open"
+    @click.self="close()"
+  >
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="redesign-rerun-title">
+      <div class="card-header">
+        <h3 id="redesign-rerun-title">Re-run with the redesigned plan?</h3>
+        <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+      </div>
+      <form method="post" :action="rerunCard ? rerunCard.rerun_url : ''" @submit="cardSubmitting = true">
+        {% csrf_token %}
+        <p x-text="rerunCard ? rerunCard.confirm_body : ''"></p>
+        {% if help_mode_form %}
+        {% include "projects/includes/_help_mode_select.html" with field_id="redesign-rerun-help-mode" choices=help_mode_form.fields.help_mode.choices current=result_thread.run_help_mode only %}
+        {% endif %}
+        <p class="hint">The run must be finished or cancelled, the test machine ready, and no other run, TestRail send or setup agent reply in progress.</p>
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-primary" :disabled="!rerunCard || cardSubmitting">Re-run with redesigned plan</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endif %}
 
   {% if thread_kind == "chat" %}
   {% url 'machine_setup:reset' project_id=project.id as reset_url %}
@@ -186,6 +268,19 @@ document.addEventListener('alpine:init', () => {
     created: 'badge-passed',
     superseded: 'badge-cancelled',
     discarded: 'badge-cancelled',
+  };
+  // Result chat cards: badge class per card status, and per result label
+  // (fixed maps; labels are server text, never class names).
+  const CARD_STATUS_BADGES = {
+    proposed: 'badge-warning',
+    applied: 'badge-passed',
+    superseded: 'badge-cancelled',
+    discarded: 'badge-cancelled',
+  };
+  const RESULT_LABEL_BADGES = {
+    Passed: 'badge-passed',
+    Failed: 'badge-failed',
+    Blocked: 'badge-blocked',
   };
 
   // --- Tool wording: the only place tool labels live. -----------------------
@@ -314,6 +409,15 @@ document.addEventListener('alpine:init', () => {
       live: (args) => (runCount(args) > 0 ? 'Proposing ' + plural(runCount(args), 'test run', 'test runs') : 'Proposing test runs') + '…',
       detail: (args) => (runCount(args) > 0 ? plural(runCount(args), 'run', 'runs') : ''),
     },
+    get_case_result: plain('Read the case result', () => 'Reading the case result…'),
+    read_case_log: {
+      summary: (count) => 'Read ' + plural(count, 'log page', 'log pages'),
+      live: (args) => 'Reading the case log' + (args.page !== undefined && args.page !== null ? ', page ' + oneLine(args.page, 12) : '') + '…',
+      detail: (args) => (args.page !== undefined && args.page !== null ? 'page ' + oneLine(args.page, 12) : ''),
+    },
+    ask_case_screenshot: plain('Looked at a stored screenshot', (args) => withDetail('Looking at screenshot', args.screenshot_id !== undefined && args.screenshot_id !== null ? '#' + oneLine(args.screenshot_id, 12) : '') + '…', (args) => oneLine(args.question)),
+    propose_result_change: plain('Proposed a result change', () => 'Proposing a result change…', (args) => oneLine(args.status, 12)),
+    propose_plan_change: plain('Proposed a redesigned test plan', () => 'Redesigning the test plan…', (args) => (Array.isArray(args.steps) ? plural(args.steps.length, 'step', 'steps') : '')),
     run_setup_task: {
       summary: (count) => times('Ran a sub-task', count),
       live: (args) => withDetail('Working on:', oneLine(args.goal, 60)) + '…',
@@ -415,6 +519,14 @@ document.addEventListener('alpine:init', () => {
       if (message.kind === 'assistant') role = nested || narration.has(message.id) ? 'narration' : 'reply';
       if (message.kind === 'notice' && message.run_proposal) {
         blocks.push({ kind: 'row', key: 'msg-' + message.id, role: 'run_proposal', message, proposal: message.run_proposal });
+        continue;
+      }
+      if (message.kind === 'notice' && message.result_change) {
+        blocks.push({ kind: 'row', key: 'msg-' + message.id, role: 'result_change', message, change: message.result_change });
+        continue;
+      }
+      if (message.kind === 'notice' && message.plan_redesign) {
+        blocks.push({ kind: 'row', key: 'msg-' + message.id, role: 'plan_redesign', message, redesign: message.plan_redesign });
         continue;
       }
       blocks.push({ kind: 'row', key: 'msg-' + message.id, role, message });
@@ -628,6 +740,11 @@ document.addEventListener('alpine:init', () => {
     attachment: null,
     attachmentError: '',
     proposalSubmitting: false,
+    // Result chat cards: one submit at a time, and the card each page-level
+    // confirm dialog acts on.
+    cardSubmitting: false,
+    applyCard: null,
+    rerunCard: null,
     socketOpen: true,
     reconnectDelay: 1000,
     lightboxShots: [],
@@ -988,6 +1105,28 @@ document.addEventListener('alpine:init', () => {
 
     proposalDiscardUrl(id) {
       return withId(PROPOSAL_DISCARD_URL_TEMPLATE, /\/run-proposals\/0\/discard\/$/, id);
+    },
+
+    cardStatusBadge(status) {
+      return (Object.hasOwn(CARD_STATUS_BADGES, status) && CARD_STATUS_BADGES[status]) || 'badge-draft';
+    },
+
+    resultLabelBadge(label) {
+      return (Object.hasOwn(RESULT_LABEL_BADGES, label) && RESULT_LABEL_BADGES[label]) || 'badge-draft';
+    },
+
+    planRowBadge(status) {
+      return (Object.hasOwn(CASE_STATUS_BADGES, status) && CASE_STATUS_BADGES[status]) || 'badge-draft';
+    },
+
+    openApplyResult(change) {
+      this.applyCard = change;
+      this.$dispatch('open-apply-result-change');
+    },
+
+    openRedesignRerun(redesign) {
+      this.rerunCard = redesign;
+      this.$dispatch('open-redesign-rerun');
     },
 
     proposalBadgeClass(status) {

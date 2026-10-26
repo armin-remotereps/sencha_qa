@@ -19,12 +19,7 @@ from collections.abc import Callable
 from django.conf import settings
 from django.db import transaction
 
-from agents.plan_revision import (
-    MAX_DESCRIPTION_CHARS,
-    MAX_EXPECTED_RESULT_CHARS,
-    PlanDraftView,
-    PlanStepInput,
-)
+from agents.plan_revision import PlanDraftView
 from agents.types import ToolCategory, ToolDefinition, ToolParameter
 from machine_setup.case_help_brief import CASE_UPDATE_MAX_CHARS
 from machine_setup.services.case_help_context import (
@@ -33,6 +28,11 @@ from machine_setup.services.case_help_context import (
     load_help_request,
 )
 from machine_setup.services.help_thread_state import broadcast_help_thread
+from machine_setup.services.plan_step_args import (
+    STEP_ITEM_SCHEMA,
+    parse_plan_steps,
+    required_text,
+)
 from projects.case_help_proposal_services import record_agent_proposal
 from projects.case_plan_revision_services import propose_plan_revision
 from projects.exceptions import PlanRevisionError, RunHelpError
@@ -110,7 +110,7 @@ def help_chat_tool_definitions() -> tuple[ToolDefinition, ...]:
                     ),
                     required=True,
                     max_items=max_steps,
-                    items_schema=_STEP_ITEM_SCHEMA,
+                    items_schema=STEP_ITEM_SCHEMA,
                 ),
                 ToolParameter(
                     name="reason",
@@ -159,45 +159,13 @@ def help_chat_tool_definitions() -> tuple[ToolDefinition, ...]:
     )
 
 
-_STEP_ITEM_SCHEMA: dict[str, object] = {
-    "type": "object",
-    "properties": {
-        "description": {
-            "type": "string",
-            "description": (
-                "What to do, naming the application, window or terminal (at most "
-                f"{MAX_DESCRIPTION_CHARS} characters)."
-            ),
-        },
-        "expected_result": {
-            "type": "string",
-            "description": (
-                "What must be true afterwards (at most "
-                f"{MAX_EXPECTED_RESULT_CHARS} characters)."
-            ),
-        },
-        "timeout_seconds": {
-            "type": "integer",
-            "description": "Optional time budget in seconds; clamped to the limits.",
-        },
-        "carried_from": {
-            "type": "integer",
-            "description": (
-                "Optional. The earlier step number this step is carried from "
-                "(its final attempt passed). Omit for a step that will run."
-            ),
-        },
-    },
-    "required": ["description", "expected_result"],
-}
-
-
 def build_help_chat_handlers(
     *, help_request_id: int, conversation_id: int, project_id: int
 ) -> dict[str, HelpToolHandler]:
     """The help tools' handlers, bound to one request and its thread.
 
-    A handler raises ``HelpToolError`` for a tool error.
+    A handler raises ``HelpToolError`` (or ``PlanStepArgumentError`` for bad
+    step arguments) for a tool error.
     """
 
     def _broadcast_after_commit() -> None:
@@ -212,8 +180,8 @@ def build_help_chat_handlers(
         return build_help_case_update(request)
 
     def _handle_propose_plan_change(arguments: dict[str, object]) -> str:
-        steps = _parse_steps(arguments.get("steps"))
-        reason = _required_text(arguments, "reason", PLAN_REVISION_REASON_MAX_LENGTH)
+        steps = parse_plan_steps(arguments.get("steps"))
+        reason = required_text(arguments, "reason", PLAN_REVISION_REASON_MAX_LENGTH)
         try:
             draft = propose_plan_revision(
                 help_request_id=help_request_id,
@@ -234,7 +202,7 @@ def build_help_chat_handlers(
                 + ", ".join(_PROPOSAL_ACTIONS)
                 + "."
             )
-        note = _required_text(arguments, "note", HELP_NOTE_MAX_LENGTH)
+        note = required_text(arguments, "note", HELP_NOTE_MAX_LENGTH)
         try:
             record_agent_proposal(
                 help_request_id=help_request_id,
@@ -275,62 +243,3 @@ def _draft_saved_text(draft: PlanDraftView) -> str:
         f"{head} The person sees it next to the chat and applies it with "
         "Continue. Nothing has changed yet."
     )
-
-
-def _parse_steps(value: object) -> list[PlanStepInput]:
-    if not isinstance(value, list):
-        raise HelpToolError("steps is required and must be a list of step objects.")
-    max_steps = settings.ORCHESTRATOR_MAX_SUBTASKS
-    if not value:
-        raise HelpToolError("steps is empty. Give the complete new step list.")
-    if len(value) > max_steps:
-        raise HelpToolError(
-            f"steps has {len(value)} items; the limit is {max_steps}. Merge steps."
-        )
-    steps: list[PlanStepInput] = []
-    for num, raw in enumerate(value, start=1):
-        if not isinstance(raw, dict):
-            raise HelpToolError(f"Step {num} must be an object.")
-        description = raw.get("description")
-        expected = raw.get("expected_result")
-        if not isinstance(description, str):
-            raise HelpToolError(f"Step {num}: description must be a string.")
-        if not isinstance(expected, str):
-            raise HelpToolError(f"Step {num}: expected_result must be a string.")
-        timeout = raw.get("timeout_seconds")
-        if timeout is not None and (
-            not isinstance(timeout, int) or isinstance(timeout, bool)
-        ):
-            raise HelpToolError(f"Step {num}: timeout_seconds must be an integer.")
-        carried = raw.get("carried_from")
-        if carried is not None and (
-            not isinstance(carried, int) or isinstance(carried, bool) or carried < 1
-        ):
-            raise HelpToolError(
-                f"Step {num}: carried_from must be an earlier step number (1 or "
-                "more), or omitted."
-            )
-        steps.append(
-            PlanStepInput(
-                description=description,
-                expected_result=expected,
-                raw_timeout=timeout,
-                carried_from=carried,
-            )
-        )
-    return steps
-
-
-def _required_text(arguments: dict[str, object], name: str, limit: int) -> str:
-    value = arguments.get(name)
-    if not isinstance(value, str):
-        raise HelpToolError(f"{name} is required and must be a string.")
-    value = value.strip()
-    if not value:
-        raise HelpToolError(f"{name} is empty.")
-    if len(value) > limit:
-        raise HelpToolError(
-            f"{name} is {len(value)} characters; the limit is {limit}. Shorten it "
-            "and call again."
-        )
-    return value

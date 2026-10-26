@@ -32,6 +32,9 @@ from machine_setup.subtask_types import (
     KNOWN_STATE_MAX_CHARS,
     RUN_SETUP_TASK_TOOL,
 )
+from projects.case_result_change_services import get_result_change_view
+from projects.case_review_redesign_services import get_review_draft_view
+from projects.models import CasePlanRevision, CaseResultChange
 
 _ARGUMENTS_TEXT_LIMIT = 4000
 # Help panel caps (the services already cap these; the payload caps again).
@@ -41,6 +44,28 @@ _HELP_STEP_TEXT_LIMIT = 2000
 _HELP_ROWS_LIMIT = 60
 _SAMPLE_TITLE_LIMIT = 200
 _PROPOSAL_ROWS_LIMIT = 50
+# Result-chat card caps (the services already cap these; the payload caps again).
+_RESULT_SUMMARY_LIMIT = 4000
+_RESULT_EXPLANATION_LIMIT = 2000
+_RESULT_EFFECTS_LIMIT = 1000
+_CONFIRM_BODY_LIMIT = 1000
+
+# What a SetupMessage load joins so the result-chat cards build without
+# further queries (``message_payload`` reads both FKs when set; the caller
+# passes ``project_id``, so the run is not joined). The case's log is never
+# read; a result change's card reads only the case's result fields, so its
+# checkpoint is deferred too. A redesign's card needs the checkpoint for the
+# plan fingerprint (there is no stored one to compare instead).
+CARD_SELECT_RELATED: tuple[str, ...] = (
+    "result_change__test_run_test_case",
+    "result_change__decided_by",
+    "plan_revision__test_run_test_case",
+)
+CARD_DEFER: tuple[str, ...] = (
+    "result_change__test_run_test_case__logs",
+    "result_change__test_run_test_case__execution_checkpoint",
+    "plan_revision__test_run_test_case__logs",
+)
 
 
 class SetupScreenshotPayload(TypedDict):
@@ -80,6 +105,40 @@ class RunProposalPayload(TypedDict):
     skipped: list[str]
 
 
+class ResultChangeCardPayload(TypedDict):
+    change_id: int
+    # A ``projects.models.ResultChangeStatus`` value, and its label.
+    status: str
+    status_label: str
+    from_label: str
+    to_label: str
+    summary: str
+    explanation: str
+    effects: str
+    # The case changed since the proposal: only Discard is offered.
+    outdated: bool
+    decided_by_name: str
+    apply_url: str
+    discard_url: str
+
+
+class PlanRedesignCardPayload(TypedDict):
+    revision_id: int
+    # A ``projects.models.PlanRevisionStatus`` value, and its label.
+    status: str
+    status_label: str
+    reason: str
+    resume_step: int
+    carried_count: int
+    old_rows: list["PlanDraftOldRowPayload"]
+    new_rows: list["PlanDraftNewRowPayload"]
+    outdated: bool
+    # Server-built from counts only (no model text).
+    confirm_body: str
+    rerun_url: str
+    discard_url: str
+
+
 class SetupMessagePayload(TypedDict):
     id: int
     conversation_id: int
@@ -103,6 +162,9 @@ class SetupMessagePayload(TypedDict):
     attachments: list[SetupAttachmentPayload]
     # NOTICE rows that show a run proposal card.
     run_proposal: RunProposalPayload | None
+    # NOTICE rows of a result chat that show a result change / redesign card.
+    result_change: ResultChangeCardPayload | None
+    plan_redesign: PlanRedesignCardPayload | None
 
 
 class SetupTurnPayload(TypedDict):
@@ -132,13 +194,17 @@ def message_payload(
     *,
     hidden_child_count: int = 0,
     attachments: list[SetupDocument] | None = None,
+    project_id: int | None = None,
 ) -> SetupMessagePayload:
     """``screenshots`` defaults to the prefetched ``message.screenshots``.
 
     ``attachments`` defaults to the prefetched ``message.documents``, read for
     USER rows only; the proposal is read only when ``run_proposal_id`` is set
-    (load it with ``select_related`` and ``case_ids`` deferred). Both rules keep
-    tool and child rows free of extra queries.
+    (load it with ``select_related`` and ``case_ids`` deferred), and the
+    result-chat cards only when ``result_change_id`` / ``plan_revision_id``
+    is set (load them with ``CARD_SELECT_RELATED`` / ``CARD_DEFER`` and pass
+    ``project_id``; without it a card loads its run, one query). These rules
+    keep tool and child rows free of extra queries.
     """
     rows = screenshots if screenshots is not None else list(message.screenshots.all())
     if attachments is None:
@@ -176,6 +242,79 @@ def message_payload(
             run_proposal_payload(message.run_proposal)
             if message.run_proposal_id is not None and message.run_proposal
             else None
+        ),
+        "result_change": (
+            result_change_card_payload(message.result_change, project_id)
+            if message.result_change_id is not None and message.result_change
+            else None
+        ),
+        "plan_redesign": (
+            plan_redesign_card_payload(message.plan_revision, project_id)
+            if message.plan_revision_id is not None and message.plan_revision
+            else None
+        ),
+    }
+
+
+def result_change_card_payload(
+    change: CaseResultChange, project_id: int | None = None
+) -> ResultChangeCardPayload:
+    """Reads the change's case (``CARD_SELECT_RELATED``); the run only when
+    ``project_id`` is not given."""
+    pivot = change.test_run_test_case
+    view = get_result_change_view(change, pivot)
+    if project_id is None:
+        project_id = pivot.test_run.project_id
+    return {
+        "change_id": view.change_id,
+        "status": view.status,
+        "status_label": view.status_label,
+        "from_label": view.from_label,
+        "to_label": view.to_label,
+        "summary": view.summary[:_RESULT_SUMMARY_LIMIT],
+        "explanation": view.explanation[:_RESULT_EXPLANATION_LIMIT],
+        "effects": view.effects[:_RESULT_EFFECTS_LIMIT],
+        "outdated": view.outdated,
+        "decided_by_name": view.decided_by_name,
+        "apply_url": reverse(
+            "machine_setup:result_change_apply",
+            kwargs={"project_id": project_id, "change_id": change.pk},
+        ),
+        "discard_url": reverse(
+            "machine_setup:result_change_discard",
+            kwargs={"project_id": project_id, "change_id": change.pk},
+        ),
+    }
+
+
+def plan_redesign_card_payload(
+    revision: CasePlanRevision, project_id: int | None = None
+) -> PlanRedesignCardPayload:
+    """Reads the revision's case (``CARD_SELECT_RELATED``); the run only when
+    ``project_id`` is not given."""
+    pivot = revision.test_run_test_case
+    view = get_review_draft_view(revision, pivot)
+    rows = plan_draft_payload(view.draft)
+    if project_id is None:
+        project_id = pivot.test_run.project_id
+    return {
+        "revision_id": view.revision_id,
+        "status": view.status,
+        "status_label": revision.get_status_display(),
+        "reason": view.reason[:_HELP_REASON_LIMIT],
+        "resume_step": view.resume_step,
+        "carried_count": view.draft.carried_count,
+        "old_rows": rows["old_rows"],
+        "new_rows": rows["new_rows"],
+        "outdated": view.outdated,
+        "confirm_body": view.confirm_body[:_CONFIRM_BODY_LIMIT],
+        "rerun_url": reverse(
+            "machine_setup:plan_redesign_rerun",
+            kwargs={"project_id": project_id, "revision_id": revision.pk},
+        ),
+        "discard_url": reverse(
+            "machine_setup:plan_redesign_discard",
+            kwargs={"project_id": project_id, "revision_id": revision.pk},
         ),
     }
 

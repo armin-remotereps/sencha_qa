@@ -14,6 +14,27 @@ urlpatterns: list[URLPattern] = [
     path("stop/", views.setup_stop, name="stop"),
     path("reset/", views.setup_reset, name="reset"),
     path("help/<int:pivot_id>/", views.help_chat_open, name="help_chat_open"),
+    path("result/<int:pivot_id>/", views.result_chat_open, name="result_chat_open"),
+    path(
+        "result-changes/<int:change_id>/apply/",
+        views.result_change_apply,
+        name="result_change_apply",
+    ),
+    path(
+        "result-changes/<int:change_id>/discard/",
+        views.result_change_discard,
+        name="result_change_discard",
+    ),
+    path(
+        "redesigns/<int:revision_id>/rerun/",
+        views.plan_redesign_rerun,
+        name="plan_redesign_rerun",
+    ),
+    path(
+        "redesigns/<int:revision_id>/discard/",
+        views.plan_redesign_discard,
+        name="plan_redesign_discard",
+    ),
     path("documents/<int:document_id>/", views.setup_document, name="document"),
     path(
         "run-proposals/<int:proposal_id>/create/",

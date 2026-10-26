@@ -8,6 +8,7 @@ workers of an earlier chain stand down.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 
 from django.db import transaction
 from django.utils import timezone
@@ -49,6 +50,27 @@ _VISUAL_ENGINE_OFFLINE = "Start a vision worker."
 _NOT_PAUSED = "This run is not waiting for help."
 _STILL_NEEDS_HELP = "A case of this run still needs help."
 
+# A case's Checked/Sent marks; cleared whenever its result is replaced, so a
+# new TestRail result can be sent.
+CHECKED_SENT_FIELDS: tuple[str, ...] = (
+    "checked_at",
+    "checked_by",
+    "testrail_source_result_id",
+    "testrail_source_sent_at",
+    "testrail_source_attachment_count",
+    "testrail_source_skip_reason",
+)
+
+# Every field `reset_case_for_restart` writes, for ``save`` / ``bulk_update``.
+RESTART_RESET_FIELDS: tuple[str, ...] = (
+    "status",
+    "blocked_reason",
+    "result",
+    "finished_at",
+    *CHECKED_SENT_FIELDS,
+    "updated_at",
+)
+
 
 def lock_project_and_run(test_run_id: int) -> tuple[Project, TestRun]:
     """Lock project then run; the caller must be inside ``transaction.atomic``."""
@@ -68,16 +90,52 @@ def list_reopen_blockers(test_run: TestRun, project: Project) -> list[str]:
     blockers: list[str] = []
     if _has_other_started_run(project.pk, test_run.pk):
         blockers.append(_OTHER_RUN_ACTIVE)
-    if is_checked_push_live(test_run, timezone.now()):
-        blockers.append(_CHECKED_PUSH_LIVE)
-    if test_run.testrail_push_status == TestRailPushStatus.PUSHING:
-        blockers.append(_RESULTS_PUSHING)
+    blockers.extend(list_testrail_push_blockers(test_run))
     machine_blocker = _machine_blocker(project)
     if machine_blocker:
         blockers.append(machine_blocker)
     if live_turn_exists(project.pk, timezone.now()):
         blockers.append(MACHINE_SETUP_RUNNING_MESSAGE)
     return blockers
+
+
+def list_testrail_push_blockers(test_run: TestRun) -> list[str]:
+    """User-safe reasons a TestRail send or push of the run is live (no query).
+
+    A case's result must not change under a live Send checked or results push.
+    """
+    blockers: list[str] = []
+    if is_checked_push_live(test_run, timezone.now()):
+        blockers.append(_CHECKED_PUSH_LIVE)
+    if test_run.testrail_push_status == TestRailPushStatus.PUSHING:
+        blockers.append(_RESULTS_PUSHING)
+    return blockers
+
+
+def clear_checked_and_sent(pivot: TestRunTestCase) -> None:
+    """Clear the case's Checked/Sent marks in memory (`CHECKED_SENT_FIELDS`)."""
+    pivot.checked_at = None
+    pivot.checked_by = None
+    pivot.testrail_source_result_id = None
+    pivot.testrail_source_sent_at = None
+    pivot.testrail_source_attachment_count = 0
+    pivot.testrail_source_skip_reason = ""
+
+
+def reset_case_for_restart(pivot: TestRunTestCase, now: datetime) -> None:
+    """Put a case back to CREATED in memory, as Resume does (`RESTART_RESET_FIELDS`).
+
+    Clears the verdict, finish time and Checked/Sent marks; the log,
+    screenshots and checkpoint are kept (``started_at`` is set again when the
+    worker picks the case up).
+    """
+    pivot.status = TestRunTestCaseStatus.CREATED
+    pivot.blocked_reason = ""
+    pivot.result = ""
+    pivot.finished_at = None
+    clear_checked_and_sent(pivot)
+    # bulk_update does not run auto_now.
+    pivot.updated_at = now
 
 
 def is_valid_help_mode(help_mode: str) -> bool:

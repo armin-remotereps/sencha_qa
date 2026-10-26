@@ -32,8 +32,10 @@ from agents.services.orchestrator_prompts import (
     format_failed_attempt_state,
     format_help_state_line,
     format_redesign_state_line,
+    format_review_redesign_state_line,
     help_verdict_note,
     redesign_for_help,
+    redesign_for_review,
     redesign_verdict_note,
     verdict_redesign,
     was_resumed,
@@ -209,7 +211,7 @@ class _Progress:
     # The last help this case got, carried into every checkpoint so a later
     # resume still names it; never marked continue_pending once running.
     help: CheckpointHelp | None = None
-    # Help-chat redesigns applied to this case and the newest earlier plans;
+    # Help-chat and result-review redesigns applied to this case and the newest earlier plans;
     # carried into every checkpoint so a save after a resume keeps them.
     plan_version: int = 0
     plan_revisions: tuple[PlanRevisionRecord, ...] = ()
@@ -297,8 +299,24 @@ def _rebuild_state(
     earlier plan (in the newest revision record): the carried steps get their
     lines, then the redesign line and the help line, and the first new step
     that is not carried gets the earlier failed attempt as its retry note.
+
+    When a person's result review redesigned it instead (and this help made
+    no redesign), the carried lines are followed by the review redesign line,
+    and the first new step gets the earlier plan's failed attempt as its retry
+    note when one was recorded. A later help in the same execution anchors on
+    the new plan's step numbers as usual.
     """
     redesign = redesign_for_help(help, revisions)
+    review = redesign_for_review(revisions) if redesign is None else None
+    # The review line says "continue at step C+1": only true while the cursor
+    # is there with no help pending (a later pause or Resume moved it on).
+    if review is not None and (help is not None or next_step != review.resume_step):
+        review = None
+    # Once a step of the redesigned plan ran, the earlier failed attempt is no
+    # longer the first new step's retry note (a later Resume or restore).
+    review_note = review is not None and not any(
+        attempt.kind == "step" and attempt.carried_from is None for attempt in attempts
+    )
     final_index = final_step_indices(attempts)
     help_anchor = _help_anchor_index(
         attempts, help, next_step, final_index, redesigned=redesign is not None
@@ -318,11 +336,15 @@ def _rebuild_state(
     notes: dict[int, str] = {}
     # Carried attempts lead the attempts; the redesign lines follow them.
     redesign_pending = redesign is not None
+    review_pending = review is not None
     for index, attempt in enumerate(attempts):
         result = attempt.result
         if redesign_pending and attempt.carried_from is None:
             lines.extend(_redesign_state(redesign, help, notes))
             redesign_pending = False
+        if review_pending and attempt.carried_from is None:
+            lines.extend(_review_redesign_state(review, notes, with_note=review_note))
+            review_pending = False
         if (
             interrupted_help is not None
             and attempt.carried_from is None
@@ -378,6 +400,8 @@ def _rebuild_state(
             lines.append(_resume_state_line(attempt.step_num, result.summary))
     if redesign_pending:
         lines.extend(_redesign_state(redesign, help, notes))
+    if review_pending:
+        lines.extend(_review_redesign_state(review, notes, with_note=review_note))
     if interrupted_help is not None:
         lines.append(_interrupted_help_line(interrupted_help, decisions))
     return lines, notes
@@ -432,6 +456,30 @@ def _redesign_state(
             step_label=label,
         ),
     ]
+
+
+def _review_redesign_state(
+    record: PlanRevisionRecord | None, notes: dict[int, str], *, with_note: bool
+) -> list[str]:
+    """The result-review redesign line; sets the first new step's retry note.
+
+    The retry note is the earlier plan's last failed step attempt, with its
+    actions, only when the record kept a digest of it and ``with_note`` (no
+    step of the new plan ran yet).
+    """
+    if record is None:
+        return []
+    failed = (
+        _earlier_failed_result(record) if with_note and record.paused_digest else None
+    )
+    if failed is not None:
+        notes[record.resume_step] = format_failed_attempt_state(
+            record.paused_step,
+            replace(failed, actions_digest=record.paused_digest),
+            with_actions=True,
+            step_label=f"Earlier plan, step {record.paused_step}",
+        )
+    return [format_review_redesign_state_line(record)]
 
 
 def _earlier_failed_result(record: PlanRevisionRecord) -> SubTaskResult | None:

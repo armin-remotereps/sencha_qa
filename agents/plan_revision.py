@@ -1,4 +1,4 @@
-"""Validate and apply a help-chat redesign of a case's test plan.
+"""Validate and apply a help-chat or result-chat redesign of a case's test plan.
 
 Pure: no ORM. A redesign is a full new step list whose leading steps may be
 *carried* from earlier steps that passed; carried steps count as passed and the
@@ -293,12 +293,19 @@ def apply_plan_revision(
     validated: ValidatedRevision,
     *,
     revision_id: int,
-    help_request_id: int,
+    help_request_id: int | None,
     reason: str,
+    source: Literal["help", "review"] = "help",
 ) -> OrchestratorCheckpoint:
     """The checkpoint with the new plan, carried passes and the earlier plan recorded.
 
     The caller validated ``validated`` against this very checkpoint.
+
+    ``source="help"`` keeps the checkpoint's ``help`` and phase and records the
+    cursor step as the paused one. ``source="review"`` (a finished case, whose
+    cursor can be past the last step) clears ``help`` (it belongs to the
+    replaced plan's step numbers), sets phase ``step`` and records the last
+    step whose final attempt failed (0 when none) as the paused one.
     """
     carriable = carriable_steps(checkpoint)
     carried_attempts: list[SubTaskAttempt] = []
@@ -306,19 +313,23 @@ def apply_plan_revision(
     for num, step in enumerate(validated.steps, start=1):
         if step.carried_from is None:
             continue
-        source = carriable[step.carried_from]
+        carried = carriable[step.carried_from]
         mapping.append((num, step.carried_from))
         carried_attempts.append(
             SubTaskAttempt(
                 step_num=num,
                 kind="step",
                 result=SubTaskResult(
-                    status="pass", summary=source.result.summary, iterations=0
+                    status="pass", summary=carried.result.summary, iterations=0
                 ),
-                duration_seconds=source.duration_seconds,
+                duration_seconds=carried.duration_seconds,
                 carried_from=step.carried_from,
             )
         )
+    if source == "review":
+        paused_step, paused_digest = _last_failed_step(checkpoint)
+    else:
+        paused_step, paused_digest = checkpoint.next_step, _paused_digest(checkpoint)
     version = checkpoint.plan_version + 1
     record = PlanRevisionRecord(
         version=version,
@@ -355,12 +366,16 @@ def apply_plan_revision(
             for decision in checkpoint.decisions
         ),
         mapping=tuple(mapping),
-        paused_step=checkpoint.next_step,
-        paused_digest=_paused_digest(checkpoint)[:_RECORD_PAUSED_DIGEST_CHARS],
+        paused_step=paused_step,
+        paused_digest=paused_digest[:_RECORD_PAUSED_DIGEST_CHARS],
         resume_step=validated.resume_step,
+        source=source,
     )
+    revised = checkpoint
+    if source == "review":
+        revised = dataclasses.replace(checkpoint, help=None, phase="step")
     return dataclasses.replace(
-        checkpoint,
+        revised,
         plan=tuple(
             SubTask(
                 description=step.description,
@@ -543,6 +558,34 @@ def _paused_digest(checkpoint: OrchestratorCheckpoint) -> str:
         ):
             return attempt.result.actions_digest
     return ""
+
+
+def review_carriable_note(checkpoint: OrchestratorCheckpoint) -> str:
+    """Which steps a result-chat redesign may carry, for the agent's brief."""
+    carriable = sorted(carriable_steps(checkpoint))
+    if not carriable:
+        return (
+            "No step can be carried: none passed. A redesign runs every step from "
+            "step 1."
+        )
+    return (
+        f"Steps that can be carried (their final attempt passed): "
+        f"{_format_step_list(carriable)}."
+    )
+
+
+def _last_failed_step(checkpoint: OrchestratorCheckpoint) -> tuple[int, str]:
+    """The last step whose final step attempt failed, with its digest; (0, "")."""
+    finals: dict[int, SubTaskAttempt] = {}
+    for attempt in checkpoint.attempts:
+        if attempt.kind == "step":
+            finals[attempt.step_num] = attempt
+    failed = [
+        (step_num, attempt.result.actions_digest)
+        for step_num, attempt in sorted(finals.items())
+        if attempt.result.status != "pass"
+    ]
+    return failed[-1] if failed else (0, "")
 
 
 def _format_step_list(steps: Sequence[int]) -> str:

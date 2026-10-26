@@ -1,8 +1,9 @@
 {% comment %}
-  Machine setup threads: the main chat, then the newest help threads:
+  Machine setup threads: the main chat, then the newest case threads:
   auto-fix threads (opened by the server for a Night-mode case that needs
-  help) and help chats (opened by a person from such a case). Shown only
-  when there is a help thread. Server-rendered; a thread opened after
+  help), help chats (opened by a person from such a case) and result chats
+  (opened by a person from a finished case; state_label is the case's
+  result, e.g. "Failed"). Shown only when there is a case thread. Server-rendered; a thread opened after
   the page loaded appears on the next load.
 
   Context contract:

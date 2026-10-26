@@ -289,7 +289,10 @@ class CheckpointHelp:
 
 @dataclass(frozen=True)
 class PlanRevisionRecord:
-    """An earlier plan replaced by a help-chat redesign (display and prompt data).
+    """An earlier plan replaced by a redesign (display and prompt data).
+
+    ``source`` ``help``: a help-chat redesign of a paused case; ``review``: a
+    result-chat redesign of a finished case (no help request).
 
     ``attempts``/``decisions`` of the checkpoint describe the current plan only;
     the earlier plan's moved here when the revision was applied.
@@ -297,9 +300,10 @@ class PlanRevisionRecord:
 
     # ``plan_version`` the checkpoint got when this revision was applied.
     version: int
-    # ``projects.CasePlanRevision`` / ``CaseHelpRequest`` ids.
+    # ``projects.CasePlanRevision`` / ``CaseHelpRequest`` ids; no help request
+    # for a review redesign.
     revision_id: int
-    help_request_id: int
+    help_request_id: int | None
     reason: str
     # (description, expected_result) of every earlier step.
     previous_plan: tuple[tuple[str, str], ...]
@@ -313,6 +317,8 @@ class PlanRevisionRecord:
     paused_digest: str
     # First new step that was not carried (where the case resumed).
     resume_step: int
+    # Help-chat or result-chat redesign; a missing checkpoint key means help.
+    source: Literal["help", "review"] = "help"
 
 
 @dataclass(frozen=True)

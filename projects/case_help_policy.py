@@ -23,7 +23,8 @@ from projects.models import (
 
 def auto_fix_eligible(pivot_id: int, step_num: int) -> bool:
     """False when this step already got a fixed auto-fix since the case last
-    started from scratch (Start, or a re-run in place); a repeat goes to a person.
+    started from scratch (Start, a re-run in place, or a redesigned re-run,
+    which renumbers the steps); a repeat goes to a person.
 
     A request counts as fixed when its auto-fix settled ``fixed``, or when its
     auto-fix thread's ``report_case_fix`` said fixed even though the turn did
@@ -37,7 +38,8 @@ def auto_fix_eligible(pivot_id: int, step_num: int) -> bool:
     """
     last_rerun_at = Subquery(
         TestRunCaseResume.objects.filter(
-            test_run_test_case_id=pivot_id, kind=CaseRestartKind.RERUN
+            test_run_test_case_id=pivot_id,
+            kind__in=(CaseRestartKind.RERUN, CaseRestartKind.REDESIGN),
         )
         .order_by("-created_at")
         .values("created_at")[:1]

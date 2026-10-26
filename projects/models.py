@@ -83,8 +83,9 @@ class BlockedReason(models.TextChoices):
     """Why a case could not be executed or judged; never a verdict on the app.
 
     Also classifies the fault behind a help request (``CaseHelpRequest.fault``).
-    Only a person marks a case Blocked, always with ``HELP_SKIPPED``; the other
-    values remain on older Blocked rows.
+    Only a person marks a case Blocked: ``HELP_SKIPPED`` (Mark blocked) or
+    ``PERSON_REVIEW`` (an applied result change); the other values remain on
+    older Blocked rows.
     """
 
     RUNNER_DISCONNECTED = "runner_disconnected", "Test Runner disconnected"
@@ -103,6 +104,7 @@ class BlockedReason(models.TextChoices):
     )
     INTERNAL_ERROR = "internal_error", "Internal error"
     HELP_SKIPPED = "help_skipped", "Marked blocked by a person"
+    PERSON_REVIEW = "person_review", "Marked blocked by a person after review"
 
 
 class ApplicationPlatform(models.TextChoices):
@@ -496,6 +498,7 @@ class TestRunTestCase(models.Model):
 class CaseRestartKind(models.TextChoices):
     RESUME = "resume", "Resumed"
     RERUN = "rerun", "Re-run"
+    REDESIGN = "redesign", "Re-run with a redesigned plan"
 
 
 class TestRunCaseResume(models.Model):
@@ -513,7 +516,7 @@ class TestRunCaseResume(models.Model):
     )
     created_at = models.DateTimeField(auto_now_add=True)
     kind = models.CharField(
-        max_length=10, choices=CaseRestartKind.choices, default=CaseRestartKind.RESUME
+        max_length=16, choices=CaseRestartKind.choices, default=CaseRestartKind.RESUME
     )
     # Step the case resumed at; null means it ran from the start (no checkpoint,
     # or a re-run).
@@ -678,8 +681,19 @@ class PlanRevisionStatus(models.TextChoices):
     SUPERSEDED = "superseded", "Superseded"
 
 
+class PlanRevisionSource(models.TextChoices):
+    # The help chat of a paused case (has a help request).
+    HELP = "help", "Help chat"
+    # The result chat of a finished case (no help request).
+    REVIEW = "review", "Result review"
+
+
 class CasePlanRevision(models.Model):
-    """A help-chat agent's redesign of a case's whole test plan (a draft until applied).
+    """An agent's redesign of a case's whole test plan (a draft until applied).
+
+    ``source`` ``help``: proposed in a help request's chat; ``review``: proposed
+    in the case's result chat, with no help request. Help code filters by
+    ``help_request`` and so never sees review rows.
 
     ``steps`` / ``previous_steps`` use the JSON forms of ``agents.plan_revision``
     (``revision_steps_to_json`` / ``snapshots_to_json``).
@@ -689,7 +703,16 @@ class CasePlanRevision(models.Model):
         TestRunTestCase, on_delete=models.CASCADE, related_name="plan_revisions"
     )
     help_request = models.ForeignKey(
-        CaseHelpRequest, on_delete=models.CASCADE, related_name="plan_revisions"
+        CaseHelpRequest,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="plan_revisions",
+    )
+    source = models.CharField(
+        max_length=8,
+        choices=PlanRevisionSource.choices,
+        default=PlanRevisionSource.HELP,
     )
     # ``agents.plan_revision.plan_fingerprint`` of the checkpoint it was built on.
     base_fingerprint = models.CharField(max_length=64)
@@ -725,7 +748,19 @@ class CasePlanRevision(models.Model):
                 fields=["help_request"],
                 condition=models.Q(status="proposed"),
                 name="plan_revision_one_pending",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["test_run_test_case"],
+                condition=models.Q(status="proposed", source="review"),
+                name="plan_revision_one_pending_review",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(source="help", help_request__isnull=False)
+                    | models.Q(source="review", help_request__isnull=True)
+                ),
+                name="plan_revision_source_matches_request",
+            ),
         ]
         indexes = [
             models.Index(
@@ -735,7 +770,84 @@ class CasePlanRevision(models.Model):
         ]
 
     def __str__(self) -> str:
+        if self.help_request_id is None:
+            return f"Plan revision #{self.pk} of TRTC #{self.test_run_test_case_id}"
         return f"Plan revision #{self.pk} of help request #{self.help_request_id}"
+
+
+# Caps on the model-written texts of a result change.
+RESULT_CHANGE_SUMMARY_MAX_LENGTH = 4000
+RESULT_CHANGE_EXPLANATION_MAX_LENGTH = 2000
+
+
+class ResultChangeStatus(models.TextChoices):
+    PROPOSED = "proposed", "Proposed"
+    APPLIED = "applied", "Applied"
+    # By a person.
+    DISCARDED = "discarded", "Discarded"
+    # By a newer proposal, or the case was re-run with a redesigned plan.
+    SUPERSEDED = "superseded", "Superseded"
+
+
+class CaseResultChange(models.Model):
+    """A result-chat agent's proposed change of a finished case's result.
+
+    A person applies it; APPLIED rows are the audit trail. ``from_*`` snapshot
+    the result when proposed and are rewritten at apply with the values
+    actually replaced.
+    """
+
+    test_run_test_case = models.ForeignKey(
+        TestRunTestCase, on_delete=models.CASCADE, related_name="result_changes"
+    )
+    # sha256 of (status, blocked_reason, finished_at ISO, result) it was built on.
+    base_fingerprint = models.CharField(max_length=64)
+    from_status = models.CharField(max_length=20, choices=TestRunTestCaseStatus.choices)
+    from_blocked_reason = models.CharField(
+        max_length=32, choices=BlockedReason.choices, blank=True, default=""
+    )
+    from_result = models.TextField(blank=True, default="")
+    to_status = models.CharField(max_length=20, choices=TestRunTestCaseStatus.choices)
+    # Model-written; shown escaped. ``summary`` becomes the new result text.
+    summary = models.TextField(max_length=RESULT_CHANGE_SUMMARY_MAX_LENGTH)
+    explanation = models.TextField(
+        max_length=RESULT_CHANGE_EXPLANATION_MAX_LENGTH, blank=True, default=""
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=ResultChangeStatus.choices,
+        default=ResultChangeStatus.PROPOSED,
+    )
+    proposed_at = models.DateTimeField(auto_now_add=True)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    # ``machine_setup.SetupConversation`` id, kept as a plain id so ``projects``
+    # has no schema dependency on ``machine_setup``.
+    conversation_id = models.PositiveIntegerField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["test_run_test_case"],
+                condition=models.Q(status="proposed"),
+                name="result_change_one_pending",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["test_run_test_case", "-proposed_at"],
+                name="result_change_case_idx",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"Result change #{self.pk} of TRTC #{self.test_run_test_case_id}"
 
 
 def _screenshot_upload_path(instance: "TestRunScreenshot", filename: str) -> str:

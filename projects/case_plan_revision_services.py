@@ -17,7 +17,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from django.conf import settings
 from django.db import transaction
 from django.db.models import Prefetch, QuerySet
 from django.utils import timezone
@@ -28,7 +27,6 @@ from agents.exceptions import PlanRevisionInvalid
 from agents.plan_revision import (
     PlanDraftView,
     PlanStepInput,
-    ValidatedRevision,
     apply_plan_revision,
     build_plan_draft_view,
     plan_fingerprint,
@@ -37,9 +35,8 @@ from agents.plan_revision import (
     snapshot_plan,
     snapshots_from_json,
     snapshots_to_json,
-    validate_plan_revision,
 )
-from agents.services.sub_task_budget import build_timeout_bounds
+from agents.plan_revision_limits import validate_case_plan_revision
 from agents.types import OrchestratorCheckpoint
 from projects.exceptions import PlanRevisionError, RunHelpError
 from projects.models import (
@@ -152,7 +149,7 @@ def propose_plan_revision(
         if checkpoint is None:
             raise PlanRevisionError(_NO_PLAN)
         try:
-            validated = _validate(checkpoint, steps)
+            validated = validate_case_plan_revision(checkpoint, steps)
         except PlanRevisionInvalid as exc:
             raise PlanRevisionError(exc.message) from exc
         previous_steps = snapshot_plan(checkpoint)
@@ -287,7 +284,7 @@ def apply_plan_revision_locked(
         raise RunHelpError(_CASE_CHANGED)
     stored = revision_steps_from_json(revision.steps)
     try:
-        validated = _validate(
+        validated = validate_case_plan_revision(
             checkpoint,
             [
                 PlanStepInput(
@@ -342,14 +339,3 @@ def _current_checkpoint(pivot: TestRunTestCase) -> OrchestratorCheckpoint | None
     if checkpoint is None or not checkpoint.plan:
         return None
     return checkpoint
-
-
-def _validate(
-    checkpoint: OrchestratorCheckpoint, steps: Sequence[PlanStepInput]
-) -> ValidatedRevision:
-    return validate_plan_revision(
-        checkpoint,
-        steps,
-        bounds=build_timeout_bounds(),
-        max_steps=settings.ORCHESTRATOR_MAX_SUBTASKS,
-    )
