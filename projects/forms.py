@@ -54,6 +54,24 @@ class ProjectForm(forms.Form):
         return [tag.strip() for tag in raw.split(",") if tag.strip()]
 
 
+class ProjectMemberInviteForm(forms.Form):
+    email = forms.EmailField(
+        label="Email",
+        max_length=254,
+        help_text=(
+            "The person needs an account here. They turn on notifications "
+            "in their own Notifications settings."
+        ),
+        widget=forms.EmailInput(
+            attrs={
+                "class": "input",
+                "placeholder": "colleague@example.com",
+                "autocomplete": "off",
+            }
+        ),
+    )
+
+
 class TestCaseForm(forms.Form):
     title = forms.CharField(
         max_length=500,

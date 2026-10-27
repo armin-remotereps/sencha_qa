@@ -11,6 +11,7 @@ from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
 from projects.exceptions import CheckedPushError, TestRailRunImportError
 from projects.forms import (
+    ProjectMemberInviteForm,
     TestRailImportStartForm,
     TestRailPushStartForm,
     TestRailRunImportForm,
@@ -18,6 +19,7 @@ from projects.forms import (
     TestRailSuiteForm,
 )
 from projects.models import Project, TestRun
+from projects.project_member_services import list_project_members
 from projects.services import get_test_run_for_project
 from projects.testrail_checked_push_services import start_checked_push
 from projects.testrail_client import TestRailError, TestRailProject, TestRailSuite
@@ -48,16 +50,32 @@ def _settings_initial(project: Project) -> dict[str, str]:
     }
 
 
-def _render_settings_page(
-    request: HttpRequest, project: Project, form: TestRailSettingsForm
+def render_project_settings(
+    request: AuthenticatedRequest,
+    project: Project,
+    *,
+    testrail_form: TestRailSettingsForm | None = None,
+    invite_form: ProjectMemberInviteForm | None = None,
 ) -> HttpResponse:
+    """Render the Settings tab; a card whose form is not given gets a fresh one."""
+    if testrail_form is None:
+        testrail_form = TestRailSettingsForm(
+            initial=_settings_initial(project),
+            has_stored_key=bool(project.testrail_api_key_encrypted),
+        )
+    if invite_form is None:
+        invite_form = ProjectMemberInviteForm()
+    members = list_project_members(project, viewer=request.user)
     return render(
         request,
         "projects/settings.html",
         {
             "project": project,
-            "form": form,
+            "form": testrail_form,
             "api_key_hint": get_testrail_api_key_hint(project),
+            "members": members.rows,
+            "can_leave": members.can_leave,
+            "invite_form": invite_form,
             "active_tab": "settings",
             "active_nav": "projects",
         },
@@ -65,18 +83,16 @@ def _render_settings_page(
 
 
 @project_membership_required
-def project_settings(request: HttpRequest, project: Project) -> HttpResponse:
-    """Settings tab: TestRail integration card."""
-    has_stored_key = bool(project.testrail_api_key_encrypted)
+def project_settings(request: AuthenticatedRequest, project: Project) -> HttpResponse:
+    """Settings tab: members card and TestRail integration card."""
     if request.method == "GET":
-        form = TestRailSettingsForm(
-            initial=_settings_initial(project), has_stored_key=has_stored_key
-        )
-        return _render_settings_page(request, project, form)
+        return render_project_settings(request, project)
 
-    form = TestRailSettingsForm(request.POST, has_stored_key=has_stored_key)
+    form = TestRailSettingsForm(
+        request.POST, has_stored_key=bool(project.testrail_api_key_encrypted)
+    )
     if not form.is_valid():
-        return _render_settings_page(request, project, form)
+        return render_project_settings(request, project, testrail_form=form)
 
     save_testrail_settings(
         project=project,

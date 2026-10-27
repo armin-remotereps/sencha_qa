@@ -127,7 +127,7 @@ pip install -r requirements.txt
 
 **Controller Protocol**: The controller client on the target machine connects via WebSocket. The server dispatches actions (click, type, screenshot, browser commands) through the channel layer and waits for replies. All controller actions are in `projects/services.py` (functions prefixed `controller_*`).
 
-**Authorization**: `@project_membership_required` decorator in `projects/decorators.py` handles both `@login_required` and project membership checks. Views receive a resolved `project` kwarg.
+**Authorization**: `@project_membership_required` decorator in `projects/decorators.py` handles both `@login_required` and project membership checks. Views receive a resolved `project` kwarg. All members are equal (no owner or roles); members invite others by email and leave on the Settings tab (`projects/project_member_services.py`), and a project always keeps at least one active member.
 
 ### Frontend
 

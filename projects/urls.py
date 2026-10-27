@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.urls import URLPattern, path
 
-from projects import testrail_views, views
+from projects import member_views, testrail_views, views
 
 app_name = "projects"
 
@@ -59,6 +59,12 @@ urlpatterns: list[URLPattern] = [
         testrail_views.project_settings,
         name="settings",
     ),
+    path(
+        "<int:project_id>/settings/members/invite/",
+        member_views.member_invite,
+        name="member_invite",
+    ),
+    path("<int:project_id>/leave/", member_views.project_leave, name="leave"),
     path(
         "<int:project_id>/settings/testrail/test/",
         testrail_views.settings_testrail_test,

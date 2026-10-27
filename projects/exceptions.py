@@ -184,3 +184,51 @@ class ResultChangeError(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+class ProjectMembershipError(Exception):
+    """Base for invite / leave failures; ``message`` is safe to show the user."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class MemberNotFoundError(ProjectMembershipError):
+    """No active account has that email (unknown and inactive look the same)."""
+
+    def __init__(self) -> None:
+        super().__init__("No active user with that email.")
+
+
+class AlreadyMemberError(ProjectMembershipError):
+    """The invited user is already a member of the project."""
+
+    def __init__(self) -> None:
+        super().__init__("That user is already a member of this project.")
+
+
+class MemberInviteThrottledError(ProjectMembershipError):
+    """The inviter made too many invite attempts in the current window."""
+
+    def __init__(self, window_seconds: int) -> None:
+        super().__init__(
+            f"Too many invites. Try again in {window_seconds // 60} minutes."
+        )
+        self.window_seconds = window_seconds
+
+
+class LastProjectMemberError(ProjectMembershipError):
+    """Leaving would leave the project with no other active member."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "You are the only active member. Add someone before you leave."
+        )
+
+
+class NotProjectMemberError(ProjectMembershipError):
+    """The user is no longer a member (they left in another tab)."""
+
+    def __init__(self) -> None:
+        super().__init__("You are not a member of this project.")

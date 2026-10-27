@@ -1,12 +1,15 @@
 {% extends "layouts/project.html" %}
 
-{% comment %} Project settings tab. Today it holds one card: the TestRail
-   integration used by "Import from TestRail account" on the Import page.
+{% comment %} Project settings tab: the Members card (invite by email, leave) and
+   the TestRail integration used by "Import from TestRail account".
 
-   Context contract (projects.testrail_views.project_settings):
+   Context contract (projects.testrail_views.render_project_settings):
      project      — current Project
      form         — TestRailSettingsForm (api key never pre-filled)
-     api_key_hint — last characters of the stored API key, "" when none {% endcomment %}
+     api_key_hint — last characters of the stored API key, "" when none
+     members      — list of ProjectMemberRow (email, full_name, is_you, is_active)
+     can_leave    — bool, another active member would remain after leaving
+     invite_form  — ProjectMemberInviteForm {% endcomment %}
 {% block title %}Settings · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
 {% block page_header %}
@@ -19,6 +22,62 @@
 {% endblock %}
 
 {% block project_content %}
+<div class="card">
+  <div class="card-header">
+    <h2>Members</h2>
+    <span class="badge badge-draft">{{ members|length }}</span>
+  </div>
+  <p class="muted">
+    Every member can manage everything in this project and gets its
+    notifications once they turn them on.
+  </p>
+
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th scope="col">Member</th>
+          <th scope="col">Name</th>
+          <th scope="col"><span class="visually-hidden">Status</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for member in members %}
+          <tr{% if not member.is_active %} class="muted"{% endif %}>
+            <td data-label="Member" class="cell-primary">{{ member.email }}</td>
+            <td data-label="Name">{{ member.full_name|default:"—" }}</td>
+            <td data-label="Status">
+              {% if member.is_you %}<span class="badge badge-ready">You</span>{% endif %}
+              {% if not member.is_active %}<span class="badge badge-draft">Inactive</span>{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <form method="post" action="{% url 'projects:member_invite' project.id %}" novalidate>
+    {% csrf_token %}
+    {% include "partials/form_field.html" with field=invite_form.email only %}
+    <div class="dialog-actions">
+      {% if can_leave %}
+        <button type="button" class="btn btn-ghost" @click="$dispatch('open-leave-project')">Leave project</button>
+      {% else %}
+        <button type="button" class="btn btn-ghost" disabled title="You are the only active member. Add someone before you leave.">Leave project</button>
+      {% endif %}
+      <button class="btn btn-primary" type="submit">Add member</button>
+    </div>
+    {% if not can_leave %}
+      <p class="hint">You are the only active member. Add someone before you leave.</p>
+    {% endif %}
+  </form>
+</div>
+
+{% if can_leave %}
+  {% url 'projects:leave' project.id as leave_url %}
+  {% include "partials/confirm_dialog.html" with dialog_id="leave-project" title="Leave this project?" body="You lose access to this project and stop getting its notifications. Another member can add you again." confirm_label="Leave project" action_url=leave_url csrf_token=csrf_token only %}
+{% endif %}
+
 <div class="card">
   <div class="card-header">
     <h2>TestRail integration</h2>
