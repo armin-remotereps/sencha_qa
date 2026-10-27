@@ -168,7 +168,7 @@ _EXPLICIT_DOWNLOAD_BUDGET_S: float = 110.0
 # handlers finish their saves; sleeping instead would stall them.
 _DOWNLOAD_POLL_MS: float = 250.0
 
-# Playwright 1.50 launch errors that mean the browser is simply not on this
+# Playwright 1.64 launch errors that mean the browser is simply not on this
 # machine: a bundled engine never downloaded ("Executable doesn't exist at"),
 # a system channel not installed ("Chromium distribution 'msedge' is not found
 # at"), or a browser this OS has no build of ("... is not supported on").
