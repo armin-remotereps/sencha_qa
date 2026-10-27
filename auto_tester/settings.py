@@ -394,6 +394,16 @@ NTFY_REQUEST_TIMEOUT: int = config("NTFY_REQUEST_TIMEOUT", default=10, cast=int)
 # means notifications carry no click link.
 SITE_URL: str = config("SITE_URL", default="", cast=str)
 
+# "Send checked to TestRail" attaches only the screenshots of the attempts that
+# caused a Failed or Blocked result (projects/testrail_evidence.py): at most
+# this many per failing step, and at most TESTRAIL_EVIDENCE_MAX_SHOTS per case.
+TESTRAIL_EVIDENCE_SHOTS_PER_STEP: int = config(
+    "TESTRAIL_EVIDENCE_SHOTS_PER_STEP", default=3, cast=int
+)
+TESTRAIL_EVIDENCE_MAX_SHOTS: int = config(
+    "TESTRAIL_EVIDENCE_MAX_SHOTS", default=10, cast=int
+)
+
 # Orchestrator (sub-agent architecture)
 ORCHESTRATOR_MAX_SUBTASKS: int = config(
     "ORCHESTRATOR_MAX_SUBTASKS", default=30, cast=int

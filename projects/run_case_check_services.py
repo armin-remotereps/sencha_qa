@@ -18,11 +18,17 @@ from accounts.models import CustomUser
 from projects.checked_push_limits import is_checked_push_live
 from projects.exceptions import RunCaseCheckError
 from projects.models import TestRun, TestRunTestCase, TestRunTestCaseStatus
+from projects.testrail_evidence_services import freeze_testrail_evidence
 
 CHECKABLE_STATUSES: tuple[str, ...] = (
     TestRunTestCaseStatus.SUCCESS,
     TestRunTestCaseStatus.FAILED,
     TestRunTestCaseStatus.BLOCKED,
+)
+
+_NOTHING_TO_CHECK_MESSAGE = (
+    "None of the selected cases could be checked: they have no verdict "
+    "yet or are already checked."
 )
 
 
@@ -62,25 +68,34 @@ def list_uncheckable_pivot_ids(test_run: TestRun) -> list[int]:
     )
 
 
+@transaction.atomic
 def check_run_cases(
     *, test_run: TestRun, pivot_ids: Sequence[int], user: CustomUser
 ) -> CheckOutcome:
-    """Check the selected cases; raises `RunCaseCheckError` if none changed."""
+    """Check the selected cases; raises `RunCaseCheckError` if none changed.
+
+    Also freezes which of their screenshots the next TestRail send attaches.
+    The cases are locked so a concurrent Apply or Resume cannot change a
+    result between the selection and the check.
+    """
     selected = set(pivot_ids)
+    pivots = list(
+        test_run.pivot_entries.select_for_update()
+        .filter(id__in=selected, status__in=CHECKABLE_STATUSES, checked_at__isnull=True)
+        .only("id", "status")
+    )
+    if not pivots:
+        raise RunCaseCheckError(_NOTHING_TO_CHECK_MESSAGE)
+    freeze_testrail_evidence(pivots)
     now = timezone.now()
-    changed = test_run.pivot_entries.filter(
-        id__in=selected, status__in=CHECKABLE_STATUSES, checked_at__isnull=True
+    changed = TestRunTestCase.objects.filter(
+        id__in=[pivot.id for pivot in pivots]
     ).update(
         checked_at=now,
         checked_by=user,
         testrail_source_skip_reason="",
         updated_at=now,
     )
-    if changed == 0:
-        raise RunCaseCheckError(
-            "None of the selected cases could be checked: they have no verdict "
-            "yet or are already checked."
-        )
     return CheckOutcome(changed=changed, skipped=len(selected) - changed)
 
 
