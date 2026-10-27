@@ -2312,8 +2312,9 @@ details.card[open] > summary,
 }
 
 /* --------------------------------------------------------------------------
-   Machine setup chat (templates/machine_setup/chat.html). Every row is
-   plain text (x-text, pre-wrap). The agent's replies are the hero; its
+   Machine setup chat (templates/machine_setup/chat.html). Rows are plain
+   text (x-text, pre-wrap), except the main agent's replies and narration, which
+   are sanitized Markdown (.chat-md). The agent's replies are the hero; its
    narration is a muted line above each activity block, which folds the
    turn's tool rows; notices are centred pills. A working indicator follows
    the last block while a turn runs, and the composer sticks to the viewport
@@ -2428,6 +2429,106 @@ details.card[open] > summary,
 
 .chat-narration .chat-agent-mark {
   margin-top: 1px;
+}
+
+/* Rendered Markdown of an agent reply or narration (sanitized, no images). */
+.chat-md {
+  min-width: 0;
+}
+
+.chat-md > :first-child {
+  margin-top: 0;
+}
+
+.chat-md > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-md p,
+.chat-md ul,
+.chat-md ol,
+.chat-md pre,
+.chat-md table,
+.chat-md blockquote {
+  margin: 0 0 0.6em;
+}
+
+.chat-md ul,
+.chat-md ol {
+  padding-left: 1.4em;
+}
+
+.chat-md li + li {
+  margin-top: 0.15em;
+}
+
+.chat-md h1,
+.chat-md h2,
+.chat-md h3,
+.chat-md h4 {
+  margin: 0.8em 0 0.4em;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.chat-md a {
+  color: var(--brand-cyan);
+}
+
+.chat-md code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--code-bg);
+  color: var(--code-text);
+  font-family: var(--mono);
+  font-size: 0.86em;
+}
+
+.chat-md pre {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--code-bg);
+  overflow-x: auto;
+  overflow-wrap: normal;
+}
+
+.chat-md pre code {
+  padding: 0;
+  background: none;
+  white-space: pre;
+}
+
+.chat-md blockquote {
+  padding-left: 10px;
+  border-left: 3px solid var(--border-strong);
+  color: var(--text-muted);
+}
+
+.chat-md table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+
+.chat-md th,
+.chat-md td {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+
+.chat-md th {
+  background: var(--surface-raised);
+}
+
+.chat-md hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 0.8em 0;
 }
 
 @keyframes chat-fade-in {

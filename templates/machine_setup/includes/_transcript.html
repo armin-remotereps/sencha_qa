@@ -7,7 +7,9 @@
   there; sub-task blocks render through _subtask.html, run proposal cards
   through _run_proposal.html, result chat cards through _result_change.html
   and _plan_redesign.html). Every field is model or agent text, so it is
-  rendered with x-text (and :title) only; :href is bound only to the
+  rendered with x-text (and :title) only, except agent reply and narration
+  rows: Markdown, rendered to sanitized HTML by renderMarkdown (marked +
+  DOMPurify allowlist, nothing that loads a resource) set by showMarkdown. :href is bound only to the
   server-built link_url, a run's server-built url, a card's server-built
   form URLs, or documentUrl(id) (the
   reversed document_url_template with the id swapped in).
@@ -55,15 +57,15 @@
             <span>Setup agent</span>
             <time :datetime="block.message.created_at" x-text="formatClock(block.message.created_at)"></time>
           </div>
-          <div class="pre-wrap" x-text="block.message.text"></div>
+          <div class="chat-md" x-effect="showMarkdown($el, block.message.text)"></div>
         </div>
       </template>
 
       <template x-if="block.kind === 'row' && block.role === 'narration'">
-        <p class="chat-narration">
+        <div class="chat-narration">
           <span class="chat-agent-mark" aria-hidden="true"><img src="{% static 'branding/punk-hazard-mark.png' %}" alt=""></span>
-          <span class="pre-wrap" x-text="block.message.text"></span>
-        </p>
+          <div class="chat-md" x-effect="showMarkdown($el, block.message.text)"></div>
+        </div>
       </template>
 
       <template x-if="block.kind === 'row' && block.role === 'notice'">

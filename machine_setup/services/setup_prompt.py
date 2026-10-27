@@ -643,7 +643,10 @@ _CONTEXT_WRITING = (
 
 _REPLY = (
     "REPLY:\n"
-    "- When you finish, reply in plain text (no Markdown tables or HTML; "
-    "simple '-' and '1.' lists are fine), concisely: what you did, what is "
-    "left, and any question. Do NOT call any tools in that final reply."
+    "- When you finish, reply concisely in GitHub-flavored Markdown: what you "
+    "did, what is left, and any question. Use short paragraphs, '-' and '1.' "
+    "lists, **bold** for the key outcome, `inline code` for paths, commands, "
+    "versions and case ids, fenced code blocks for multi-line output, and a "
+    "small table only when comparing items. No headings above ###, no HTML, "
+    "no images. Do NOT call any tools in that final reply."
 )

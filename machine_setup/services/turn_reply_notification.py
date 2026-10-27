@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from django.db import transaction
 from django.urls import reverse
@@ -36,8 +37,28 @@ _LIMIT_REASONS = frozenset(
 )
 
 
+# The reply is Markdown; a push shows plain text.
+_MARKDOWN_LINK = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_MARKDOWN_LINE_MARK = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]+|>[ \t]?|[-*+][ \t]+|\d+\.[ \t]+)", re.M
+)
+_MARKDOWN_TABLE_RULE = re.compile(r"^[ \t]*\|?[ \t:|-]+\|[ \t:|-]*$", re.M)
+_MARKDOWN_BREAK = re.compile(r"```[^\n]*|\|")
+_MARKDOWN_INLINE = re.compile(r"\*\*|`")
+
+
+def _plain(text: str) -> str:
+    # Only the start is shown; never scan a huge reply.
+    text = text[: PREVIEW_MAX_LENGTH * 8]
+    text = _MARKDOWN_LINK.sub(r"\1", text)
+    text = _MARKDOWN_TABLE_RULE.sub("", text)
+    text = _MARKDOWN_LINE_MARK.sub("", text)
+    text = _MARKDOWN_BREAK.sub(" ", text)
+    return _MARKDOWN_INLINE.sub("", text)
+
+
 def _preview(text: str) -> str:
-    collapsed = " ".join(text.split())
+    collapsed = " ".join(_plain(text).split())
     if len(collapsed) <= PREVIEW_MAX_LENGTH:
         return collapsed
     return collapsed[: PREVIEW_MAX_LENGTH - len(_ELLIPSIS)].rstrip() + _ELLIPSIS

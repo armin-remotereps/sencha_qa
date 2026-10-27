@@ -66,7 +66,9 @@
   current_state (with `help` on a help thread), message, screenshot, turn,
   reset, help, agent_status, visual_engine. `help` (and current_state's
   `help`) is re-dispatched as the `help-state` window event for the nested
-  helpPanel. All dynamic text is rendered with x-text; never x-html.
+  helpPanel. All dynamic text is rendered with x-text, except agent reply and
+  narration rows: Markdown rendered by renderMarkdown (marked, then DOMPurify
+  allowlist) and set by showMarkdown. Never inject HTML anywhere else.
   Client to server: {type:'presence', visible, conversation_id} on open,
   on visibilitychange, every 15 s while visible, visible:false on pagehide, again on a
   back/forward-cache pageshow.
@@ -229,7 +231,53 @@
 {% endblock %}
 
 {% block extra_scripts %}
+{# Blocking on purpose: both must exist before Alpine (deferred) starts. Pinned with SRI: DOMPurify is the XSS barrier for agent text. #}
+<script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/marked.min.js" integrity="sha384-948ahk4ZmxYVYOc+rxN1H2gM1EJ2Duhp7uHtZ4WSLkV4Vtx5MUqnV+l7u9B+jFv+" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.6/dist/purify.min.js" integrity="sha384-JEyTNhjM6R1ElGoJns4U2Ln4ofPcqzSsynQkmEc/KGy6336qAZl70tDLufbkla+3" crossorigin="anonymous"></script>
 <script>
+// Agent replies are Markdown. Agent text can carry content copied from web
+// pages, so every rendered string is sanitized to an explicit allowlist: no
+// element or attribute can load a resource (no img, no background, no style),
+// and links open in a new tab without a referrer. The hook is global to
+// DOMPurify; only renderMarkdown uses it on this page.
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node.tagName === 'A') {
+    node.setAttribute('target', '_blank');
+    node.setAttribute('rel', 'noopener noreferrer nofollow');
+  }
+});
+const MARKDOWN_PURIFY = {
+  ALLOWED_TAGS: [
+    'p', 'br', 'hr', 'strong', 'em', 'del', 'code', 'pre', 'blockquote',
+    'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'table', 'thead', 'tbody', 'tr', 'th', 'td',
+  ],
+  ALLOWED_ATTR: ['href', 'title', 'align', 'start', 'target', 'rel'],
+};
+// Rendering is memoised: `blocks` is rebuilt on every socket event, so the same
+// text is asked for again and again. Bounded so a long session cannot grow it.
+const MARKDOWN_CACHE_MAX = 500;
+const markdownCache = new Map();
+const renderMarkdown = (text) => {
+  const source = String(text || '');
+  let html = markdownCache.get(source);
+  if (html === undefined) {
+    html = DOMPurify.sanitize(
+      marked.parse(source, { gfm: true, breaks: true, async: false }),
+      MARKDOWN_PURIFY,
+    );
+    if (markdownCache.size >= MARKDOWN_CACHE_MAX) markdownCache.clear();
+    markdownCache.set(source, html);
+  }
+  return html;
+};
+// Plain text of a Markdown reply, for the screen-reader live region.
+const markdownText = (text) => {
+  const holder = document.createElement('div');
+  holder.innerHTML = renderMarkdown(text);
+  return holder.textContent.trim();
+};
+
 document.addEventListener('alpine:init', () => {
   const LIVE_STATUSES = ['queued', 'running'];
   const readJson = (id) => JSON.parse(document.getElementById(id).textContent);
@@ -1025,7 +1073,7 @@ document.addEventListener('alpine:init', () => {
         const message = this.messages[i];
         if (message.parent_id !== null && message.parent_id !== undefined) continue;
         if (message.kind === 'tool') return '';
-        if (message.kind === 'assistant') return message.text;
+        if (message.kind === 'assistant') return markdownText(message.text);
       }
       return '';
     },
@@ -1093,6 +1141,16 @@ document.addEventListener('alpine:init', () => {
       if (value < 1024) return value + ' B';
       if (value < 1024 * 1024) return (value / 1024).toFixed(value < 10 * 1024 ? 1 : 0) + ' KB';
       return (value / (1024 * 1024)).toFixed(1) + ' MB';
+    },
+
+    // Puts the sanitized HTML of an agent reply or narration (Markdown
+    // source) into el, touching the DOM only when the HTML changed, so a
+    // re-render keeps scroll positions inside code blocks and tables.
+    showMarkdown(el, text) {
+      const source = String(text || '');
+      if (el.dataset.mdSource === source) return;
+      el.innerHTML = renderMarkdown(source);
+      el.dataset.mdSource = source;
     },
 
     documentUrl(id) {
