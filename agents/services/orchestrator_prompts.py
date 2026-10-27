@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Final, Literal
 
+from agents.checkpoint import final_step_indices
 from agents.types import (
     CheckpointHelp,
     PlanRevisionRecord,
@@ -586,15 +587,6 @@ def _shorten(text: str) -> str:
     if len(description) <= _STEP_DESCRIPTION_MAX_CHARS:
         return description
     return description[: _STEP_DESCRIPTION_MAX_CHARS - 1].rstrip() + "…"
-
-
-def final_step_indices(attempts: Sequence[SubTaskAttempt]) -> dict[int, int]:
-    """Map each planned step to the index of its final (last) step attempt."""
-    return {
-        attempt.step_num: index
-        for index, attempt in enumerate(attempts)
-        if attempt.kind == "step"
-    }
 
 
 def _resume_label(attempt: SubTaskAttempt) -> str:

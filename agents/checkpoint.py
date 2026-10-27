@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal, cast
 
@@ -49,6 +50,15 @@ class _MalformedCheckpoint(Exception):
     pass
 
 
+def final_step_indices(attempts: Sequence[SubTaskAttempt]) -> dict[int, int]:
+    """Map each planned step to the index of its final (last) step attempt."""
+    return {
+        attempt.step_num: index
+        for index, attempt in enumerate(attempts)
+        if attempt.kind == "step"
+    }
+
+
 def checkpoint_to_json(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
     data = _checkpoint_body(checkpoint)
     if checkpoint.help is not None:
@@ -76,6 +86,9 @@ def _attempt_to_json(attempt: SubTaskAttempt) -> dict[str, object]:
     }
     if attempt.carried_from is not None:
         data["carried_from"] = attempt.carried_from
+    # Absent for synthetic carried attempts and attempts recorded before ids.
+    if attempt.attempt_id:
+        data["attempt_id"] = attempt.attempt_id
     return data
 
 
@@ -273,7 +286,13 @@ def _parse_attempt(item: dict[str, object]) -> SubTaskAttempt:
         duration_seconds=_parse_duration(item.get("duration_seconds")),
         # Absent from attempts that were not carried over a plan redesign.
         carried_from=_parse_positive_int(item.get("carried_from")),
+        attempt_id=_parse_attempt_id(item.get("attempt_id")),
     )
+
+
+def _parse_attempt_id(value: object) -> str:
+    # Display-only: a missing or bad id just means no screenshots are linked.
+    return value if isinstance(value, str) else ""
 
 
 # The display-only keys below never make a checkpoint unusable: a bad value

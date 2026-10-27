@@ -46,12 +46,12 @@ from agents.types import (
     AgentCancelledError,
     AgentResult,
     AgentStopReason,
+    AttemptScreenshotCallback,
     CancellationCheck,
     HelpRequestInfo,
     LogCallback,
     OrchestratorCheckpoint,
     PixelParseResult,
-    ScreenshotCallback,
 )
 from auto_tester.celery import app as celery_app
 from controller_client.protocol import (
@@ -3154,13 +3154,22 @@ def _append_pivot_log(pivot_id: int, line: str, generation: int | None) -> bool:
 
 def _build_screenshot_callback(
     pivot: TestRunTestCase, generation: int
-) -> ScreenshotCallback:
-    def _save_screenshot(base64_data: str, tool_name: str) -> None:
+) -> AttemptScreenshotCallback:
+    def _save_screenshot(
+        base64_data: str, tool_name: str, *, attempt_id: str, step_num: int
+    ) -> None:
         if _is_stale_execution(pivot.test_run_id, generation):
             return
         image_bytes = _decode_base64_image(base64_data)
         filename = _generate_screenshot_filename(tool_name)
-        _persist_screenshot(pivot, image_bytes, filename, tool_name)
+        _persist_screenshot(
+            pivot,
+            image_bytes,
+            filename,
+            tool_name,
+            attempt_id=attempt_id,
+            step_num=step_num,
+        )
 
     return _save_screenshot
 
@@ -3179,11 +3188,16 @@ def _persist_screenshot(
     image_bytes: bytes,
     filename: str,
     tool_name: str,
+    *,
+    attempt_id: str,
+    step_num: int,
 ) -> None:
     screenshot = TestRunScreenshot.objects.create(
         test_run_test_case=pivot,
         image=ContentFile(image_bytes, name=filename),
         tool_name=tool_name,
+        attempt_id=attempt_id,
+        step_num=step_num,
     )
     _broadcast_screenshot(pivot, screenshot)
 

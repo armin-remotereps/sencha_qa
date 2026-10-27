@@ -4,6 +4,7 @@ import json
 import logging
 import re
 import time
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -12,6 +13,7 @@ from typing import Literal
 from django.conf import settings
 from django.utils import timezone
 
+from agents.checkpoint import final_step_indices
 from agents.exceptions import (
     AIServiceError,
     OrchestratorParseError,
@@ -27,7 +29,6 @@ from agents.services.orchestrator_prompts import (
     build_evaluate_system_prompt,
     build_plan_system_prompt,
     build_verdict_prompt,
-    final_step_indices,
     format_attempt_lines,
     format_failed_attempt_state,
     format_help_state_line,
@@ -51,6 +52,7 @@ from agents.types import (
     AgentConfig,
     AgentResult,
     AgentStopReason,
+    AttemptScreenshotCallback,
     BrowserSelection,
     CancellationCheck,
     ChatMessage,
@@ -90,7 +92,7 @@ def run_orchestrator(
     project_id: int,
     *,
     on_log: LogCallback | None = None,
-    on_screenshot: ScreenshotCallback | None = None,
+    on_screenshot: AttemptScreenshotCallback | None = None,
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
     cancellation_check: CancellationCheck | None = None,
@@ -143,7 +145,7 @@ def run_orchestrator(
         )
 
     sub_agent_config = _build_sub_agent_execution_config(
-        sub_agent_llm, vision_llm, on_log, on_screenshot, cancellation_check
+        sub_agent_llm, vision_llm, on_log, cancellation_check
     )
     # One selection per case (one run_orchestrator call per case), shared by
     # every sub-agent and recovery sub-agent, so the browser the case asked for
@@ -154,7 +156,9 @@ def run_orchestrator(
         if resume is None
         else BrowserSelection(current=resume.browser)
     )
-    progress = _new_progress(sub_tasks, resume, browser_selection, on_checkpoint)
+    progress = _new_progress(
+        sub_tasks, resume, browser_selection, on_checkpoint, on_screenshot
+    )
     progress.checkpoint()
 
     orchestrator_result = _execute_sub_tasks(
@@ -195,6 +199,9 @@ class _Progress:
     plan: tuple[SubTask, ...]
     browser_selection: BrowserSelection
     on_checkpoint: CheckpointCallback | None
+    # The case's screenshot sink; each sub-agent run gets it tagged with its
+    # attempt (_config_for_attempt).
+    on_screenshot: AttemptScreenshotCallback | None
     attempts: list[SubTaskAttempt] = field(default_factory=list)
     state_lines: list[str] = field(default_factory=list)
     # Step -> the failed attempt's state with its actions, shown only while that
@@ -248,11 +255,13 @@ def _new_progress(
     resume: OrchestratorCheckpoint | None,
     browser_selection: BrowserSelection,
     on_checkpoint: CheckpointCallback | None,
+    on_screenshot: AttemptScreenshotCallback | None,
 ) -> _Progress:
     progress = _Progress(
         plan=plan,
         browser_selection=browser_selection,
         on_checkpoint=on_checkpoint,
+        on_screenshot=on_screenshot,
     )
     if resume is None:
         return progress
@@ -622,11 +631,18 @@ def _restore_resumed_state(
     )
     progress.set_phase("resume")
     started = time.monotonic()
+    attempt_id = uuid.uuid4().hex
     result = run_sub_agent(
         resume_task,
         "\n".join(progress.state_lines),
         project_id,
-        config=_config_for_sub_task(sub_agent_config, resume_task),
+        config=_config_for_attempt(
+            sub_agent_config,
+            resume_task,
+            progress.on_screenshot,
+            attempt_id=attempt_id,
+            step_num=step_num,
+        ),
         browser_selection=progress.browser_selection,
         system_info=system_info,
         project_prompt=project_prompt,
@@ -638,6 +654,7 @@ def _restore_resumed_state(
             kind="resume",
             result=result,
             duration_seconds=_elapsed_seconds(started),
+            attempt_id=attempt_id,
         )
     )
     progress.checkpoint()
@@ -656,16 +673,15 @@ def _build_sub_agent_execution_config(
     sub_agent_llm: LLMConfig,
     vision_llm: LLMConfig,
     on_log: LogCallback | None,
-    on_screenshot: ScreenshotCallback | None,
     cancellation_check: CancellationCheck | None,
 ) -> AgentConfig:
+    # Shared by every sub-agent run; on_screenshot is set per attempt.
     return AgentConfig(
         llm=sub_agent_llm,
         vision_llm=vision_llm,
         max_iterations=settings.SUB_AGENT_MAX_ITERATIONS,
         timeout_seconds=settings.SUB_AGENT_TIMEOUT_SECONDS,
         on_log=on_log,
-        on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
     )
 
@@ -740,8 +756,39 @@ def _build_sub_task(item: dict[str, object], bounds: TimeoutBounds) -> SubTask:
     )
 
 
-def _config_for_sub_task(base: AgentConfig, sub_task: SubTask) -> AgentConfig:
-    return replace(base, timeout_seconds=sub_task.timeout_seconds)
+def _config_for_attempt(
+    base: AgentConfig,
+    sub_task: SubTask,
+    on_screenshot: AttemptScreenshotCallback | None,
+    *,
+    attempt_id: str,
+    step_num: int,
+) -> AgentConfig:
+    """The config for one sub-agent run: its budget, and its screenshots tagged
+    with the attempt the run records (the same ``attempt_id``)."""
+    return replace(
+        base,
+        timeout_seconds=sub_task.timeout_seconds,
+        on_screenshot=_attempt_screenshot_callback(
+            on_screenshot, attempt_id=attempt_id, step_num=step_num
+        ),
+    )
+
+
+def _attempt_screenshot_callback(
+    on_screenshot: AttemptScreenshotCallback | None,
+    *,
+    attempt_id: str,
+    step_num: int,
+) -> ScreenshotCallback | None:
+    if on_screenshot is None:
+        return None
+    case_callback = on_screenshot
+
+    def forward(base64_data: str, tool_name: str) -> None:
+        case_callback(base64_data, tool_name, attempt_id=attempt_id, step_num=step_num)
+
+    return forward
 
 
 def _execute_sub_tasks(
@@ -809,11 +856,18 @@ def _execute_sub_tasks(
         )
 
         started = time.monotonic()
+        attempt_id = uuid.uuid4().hex
         result = run_sub_agent(
             sub_task,
             state_description,
             project_id,
-            config=_config_for_sub_task(sub_agent_config, sub_task),
+            config=_config_for_attempt(
+                sub_agent_config,
+                sub_task,
+                progress.on_screenshot,
+                attempt_id=attempt_id,
+                step_num=step_num,
+            ),
             browser_selection=browser_selection,
             system_info=system_info,
             project_prompt=project_prompt,
@@ -825,6 +879,7 @@ def _execute_sub_tasks(
                 kind="step",
                 result=result,
                 duration_seconds=_elapsed_seconds(started),
+                attempt_id=attempt_id,
             )
         )
 
@@ -1022,11 +1077,18 @@ def _attempt_recovery(
     )
     progress.set_phase("recovery")
     started = time.monotonic()
+    attempt_id = uuid.uuid4().hex
     recovery_result = run_sub_agent(
         decision.recovery_task,
         recovery_state,
         project_id,
-        config=_config_for_sub_task(sub_agent_config, decision.recovery_task),
+        config=_config_for_attempt(
+            sub_agent_config,
+            decision.recovery_task,
+            progress.on_screenshot,
+            attempt_id=attempt_id,
+            step_num=step_num,
+        ),
         browser_selection=progress.browser_selection,
         system_info=system_info,
         project_prompt=project_prompt,
@@ -1037,6 +1099,7 @@ def _attempt_recovery(
             kind="recovery",
             result=recovery_result,
             duration_seconds=_elapsed_seconds(started),
+            attempt_id=attempt_id,
         )
     )
 

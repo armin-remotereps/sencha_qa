@@ -861,6 +861,13 @@ class TestRunScreenshot(models.Model):
     image = models.ImageField(upload_to=_screenshot_upload_path)
     tool_name = models.CharField(max_length=100)
     created_at = models.DateTimeField(auto_now_add=True)
+    # The step attempt that took it (``SubTaskAttempt.attempt_id``); empty for
+    # screenshots taken before tagging or outside a sub-agent.
+    attempt_id = models.CharField(max_length=32, blank=True, default="")
+    step_num = models.PositiveSmallIntegerField(null=True, blank=True)
+    # Selected for the next "Send checked to TestRail"; frozen when the case is
+    # checked (projects/testrail_evidence_services.py).
+    testrail_evidence = models.BooleanField(default=False)
 
     class Meta:
         ordering = ["created_at"]

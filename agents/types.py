@@ -150,6 +150,15 @@ class ScreenshotCallback(Protocol):
     def __call__(self, base64_data: str, tool_name: str) -> None: ...
 
 
+class AttemptScreenshotCallback(Protocol):
+    """The case's screenshot sink: the orchestrator wraps it per sub-agent run
+    into a plain ``ScreenshotCallback`` tagged with that run's attempt."""
+
+    def __call__(
+        self, base64_data: str, tool_name: str, *, attempt_id: str, step_num: int
+    ) -> None: ...
+
+
 @dataclass(frozen=True)
 class AgentConfig:
     llm: LLMConfig
@@ -202,6 +211,10 @@ class SubTaskAttempt:
     # Set on a synthetic passing ``step`` attempt written when a help chat
     # redesigned the plan: the earlier plan's step this one was carried from.
     carried_from: int | None = None
+    # Random id minted before the sub-agent ran; the screenshots it took carry
+    # the same id. Empty for checkpoints written before screenshots were tagged
+    # and for synthetic carried attempts.
+    attempt_id: str = ""
 
 
 # What the orchestrator decides after a failed step.

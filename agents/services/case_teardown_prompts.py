@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from agents.services.orchestrator_prompts import (
-    CLOSE_CLAUSE_PREFIX,
-    final_step_indices,
-)
+from agents.checkpoint import final_step_indices
+from agents.services.orchestrator_prompts import CLOSE_CLAUSE_PREFIX
 from agents.types import SubTask, SubTaskAttempt
 
 _CLOSE_CLAUSE_MAX_CHARS = 300
