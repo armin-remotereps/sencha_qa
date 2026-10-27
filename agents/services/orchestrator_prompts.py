@@ -19,6 +19,30 @@ _STEP_DESCRIPTION_MAX_CHARS = 100
 # that never reached the step finds it by the same words.
 CLOSE_CLAUSE_PREFIX: Final = "Afterwards, close"
 
+# How much a plan tests and how coarse its steps are; shared by the planner and
+# the help/result chat redesigns so a redesign does not grow a short plan back.
+PLAN_SCOPE_RULES: Final = (
+    "- SCOPE: test exactly what the case asks, no more. When the case is a general "
+    "check ('check feature A works', 'verify X is OK') without listed items, plan a "
+    "short happy path: reach the feature, use its main action once and confirm the "
+    "visible result — typically 2 to 5 steps. Never invent scenarios, go through "
+    "every option, field or menu item, or add edge cases or negative tests the case "
+    "does not ask for. 'All X "
+    "are shown' gets one look, not a step per item; only when the case asks that "
+    "each X works, exercise each one, in as few steps as possible. When the case "
+    "lists explicit steps or items, cover those and only those, plus the "
+    "preconditions and implicit steps needed to reach what is tested, and keep "
+    "every expected result the case states.\n"
+    "- Each step must be a concrete action with a verifiable expected result. For "
+    "explicit multi-step cases, use one action per step and split a compound step. "
+    "For a general check, one step may cover a short sequence in the same screen or "
+    "app, with the checks in its expected_result, but only of actions that are safe "
+    "to repeat (open, navigate, look, read): an action that creates, submits, sends "
+    "or changes data gets its own step, because an interrupted step re-runs from "
+    "its first action. A step that combines several actions needs a larger "
+    "timeout_seconds.\n"
+)
+
 
 def build_plan_system_prompt(
     project_prompt: str | None = None,
@@ -27,8 +51,9 @@ def build_plan_system_prompt(
     max_timeout_seconds: int,
 ) -> str:
     prompt = (
-        "You are a QA test orchestrator. Your job is to decompose test cases into "
-        "small, focused sub-tasks that an executor agent will run one at a time.\n\n"
+        "You are a QA test orchestrator. Your job is to turn a test case into the "
+        "fewest sub-tasks that test what it asks; an executor agent runs them one at "
+        "a time.\n\n"
     )
 
     if project_prompt:
@@ -41,10 +66,10 @@ def build_plan_system_prompt(
         )
 
     prompt += (
-        "RULES:\n"
-        "- Each sub-task must be a single, concrete action with a verifiable expected result.\n"
-        "- If a test step is compound (multiple actions), split it into separate sub-tasks.\n"
-        "- Add implicit steps when needed (e.g., opening a browser before navigating to a URL).\n"
+        "RULES (a step is one sub-task):\n"
+        f"{PLAN_SCOPE_RULES}"
+        "- Add only the implicit steps needed to reach what is being tested (e.g., "
+        "opening a browser before navigating to a URL).\n"
         "- CRITICAL: Each sub-task is executed by a SEPARATE agent with NO memory of prior steps. "
         "Every sub-task description must be FULLY self-contained — always specify WHICH "
         "application, window, or terminal to use (e.g., 'In the VS Code integrated terminal, "
@@ -105,7 +130,8 @@ def _build_timeout_rule(min_timeout_seconds: int, max_timeout_seconds: int) -> s
         "executor gets for that step, between "
         f"{min_timeout_seconds} and {max_timeout_seconds} seconds. Budget for the SLOW case, "
         "not the typical one. Quick UI actions (open an app, click, type, navigate) need "
-        f"the minimum ({min_timeout_seconds}). Steps that wait on external progress "
+        f"the minimum ({min_timeout_seconds}); a sub-task combining several actions gets "
+        "proportionally more. Steps that wait on external progress "
         "(downloads, installs, builds, test suites, package managers) need several hundred "
         f"seconds and should usually get the maximum ({max_timeout_seconds}). The executor "
         "cannot extend its budget, so a step that runs out of time fails even if the action "

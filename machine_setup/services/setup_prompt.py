@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from django.conf import settings
 
-from agents.services.orchestrator_prompts import CLOSE_CLAUSE_PREFIX
+from agents.services.orchestrator_prompts import CLOSE_CLAUSE_PREFIX, PLAN_SCOPE_RULES
 from agents.services.prompt_parts import (
     build_agent_persona,
     build_project_context,
@@ -283,11 +283,12 @@ def _build_result_chat_rules(*, max_iterations: int) -> str:
         f"dropped), and at least one step must run. {GET_CASE_RESULT_TOOL} "
         "lists the steps that can be carried.\n"
         "- Each step runs in a separate agent with no memory: make every step "
-        "self-contained (name the application, window or terminal). One "
-        "concrete action per step with a verifiable expected result. Keep the "
+        "self-contained (name the application, window or terminal). Keep the "
         f"closing clauses the tester's plan uses ('{CLOSE_CLAUSE_PREFIX} <App> "
         "with close_app ...') on the last step that uses an app. No "
         "verification-only steps.\n"
+        f"{PLAN_SCOPE_RULES}"
+        "- When the person asks for more coverage than the case, follow them.\n"
         "- Do NOT prepare the machine for the re-run: the server cleans up the "
         "machine and restores the carried steps' state first. Undo anything "
         "your helpers changed that the cleanup would not.\n"
@@ -509,10 +510,11 @@ def _build_help_chat_rules(*, max_iterations: int) -> str:
         "it: add a step that verifies its result instead.\n"
         "- Each step runs in a separate agent with no memory: make every step "
         "self-contained (name the application, window or terminal, e.g. 'In the "
-        "already-open VS Code window, ...'). One concrete action per step with a "
-        "verifiable expected result. Keep the closing clauses the tester's plan "
-        f"uses ('{CLOSE_CLAUSE_PREFIX} <App> with close_app ...') on the last step "
-        "that uses an app. No verification-only steps.\n"
+        "already-open VS Code window, ...'). Keep the closing clauses the tester's "
+        f"plan uses ('{CLOSE_CLAUSE_PREFIX} <App> with close_app ...') on the last "
+        "step that uses an app. No verification-only steps.\n"
+        f"{PLAN_SCOPE_RULES}"
+        "- When the person asks for more coverage than the case, follow them.\n"
         "- Before proposing, bring the machine (through helpers) to the state the "
         "first step that runs expects, and undo or account for the effects of "
         "earlier steps you dropped: Continue resumes on the machine as it is, "

@@ -56,7 +56,10 @@ def build_qa_rules() -> str:
         "sources, mirrors, or workarounds. Report the exact URL and that authentication is required.\n"
         "- NEVER pretend a step succeeded. NEVER fabricate results. If something does not work "
         "as described, the test FAILS.\n"
-        "- Verify every expected result. If the actual result does not match the expected result, "
+        "- Do only what this task asks. Do not explore or check anything beyond what the "
+        "task and its expected result need. Once the expected result is confirmed, do any "
+        "housekeeping the task names (e.g. closing an app), then finish.\n"
+        "- Verify every check in the expected result. If the actual result does not match the expected result, "
         "FAIL the test."
     )
 
