@@ -5,6 +5,7 @@ import sys
 
 from controller_client.client import ControllerClient
 from controller_client.config import load_config, setup_logging
+from controller_client.desktop import get_desktop_backend
 from controller_client.env_check import verify_environment, verify_screen_capture
 from controller_client.exceptions import EnvironmentCheckError
 
@@ -20,6 +21,8 @@ def main(argv: list[str] | None = None) -> None:
     except EnvironmentCheckError as exc:
         logger.error("%s", exc)
         sys.exit(1)
+
+    logger.info("Desktop backend: %s", get_desktop_backend().name)
 
     # Not fatal: browser tools keep working without it, and the desktop tools
     # now fail with this same explanation, so the run is still diagnosable.

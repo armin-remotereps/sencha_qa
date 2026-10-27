@@ -1,4 +1,7 @@
 websockets~=15.0
+# Talks to GNOME's remote desktop D-Bus API on Linux (Wayland); never
+# imported on Windows, where it has no wheel.
+dbus-fast~=5.2.0; sys_platform != "win32"
 PyAutoGUI==0.9.54
 python-decouple~=3.8
 Pillow~=11.2.1

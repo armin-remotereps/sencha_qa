@@ -2,16 +2,16 @@ import base64
 import io
 import os
 import subprocess
-import sys
 import threading
 import time
 from collections.abc import Callable
 from typing import Final
 
-import pyautogui
 from PIL import Image
 
-from controller_client.exceptions import ExecutionError, ScreenCaptureError
+from controller_client.desktop import get_desktop_backend
+from controller_client.desktop_backend import DesktopBackend
+from controller_client.exceptions import ExecutionError
 from controller_client.input_guard import ensure_input_not_blocked
 from controller_client.interactive_session import InteractiveSessionManager
 from controller_client.process_tracker import ProcessTracker
@@ -35,17 +35,16 @@ from controller_client.protocol import (
 )
 from controller_client.screen_capture import capture_screen
 
-if sys.platform == "darwin":
-    import Quartz
-
-pyautogui.FAILSAFE = False
+_DESKTOP: Final[DesktopBackend] = get_desktop_backend()
 
 
 def execute_click(payload: ClickPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
     try:
-        pyautogui.click(x=payload.x, y=payload.y, button=payload.button)
+        _DESKTOP.click(payload.x, payload.y, payload.button)
+    except ExecutionError:
+        raise
     except Exception as e:
         raise ExecutionError(f"Click failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -56,42 +55,11 @@ def execute_click(payload: ClickPayload) -> ActionResultPayload:
     )
 
 
-if sys.platform == "darwin":
-
-    def _double_click(x: int, y: int) -> None:
-        # pyautogui 0.9.54 posts two plain down/up pairs on macOS and never sets
-        # kCGMouseEventClickState, the field AppKit reads as clickCount, so Cocoa
-        # apps saw two single clicks. Post the pairs with click state 1 then 2.
-        pyautogui.moveTo(x=x, y=y)
-        point = Quartz.CGPointMake(x, y)
-        for click_state in (1, 2):
-            for event_type in (
-                Quartz.kCGEventLeftMouseDown,
-                Quartz.kCGEventLeftMouseUp,
-            ):
-                event = Quartz.CGEventCreateMouseEvent(
-                    None, event_type, point, Quartz.kCGMouseButtonLeft
-                )
-                if event is None:
-                    raise ExecutionError("Could not create a mouse event")
-                Quartz.CGEventSetIntegerValueField(
-                    event, Quartz.kCGMouseEventClickState, click_state
-                )
-                Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
-
-else:
-
-    def _double_click(x: int, y: int) -> None:
-        # Windows and Linux detect the double-click from the timing of the two
-        # clicks pyautogui sends back to back.
-        pyautogui.doubleClick(x=x, y=y)
-
-
 def execute_double_click(payload: DoubleClickPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
     try:
-        _double_click(payload.x, payload.y)
+        _DESKTOP.double_click(payload.x, payload.y)
     except ExecutionError:
         raise
     except Exception as e:
@@ -108,7 +76,9 @@ def execute_hover(payload: HoverPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
     try:
-        pyautogui.moveTo(x=payload.x, y=payload.y)
+        _DESKTOP.move_to(payload.x, payload.y)
+    except ExecutionError:
+        raise
     except Exception as e:
         raise ExecutionError(f"Hover failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -123,13 +93,16 @@ def execute_drag(payload: DragPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
     try:
-        pyautogui.moveTo(x=payload.start_x, y=payload.start_y)
-        pyautogui.drag(
-            xOffset=payload.end_x - payload.start_x,
-            yOffset=payload.end_y - payload.start_y,
-            duration=payload.duration,
-            button=payload.button,
+        _DESKTOP.drag(
+            payload.start_x,
+            payload.start_y,
+            payload.end_x,
+            payload.end_y,
+            payload.button,
+            payload.duration,
         )
+    except ExecutionError:
+        raise
     except Exception as e:
         raise ExecutionError(f"Drag failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -147,7 +120,9 @@ def execute_type_text(payload: TypeTextPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
     try:
-        pyautogui.typewrite(payload.text, interval=payload.interval)
+        _DESKTOP.type_text(payload.text, payload.interval)
+    except ExecutionError:
+        raise
     except Exception as e:
         raise ExecutionError(f"Type text failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -158,42 +133,20 @@ def execute_type_text(payload: TypeTextPayload) -> ActionResultPayload:
     )
 
 
-# pyautogui silently skips key names its platform backend does not know, so
-# "cmd+n" on macOS (which only knows "command") pressed a bare "n". Map the
-# common aliases onto each backend's own names and reject anything unknown.
-if sys.platform == "darwin":
-    _KEY_ALIASES: Final[dict[str, str]] = {
-        "cmd": "command",
-        "meta": "command",
-        "super": "command",
-        "win": "command",
-        "opt": "option",
-        "control": "ctrl",
-    }
-else:
-    _KEY_ALIASES = {
-        "cmd": "win",
-        "command": "win",
-        "meta": "win",
-        "super": "win",
-        "opt": "alt",
-        "option": "alt",
-        "control": "ctrl",
-    }
-
-
+# Each backend owns its key aliases (cmd/meta/super, opt, control, ...) and
+# rejects names it cannot press, so an unknown key never becomes a bare letter.
 def _normalize_key(key: str, *, in_combination: bool) -> str:
     if not key:
         raise ExecutionError(
             "Empty key in combination; the '+' key itself cannot be pressed"
         )
-    # A lone uppercase letter means shift+letter to pyautogui; inside a
+    # A lone uppercase letter means shift+letter to the backend; inside a
     # combination "cmd+N" means Cmd+N, so lowercase it there.
     name = key.lower() if len(key) > 1 or in_combination else key
-    name = _KEY_ALIASES.get(name, name)
-    if not pyautogui.isValidKey(name):
+    resolved = _DESKTOP.resolve_key(name)
+    if resolved is None:
         raise ExecutionError(f"Unknown key: {key!r}")
-    return name
+    return resolved
 
 
 def execute_key_press(payload: KeyPressPayload) -> ActionResultPayload:
@@ -202,10 +155,9 @@ def execute_key_press(payload: KeyPressPayload) -> ActionResultPayload:
     parts = [k.strip() for k in payload.keys.split("+")]
     keys = [_normalize_key(k, in_combination=len(parts) > 1) for k in parts]
     try:
-        if len(keys) > 1:
-            pyautogui.hotkey(*keys)
-        else:
-            pyautogui.press(keys[0])
+        _DESKTOP.press_keys(keys)
+    except ExecutionError:
+        raise
     except Exception as e:
         raise ExecutionError(f"Key press failed: {e}") from e
     duration_ms = (time.monotonic() - start) * 1000
@@ -370,8 +322,9 @@ def execute_screenshot() -> ScreenshotResponsePayload:
         screenshot.save(buffer, format="PNG")
         image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
         width, height = screenshot.size
-    except ScreenCaptureError:
-        # Already carries the OS-level reason and how to fix it.
+    except ExecutionError:
+        # ScreenCaptureError or DesktopSessionError: already carries the
+        # OS-level reason and how to fix it.
         raise
     except Exception as e:
         raise ExecutionError(f"Screenshot failed: {e}") from e

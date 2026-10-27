@@ -56,18 +56,33 @@ case "$PROJECT_DIR/" in
         ;;
 esac
 
-# Install system dependencies (Linux only)
+# Install system dependencies (Linux only). On Linux the Test Runner drives
+# GNOME on Wayland through Mutter's remote-desktop D-Bus API and reads screen
+# frames from PipeWire with the gst-launch-1.0 CLI.
+LINUX_PACKAGES=(gstreamer1.0-tools gstreamer1.0-pipewire gstreamer1.0-plugins-base gstreamer1.0-plugins-good)
 if [[ "$(uname -s)" == "Linux" ]]; then
     echo "[1/6] Installing system dependencies..."
     if command -v apt-get &> /dev/null; then
-        if ! command -v gnome-screenshot &> /dev/null; then
-            echo "  Installing gnome-screenshot (required by PyAutoGUI)..."
-            sudo apt-get install -y gnome-screenshot
+        MISSING_PACKAGES=()
+        for package in "${LINUX_PACKAGES[@]}"; do
+            if ! dpkg -s "$package" &> /dev/null; then
+                MISSING_PACKAGES+=("$package")
+            fi
+        done
+        if [[ ${#MISSING_PACKAGES[@]} -gt 0 ]]; then
+            echo "  Installing ${MISSING_PACKAGES[*]} (screen capture through PipeWire)..."
+            sudo apt-get install -y "${MISSING_PACKAGES[@]}"
         else
-            echo "  gnome-screenshot already installed."
+            echo "  GStreamer PipeWire tools already installed."
         fi
     else
-        echo "  WARNING: Non-apt system detected. Please install gnome-screenshot manually."
+        echo "  WARNING: Non-apt system detected. Please install these packages (or your distribution's equivalents) manually:"
+        echo "           ${LINUX_PACKAGES[*]}"
+    fi
+    if [[ "${XDG_SESSION_TYPE:-}" != "wayland" ]] || [[ "${XDG_CURRENT_DESKTOP:-}" != *GNOME* ]]; then
+        echo "  WARNING: this session is '${XDG_SESSION_TYPE:-unknown}' with desktop '${XDG_CURRENT_DESKTOP:-unknown}'."
+        echo "           The Test Runner on Linux needs Ubuntu's default GNOME on Wayland session."
+        echo "           Log in to 'Ubuntu' (not 'Ubuntu on Xorg') and run the Test Runner from that session."
     fi
 else
     echo "[1/6] System dependencies check skipped (not Linux)."
@@ -124,6 +139,21 @@ echo "To start the controller client:"
 echo "  cd $ROOT_DIR"
 echo "  controller_client/.venv/bin/python -m controller_client.main"
 echo ""
+if [[ "$(uname -s)" == "Linux" ]]; then
+    echo "Start the Test Runner from a terminal inside the desktop session, not over SSH:"
+    echo "it needs that session's D-Bus and screen."
+    echo ""
+    echo "Unattended machines (e.g. Night runs): the lock screen stops remote control, so the"
+    echo "machine must stay logged in and unlocked. This script does not change these settings;"
+    echo "run them yourself if this machine is meant to run unattended:"
+    echo "  gsettings set org.gnome.desktop.screensaver lock-enabled false"
+    echo "  gsettings set org.gnome.desktop.session idle-delay 0"
+    echo "  gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'"
+    echo "  and enable automatic login in /etc/gdm3/custom.conf (needs sudo), under [daemon]:"
+    echo "    AutomaticLoginEnable=true"
+    echo "    AutomaticLogin=${USER:-<your user name>}"
+    echo ""
+fi
 echo "To check that the Test Runner can capture the screen:"
 echo "  controller_client/.venv/bin/python -m controller_client.diagnose"
 echo ""

@@ -52,3 +52,10 @@ class BrowserNotInstalledError(ExecutionError):
 
 class InputBlockedError(ExecutionError):
     """Synthesized input would be discarded by the OS before reaching the screen."""
+
+
+class DesktopSessionError(ExecutionError):
+    """The desktop session refused or lost remote control.
+
+    The message says why and how to fix it, for the agent and the person.
+    """

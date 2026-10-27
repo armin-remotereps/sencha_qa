@@ -2,14 +2,7 @@ import platform
 import socket
 from dataclasses import dataclass
 
-import pyautogui
-
-try:
-    from screeninfo import get_monitors
-
-    _SCREENINFO_AVAILABLE = True
-except ImportError:
-    _SCREENINFO_AVAILABLE = False
+from controller_client.desktop import get_desktop_backend
 
 
 @dataclass(frozen=True)
@@ -20,6 +13,9 @@ class SystemInfo:
     hostname: str
     screen_width: int
     screen_height: int
+    # Extra keys from the desktop backend (Linux: display_server, desktop);
+    # empty on Windows and macOS, so their handshake keeps today's keys.
+    session: tuple[tuple[str, str], ...] = ()
 
     def to_dict(self) -> dict[str, str | int]:
         return {
@@ -29,6 +25,7 @@ class SystemInfo:
             "hostname": self.hostname,
             "screen_width": self.screen_width,
             "screen_height": self.screen_height,
+            **dict(self.session),
         }
 
 
@@ -44,20 +41,9 @@ def _normalize_architecture(arch: str) -> str:
     return _ARCHITECTURE_MAP.get(arch.lower(), arch)
 
 
-def _get_screen_resolution() -> tuple[int, int]:
-    if _SCREENINFO_AVAILABLE:
-        try:
-            monitors = get_monitors()
-            if monitors:
-                return monitors[0].width, monitors[0].height
-        except (IndexError, RuntimeError):
-            pass
-    size = pyautogui.size()
-    return size.width, size.height
-
-
 def gather_system_info() -> SystemInfo:
-    width, height = _get_screen_resolution()
+    backend = get_desktop_backend()
+    width, height = backend.screen_size()
     return SystemInfo(
         os=platform.system(),
         os_version=platform.version(),
@@ -65,4 +51,5 @@ def gather_system_info() -> SystemInfo:
         hostname=socket.gethostname(),
         screen_width=width,
         screen_height=height,
+        session=tuple(backend.session_info().items()),
     )

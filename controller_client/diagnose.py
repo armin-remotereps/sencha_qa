@@ -3,25 +3,11 @@ import sys
 
 from controller_client.browser_diagnostics import build_browser_steps
 from controller_client.config import setup_logging
-from controller_client.diagnostics import DiagnosticStep, run_diagnostics
+from controller_client.desktop import get_desktop_backend
+from controller_client.diagnostics import run_diagnostics
 from controller_client.protocol import BrowserName
-from controller_client.screen_capture import describe_screen_capture_failure
 
 _ALL_BROWSERS = "all"
-
-_SCREEN_CAPTURE_HINT = (
-    "The Test Runner must run inside an interactive desktop session that may "
-    "capture the screen: on macOS grant Screen Recording to the terminal, on "
-    "Linux make sure DISPLAY points at the desktop, on Windows run it from a "
-    "logged-in desktop session rather than a service."
-)
-
-
-def _check_screen_capture() -> str:
-    failure = describe_screen_capture_failure()
-    if failure is not None:
-        raise RuntimeError(f"{failure}. {_SCREEN_CAPTURE_HINT}")
-    return "the screen can be captured"
 
 
 def _parse_browsers(value: str) -> tuple[BrowserName, ...]:
@@ -54,7 +40,8 @@ def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m controller_client.diagnose",
         description=(
-            "Check that this machine lets the Test Runner capture the screen. "
+            "Check that this machine lets the Test Runner capture the screen "
+            "and drive input. "
             "With --browsers, check the browsers instead."
         ),
     )
@@ -78,9 +65,7 @@ def main(argv: list[str] | None = None) -> None:
         _run_browser_diagnostics(args.browsers)
         return
 
-    passed = run_diagnostics(
-        (DiagnosticStep("screen capture", _check_screen_capture),), print
-    )
+    passed = run_diagnostics(get_desktop_backend().diagnostic_steps(), print)
     if passed:
         print("All diagnostics passed.")
         return

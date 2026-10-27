@@ -7,6 +7,41 @@ def get_os_name(system_info: dict[str, object] | None) -> str:
     return str(system_info.get("os", "Linux"))
 
 
+_SYSTEM_INFO_VALUE_MAX_CHARS = 40
+
+
+def _system_info_text(system_info: dict[str, object] | None, key: str) -> str:
+    """A runner-reported value as one short line of plain text ("" when absent).
+
+    The runner is not trusted: keep only printable characters on one line and cap
+    the length so the value cannot reshape the prompt around it.
+    """
+    if not system_info:
+        return ""
+    value = system_info.get(key)
+    if not isinstance(value, str):
+        return ""
+    text = " ".join("".join(c if c.isprintable() else " " for c in value).split())
+    return text[:_SYSTEM_INFO_VALUE_MAX_CHARS]
+
+
+def _is_gnome_wayland(desktop: str, display_server: str) -> bool:
+    return "gnome" in desktop.lower() and display_server.lower() == "wayland"
+
+
+def _linux_desktop_details(system_info: dict[str, object] | None) -> str:
+    """What the runner reported about its Linux desktop ("" for older runners)."""
+    desktop = _system_info_text(system_info, "desktop")
+    display_server = _system_info_text(system_info, "display_server")
+    if _is_gnome_wayland(desktop, display_server):
+        return f"GNOME on Wayland, {desktop}"
+    return ", ".join(
+        part
+        for part in (desktop, display_server and f"display server: {display_server}")
+        if part
+    )
+
+
 def build_project_context(
     project_prompt: str,
     *,
@@ -34,7 +69,10 @@ def build_agent_persona(
     elif os_name == "Windows":
         env_description = "a Windows desktop environment"
     else:
-        env_description = "a Linux desktop environment (Ubuntu 24.04 with XFCE4)"
+        details = _linux_desktop_details(system_info)
+        env_description = "a Linux desktop environment" + (
+            f" ({details})" if details else ""
+        )
     return (
         f"You are {role} operating inside {env_description}. " f"Your job is to {job}."
     )
@@ -158,9 +196,24 @@ def build_environment_context(
             "- If a CLI install fails, use the browser to download from the official website, "
             "then use desktop tools to run the installer."
         )
+    desktop = _system_info_text(system_info, "desktop")
+    display_server = _system_info_text(system_info, "display_server")
+    if _is_gnome_wayland(desktop, display_server):
+        desktop_line = (
+            "- The desktop is GNOME on Wayland and is already running. Open apps with "
+            'launch_app; the Activities overview opens with key_press(keys="super"); '
+            'close a window with key_press(keys="alt+F4").\n'
+        )
+    else:
+        details = _linux_desktop_details(system_info)
+        desktop_line = (
+            "- The desktop"
+            + (f" ({details})" if details else "")
+            + " is already running. Open apps with launch_app.\n"
+        )
     return (
         "ENVIRONMENT:\n"
-        "- The desktop (XFCE4) is already running on display :0\n"
+        f"{desktop_line}"
         "- A browser is available via browser tools (Playwright): chromium (default), "
         "firefox, webkit, chrome (Google Chrome), msedge (Microsoft Edge). "
         "Use browser_navigate to open a URL — no need to launch a browser manually.\n"
