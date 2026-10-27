@@ -66,6 +66,7 @@ from projects.testrail_client import (
     TestRailResultInput,
     TestRailRun,
 )
+from projects.testrail_evidence import OVERLAY_TOOL_NAME
 from projects.testrail_mapping import (
     build_checked_result_comment,
     format_checked_push_confirm_body,
@@ -96,8 +97,6 @@ CHECKED_PUSH_INTERRUPTED_MESSAGE = (
     "The previous send was interrupted; send again to resume."
 )
 
-# OmniParser annotated overlays are debugging images, not evidence.
-_OVERLAY_TOOL_NAME = "controller_omniparser"
 _FINISHED_STATUSES = (TestRunStatus.DONE, TestRunStatus.CANCELLED)
 _NOT_CONFIGURED_MESSAGE = (
     "TestRail is not configured for this project. "
@@ -117,11 +116,16 @@ _UNKNOWN_REVIEWER = "a deleted user"
 def _evidence_screenshots() -> QuerySet[TestRunScreenshot]:
     """The screenshots that are attached to TestRail, in upload order.
 
-    `(created_at, id)` is stable across attempts, which is what makes the
-    per-pivot attachment counter a valid resume index.
+    Only the evidence frozen when the case was checked
+    (`testrail_evidence`, see `testrail_evidence_services`); overlays stay
+    excluded as a belt. The flags only change at check, which is refused once
+    sent, and `(created_at, id)` is stable across attempts, which is what makes
+    the per-pivot attachment counter a valid resume index.
     """
-    return TestRunScreenshot.objects.exclude(tool_name=_OVERLAY_TOOL_NAME).order_by(
-        "created_at", "id"
+    return (
+        TestRunScreenshot.objects.filter(testrail_evidence=True)
+        .exclude(tool_name=OVERLAY_TOOL_NAME)
+        .order_by("created_at", "id")
     )
 
 
@@ -130,8 +134,10 @@ def _with_planned_shot_count(
 ) -> QuerySet[TestRunTestCase]:
     """Annotate `planned_shots`: how many screenshots each pivot will attach."""
     shot_count = (
-        TestRunScreenshot.objects.filter(test_run_test_case=OuterRef("pk"))
-        .exclude(tool_name=_OVERLAY_TOOL_NAME)
+        TestRunScreenshot.objects.filter(
+            test_run_test_case=OuterRef("pk"), testrail_evidence=True
+        )
+        .exclude(tool_name=OVERLAY_TOOL_NAME)
         .order_by()
         .values("test_run_test_case")
         .annotate(total=Count("id"))
@@ -549,13 +555,15 @@ def _checked_by_label(user: CustomUser | None) -> str:
     return user.get_full_name().strip() or user.email
 
 
-def _existing_file_count(screenshots: Iterable[TestRunScreenshot]) -> int:
-    return sum(
-        1
+def _existing_files(
+    screenshots: Iterable[TestRunScreenshot],
+) -> list[TestRunScreenshot]:
+    return [
+        screenshot
         for screenshot in screenshots
         if screenshot.image.name
         and screenshot.image.storage.exists(screenshot.image.name)
-    )
+    ]
 
 
 def _plan_pivot(
@@ -577,9 +585,9 @@ def _plan_pivot(
         return None  # a checked case always has a verdict
     screenshots: list[TestRunScreenshot] = getattr(pivot, "testrail_screenshots", [])
     if pivot.testrail_source_result_id is None:
-        attached_count = _existing_file_count(screenshots)
+        attached = _existing_files(screenshots)
     else:
-        attached_count = len(screenshots)  # the comment is not sent again
+        attached = screenshots  # the comment is not sent again
     comment = build_checked_result_comment(
         outcome_label=testrail_outcome_label(status_id),
         run_name=test_run.display_name,
@@ -590,7 +598,10 @@ def _plan_pivot(
         ),
         checked_by_label=_checked_by_label(pivot.checked_by),
         checked_at=pivot.checked_at,
-        screenshot_count=attached_count,
+        screenshot_count=len(attached),
+        screenshot_steps=[
+            shot.step_num for shot in attached if shot.step_num is not None
+        ],
     )
     return PlannedCheckedResult(
         pivot=pivot,
@@ -653,7 +664,12 @@ def plan_checked_push(
             Prefetch(
                 "screenshots",
                 queryset=_evidence_screenshots().only(
-                    "id", "test_run_test_case_id", "image", "tool_name", "created_at"
+                    "id",
+                    "test_run_test_case_id",
+                    "image",
+                    "tool_name",
+                    "step_num",
+                    "created_at",
                 ),
                 to_attr="testrail_screenshots",
             )
@@ -777,7 +793,10 @@ def _attach_screenshots(
             attachment_id = client.add_attachment_to_result(
                 result_id,
                 filename=screenshot_attachment_filename(
-                    item.case_id, index + 1, screenshot.image.name
+                    item.case_id,
+                    index + 1,
+                    screenshot.image.name,
+                    screenshot.step_num,
                 ),
                 content=content,
             )

@@ -324,8 +324,13 @@ def build_checked_result_comment(
     checked_by_label: str,
     checked_at: datetime,
     screenshot_count: int,
+    screenshot_steps: Sequence[int],
 ) -> str:
-    """The 018 result comment plus who checked it and how many screenshots follow."""
+    """The 018 result comment plus who checked it and how many screenshots follow.
+
+    `screenshot_steps` are the plan steps the attached screenshots were taken
+    in (empty when unknown, e.g. untagged screenshots from older runs).
+    """
     paragraphs = [
         build_result_comment(
             outcome_label=outcome_label,
@@ -338,8 +343,17 @@ def build_checked_result_comment(
     ]
     if screenshot_count > 0:
         shots = pluralize_count(screenshot_count, "screenshot", "screenshots")
-        paragraphs.append(f"{shots} attached.")
+        paragraphs.append(f"{shots} attached{_steps_note(screenshot_steps)}.")
     return "\n\n".join(paragraphs)
+
+
+def _steps_note(steps: Sequence[int]) -> str:
+    """e.g. " from step 3" or " from steps 2, 3"; empty when no step is known."""
+    numbers = sorted(set(steps))
+    if not numbers:
+        return ""
+    label = "step" if len(numbers) == 1 else "steps"
+    return f" from {label} {', '.join(str(number) for number in numbers)}"
 
 
 def _run_list(run_ids: Sequence[int]) -> str:
@@ -421,13 +435,18 @@ def format_checked_push_confirm_body(
     )
 
 
-def screenshot_attachment_filename(case_id: int, index: int, image_name: str) -> str:
-    """Attachment name such as "C123_02_click.png" from a stored screenshot path.
+def screenshot_attachment_filename(
+    case_id: int, index: int, image_name: str, step_num: int | None
+) -> str:
+    """Attachment name such as "C123_s03_02_click.png" from a stored screenshot path.
 
-    `index` is 1-based. Stored names look like "<ms>_<tool>.png"; the tool
+    `index` is 1-based within the case. `step_num` is the plan step the
+    screenshot was taken in; when unknown the name has no step part
+    ("C123_02_click.png"). Stored names look like "<ms>_<tool>.png"; the tool
     part becomes the label so TestRail lists the shots in a readable order.
     """
     stem, extension = posixpath.splitext(posixpath.basename(image_name))
     tool = stem.split("_", 1)[1] if "_" in stem else stem
     label = _ATTACHMENT_LABEL_UNSAFE.sub("-", tool).strip("-") or "screenshot"
-    return f"C{case_id}_{index:02d}_{label}{extension.lower() or '.png'}"
+    step = f"s{step_num:02d}_" if step_num is not None else ""
+    return f"C{case_id}_{step}{index:02d}_{label}{extension.lower() or '.png'}"
