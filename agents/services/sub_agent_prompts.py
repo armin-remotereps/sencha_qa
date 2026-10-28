@@ -23,8 +23,13 @@ def build_sub_agent_system_prompt(
     system_info: dict[str, object] | None = None,
     project_prompt: str | None = None,
     tool_names: frozenset[str] | None = None,
+    final_turn_on_timeout: bool = False,
 ) -> str:
-    """``tool_names`` set: describe only those tools (a housekeeping sub-task)."""
+    """``tool_names`` set: describe only those tools (a housekeeping sub-task).
+
+    ``final_turn_on_timeout``: the loop gives one last turn without tools when the
+    budget runs out (``AgentConfig.final_answer``), so the TIME BUDGET says so.
+    """
     if tool_names is None:
         sections = [
             _build_sub_agent_persona(system_info=system_info),
@@ -34,7 +39,9 @@ def build_sub_agent_system_prompt(
             build_environment_context(system_info=system_info),
             build_tool_guidelines(system_info=system_info),
             _build_current_browser_section(current_browser),
-            _build_time_budget_section(timeout_seconds),
+            _build_time_budget_section(
+                timeout_seconds, final_turn_on_timeout=final_turn_on_timeout
+            ),
             _build_result_format_instructions(),
         ]
     else:
@@ -43,7 +50,9 @@ def build_sub_agent_system_prompt(
         sections = [
             _build_sub_agent_persona(system_info=system_info),
             _build_restricted_tools_section(tool_names),
-            _build_time_budget_section(timeout_seconds),
+            _build_time_budget_section(
+                timeout_seconds, final_turn_on_timeout=final_turn_on_timeout
+            ),
             _build_result_format_instructions(),
         ]
     if project_prompt:
@@ -80,13 +89,36 @@ def _build_current_browser_section(current_browser: BrowserName) -> str:
     )
 
 
-def _build_time_budget_section(timeout_seconds: int) -> str:
+def _build_time_budget_section(
+    timeout_seconds: int, *, final_turn_on_timeout: bool
+) -> str:
+    if final_turn_on_timeout:
+        on_timeout = (
+            "When the budget runs out you get one last turn without tools to give your "
+            "RESULT. PASS then only counts if you had already verified the expected "
+            "result, so verify as soon as the action is done."
+        )
+    else:
+        on_timeout = (
+            "The step fails automatically when the budget runs out, even if the action "
+            "itself succeeded."
+        )
     return (
         f"TIME BUDGET:\nYou have {timeout_seconds} seconds of wall-clock time for this "
-        "step, counted from your first action. The step fails automatically when the "
-        "budget runs out, even if the action itself succeeded. Leave time for a final "
-        "screenshot and your RESULT answer; the wait tool shortens any wait that would "
+        f"step, counted from your first action. {on_timeout} Leave time for a final "
+        "check and your RESULT answer; the wait tool shortens any wait that would "
         "run past the budget."
+    )
+
+
+def build_final_answer_prompt() -> str:
+    """The user message of the last, tool-less turn after the budget ran out."""
+    return (
+        "TIME IS UP. Your time budget for this step has run out and no more tools can "
+        "be called. Answer now in the RESULT FORMAT. Answer RESULT: PASS only if a tool "
+        "result or screenshot answer earlier in this conversation already showed every "
+        "check of the expected result; otherwise RESULT: FAIL, and say what was done "
+        "and what is still unverified. Do not guess."
     )
 
 
@@ -112,7 +144,8 @@ def _build_state_section(state_description: str) -> str:
         "CURRENT STATE — the machine is in the state resulting from these prior actions. "
         "Applications, windows, and terminals mentioned below are still open and available "
         "unless a summary says they were closed. "
-        "Take a screenshot first to see the current screen before acting:\n"
+        "Before your first GUI action, take a screenshot to see the current screen. If "
+        "this step only runs shell commands, do not take one:\n"
         f"{state_description}"
     )
 

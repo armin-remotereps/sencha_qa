@@ -137,23 +137,25 @@ def build_tool_taxonomy() -> str:
         "7. key_press — Press a key or key combination\n"
         "8. hover — Hover over an element found by vision-based description\n"
         "9. drag — Drag from one element to another, both found by vision-based description\n"
-        "10. launch_app — Launch a desktop application by name\n"
-        "11. close_app — Quit a desktop application the test no longer needs\n"
-        "12. close_tab — Close the front tab you opened in an app that has other tabs to keep\n\n"
+        "10. scroll — Scroll with the mouse wheel at a screen point\n"
+        "11. click_at — Left-click at pixel coordinates from take_screenshot\n"
+        "12. launch_app — Launch a desktop application by name\n"
+        "13. close_app — Quit a desktop application the test no longer needs\n"
+        "14. close_tab — Close the front tab you opened in an app that has other tabs to keep\n\n"
         "BROWSER TOOLS (Playwright — for web page interactions):\n"
-        "13. browser_navigate — Navigate the browser to a URL\n"
-        "14. browser_click — Click a web page element found by AI-based description\n"
-        "15. browser_double_click — Double-click a web page element found by AI-based description\n"
-        "16. browser_type — Type text into a web page element found by AI-based description\n"
-        "17. browser_hover — Hover over a web page element found by AI-based description\n"
-        "18. browser_get_page_content — Get the text content of the current page\n"
-        "19. browser_get_url — Get the current browser URL\n"
-        "20. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
-        "21. browser_download — Download a file from a URL via the browser\n\n"
+        "15. browser_navigate — Navigate the browser to a URL\n"
+        "16. browser_click — Click a web page element found by AI-based description\n"
+        "17. browser_double_click — Double-click a web page element found by AI-based description\n"
+        "18. browser_type — Type text into a web page element found by AI-based description\n"
+        "19. browser_hover — Hover over a web page element found by AI-based description\n"
+        "20. browser_get_page_content — Get the text content of the current page\n"
+        "21. browser_get_url — Get the current browser URL\n"
+        "22. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
+        "23. browser_download — Download a file from a URL via the browser\n\n"
         "SEARCH TOOLS (for looking up information on the web):\n"
-        "22. web_search — Search the web and return top results with titles, snippets, and URLs\n\n"
+        "24. web_search — Search the web and return top results with titles, snippets, and URLs\n\n"
         "UTILITY TOOLS:\n"
-        "23. wait — Pause for a fixed number of seconds while the UI settles"
+        "25. wait — Pause for a fixed number of seconds while the UI settles"
     )
 
 
@@ -241,6 +243,7 @@ def build_tool_guidelines(*, system_info: dict[str, object] | None) -> str:
             build_search_tool_examples(),
             build_utility_tool_examples(),
             build_shell_rules(system_info=system_info),
+            build_action_batching_rules(),
             build_retry_limits(),
             (
                 "When you have completed the task, respond with a text message summarizing "
@@ -271,10 +274,18 @@ def build_desktop_tool_examples() -> str:
         "performed once on the intended element and no other element was tried: use "
         "take_screenshot, then decide whether the step's goal is met; do not repeat the "
         "action blindly.\n"
+        "- When content is outside the visible area, use scroll at a point over that "
+        "area, not PageDown or zoom.\n"
+        "- When click cannot find a target (window chrome, a blank area, the end of a "
+        "text line), ask take_screenshot for its pixel coordinates and use click_at. "
+        "Never fake a click with AppleScript, osascript, ctypes or other scripts: they "
+        "do not move keyboard focus.\n"
         '- click(description="the Login button", expected_result="the login form opens") — describe what to click and what should happen\n'
         '- double_click(description="the Documents folder icon", expected_result="the Documents folder opens") — double-click and describe what should happen\n'
         '- hover(description="the Settings menu") — describe what to hover\n'
         '- drag(start_description="file icon", end_description="trash icon", expected_result="the file disappears from the desktop") — describe start, end and outcome\n'
+        '- scroll(direction="down", amount=5, x=640, y=500) — wheel notches (default 5) over the point; omit x and y to scroll at the pointer\n'
+        '- click_at(x=812, y=233, expected_result="the caret is at the end of the Editor 3 text") — left-click at screenshot pixel coordinates; expected_result is optional\n'
         '- type_text(text="hello") — type text using the keyboard\n'
         '- launch_app(app_name="Calculator") — open a desktop application\n'
         '- close_app(app_name="Calculator") — quit an application the test no longer needs\n'
@@ -402,11 +413,15 @@ def build_utility_tool_examples() -> str:
 
 def build_shell_rules(*, system_info: dict[str, object] | None) -> str:
     background = (
+        "- A shell command always goes through execute_command, also when the step says "
+        "'in Terminal', 'in Command Prompt' or 'in a shell'. Open a terminal window only "
+        "when the step tests the terminal application itself.\n"
         "- BACKGROUND SHELL: execute_command runs in a hidden background shell. No terminal "
         "window opens and nothing changes on screen, so do NOT take a screenshot to see a "
         "command run or to read its output. The tool result already contains the output "
-        "and exit code; judge the command from that. Take a screenshot only to check a GUI "
-        "application the command launched.\n"
+        "and exit code; judge the command from that. A step that only runs shell commands "
+        "needs no screenshot; take one only to check a GUI application the command "
+        "launched.\n"
     )
     if get_os_name(system_info) == "Windows":
         return (
@@ -443,6 +458,16 @@ def build_shell_rules(*, system_info: dict[str, object] | None) -> str:
         "input (sudo password, Y/n confirmation), it returns a session_id. Use "
         "send_command_input to respond to each prompt. Pass empty input_text to read "
         "more output without sending anything."
+    )
+
+
+def build_action_batching_rules() -> str:
+    return (
+        "CHAINING ACTIONS:\n"
+        "- When the next actions are predictable and need no look in between (e.g. "
+        "focus the browser's address bar with its shortcut, type_text the URL, "
+        'key_press(keys="Return")), call them together in one response; they run '
+        "in order. Observe once afterwards."
     )
 
 
