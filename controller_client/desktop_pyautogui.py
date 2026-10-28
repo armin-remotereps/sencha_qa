@@ -130,13 +130,14 @@ if sys.platform == "darwin":
         | Quartz.kCGEventFlagMaskAlternate
         | Quartz.kCGEventFlagMaskCommand
     )
-    # Keys to release per modifier flag. A lone modifier key-up is only a
-    # flagsChanged event on macOS, so releasing a side that is not down is safe.
+    # Per modifier flag: its name and the keys that release it. A lone
+    # modifier key-up is only a flagsChanged event on macOS, so releasing a
+    # side that is not down is safe.
     _MAC_MODIFIER_KEYS: Final = (
-        (Quartz.kCGEventFlagMaskShift, ("shift", "shiftright")),
-        (Quartz.kCGEventFlagMaskControl, ("ctrl", "ctrlright")),
-        (Quartz.kCGEventFlagMaskAlternate, ("option", "optionright")),
-        (Quartz.kCGEventFlagMaskCommand, ("command",)),
+        (Quartz.kCGEventFlagMaskShift, "shift", ("shift", "shiftright")),
+        (Quartz.kCGEventFlagMaskControl, "ctrl", ("ctrl", "ctrlright")),
+        (Quartz.kCGEventFlagMaskAlternate, "option", ("option", "optionright")),
+        (Quartz.kCGEventFlagMaskCommand, "command", ("command",)),
     )
     _MODIFIER_SETTLE_SECONDS: Final = 0.02
 
@@ -150,23 +151,33 @@ if sys.platform == "darwin":
                 raise ExecutionError("Could not create a scroll wheel event")
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
 
-    def _release_modifiers(context: str) -> None:
-        # Typing while Ctrl+Cmd is still down turns a space into Ctrl+Cmd+Space
-        # (the emoji picker). Release only what is still set: every key event
-        # costs pyautogui's 10 ms catch-up sleep on macOS.
+    def _held_modifier_flags() -> int:
+        # The session's modifier flags, masked to Shift/Ctrl/Option/Command.
         flags = Quartz.CGEventSourceFlagsState(
             Quartz.kCGEventSourceStateCombinedSessionState
         )
-        if not flags & _MAC_MODIFIER_MASK:
-            return
-        logger.warning(
-            "Modifier flags still set %s: 0x%x", context, flags & _MAC_MODIFIER_MASK
-        )
-        for mask, keys in _MAC_MODIFIER_KEYS:
+        return flags & _MAC_MODIFIER_MASK
+
+    def held_modifiers() -> tuple[str, ...]:
+        flags = _held_modifier_flags()
+        return tuple(name for mask, name, _ in _MAC_MODIFIER_KEYS if flags & mask)
+
+    def _release_modifiers(context: str) -> tuple[str, ...]:
+        # Typing while Ctrl+Cmd is still down turns a space into Ctrl+Cmd+Space
+        # (the emoji picker). Release only what is still set: every key event
+        # costs pyautogui's 10 ms catch-up sleep on macOS.
+        flags = _held_modifier_flags()
+        if not flags:
+            return ()
+        logger.warning("Modifier flags still set %s: 0x%x", context, flags)
+        held: list[str] = []
+        for mask, name, keys in _MAC_MODIFIER_KEYS:
             if flags & mask:
+                held.append(name)
                 for key in keys:
                     pyautogui.keyUp(key, _pause=False)
         time.sleep(_MODIFIER_SETTLE_SECONDS)
+        return tuple(held)
 
     def _dpi_awareness_note() -> str:
         return ""
@@ -213,19 +224,23 @@ elif sys.platform == "win32":
         flag, sign = _WIN_SCROLL_EVENTS[direction]
         _user32.mouse_event(flag, 0, 0, sign * amount * _WHEEL_DELTA, 0)
 
-    def _release_modifiers(context: str) -> None:
-        # Release only keys Windows reports as down: a blind Win or Alt key-up
-        # could open Start or the menu bar.
-        held = [
+    def held_modifiers() -> tuple[str, ...]:
+        return tuple(
             name
             for vk, name in _WIN_MODIFIER_KEYS.items()
             if _user32.GetAsyncKeyState(vk) & _KEY_DOWN_BIT
-        ]
+        )
+
+    def _release_modifiers(context: str) -> tuple[str, ...]:
+        # Release only keys Windows reports as down: a blind Win or Alt key-up
+        # could open Start or the menu bar.
+        held = held_modifiers()
         if not held:
-            return
+            return ()
         logger.warning("Modifier keys still down %s: %s", context, ", ".join(held))
         for name in held:
             pyautogui.keyUp(name, _pause=False)
+        return held
 
     def _dpi_awareness_note() -> str:
         aware = bool(_user32.IsProcessDPIAware())
@@ -236,11 +251,29 @@ else:
     def _scroll(direction: ScrollDirection, amount: int) -> None:
         raise ExecutionError("Scrolling is not supported on this platform")
 
-    def _release_modifiers(context: str) -> None:
-        return None
+    def held_modifiers() -> tuple[str, ...]:
+        return ()
+
+    def _release_modifiers(context: str) -> tuple[str, ...]:
+        return ()
 
     def _dpi_awareness_note() -> str:
         return ""
+
+
+def press_combination(keys: Sequence[str]) -> tuple[str, ...]:
+    """Press a key combination, then release any modifier still held.
+
+    Returns the modifiers the release found still down (empty when none).
+    ``PyAutoGuiDesktopBackend.press_keys`` uses it at runtime and
+    ``diagnose --input`` reads its result, so both run the same code.
+    """
+    held: tuple[str, ...] = ()
+    try:
+        pyautogui.hotkey(*keys)
+    finally:
+        held = _release_modifiers("after a key combination")
+    return held
 
 
 def _screeninfo_size() -> tuple[int, int] | None:
@@ -311,10 +344,7 @@ class PyAutoGuiDesktopBackend:
 
     def press_keys(self, keys: Sequence[str]) -> None:
         if len(keys) > 1:
-            try:
-                pyautogui.hotkey(*keys)
-            finally:
-                _release_modifiers("after a key combination")
+            press_combination(keys)
         else:
             pyautogui.press(keys[0])
 

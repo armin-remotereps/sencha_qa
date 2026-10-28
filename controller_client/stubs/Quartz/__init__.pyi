@@ -1,12 +1,15 @@
 # Local stub for pyobjc-framework-Quartz, which ships no type information.
 # It covers only what the controller uses: posting mouse events with an
 # explicit click state (executor double-click), scroll wheel events and the
-# session's modifier flags (desktop_pyautogui), and listing windows
-# (app_closer_macos). Extend it when the controller uses more of Quartz.
+# session's modifier flags (desktop_pyautogui), listing windows
+# (app_closer_macos), and the main display mode for diagnose --input
+# (display_scale). Extend it when the controller uses more of Quartz.
 from collections.abc import Mapping, Sequence
 from typing import Final, NewType
 
 CGEventRef = NewType("CGEventRef", object)
+CGDirectDisplayID = int
+CGDisplayModeRef = NewType("CGDisplayModeRef", object)
 
 class CGPoint:
     x: float
@@ -26,6 +29,12 @@ def CGEventSourceFlagsState(stateID: int) -> int: ...
 def CGWindowListCopyWindowInfo(
     option: int, relativeToWindow: int
 ) -> Sequence[Mapping[str, object]] | None: ...
+def CGMainDisplayID() -> CGDirectDisplayID: ...
+def CGDisplayCopyDisplayMode(display: CGDirectDisplayID) -> CGDisplayModeRef | None: ...
+def CGDisplayModeGetPixelWidth(mode: CGDisplayModeRef) -> int: ...
+def CGDisplayModeGetPixelHeight(mode: CGDisplayModeRef) -> int: ...
+def CGDisplayModeGetWidth(mode: CGDisplayModeRef) -> int: ...
+def CGDisplayModeGetHeight(mode: CGDisplayModeRef) -> int: ...
 
 kCGEventLeftMouseDown: Final[int]
 kCGEventLeftMouseUp: Final[int]
@@ -46,3 +55,4 @@ kCGWindowListOptionOnScreenOnly: Final[int]
 kCGWindowListExcludeDesktopElements: Final[int]
 kCGWindowLayer: Final[str]
 kCGWindowOwnerPID: Final[str]
+kCGWindowOwnerName: Final[str]
