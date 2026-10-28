@@ -1,6 +1,6 @@
 # feat: Human in the loop run mode (a person performs the steps, the agent confirms and records)
 
-Status: In progress
+Status: Done
 Created: 2026-10-28
 Request: Verbatim: "A new feature: Human in the loop tests. We need another mode besides attended and night shift, named human in the loop. On that case, all the interactive steps, will be done by human, human will report the resolve, AI will confirm and record, then next step. For commands, if it's part of a test case step explicitly, ai will provide the command for human, and human will run it then rest like interactive ones."
 
@@ -282,3 +282,11 @@ Manual checks (this project has no tests):
 ## Changelog
 - 2026-10-28: created (Draft).
 - 2026-10-28: user answers. Q1: (a) screen confirmation, plus the confirm agent may run read-only verification commands (`execute_command`, `wait_for_command`). Q2–Q8: the recommended assumptions as written. Status In progress.
+- 2026-10-28: implemented (shared contracts, then four parallel parts) and reviewed in five reviewer/verifier rounds. Deviations from this plan, all from review:
+  - Row helpers live in `projects/person_step_rows.py` (not `services.py`); rows settle from the checkpoint save hook, with guarded backstops (`abandoned="keep"|"unreferenced"|"all"`).
+  - `_pause_run_for_person` re-checks the mode under the run lock; when it is no longer HITL it hands the step back and the worker re-runs the orchestrator in the same execution (`_PersonPause.HANDED_BACK`), because `services` cannot import `run_reopen_services`.
+  - Resume, help Continue in restore/from-scratch mode and every plan redesign drop the checkpoint `person` key (a report made before a restore is never confirmed after it); Continue cancels the open row it orphaned.
+  - Push rule: a new row pushes unless the case's latest earlier row passed in the current execution segment; every not-confirmed round pushes.
+  - Mark blocked on a person step closes the row `cancelled` (the step was never performed); Mark failed closes it `failed`.
+  - `get_os_name` and `shell_label` moved to the leaf `agents/os_shell.py`; run page panels are built by `projects/run_pause_panel.py`; the explicit-command check is a whole-line / whole-span match.
+  - Status Done.
