@@ -977,6 +977,20 @@ class PersonStepClose(models.TextChoices):
     MARKED_BLOCKED = "marked_blocked", "Marked blocked"
 
 
+class PersonStepChannel(models.TextChoices):
+    """Where a person answered a person step; blank until a person acts.
+
+    Rows from before the channel existed keep blank and were answered on the
+    web (``reported_by``/``closed_by`` name the user). A Test Runner answer has
+    a user only when the runner's ``CONTROLLER_PERSON_EMAIL`` named an active
+    project member.
+    """
+
+    NONE = "", "Not answered by a person"
+    WEB = "web", "Punk Hazard"
+    RUNNER = "runner", "Test Runner"
+
+
 class CasePersonStep(models.Model):
     """One step of a run case handed to a person (Human in the loop).
 
@@ -1017,6 +1031,10 @@ class CasePersonStep(models.Model):
         blank=True,
         related_name="+",
     )
+    # Set with every report.
+    reported_via = models.CharField(
+        max_length=8, choices=PersonStepChannel.choices, blank=True, default=""
+    )
     outcome = models.CharField(
         max_length=16, choices=PersonStepOutcome.choices, blank=True, default=""
     )
@@ -1038,6 +1056,11 @@ class CasePersonStep(models.Model):
         null=True,
         blank=True,
         related_name="+",
+    )
+    # Set by a person's overrule, Mark failed or Mark blocked; a runner
+    # overrule may have no ``closed_by``, so this marks it as a person's.
+    closed_via = models.CharField(
+        max_length=8, choices=PersonStepChannel.choices, blank=True, default=""
     )
     closed_at = models.DateTimeField(null=True, blank=True)
     close_reason = models.CharField(

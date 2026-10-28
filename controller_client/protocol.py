@@ -1,7 +1,7 @@
 import json
 import re
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import IntEnum, StrEnum
@@ -12,7 +12,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.8.0"
+CLIENT_VERSION: Final[str] = "0.9.0"
 
 
 class CloseCode(IntEnum):
@@ -73,6 +73,12 @@ class MessageType(StrEnum):
     # runner -> server with the progress of that update.
     UPDATE_RUNNER = "update_runner"
     UPDATE_STATUS = "update_status"
+    # Human in the loop person steps (PERSON_STEPS_V1): server -> runner with a
+    # snapshot of the open steps, runner -> server with a person's answer, and
+    # server -> runner with the outcome of that answer (same request_id).
+    PERSON_STEP_STATE = "person_step_state"
+    PERSON_STEP_ACTION = "person_step_action"
+    PERSON_STEP_ACTION_RESULT = "person_step_action_result"
 
 
 class ClientCapability(StrEnum):
@@ -96,16 +102,38 @@ class ClientCapability(StrEnum):
     # Optional: ``update_runner`` / ``update_status`` (side-by-side self-update).
     # Checked by the server before it offers the Update button.
     SELF_UPDATE_V1 = "self_update_v1"
+    # Optional: ``person_step_state`` / ``person_step_action`` /
+    # ``person_step_action_result`` (the person step window). Advertised only
+    # when the window is enabled and Tk works (``advertised_capabilities``).
+    PERSON_STEPS_V1 = "person_steps_v1"
 
 
-# What this client advertises in its handshake.
+# Everything this client build knows. The handshake sends
+# ``advertised_capabilities(...)``, which may drop the runtime-dependent ones.
 CLIENT_CAPABILITIES: Final[tuple[ClientCapability, ...]] = tuple(ClientCapability)
+
+
+def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]:
+    """The capabilities to send in the handshake.
+
+    ``person_window`` is False when the person step window is disabled
+    (``CONTROLLER_PERSON_WINDOW=false``) or Tk is unavailable; the server then
+    never sends ``person_step_state`` and the person answers on the web.
+    """
+    if person_window:
+        return CLIENT_CAPABILITIES
+    return tuple(
+        capability
+        for capability in CLIENT_CAPABILITIES
+        if capability is not ClientCapability.PERSON_STEPS_V1
+    )
+
 
 # What the server insists on; a controller missing any of them would
 # authenticate fine and then silently time out on first use. Optional
 # capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1,
-# WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1) are checked where they are used
-# instead.
+# WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1) are checked
+# where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
@@ -189,6 +217,10 @@ class HandshakePayload:
     # still runs (normalized UUID); absent otherwise, including on the new
     # runner an update started (it connects at the target version).
     update_in_flight_id: str | None = None
+    # The person at this Test Runner (``CONTROLLER_PERSON_EMAIL``), normalized
+    # by ``normalize_person_email``; absent when not configured. The server
+    # trusts it only to name an active member of the key's project.
+    person_email: str | None = None
 
 
 @dataclass(frozen=True)
@@ -851,6 +883,389 @@ def parse_update_status_payload(data: dict[str, object]) -> UpdateStatusPayload:
         update_id=_extract_update_id(data),
         phase=phase,
         detail=detail[:UPDATE_STATUS_DETAIL_MAX_LENGTH],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Person at the Test Runner (handshake ``person_email``)
+# ---------------------------------------------------------------------------
+
+# RFC 5321 path limit; matches Django's EmailField.
+PERSON_EMAIL_MAX_LENGTH: Final[int] = 254
+# A deliberately simple check (one "@", a dot in the domain, no whitespace or
+# control characters); the server decides by looking the address up.
+_PERSON_EMAIL_RE: Final[re.Pattern[str]] = re.compile(
+    r"[^@\s\x00-\x1f\x7f]+@[^@\s\x00-\x1f\x7f]+\.[^@\s\x00-\x1f\x7f]+"
+)
+
+
+def normalize_person_email(raw: str) -> str | None:
+    """Strip and lower-case an email; None when blank.
+
+    Raises ProtocolError when it is too long or not shaped like an email.
+    The runner's config uses it to validate ``CONTROLLER_PERSON_EMAIL`` and
+    the server's handshake uses it through ``parse_person_email``.
+    """
+    email = raw.strip().lower()
+    if not email:
+        return None
+    if len(email) > PERSON_EMAIL_MAX_LENGTH:
+        raise ProtocolError(
+            f"Invalid person email: longer than {PERSON_EMAIL_MAX_LENGTH} characters"
+        )
+    if not _PERSON_EMAIL_RE.fullmatch(email):
+        raise ProtocolError("Invalid person email: expected name@domain")
+    return email
+
+
+def parse_person_email(data: Mapping[str, object]) -> str | None:
+    """The handshake's optional ``person_email``, normalized.
+
+    None when absent, null or blank. Raises ProtocolError for a non-string,
+    an over-long or a malformed value.
+    """
+    raw = data.get("person_email")
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ProtocolError("Invalid 'person_email': expected a string")
+    return normalize_person_email(raw)
+
+
+# ---------------------------------------------------------------------------
+# Person steps (PERSON_STEPS_V1)
+# ---------------------------------------------------------------------------
+
+# Most open steps one ``person_step_state`` carries (newest request first).
+PERSON_STEP_STATE_MAX_STEPS: Final[int] = 5
+# A person's answer: the server's limits (HELP_NOTE_MAX_LENGTH and
+# PERSON_STEP_OUTPUT_MAX_LENGTH in projects.models), restated because the
+# runner cannot import the server. Over-long answers are refused, not cut.
+PERSON_STEP_NOTE_MAX_CHARS: Final[int] = 2000
+PERSON_STEP_OUTPUT_MAX_CHARS: Final[int] = 20000
+# Largest raw ``person_step_action`` message the server reads.
+PERSON_STEP_ACTION_MAX_BYTES: Final[int] = 256 * 1024
+# Display caps of the server-written state texts; longer text is cut when
+# parsed (the server writes them within these limits).
+PERSON_STEP_INSTRUCTION_MAX_CHARS: Final[int] = 2000
+PERSON_STEP_EXPECTED_MAX_CHARS: Final[int] = 1000
+PERSON_STEP_COMMAND_MAX_CHARS: Final[int] = 2000
+PERSON_STEP_OBJECTION_MAX_CHARS: Final[int] = 1000
+PERSON_STEP_LABEL_MAX_CHARS: Final[int] = 255
+PERSON_STEP_URL_MAX_CHARS: Final[int] = 2000
+PERSON_STEP_MAX_BLOCKERS: Final[int] = 10
+# Longest user-safe ``message`` of a ``person_step_action_result``.
+PERSON_STEP_RESULT_MESSAGE_MAX_CHARS: Final[int] = 1000
+# ``CasePersonStep.round`` is a PositiveSmallIntegerField.
+_PERSON_STEP_MAX_ROUND: Final[int] = 32767
+_PERSON_STEP_MAX_ID: Final[int] = 2**63 - 1
+
+
+class PersonStepWireStatus(StrEnum):
+    """Open statuses a snapshot can carry (values of PersonStepStatus)."""
+
+    WAITING = "waiting"
+    NOT_CONFIRMED = "not_confirmed"
+
+
+class PersonStepWireKind(StrEnum):
+    """Values of PersonStepKind."""
+
+    INTERACTIVE = "interactive"
+    COMMAND = "command"
+    RESTORE = "restore"
+
+
+class PersonStepActionKind(StrEnum):
+    """What the person answered from the window (the web card's four buttons)."""
+
+    REPORT = "report"
+    # Only while the step is ``not_confirmed``.
+    OVERRULE = "overrule"
+    FAIL = "fail"
+    BLOCK = "block"
+
+
+class PersonStepWireOutcome(StrEnum):
+    """Values of PersonStepOutcome; ``report`` only."""
+
+    AS_EXPECTED = "as_expected"
+    DIFFERENT = "different"
+
+
+@dataclass(frozen=True)
+class PersonStepStatePayload:
+    """One open person step as the Test Runner window shows it."""
+
+    person_step_id: int
+    round: int
+    status: PersonStepWireStatus
+    run_name: str
+    case_title: str
+    # "Step N of M".
+    step_label: str
+    kind: PersonStepWireKind
+    instruction: str
+    expected_result: str
+    # Blank unless ``kind`` is command.
+    command: str
+    shell_label: str
+    # The agent's reason while ``not_confirmed``; blank otherwise.
+    objection: str
+    # User-safe reasons the run cannot continue at once (run page gates).
+    blockers: tuple[str, ...]
+    # Absolute case page URL; blank when the server has no SITE_URL.
+    case_url: str
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "person_step_id": self.person_step_id,
+            "round": self.round,
+            "status": self.status.value,
+            "run_name": self.run_name,
+            "case_title": self.case_title,
+            "step_label": self.step_label,
+            "kind": self.kind.value,
+            "instruction": self.instruction,
+            "expected_result": self.expected_result,
+            "command": self.command,
+            "shell_label": self.shell_label,
+            "objection": self.objection,
+            "blockers": list(self.blockers),
+            "case_url": self.case_url,
+        }
+
+
+@dataclass(frozen=True)
+class PersonStepStateMessage:
+    # Newest request first; empty means "nothing for you; hide".
+    steps: tuple[PersonStepStatePayload, ...]
+
+
+@dataclass(frozen=True)
+class PersonStepActionPayload:
+    action: PersonStepActionKind
+    person_step_id: int
+    # The round the person answered; a reopened step refuses an older round.
+    round: int
+    # Set for ``report`` only, None otherwise.
+    outcome: PersonStepWireOutcome | None
+    note: str
+    # Pasted command output (report of a command step); blank otherwise.
+    output: str
+
+
+@dataclass(frozen=True)
+class PersonStepActionResultPayload:
+    ok: bool
+    # User-safe text to show in the window.
+    message: str
+    # The run continues now (False: a gate refused; ``message`` says why).
+    queued: bool
+
+
+def _extract_bounded_int(data: Mapping[str, object], field: str, maximum: int) -> int:
+    value = data.get(field)
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 1 <= value <= maximum
+    ):
+        raise ProtocolError(f"Missing or invalid '{field}': expected a positive int")
+    return value
+
+
+def _extract_text(
+    data: Mapping[str, object], field: str, max_chars: int, *, truncate: bool
+) -> str:
+    """An optional string field ("" when absent); cut or refused when too long."""
+    value = data.get(field, "")
+    if not isinstance(value, str):
+        raise ProtocolError(f"Invalid '{field}': expected a string")
+    if len(value) > max_chars:
+        if not truncate:
+            raise ProtocolError(
+                f"Invalid '{field}': longer than {max_chars} characters"
+            )
+        return value[:max_chars]
+    return value
+
+
+def _parse_person_step(raw: object) -> PersonStepStatePayload:
+    if not isinstance(raw, dict):
+        raise ProtocolError("Invalid person step: expected an object")
+    item: dict[str, object] = raw
+    raw_status = _extract_str(item, "status")
+    raw_kind = _extract_str(item, "kind")
+    try:
+        status = PersonStepWireStatus(raw_status)
+        kind = PersonStepWireKind(raw_kind)
+    except ValueError as e:
+        raise ProtocolError(
+            f"Unknown person step status or kind: {raw_status[:40]!r}, "
+            f"{raw_kind[:40]!r}"
+        ) from e
+    raw_blockers = item.get("blockers", [])
+    if not isinstance(raw_blockers, list) or not all(
+        isinstance(blocker, str) for blocker in raw_blockers
+    ):
+        raise ProtocolError("Invalid 'blockers': expected a list of strings")
+    blockers = tuple(
+        blocker[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS]
+        for blocker in raw_blockers[:PERSON_STEP_MAX_BLOCKERS]
+    )
+    return PersonStepStatePayload(
+        person_step_id=_extract_bounded_int(
+            item, "person_step_id", _PERSON_STEP_MAX_ID
+        ),
+        round=_extract_bounded_int(item, "round", _PERSON_STEP_MAX_ROUND),
+        status=status,
+        run_name=_extract_text(
+            item, "run_name", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
+        ),
+        case_title=_extract_text(
+            item, "case_title", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
+        ),
+        step_label=_extract_text(
+            item, "step_label", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
+        ),
+        kind=kind,
+        instruction=_extract_text(
+            item, "instruction", PERSON_STEP_INSTRUCTION_MAX_CHARS, truncate=True
+        ),
+        expected_result=_extract_text(
+            item, "expected_result", PERSON_STEP_EXPECTED_MAX_CHARS, truncate=True
+        ),
+        command=_extract_text(
+            item, "command", PERSON_STEP_COMMAND_MAX_CHARS, truncate=True
+        ),
+        shell_label=_extract_text(
+            item, "shell_label", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
+        ),
+        objection=_extract_text(
+            item, "objection", PERSON_STEP_OBJECTION_MAX_CHARS, truncate=True
+        ),
+        blockers=blockers,
+        case_url=_extract_text(
+            item, "case_url", PERSON_STEP_URL_MAX_CHARS, truncate=True
+        ),
+    )
+
+
+def parse_person_step_state_payload(
+    data: dict[str, object],
+) -> PersonStepStateMessage:
+    """Validate a ``person_step_state`` (runner side).
+
+    Steps beyond PERSON_STEP_STATE_MAX_STEPS are dropped and over-long texts
+    cut; a wrong type or an unknown status or kind raises ProtocolError.
+    """
+    raw_steps = data.get("steps")
+    if not isinstance(raw_steps, list):
+        raise ProtocolError("Missing or invalid 'steps': expected a list")
+    return PersonStepStateMessage(
+        steps=tuple(
+            _parse_person_step(raw) for raw in raw_steps[:PERSON_STEP_STATE_MAX_STEPS]
+        )
+    )
+
+
+def serialize_person_step_state(steps: Sequence[PersonStepStatePayload]) -> str:
+    """A ``person_step_state`` message (server side; fresh request_id)."""
+    return serialize_message(
+        MessageType.PERSON_STEP_STATE,
+        None,
+        steps=[step.to_wire() for step in steps[:PERSON_STEP_STATE_MAX_STEPS]],
+    )
+
+
+def parse_person_step_action_payload(
+    data: Mapping[str, object],
+) -> PersonStepActionPayload:
+    """Validate a ``person_step_action`` (both sides).
+
+    Over-long note or output, a report without an outcome, and a "different"
+    report without a note raise ProtocolError. ``outcome`` and ``output`` are
+    dropped for actions other than ``report``. The note is stripped (as the
+    web form does); the output is kept as pasted.
+    """
+    raw_action = data.get("action")
+    if not isinstance(raw_action, str):
+        raise ProtocolError("Missing or invalid 'action'")
+    try:
+        action = PersonStepActionKind(raw_action)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown person step action: {raw_action[:40]!r}") from e
+    note = _extract_text(
+        data, "note", PERSON_STEP_NOTE_MAX_CHARS, truncate=False
+    ).strip()
+    output = _extract_text(data, "output", PERSON_STEP_OUTPUT_MAX_CHARS, truncate=False)
+    outcome: PersonStepWireOutcome | None = None
+    if action is PersonStepActionKind.REPORT:
+        raw_outcome = data.get("outcome")
+        if not isinstance(raw_outcome, str):
+            raise ProtocolError("Missing or invalid 'outcome'")
+        try:
+            outcome = PersonStepWireOutcome(raw_outcome)
+        except ValueError as e:
+            raise ProtocolError(
+                f"Unknown person step outcome: {raw_outcome[:40]!r}"
+            ) from e
+        if outcome is PersonStepWireOutcome.DIFFERENT and not note:
+            raise ProtocolError("A different result needs a note")
+    else:
+        output = ""
+    return PersonStepActionPayload(
+        action=action,
+        person_step_id=_extract_bounded_int(
+            data, "person_step_id", _PERSON_STEP_MAX_ID
+        ),
+        round=_extract_bounded_int(data, "round", _PERSON_STEP_MAX_ROUND),
+        outcome=outcome,
+        note=note,
+        output=output,
+    )
+
+
+def serialize_person_step_action(
+    action: PersonStepActionPayload, request_id: str
+) -> str:
+    """A ``person_step_action`` message (runner side; one request_id per answer)."""
+    return serialize_message(
+        MessageType.PERSON_STEP_ACTION,
+        request_id,
+        action=action.action.value,
+        person_step_id=action.person_step_id,
+        round=action.round,
+        outcome=action.outcome.value if action.outcome is not None else "",
+        note=action.note,
+        output=action.output,
+    )
+
+
+def parse_person_step_action_result_payload(
+    data: dict[str, object],
+) -> PersonStepActionResultPayload:
+    """Validate a ``person_step_action_result`` (runner side)."""
+    return PersonStepActionResultPayload(
+        ok=_extract_bool(data, "ok"),
+        message=_extract_text(
+            data, "message", PERSON_STEP_RESULT_MESSAGE_MAX_CHARS, truncate=True
+        ),
+        queued=_extract_bool(data, "queued", default=False),
+    )
+
+
+def serialize_person_step_action_result(
+    result: PersonStepActionResultPayload, request_id: str
+) -> str:
+    """A ``person_step_action_result`` (server side; echoes the action's id)."""
+    return serialize_message(
+        MessageType.PERSON_STEP_ACTION_RESULT,
+        request_id,
+        ok=result.ok,
+        message=result.message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
+        queued=result.queued,
     )
 
 
