@@ -1,6 +1,6 @@
 # feat: Answer Human in the loop steps from the Test Runner
 
-Status: In progress
+Status: Done
 Created: 2026-10-28
 Request: In a Human in the loop (HITL) run a person performs each step on the
 test machine, but today the instructions and the report form ("Your turn" card)
@@ -627,3 +627,11 @@ No automated tests (project rule). Manual checks:
 - 2026-10-28: created (Draft).
 - 2026-10-28: user answers. Q2: a native window in its own process (as planned), closed/hidden automatically before every screenshot and agent action. Q3: the Test Runner asks for the person's email when it starts; the server records that member as reporter (see the identity caveat raised to the user). Other questions still open.
 - 2026-10-28: user answers. Q3 refined: the email entered at Test Runner start is enough (no one-time code); the server checks it is an active project member, otherwise reports are labelled "a person at the Test Runner"; the email is stored in the runner's .env and carried over by self-update; reports record that member with "via Test Runner". Q1, Q4–Q7: the recommendations as written. Status In progress; build after feat-runner-self-update.
+- 2026-10-28: implemented after self-update (CLIENT_VERSION 0.9.0, migration 0040) and reviewed in three reviewer/verifier rounds. Deviations from the plan, all from review:
+  - Identity: the runner asks for the person's email at its first interactive start (`CONTROLLER_PERSON_EMAIL`, saved in its `.env`; skipped when the window can't run); the handshake carries `person_email`; the server keeps only the resolved active member's id, re-checks it per answer, and records `reported_via`/`closed_via`. Self-update carries the email through `.env`, never on the command line, and it is never logged.
+  - The runner snapshot carries no blockers (always empty): 1 query per push; the answer's reply names the real blocker.
+  - Mark failed / Mark blocked confirm inline (no messagebox or other Toplevel); an open picker list is closed before every hide.
+  - The window never activates on show: Windows uses `SW_SHOWNOACTIVATE`/`SWP_NOACTIVATE`; macOS (Tk always activates there) re-shows only for a new round or reply (5 s quiet) or after 30 s idle, and `FrontAppKeeper` re-activates the previous front app before every hide ack, answer and close.
+  - A window that does not confirm a hide within 1.5 s is killed (then restarted, rate limited), so it can never reach a screenshot.
+  - A refusal with no open step is shown once, then the window stays hidden until a new round.
+  - Status Done.
