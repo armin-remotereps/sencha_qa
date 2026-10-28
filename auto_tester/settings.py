@@ -5,6 +5,7 @@ django_stubs_ext.monkeypatch()
 
 from pathlib import Path
 
+from celery.schedules import crontab
 from decouple import Choices, Csv, config
 
 from auto_tester.encryption_key import validate_fernet_key
@@ -80,6 +81,7 @@ TEMPLATES = [
                 "django.contrib.auth.context_processors.auth",
                 "django.contrib.messages.context_processors.messages",
                 "auto_tester.context_processors.branding",
+                "dashboard.context_processors.attention_badge",
             ],
         },
     },
@@ -150,6 +152,14 @@ CACHES = {
 }
 
 # Celery
+# Hour (0-23, in CELERY_TIMEZONE) of the morning Night-run digest push, and how
+# far back a Night run may have started to be included (each run is sent once).
+NIGHT_DIGEST_HOUR: int = config("NIGHT_DIGEST_HOUR", default=7, cast=int)
+if not 0 <= NIGHT_DIGEST_HOUR <= 23:
+    raise ValueError("NIGHT_DIGEST_HOUR must be between 0 and 23")
+NIGHT_DIGEST_LOOKBACK_HOURS: int = config(
+    "NIGHT_DIGEST_LOOKBACK_HOURS", default=24, cast=int
+)
 CELERY_BROKER_URL: str = REDIS_URL
 CELERY_RESULT_BACKEND = "django-db"
 CELERY_CACHE_BACKEND = "default"
@@ -180,6 +190,7 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "machine_setup.tasks.sweep_stale_auto_fixes": {"queue": "notify"},
     # Its own small worker, so a notification is never stuck behind TestRail imports.
     "notifications.tasks.send_notification": {"queue": "notify"},
+    "notifications.tasks.send_night_digest": {"queue": "notify"},
 }
 # Installed into django-celery-beat's tables by its DatabaseScheduler when
 # beat starts (machine_setup.task_names.SWEEP_STALE_AUTO_FIXES).
@@ -191,6 +202,12 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": 120.0,
         # A sweep not picked up before the next one is due is dropped.
         "options": {"expire_seconds": 110},
+    },
+    # Morning push summarising the night's Night runs (notifications app).
+    "notifications-send-night-digest": {
+        "task": "notifications.tasks.send_night_digest",
+        "schedule": crontab(hour=NIGHT_DIGEST_HOUR, minute=0),
+        "options": {"expire_seconds": 3600},
     },
 }
 

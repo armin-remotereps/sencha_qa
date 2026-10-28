@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 
 from celery import shared_task
+from django.utils import timezone
 
+from notifications.services.night_digest import send_night_digests
 from notifications.services.notification_message import (
     NotificationKind,
     NotificationMessage,
@@ -41,3 +43,16 @@ def send_notification(
     )
     sent = send_to_users(user_ids=user_ids, message=message)
     logger.info("Notification %s: %d of %d user(s) reached", kind, sent, len(user_ids))
+
+
+@shared_task(
+    name="notifications.tasks.send_night_digest",
+    # Beat (CELERY_BEAT_SCHEDULE); routed to "notify" in CELERY_TASK_ROUTES.
+    queue="notify",
+    max_retries=0,
+    soft_time_limit=120,
+    time_limit=150,
+)
+def send_night_digest() -> None:
+    """Push the morning digest of the night's Night runs (one push per user)."""
+    send_night_digests(timezone.now())
