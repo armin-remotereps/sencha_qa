@@ -306,6 +306,18 @@ def clear_person_continue_pending(checkpoint_json: object) -> dict[str, object]:
     return data
 
 
+def without_person_step(checkpoint_json: object) -> dict[str, object]:
+    """A copy of a stored checkpoint with no ``person`` key.
+
+    A value that is not an object becomes ``{}``.
+    """
+    if not isinstance(checkpoint_json, dict):
+        return {}
+    data = dict(cast(dict[str, object], checkpoint_json))
+    data.pop(_PERSON_KEY, None)
+    return data
+
+
 def truncate_checkpoint(
     checkpoint: OrchestratorCheckpoint, from_step: int
 ) -> OrchestratorCheckpoint:

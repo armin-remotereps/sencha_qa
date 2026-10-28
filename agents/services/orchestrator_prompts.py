@@ -4,6 +4,10 @@ from collections.abc import Sequence
 from typing import Final, Literal
 
 from agents.checkpoint import final_step_indices
+from agents.services.person_step_prompts import (
+    person_attempt_label,
+    person_verdict_note,
+)
 from agents.types import (
     CheckpointHelp,
     PlanRevisionRecord,
@@ -495,6 +499,11 @@ def build_verdict_prompt(
         if redesign is not None
         else ""
     )
+    person_note = (
+        f"{person_verdict_note()} "
+        if any(attempt.performed_by == "person" for attempt in attempts)
+        else ""
+    )
     return (
         f"Sub-task execution finished. Results:\n{results_text}\n\n"
         "Provide a final summary of the test case execution in 2-4 sentences. "
@@ -503,6 +512,7 @@ def build_verdict_prompt(
         f"{resumed_note}"
         f"{helped_note}"
         f"{redesign_note}"
+        f"{person_note}"
         "State that result and do not "
         "contradict it. Highlight any key observations, including recoveries. "
         "Readers never see the numbered step list, so whenever you mention a step "
@@ -546,6 +556,8 @@ def format_attempt_lines(
             else:
                 label = f"Step {attempt.step_num}"
             label = f"{label} — {_short_description(plan, attempt.step_num)}"
+            if attempt.performed_by == "person":
+                label = f"{label} ({person_attempt_label(attempt)})"
         lines.append(_format_result_line(label, attempt.result))
 
     # Steps run in order from step 1, so the unrun ones are the tail of the plan.
@@ -598,6 +610,16 @@ def _shorten(text: str) -> str:
 
 
 def _resume_label(attempt: SubTaskAttempt) -> str:
+    if attempt.performed_by == "person":
+        if attempt.result.status == "pass":
+            return (
+                f"Resume: state restored by a person before step {attempt.step_num} "
+                f"({person_attempt_label(attempt)})"
+            )
+        return (
+            f"Resume: a person could not restore state before step "
+            f"{attempt.step_num}"
+        )
     if attempt.result.status == "pass":
         return f"Resume: state restored before step {attempt.step_num}"
     return f"Resume: could not restore state before step {attempt.step_num}"

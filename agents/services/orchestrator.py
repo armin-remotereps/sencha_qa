@@ -5,7 +5,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Literal
@@ -41,6 +41,15 @@ from agents.services.orchestrator_prompts import (
     verdict_redesign,
     was_resumed,
 )
+from agents.services.person_step_prompts import (
+    OBJECTION_MAX_CHARS,
+    cap_text,
+    format_different_summary,
+    format_overrule_summary,
+    format_person_state_line,
+    is_overruled,
+)
+from agents.services.person_steps import confirm_person_step, prepare_person_step
 from agents.services.sub_agent import run_sub_agent
 from agents.services.sub_agent_prompts import build_final_answer_prompt
 from agents.services.sub_task_budget import (
@@ -59,6 +68,7 @@ from agents.types import (
     ChatMessage,
     CheckpointCallback,
     CheckpointHelp,
+    CheckpointPersonStep,
     DecisionAction,
     FailureCause,
     FinalAnswerPolicy,
@@ -69,6 +79,7 @@ from agents.types import (
     OrchestratorDecision,
     OrchestratorPhase,
     OrchestratorResult,
+    PersonStepHandOff,
     PlanRevisionRecord,
     ScreenshotCallback,
     StepDecision,
@@ -100,7 +111,14 @@ def run_orchestrator(
     cancellation_check: CancellationCheck | None = None,
     resume: OrchestratorCheckpoint | None = None,
     on_checkpoint: CheckpointCallback | None = None,
+    person_mode: Callable[[], bool] | None = None,
 ) -> AgentResult:
+    """Plan and run one test case.
+
+    ``person_mode`` (Human in the loop) is asked at each step boundary: while
+    it answers True the step goes to a person instead of a sub-agent, and the
+    case stops with ``AgentStopReason.AWAITING_PERSON`` until they report.
+    """
     # One model serves every role. The distinct names keep the call sites below
     # readable and make a future per-role split a one-line change.
     orchestrator_llm = build_llm_config()
@@ -114,6 +132,13 @@ def run_orchestrator(
     # it as it is: re-run that step from the current screen, without a restore.
     continuing_after_help = (
         resume is not None and resume.help is not None and resume.help.continue_pending
+    )
+    # A person reported (or overruled, or handed back) the cursor step and left
+    # the machine as it is: settle that step without a restore.
+    continuing_after_person = (
+        resume is not None
+        and resume.person is not None
+        and resume.person.continue_pending
     )
     if resume is None:
         _log(on_log, "[Orchestrator] Planning: decomposing test case into sub-tasks...")
@@ -136,6 +161,12 @@ def run_orchestrator(
                 on_log,
                 "[Orchestrator] Continuing after help: the machine was fixed, "
                 "so the state is not restored.",
+            )
+        elif continuing_after_person:
+            _log(
+                on_log,
+                "[Orchestrator] Continuing after a person's step: the state is "
+                "not restored.",
             )
 
     _check_cancelled(cancellation_check, on_log)
@@ -170,14 +201,23 @@ def run_orchestrator(
         sub_agent_config=sub_agent_config,
         bounds=bounds,
         resuming=resume is not None,
-        continuing_after_help=continuing_after_help,
+        continuing_after_help=continuing_after_help or continuing_after_person,
         system_info=system_info,
         project_prompt=project_prompt,
         on_log=on_log,
         cancellation_check=cancellation_check,
+        task_description=task_description,
+        person_mode=person_mode,
     )
 
-    if orchestrator_result.help is not None:
+    if orchestrator_result.person_step is not None:
+        _log(
+            on_log,
+            f"[Orchestrator] Waiting for a person at step "
+            f"{orchestrator_result.person_step.step_num} "
+            f"({orchestrator_result.total_iterations} total iterations)",
+        )
+    elif orchestrator_result.help is not None:
         _log(
             on_log,
             f"[Orchestrator] Paused for help at step "
@@ -220,6 +260,9 @@ class _Progress:
     # The last help this case got, carried into every checkpoint so a later
     # resume still names it; never marked continue_pending once running.
     help: CheckpointHelp | None = None
+    # Human in the loop: the step handed to a person, until its report is
+    # recorded; never marked continue_pending once running.
+    person: CheckpointPersonStep | None = None
     # Help-chat and result-review redesigns applied to this case and the newest earlier plans;
     # carried into every checkpoint so a save after a resume keeps them.
     plan_version: int = 0
@@ -246,6 +289,7 @@ class _Progress:
                 phase=self.phase,
                 phase_started_at=self.phase_started_at,
                 help=self.help,
+                person=self.person,
                 plan_version=self.plan_version,
                 plan_revisions=self.plan_revisions,
             )
@@ -277,6 +321,11 @@ def _new_progress(
     # interruption after it resumes normally, with a restore.
     progress.help = (
         None if resume.help is None else replace(resume.help, continue_pending=False)
+    )
+    progress.person = (
+        None
+        if resume.person is None
+        else replace(resume.person, continue_pending=False)
     )
     progress.state_lines, progress.retry_notes = _rebuild_state(
         resume.attempts,
@@ -388,7 +437,7 @@ def _rebuild_state(
                     attempt.step_num, result, with_actions=True
                 )
             elif result.status == "pass":
-                lines.append(f"Step {attempt.step_num}: {result.summary}")
+                lines.append(_passed_step_line(attempt))
             elif (
                 final_index[attempt.step_num] == index and attempt.step_num < next_step
             ):
@@ -416,6 +465,14 @@ def _rebuild_state(
     if interrupted_help is not None:
         lines.append(_interrupted_help_line(interrupted_help, decisions))
     return lines, notes
+
+
+def _passed_step_line(attempt: SubTaskAttempt) -> str:
+    # The reporter's name is not kept on the attempt; an overrule's summary
+    # already says who overruled.
+    if attempt.performed_by == "person" and not is_overruled(attempt):
+        return format_person_state_line(attempt.step_num, "", attempt.result.summary)
+    return f"Step {attempt.step_num}: {attempt.result.summary}"
 
 
 def _interrupted_by_fault(help: CheckpointHelp, next_step: int) -> bool:
@@ -671,6 +728,256 @@ def _restore_resumed_state(
     progress.state_lines.append(_resume_state_line(step_num, result.summary))
 
 
+def _restore_before_resume(
+    *,
+    orchestrator_llm: LLMConfig,
+    progress: _Progress,
+    project_id: int,
+    sub_agent_config: AgentConfig,
+    bounds: TimeoutBounds,
+    system_info: dict[str, object] | None,
+    project_prompt: str | None,
+    on_log: LogCallback | None,
+    task_description: str,
+    person_mode: Callable[[], bool] | None,
+) -> OrchestratorResult | None:
+    """Restore the state before the cursor step; a result means wait for a person.
+
+    In Human in the loop the restore is handed to a person (kind ``restore``)
+    and settled from their report; otherwise the restore sub-agent runs.
+    """
+    step_num = progress.next_step
+    person = progress.person
+    if person is not None and (
+        person.hand_off.kind != "restore" or person.hand_off.step_num != step_num
+    ):
+        person = None
+    if person is not None and person.state in ("reported", "overruled"):
+        settled = _settle_person_report(
+            progress,
+            person,
+            attempt_kind="resume",
+            project_id=project_id,
+            sub_agent_config=sub_agent_config,
+            system_info=system_info,
+            project_prompt=project_prompt,
+            state_description="\n".join(progress.state_lines),
+            on_log=on_log,
+            person_mode=person_mode,
+        )
+        if isinstance(settled, OrchestratorResult):
+            return settled
+        if settled is not None:
+            summary = settled.result.summary
+            progress.checkpoint()
+            if settled.result.status != "pass":
+                raise ResumeStateLostError(step_num, summary)
+            progress.state_lines.append(_resume_state_line(step_num, summary))
+            return None
+        # Not confirmed and Human in the loop is off now: the agent restores.
+    elif _person_mode_on(person_mode):
+        if person is not None and person.state == "waiting":
+            return _await_person(progress, person, on_log)
+        progress.set_phase("resume")
+        awaiting = _hand_off_to_person(
+            progress,
+            prepare_person_step(
+                orchestrator_llm,
+                _build_resume_sub_task(progress.plan, step_num, bounds),
+                step_num=step_num,
+                total_steps=len(progress.plan),
+                task_description=task_description,
+                system_info=system_info,
+                restore=True,
+            ),
+            on_log,
+            person_mode,
+        )
+        if awaiting is not None:
+            return awaiting
+    # Not in Human in the loop (any more): the agent restores the state.
+    progress.person = None
+    _restore_resumed_state(
+        progress=progress,
+        project_id=project_id,
+        sub_agent_config=sub_agent_config,
+        bounds=bounds,
+        system_info=system_info,
+        project_prompt=project_prompt,
+        on_log=on_log,
+    )
+    return None
+
+
+def _person_mode_on(person_mode: Callable[[], bool] | None) -> bool:
+    return person_mode is not None and person_mode()
+
+
+def _person_for_step(progress: _Progress, step_num: int) -> CheckpointPersonStep | None:
+    """The person key when it is for ``step_num``; a stale key is dropped."""
+    person = progress.person
+    if person is None:
+        return None
+    if person.hand_off.kind == "restore" or person.hand_off.step_num != step_num:
+        progress.person = None
+        return None
+    return person
+
+
+def _hand_off_to_person(
+    progress: _Progress,
+    hand_off: PersonStepHandOff,
+    on_log: LogCallback | None,
+    person_mode: Callable[[], bool] | None,
+) -> OrchestratorResult | None:
+    """Wait for a person to perform ``hand_off``; None when the mode is off now.
+
+    The mode is asked again right before the hand-off (the prepare call or the
+    confirmation ran in between): a hand-off after the run left Human in the
+    loop would never be answered. Then the person key is dropped and the
+    caller runs the step (or the restore) the agent's way, from the current
+    screen.
+    """
+    if not _person_mode_on(person_mode):
+        progress.person = None
+        _log(
+            on_log,
+            f"[Orchestrator]   Human in the loop is off: the agent performs "
+            f"{'the state restore before step' if hand_off.kind == 'restore' else 'step'}"
+            f" {hand_off.step_num}",
+        )
+        return None
+    progress.person = CheckpointPersonStep(
+        hand_off=hand_off,
+        request_id=None,
+        state="waiting",
+        requested_at=timezone.now(),
+    )
+    return _await_person(progress, progress.person, on_log)
+
+
+def _await_person(
+    progress: _Progress, person: CheckpointPersonStep, on_log: LogCallback | None
+) -> OrchestratorResult:
+    """Stop the case until a person performs ``person``'s step (no verdict)."""
+    hand_off = person.hand_off
+    progress.person = person
+    progress.next_step = hand_off.step_num
+    progress.set_phase("awaiting_person")
+    what = "the state restore before step" if hand_off.kind == "restore" else "step"
+    _log(
+        on_log,
+        f"[Orchestrator]   Handed {what} {hand_off.step_num} to a person"
+        f"{' again: ' + hand_off.objection if hand_off.objection else ''}",
+    )
+    return OrchestratorResult(
+        status="awaiting_person",
+        summary=f"Waiting for a person to perform {what} {hand_off.step_num}",
+        attempts=tuple(progress.attempts),
+        total_iterations=progress.total_iterations,
+        person_step=hand_off,
+    )
+
+
+def _settle_person_report(
+    progress: _Progress,
+    person: CheckpointPersonStep,
+    *,
+    attempt_kind: Literal["step", "resume"],
+    project_id: int,
+    sub_agent_config: AgentConfig,
+    system_info: dict[str, object] | None,
+    project_prompt: str | None,
+    state_description: str,
+    on_log: LogCallback | None,
+    person_mode: Callable[[], bool] | None,
+) -> SubTaskAttempt | OrchestratorResult | None:
+    """Record a person's report of their step, or hand it back with an objection.
+
+    An overrule is recorded as passed without a check. A report is checked by
+    the confirm sub-agent: "as expected" passes when confirmed and otherwise
+    goes back to the person (nothing recorded, the person decides); "different"
+    is recorded as failed with the agent's observation as evidence. None: not
+    confirmed while Human in the loop is off now, so nothing is recorded, the
+    person key is dropped and the caller runs the step the agent's way.
+    """
+    hand_off = person.hand_off
+    step_num = hand_off.step_num
+    attempt_id = ""
+    if person.state == "overruled":
+        result = SubTaskResult(
+            status="pass",
+            summary=format_overrule_summary(person.reporter, hand_off.objection),
+            iterations=0,
+        )
+    else:
+        progress.set_phase("resume" if attempt_kind == "resume" else "step")
+        _log(
+            on_log, f"[Orchestrator]   Confirming a person's report of step {step_num}"
+        )
+        attempt_id = uuid.uuid4().hex
+        confirmed = confirm_person_step(
+            person,
+            project_id,
+            config=replace(
+                sub_agent_config,
+                on_screenshot=_attempt_screenshot_callback(
+                    progress.on_screenshot, attempt_id=attempt_id, step_num=step_num
+                ),
+            ),
+            browser_selection=progress.browser_selection,
+            system_info=system_info,
+            project_prompt=project_prompt,
+            state_description=state_description,
+        )
+        progress.total_iterations += confirmed.iterations
+        _log(
+            on_log,
+            f"[Orchestrator]   Confirmation: {confirmed.status.upper()} — "
+            f"{confirmed.summary}",
+        )
+        if person.outcome == "different":
+            result = SubTaskResult(
+                status="fail",
+                summary=format_different_summary(
+                    person.reporter, person.note, confirmed.summary
+                ),
+                iterations=confirmed.iterations,
+            )
+        elif confirmed.status == "pass":
+            result = replace(confirmed, actions_digest="")
+        else:
+            return _hand_off_to_person(
+                progress,
+                replace(
+                    hand_off,
+                    objection=cap_text(confirmed.summary, OBJECTION_MAX_CHARS),
+                ),
+                on_log,
+                person_mode,
+            )
+    attempt = SubTaskAttempt(
+        step_num=step_num,
+        kind=attempt_kind,
+        result=result,
+        duration_seconds=_person_duration(person),
+        attempt_id=attempt_id,
+        performed_by="person",
+        person_step_id=person.request_id,
+    )
+    progress.attempts.append(attempt)
+    progress.person = None
+    return attempt
+
+
+def _person_duration(person: CheckpointPersonStep) -> int | None:
+    """The person's time on the step: handed out to reported."""
+    if person.requested_at is None or person.reported_at is None:
+        return None
+    seconds = (person.reported_at - person.requested_at).total_seconds()
+    return max(0, int(round(seconds)))
+
+
 def _build_sub_agent_execution_config(
     sub_agent_llm: LLMConfig,
     vision_llm: LLMConfig,
@@ -817,6 +1124,8 @@ def _execute_sub_tasks(
     project_prompt: str | None = None,
     on_log: LogCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
+    task_description: str = "",
+    person_mode: Callable[[], bool] | None = None,
 ) -> OrchestratorResult:
     sub_tasks = progress.plan
     attempts = progress.attempts
@@ -834,9 +1143,23 @@ def _execute_sub_tasks(
 
     # Every step already had an attempt: there is nothing to restore or run.
     # After help the machine is exactly as the person or setup agent left it.
-    if resuming and not continuing_after_help and 0 < i < total:
+    # A restore handed to a person is settled even then: their report of it is
+    # what continues the case.
+    # A restore key for another step than the cursor's is stale: dropped.
+    stale = progress.person
+    if (
+        stale is not None
+        and stale.hand_off.kind == "restore"
+        and stale.hand_off.step_num != progress.next_step
+    ):
+        progress.person = None
+    restore_handed_out = (
+        progress.person is not None and progress.person.hand_off.kind == "restore"
+    )
+    if restore_handed_out or (resuming and not continuing_after_help and 0 < i < total):
         _check_cancelled(cancellation_check, on_log)
-        _restore_resumed_state(
+        awaiting = _restore_before_resume(
+            orchestrator_llm=orchestrator_llm,
             progress=progress,
             project_id=project_id,
             sub_agent_config=sub_agent_config,
@@ -844,7 +1167,11 @@ def _execute_sub_tasks(
             system_info=system_info,
             project_prompt=project_prompt,
             on_log=on_log,
+            task_description=task_description,
+            person_mode=person_mode,
         )
+        if awaiting is not None:
+            return awaiting
 
     while i < len(sub_tasks):
         _check_cancelled(cancellation_check, on_log)
@@ -861,6 +1188,79 @@ def _execute_sub_tasks(
         # The cursor points at this step before it runs, so a case interrupted
         # mid-step resumes by running it again.
         progress.next_step = step_num
+
+        # Human in the loop: a person performs the step and the agent confirms
+        # it. No failure evaluation, recovery or need_help on a person step.
+        person = _person_for_step(progress, step_num)
+        reported = person is not None and person.state in ("reported", "overruled")
+        settled: SubTaskAttempt | None = None
+        if person is not None and reported:
+            settled_or_wait = _settle_person_report(
+                progress,
+                person,
+                attempt_kind="step",
+                project_id=project_id,
+                sub_agent_config=sub_agent_config,
+                system_info=system_info,
+                project_prompt=project_prompt,
+                state_description=state_description,
+                on_log=on_log,
+                person_mode=person_mode,
+            )
+            if isinstance(settled_or_wait, OrchestratorResult):
+                return settled_or_wait
+            # None: not confirmed and Human in the loop is off now, so the
+            # agent runs the step below, from the current screen.
+            settled = settled_or_wait
+        if person is not None and settled is not None:
+            person_result = settled.result
+            if person_result.status == "pass":
+                state_lines.append(
+                    f"Step {step_num}: {person_result.summary}"
+                    if person.state == "overruled"
+                    else format_person_state_line(
+                        step_num, person.reporter, person_result.summary
+                    )
+                )
+                progress.next_step = step_num + 1
+                progress.checkpoint()
+                i += 1
+                continue
+            # The person saw a different result: the step failed and the case
+            # stops; the verdict follows.
+            reason = "A person reported a different result"
+            progress.decisions.append(
+                StepDecision(step_num=step_num, action="stop", reason=reason)
+            )
+            _log(on_log, f"[Orchestrator]   Stopping: {reason}")
+            state_lines.append(
+                f"Step {step_num}: FAILED (stopped) — {person_result.summary}"
+            )
+            progress.next_step = total + 1
+            break
+        if not reported and _person_mode_on(person_mode):
+            if person is not None and person.state == "waiting":
+                # Already handed out: never prepared twice.
+                return _await_person(progress, person, on_log)
+            progress.set_phase("step")
+            awaiting = _hand_off_to_person(
+                progress,
+                prepare_person_step(
+                    orchestrator_llm,
+                    sub_task,
+                    step_num=step_num,
+                    total_steps=total,
+                    task_description=task_description,
+                    system_info=system_info,
+                ),
+                on_log,
+                person_mode,
+            )
+            if awaiting is not None:
+                return awaiting
+        # Not in Human in the loop (any more): a waiting, handed-back or
+        # unconfirmed step is run by the agent, from the current screen.
+        progress.person = None
         progress.set_phase("step")
 
         _log(
@@ -1310,6 +1710,8 @@ def _to_agent_result(orchestrator_result: OrchestratorResult) -> AgentResult:
         stop_reason = AgentStopReason.TASK_COMPLETE
     elif orchestrator_result.status == "need_help":
         stop_reason = AgentStopReason.NEEDS_HUMAN_HELP
+    elif orchestrator_result.status == "awaiting_person":
+        stop_reason = AgentStopReason.AWAITING_PERSON
     else:
         stop_reason = AgentStopReason.ERROR
 
@@ -1321,6 +1723,7 @@ def _to_agent_result(orchestrator_result: OrchestratorResult) -> AgentResult:
         messages=messages,
         error=orchestrator_result.error,
         help=orchestrator_result.help,
+        person_step=orchestrator_result.person_step,
     )
 
 

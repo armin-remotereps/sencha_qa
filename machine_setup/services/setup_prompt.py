@@ -15,12 +15,9 @@ from __future__ import annotations
 
 from django.conf import settings
 
+from agents.os_shell import get_os_name
 from agents.services.orchestrator_prompts import CLOSE_CLAUSE_PREFIX, PLAN_SCOPE_RULES
-from agents.services.prompt_parts import (
-    build_agent_persona,
-    build_project_context,
-    get_os_name,
-)
+from agents.services.prompt_parts import build_agent_persona, build_project_context
 from machine_setup.document_text import DOCUMENT_PAGE_CHARS
 from machine_setup.run_proposal_types import (
     LIST_CASE_GROUPS_TOOL,

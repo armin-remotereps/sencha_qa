@@ -371,9 +371,11 @@ def apply_plan_revision(
         resume_step=validated.resume_step,
         source=source,
     )
-    revised = checkpoint
+    # A person step (Human in the loop) belongs to the earlier plan's step
+    # numbers: never carry it into the new plan.
+    revised = dataclasses.replace(checkpoint, person=None)
     if source == "review":
-        revised = dataclasses.replace(checkpoint, help=None, phase="step")
+        revised = dataclasses.replace(revised, help=None, phase="step")
     return dataclasses.replace(
         revised,
         plan=tuple(

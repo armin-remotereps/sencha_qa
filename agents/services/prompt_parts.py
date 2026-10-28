@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-
-def get_os_name(system_info: dict[str, object] | None) -> str:
-    if not system_info:
-        return "Linux"
-    return str(system_info.get("os", "Linux"))
-
+from agents.os_shell import get_os_name
 
 _SYSTEM_INFO_VALUE_MAX_CHARS = 40
 
