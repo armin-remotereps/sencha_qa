@@ -6,6 +6,12 @@ open request waits for a person and never had an auto-fix gets one at once
 when switched to Night, if the step is eligible. Switching to Attended never
 stops a running auto-fix; Stop auto-fix on the case page does that.
 
+Human in the loop applies from the next step (the worker reads the mode at
+each step boundary). Choosing any other mode (even the current one) while a
+step waits for a person hands that step back to the agent at once
+(``hand_back_person_step``). A Need help in a Human in the loop run behaves
+as in Attended: the auto-fix paths are gated on Night only.
+
 Imports the leaf ``machine_setup`` modules only (through ``services`` and
 ``case_help_state``), never
 ``machine_setup.services`` (that package imports ``projects``).
@@ -31,6 +37,7 @@ from projects.models import (
     TestRun,
     TestRunStatus,
 )
+from projects.person_step_services import hand_back_person_step
 from projects.run_reopen_services import is_valid_help_mode, lock_project_and_run
 from projects.services import broadcast_run_and_pivots, broadcast_test_run_status
 
@@ -40,7 +47,7 @@ _CHANGEABLE_STATUSES = (
     TestRunStatus.PAUSED,
 )
 _NOT_CHANGEABLE = "The help mode can only be changed while the run is active."
-_UNKNOWN_MODE = "Choose Attended or Night."
+_UNKNOWN_MODE = "Choose Attended, Night or Human in the loop."
 
 
 @dataclass(frozen=True)
@@ -50,6 +57,11 @@ class HelpModeChange:
     changed: bool
     # The paused run's waiting case was handed to the auto-fix.
     auto_fix_started: bool
+    # A step waiting for a person was handed back to the agent.
+    handed_back: bool = False
+    # User-safe reason the run stays paused after a hand-back (a gate
+    # refused; "Continue run" queues it later); empty otherwise.
+    blocker: str = ""
 
 
 def change_run_help_mode(
@@ -65,10 +77,27 @@ def change_run_help_mode(
         _, locked_run = lock_project_and_run(test_run.pk)
         if locked_run.status not in _CHANGEABLE_STATUSES:
             raise RunHelpError(_NOT_CHANGEABLE)
-        if locked_run.help_mode == help_mode:
+        changed = locked_run.help_mode != help_mode
+        if changed:
+            locked_run.help_mode = help_mode
+            locked_run.save(update_fields=["help_mode", "updated_at"])
+
+        # Outside Human in the loop, a step waiting for a person goes back to
+        # the agent (it broadcasts and queues the run itself); a step being
+        # confirmed finishes first. Checked before the unchanged-mode return,
+        # so choosing the current mode again recovers a run left on a step.
+        if help_mode != RunHelpMode.HUMAN_IN_THE_LOOP:
+            hand_back = hand_back_person_step(locked_run)
+            if hand_back is not None:
+                return HelpModeChange(
+                    help_mode,
+                    changed=changed,
+                    auto_fix_started=False,
+                    handed_back=True,
+                    blocker=hand_back.blocker,
+                )
+        if not changed:
             return HelpModeChange(help_mode, changed=False, auto_fix_started=False)
-        locked_run.help_mode = help_mode
-        locked_run.save(update_fields=["help_mode", "updated_at"])
 
         request = _request_waiting_for_person(locked_run, help_mode)
         if request is None:

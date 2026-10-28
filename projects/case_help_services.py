@@ -5,7 +5,9 @@ Imports ``run_reopen_services``, ``services`` and the leaf
 ``machine_setup.services`` (that package imports this one).
 
 Every action locks the project, then the run (the order Start and Resume use),
-then the help request, then the case (the order every help writer uses),
+then the help request, then (Continue / Mark failed / Mark blocked) the case's open
+person steps, then the case (the order every help writer uses; the person
+step services also lock a step before its case),
 requires the run to be PAUSED, and resolves the case's open help request. The
 remaining cases are then queued (the helped case first), unless the auto-fix
 turn of the request is still live: it is asked to stop, and the run is queued
@@ -18,6 +20,7 @@ Every resolution clears the help-chat agent's suggestion.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -27,7 +30,11 @@ from django.db.models import Prefetch, QuerySet, Subquery
 from django.utils import timezone
 
 from accounts.models import CustomUser
-from agents.checkpoint import with_help
+from agents.checkpoint import (
+    read_checkpoint_person_step,
+    with_help,
+    without_person_step,
+)
 from agents.plan_revision import PlanDraftView
 from agents.types import CheckpointHelp, HelpSource
 from machine_setup.auto_fix_stop import request_auto_fix_stop
@@ -50,12 +57,16 @@ from projects.case_plan_revision_services import (
 from projects.exceptions import RunHelpError
 from projects.models import (
     HELP_NOTE_MAX_LENGTH,
+    OPEN_PERSON_STEP_STATUSES,
     BlockedReason,
     CaseHelpRequest,
+    CasePersonStep,
     FailedBy,
     HelpAutoFixState,
     HelpContinueMode,
     HelpResolution,
+    PersonStepClose,
+    PersonStepStatus,
     Project,
     TestRun,
     TestRunScreenshot,
@@ -180,11 +191,17 @@ def _latest_thread(request: CaseHelpRequest) -> SetupConversation | None:
 
 
 def get_help_panel(
-    test_run: TestRun, project: Project, *, pivot_id: int | None = None
+    test_run: TestRun,
+    project: Project,
+    *,
+    pivot_id: int | None = None,
+    blockers: Sequence[str] | None = None,
 ) -> HelpPanel | None:
     """The help panel of a PAUSED run; None (no queries) for any other status.
 
     With ``pivot_id``, None unless the run's latest request is that case's.
+    ``blockers``: the run's reopen gates (``list_reopen_blockers``) when the
+    caller already computed them; computed here otherwise.
     """
     if test_run.status != TestRunStatus.PAUSED:
         return None
@@ -201,7 +218,8 @@ def get_help_panel(
     if pivot_id is not None and request.test_run_test_case_id != pivot_id:
         return None
     auto_fix_live = auto_fix_turn_live(request.pk)
-    blockers = list_reopen_blockers(test_run, project)
+    if blockers is None:
+        blockers = list_reopen_blockers(test_run, project)
     if auto_fix_live:
         # The live turn is this request's auto-fix: resolving the request
         # stops it, so it does not block the actions.
@@ -318,10 +336,16 @@ def continue_after_help(
     pending draft is superseded and the case re-runs its failing step. A
     pending draft other than the one shown refuses (the agent proposed a newer
     plan).
+
+    A person step a fault left open (Human in the loop) is cancelled unless
+    the checkpoint keeps its key (``_write_help_key``): the step is handed out
+    afresh, not as a rejected report.
     """
     with transaction.atomic():
         project, test_run = _lock_paused_run(pivot.test_run_id)
-        locked_pivot, request = _lock_open_request(test_run, pivot.pk)
+        request = _lock_request(pivot.pk)
+        person_step_ids = _lock_open_person_step_ids(pivot.pk)
+        locked_pivot = _lock_help_case(test_run, pivot.pk)
         now = timezone.now()
         if person_turn_live(request.pk):
             raise RunHelpError(_AGENT_REPLYING)
@@ -356,6 +380,8 @@ def continue_after_help(
             project_id=test_run.project_id,
         )
         _set_continue_pending(locked_pivot, request, "human")
+        if read_checkpoint_person_step(locked_pivot.execution_checkpoint) is None:
+            _cancel_person_steps(person_step_ids, PersonStepClose.OPEN, user, now)
         return _queue_or_wait(test_run, request, locked_pivot, auto_fix_live)
 
 
@@ -365,10 +391,14 @@ def mark_failed_after_help(
     """A person judges the case Failed; the rest of the run continues."""
     with transaction.atomic():
         _, test_run = _lock_paused_run(pivot.test_run_id)
-        locked_pivot, request = _lock_open_request(test_run, pivot.pk)
+        request = _lock_request(pivot.pk)
+        person_step_ids = _lock_open_person_step_ids(pivot.pk)
+        locked_pivot = _lock_help_case(test_run, pivot.pk)
         now = timezone.now()
         auto_fix_live = auto_fix_turn_live(request.pk)
         note = _cap_note(note)
+        # Human in the loop: a step left open on the case closes with it.
+        _cancel_person_steps(person_step_ids, PersonStepClose.MARKED_FAILED, user, now)
         supersede_pending_revisions(request)
         _resolve(
             request,
@@ -412,10 +442,14 @@ def mark_blocked_after_help(
     """
     with transaction.atomic():
         _, test_run = _lock_paused_run(pivot.test_run_id)
-        locked_pivot, request = _lock_open_request(test_run, pivot.pk)
+        request = _lock_request(pivot.pk)
+        person_step_ids = _lock_open_person_step_ids(pivot.pk)
+        locked_pivot = _lock_help_case(test_run, pivot.pk)
         now = timezone.now()
         auto_fix_live = auto_fix_turn_live(request.pk)
         note = _cap_note(note)
+        # Human in the loop: a step left open on the case closes with it.
+        _cancel_person_steps(person_step_ids, PersonStepClose.MARKED_BLOCKED, user, now)
         # The blocked case resumes later on its current (old) plan.
         supersede_pending_revisions(request)
         _resolve(
@@ -675,6 +709,12 @@ def _lock_open_request(
     The order of ``case_plan_revision_services.lock_waiting_help_request``.
     Raises ``RunHelpError`` unless the request is open and the case Need help.
     """
+    request = _lock_request(pivot_id)
+    return _lock_help_case(test_run, pivot_id), request
+
+
+def _lock_request(pivot_id: int) -> CaseHelpRequest:
+    """Lock the case's open help request; ``RunHelpError`` when none is open."""
     request = (
         CaseHelpRequest.objects.select_for_update()
         .filter(test_run_test_case_id=pivot_id, resolution=HelpResolution.OPEN)
@@ -682,6 +722,11 @@ def _lock_open_request(
     )
     if request is None:
         raise RunHelpError(_NO_OPEN_REQUEST)
+    return request
+
+
+def _lock_help_case(test_run: TestRun, pivot_id: int) -> TestRunTestCase:
+    """Lock the case (last); ``RunHelpError`` unless it is in Need help."""
     pivot = (
         TestRunTestCase.objects.select_for_update()
         .defer("logs")
@@ -690,7 +735,37 @@ def _lock_open_request(
     )
     if pivot is None or pivot.status != TestRunTestCaseStatus.NEED_HELP:
         raise RunHelpError(_NO_OPEN_REQUEST)
-    return pivot, request
+    return pivot
+
+
+def _lock_open_person_step_ids(pivot_id: int) -> list[int]:
+    """Lock the case's open person steps (after the request, before the case).
+
+    A fault while the agent confirmed a person's report leaves the step
+    open (``reported``) while the case needs help; one row at most.
+    """
+    return list(
+        CasePersonStep.objects.select_for_update()
+        .filter(test_run_test_case_id=pivot_id, status__in=OPEN_PERSON_STEP_STATUSES)
+        .values_list("id", flat=True)
+    )
+
+
+def _cancel_person_steps(
+    person_step_ids: list[int],
+    close_reason: PersonStepClose,
+    user: CustomUser,
+    now: datetime,
+) -> None:
+    """Close the locked open person steps: the case finished without them."""
+    if not person_step_ids:
+        return
+    CasePersonStep.objects.filter(pk__in=person_step_ids).update(
+        status=PersonStepStatus.CANCELLED,
+        close_reason=close_reason,
+        closed_by=user,
+        closed_at=now,
+    )
 
 
 def _resolve(
@@ -754,13 +829,21 @@ def _write_help_key(
     agent continued), the setup agent's summary (empty when no auto-fix
     reported), whether that auto-fix reported the machine fixed, and the
     fault's label (empty when the agent asked for help).
+
+    A person step key (Human in the loop) survives only a current-screen
+    Continue, the retry of a confirmation a fault interrupted: after a restore
+    a report made before it must not be confirmed, so the step is handed out
+    afresh.
     """
     mode = _continue_mode(request)
     if mode == HelpContinueMode.FROM_SCRATCH:
         pivot.execution_checkpoint = {}
         return
+    checkpoint = pivot.execution_checkpoint
+    if mode != HelpContinueMode.CURRENT_SCREEN:
+        checkpoint = without_person_step(checkpoint)
     pivot.execution_checkpoint = with_help(
-        pivot.execution_checkpoint,
+        checkpoint,
         CheckpointHelp(
             step_num=request.step_num,
             request_id=request.pk,

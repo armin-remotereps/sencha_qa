@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from django.urls import URLPattern, path
 
-from projects import member_views, testrail_views, views
+from projects import member_views, person_step_views, testrail_views, views
 
 app_name = "projects"
 
@@ -290,6 +290,26 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/help/stop-auto-fix/",
         views.test_run_case_help_stop_auto_fix,
         name="test_run_case_help_stop_auto_fix",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/person-step/report/",
+        person_step_views.test_run_case_person_report,
+        name="test_run_case_person_report",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/person-step/overrule/",
+        person_step_views.test_run_case_person_overrule,
+        name="test_run_case_person_overrule",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/person-step/fail/",
+        person_step_views.test_run_case_person_fail,
+        name="test_run_case_person_fail",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/person-step/block/",
+        person_step_views.test_run_case_person_block,
+        name="test_run_case_person_block",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:test_case_id>/edit/",

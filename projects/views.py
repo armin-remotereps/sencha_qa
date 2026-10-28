@@ -48,7 +48,6 @@ from projects.case_help_services import (
     resolve_return_thread,
     stop_auto_fix,
 )
-from projects.case_help_state import get_run_help_state
 from projects.case_plan_revision_services import (
     discard_plan_revision,
     plan_revision_belongs_to,
@@ -70,6 +69,7 @@ from projects.forms import (
     CaseResumeForm,
     ContextRestoreForm,
     HelpReturnForm,
+    PersonStepReportForm,
     ProjectForm,
     RunCaseSelectionForm,
     RunCasesRerunForm,
@@ -88,6 +88,7 @@ from projects.models import (
     TestRunStatus,
     TestRunTestCase,
 )
+from projects.person_step_services import get_person_step_panel
 from projects.run_case_check_services import (
     check_run_cases,
     format_check_message,
@@ -98,6 +99,7 @@ from projects.run_case_check_services import (
     uncheck_run_cases,
 )
 from projects.run_help_mode_services import change_run_help_mode
+from projects.run_pause_panel import get_run_pause_panels
 from projects.run_rerun_services import (
     format_rerun_message,
     get_rerun_panel,
@@ -964,6 +966,8 @@ def _build_test_run_detail_context(
 
     # Shared with Resume, so the reopen gates run once per page.
     rerun_panel = get_rerun_panel(test_run, project)
+    # Help request / Human in the loop person step / plain "Continue run".
+    pause = get_run_pause_panels(test_run, project)
 
     context: dict[str, Any] = {
         "project": project,
@@ -991,8 +995,10 @@ def _build_test_run_detail_context(
         "uncheckable_pivot_ids": [p.id for p in cases if is_uncheckable(p)],
         "rerunnable_pivot_ids": rerunnable_ids_on_page(test_run, cases),
         "rerun_panel": rerun_panel,
-        "help_panel": get_help_panel(test_run, project),
-        "help_state": get_run_help_state(test_run),
+        "help_panel": pause.help_panel,
+        "help_state": pause.help_state,
+        "person_step_panel": pause.person_step_panel,
+        "paused_run_blockers": pause.paused_run_blockers,
         # Resume / Re-run dialogs: pre-set to the run's current mode.
         "help_mode_form": RunHelpModeForm(initial={"help_mode": test_run.help_mode}),
         "active_tab": "runs",
@@ -1063,6 +1069,11 @@ def test_run_case_detail(
             ),
             "help_panel": help_panel,
             "help_requests": list_case_help_requests(pivot),
+            # Human in the loop: the step this case waits on a person for.
+            "person_step_panel": get_person_step_panel(
+                pivot.test_run, project, pivot=pivot
+            ),
+            "person_step_form": PersonStepReportForm(),
             # The agent's suggested note is shown, never pre-filled: the
             # Continue note reaches the tester as the person's own words.
             # The draft is only summarised here, so it is not applied by default.
@@ -1468,7 +1479,20 @@ def test_run_help_mode(
         messages.error(request, exc.message)
         return run_page
     label = RunHelpMode(change.help_mode).label
-    if not change.changed:
+    if change.handed_back:
+        prefix = f"Help mode changed to {label}. " if change.changed else f"{label}: "
+        if change.blocker:
+            messages.warning(
+                request,
+                f"{prefix}The agent performs the waiting step itself, but the "
+                f"run could not continue: {change.blocker} Use Continue run "
+                "once that is resolved.",
+            )
+        else:
+            messages.success(
+                request, f"{prefix}The agent now performs the waiting step itself."
+            )
+    elif not change.changed:
         messages.info(request, f"The help mode already is {label}.")
     elif change.auto_fix_started:
         messages.success(
