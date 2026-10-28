@@ -70,8 +70,8 @@ def _settle_row(
 
     Guarded by the open statuses, so an abort's ``cancelled`` (or any other
     close) is never overwritten. The close reason keeps one already recorded;
-    otherwise reported different, overruled (the overrule records who closed
-    the step) or confirmed.
+    otherwise reported different, overruled (the overrule sets ``closed_via``,
+    and ``closed_by`` unless anonymous) or confirmed.
     """
     passed = attempt.result.status == "pass"
     return CasePersonStep.objects.filter(
@@ -91,8 +91,10 @@ def _settle_row(
                 outcome=PersonStepOutcome.DIFFERENT,
                 then=Value(PersonStepClose.REPORTED_DIFFERENT.value),
             ),
+            # Only an overrule sets an open row's ``closed_via``/``closed_by``; an
+            # anonymous Test Runner overrule has no ``closed_by``.
             When(
-                closed_by__isnull=False,
+                Q(closed_by__isnull=False) | ~Q(closed_via=""),
                 then=Value(PersonStepClose.OVERRULED.value),
             ),
             default=Value(PersonStepClose.CONFIRMED.value),

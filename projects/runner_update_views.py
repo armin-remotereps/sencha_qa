@@ -9,11 +9,12 @@ request while one is running.
 
 from __future__ import annotations
 
-from accounts.types import AuthenticatedRequest
 from django.contrib import messages
 from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.views.decorators.http import require_POST
+
+from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
 from projects.exceptions import RunnerUpdateRefusedError
 from projects.forms import RunnerUpdateForm

@@ -16,6 +16,8 @@ from typing import Final
 
 from django.db import transaction
 from django.utils import timezone
+
+from controller_client.protocol import UpdatePhase
 from projects.case_help_services import restore_open_help_after_runner_update
 from projects.models import (
     NON_TERMINAL_RUNNER_UPDATE_STATUSES,
@@ -26,8 +28,6 @@ from projects.models import (
     RunnerUpdateStatus,
 )
 from projects.runner_update_offer import broadcast_runner_update
-
-from controller_client.protocol import UpdatePhase
 
 logger = logging.getLogger(__name__)
 

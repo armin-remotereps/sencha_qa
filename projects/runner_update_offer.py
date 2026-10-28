@@ -18,6 +18,13 @@ from typing import Any, Final, TypedDict
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.utils import timezone
+
+from controller_client.protocol import (
+    CLIENT_VERSION,
+    ClientCapability,
+    UpdatePhase,
+    version_tuple,
+)
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from projects.models import (
     Project,
@@ -31,13 +38,6 @@ from projects.models import (
 from projects.runner_update_state import (
     expire_stale_runner_updates,
     runner_update_timeout,
-)
-
-from controller_client.protocol import (
-    CLIENT_VERSION,
-    ClientCapability,
-    UpdatePhase,
-    version_tuple,
 )
 
 RUN_STARTED_MESSAGE: Final[str] = (

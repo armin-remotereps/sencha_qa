@@ -163,6 +163,7 @@ from projects.person_step_rows import (
 from projects.run_case_order import PICKER_CASE_ORDERING, RUN_CASE_ORDERING
 from projects.run_finished_notifications import notify_run_finished
 from projects.runner_bundle import build_runner_archive
+from projects.runner_person_step_push import nudge_runner_person_steps
 from projects.runner_update_state import (
     RUNNER_UPDATE_RUNNING_MESSAGE,
     runner_update_in_progress,
@@ -2850,6 +2851,7 @@ def broadcast_run_and_pivots(
     for pivot in pivots:
         _send_pivot_status_to_run(layer, pivot, summary)
         _broadcast_pivot_status_to_case(pivot)
+    _nudge_runner_after_commit(test_run.project_id)
 
 
 def _broadcast_pivot_status_to_case(pivot: TestRunTestCase) -> None:
@@ -2909,6 +2911,18 @@ def broadcast_test_run_status(test_run: TestRun) -> None:
         "help_mode": test_run.help_mode,
     }
     async_to_sync(layer.group_send)(_test_run_group(test_run.id), event)
+    _nudge_runner_after_commit(test_run.project_id)
+
+
+def _nudge_runner_after_commit(project_id: int) -> None:
+    """Let the Test Runner window re-read its person steps once this commits.
+
+    Every person step transition goes through a run broadcast; some callers
+    broadcast inside their transaction (``abort_test_run``), where the
+    consumer would still read the old rows. Outside a transaction (including
+    inside another ``on_commit`` callback) it runs at once.
+    """
+    transaction.on_commit(lambda: nudge_runner_person_steps(project_id))
 
 
 def _broadcast_log(pivot: TestRunTestCase, message: str) -> None:
@@ -3920,6 +3934,9 @@ def _generate_env_content(project: Project) -> str:
         "CONTROLLER_MAX_RECONNECT_ATTEMPTS=0\n"
         "CONTROLLER_RECONNECT_MAX_INTERVAL=60\n"
         "CONTROLLER_LOG_LEVEL=INFO\n"
+        "CONTROLLER_PERSON_WINDOW=true\n"
+        # Asked for when the Test Runner first starts, then written here.
+        "CONTROLLER_PERSON_EMAIL=\n"
     )
 
 

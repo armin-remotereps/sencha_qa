@@ -24,7 +24,6 @@ from datetime import datetime
 from django.db import transaction
 from django.utils import timezone
 
-from accounts.models import CustomUser
 from agents.checkpoint import read_checkpoint_person_step, with_person_step
 from agents.types import (
     CheckpointPersonStep,
@@ -32,6 +31,7 @@ from agents.types import (
     PersonReportOutcome,
     PersonStepHandOff,
 )
+from controller_client.protocol import ClientCapability
 from notifications.services.inbox_broadcast import broadcast_project_attention_changed
 from projects.case_result_text import person_label
 from projects.exceptions import PersonStepError, RunHelpError
@@ -43,6 +43,7 @@ from projects.models import (
     BlockedReason,
     CasePersonStep,
     FailedBy,
+    PersonStepChannel,
     PersonStepClose,
     PersonStepOutcome,
     PersonStepStatus,
@@ -52,6 +53,7 @@ from projects.models import (
     TestRunTestCase,
     TestRunTestCaseStatus,
 )
+from projects.person_step_actor import PersonStepActor
 from projects.run_reopen_services import (
     list_reopen_blockers,
     lock_project_and_run,
@@ -60,7 +62,7 @@ from projects.run_reopen_services import (
 from projects.services import broadcast_run_and_pivots
 
 _NOT_PAUSED = "This run is not waiting for a person."
-_STEP_GONE = "This step is no longer waiting for you. Reload the page."
+_STEP_GONE = "This step was already answered or is no longer waiting."
 _NOT_CONFIRMED_ONLY = "Only a step the agent could not confirm can be overruled."
 _NOTE_REQUIRED = "Describe what was different."
 _UNKNOWN_OUTCOME = "Choose how the step went."
@@ -95,6 +97,14 @@ class PersonStepPanel:
     can_report: bool
     # Why the run cannot be queued right now (runner offline, ...).
     blockers: tuple[str, ...]
+    # The open step can also be answered in the Test Runner's window: the
+    # project's runner is connected and advertised ``person_steps_v1``.
+    runner_can_answer: bool
+    # The step's report came from the Test Runner window.
+    reported_at_runner: bool
+    # The member who reported the step (name, else email); blank before a
+    # report and for an anonymous Test Runner report. Never runner-sent text.
+    reporter_label: str
 
     @property
     def holds_run(self) -> bool:
@@ -131,7 +141,7 @@ def get_person_step_panel(
 
     The run's open step (``waiting``, ``not_confirmed``, or ``reported`` while
     the agent confirms it, which also happens after the run was re-queued).
-    One query, plus the reopen gates while the run is PAUSED unless the caller
+    One query (with the reporter joined), plus the reopen gates while the run is PAUSED unless the caller
     passes them as ``blockers`` (``list_reopen_blockers``).
 
     With ``pivot`` (the case page, which already loaded it with its checkpoint
@@ -141,7 +151,9 @@ def get_person_step_panel(
     """
     if test_run.status not in ACTIVE_RUN_STATUSES:
         return None
-    steps = CasePersonStep.objects.filter(status__in=OPEN_PERSON_STEP_STATUSES)
+    steps = CasePersonStep.objects.filter(
+        status__in=OPEN_PERSON_STEP_STATUSES
+    ).select_related("reported_by")
     if pivot is not None:
         steps = steps.filter(test_run_test_case_id=pivot.pk)
     else:
@@ -177,6 +189,9 @@ def get_person_step_panel(
         shell_label=step.shell_label,
         can_report=paused and is_open and not blockers,
         blockers=tuple(blockers),
+        runner_can_answer=paused and is_open and _runner_shows_steps(project),
+        reported_at_runner=step.reported_via == PersonStepChannel.RUNNER,
+        reporter_label=person_label(step.reported_by),
     )
 
 
@@ -188,13 +203,18 @@ def get_person_step_panel(
 def report_person_step(
     *,
     pivot: TestRunTestCase,
-    user: CustomUser,
+    actor: PersonStepActor,
     person_step_id: int,
     outcome: str,
     note: str,
     output: str,
+    expected_round: int | None = None,
 ) -> PersonStepActionResult:
-    """The person performed the step and reports how it went; the agent confirms."""
+    """The person performed the step and reports how it went; the agent confirms.
+
+    ``expected_round``: the round the answer was given for (the Test Runner);
+    a step reopened since (next round) refuses it. None skips the check.
+    """
     report_outcome = _parse_outcome(outcome)
     note = _cap_note(note)
     if report_outcome == "different" and not note:
@@ -203,12 +223,13 @@ def report_person_step(
     with transaction.atomic():
         project, test_run = _lock_paused_run(pivot.test_run_id)
         locked_pivot, step = _lock_step(
-            test_run, pivot.pk, person_step_id, _ACTIONABLE_STATUSES
+            test_run, pivot.pk, person_step_id, _ACTIONABLE_STATUSES, expected_round
         )
         now = timezone.now()
         step.status = PersonStepStatus.REPORTED
         step.reported_at = now
-        step.reported_by = user
+        step.reported_by = actor.user
+        step.reported_via = actor.via
         step.outcome = report_outcome
         step.note = note
         step.output = output
@@ -217,6 +238,7 @@ def report_person_step(
                 "status",
                 "reported_at",
                 "reported_by",
+                "reported_via",
                 "outcome",
                 "note",
                 "output",
@@ -228,7 +250,7 @@ def report_person_step(
             outcome=report_outcome,
             note=note,
             output=output,
-            reporter=person_label(user),
+            reporter=actor.label(),
             reported_at=now,
             continue_pending=True,
         )
@@ -237,26 +259,33 @@ def report_person_step(
 
 
 def overrule_person_step(
-    *, pivot: TestRunTestCase, user: CustomUser, person_step_id: int, note: str
+    *,
+    pivot: TestRunTestCase,
+    actor: PersonStepActor,
+    person_step_id: int,
+    note: str,
+    expected_round: int | None = None,
 ) -> PersonStepActionResult:
     """The person overrules the agent's objection; the step is recorded passed."""
     note = _cap_note(note)
     with transaction.atomic():
         project, test_run = _lock_paused_run(pivot.test_run_id)
         locked_pivot, step = _lock_step(
-            test_run, pivot.pk, person_step_id, _ACTIONABLE_STATUSES
+            test_run, pivot.pk, person_step_id, _ACTIONABLE_STATUSES, expected_round
         )
         if step.status != PersonStepStatus.NOT_CONFIRMED:
             raise PersonStepError(_NOT_CONFIRMED_ONLY)
         # The agent records the pass on its next run; the worker closes the
-        # row (``overruled``) then. ``closed_by`` names who overruled.
+        # row (``overruled``) then. ``closed_via`` marks the overrule (an
+        # anonymous Test Runner answer has no ``closed_by``).
         step.status = PersonStepStatus.REPORTED
-        step.closed_by = user
+        step.closed_by = actor.user
+        step.closed_via = actor.via
         if note:
             step.note = _cap_note(
                 f"{step.note}\nOverruled: {note}" if step.note else note
             )
-        step.save(update_fields=["status", "closed_by", "note"])
+        step.save(update_fields=["status", "closed_by", "closed_via", "note"])
         base = _checkpoint_person(locked_pivot, step)
         person = dataclasses.replace(
             base,
@@ -264,7 +293,7 @@ def overrule_person_step(
             outcome=base.outcome or _stored_outcome(step),
             note=step.note,
             output=base.output or step.output,
-            reporter=person_label(user),
+            reporter=actor.label(),
             reported_at=step.reported_at or timezone.now(),
             continue_pending=True,
         )
@@ -273,25 +302,30 @@ def overrule_person_step(
 
 
 def mark_failed_person_step(
-    *, pivot: TestRunTestCase, user: CustomUser, person_step_id: int, note: str
+    *,
+    pivot: TestRunTestCase,
+    actor: PersonStepActor,
+    person_step_id: int,
+    note: str,
+    expected_round: int | None = None,
 ) -> PersonStepActionResult:
     """The person judges the case Failed; the rest of the run continues."""
     note = _cap_note(note)
     with transaction.atomic():
         project, test_run = _lock_paused_run(pivot.test_run_id)
         locked_pivot, step = _lock_step(
-            test_run, pivot.pk, person_step_id, _ACTIONABLE_STATUSES
+            test_run, pivot.pk, person_step_id, _ACTIONABLE_STATUSES, expected_round
         )
         now = timezone.now()
         objection = _open_objection(step)
         _close_step(
-            step, PersonStepStatus.FAILED, PersonStepClose.MARKED_FAILED, user, now
+            step, PersonStepStatus.FAILED, PersonStepClose.MARKED_FAILED, actor, now
         )
         locked_pivot.status = TestRunTestCaseStatus.FAILED
         locked_pivot.failed_by = FailedBy.HELP
         locked_pivot.blocked_reason = ""
         locked_pivot.result = _verdict_text(
-            f"Marked failed by {person_label(user)} at step {step.step_num} "
+            f"Marked failed by {actor.label()} at step {step.step_num} "
             "while it was waiting for a person.",
             step,
             objection,
@@ -312,7 +346,12 @@ def mark_failed_person_step(
 
 
 def mark_blocked_person_step(
-    *, pivot: TestRunTestCase, user: CustomUser, person_step_id: int, note: str
+    *,
+    pivot: TestRunTestCase,
+    actor: PersonStepActor,
+    person_step_id: int,
+    note: str,
+    expected_round: int | None = None,
 ) -> PersonStepActionResult:
     """The person marks the case Blocked (``help_skipped``); the run continues.
 
@@ -325,7 +364,7 @@ def mark_blocked_person_step(
     with transaction.atomic():
         project, test_run = _lock_paused_run(pivot.test_run_id)
         locked_pivot, step = _lock_step(
-            test_run, pivot.pk, person_step_id, _ACTIONABLE_STATUSES
+            test_run, pivot.pk, person_step_id, _ACTIONABLE_STATUSES, expected_round
         )
         now = timezone.now()
         objection = _open_objection(step)
@@ -334,13 +373,13 @@ def mark_blocked_person_step(
             step,
             PersonStepStatus.CANCELLED,
             PersonStepClose.MARKED_BLOCKED,
-            user,
+            actor,
             now,
         )
         locked_pivot.status = blocked
         locked_pivot.blocked_reason = BlockedReason.HELP_SKIPPED
         locked_pivot.result = _verdict_text(
-            f"Marked blocked by {person_label(user)} at step {step.step_num} "
+            f"Marked blocked by {actor.label()} at step {step.step_num} "
             "while it was waiting for a person.",
             step,
             objection,
@@ -420,11 +459,13 @@ def _lock_step(
     pivot_id: int,
     person_step_id: int,
     statuses: tuple[str, ...],
+    expected_round: int | None,
 ) -> tuple[TestRunTestCase, CasePersonStep]:
     """Lock the person step, then the case (after project and run).
 
     Raises ``PersonStepError`` unless the step is the case's, in one of
-    ``statuses``, and the case waits for a person.
+    ``statuses``, in ``expected_round`` when given, and the case waits for a
+    person.
     """
     step = (
         CasePersonStep.objects.select_for_update()
@@ -432,6 +473,8 @@ def _lock_step(
         .first()
     )
     if step is None or step.status not in statuses:
+        raise PersonStepError(_STEP_GONE)
+    if expected_round is not None and step.round != expected_round:
         raise PersonStepError(_STEP_GONE)
     pivot = (
         TestRunTestCase.objects.select_for_update()
@@ -473,7 +516,7 @@ def _checkpoint_person(
         outcome=_stored_outcome(step),
         note=step.note,
         output=step.output,
-        reporter=person_label(step.reported_by) if step.reported_by_id else "",
+        reporter=_row_reporter(step),
         requested_at=step.requested_at,
         reported_at=step.reported_at,
     )
@@ -502,14 +545,37 @@ def _close_step(
     step: CasePersonStep,
     status: PersonStepStatus,
     close_reason: PersonStepClose,
-    user: CustomUser,
+    actor: PersonStepActor,
     now: datetime,
 ) -> None:
     step.status = status
     step.close_reason = close_reason
-    step.closed_by = user
+    step.closed_by = actor.user
+    step.closed_via = actor.via
     step.closed_at = now
-    step.save(update_fields=["status", "close_reason", "closed_by", "closed_at"])
+    step.save(
+        update_fields=["status", "close_reason", "closed_by", "closed_via", "closed_at"]
+    )
+
+
+def _row_reporter(step: CasePersonStep) -> str:
+    """Who reported ``step`` as the checkpoint names them; "" before a report.
+
+    An anonymous Test Runner report has no ``reported_by`` but a ``reported_via``.
+    """
+    if step.reported_by_id is None and step.reported_via != PersonStepChannel.RUNNER:
+        return ""
+    return PersonStepActor.from_row(step.reported_by, step.reported_via).label()
+
+
+def _runner_shows_steps(project: Project) -> bool:
+    """The project's Test Runner is connected and shows person steps (no query)."""
+    capabilities = project.agent_capabilities
+    return (
+        project.agent_connected
+        and isinstance(capabilities, list)
+        and ClientCapability.PERSON_STEPS_V1.value in capabilities
+    )
 
 
 def _after_action(

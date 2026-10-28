@@ -21,6 +21,7 @@ from projects.forms import (
     form_error_text,
 )
 from projects.models import Project, TestRunTestCase
+from projects.person_step_actor import PersonStepActor
 from projects.person_step_services import (
     PersonStepActionResult,
     mark_blocked_person_step,
@@ -43,7 +44,7 @@ def test_run_case_person_report(
     try:
         result = report_person_step(
             pivot=pivot,
-            user=request.user,
+            actor=PersonStepActor.web(request.user),
             person_step_id=form.cleaned_data["person_step_id"],
             outcome=form.cleaned_data["outcome"],
             note=form.cleaned_data["note"],
@@ -69,7 +70,7 @@ def test_run_case_person_overrule(
     try:
         result = overrule_person_step(
             pivot=pivot,
-            user=request.user,
+            actor=PersonStepActor.web(request.user),
             person_step_id=form.cleaned_data["person_step_id"],
             note=form.cleaned_data["note"],
         )
@@ -95,7 +96,7 @@ def test_run_case_person_fail(
     try:
         result = mark_failed_person_step(
             pivot=pivot,
-            user=request.user,
+            actor=PersonStepActor.web(request.user),
             person_step_id=form.cleaned_data["person_step_id"],
             note=form.cleaned_data["note"],
         )
@@ -119,7 +120,7 @@ def test_run_case_person_block(
     try:
         result = mark_blocked_person_step(
             pivot=pivot,
-            user=request.user,
+            actor=PersonStepActor.web(request.user),
             person_step_id=form.cleaned_data["person_step_id"],
             note=form.cleaned_data["note"],
         )

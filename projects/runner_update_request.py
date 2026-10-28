@@ -13,11 +13,13 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from accounts.models import CustomUser
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.db import IntegrityError, transaction
 from django.utils import timezone
+
+from accounts.models import CustomUser
+from controller_client.protocol import CLIENT_VERSION
 from projects.controller_protocol import UpdateRunnerEvent
 from projects.exceptions import RunnerUpdateRefusedError
 from projects.models import Project, RunnerUpdate
@@ -32,8 +34,6 @@ from projects.runner_update_state import (
     expire_stale_runner_updates,
     runner_update_in_progress,
 )
-
-from controller_client.protocol import CLIENT_VERSION
 
 logger = logging.getLogger(__name__)
 

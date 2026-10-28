@@ -10,7 +10,7 @@ from django.forms import BaseForm
 from django.http import QueryDict
 from django.utils.text import Truncator
 
-from controller_client.protocol import MAX_VERSION_LENGTH
+from controller_client.protocol import MAX_VERSION_LENGTH, PersonStepActionKind
 from projects.case_checkpoint_services import ResumeStepOption
 from projects.models import (
     HELP_NOTE_MAX_LENGTH,
@@ -24,6 +24,11 @@ from projects.models import (
     TestCasePriority,
     TestCaseType,
 )
+
+# Bounds of integer ids and counters fed from a JSON message (BigAutoField
+# primary keys, PositiveSmallIntegerField rounds).
+_MAX_BIGINT = 2**63 - 1
+_MAX_SMALLINT = 32767
 
 _APPLICATION_PLATFORM_CHOICES: list[tuple[str, str]] = [("", "Not specified")] + list(
     ApplicationPlatform.choices
@@ -418,6 +423,57 @@ class PersonStepDecisionForm(forms.Form):
             }
         ),
     )
+
+
+class _WireTextField(forms.CharField):
+    """A text field fed from a JSON message: only a string (or nothing) is valid.
+
+    ``CharField`` would turn a list or a number into its ``str()``.
+    """
+
+    def to_python(self, value: Any) -> str:
+        if value is not None and not isinstance(value, str):
+            raise forms.ValidationError("Expected text.", code="invalid")
+        return cast(str, super().to_python(value))
+
+
+class RunnerPersonStepActionForm(forms.Form):
+    """A person's answer to a person step sent from the Test Runner window.
+
+    Fed from the ``person_step_action`` message (not a rendered form). The same
+    rules as ``PersonStepReportForm`` / ``PersonStepDecisionForm``; over-long
+    input is refused, not cut.
+    """
+
+    action = forms.ChoiceField(
+        choices=[(kind.value, kind.value) for kind in PersonStepActionKind]
+    )
+    person_step_id = forms.IntegerField(min_value=1, max_value=_MAX_BIGINT)
+    # The round the window showed; ``CasePersonStep.round`` is a small int.
+    round = forms.IntegerField(min_value=1, max_value=_MAX_SMALLINT)
+    # Report only; the runner sends "" for the other actions.
+    outcome = forms.ChoiceField(
+        required=False,
+        choices=PersonStepOutcome.choices,
+        error_messages={"invalid_choice": "Choose how the step went."},
+    )
+    note = _WireTextField(required=False, max_length=HELP_NOTE_MAX_LENGTH, strip=True)
+    output = _WireTextField(
+        required=False, max_length=PERSON_STEP_OUTPUT_MAX_LENGTH, strip=False
+    )
+
+    def clean(self) -> dict[str, Any]:
+        cleaned_data = super().clean() or {}
+        if cleaned_data.get("action") != PersonStepActionKind.REPORT:
+            cleaned_data["outcome"] = ""
+            cleaned_data["output"] = ""
+            return cleaned_data
+        outcome = cleaned_data.get("outcome")
+        if "outcome" not in self.errors and not outcome:
+            self.add_error("outcome", "Choose how the step went.")
+        if outcome == PersonStepOutcome.DIFFERENT and not cleaned_data.get("note"):
+            self.add_error("note", "Describe what was different.")
+        return cleaned_data
 
 
 class HelpReturnForm(forms.Form):

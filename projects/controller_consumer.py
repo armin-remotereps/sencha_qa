@@ -11,12 +11,20 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 
 from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
+    PERSON_STEP_ACTION_MAX_BYTES,
+    ClientCapability,
     CloseCode,
     ErrorCode,
     MessageType,
+    PersonStepActionKind,
+    PersonStepActionResultPayload,
+    PersonStepStatePayload,
     parse_handshake_capabilities,
+    parse_person_email,
     parse_update_in_flight_id,
     parse_update_status_payload,
+    serialize_person_step_action_result,
+    serialize_person_step_state,
 )
 from projects.controller_authenticator import (
     ControllerAuthenticator,
@@ -59,7 +67,16 @@ from projects.controller_protocol import (
     WaitForCommandActionEvent,
 )
 from projects.controller_reply_tracker import ReplyTracker
+from projects.exceptions import PersonStepError
+from projects.forms import RunnerPersonStepActionForm, form_error_text
 from projects.models import Project
+from projects.person_step_services import PersonStepActionResult
+from projects.runner_person_step_services import (
+    RunnerPersonStepAnswer,
+    answer_from_runner,
+    get_runner_person_steps,
+    resolve_runner_person,
+)
 from projects.runner_update_progress import (
     record_runner_update_status,
     settle_runner_update_on_handshake,
@@ -68,6 +85,20 @@ from projects.services import broadcast_agent_status, release_agent_connection
 
 logger = logging.getLogger(__name__)
 
+# What the Test Runner window says after an answer was saved and the run
+# continues (the web card's flash texts).
+_PERSON_STEP_DONE: dict[PersonStepActionKind, str] = {
+    PersonStepActionKind.REPORT: "Reported. The agent is checking it.",
+    PersonStepActionKind.OVERRULE: "Overruled. The step is recorded as passed.",
+    PersonStepActionKind.FAIL: "Marked the case failed. The run continues.",
+    PersonStepActionKind.BLOCK: "Marked the case blocked. The run continues.",
+}
+_PERSON_STEPS_UNSUPPORTED = "This Test Runner did not offer person steps."
+_PERSON_STEP_TOO_LARGE = "The answer is too long."
+_PERSON_STEP_FAILED = "The answer could not be saved. Answer on Punk Hazard."
+# Longest ``request_id`` echoed back; a longer one gets a fresh id.
+_MAX_REQUEST_ID_LENGTH = 128
+
 
 class ControllerConsumer(AsyncWebsocketConsumer):
     _authenticated: bool
@@ -75,10 +106,20 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     _reply_tracker: ReplyTracker
     _authenticator: ControllerAuthenticator
     _message_builder: ControllerMessageBuilder
+    # The runner shows person steps (it advertised PERSON_STEPS_V1).
+    _person_steps_enabled: bool
+    # The active member the handshake's ``person_email`` named; re-checked
+    # when an answer arrives. The email itself is never kept.
+    _person_user_id: int | None
+    # The last ``person_step_state`` sent; None before the first one.
+    _person_steps_sent: tuple[PersonStepStatePayload, ...] | None
 
     async def connect(self) -> None:
         self._authenticated = False
         self._project = None
+        self._person_steps_enabled = False
+        self._person_user_id = None
+        self._person_steps_sent = None
         self._reply_tracker = ReplyTracker(self.channel_layer)
         self._authenticator = ControllerAuthenticator()
         self._message_builder = ControllerMessageBuilder(ActionTypeRegistry())
@@ -100,7 +141,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             await self._handle_unauthenticated_message(data)
             return
 
-        await self._route_authenticated_message(data)
+        await self._route_authenticated_message(data, len(text_data))
 
     async def disconnect(self, close_code: int) -> None:
         if self._authenticated and self._project is not None:
@@ -118,7 +159,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             )
             await self.close()
 
-    async def _route_authenticated_message(self, data: dict[str, Any]) -> None:
+    async def _route_authenticated_message(
+        self, data: dict[str, Any], raw_length: int
+    ) -> None:
         msg_type: str = data.get("type", "")
         request_id: str = data.get("request_id", "")
 
@@ -129,6 +172,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
         if msg_type == MessageType.UPDATE_STATUS:
             await self._handle_update_status(data)
+            return
+
+        if msg_type == MessageType.PERSON_STEP_ACTION:
+            await self._handle_person_step_action(data, raw_length)
             return
 
         handlers = {
@@ -169,6 +216,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         try:
             capabilities = parse_handshake_capabilities(data)
             update_in_flight_id = parse_update_in_flight_id(data)
+            person_email = parse_person_email(data)
         except ProtocolError as exc:
             await self._send_handshake_ack(
                 "error", f"Invalid handshake: {exc}", request_id
@@ -191,6 +239,14 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             await self.close()
             return
 
+        # Never echoed and never an error: the runner does not learn whether
+        # the email belongs to a member.
+        self._person_user_id = await sync_to_async(resolve_runner_person)(
+            result.project.id, person_email
+        )
+        self._person_steps_enabled = (
+            ClientCapability.PERSON_STEPS_V1.value in capabilities
+        )
         await self._establish_authenticated_connection(
             result.project,
             system_info,
@@ -242,6 +298,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             project_id=str(project.id),
             project_name=project.name,
         )
+        # Covers a reconnect or a runner restart while a step waits.
+        await self._push_person_steps()
 
     async def _cleanup_connection(self) -> None:
         if self._project is None:
@@ -268,6 +326,85 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
     async def controller_force_disconnect(self, event: dict[str, Any]) -> None:
         await self.close(code=CloseCode.FORCE_DISCONNECTED)
+
+    async def controller_person_steps_changed(self, event: dict[str, Any]) -> None:
+        await self._push_person_steps()
+
+    async def _push_person_steps(self, *, force: bool = False) -> None:
+        """Send the open person steps when they changed since the last send.
+
+        Only to a runner that advertised PERSON_STEPS_V1. ``force`` resends an
+        unchanged snapshot (after a refused answer the window must re-sync).
+        """
+        if not self._person_steps_enabled or self._project is None:
+            return
+        try:
+            views = await sync_to_async(get_runner_person_steps)(self._project.id)
+        except Exception:
+            logger.exception(
+                "Reading person steps failed for project %s", self._project.id
+            )
+            return
+        steps = tuple(view.to_payload() for view in views)
+        # The first push of a connection always goes out (even empty), so a
+        # reconnected runner drops a step answered meanwhile.
+        if not force and steps == self._person_steps_sent:
+            return
+        self._person_steps_sent = steps
+        await self.send(text_data=serialize_person_step_state(steps))
+
+    async def _handle_person_step_action(
+        self, data: dict[str, Any], raw_length: int
+    ) -> None:
+        raw_request_id = data.get("request_id")
+        request_id = (
+            raw_request_id
+            if isinstance(raw_request_id, str)
+            and 0 < len(raw_request_id) <= _MAX_REQUEST_ID_LENGTH
+            else ""
+        )
+        result = await self._answer_person_step(data, raw_length)
+        await self.send(
+            text_data=serialize_person_step_action_result(result, request_id)
+        )
+        if not result.ok:
+            await self._push_person_steps(force=True)
+
+    async def _answer_person_step(
+        self, data: dict[str, Any], raw_length: int
+    ) -> PersonStepActionResultPayload:
+        if not self._person_steps_enabled or self._project is None:
+            return _refused(_PERSON_STEPS_UNSUPPORTED)
+        if raw_length > PERSON_STEP_ACTION_MAX_BYTES:
+            return _refused(_PERSON_STEP_TOO_LARGE)
+        form = RunnerPersonStepActionForm(
+            {field: data.get(field) for field in RunnerPersonStepActionForm.base_fields}
+        )
+        if not form.is_valid():
+            return _refused(form_error_text(form))
+        answer = RunnerPersonStepAnswer(
+            action=PersonStepActionKind(form.cleaned_data["action"]),
+            person_step_id=form.cleaned_data["person_step_id"],
+            round=form.cleaned_data["round"],
+            outcome=form.cleaned_data["outcome"],
+            note=form.cleaned_data["note"],
+            output=form.cleaned_data["output"],
+        )
+        try:
+            outcome = await sync_to_async(answer_from_runner)(
+                project_id=self._project.id,
+                channel_name=self.channel_name,
+                person_user_id=self._person_user_id,
+                action=answer,
+            )
+        except PersonStepError as exc:
+            return _refused(exc.message)
+        except Exception:
+            logger.exception(
+                "Person step answer failed for project %s", self._project.id
+            )
+            return _refused(_PERSON_STEP_FAILED)
+        return _answered(answer.action, outcome)
 
     async def _forward_action(self, event: BaseActionEvent) -> None:
         request_id: str = event.get("request_id") or str(uuid.uuid4())
@@ -416,3 +553,24 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     @staticmethod
     def _controller_group_name(project_id: int) -> str:
         return f"controller_{project_id}"
+
+
+def _refused(message: str) -> PersonStepActionResultPayload:
+    return PersonStepActionResultPayload(ok=False, message=message, queued=False)
+
+
+def _answered(
+    action: PersonStepActionKind, result: PersonStepActionResult
+) -> PersonStepActionResultPayload:
+    if result.queued:
+        return PersonStepActionResultPayload(
+            ok=True, message=_PERSON_STEP_DONE[action], queued=True
+        )
+    return PersonStepActionResultPayload(
+        ok=True,
+        message=(
+            f"Saved, but the run cannot continue yet: {result.blocker} "
+            "Then use Continue run on the run page."
+        ),
+        queued=False,
+    )
