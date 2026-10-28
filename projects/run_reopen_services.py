@@ -50,6 +50,7 @@ _MACHINE_FAILED = (
 _VISUAL_ENGINE_OFFLINE = "Start a vision worker."
 _NOT_PAUSED = "This run is not waiting for help."
 _STILL_NEEDS_HELP = "A case of this run still needs help."
+_WAITING_FOR_PERSON_STEP = "A case of this run is waiting for a person's step."
 
 # A case's Checked/Sent marks; cleared whenever its result is replaced, so a
 # new TestRail result can be sent.
@@ -189,7 +190,8 @@ def queue_pending_cases(test_run: TestRun) -> None:
     finished (DONE) instead, without the gates.
 
     Raises ``RunHelpError`` (user-safe) when the run is not PAUSED, a case of
-    it still needs help, or a reopen gate fails (`list_reopen_blockers`).
+    it still needs help or waits for a person's step (Human in the loop), or a
+    reopen gate fails (`list_reopen_blockers`).
     """
     if test_run.status != TestRunStatus.PAUSED:
         raise RunHelpError(_NOT_PAUSED)
@@ -197,13 +199,21 @@ def queue_pending_cases(test_run: TestRun) -> None:
     open_pivots = list(
         TestRunTestCase.objects.filter(
             test_run_id=test_run.pk,
-            status__in=[TestRunTestCaseStatus.CREATED, TestRunTestCaseStatus.NEED_HELP],
+            status__in=[
+                TestRunTestCaseStatus.CREATED,
+                TestRunTestCaseStatus.NEED_HELP,
+                TestRunTestCaseStatus.AWAITING_PERSON,
+            ],
         )
         .defer("logs")
         .order_by(*RUN_CASE_ORDERING)
     )
     if any(pivot.status == TestRunTestCaseStatus.NEED_HELP for pivot in open_pivots):
         raise RunHelpError(_STILL_NEEDS_HELP)
+    if any(
+        pivot.status == TestRunTestCaseStatus.AWAITING_PERSON for pivot in open_pivots
+    ):
+        raise RunHelpError(_WAITING_FOR_PERSON_STEP)
     if not open_pivots:
         _finish_run(test_run)
         return

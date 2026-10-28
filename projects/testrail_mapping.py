@@ -228,9 +228,9 @@ def _one_line(text: str, limit: int) -> str:
 
 def _step_lines(row: CaseStepRow) -> str:
     status = (
-        f"{row.status_label} (carried over from the earlier plan)"
+        f"{row.status_text} (carried over from the earlier plan)"
         if row.carried_from is not None
-        else row.status_label
+        else row.status_text
     )
     line = f"{row.num}. {status}: " + _one_line(row.description, _STEP_DESCRIPTION_MAX)
     result = _one_line(row.summary or row.error, _STEP_RESULT_MAX)

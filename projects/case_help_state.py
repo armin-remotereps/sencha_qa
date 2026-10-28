@@ -16,7 +16,15 @@ from django.utils import timezone
 from auto_tester.celery import app as celery_app
 from machine_setup.task_names import START_CASE_AUTO_FIX
 from projects.case_help_notifications import notify_case_needs_help
-from projects.models import CaseHelpRequest, HelpAutoFixState, TestRun, TestRunStatus
+from projects.models import (
+    OPEN_PERSON_STEP_STATUSES,
+    CaseHelpRequest,
+    CasePersonStep,
+    HelpAutoFixState,
+    TestRun,
+    TestRunStatus,
+    TestRunTestCaseStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -27,26 +35,56 @@ class RunHelpState(StrEnum):
     NONE = "none"
     AUTO_FIXING = "auto_fixing"
     WAITING_FOR_PERSON = "waiting_for_person"
+    # Human in the loop: a step of the run waits for a person to perform it
+    # (or the person's report waits for "Continue run" past a gate).
+    PERSON_STEP = "person_step"
 
 
-def get_run_help_state(test_run: TestRun) -> RunHelpState:
+def get_run_help_state(
+    test_run: TestRun,
+    *,
+    person_step_open: bool | None = None,
+    latest_auto_fix_state: str | None = None,
+) -> RunHelpState:
     """Whether a PAUSED run's help is with the auto-fix agent or a person.
 
-    ``none`` (no query) unless the run is PAUSED. ``auto_fixing`` while the
-    auto-fix of the run's latest help request is running, even when a person
+    ``none`` (no query) unless the run is PAUSED. ``person_step`` while a case
+    of the run has an open person step and is not itself in Need help (a fault
+    while confirming a report opens a help request: that one wins); one
+    ``exists()``. Otherwise ``auto_fixing`` while the auto-fix of the run's
+    latest help request is running, even when a person
     already resolved that request (the run continues when that agent stops).
     Older requests are ignored: they belong to earlier pauses. Otherwise
     ``waiting_for_person``: an open request, or a resolved one whose queueing
-    waits for the gates ("Continue run"). One query.
+    waits for the gates ("Continue run"). One more query.
+
+    ``person_step_open``: the caller already knows whether such a person step
+    exists (the run page loads it for its banner); skips the ``exists()``.
+    ``latest_auto_fix_state``: the caller already loaded the run's latest
+    help request (its ``auto_fix_state``, or ``""`` when the run has none);
+    skips the second query.
     """
     if test_run.status != TestRunStatus.PAUSED:
         return RunHelpState.NONE
-    latest_state = (
-        CaseHelpRequest.objects.filter(test_run_test_case__test_run_id=test_run.pk)
-        .order_by("-requested_at", "-id")
-        .values_list("auto_fix_state", flat=True)
-        .first()
-    )
+    if person_step_open is None:
+        person_step_open = (
+            CasePersonStep.objects.filter(
+                test_run_test_case__test_run_id=test_run.pk,
+                status__in=OPEN_PERSON_STEP_STATUSES,
+            )
+            .exclude(test_run_test_case__status=TestRunTestCaseStatus.NEED_HELP)
+            .exists()
+        )
+    if person_step_open:
+        return RunHelpState.PERSON_STEP
+    latest_state = latest_auto_fix_state
+    if latest_state is None:
+        latest_state = (
+            CaseHelpRequest.objects.filter(test_run_test_case__test_run_id=test_run.pk)
+            .order_by("-requested_at", "-id")
+            .values_list("auto_fix_state", flat=True)
+            .first()
+        )
     if latest_state == HelpAutoFixState.RUNNING:
         return RunHelpState.AUTO_FIXING
     return RunHelpState.WAITING_FOR_PERSON

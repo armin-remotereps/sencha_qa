@@ -36,6 +36,8 @@ class StepStatus(StrEnum):
     NOT_RUN = "not_run"
     # The case is Need help at this step: it re-runs once the machine is fixed.
     AWAITING_HELP = "awaiting_help"
+    # Human in the loop: the step waits for a person to perform it.
+    AWAITING_PERSON = "awaiting_person"
 
 
 STEP_STATUS_LABELS: dict[StepStatus, str] = {
@@ -46,6 +48,7 @@ STEP_STATUS_LABELS: dict[StepStatus, str] = {
     StepStatus.INTERRUPTED: "Interrupted",
     StepStatus.NOT_RUN: "Not run",
     StepStatus.AWAITING_HELP: "Needs help",
+    StepStatus.AWAITING_PERSON: "Your turn",
 }
 
 
@@ -58,6 +61,7 @@ class StepActivity(StrEnum):
     RESTORING = "restoring"
     VERDICT = "verdict"
     AWAITING_HELP = "awaiting_help"
+    AWAITING_PERSON = "awaiting_person"
 
 
 _ACTIVITY_LABELS: dict[StepActivity, str] = {
@@ -69,6 +73,7 @@ _ACTIVITY_LABELS: dict[StepActivity, str] = {
     StepActivity.RESTORING: "Restoring state before resuming",
     StepActivity.VERDICT: "Writing the verdict",
     StepActivity.AWAITING_HELP: "Waiting for help",
+    StepActivity.AWAITING_PERSON: "Waiting for a person",
 }
 
 _PHASE_ACTIVITIES: dict[OrchestratorPhase, StepActivity] = {
@@ -78,7 +83,11 @@ _PHASE_ACTIVITIES: dict[OrchestratorPhase, StepActivity] = {
     "resume": StepActivity.RESTORING,
     "verdict": StepActivity.VERDICT,
     "awaiting_help": StepActivity.AWAITING_HELP,
+    "awaiting_person": StepActivity.AWAITING_PERSON,
 }
+
+# Human in the loop: who performed a step (attempt label and row note).
+PERFORMED_BY_PERSON_LABEL = "Performed by a person"
 
 
 @dataclass(frozen=True)
@@ -88,6 +97,8 @@ class StepAttemptRow:
     summary: str
     error: str
     duration_seconds: int | None
+    # "agent", or "person" when a person performed it (Human in the loop).
+    performed_by: str = "agent"
 
 
 @dataclass(frozen=True)
@@ -108,10 +119,25 @@ class CaseStepRow:
     # (counted as passed, not re-run), and its label; None / "" otherwise.
     carried_from: int | None = None
     carried_label: str = ""
+    # Who performed the step's final attempt: "agent", or "person" (Human in
+    # the loop, confirmed or overruled; the summary says which).
+    performed_by: str = "agent"
 
     @property
     def status_label(self) -> str:
         return STEP_STATUS_LABELS[self.status]
+
+    @property
+    def performed_by_label(self) -> str:
+        """ "Performed by a person", or "" for the agent."""
+        return PERFORMED_BY_PERSON_LABEL if self.performed_by == "person" else ""
+
+    @property
+    def status_text(self) -> str:
+        """The status label plus who performed the step, for plain-text reports."""
+        if self.performed_by == "person":
+            return f"{self.status_label} ({PERFORMED_BY_PERSON_LABEL.lower()})"
+        return self.status_label
 
 
 @dataclass(frozen=True)
@@ -180,8 +206,15 @@ def build_case_step_progress(
         return None
     running = case_status == TestRunTestCaseStatus.IN_PROGRESS
     awaiting_help = case_status == TestRunTestCaseStatus.NEED_HELP
-    # A Need help case continues later: its later steps are still pending.
-    open_case = running or awaiting_help or case_status == TestRunTestCaseStatus.CREATED
+    awaiting_person = case_status == TestRunTestCaseStatus.AWAITING_PERSON
+    # A Need help (or person step) case continues later: its later steps are
+    # still pending.
+    open_case = (
+        running
+        or awaiting_help
+        or awaiting_person
+        or case_status == TestRunTestCaseStatus.CREATED
+    )
     interrupted = case_status in (
         TestRunTestCaseStatus.BLOCKED,
         TestRunTestCaseStatus.CANCELLED,
@@ -207,6 +240,7 @@ def build_case_step_progress(
             open_case=open_case,
             interrupted=interrupted,
             awaiting_help=awaiting_help,
+            awaiting_person=awaiting_person,
             activity=activity,
         )
         decision = next(
@@ -235,6 +269,7 @@ def build_case_step_progress(
                 ),
                 carried_from=carried_from,
                 carried_label=_carried_label(revisions, carried_from),
+                performed_by=final.performed_by if final is not None else "agent",
             )
         )
 
@@ -344,6 +379,7 @@ def _row_status(
     open_case: bool,
     interrupted: bool,
     awaiting_help: bool,
+    awaiting_person: bool,
     activity: StepActivity | None,
 ) -> tuple[StepStatus, StepActivity]:
     if final is not None and final.result.status == "pass":
@@ -352,6 +388,8 @@ def _row_status(
         return StepStatus.RUNNING, activity
     if num == cursor and awaiting_help:
         return StepStatus.AWAITING_HELP, StepActivity.AWAITING_HELP
+    if num == cursor and awaiting_person:
+        return StepStatus.AWAITING_PERSON, StepActivity.AWAITING_PERSON
     if num == cursor and interrupted:
         return StepStatus.INTERRUPTED, StepActivity.NONE
     if final is not None:
@@ -401,6 +439,8 @@ def _attempt_rows(
             label = "State restored before this step"
         else:
             label = "Could not restore state before this step"
+        if attempt.performed_by == "person":
+            label += f" · {PERFORMED_BY_PERSON_LABEL}"
         rows.append(
             StepAttemptRow(
                 label=f"{prefix}{label}",
@@ -408,6 +448,7 @@ def _attempt_rows(
                 summary=attempt.result.summary,
                 error=attempt.result.error or "",
                 duration_seconds=attempt.duration_seconds,
+                performed_by=attempt.performed_by,
             )
         )
     return rows
@@ -419,6 +460,8 @@ class StepAttemptPayload(TypedDict):
     summary: str
     error: str
     duration_seconds: int | None
+    # "agent" or "person".
+    performed_by: str
 
 
 class StepDecisionPayload(TypedDict):
@@ -443,6 +486,9 @@ class StepRowPayload(TypedDict):
     history: list[StepAttemptPayload]
     carried_from: int | None
     carried_label: str
+    # "agent" or "person"; the label is "" for the agent.
+    performed_by: str
+    performed_by_label: str
 
 
 class StepProgressPayload(TypedDict):
@@ -561,11 +607,14 @@ def _row_payload(row: CaseStepRow) -> StepRowPayload:
                 summary=_cap(item.summary),
                 error=_cap(item.error),
                 duration_seconds=item.duration_seconds,
+                performed_by=item.performed_by,
             )
             for item in row.history
         ],
         carried_from=row.carried_from,
         carried_label=_cap(row.carried_label),
+        performed_by=row.performed_by,
+        performed_by_label=row.performed_by_label,
     )
 
 

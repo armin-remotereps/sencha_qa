@@ -9,7 +9,7 @@ import time
 import uuid
 import zipfile
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -42,16 +42,22 @@ from django.urls import reverse
 from django.utils import dateformat, timezone
 
 from accounts.models import CustomUser
-from agents.checkpoint import read_checkpoint_help
+from agents.checkpoint import (
+    read_checkpoint_help,
+    read_checkpoint_person_step,
+    with_person_step,
+)
 from agents.types import (
     AgentCancelledError,
     AgentResult,
     AgentStopReason,
     AttemptScreenshotCallback,
     CancellationCheck,
+    CheckpointPersonStep,
     HelpRequestInfo,
     LogCallback,
     OrchestratorCheckpoint,
+    PersonStepHandOff,
     PixelParseResult,
 )
 from auto_tester.celery import app as celery_app
@@ -117,9 +123,11 @@ from projects.exceptions import (
 from projects.models import (
     ACTIVE_RUN_STATUSES,
     HELP_REQUEST_TEXT_MAX_LENGTH,
+    OPEN_PERSON_STEP_STATUSES,
     ApplicationPlatform,
     BlockedReason,
     CaseHelpRequest,
+    CasePersonStep,
     CasePlanRevision,
     CaseResultChange,
     ContextWriteSource,
@@ -128,6 +136,7 @@ from projects.models import (
     HelpContinueMode,
     HelpProposalAction,
     HelpResolution,
+    PersonStepStatus,
     PlanRevisionStatus,
     Project,
     RunHelpMode,
@@ -143,6 +152,16 @@ from projects.models import (
     TestRunTestCase,
     TestRunTestCaseStatus,
     UploadStatus,
+)
+from projects.person_step_notifications import notify_person_step
+from projects.person_step_rows import (
+    build_person_step_settler,
+    cap_text,
+    command_shell_label,
+    hand_back_person_step_row,
+    open_person_step_row,
+    settle_person_steps,
+    with_person_request_id,
 )
 from projects.run_case_order import PICKER_CASE_ORDERING, RUN_CASE_ORDERING
 from projects.run_finished_notifications import notify_run_finished
@@ -2002,7 +2021,8 @@ def _safe_teardown(
     """Close the apps a Failed case left open, never failing the case.
 
     Runs after the outcome is written and before ``_safe_cleanup``, so apps that
-    hold files in the cleanup folder are gone before it is emptied.
+    hold files in the cleanup folder are gone before it is emptied. Skipped
+    while the run is in Human in the loop.
     """
     timeout = settings.CASE_TEARDOWN_TIMEOUT_SECONDS
     if timeout <= 0:
@@ -2010,6 +2030,11 @@ def _safe_teardown(
     try:
         pivot.refresh_from_db(fields=["status"])
         if not needs_teardown(pivot.status):
+            return
+        # Human in the loop: the agent never drives the machine (a teardown is
+        # an AI-run interactive close); the person leaves it as they see fit.
+        if _build_person_mode_check(pivot.test_run_id)():
+            logger.info("Teardown skipped for pivot %d: human in the loop", pivot.pk)
             return
         checkpoint = load_resume_checkpoint(pivot)
         if checkpoint is None:
@@ -2412,6 +2437,8 @@ def reset_test_run(test_run: TestRun) -> None:
     # Result changes describe results the reset discards; a pending review
     # redesign was built on a checkpoint that is gone.
     CaseResultChange.objects.filter(test_run_test_case__test_run=test_run).delete()
+    # Person steps (Human in the loop) belong to the discarded checkpoints.
+    CasePersonStep.objects.filter(test_run_test_case__test_run=test_run).delete()
     supersede_run_review_drafts(test_run.pk)
     test_run.status = TestRunStatus.WAITING
     test_run.celery_task_id = ""
@@ -2543,6 +2570,9 @@ def get_test_run_summary(test_run: TestRun) -> dict[str, int]:
         blocked=Count("id", filter=Q(status=TestRunTestCaseStatus.BLOCKED)),
         cancelled=Count("id", filter=Q(status=TestRunTestCaseStatus.CANCELLED)),
         need_help=Count("id", filter=Q(status=TestRunTestCaseStatus.NEED_HELP)),
+        awaiting_person=Count(
+            "id", filter=Q(status=TestRunTestCaseStatus.AWAITING_PERSON)
+        ),
     )
     return {k: v or 0 for k, v in result.items()}
 
@@ -2642,6 +2672,11 @@ def _build_narrative_for_active_run(test_run: TestRun, summary: dict[str, int]) 
         return f"Run cancelled after {finished} of {total} cases finished."
     if test_run.status == TestRunStatus.PAUSED:
         need_help = summary.get("need_help", 0)
+        if not need_help and summary.get("awaiting_person", 0):
+            return (
+                "Paused: waiting for a person to perform a step. "
+                f"{finished} of {total} cases finished so far."
+            )
         noun = "case needs" if need_help == 1 else "cases need"
         return (
             f"Paused: {need_help} {noun} help. "
@@ -2917,6 +2952,34 @@ def _build_cancellation_check(test_run_id: int, generation: int) -> Callable[[],
     return _is_cancelled
 
 
+def _build_checkpoint_saved_hook(
+    pivot: TestRunTestCase,
+) -> Callable[[dict[str, object]], None]:
+    """After each landed checkpoint write: close a just-confirmed person step
+    (Human in the loop; no query otherwise), then push the case's step rows."""
+    settle_person_step = build_person_step_settler(pivot.pk, pivot.execution_checkpoint)
+
+    def _on_saved(data: dict[str, object]) -> None:
+        settle_person_step(data)
+        _broadcast_case_steps(pivot, data)
+
+    return _on_saved
+
+
+def _build_person_mode_check(test_run_id: int) -> Callable[[], bool]:
+    """True while the run is in Human in the loop (read at each step boundary).
+
+    Read fresh every time, so a mid-run mode switch applies from the next step.
+    """
+
+    def _is_person_mode() -> bool:
+        return TestRun.objects.filter(
+            pk=test_run_id, help_mode=RunHelpMode.HUMAN_IN_THE_LOOP
+        ).exists()
+
+    return _is_person_mode
+
+
 def _is_stale_execution(test_run_id: int, generation: int) -> bool:
     """A newer Start or Resume took over the run; this worker must not write."""
     return not TestRun.objects.filter(
@@ -2951,15 +3014,18 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
     cancellation_check = _build_cancellation_check(run_id, generation)
     # A worker shutdown (BaseException) must not start an agent on its way out.
     allow_teardown = True
-    # A case paused for help keeps the machine exactly as it is: no teardown,
-    # no cleanup, so a person (or the auto-fix agent) sees what went wrong.
+    # A case paused for help (or for a person's step, Human in the loop) keeps
+    # the machine exactly as it is: no teardown, no cleanup, so a person (or
+    # the auto-fix agent) sees what went wrong or performs the step.
     paused_for_help = False
-    # Continuing after help: the machine was fixed by hand and must not be
-    # cleaned up before the failing step re-runs.
+    # Continuing after help, or after a person performed a step: the machine
+    # was changed by hand and must not be cleaned up (or restored) before the
+    # step re-runs or is confirmed.
     checkpoint_help = read_checkpoint_help(pivot.execution_checkpoint)
+    checkpoint_person = read_checkpoint_person_step(pivot.execution_checkpoint)
     continue_after_help = (
         checkpoint_help is not None and checkpoint_help.continue_pending
-    )
+    ) or (checkpoint_person is not None and checkpoint_person.continue_pending)
     # A resumed case restores the earlier steps' state before its cursor step
     # (``run_orchestrator``); a fault before that restore finished keeps it
     # pending for Continue. None when no restore is due.
@@ -2994,34 +3060,56 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         # A resumed case keeps its log and continues the persisted plan.
         if resume is not None:
             on_log(f"=== Resumed from step {resume.next_step} ===")
-        result = run_orchestrator(
-            task_description,
-            project.id,
-            on_log=on_log,
-            on_screenshot=on_screenshot,
-            system_info=project.agent_system_info or None,
-            project_prompt=build_agent_project_context(project),
-            cancellation_check=cancellation_check,
-            resume=resume,
-            on_checkpoint=build_checkpoint_callback(
-                pivot,
-                generation,
-                on_saved=lambda data: _broadcast_case_steps(pivot, data),
-            ),
-        )
-        # Once a Resume or Start took the run over, the pivot belongs to the
-        # newer chain: this worker records nothing (here and below).
-        if not _is_stale_execution(run_id, generation):
-            if result.stop_reason == AgentStopReason.NEEDS_HUMAN_HELP:
+        # Built once per execution: it reads the case's open person step.
+        checkpoint_saved_hook = _build_checkpoint_saved_hook(pivot)
+        while True:
+            result = run_orchestrator(
+                task_description,
+                project.id,
+                on_log=on_log,
+                on_screenshot=on_screenshot,
+                system_info=project.agent_system_info or None,
+                project_prompt=build_agent_project_context(project),
+                cancellation_check=cancellation_check,
+                resume=resume,
+                on_checkpoint=build_checkpoint_callback(
+                    pivot,
+                    generation,
+                    on_saved=checkpoint_saved_hook,
+                ),
+                person_mode=_build_person_mode_check(run_id),
+            )
+            # Once a Resume or Start took the run over, the pivot belongs to
+            # the newer chain: this worker records nothing (here and below).
+            if _is_stale_execution(run_id, generation):
+                break
+            if result.stop_reason == AgentStopReason.AWAITING_PERSON:
+                outcome = _pause_run_for_person(
+                    pivot, _person_hand_off(pivot, result), generation
+                )
+                if outcome == _PersonPause.HANDED_BACK:
+                    # The run left Human in the loop before it paused: the
+                    # agent performs the step now, from the current screen.
+                    resume = load_resume_checkpoint(pivot)
+                    continue
+                paused_for_help = outcome == _PersonPause.PAUSED
+            elif result.stop_reason == AgentStopReason.NEEDS_HUMAN_HELP:
+                settle_person_steps(
+                    pivot.pk, load_resume_checkpoint(pivot), abandoned="unreferenced"
+                )
                 paused_for_help = _pause_run_for_help(
                     pivot, _help_request_info(pivot, result), generation
                 )
             else:
+                settle_person_steps(
+                    pivot.pk, load_resume_checkpoint(pivot), abandoned="all"
+                )
                 _finalize_pivot(pivot, result)
                 # Only the agent's verdict notifies; the entry point re-checks
                 # the generation, since _finalize_pivot holds no run lock.
                 if pivot.status == TestRunTestCaseStatus.FAILED:
                     notify_case_failed(pivot.pk, generation=generation)
+            break
     except (AgentCancelledError, ControllerNotConnectedError):
         # Inside a case, wait_for_controller only reports "not connected" once
         # the run is no longer STARTED, i.e. it was aborted.
@@ -3410,6 +3498,180 @@ def _pause_run_for_help(
     return True
 
 
+# The case result while a step waits for a person: the instruction's head.
+_PERSON_RESULT_HEAD_MAX = 300
+
+
+def _person_hand_off(pivot: TestRunTestCase, result: AgentResult) -> PersonStepHandOff:
+    """The orchestrator's hand-off; the checkpoint's when the result lacks it.
+
+    Raises when neither has one: the worker then asks for help (internal error).
+    """
+    if result.person_step is not None:
+        return result.person_step
+    person = read_checkpoint_person_step(pivot.execution_checkpoint)
+    if person is None:
+        raise RuntimeError(f"Pivot {pivot.pk} awaits a person without a hand-off")
+    logger.warning("Pivot %d awaits a person without a hand-off result", pivot.pk)
+    return person.hand_off
+
+
+class _PersonPause(StrEnum):
+    """What ``_pause_run_for_person`` did."""
+
+    # The case waits for the person; the run is PAUSED.
+    PAUSED = "paused"
+    # Nothing (stale generation, run aborted, case no longer In progress).
+    SKIPPED = "skipped"
+    # The run left Human in the loop before the pause: the caller runs the
+    # orchestrator again and the agent performs the step.
+    HANDED_BACK = "handed_back"
+
+
+def _pause_run_for_person(
+    pivot: TestRunTestCase, hand_off: PersonStepHandOff, generation: int
+) -> _PersonPause:
+    """Hand the step to a person and put the run to sleep.
+
+    Human in the loop. Mirrors ``_pause_run_for_help``: one transaction under
+    the run lock; a stale generation does nothing and a run aborted meanwhile
+    cancels the case. A person step the checkpoint save hook did not settle is
+    settled (backstop), the open ``CasePersonStep`` is created (or reopened as not
+    confirmed), its id is written into the checkpoint ``person`` key, the case
+    waits for the person (``AWAITING_PERSON``) and the run is PAUSED. The
+    machine is left as it is. After commit the pages and the attention inbox
+    are told, and the members are notified when the hand-off starts a new
+    sequence of person steps (``open_person_step_row``) and on every
+    not-confirmed round.
+
+    The mode is read again under the run lock: a switch away from Human in
+    the loop after the orchestrator's last ``person_mode()`` check and before
+    this lock found the run Started, so ``change_run_help_mode`` handed
+    nothing back. Pausing would leave a step no one answers in Attended or
+    Night, so the step is handed back here instead (``_hand_back_unpaused``)
+    and the caller re-runs the orchestrator in the same execution. Re-queueing
+    the case is not an option: ``run_reopen_services`` imports this module.
+    """
+    step_num = max(hand_off.step_num, 1)
+    shell_label = command_shell_label(
+        hand_off.kind, pivot.test_run.project.agent_system_info
+    )
+    with transaction.atomic():
+        test_run = TestRun.objects.select_for_update().get(pk=pivot.test_run_id)
+        if test_run.execution_generation != generation:
+            return _PersonPause.SKIPPED
+        pivot.refresh_from_db(fields=["status", "execution_checkpoint"])
+        if test_run.status != TestRunStatus.STARTED:
+            if pivot.status == TestRunTestCaseStatus.IN_PROGRESS:
+                _mark_pivot_cancelled(pivot)
+            return _PersonPause.SKIPPED
+        if pivot.status != TestRunTestCaseStatus.IN_PROGRESS:
+            return _PersonPause.SKIPPED
+        if test_run.help_mode != RunHelpMode.HUMAN_IN_THE_LOOP:
+            _hand_back_unpaused(pivot, hand_off, generation)
+            return _PersonPause.HANDED_BACK
+
+        now = timezone.now()
+        segment_started_at = pivot.segment_started_at
+        # The worker stops owning the case: the person's time is not counted.
+        close_case_segment(pivot.pk, now)
+        pivot.segment_started_at = None
+        settle_person_steps(pivot.pk, load_resume_checkpoint(pivot))
+        person_step, push = open_person_step_row(
+            pivot.pk,
+            hand_off,
+            shell_label=shell_label,
+            segment_started_at=segment_started_at,
+            now=now,
+        )
+
+        pivot.execution_checkpoint = with_person_request_id(
+            pivot.execution_checkpoint, hand_off, person_step.pk, now
+        )
+        pivot.status = TestRunTestCaseStatus.AWAITING_PERSON
+        pivot.blocked_reason = ""
+        pivot.result = cap_text(
+            " ".join(person_step.instruction.split()), _PERSON_RESULT_HEAD_MAX
+        )
+        pivot.finished_at = None
+        pivot.save(
+            update_fields=[
+                "status",
+                "blocked_reason",
+                "result",
+                "finished_at",
+                "execution_checkpoint",
+                "updated_at",
+            ]
+        )
+        test_run.status = TestRunStatus.PAUSED
+        test_run.save(update_fields=["status", "updated_at"])
+
+        if person_step.status == PersonStepStatus.NOT_CONFIRMED:
+            log_line = (
+                f"[Not confirmed at step {step_num}] {person_step.agent_objection} "
+                "Waiting for the person again."
+            )
+        else:
+            log_line = f"[Waiting for a person at step {step_num}] {pivot.result}"
+        logged = _append_pivot_log(pivot.pk, log_line, generation)
+        person_step_id = person_step.pk
+        project_id = test_run.project_id
+
+        def _after_commit() -> None:
+            if logged:
+                _broadcast_log(pivot, log_line)
+            broadcast_run_and_pivots(test_run, [pivot])
+            broadcast_project_attention_changed(project_id)
+            if push:
+                notify_person_step(person_step_id)
+
+        transaction.on_commit(_after_commit)
+    return _PersonPause.PAUSED
+
+
+def _hand_back_unpaused(
+    pivot: TestRunTestCase, hand_off: PersonStepHandOff, generation: int
+) -> None:
+    """Give the agent a step handed out after the run left Human in the loop.
+
+    The caller holds the run lock, the run is Started and the case In
+    progress (it stays so, its segment open). A row still open for the case
+    (a report the agent could not confirm) is closed as handed back, and the
+    checkpoint ``person`` key becomes ``handed_back`` with ``continue_pending``,
+    so the orchestrator's re-entry skips the restore and the agent runs the
+    step from the current screen.
+    """
+    now = timezone.now()
+    settle_person_steps(pivot.pk, load_resume_checkpoint(pivot))
+    open_id = (
+        CasePersonStep.objects.filter(
+            test_run_test_case_id=pivot.pk, status__in=OPEN_PERSON_STEP_STATUSES
+        )
+        .values_list("pk", flat=True)
+        .first()
+    )
+    if open_id is not None:
+        hand_back_person_step_row(pivot.pk, open_id, now)
+    person = read_checkpoint_person_step(pivot.execution_checkpoint)
+    if person is None or person.hand_off.step_num != hand_off.step_num:
+        person = CheckpointPersonStep(
+            hand_off=hand_off, request_id=None, state="waiting", requested_at=now
+        )
+    pivot.execution_checkpoint = with_person_step(
+        pivot.execution_checkpoint,
+        replace(person, request_id=open_id, state="handed_back", continue_pending=True),
+    )
+    pivot.save(update_fields=["execution_checkpoint", "updated_at"])
+    step_num = max(hand_off.step_num, 1)
+    log_line = (
+        f"[Human in the loop is off at step {step_num}] The agent performs the "
+        "step itself."
+    )
+    if _append_pivot_log(pivot.pk, log_line, generation):
+        transaction.on_commit(lambda: _broadcast_log(pivot, log_line))
+
+
 def _extract_agent_summary(result: AgentResult) -> str:
     for message in reversed(result.messages):
         if message.role == "assistant" and isinstance(message.content, str):
@@ -3422,9 +3684,10 @@ def _mark_pivot_cancelled(pivot: TestRunTestCase) -> None:
     pivot.status = TestRunTestCaseStatus.CANCELLED
     pivot.finished_at = now
     pivot.save(update_fields=["status", "finished_at", "updated_at"])
-    # Need help and Created cases have no open segment: skip the query (abort
-    # cancels many). The close itself is idempotent when an abort races the
-    # worker's own cancel; that worker's pivot still shows its segment.
+    # Need help, Waiting for a person and Created cases have no open segment:
+    # skip the query (abort cancels many). The close itself is idempotent when
+    # an abort races the worker's own cancel; that worker's pivot still shows
+    # its segment.
     if pivot.segment_started_at is not None:
         close_case_segment(pivot.pk, now)
         pivot.segment_started_at = None
@@ -3450,14 +3713,18 @@ def abort_test_run(
     test_run.finished_at = now
     test_run.save(update_fields=["status", "finished_at", "updated_at"])
 
-    # Help requests before cases: the lock order of every help writer.
+    # Help requests and person steps before cases: the lock order of every
+    # help and person step writer.
     _cancel_run_help_requests(test_run, now)
+    _cancel_run_person_steps(test_run, now)
 
-    # A Need help case is Cancelled like a running one: Resume continues it.
+    # A Need help (or person step) case is Cancelled like a running one:
+    # Resume continues it.
     for pivot in test_run.pivot_entries.filter(
         status__in=[
             TestRunTestCaseStatus.IN_PROGRESS,
             TestRunTestCaseStatus.NEED_HELP,
+            TestRunTestCaseStatus.AWAITING_PERSON,
         ]
     ):
         _mark_pivot_cancelled(pivot)
@@ -3523,6 +3790,16 @@ def _cancel_run_help_requests(test_run: TestRun, now: datetime) -> None:
         ).update(auto_fix_state=HelpAutoFixState.NOT_FIXED)
 
 
+def _cancel_run_person_steps(test_run: TestRun, now: datetime) -> None:
+    """Close the run's open person steps (Human in the loop) as cancelled."""
+    cancelled = CasePersonStep.objects.filter(
+        test_run_test_case__test_run=test_run, status__in=OPEN_PERSON_STEP_STATUSES
+    ).update(status=PersonStepStatus.CANCELLED, closed_at=now)
+    if cancelled:
+        project_id = test_run.project_id
+        transaction.on_commit(lambda: broadcast_project_attention_changed(project_id))
+
+
 def abort_active_test_run_on_disconnect(project: Project) -> None:
     # STARTED only: a paused run executes nothing, so a runner drop while a
     # person fixes the machine (or the auto-fix restarts it) must not cancel it.
@@ -3543,7 +3820,8 @@ def _update_test_run_status_if_needed(test_run: TestRun, *, generation: int) -> 
     commit). A worker of an older generation matches nothing.
     """
     test_run.refresh_from_db()
-    # A paused run finishes only after its Need help case is resolved.
+    # A paused run finishes only after its Need help case is resolved (or
+    # its person step is reported).
     if test_run.status in (TestRunStatus.CANCELLED, TestRunStatus.PAUSED):
         return False
 
@@ -3557,6 +3835,7 @@ def _update_test_run_status_if_needed(test_run: TestRun, *, generation: int) -> 
             TestRunTestCaseStatus.CREATED,
             TestRunTestCaseStatus.IN_PROGRESS,
             TestRunTestCaseStatus.NEED_HELP,
+            TestRunTestCaseStatus.AWAITING_PERSON,
         ]
     ).exists()
 

@@ -23,7 +23,9 @@ from agents.checkpoint import (
     checkpoint_to_json,
     clear_help_continue_pending,
     read_checkpoint_help,
+    read_checkpoint_person_step,
     truncate_checkpoint,
+    without_person_step,
 )
 from projects.case_checkpoint_services import load_resume_checkpoint
 from projects.exceptions import RunResumeError
@@ -197,16 +199,28 @@ def _resume_pivots(
 
 
 def _clear_pending_help(pivot: TestRunTestCase) -> bool:
-    """Drop a Continue-after-help that never ran (the run was aborted first).
+    """Drop a Continue-after-help, or after a person's step, that never ran.
 
-    A Resume restores the machine state and cleans up as usual; only a
-    Continue skips both. Returns whether the checkpoint changed (in memory).
+    The run was aborted before a worker picked the case up. A Resume restores
+    the machine state and cleans up as usual; only a Continue skips both.
+    Returns whether the checkpoint changed (in memory).
+
+    The ``person`` key (Human in the loop: a hand-off, report, overrule or
+    hand-back) is dropped whole: the abort cancelled its row, and a report made
+    before the restore must not be confirmed after it. The orchestrator hands
+    the step out afresh (or runs it, with the mode off) after the restore.
     """
+    changed = False
     checkpoint_help = read_checkpoint_help(pivot.execution_checkpoint)
-    if checkpoint_help is None or not checkpoint_help.continue_pending:
-        return False
-    pivot.execution_checkpoint = clear_help_continue_pending(pivot.execution_checkpoint)
-    return True
+    if checkpoint_help is not None and checkpoint_help.continue_pending:
+        pivot.execution_checkpoint = clear_help_continue_pending(
+            pivot.execution_checkpoint
+        )
+        changed = True
+    if read_checkpoint_person_step(pivot.execution_checkpoint) is not None:
+        pivot.execution_checkpoint = without_person_step(pivot.execution_checkpoint)
+        changed = True
+    return changed
 
 
 def _lock_and_check(
