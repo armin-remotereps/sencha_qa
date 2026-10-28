@@ -14,6 +14,7 @@ from controller_client.desktop_backend import DesktopBackend
 from controller_client.exceptions import ExecutionError
 from controller_client.input_guard import ensure_input_not_blocked
 from controller_client.interactive_session import InteractiveSessionManager
+from controller_client.pointer_mapping import ScreenSpaces, map_to_input
 from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import (
     ActionResultPayload,
@@ -26,6 +27,7 @@ from controller_client.protocol import (
     KeyPressPayload,
     RunCommandPayload,
     ScreenshotResponsePayload,
+    ScrollPayload,
     SendInputPayload,
     StartInteractiveCmdPayload,
     StreamName,
@@ -39,11 +41,25 @@ from controller_client.shell_encoding import SHELL_OUTPUT_ENCODING
 _DESKTOP: Final[DesktopBackend] = get_desktop_backend()
 
 
+def _to_input(x: int, y: int) -> tuple[int, int]:
+    """Map a point from the latest screenshot into the backend's input space."""
+    spaces = ScreenSpaces(_DESKTOP.capture_size(), _DESKTOP.input_size())
+    return map_to_input(x, y, spaces)
+
+
+def _point(x: int, y: int, input_x: int, input_y: int) -> str:
+    # Name the input point only when it differs, so logs show any scaling.
+    if (x, y) == (input_x, input_y):
+        return f"({x}, {y})"
+    return f"({x}, {y}) [input ({input_x}, {input_y})]"
+
+
 def execute_click(payload: ClickPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
+    x, y = _to_input(payload.x, payload.y)
     try:
-        _DESKTOP.click(payload.x, payload.y, payload.button)
+        _DESKTOP.click(x, y, payload.button)
     except ExecutionError:
         raise
     except Exception as e:
@@ -51,7 +67,10 @@ def execute_click(payload: ClickPayload) -> ActionResultPayload:
     duration_ms = (time.monotonic() - start) * 1000
     return ActionResultPayload(
         success=True,
-        message=f"Clicked ({payload.x}, {payload.y}) with {payload.button} button",
+        message=(
+            f"Clicked {_point(payload.x, payload.y, x, y)} "
+            f"with {payload.button} button"
+        ),
         duration_ms=duration_ms,
     )
 
@@ -59,8 +78,9 @@ def execute_click(payload: ClickPayload) -> ActionResultPayload:
 def execute_double_click(payload: DoubleClickPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
+    x, y = _to_input(payload.x, payload.y)
     try:
-        _DESKTOP.double_click(payload.x, payload.y)
+        _DESKTOP.double_click(x, y)
     except ExecutionError:
         raise
     except Exception as e:
@@ -68,7 +88,7 @@ def execute_double_click(payload: DoubleClickPayload) -> ActionResultPayload:
     duration_ms = (time.monotonic() - start) * 1000
     return ActionResultPayload(
         success=True,
-        message=f"Double-clicked ({payload.x}, {payload.y})",
+        message=f"Double-clicked {_point(payload.x, payload.y, x, y)}",
         duration_ms=duration_ms,
     )
 
@@ -76,8 +96,9 @@ def execute_double_click(payload: DoubleClickPayload) -> ActionResultPayload:
 def execute_hover(payload: HoverPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
+    x, y = _to_input(payload.x, payload.y)
     try:
-        _DESKTOP.move_to(payload.x, payload.y)
+        _DESKTOP.move_to(x, y)
     except ExecutionError:
         raise
     except Exception as e:
@@ -85,7 +106,7 @@ def execute_hover(payload: HoverPayload) -> ActionResultPayload:
     duration_ms = (time.monotonic() - start) * 1000
     return ActionResultPayload(
         success=True,
-        message=f"Hovered to ({payload.x}, {payload.y})",
+        message=f"Hovered to {_point(payload.x, payload.y, x, y)}",
         duration_ms=duration_ms,
     )
 
@@ -93,12 +114,14 @@ def execute_hover(payload: HoverPayload) -> ActionResultPayload:
 def execute_drag(payload: DragPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
+    start_x, start_y = _to_input(payload.start_x, payload.start_y)
+    end_x, end_y = _to_input(payload.end_x, payload.end_y)
     try:
         _DESKTOP.drag(
-            payload.start_x,
-            payload.start_y,
-            payload.end_x,
-            payload.end_y,
+            start_x,
+            start_y,
+            end_x,
+            end_y,
             payload.button,
             payload.duration,
         )
@@ -110,9 +133,36 @@ def execute_drag(payload: DragPayload) -> ActionResultPayload:
     return ActionResultPayload(
         success=True,
         message=(
-            f"Dragged from ({payload.start_x}, {payload.start_y}) "
-            f"to ({payload.end_x}, {payload.end_y})"
+            f"Dragged from {_point(payload.start_x, payload.start_y, start_x, start_y)} "
+            f"to {_point(payload.end_x, payload.end_y, end_x, end_y)}"
         ),
+        duration_ms=duration_ms,
+    )
+
+
+def execute_scroll(payload: ScrollPayload) -> ActionResultPayload:
+    # Windows UIPI drops wheel events too.
+    ensure_input_not_blocked()
+    start = time.monotonic()
+    if payload.x is not None and payload.y is not None:
+        x, y = _to_input(payload.x, payload.y)
+        input_x: int | None = x
+        input_y: int | None = y
+        where = f"at {_point(payload.x, payload.y, x, y)}"
+    else:
+        input_x = input_y = None
+        where = "at the pointer"
+    try:
+        _DESKTOP.scroll(payload.direction, payload.amount, input_x, input_y)
+    except ExecutionError:
+        raise
+    except Exception as e:
+        raise ExecutionError(f"Scroll failed: {e}") from e
+    duration_ms = (time.monotonic() - start) * 1000
+    notches = "notch" if payload.amount == 1 else "notches"
+    return ActionResultPayload(
+        success=True,
+        message=f"Scrolled {payload.direction} {payload.amount} {notches} {where}",
         duration_ms=duration_ms,
     )
 

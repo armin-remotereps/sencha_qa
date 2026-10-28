@@ -27,6 +27,8 @@ from controller_client.exceptions import (
 )
 from controller_client.gnome_diagnostics import build_gnome_steps
 from controller_client.gnome_remote_session import (
+    AXIS_HORIZONTAL,
+    AXIS_VERTICAL,
     BTN_LEFT,
     BTN_MIDDLE,
     BTN_RIGHT,
@@ -38,6 +40,7 @@ from controller_client.keysyms import (
     resolve_key_name,
 )
 from controller_client.pipewire_frame import grab_frame
+from controller_client.protocol import ScrollDirection
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +54,15 @@ _BUTTONS: Final[dict[str, int]] = {
     "left": BTN_LEFT,
     "right": BTN_RIGHT,
     "middle": BTN_MIDDLE,
+}
+
+# (axis, sign of the steps) per direction; positive is down / right. One table,
+# so a sign found wrong on a real GNOME VM is fixed here only.
+_SCROLL_AXES: Final[dict[ScrollDirection, tuple[int, int]]] = {
+    ScrollDirection.UP: (AXIS_VERTICAL, -1),
+    ScrollDirection.DOWN: (AXIS_VERTICAL, 1),
+    ScrollDirection.LEFT: (AXIS_HORIZONTAL, -1),
+    ScrollDirection.RIGHT: (AXIS_HORIZONTAL, 1),
 }
 
 
@@ -67,6 +79,11 @@ class GnomeDesktopBackend:
     def name(self) -> str:
         return "gnome-wayland"
 
+    # Pointer methods receive input-space coordinates from the executor; on
+    # GNOME that space is the frame size, so they arrive unchanged and
+    # _check_bounds stays as this backend's own guard (it also pins the
+    # session the events go to).
+    #
     # Each action sends its events on the session it checked the bounds on
     # (``stream_path``): see GnomeRemoteSession._session_for. A release goes
     # out even when its press failed, since a press whose reply timed out may
@@ -125,6 +142,23 @@ class GnomeDesktopBackend:
             press_and_move, lambda quiet: self._release_button(code, stream, quiet)
         )
 
+    def scroll(
+        self, direction: ScrollDirection, amount: int, x: int | None, y: int | None
+    ) -> None:
+        axis, sign = _SCROLL_AXES[direction]
+        if x is not None and y is not None:
+            stream = self._check_bounds(x, y)
+            self._session.pointer_move(x, y, stream_path=stream)
+        else:
+            stream = self._session.ensure_started().stream_path
+        self._session.pointer_axis_discrete(axis, sign * amount, stream_path=stream)
+
+    # Modifier keys: unlike the pyautogui backend, nothing extra is released
+    # after key combinations or before typing. press_keys and type_text
+    # release every keysym they pressed in _then_release, even on errors, and
+    # mutter's virtual keyboard holds no other state; key-ups for keys it never
+    # pressed would only add warnings to mutter's log.
+
     def type_text(self, text: str, interval: float) -> None:
         stream = self._session.ensure_started().stream_path
         for index, char in enumerate(text):
@@ -167,6 +201,14 @@ class GnomeDesktopBackend:
             logger.warning("Screen size unknown: no screenshot has succeeded yet")
             return (0, 0)
         return size
+
+    def capture_size(self) -> tuple[int, int]:
+        return self._known_frame_size()[1]
+
+    def input_size(self) -> tuple[int, int]:
+        # Mutter maps stream coordinates onto the monitor, so the input space
+        # is the current stream's frame size.
+        return self._known_frame_size()[1]
 
     def session_info(self) -> dict[str, str]:
         return {

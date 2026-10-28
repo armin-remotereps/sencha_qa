@@ -44,6 +44,11 @@ BTN_LEFT: Final = 0x110
 BTN_RIGHT: Final = 0x111
 BTN_MIDDLE: Final = 0x112
 
+# NotifyPointerAxisDiscrete axes (mutter follows the Wayland wl_pointer axis
+# numbering); positive steps scroll down / right, the libinput convention.
+AXIS_VERTICAL: Final = 0
+AXIS_HORIZONTAL: Final = 1
+
 _DBUS_NAME: Final = "org.freedesktop.DBus"
 _DBUS_PATH: Final = "/org/freedesktop/DBus"
 _PROPERTIES_IFACE: Final = "org.freedesktop.DBus.Properties"
@@ -229,6 +234,18 @@ class GnomeRemoteSession:
                 "ib",
                 [button_code, pressed],
                 "the mouse button event",
+            )
+
+    def pointer_axis_discrete(self, axis: int, steps: int, *, stream_path: str) -> None:
+        """Turn the wheel ``steps`` notches on ``axis`` (AXIS_VERTICAL/HORIZONTAL)."""
+        with self._lock:
+            session = self._session_for(stream_path)
+            self._notify(
+                session,
+                "NotifyPointerAxisDiscrete",
+                "ui",
+                [axis, steps],
+                "the scroll event",
             )
 
     def key(

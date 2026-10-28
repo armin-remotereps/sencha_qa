@@ -10,7 +10,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.6.2"
+CLIENT_VERSION: Final[str] = "0.7.0"
 
 
 class CloseCode(IntEnum):
@@ -66,6 +66,7 @@ class MessageType(StrEnum):
     CLOSE_TAB = "close_tab"
     CHECK_APP_INSTALLED = "check_app_installed"
     CLEANUP_ENVIRONMENT = "cleanup_environment"
+    SCROLL = "scroll"
 
 
 class ClientCapability(StrEnum):
@@ -83,6 +84,9 @@ class ClientCapability(StrEnum):
     # Optional: interactive commands run in ``cmd.exe`` on Windows. Older
     # controllers fail every command there; only Windows runners are checked.
     WINDOWS_SHELL_V1 = "windows_shell_v1"
+    # Optional: ``scroll`` (mouse wheel). Older controllers answer
+    # UNKNOWN_COMMAND.
+    SCROLL_V1 = "scroll_v1"
 
 
 # What this client advertises in its handshake.
@@ -91,7 +95,7 @@ CLIENT_CAPABILITIES: Final[tuple[ClientCapability, ...]] = tuple(ClientCapabilit
 # What the server insists on; a controller missing any of them would
 # authenticate fine and then silently time out on first use. Optional
 # capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1,
-# WINDOWS_SHELL_V1) are checked where they are used instead.
+# WINDOWS_SHELL_V1, SCROLL_V1) are checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
@@ -221,6 +225,28 @@ class DoubleClickPayload:
 class HoverPayload:
     x: int
     y: int
+
+
+class ScrollDirection(StrEnum):
+    UP = "up"
+    DOWN = "down"
+    LEFT = "left"
+    RIGHT = "right"
+
+
+# Wheel notches per scroll message; the server's tool uses the default when the
+# model gives no amount.
+MAX_SCROLL_AMOUNT: Final[int] = 25
+DEFAULT_SCROLL_AMOUNT: Final[int] = 5
+
+
+@dataclass(frozen=True)
+class ScrollPayload:
+    direction: ScrollDirection
+    amount: int
+    # Both None: scroll at the current pointer position.
+    x: int | None
+    y: int | None
 
 
 @dataclass(frozen=True)
@@ -493,6 +519,28 @@ def parse_drag_payload(data: dict[str, object]) -> DragPayload:
     )
 
 
+def parse_scroll_payload(data: dict[str, object]) -> ScrollPayload:
+    raw_direction = _extract_str(data, "direction")
+    try:
+        direction = ScrollDirection(raw_direction)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown scroll direction: {raw_direction}") from e
+    amount = data.get("amount")
+    if (
+        not isinstance(amount, int)
+        or isinstance(amount, bool)
+        or not 1 <= amount <= MAX_SCROLL_AMOUNT
+    ):
+        raise ProtocolError(
+            f"Invalid 'amount': expected an int from 1 to {MAX_SCROLL_AMOUNT}"
+        )
+    x = _extract_optional_int(data, "x")
+    y = _extract_optional_int(data, "y")
+    if (x is None) != (y is None):
+        raise ProtocolError("'x' and 'y' must both be given or both be omitted")
+    return ScrollPayload(direction=direction, amount=amount, x=x, y=y)
+
+
 def parse_type_text_payload(data: dict[str, object]) -> TypeTextPayload:
     return TypeTextPayload(
         text=_extract_str(data, "text"),
@@ -575,7 +623,7 @@ def _extract_optional_int(data: dict[str, object], field: str) -> int | None:
     value = data.get(field)
     if value is None:
         return None
-    if not isinstance(value, int):
+    if not isinstance(value, int) or isinstance(value, bool):
         raise ProtocolError(f"Invalid '{field}': expected int or null")
     return value
 

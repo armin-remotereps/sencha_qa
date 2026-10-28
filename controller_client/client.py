@@ -47,6 +47,7 @@ from controller_client.executor import (
     execute_hover,
     execute_key_press,
     execute_screenshot,
+    execute_scroll,
     execute_send_input,
     execute_start_interactive_cmd,
     execute_terminate_interactive_cmd,
@@ -86,6 +87,7 @@ from controller_client.protocol import (
     parse_key_press_payload,
     parse_launch_app_payload,
     parse_run_command_payload,
+    parse_scroll_payload,
     parse_send_input_payload,
     parse_start_interactive_cmd_payload,
     parse_terminate_interactive_cmd_payload,
@@ -156,6 +158,7 @@ class ControllerClient:
             MessageType.DOUBLE_CLICK: self._handle_double_click,
             MessageType.HOVER: self._handle_hover,
             MessageType.DRAG: self._handle_drag,
+            MessageType.SCROLL: self._handle_scroll,
             MessageType.TYPE_TEXT: self._handle_type_text,
             MessageType.KEY_PRESS: self._handle_key_press,
             MessageType.SCREENSHOT_REQUEST: self._handle_screenshot,
@@ -551,6 +554,14 @@ class ControllerClient:
         payload = parse_drag_payload(data)
         try:
             result = await asyncio.to_thread(execute_drag, payload)
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_scroll(self, request_id: str, data: dict[str, object]) -> None:
+        payload = parse_scroll_payload(data)
+        try:
+            result = await asyncio.to_thread(execute_scroll, payload)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
