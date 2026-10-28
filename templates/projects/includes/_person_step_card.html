@@ -1,0 +1,133 @@
+{% comment %} Case page: "Your turn" card of a Human in the loop run (a person
+   performs the step, the agent confirms it).
+
+   Context contract:
+     project, test_run, pivot, csrf_token
+     person_step_panel — projects.person_step_services.PersonStepPanel for
+                  this case (the run is paused on it): step (CasePersonStep:
+                  kind, instruction, expected_result, command, round,
+                  requested_at, outcome, note, output), step_label
+                  ("Step N of M"), is_open (waiting / not_confirmed),
+                  confirming (reported), objection (the agent's reason while
+                  not_confirmed), shell_label (command steps), can_report,
+                  blockers
+     person_step_form — unbound PersonStepReportForm (outcome radios, note,
+                  output; person_step_id is written from the panel's step)
+   Report / Overrule / Mark failed / Mark blocked share one form and post to
+   their own URL via formaction (the help card convention); the decision
+   views read person_step_id and note and ignore the report fields. The
+   command sits in <code> and Copy copies its textContent. Model and person
+   text is autoescaped, never |safe. {% endcomment %}
+{% with step=person_step_panel.step %}
+<section aria-labelledby="person-step-h" class="card card-tone-your-turn">
+  <div class="card-header">
+    <h2 id="person-step-h">{% if person_step_panel.confirming %}Your report on {{ person_step_panel.step_label|lower }}{% else %}Your turn: {{ person_step_panel.step_label|lower }}{% endif %}</h2>
+    {% if person_step_panel.is_open %}
+      {% include "partials/badge_case_status.html" with status="awaiting_person" only %}
+    {% endif %}
+  </div>
+
+  <p class="muted small">
+    {{ step.get_kind_display }}{% if step.round > 1 %} · attempt {{ step.round }}{% endif %} · asked
+    <time datetime="{{ step.requested_at|date:'c' }}">{{ step.requested_at|timesince }}</time> ago.
+    {% if person_step_panel.is_open %}Perform this step on the test machine yourself, then report how it went. The agent then checks the test machine to confirm it. Nothing else in this run executes until then.{% endif %}
+  </p>
+
+  <div class="label">What to do</div>
+  <p class="help-quote">{{ step.instruction }}</p>
+  {% if step.expected_result %}
+    <div class="label">Expected result</div>
+    <p class="help-quote">{{ step.expected_result }}</p>
+  {% endif %}
+
+  {% if step.kind == "command" and step.command %}
+    <div class="person-step-command" x-data="clipboard()">
+      <div class="person-step-command-head">
+        <span class="label">Run this in {{ person_step_panel.shell_label|default:"the shell" }} on the test machine</span>
+        <button type="button" class="btn btn-sm btn-secondary" @click="copy($refs.command.textContent)" aria-label="Copy the command">
+          <span x-show="!copied">Copy</span>
+          <span x-show="copied" x-cloak>Copied!</span>
+        </button>
+      </div>
+      <pre class="code-block"><code x-ref="command">{{ step.command }}</code></pre>
+      <p class="hint">Check the command before you run it.</p>
+    </div>
+  {% endif %}
+
+  {% if person_step_panel.confirming %}
+    {% if test_run.status == "paused" %}
+      <div class="alert alert-warning">
+        <span class="alert-icon" aria-hidden="true">⚠</span>
+        <div>
+          <strong>Your report is saved, but the run could not continue</strong>
+          {% if person_step_panel.blockers %}<p>{{ person_step_panel.blockers|join:" " }}</p>{% endif %}
+          <a class="btn btn-sm btn-primary" href="{% url 'projects:test_run_detail' project.id test_run.id %}">Continue it from the run page</a>
+        </div>
+      </div>
+    {% else %}
+      <div class="alert alert-info">
+        <span class="alert-icon" aria-hidden="true">⚙</span>
+        <div>
+          <strong>The agent is checking your report…</strong>
+          <p>It looks at the test machine to confirm the step. This page updates when it is done.</p>
+        </div>
+      </div>
+    {% endif %}
+    {% if step.note %}
+      <div class="label">Your note</div>
+      <p class="help-quote">{{ step.note }}</p>
+    {% endif %}
+  {% elif person_step_panel.is_open %}
+    {% if person_step_panel.objection %}
+      <div class="alert alert-warning">
+        <span class="alert-icon" aria-hidden="true">⚠</span>
+        <div>
+          <strong>The agent could not confirm your report</strong>
+          <p>Check the test machine and report again, or overrule the agent if the step did go as expected.</p>
+        </div>
+      </div>
+      <div class="label">Why the agent could not confirm it</div>
+      <p class="help-quote">{{ person_step_panel.objection }}</p>
+    {% endif %}
+
+    <form method="post" action="{% url 'projects:test_run_case_person_report' project.id test_run.id pivot.id %}">
+      {% csrf_token %}
+      <input type="hidden" name="person_step_id" value="{{ step.id }}">
+      <fieldset class="person-step-outcome">
+        <legend class="label">{{ person_step_form.outcome.label }}</legend>
+        {% for radio in person_step_form.outcome %}
+          <label class="checkbox" for="{{ radio.id_for_label }}">
+            {{ radio.tag }}
+            <span>{{ radio.choice_label }}</span>
+          </label>
+        {% endfor %}
+      </fieldset>
+      <div class="field">
+        <label class="label" for="{{ person_step_form.note.id_for_label }}">{{ person_step_form.note.label }}</label>
+        {{ person_step_form.note }}
+        <p class="hint">Required when the result was different: say what you saw.</p>
+      </div>
+      {% if step.kind == "command" %}
+        <div class="field">
+          <label class="label" for="{{ person_step_form.output.id_for_label }}">{{ person_step_form.output.label }}</label>
+          {{ person_step_form.output }}
+          <p class="hint">Optional. Paste what the command printed; the agent reads it as evidence.</p>
+        </div>
+      {% endif %}
+      <p class="hint">{% if person_step_panel.objection %}Report again sends a new report for the agent to check. Overrule records the step as passed without another check.{% else %}Report hands the step to the agent to confirm.{% endif %} Mark failed records a Failed verdict. Mark blocked leaves the case Blocked so it can be resumed later. In every case the rest of the run then continues.</p>
+      {% if person_step_panel.blockers %}
+        <p class="hint" id="person-step-blockers">The run cannot continue right now: {{ person_step_panel.blockers|join:" " }}</p>
+      {% endif %}
+      <div class="help-actions">
+        <button type="submit" class="btn btn-primary"{% if not person_step_panel.can_report %} disabled aria-disabled="true"{% if person_step_panel.blockers %} aria-describedby="person-step-blockers"{% endif %}{% endif %}>{% if person_step_panel.objection %}Report again{% else %}Report{% endif %}</button>
+        {% if person_step_panel.objection %}
+          <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_person_overrule' project.id test_run.id pivot.id %}">Overrule</button>
+        {% endif %}
+        <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_person_fail' project.id test_run.id pivot.id %}">Mark failed</button>
+        <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_person_block' project.id test_run.id pivot.id %}">Mark blocked</button>
+        <button type="button" class="btn btn-danger" @click="$dispatch('open-abort-run')">Abort run</button>
+      </div>
+    </form>
+  {% endif %}
+</section>
+{% endwith %}

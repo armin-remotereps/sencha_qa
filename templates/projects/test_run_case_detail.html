@@ -68,6 +68,14 @@
      page reloads when the case moves into, out of, or stays in "need_help"
      (an auto-fix ended), since the help card is server-rendered.
 
+     Your turn (Human in the loop): person_step_panel
+     (projects.person_step_services.PersonStepPanel, or None unless the run is
+     paused on this case's person step; see includes/_person_step_card.html,
+     rendered while it is open or confirming), person_step_form (unbound
+     PersonStepReportForm). The page reloads when the case moves into, out
+     of, or stays in "awaiting_person"; the abort dialog is also rendered
+     for it.
+
      Result chat (projects.case_result_page.get_case_result_panel):
      can_discuss_result (bool: Passed / Failed / Blocked), result_thread_id
      (the case's non-archived result chat thread, or None), result_chat_blocker
@@ -111,7 +119,7 @@
           data-status="{{ pivot.status }}"
           :class="badgeClass(status)"
           x-text="badgeLabel(status)"
-        >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% endif %}</span>
+        >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% elif pivot.status == "awaiting_person" %}Your turn{% endif %}</span>
       </h1>
       <p class="subtitle">
         Case {{ case_position }} of {{ case_total }} in {{ test_run.display_name }}
@@ -164,11 +172,11 @@
   <section
     aria-labelledby="result-h"
     class="card"
-    :class="status === 'failed' ? 'card-tone-danger' : (status === 'success' ? 'card-tone-success' : (status === 'blocked' ? 'card-tone-warning' : (status === 'need_help' ? 'card-tone-need-help' : '')))"
+    :class="status === 'failed' ? 'card-tone-danger' : (status === 'success' ? 'card-tone-success' : (status === 'blocked' ? 'card-tone-warning' : (status === 'need_help' ? 'card-tone-need-help' : (status === 'awaiting_person' ? 'card-tone-your-turn' : ''))))"
   >
     <div class="card-header">
       <h2 id="result-h">Result</h2>
-      <span class="badge" data-status="{{ pivot.status }}" :class="badgeClass(status)" x-text="badgeLabel(status)">{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% endif %}</span>
+      <span class="badge" data-status="{{ pivot.status }}" :class="badgeClass(status)" x-text="badgeLabel(status)">{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% elif pivot.status == "awaiting_person" %}Your turn{% endif %}</span>
     </div>
     <template x-if="status === 'created' && testRunStatus === 'waiting'">
       <div class="alert alert-info">
@@ -214,6 +222,11 @@
   {% if help_panel %}
   {# Section: Need help — the agent's ask and the human actions (server-rendered) #}
   {% include "projects/includes/_case_help_card.html" with project=project test_run=test_run pivot=pivot help_panel=help_panel help_form=help_form csrf_token=csrf_token only %}
+  {% endif %}
+
+  {% if person_step_panel.holds_run and person_step_panel.is_open or person_step_panel.holds_run and person_step_panel.confirming %}
+  {# Section: Your turn — a person performs the step, the agent confirms it (server-rendered). Hidden while the case is in Need help (a fault while confirming): the help card above owns the case then. #}
+  {% include "projects/includes/_person_step_card.html" with project=project test_run=test_run pivot=pivot person_step_panel=person_step_panel person_step_form=person_step_form csrf_token=csrf_token only %}
   {% endif %}
 
   {# Section: Steps — the agent's planned steps, live while the case runs #}
@@ -515,7 +528,7 @@
     </div>
   </div>
 
-  {% if help_panel %}
+  {% if help_panel or person_step_panel %}
   {% url 'projects:test_run_abort' project.id test_run.id as test_run_abort_url %}
   {% include "partials/confirm_dialog.html" with dialog_id="abort-run" title="Abort this run?" body="This case and the pending cases will be marked as cancelled (a running auto-fix is asked to stop). Cases that already finished keep their result." confirm_label="Abort run" action_url=test_run_abort_url %}
   {% endif %}
@@ -729,6 +742,7 @@ document.addEventListener('alpine:init', () => {
         blocked: 'badge-blocked',
         cancelled: 'badge-cancelled',
         need_help: 'badge-need-help',
+        awaiting_person: 'badge-your-turn',
       }[status] || 'badge-draft';
     },
 
@@ -741,6 +755,7 @@ document.addEventListener('alpine:init', () => {
         blocked: 'Blocked',
         cancelled: 'Cancelled',
         need_help: 'Need help',
+        awaiting_person: 'Your turn',
       }[status] || status;
     },
 
@@ -753,6 +768,7 @@ document.addEventListener('alpine:init', () => {
         interrupted: 'badge-blocked',
         not_run: 'badge-cancelled',
         awaiting_help: 'badge-need-help',
+        awaiting_person: 'badge-your-turn',
       }[status] || 'badge-draft';
     },
 
@@ -859,9 +875,12 @@ document.addEventListener('alpine:init', () => {
         }
 
         if (data.type === 'status') {
-          if (data.status === 'need_help' || this.status === 'need_help') {
-            // The help card is server-rendered: reload when the case pauses,
-            // is resolved, or its auto-fix ends (a need_help -> need_help event).
+          const reloadOn = ['need_help', 'awaiting_person'];
+          if (reloadOn.includes(data.status) || reloadOn.includes(this.status)) {
+            // The help and Your turn cards are server-rendered: reload when
+            // the case pauses, is resolved, its auto-fix ends (a need_help ->
+            // need_help event), or the agent hands the next step to a person
+            // (an awaiting_person -> awaiting_person event).
             this.status = data.status;
             window.location.reload();
             return;

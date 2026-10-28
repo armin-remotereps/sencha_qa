@@ -1,8 +1,9 @@
 """A user's "Needs your attention" list and its badge count.
 
-Three groups: cases that need help (open ``CaseHelpRequest`` rows, listed while
-open, including while the Night auto-fix is trying), missed failures and
-missed replies (the user's inbox rows, ``notifications.services.inbox``).
+Four groups: cases that need help (open ``CaseHelpRequest`` rows, listed while
+open, including while the Night auto-fix is trying), person steps waiting for a
+member ("Your turn", Human in the loop), missed failures and missed replies
+(the last three from ``notifications.services.inbox``).
 """
 
 from __future__ import annotations
@@ -16,7 +17,14 @@ from django.utils import timezone
 
 from accounts.models import CustomUser
 from dashboard.services.member_projects import member_project_ids
-from notifications.services.inbox import Inbox, count_inbox, get_inbox
+from notifications.services.inbox import (
+    Inbox,
+    InboxPersonStep,
+    count_inbox,
+    get_inbox,
+    open_person_steps,
+    person_steps,
+)
 from projects.models import CaseHelpRequest, HelpAutoFixState, HelpResolution
 
 # Items shown per group; the group says "and N more" past it.
@@ -48,17 +56,28 @@ class Attention:
 
     help_items: list[HelpItem]
     help_total: int
+    person_items: list[InboxPersonStep]
+    person_total: int
     inbox: Inbox
     # When the card was built: "Dismiss all" only clears items up to it.
     rendered_at: datetime
 
     @property
     def total(self) -> int:
-        return self.help_total + self.inbox.failure_total + self.inbox.reply_total
+        return (
+            self.help_total
+            + self.person_total
+            + self.inbox.failure_total
+            + self.inbox.reply_total
+        )
 
     @property
     def help_more(self) -> int:
         return self.help_total - len(self.help_items)
+
+    @property
+    def person_more(self) -> int:
+        return self.person_total - len(self.person_items)
 
     @property
     def failure_more(self) -> int:
@@ -132,13 +151,16 @@ def get_attention(
 ) -> Attention:
     """The attention card for ``user`` over ``project_ids`` (their member projects).
 
-    One help list query (plus one count only when the list is full) and the
-    inbox's queries; none when ``project_ids`` is empty.
+    One help list query and one person step list query (each plus one count
+    only when its list is full) and the inbox's queries; none when
+    ``project_ids`` is empty.
     """
     rendered_at = now or timezone.now()
     if not project_ids:
         help_items: list[HelpItem] = []
         help_total = 0
+        person_items: list[InboxPersonStep] = []
+        person_total = 0
     else:
         help_items = _help_items(project_ids, ATTENTION_GROUP_LIMIT)
         help_total = (
@@ -146,19 +168,28 @@ def get_attention(
             if len(help_items) >= ATTENTION_GROUP_LIMIT
             else len(help_items)
         )
+        person_items = person_steps(project_ids, ATTENTION_GROUP_LIMIT)
+        person_total = (
+            open_person_steps(project_ids).count()
+            if len(person_items) >= ATTENTION_GROUP_LIMIT
+            else len(person_items)
+        )
     return Attention(
         help_items=help_items,
         help_total=help_total,
+        person_items=person_items,
+        person_total=person_total,
         inbox=get_inbox(user, project_ids, limit=ATTENTION_GROUP_LIMIT),
         rendered_at=rendered_at,
     )
 
 
 def count_attention(user: CustomUser) -> int:
-    """How many items need ``user``: the nav badge and tab title (4 queries)."""
+    """How many items need ``user``: the nav badge and tab title (5 queries)."""
     project_ids = member_project_ids(user)
     if not project_ids:
         return 0
     help_total = _open_help_requests(project_ids).count()
+    person_total = open_person_steps(project_ids).count()
     failures, replies = count_inbox(user, project_ids)
-    return help_total + failures + replies
+    return help_total + person_total + failures + replies

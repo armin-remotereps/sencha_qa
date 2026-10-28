@@ -3455,6 +3455,84 @@ details.card[open] > summary,
   color: var(--brand-orange);
 }
 
+/* Your turn (Human in the loop): a person performs the step, the agent
+   confirms it. Cyan, so it never reads as Need help (orange). */
+.badge-your-turn {
+  color: var(--brand-cyan);
+  background: var(--cyan-soft);
+  border-color: color-mix(in srgb, var(--brand-cyan) 35%, transparent);
+}
+
+.badge-your-turn::before {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.alert-your-turn {
+  background: var(--cyan-soft);
+  border-color: color-mix(in srgb, var(--brand-cyan) 35%, transparent);
+}
+
+.alert-your-turn .alert-icon {
+  color: var(--brand-cyan);
+}
+
+.card-tone-your-turn {
+  border-color: var(--brand-cyan);
+}
+
+.stat-value.is-your-turn {
+  color: var(--brand-cyan);
+}
+
+.step-list .step-num.is-awaiting_person {
+  background: var(--cyan-soft);
+  color: var(--brand-cyan);
+  border-color: var(--brand-cyan);
+}
+
+/* The command a person runs; Copy copies the <code> text. */
+.person-step-command {
+  margin-bottom: 12px;
+}
+
+.person-step-command-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.person-step-command .code-block {
+  margin-bottom: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.person-step-command code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+
+.person-step-outcome {
+  display: grid;
+  gap: 8px;
+  border: 0;
+  padding: 0;
+  margin: 0 0 16px;
+}
+
+.person-step-outcome input[type="radio"] {
+  width: 17px;
+  height: 17px;
+  margin: 2px 0 0;
+  accent-color: var(--brand-cyan);
+  flex: none;
+}
+
 /* The agent's reason / ask and the people's notes: model or user text. */
 .help-quote {
   margin: 0 0 12px;

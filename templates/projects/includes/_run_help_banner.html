@@ -1,4 +1,5 @@
-{% comment %} Run page banner while the run is paused (asleep) because a case needs help.
+{% comment %} Run page banner while the run is paused (asleep) because a case needs help
+   or (Human in the loop) waits for a person to perform a step.
 
    Context contract:
      project, test_run, csrf_token
@@ -8,7 +9,49 @@
                   blockers, is_open, can_continue_run, waiting_for_auto_fix_stop;
                   request.fault / get_fault_display: the infrastructure fault,
                   "" when the agent asked)
+     person_step_panel — projects.person_step_services.PersonStepPanel or
+                  None (Human in the loop: step with
+                  test_run_test_case__test_case loaded, step_label, is_open,
+                  confirming, blockers)
+     help_state — the run's RunHelpState; "person_step" selects the
+                  person-step branch (a person performs the step), otherwise
+                  the help branch renders from help_panel
+     paused_run_blockers — sequence of str: the reopen gates of a PAUSED run with
+                  neither help_panel nor person_step_panel (a person step was
+                  marked failed or blocked, or handed back, and a gate
+                  refused the queueing); renders a plain "Continue run" banner
    The agent's reason / ask is model text: autoescaped, never |safe. {% endcomment %}
+{% if help_state == "person_step" and person_step_panel %}
+{% with step=person_step_panel.step %}
+{% with case=step.test_run_test_case %}
+<div class="alert alert-your-turn" role="alert" x-show="testRunStatus === 'paused'">
+  <span class="alert-icon" aria-hidden="true">✋</span>
+  <div>
+    {% if person_step_panel.is_open %}
+      <strong>Waiting for a person: {{ case.test_case.title }} step {{ step.step_num }}</strong>
+      <p>{{ step.instruction|truncatechars:240 }}</p>
+      <p>{% if person_step_panel.objection %}The agent could not confirm the last report. {% endif %}Waiting {{ step.requested_at|timesince }}. Perform the step on the test machine and report it on the case page; the agent then confirms it. Nothing else in this run executes until then.</p>
+      <div class="help-actions">
+        <a class="btn btn-sm btn-primary" href="{% url 'projects:test_run_case_detail' project.id test_run.id case.id %}">Open the case</a>
+      </div>
+    {% else %}
+      <strong>Run paused: the report on {{ case.test_case.title }} step {{ step.step_num }} is saved, but the run could not continue</strong>
+      {% if person_step_panel.blockers %}
+        <p>{{ person_step_panel.blockers|join:" " }}</p>
+      {% else %}
+        <p>The run can continue now.</p>
+      {% endif %}
+      <form method="post" action="{% url 'projects:test_run_continue' project.id test_run.id %}" class="help-actions">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-primary"{% if person_step_panel.blockers %} disabled aria-disabled="true"{% endif %}>Continue run</button>
+        <a class="btn btn-sm btn-secondary" href="{% url 'projects:test_run_case_detail' project.id test_run.id case.id %}">Open the case</a>
+      </form>
+    {% endif %}
+  </div>
+</div>
+{% endwith %}
+{% endwith %}
+{% elif help_panel %}
 {% with help_request=help_panel.request %}
 {% with case=help_request.test_run_test_case %}
 <div class="alert alert-need-help" role="alert" x-show="testRunStatus === 'paused'">
@@ -55,3 +98,20 @@
 </div>
 {% endwith %}
 {% endwith %}
+{% elif test_run.status == "paused" %}
+<div class="alert alert-need-help" role="alert" x-show="testRunStatus === 'paused'">
+  <span class="alert-icon" aria-hidden="true">✋</span>
+  <div>
+    <strong>Run paused: the run could not continue</strong>
+    {% if paused_run_blockers %}
+      <p>{{ paused_run_blockers|join:" " }}</p>
+    {% else %}
+      <p>The run can continue now.</p>
+    {% endif %}
+    <form method="post" action="{% url 'projects:test_run_continue' project.id test_run.id %}" class="help-actions">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-sm btn-primary"{% if paused_run_blockers %} disabled aria-disabled="true"{% endif %}>Continue run</button>
+    </form>
+  </div>
+</div>
+{% endif %}

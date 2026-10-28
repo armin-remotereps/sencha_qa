@@ -5,8 +5,11 @@
 
    Context contract:
      attention  — dashboard.services.attention.Attention
-                  (help_items, help_total, help_more, inbox, failure_more,
-                  reply_more, total, rendered_at)
+                  (help_items, help_total, help_more, person_items,
+                  person_total, person_more, inbox, failure_more,
+                  reply_more, total, rendered_at); person_items are
+                  notifications.services.inbox.InboxPersonStep ("Your turn":
+                  a Human in the loop step waiting for a person)
      csrf_token — for the dismiss forms {% endcomment %}
 <section id="attention-card" aria-labelledby="attention-h" class="card{% if attention.total %} card-tone-warning{% endif %}" data-fragment-url="{% url 'dashboard:attention_fragment' %}">
   <div class="card-header">
@@ -40,6 +43,31 @@
         {% endfor %}
       </ul>
       {% if attention.help_more > 0 %}<p class="muted small">and {{ attention.help_more }} more</p>{% endif %}
+    </div>
+  {% endif %}
+
+  {% if attention.person_items %}
+    <div class="attention-group">
+      <h3 class="attention-group-title">Your turn <span class="muted">({{ attention.person_total }})</span></h3>
+      <ul class="activity">
+        {% for item in attention.person_items %}
+          <li>
+            <span class="activity-icon" aria-hidden="true">✋</span>
+            <div class="attention-body">
+              <strong>{{ item.case_title }}</strong>{% if item.testrail_id %} <span class="muted small">{{ item.testrail_id }}</span>{% endif %}
+              <div class="muted small">{{ item.project_name }} · {{ item.run_name }}</div>
+              <div class="attention-tags">
+                <span class="chip">Step {{ item.step_num }}</span>
+                {% if item.not_confirmed %}<span class="badge badge-blocked">Not confirmed</span>{% endif %}
+              </div>
+              {% if item.instruction %}<div class="small attention-text">{{ item.instruction|truncatechars:200 }}</div>{% endif %}
+              <a class="btn btn-sm btn-primary" href="{{ item.url }}">Do this step</a>
+            </div>
+            <time datetime="{{ item.requested_at|date:'c' }}">{{ item.requested_at|timesince }} ago</time>
+          </li>
+        {% endfor %}
+      </ul>
+      {% if attention.person_more > 0 %}<p class="muted small">and {{ attention.person_more }} more</p>{% endif %}
     </div>
   {% endif %}
 
