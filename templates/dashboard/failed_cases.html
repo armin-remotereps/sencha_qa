@@ -1,0 +1,94 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Failures page: every Failed run case in the user's non-archived projects.
+
+   Context contract (dashboard/failure_views.py::failed_cases):
+     form              — FailedCaseFilterForm (GET; run choices only for the chosen project)
+     filters           — FailedCaseFilters (cleaned; invalid fields left out)
+     view              — "cases" | "by_case"
+     page_obj          — Page[TestRunTestCase] (cases; rows carry `verdict`) or
+                         Page[FailingCaseRow] (by_case)
+     elided_page_range, per_page, allowed_per_page, query_params — pagination
+     filter_query      — encoded cleaned filters (no page / per_page), "" when none
+     has_projects      — the user has at least one non-archived project
+     has_filters       — any filter is set
+     cases_url, by_case_url, export_url — tab and export links (same filters)
+     presets           — list[PresetItem]; preset_form — FailedCasePresetForm
+     bulk_form         — FailedCaseBulkForm (initial return_query)
+     selectable_ids    — pivot ids on this page (cases view; [] for by_case)
+     run_of_pivot      — {pivot id: run id} on this page (single-run Re-run gate) {% endcomment %}
+
+{% block title %}Failures · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="{% url 'dashboard:index' %}">Dashboard</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Failures</span>
+</nav>
+{% endblock %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <h1>Failed cases</h1>
+    <p class="subtitle">
+      {% if view == "by_case" %}{{ page_obj.paginator.count }} test case{{ page_obj.paginator.count|pluralize }} with failures{% else %}{{ page_obj.paginator.count }} failed case{{ page_obj.paginator.count|pluralize }}{% endif %}{% if has_filters %} matching the filters{% endif %}
+    </p>
+  </div>
+  <div class="actions">
+    {% if has_projects %}<a class="btn btn-secondary" href="{{ export_url }}">Export CSV</a>{% endif %}
+  </div>
+</div>
+
+{% if not has_projects %}
+  {% url 'projects:create' as create_url %}
+  {% include "partials/empty_state.html" with icon="▣" title="No projects yet" body="Failed cases from every project you are a member of are listed here." primary_label="Create a project" primary_url=create_url only %}
+{% else %}
+
+{# Section: Filters #}
+<div class="card">
+  <form method="get" action="{% url 'dashboard:failed_cases' %}" role="search" aria-label="Filter failed cases">
+    {{ form.view }}
+    {% for error in form.non_field_errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+    <div class="grid grid-3">
+      {% include "partials/form_field.html" with field=form.date_from only %}
+      {% include "partials/form_field.html" with field=form.date_to only %}
+      {% include "partials/form_field.html" with field=form.q only %}
+      {% include "partials/form_field.html" with field=form.project only %}
+      {% include "partials/form_field.html" with field=form.run only %}
+      {% include "partials/form_field.html" with field=form.review only %}
+      {% include "partials/form_field.html" with field=form.failed_by only %}
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary btn-sm">Apply filters</button>
+      {% if has_filters %}<a class="btn btn-ghost btn-sm" href="{% url 'dashboard:failed_cases' %}{% if view == 'by_case' %}?view=by_case{% endif %}">Clear filters</a>{% endif %}
+    </div>
+  </form>
+</div>
+
+{% include "dashboard/includes/_failed_case_presets.html" %}
+
+{# Section: View tabs (links, not JS tabs) #}
+<nav class="tabs" aria-label="Failures view">
+  <a class="tab" href="{{ cases_url }}"{% if view != "by_case" %} aria-current="page"{% endif %}>Cases</a>
+  <a class="tab" href="{{ by_case_url }}"{% if view == "by_case" %} aria-current="page"{% endif %}>By test case</a>
+</nav>
+
+{% if not page_obj.object_list %}
+  {% if has_filters %}
+    {% include "partials/empty_state.html" with icon="✓" title="No failed cases match" body="No failed case matches the current filters. Try widening the dates or clearing a filter." only %}
+  {% else %}
+    {% include "partials/empty_state.html" with icon="✓" title="No failed cases" body="When a run case fails in one of your projects, it is listed here." only %}
+  {% endif %}
+{% elif view == "by_case" %}
+  {% include "dashboard/includes/_failed_case_groups.html" %}
+{% else %}
+  {% include "dashboard/includes/_failed_case_table.html" %}
+{% endif %}
+
+{% comment %} `request` is passed explicitly for the per-page form's hidden fields. {% endcomment %}
+{% include "partials/pagination.html" with page_obj=page_obj query_params=query_params per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range request=request %}
+
+{% endif %}
+{% endblock %}
