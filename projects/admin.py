@@ -8,6 +8,7 @@ from projects.models import (
     ApplicationContextVersion,
     CaseHelpRequest,
     Project,
+    RunnerUpdate,
     Tag,
     TestCase,
     TestCaseUpload,
@@ -244,5 +245,38 @@ class CaseHelpRequestAdmin(admin.ModelAdmin[CaseHelpRequest]):
 
     def has_delete_permission(
         self, request: HttpRequest, obj: CaseHelpRequest | None = None
+    ) -> bool:
+        return False
+
+
+@admin.register(RunnerUpdate)
+class RunnerUpdateAdmin(admin.ModelAdmin[RunnerUpdate]):
+    """Read-only audit: updates are written by the update services."""
+
+    list_display = (
+        "id",
+        "project",
+        "from_version",
+        "to_version",
+        "status",
+        "phase",
+        "old_removal",
+        "requested_by",
+        "created_at",
+        "finished_at",
+    )
+    list_filter = ("status", "old_removal")
+    list_select_related = ("project", "requested_by")
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return False
+
+    def has_change_permission(
+        self, request: HttpRequest, obj: RunnerUpdate | None = None
+    ) -> bool:
+        return False
+
+    def has_delete_permission(
+        self, request: HttpRequest, obj: RunnerUpdate | None = None
     ) -> bool:
         return False

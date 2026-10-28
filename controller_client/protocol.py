@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.7.0"
+CLIENT_VERSION: Final[str] = "0.8.0"
 
 
 class CloseCode(IntEnum):
@@ -67,6 +68,10 @@ class MessageType(StrEnum):
     CHECK_APP_INSTALLED = "check_app_installed"
     CLEANUP_ENVIRONMENT = "cleanup_environment"
     SCROLL = "scroll"
+    # Self-update (SELF_UPDATE_V1): server -> runner with the new bundle, and
+    # runner -> server with the progress of that update.
+    UPDATE_RUNNER = "update_runner"
+    UPDATE_STATUS = "update_status"
 
 
 class ClientCapability(StrEnum):
@@ -87,6 +92,9 @@ class ClientCapability(StrEnum):
     # Optional: ``scroll`` (mouse wheel). Older controllers answer
     # UNKNOWN_COMMAND.
     SCROLL_V1 = "scroll_v1"
+    # Optional: ``update_runner`` / ``update_status`` (side-by-side self-update).
+    # Checked by the server before it offers the Update button.
+    SELF_UPDATE_V1 = "self_update_v1"
 
 
 # What this client advertises in its handshake.
@@ -95,7 +103,8 @@ CLIENT_CAPABILITIES: Final[tuple[ClientCapability, ...]] = tuple(ClientCapabilit
 # What the server insists on; a controller missing any of them would
 # authenticate fine and then silently time out on first use. Optional
 # capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1,
-# WINDOWS_SHELL_V1, SCROLL_V1) are checked where they are used instead.
+# WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1) are checked where they are used
+# instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
@@ -389,6 +398,68 @@ class CheckAppInstalledPayload:
     app_name: str
 
 
+# Largest runner bundle (the ZIP, before base64) an ``update_runner`` may carry.
+# Both sides must agree, so it lives here rather than in settings.
+MAX_UPDATE_ARCHIVE_BYTES: Final[int] = 8 * 1024 * 1024
+# Longest ``detail`` of an ``update_status``; longer text is truncated.
+UPDATE_STATUS_DETAIL_MAX_LENGTH: Final[int] = 500
+# Longest version string ``version_tuple`` accepts (matches the server column).
+MAX_VERSION_LENGTH: Final[int] = 32
+
+_VERSION_RE: Final[re.Pattern[str]] = re.compile(r"[0-9]+(?:\.[0-9]+)*")
+_SHA256_HEX_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}")
+
+
+class UpdatePhase(StrEnum):
+    """Progress of a self-update, sent by the runner in ``update_status``."""
+
+    ACCEPTED = "accepted"
+    # Verify the hash and extract the bundle into the new folder.
+    PREPARING = "preparing"
+    CREATING_ENVIRONMENT = "creating_environment"
+    INSTALLING_DEPENDENCIES = "installing_dependencies"
+    INSTALLING_BROWSERS = "installing_browsers"
+    # The new runner process was spawned.
+    STARTING = "starting"
+    WAITING_FOR_NEW_RUNNER = "waiting_for_new_runner"
+    # Terminal on the runner side; the old runner keeps running.
+    FAILED = "failed"
+    # Sent by the *new* runner after it connected; informational.
+    OLD_REMOVED = "old_removed"
+    OLD_REMOVAL_FAILED = "old_removal_failed"
+
+
+@dataclass(frozen=True)
+class UpdateRunnerPayload:
+    # Server-side RunnerUpdate id (UUID string).
+    update_id: str
+    target_version: str
+    archive_base64: str
+    # Lowercase hex sha256 of the decoded archive.
+    archive_sha256: str
+    # Length in bytes of the decoded archive.
+    archive_size: int
+
+
+@dataclass(frozen=True)
+class UpdateStatusPayload:
+    update_id: str
+    phase: UpdatePhase
+    # Plain text, at most UPDATE_STATUS_DETAIL_MAX_LENGTH characters.
+    detail: str
+
+
+def version_tuple(version: str) -> tuple[int, ...] | None:
+    """``"0.8.0"`` -> ``(0, 8, 0)``; ``None`` when the version cannot be parsed.
+
+    Compare the tuples of both sides to tell which version is newer. Only dotted
+    decimal versions of at most MAX_VERSION_LENGTH characters parse.
+    """
+    if len(version) > MAX_VERSION_LENGTH or not _VERSION_RE.fullmatch(version):
+        return None
+    return tuple(int(part) for part in version.split("."))
+
+
 def serialize_message(
     message_type: MessageType,
     request_id: str | None = None,
@@ -673,6 +744,62 @@ def parse_close_app_payload(data: dict[str, object]) -> CloseAppPayload:
 def parse_close_tab_payload(data: dict[str, object]) -> CloseTabPayload:
     return CloseTabPayload(
         app_name=_extract_str(data, "app_name"),
+    )
+
+
+def _extract_update_id(data: dict[str, object]) -> str:
+    raw = _extract_str(data, "update_id")
+    try:
+        return str(uuid.UUID(raw))
+    except ValueError as e:
+        raise ProtocolError("Invalid 'update_id': expected a UUID") from e
+
+
+def parse_update_runner_payload(data: dict[str, object]) -> UpdateRunnerPayload:
+    """Validate an ``update_runner`` message; does not decode the archive.
+
+    The size limit is enforced on both the declared size and the base64 text
+    length, so an oversized bundle is refused before anything is decoded.
+    """
+    target_version = _extract_str(data, "target_version")
+    if version_tuple(target_version) is None:
+        raise ProtocolError(f"Invalid 'target_version': {target_version[:40]!r}")
+    archive_size = data.get("archive_size")
+    if (
+        not isinstance(archive_size, int)
+        or isinstance(archive_size, bool)
+        or not 0 < archive_size <= MAX_UPDATE_ARCHIVE_BYTES
+    ):
+        raise ProtocolError(
+            f"Invalid 'archive_size': expected 1 to {MAX_UPDATE_ARCHIVE_BYTES} bytes"
+        )
+    archive_base64 = _extract_str(data, "archive_base64")
+    # Base64 of n bytes is 4 * ceil(n / 3) characters.
+    if len(archive_base64) != 4 * -(-archive_size // 3):
+        raise ProtocolError("'archive_base64' length does not match 'archive_size'")
+    archive_sha256 = _extract_str(data, "archive_sha256").lower()
+    if not _SHA256_HEX_RE.fullmatch(archive_sha256):
+        raise ProtocolError("Invalid 'archive_sha256': expected 64 hex characters")
+    return UpdateRunnerPayload(
+        update_id=_extract_update_id(data),
+        target_version=target_version,
+        archive_base64=archive_base64,
+        archive_sha256=archive_sha256,
+        archive_size=archive_size,
+    )
+
+
+def parse_update_status_payload(data: dict[str, object]) -> UpdateStatusPayload:
+    raw_phase = _extract_str(data, "phase")
+    try:
+        phase = UpdatePhase(raw_phase)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown update phase: {raw_phase[:40]!r}") from e
+    detail = _extract_str(data, "detail", default="")
+    return UpdateStatusPayload(
+        update_id=_extract_update_id(data),
+        phase=phase,
+        detail=detail[:UPDATE_STATUS_DETAIL_MAX_LENGTH],
     )
 
 

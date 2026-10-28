@@ -59,3 +59,11 @@ class DesktopSessionError(ExecutionError):
 
     The message says why and how to fix it, for the agent and the person.
     """
+
+
+class UpdateError(ControllerError):
+    """A self-update step failed.
+
+    The message is plain text for the ``update_status`` ``failed`` detail; the
+    old runner keeps running.
+    """

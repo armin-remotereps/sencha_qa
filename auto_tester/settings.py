@@ -375,6 +375,11 @@ CASE_TEARDOWN_TIMEOUT_SECONDS: int = config(
 PERSON_STEP_CONFIRM_TIMEOUT_SECONDS: int = config(
     "PERSON_STEP_CONFIRM_TIMEOUT_SECONDS", default=120, cast=int
 )
+# Test Runner self-update: an update with no outcome after this long counts as
+# expired (pip 20 min + Playwright 30 min worst case, minus overlap).
+RUNNER_UPDATE_TIMEOUT_SECONDS: int = config(
+    "RUNNER_UPDATE_TIMEOUT_SECONDS", default=2700, cast=int
+)
 
 # Visual engine (remote vision workers running OmniParser)
 # Shared secret every vision worker sends in its handshake. Empty rejects all.

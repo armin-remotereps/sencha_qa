@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import secrets
+import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
 from django.conf import settings
 from django.db import models
+
+from controller_client.protocol import (
+    MAX_VERSION_LENGTH,
+    UPDATE_STATUS_DETAIL_MAX_LENGTH,
+)
 
 
 def _default_api_key() -> str:
@@ -1059,6 +1065,112 @@ class CasePersonStep(models.Model):
 
     def __str__(self) -> str:
         return f"Person step #{self.pk} of TRTC #{self.test_run_test_case_id}"
+
+
+class RunnerUpdateStatus(models.TextChoices):
+    """Server-side state of a Test Runner self-update.
+
+    Runner phases map onto these; ``RunnerUpdate.phase`` keeps the exact phase.
+    """
+
+    SENT = "sent", "Sent to the Test Runner"
+    PREPARING = "preparing", "Preparing"
+    # creating_environment, installing_dependencies and installing_browsers.
+    INSTALLING = "installing", "Installing"
+    STARTING = "starting", "Starting the new Test Runner"
+    WAITING = "waiting", "Waiting for the new Test Runner"
+    # Terminal.
+    SUCCEEDED = "succeeded", "Succeeded"
+    FAILED = "failed", "Failed"
+    # No outcome within RUNNER_UPDATE_TIMEOUT_SECONDS; written lazily.
+    EXPIRED = "expired", "Did not finish"
+
+
+# Statuses of an update still in flight (one per project at most).
+NON_TERMINAL_RUNNER_UPDATE_STATUSES: tuple[str, ...] = (
+    RunnerUpdateStatus.SENT,
+    RunnerUpdateStatus.PREPARING,
+    RunnerUpdateStatus.INSTALLING,
+    RunnerUpdateStatus.STARTING,
+    RunnerUpdateStatus.WAITING,
+)
+
+
+class RunnerUpdateOldRemoval(models.TextChoices):
+    """Whether the new runner deleted the old install folder; blank until it says."""
+
+    PENDING = "", "Not reported"
+    REMOVED = "removed", "Removed"
+    FAILED = "failed", "Could not be removed"
+
+
+RUNNER_UPDATE_DETAIL_MAX_LENGTH = UPDATE_STATUS_DETAIL_MAX_LENGTH
+
+
+class RunnerUpdate(models.Model):
+    """One press of Update Test Runner: the audit row and its live state.
+
+    The id is sent to the runner as ``update_id``.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="runner_updates"
+    )
+    requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    from_version = models.CharField(max_length=MAX_VERSION_LENGTH)
+    to_version = models.CharField(max_length=MAX_VERSION_LENGTH)
+    status = models.CharField(
+        max_length=16,
+        choices=RunnerUpdateStatus.choices,
+        default=RunnerUpdateStatus.SENT,
+    )
+    # Last ``controller_client.protocol.UpdatePhase`` the runner reported.
+    phase = models.CharField(max_length=32, blank=True, default="")
+    # Runner-written plain text; shown escaped.
+    detail = models.CharField(
+        max_length=RUNNER_UPDATE_DETAIL_MAX_LENGTH, blank=True, default=""
+    )
+    old_removal = models.CharField(
+        max_length=16,
+        choices=RunnerUpdateOldRemoval.choices,
+        blank=True,
+        default=RunnerUpdateOldRemoval.PENDING,
+    )
+    archive_sha256 = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project"],
+                condition=models.Q(status__in=NON_TERMINAL_RUNNER_UPDATE_STATUSES),
+                name="runner_update_one_in_flight",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["project", "-created_at"], name="runner_update_project_idx"
+            )
+        ]
+
+    @property
+    def is_in_flight(self) -> bool:
+        return self.status in NON_TERMINAL_RUNNER_UPDATE_STATUSES
+
+    def __str__(self) -> str:
+        return (
+            f"Runner update {self.from_version} -> {self.to_version} "
+            f"of project #{self.project_id}"
+        )
 
 
 def _screenshot_upload_path(instance: "TestRunScreenshot", filename: str) -> str:
