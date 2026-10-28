@@ -1,6 +1,6 @@
 # feat: Failed cases page, a slimmer dashboard, a per-user attention inbox, and failure insights
 
-Status: In progress
+Status: Done
 Created: 2026-10-28
 Request: Three UI and metric changes, then an extended scope.
 (1) A new page that lists every failed run case across the user's projects,
@@ -819,3 +819,5 @@ machine health), CSS classes requested by E/F, imports and routing seams,
   - Pagination helpers moved to `auto_tester/pagination.py` (verifier: unrelated): kept, planned in Phase 1 and reused by the failures page.
   - New read-only admin views for the inbox models and duration fields (verifier: unasked): kept, read-only and harmless.
   - Trailing blank line removed in `projects/case_result_change_services.py`: black formatting, kept.
+- 2026-10-28 review round 2, finding not changed: the run page's case Duration cell updates only on reload (verifier, Low). Same as before this change; not a regression.
+- 2026-10-28 review round 3: export kept GET-only (HEAD would run the whole export and use an export slot); page keeps require_safe. Review and verification clean. Status Done.

@@ -1,6 +1,6 @@
 # fix: Case duration counts only the last execution segment; add average case time per run
 
-Status: In progress
+Status: Done
 Created: 2026-10-28
 Request: A run case's displayed duration is far too short: a case that took about
 15 minutes shows about 2 minutes. Find out why, make the case duration correct,
@@ -382,3 +382,4 @@ step 1; step 3 and 6 both edit `projects/services.py`, so one agent owns both.
 - 2026-10-28: User accepted the default (Assumption) answer to every open question. Implementation started on branch feature/failures-inbox-duration. Migration order across both plans: projects.0034 failed_by + night_digest_sent_at, 0035 concurrent status/finished_at index, 0036 case active_duration fields, 0037 backfill. One shared duration formatter: auto_tester/durations.py (format_duration); projects/run_durations.run_duration stays Start-to-Done wall clock (duration Q6 default).
 - 2026-10-28 review round 1, finding not changed: a Celery redelivery after a killed worker overwrites the open segment, so that worker's time is lost (logged as a warning in `open_case_segment`). Accepted in this plan's Risks; recovering it needs a heartbeat on the segment, out of scope.
 - 2026-10-28 review round 2: backfill rule tightened. Legacy `started_at` was reset on every pickup (help Continue included, no snapshot), so `requested_at >= started_at` let multi-segment cases through; any help request after the latest `rerun` snapshot (any at all if never re-run) now leaves the row null.
+- 2026-10-28 review round 3: export kept GET-only (HEAD would run the whole export and use an export slot); page keeps require_safe. Review and verification clean. Status Done.

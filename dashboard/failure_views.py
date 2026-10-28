@@ -26,7 +26,7 @@ from django.http.response import HttpResponseBase
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.views.decorators.http import require_POST, require_safe
+from django.views.decorators.http import require_GET, require_POST, require_safe
 
 from accounts.types import AuthenticatedRequest
 from auto_tester.pagination import (
@@ -150,7 +150,7 @@ def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
 
 
 @login_required
-@require_safe
+@require_GET
 def failed_cases_export(request: AuthenticatedRequest) -> HttpResponseBase:
     project_choices = member_project_choices(request.user)
     form = _bind_filter_form(request.GET, project_choices)
