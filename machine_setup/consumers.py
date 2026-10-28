@@ -187,3 +187,8 @@ class MachineSetupConsumer(AuthenticatedConsumer):
                 {"type": "visual_engine", "visual_engine": event["visual_engine"]}
             )
         )
+
+    async def agent_runner_update(self, event: dict[str, Any]) -> None:
+        # Shares the agent status group with the Environment page, which shows
+        # Test Runner updates; this page has nothing to show for them.
+        return
