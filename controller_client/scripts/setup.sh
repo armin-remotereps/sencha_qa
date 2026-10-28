@@ -58,8 +58,10 @@ esac
 
 # Install system dependencies (Linux only). On Linux the Test Runner drives
 # GNOME on Wayland through Mutter's remote-desktop D-Bus API and reads screen
-# frames from PipeWire with the gst-launch-1.0 CLI.
-LINUX_PACKAGES=(gstreamer1.0-tools gstreamer1.0-pipewire gstreamer1.0-plugins-base gstreamer1.0-plugins-good)
+# frames from PipeWire with the gst-launch-1.0 CLI. python3-tk gives the
+# system Python (and so the venv) tkinter for the Test Runner window, where a
+# person can answer Human in the loop steps.
+LINUX_PACKAGES=(gstreamer1.0-tools gstreamer1.0-pipewire gstreamer1.0-plugins-base gstreamer1.0-plugins-good python3-tk)
 if [[ "$(uname -s)" == "Linux" ]]; then
     echo "[1/6] Installing system dependencies..."
     if command -v apt-get &> /dev/null; then
@@ -70,7 +72,7 @@ if [[ "$(uname -s)" == "Linux" ]]; then
             fi
         done
         if [[ ${#MISSING_PACKAGES[@]} -gt 0 ]]; then
-            echo "  Installing ${MISSING_PACKAGES[*]} (screen capture through PipeWire)..."
+            echo "  Installing ${MISSING_PACKAGES[*]} (screen capture through PipeWire, Test Runner window)..."
             sudo apt-get install -y "${MISSING_PACKAGES[@]}"
         else
             echo "  GStreamer PipeWire tools already installed."
@@ -132,12 +134,33 @@ if ! "$PROJECT_DIR/.venv/bin/python" -c "import certifi; certifi.where()" &> /de
     fi
 fi
 
+# The Test Runner window (where a person can answer Human in the loop steps
+# on this machine) needs tkinter. Without it the runner still works and steps
+# are answered on the web only, so this only warns.
+if ! "$PROJECT_DIR/.venv/bin/python" -c "import tkinter" &> /dev/null; then
+    echo "  WARNING: tkinter is missing from this Python, so the Test Runner window is off"
+    echo "           (Human in the loop steps can still be answered in Punk Hazard)."
+    if [[ "$(uname -s)" == "Linux" ]]; then
+        echo "           Install it with: sudo apt-get install -y python3-tk (or your distribution's Tk package for Python $PYTHON_VERSION)"
+    elif [[ "$("$PYTHON_BIN" -c "import sys; print(sys.prefix)")" == *Cellar* ]] || [[ "$("$PYTHON_BIN" -c "import sys; print(sys.prefix)")" == /opt/homebrew/* ]]; then
+        echo "           Homebrew Python: brew install python-tk@$PYTHON_VERSION"
+    else
+        echo "           The python.org installer for macOS includes Tk: install Python $PYTHON_VERSION from python.org,"
+        echo "           delete $PROJECT_DIR/.venv and re-run this script with --python pointing at it."
+    fi
+    echo "           Check it afterwards with: controller_client/.venv/bin/python -m controller_client.diagnose --window"
+fi
+
 echo ""
 echo "Setup complete!"
 echo ""
 echo "To start the controller client:"
 echo "  cd $ROOT_DIR"
 echo "  controller_client/.venv/bin/python -m controller_client.main"
+echo ""
+echo "On its first interactive start the Test Runner asks for your Punk Hazard email"
+echo "(CONTROLLER_PERSON_EMAIL in .env), so steps you answer in its window are recorded"
+echo "as yours. Leave it blank to report as \"a person at the Test Runner\"."
 echo ""
 # Self-update (Update Test Runner on the Environment page) installs the new
 # version side by side in <base>/test-runner-<version>/ and deletes the old
@@ -176,3 +199,5 @@ echo ""
 echo "Chromium, Firefox and WebKit are installed. For Google Chrome or Microsoft Edge, install them normally."
 echo "To check which browsers the Test Runner can launch:"
 echo "  controller_client/.venv/bin/python -m controller_client.diagnose --browsers"
+echo "To check the Test Runner window (Human in the loop steps):"
+echo "  controller_client/.venv/bin/python -m controller_client.diagnose --window"

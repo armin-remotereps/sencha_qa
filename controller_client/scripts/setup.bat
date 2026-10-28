@@ -98,6 +98,18 @@ if errorlevel 1 (
     )
 )
 
+:: The Test Runner window (where a person can answer Human in the loop steps
+:: on this machine) needs tkinter. Without it the runner still works and steps
+:: are answered on the web only, so this only warns.
+"%PROJECT_DIR%\.venv\Scripts\python" -c "import tkinter" >nul 2>&1
+if errorlevel 1 (
+    echo   WARNING: tkinter is missing from this Python, so the Test Runner window is off
+    echo            ^(Human in the loop steps can still be answered in Punk Hazard^).
+    echo            The python.org installer includes Tk: run it again, choose Modify and tick
+    echo            "tcl/tk and IDLE". Then check it with:
+    echo            controller_client\.venv\Scripts\python -m controller_client.diagnose --window
+)
+
 echo.
 echo Setup complete!
 echo.
@@ -117,6 +129,10 @@ echo To start the controller client:
 echo   cd /d "!ROOT_DIR!"
 echo   controller_client\.venv\Scripts\python -m controller_client.main
 echo.
+echo On its first interactive start the Test Runner asks for your Punk Hazard email
+echo ^(CONTROLLER_PERSON_EMAIL in .env^), so steps you answer in its window are recorded
+echo as yours. Leave it blank to report as "a person at the Test Runner".
+echo.
 echo After an update from the panel (Update Test Runner), the new version runs from
 echo   !UPDATE_BASE_DIR!\test-runner-^<version^>\
 echo and this copy is deleted. Start it from then on with:
@@ -129,5 +145,7 @@ echo.
 echo Chromium, Firefox and WebKit are installed. For Google Chrome or Microsoft Edge, install them normally.
 echo To check which browsers the Test Runner can launch:
 echo   controller_client\.venv\Scripts\python -m controller_client.diagnose --browsers
+echo To check the Test Runner window ^(Human in the loop steps^):
+echo   controller_client\.venv\Scripts\python -m controller_client.diagnose --window
 
 endlocal

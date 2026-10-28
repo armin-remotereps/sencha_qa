@@ -90,12 +90,28 @@ if ($LASTEXITCODE -ne 0) {
     }
 }
 
+# The Test Runner window (where a person can answer Human in the loop steps
+# on this machine) needs tkinter. Without it the runner still works and steps
+# are answered on the web only, so this only warns.
+& "$ProjectDir\.venv\Scripts\python" -c "import tkinter" 2>$null
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "  WARNING: tkinter is missing from this Python, so the Test Runner window is off" -ForegroundColor Yellow
+    Write-Host "           (Human in the loop steps can still be answered in Punk Hazard)." -ForegroundColor Yellow
+    Write-Host "           The python.org installer includes Tk: run it again, choose Modify and tick" -ForegroundColor Yellow
+    Write-Host "           'tcl/tk and IDLE'. Then check it with:" -ForegroundColor Yellow
+    Write-Host "           controller_client\.venv\Scripts\python -m controller_client.diagnose --window" -ForegroundColor Yellow
+}
+
 Write-Host ""
 Write-Host "Setup complete!" -ForegroundColor Green
 Write-Host ""
 Write-Host "To start the controller client:"
 Write-Host "  cd $RootDir"
 Write-Host "  controller_client\.venv\Scripts\python -m controller_client.main"
+Write-Host ""
+Write-Host "On its first interactive start the Test Runner asks for your Punk Hazard email"
+Write-Host "(CONTROLLER_PERSON_EMAIL in .env), so steps you answer in its window are recorded"
+Write-Host "as yours. Leave it blank to report as 'a person at the Test Runner'."
 Write-Host ""
 # Self-update (Update Test Runner on the Environment page) installs the new
 # version side by side in <base>\test-runner-<version>\ and deletes the old
@@ -116,3 +132,5 @@ Write-Host ""
 Write-Host "Chromium, Firefox and WebKit are installed. For Google Chrome or Microsoft Edge, install them normally."
 Write-Host "To check which browsers the Test Runner can launch:"
 Write-Host "  controller_client\.venv\Scripts\python -m controller_client.diagnose --browsers"
+Write-Host "To check the Test Runner window (Human in the loop steps):"
+Write-Host "  controller_client\.venv\Scripts\python -m controller_client.diagnose --window"

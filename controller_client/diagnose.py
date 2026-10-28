@@ -6,6 +6,10 @@ from controller_client.config import setup_logging
 from controller_client.desktop import get_desktop_backend
 from controller_client.diagnostics import run_diagnostics
 from controller_client.input_diagnostics import format_summary, run_input_checks
+from controller_client.person_window_diagnostics import (
+    build_window_steps,
+    run_window_check,
+)
 from controller_client.protocol import BrowserName
 
 _ALL_BROWSERS = "all"
@@ -45,6 +49,19 @@ def _run_input_checks(*, interactive: bool) -> None:
         sys.exit(1)
 
 
+def _run_window_checks(*, interactive: bool) -> None:
+    if not run_diagnostics(build_window_steps(), print):
+        print(
+            "The Test Runner window is off on this machine; Human in the loop "
+            "steps can still be answered in Punk Hazard. Fix the problem above "
+            "and re-run."
+        )
+        sys.exit(1)
+    if interactive and not run_window_check(input, print):
+        sys.exit(1)
+    print("All window checks passed.")
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m controller_client.diagnose",
@@ -53,7 +70,9 @@ def main(argv: list[str] | None = None) -> None:
             "and drive input. "
             "With --browsers, check the browsers instead. "
             "With --input, check the pointer mapping, scroll direction and "
-            "modifier release live, ending with a summary to copy and paste."
+            "modifier release live, ending with a summary to copy and paste. "
+            "With --window, check the Test Runner window where a person "
+            "answers Human in the loop steps."
         ),
     )
     mode = parser.add_mutually_exclusive_group()
@@ -77,19 +96,34 @@ def main(argv: list[str] | None = None) -> None:
             "modifier release; moves the pointer and asks yes/no questions"
         ),
     )
+    mode.add_argument(
+        "--window",
+        action="store_true",
+        help=(
+            "check tkinter, the display and the Test Runner window: shows a "
+            "sample step, hides it and takes one screenshot, asking yes/no "
+            "questions"
+        ),
+    )
     parser.add_argument(
         "--no-interactive",
         action="store_true",
-        help="with --input, run only the automatic checks (no questions)",
+        help=(
+            "with --input or --window, run only the automatic checks " "(no questions)"
+        ),
     )
     parser.add_argument("--log-level", type=str, default="INFO")
     args = parser.parse_args(argv)
-    if args.no_interactive and not args.input:
-        parser.error("--no-interactive can only be used with --input")
+    if args.no_interactive and not (args.input or args.window):
+        parser.error("--no-interactive can only be used with --input or --window")
     setup_logging(args.log_level)
 
     if args.input:
         _run_input_checks(interactive=not args.no_interactive)
+        return
+
+    if args.window:
+        _run_window_checks(interactive=not args.no_interactive)
         return
 
     if args.browsers is not None:

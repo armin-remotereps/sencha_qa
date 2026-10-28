@@ -10,7 +10,10 @@
                   ("Step N of M"), is_open (waiting / not_confirmed),
                   confirming (reported), objection (the agent's reason while
                   not_confirmed), shell_label (command steps), can_report,
-                  blockers
+                  blockers, runner_can_answer (the connected Test Runner
+                  shows the step in its window), reported_at_runner (the
+                  report came from that window), reporter_label (the
+                  reporting member's name; blank when anonymous)
      person_step_form — unbound PersonStepReportForm (outcome radios, note,
                   output; person_step_id is written from the panel's step)
    Report / Overrule / Mark failed / Mark blocked share one form and post to
@@ -21,7 +24,7 @@
 {% with step=person_step_panel.step %}
 <section aria-labelledby="person-step-h" class="card card-tone-your-turn">
   <div class="card-header">
-    <h2 id="person-step-h">{% if person_step_panel.confirming %}Your report on {{ person_step_panel.step_label|lower }}{% else %}Your turn: {{ person_step_panel.step_label|lower }}{% endif %}</h2>
+    <h2 id="person-step-h">{% if person_step_panel.confirming %}{% if person_step_panel.reported_at_runner %}Report on{% else %}Your report on{% endif %} {{ person_step_panel.step_label|lower }}{% else %}Your turn: {{ person_step_panel.step_label|lower }}{% endif %}</h2>
     {% if person_step_panel.is_open %}
       {% include "partials/badge_case_status.html" with status="awaiting_person" only %}
     {% endif %}
@@ -32,6 +35,9 @@
     <time datetime="{{ step.requested_at|date:'c' }}">{{ step.requested_at|timesince }}</time> ago.
     {% if person_step_panel.is_open %}Perform this step on the test machine yourself, then report how it went. The agent then checks the test machine to confirm it. Nothing else in this run executes until then.{% endif %}
   </p>
+  {% if person_step_panel.runner_can_answer %}
+    <p class="hint">You can also answer this on the Test Runner window.</p>
+  {% endif %}
 
   <div class="label">What to do</div>
   <p class="help-quote">{{ step.instruction }}</p>
@@ -55,11 +61,14 @@
   {% endif %}
 
   {% if person_step_panel.confirming %}
+    {% if person_step_panel.reported_at_runner %}
+      <p class="muted small">Reported at the Test Runner{% if person_step_panel.reporter_label %} by {{ person_step_panel.reporter_label }}{% endif %}.</p>
+    {% endif %}
     {% if test_run.status == "paused" %}
       <div class="alert alert-warning">
         <span class="alert-icon" aria-hidden="true">⚠</span>
         <div>
-          <strong>Your report is saved, but the run could not continue</strong>
+          <strong>{% if person_step_panel.reported_at_runner %}The report{% else %}Your report{% endif %} is saved, but the run could not continue</strong>
           {% if person_step_panel.blockers %}<p>{{ person_step_panel.blockers|join:" " }}</p>{% endif %}
           <a class="btn btn-sm btn-primary" href="{% url 'projects:test_run_detail' project.id test_run.id %}">Continue it from the run page</a>
         </div>
@@ -68,13 +77,13 @@
       <div class="alert alert-info">
         <span class="alert-icon" aria-hidden="true">⚙</span>
         <div>
-          <strong>The agent is checking your report…</strong>
+          <strong>The agent is checking {% if person_step_panel.reported_at_runner %}the report{% else %}your report{% endif %}…</strong>
           <p>It looks at the test machine to confirm the step. This page updates when it is done.</p>
         </div>
       </div>
     {% endif %}
     {% if step.note %}
-      <div class="label">Your note</div>
+      <div class="label">{% if person_step_panel.reported_at_runner %}Note from the Test Runner{% else %}Your note{% endif %}</div>
       <p class="help-quote">{{ step.note }}</p>
     {% endif %}
   {% elif person_step_panel.is_open %}
