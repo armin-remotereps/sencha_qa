@@ -5,7 +5,7 @@ import posixpath
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Final
 
 from projects.case_step_progress import CaseStepProgress, CaseStepRow
@@ -164,17 +164,15 @@ def _format_duration_component(value: int, unit: str) -> str:
     return f"{value}{unit}" if value else ""
 
 
-def format_testrail_elapsed(
-    started_at: datetime | None, finished_at: datetime | None
-) -> str:
-    """Format a TestRail "timespan" string such as "1h 2m 3s".
+def format_testrail_elapsed(value: timedelta | None) -> str:
+    """Format a case's active duration as a TestRail "timespan" such as "1h 2m 3s".
 
-    Returns "" when either timestamp is missing or the span is under one
+    Returns "" (no ``elapsed`` sent) when the duration is unknown or under one
     second. Only non-zero units are included.
     """
-    if started_at is None or finished_at is None:
+    if value is None:
         return ""
-    total_seconds = int((finished_at - started_at).total_seconds())
+    total_seconds = int(value.total_seconds())
     if total_seconds < 1:
         return ""
     hours, remainder = divmod(total_seconds, 3600)

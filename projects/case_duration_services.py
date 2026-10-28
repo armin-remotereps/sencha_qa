@@ -21,6 +21,9 @@ from projects.models import TestRun, TestRunTestCase, TestRunTestCaseStatus
 
 logger = logging.getLogger(__name__)
 
+# The case page notes the wall clock only when it exceeds the active time by more.
+WALL_CLOCK_NOTE_THRESHOLD = timedelta(minutes=1)
+
 # Fields open_case_segment may change; save them with the status.
 CASE_SEGMENT_OPEN_FIELDS: tuple[str, ...] = (
     "segment_started_at",
@@ -98,3 +101,23 @@ def get_run_case_duration_stats(test_run: TestRun) -> RunCaseDurationStats:
         timed_count=int(row["timed_count"]),
         untimed_count=int(row["untimed_count"]),
     )
+
+
+def get_case_wall_clock_with_waiting(pivot: TestRunTestCase) -> timedelta | None:
+    """The case's first start to final finish, when waiting made it longer.
+
+    Returns ``finished_at - started_at`` only when the active duration is known
+    and the wall clock exceeds it by more than ``WALL_CLOCK_NOTE_THRESHOLD``
+    (time spent waiting for help, in a Night auto-fix or Blocked before a
+    Resume); otherwise None. Reads loaded fields only (no query).
+    """
+    if (
+        pivot.started_at is None
+        or pivot.finished_at is None
+        or pivot.active_duration is None
+    ):
+        return None
+    wall_clock = pivot.finished_at - pivot.started_at
+    if wall_clock - pivot.active_duration <= WALL_CLOCK_NOTE_THRESHOLD:
+        return None
+    return wall_clock

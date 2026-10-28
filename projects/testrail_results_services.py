@@ -121,10 +121,10 @@ def pivot_result_text(pivot: TestRunTestCase) -> str:
 def pivot_step_breakdown(pivot: TestRunTestCase) -> str:
     """The agent's step list for the comment; empty without a checkpoint.
 
-    Reads only ``execution_checkpoint``, ``status`` and ``started_at``.
+    Reads only ``execution_checkpoint``, ``status`` and ``segment_started_at``.
     """
     progress = build_case_step_progress(
-        pivot.execution_checkpoint, pivot.status, pivot.started_at
+        pivot.execution_checkpoint, pivot.status, pivot.segment_started_at
     )
     return format_step_breakdown(progress) if progress is not None else ""
 
@@ -153,7 +153,7 @@ def _plan_pivot(
         case_id=case_id,
         status_id=status_id,
         comment=comment,
-        elapsed=format_testrail_elapsed(pivot.started_at, pivot.finished_at),
+        elapsed=format_testrail_elapsed(pivot.active_duration),
     )
     return _PivotPlanOutcome(planned=planned, no_case_id=False, not_pushable=False)
 

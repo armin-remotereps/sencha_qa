@@ -31,6 +31,10 @@ from projects.application_context_services import (
     restore_context_version,
 )
 from projects.case_checkpoint_services import list_resume_steps
+from projects.case_duration_services import (
+    get_case_wall_clock_with_waiting,
+    get_run_case_duration_stats,
+)
 from projects.case_help_services import (
     continue_after_help,
     continue_paused_run,
@@ -966,6 +970,7 @@ def _build_test_run_detail_context(
         "test_run": test_run,
         "cases": cases,
         "summary": summary,
+        "case_duration": get_run_case_duration_stats(test_run),
         "per_page": per_page,
         "allowed_per_page": ALLOWED_PER_PAGE,
         "elided_page_range": elided_page_range(cases),
@@ -1065,6 +1070,7 @@ def test_run_case_detail(
             "resumes": list_case_resumes(pivot),
             "step_progress": step_progress,
             "earlier_plans": earlier_plans,
+            "wall_clock_with_waiting": get_case_wall_clock_with_waiting(pivot),
             "can_discuss_result": result_panel.can_discuss_result,
             "result_thread_id": result_panel.result_thread_id,
             "result_chat_blocker": result_panel.result_chat_blocker,

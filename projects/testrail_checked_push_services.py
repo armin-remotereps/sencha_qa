@@ -609,7 +609,7 @@ def _plan_pivot(
         source_run_id=source_run_id,
         status_id=status_id,
         comment=comment,
-        elapsed=format_testrail_elapsed(pivot.started_at, pivot.finished_at),
+        elapsed=format_testrail_elapsed(pivot.active_duration),
         screenshots=screenshots,
     )
 
@@ -629,8 +629,8 @@ _PLAN_PIVOT_FIELDS = (
     "result",
     "blocked_reason",
     "execution_checkpoint",
-    "started_at",
-    "finished_at",
+    "segment_started_at",
+    "active_duration",
     "checked_at",
     "testrail_source_run_id",
     "testrail_source_result_id",

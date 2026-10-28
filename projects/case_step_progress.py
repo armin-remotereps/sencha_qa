@@ -172,7 +172,7 @@ class EarlierPlan:
 def build_case_step_progress(
     checkpoint_data: object,
     case_status: str,
-    case_started_at: datetime | None,
+    segment_started_at: datetime | None,
 ) -> CaseStepProgress | None:
     """Rows for every planned step; ``None`` without a usable checkpoint."""
     checkpoint = checkpoint_from_json(checkpoint_data)
@@ -187,7 +187,7 @@ def build_case_step_progress(
         TestRunTestCaseStatus.CANCELLED,
     )
     cursor = checkpoint.next_step
-    activity = _current_activity(checkpoint, case_started_at) if running else None
+    activity = _current_activity(checkpoint, segment_started_at) if running else None
 
     final_index = {
         attempt.step_num: index
@@ -322,14 +322,15 @@ def _earlier_plan(record: PlanRevisionRecord) -> EarlierPlan:
 
 
 def _current_activity(
-    checkpoint: OrchestratorCheckpoint, case_started_at: datetime | None
+    checkpoint: OrchestratorCheckpoint, segment_started_at: datetime | None
 ) -> StepActivity:
     # A resumed case keeps the phase it was interrupted in until its worker
-    # writes the first checkpoint of the new execution.
+    # writes the first checkpoint of the new execution (``segment_started_at``
+    # is when the current worker picked the case up).
     if (
         checkpoint.phase_started_at is not None
-        and case_started_at is not None
-        and checkpoint.phase_started_at < case_started_at
+        and segment_started_at is not None
+        and checkpoint.phase_started_at < segment_started_at
     ):
         return StepActivity.STARTING
     return _PHASE_ACTIVITIES[checkpoint.phase]
@@ -498,16 +499,20 @@ def step_progress_payload(
 def case_step_payload(
     checkpoint_data: object,
     case_status: str,
-    case_started_at: datetime | None,
+    segment_started_at: datetime | None,
 ) -> StepProgressPayload:
     """Payload for a case straight from its stored checkpoint and status."""
-    progress = build_case_step_progress(checkpoint_data, case_status, case_started_at)
+    progress = build_case_step_progress(
+        checkpoint_data, case_status, segment_started_at
+    )
     return step_progress_payload(progress, planning=_is_planning(progress, case_status))
 
 
 def pivot_step_payload(pivot: TestRunTestCase) -> StepProgressPayload:
     """The case's step rows from its loaded checkpoint and status (no query)."""
-    return case_step_payload(pivot.execution_checkpoint, pivot.status, pivot.started_at)
+    return case_step_payload(
+        pivot.execution_checkpoint, pivot.status, pivot.segment_started_at
+    )
 
 
 def case_step_view(
@@ -515,7 +520,7 @@ def case_step_view(
 ) -> tuple[StepProgressPayload, tuple[EarlierPlan, ...]]:
     """The case page's step rows and earlier plans from one checkpoint parse."""
     progress = build_case_step_progress(
-        pivot.execution_checkpoint, pivot.status, pivot.started_at
+        pivot.execution_checkpoint, pivot.status, pivot.segment_started_at
     )
     payload = step_progress_payload(
         progress, planning=_is_planning(progress, pivot.status)

@@ -1,4 +1,5 @@
 {% extends "layouts/project.html" %}
+{% load project_extras %}
 
 {% comment %} Run detail — live via testRunLive, ported from the old (Tailwind-era)
    test_run_detail.html: same WS URL, same message types
@@ -291,7 +292,7 @@
   {# Section: Result summary — stat cards + human-readable narrative #}
   <template x-if="testRunStatus !== 'waiting'">
     <div>
-      <div class="grid grid-5">
+      <div class="grid grid-6">
         <div class="stat-card">
           <div class="stat-label">Passed</div>
           <div class="stat-value is-success" x-text="summary.success"></div>
@@ -311,6 +312,12 @@
         <div class="stat-card" x-show="!(summary.need_help > 0)">
           <div class="stat-label">Duration</div>
           <div class="stat-value">{% if test_run.finished_at and test_run.started_at %}{{ test_run.started_at|timesince:test_run.finished_at }}{% elif test_run.started_at %}Running…{% else %}—{% endif %}</div>
+        </div>
+        {# Server-rendered at page load; the reload on Done / Cancelled refreshes it. #}
+        <div class="stat-card" title="Average time the Test Runner worked on a case, over {{ case_duration.timed_count }} passed or failed case{{ case_duration.timed_count|pluralize }}">
+          <div class="stat-label">Avg per case</div>
+          <div class="stat-value">{{ case_duration.average|duration }}</div>
+          {% if case_duration.untimed_count %}<div class="stat-note">{{ case_duration.untimed_count }} without timing</div>{% endif %}
         </div>
         <div class="stat-card">
           <div class="stat-label">Pass rate</div>
@@ -444,7 +451,7 @@
                 <span class="muted">&mdash;</span>
               {% endif %}
             </td>
-            <td data-label="Duration">{% if pivot.finished_at and pivot.started_at %}{{ pivot.started_at|timesince:pivot.finished_at }}{% else %}—{% endif %}</td>
+            <td data-label="Duration">{{ pivot.active_duration|duration }}</td>
             <td data-label="Reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>{% if help_panel and help_panel.request.fault and help_panel.request.test_run_test_case_id == pivot.id %}{{ help_panel.request.get_fault_display }}{% else %}Needs help{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
             {% if can_edit %}
             <td data-label="" x-show="testRunStatus === 'waiting'" x-cloak>

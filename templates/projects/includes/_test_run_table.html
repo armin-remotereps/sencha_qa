@@ -1,8 +1,10 @@
+{% load project_extras %}
 {% comment %} Run history table (desktop table / mobile stacked records via data-label).
 
    Context contract:
      project   — current Project
-     test_runs — Page[TestRun], each row annotated case_count / success_count / failed_count / blocked_count {% endcomment %}
+     test_runs — Page[TestRun], each row annotated case_count / success_count / failed_count / blocked_count
+                 and avg_case_duration (timedelta | None: mean active_duration of its timed Passed / Failed cases) {% endcomment %}
 <div class="table-wrap">
   <table class="data-table">
     <thead>
@@ -13,6 +15,7 @@
         <th scope="col">Cases</th>
         <th scope="col">Result</th>
         <th scope="col">Duration</th>
+        <th scope="col">Avg per case</th>
         <th scope="col"><span class="visually-hidden">Actions</span></th>
       </tr>
     </thead>
@@ -56,6 +59,8 @@
               &mdash;
             {% endif %}
           </td>
+
+          <td data-label="Avg per case" {% if run.avg_case_duration is None %}class="muted"{% endif %}>{{ run.avg_case_duration|duration }}</td>
 
           <td data-label="" class="cell-actions">
             {% if run.status == "waiting" %}

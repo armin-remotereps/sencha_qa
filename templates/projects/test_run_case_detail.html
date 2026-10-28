@@ -1,4 +1,5 @@
 {% extends "layouts/project.html" %}
+{% load project_extras %}
 
 {% comment %} Run case detail — live via testRunCaseLive, ported from the old
    (Tailwind-era) test_run_case_detail.html: same WS URL, same message
@@ -115,7 +116,7 @@
       <p class="subtitle">
         Case {{ case_position }} of {{ case_total }} in {{ test_run.display_name }}
         {% if pivot.started_at %} · started <time datetime="{{ pivot.started_at|date:'c' }}">{{ pivot.started_at|date:"M j, H:i" }}</time>{% endif %}
-        {% if pivot.finished_at and pivot.started_at %} · {{ pivot.started_at|timesince:pivot.finished_at }}{% endif %}
+        {% if pivot.finished_at %} · <span title="Time the Test Runner worked on this case">{{ pivot.active_duration|duration }}</span>{% if wall_clock_with_waiting %} ({{ wall_clock_with_waiting|duration }} incl. waiting for help){% endif %}{% endif %}
       </p>
     </div>
     <div class="actions">
