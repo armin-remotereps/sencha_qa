@@ -41,6 +41,7 @@ from projects.models import (
     TestRun,
     TestRunStatus,
 )
+from projects.runner_update_state import runner_update_in_progress
 from projects.services import MachineState, get_machine_state
 from visual_engine.services.pool_status import get_visual_engine_status
 
@@ -55,6 +56,7 @@ _MACHINE_NOT_READY_REASON = (
     "the test machine was not ready (the Test Runner must be connected and the "
     "visual engine ready)."
 )
+_RUNNER_UPDATING_REASON = "the Test Runner was being updated."
 _INTERNAL_ERROR_REASON = "an internal error occurred."
 
 
@@ -112,8 +114,11 @@ def _start_locked(help_request_id: int) -> str | None:
     if SetupConversation.objects.filter(help_request_id=help_request_id).exists():
         return None
 
-    if resolve_live_turn(project_id=project.pk, now=timezone.now()) is not None:
+    now = timezone.now()
+    if resolve_live_turn(project_id=project.pk, now=now) is not None:
         return _TURN_LIVE_REASON
+    if runner_update_in_progress(project.pk, now):
+        return _RUNNER_UPDATING_REASON
     if get_machine_state(project, get_visual_engine_status()) != MachineState.READY:
         return _MACHINE_NOT_READY_REASON
 

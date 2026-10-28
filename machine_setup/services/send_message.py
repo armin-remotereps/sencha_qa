@@ -20,6 +20,10 @@ from machine_setup.models import SetupConversation, SetupConversationKind, Setup
 from machine_setup.services.live_turn import resolve_live_turn
 from machine_setup.services.queue_turn import broadcast_and_enqueue, create_user_turn
 from projects.models import Project, TestRun, TestRunStatus
+from projects.runner_update_state import (
+    RUNNER_UPDATE_RUNNING_MESSAGE,
+    runner_update_in_progress,
+)
 from projects.services import MachineState, get_machine_state
 from visual_engine.services.pool_status import get_visual_engine_status
 
@@ -41,8 +45,8 @@ def send_setup_message(
     ``conversation`` is a thread of this project to reply in (the main chat or
     an auto-fix thread); ``None`` means the main chat, created when missing.
     Raises ``SetupTurnActiveError``, ``SetupRunActiveError``,
-    ``SetupMachineNotReadyError``, or ``MachineSetupError`` when the thread was
-    archived meanwhile, or ``SetupDocumentNotAllowedError`` when ``document``
+    ``SetupMachineNotReadyError``, or ``MachineSetupError`` when the Test
+    Runner is being updated or the thread was archived meanwhile, or ``SetupDocumentNotAllowedError`` when ``document``
     targets any thread but the main chat. A stale live turn is closed as
     ``worker_lost`` first, and stays closed even when the send is refused. A paused (Needs help) run
     does not block sending; a started one does.
@@ -96,6 +100,8 @@ def _refusal(project: Project, now: datetime) -> MachineSetupError | None:
         return SetupTurnActiveError()
     if TestRun.objects.filter(project=project, status=TestRunStatus.STARTED).exists():
         return SetupRunActiveError()
+    if runner_update_in_progress(project.pk, now):
+        return MachineSetupError(RUNNER_UPDATE_RUNNING_MESSAGE)
     visual_engine = get_visual_engine_status()
     if get_machine_state(project, visual_engine) != MachineState.READY:
         return SetupMachineNotReadyError()

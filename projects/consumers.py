@@ -16,6 +16,7 @@ from projects.models import (
     TestRunScreenshot,
     TestRunTestCase,
 )
+from projects.runner_update_offer import RunnerUpdatePayload, get_runner_update_offer
 from projects.services import (
     _agent_status_group,
     fetch_test_case_state,
@@ -306,9 +307,9 @@ class AgentStatusConsumer(AuthenticatedConsumer):
         await self.channel_layer.group_add(VISUAL_ENGINE_GROUP, self.channel_name)
         project_id = self._project_id
 
-        def _fetch_project() -> dict[str, Any]:
+        def _fetch_project() -> tuple[dict[str, Any], RunnerUpdatePayload]:
             p = Project.objects.get(pk=project_id)
-            return {
+            state = {
                 "agent_connected": p.agent_connected,
                 "agent_system_info": p.agent_system_info,
                 "agent_client_version": p.agent_client_version,
@@ -317,8 +318,9 @@ class AgentStatusConsumer(AuthenticatedConsumer):
                     p.last_connected_at.isoformat() if p.last_connected_at else None
                 ),
             }
+            return state, get_runner_update_offer(p).payload
 
-        state = await sync_to_async(_fetch_project)()
+        state, runner_update = await sync_to_async(_fetch_project)()
         visual_engine = await sync_to_async(get_visual_engine_status)()
         await self.send(
             text_data=json.dumps(
@@ -329,6 +331,7 @@ class AgentStatusConsumer(AuthenticatedConsumer):
                 }
             )
         )
+        await self._send_runner_update(runner_update)
 
     async def disconnect(self, close_code: int) -> None:
         await super().disconnect(close_code)
@@ -346,6 +349,15 @@ class AgentStatusConsumer(AuthenticatedConsumer):
                     "last_connected_at": event["last_connected_at"],
                 }
             )
+        )
+
+    async def agent_runner_update(self, event: dict[str, Any]) -> None:
+        payload: RunnerUpdatePayload = event["runner_update"]
+        await self._send_runner_update(payload)
+
+    async def _send_runner_update(self, payload: RunnerUpdatePayload) -> None:
+        await self.send(
+            text_data=json.dumps({"type": "runner_update", "runner_update": payload})
         )
 
     async def visual_engine_status(self, event: dict[str, Any]) -> None:

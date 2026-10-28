@@ -7,8 +7,10 @@ from pathlib import Path
 
 from celery.schedules import crontab
 from decouple import Choices, Csv, config
+from django.core.exceptions import ImproperlyConfigured
 
 from auto_tester.encryption_key import validate_fernet_key
+from controller_client.protocol import UPDATE_MAX_SECONDS
 
 load_dotenv()
 
@@ -376,10 +378,16 @@ PERSON_STEP_CONFIRM_TIMEOUT_SECONDS: int = config(
     "PERSON_STEP_CONFIRM_TIMEOUT_SECONDS", default=120, cast=int
 )
 # Test Runner self-update: an update with no outcome after this long counts as
-# expired (pip 20 min + Playwright 30 min worst case, minus overlap).
+# expired. It must outlast the runner's own deadline (UPDATE_MAX_SECONDS), or
+# the run/setup gates would reopen while the runner is still installing.
 RUNNER_UPDATE_TIMEOUT_SECONDS: int = config(
-    "RUNNER_UPDATE_TIMEOUT_SECONDS", default=2700, cast=int
+    "RUNNER_UPDATE_TIMEOUT_SECONDS", default=UPDATE_MAX_SECONDS + 300, cast=int
 )
+if RUNNER_UPDATE_TIMEOUT_SECONDS < UPDATE_MAX_SECONDS + 60:
+    raise ImproperlyConfigured(
+        "RUNNER_UPDATE_TIMEOUT_SECONDS must be at least "
+        f"{UPDATE_MAX_SECONDS + 60} (the Test Runner's update deadline plus 60 s)"
+    )
 
 # Visual engine (remote vision workers running OmniParser)
 # Shared secret every vision worker sends in its handshake. Empty rejects all.

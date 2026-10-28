@@ -13,7 +13,10 @@ from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
     CloseCode,
     ErrorCode,
+    MessageType,
     parse_handshake_capabilities,
+    parse_update_in_flight_id,
+    parse_update_status_payload,
 )
 from projects.controller_authenticator import (
     ControllerAuthenticator,
@@ -52,10 +55,15 @@ from projects.controller_protocol import (
     StartInteractiveCmdActionEvent,
     TerminateInteractiveCmdActionEvent,
     TypeTextActionEvent,
+    UpdateRunnerEvent,
     WaitForCommandActionEvent,
 )
 from projects.controller_reply_tracker import ReplyTracker
 from projects.models import Project
+from projects.runner_update_progress import (
+    record_runner_update_status,
+    settle_runner_update_on_handshake,
+)
 from projects.services import broadcast_agent_status, release_agent_connection
 
 logger = logging.getLogger(__name__)
@@ -119,6 +127,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         if msg_type == "pong":
             return
 
+        if msg_type == MessageType.UPDATE_STATUS:
+            await self._handle_update_status(data)
+            return
+
         handlers = {
             "action_result": self._reply_tracker.send_action_result,
             "screenshot_response": self._reply_tracker.send_screenshot_result,
@@ -133,6 +145,22 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         if handler:
             await handler(request_id, data)
 
+    async def _handle_update_status(self, data: dict[str, Any]) -> None:
+        if self._project is None:
+            return
+        try:
+            status = parse_update_status_payload(data)
+        except ProtocolError as exc:
+            logger.warning(
+                "Ignoring malformed update_status for project %s: %s",
+                self._project.id,
+                exc,
+            )
+            return
+        await sync_to_async(record_runner_update_status)(
+            self._project.id, status.update_id, status.phase, status.detail
+        )
+
     async def _handle_handshake(self, data: dict[str, Any], request_id: str) -> None:
         api_key: str = data.get("api_key", "")
         system_info: dict[str, Any] = data.get("system_info", {})
@@ -140,6 +168,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
         try:
             capabilities = parse_handshake_capabilities(data)
+            update_in_flight_id = parse_update_in_flight_id(data)
         except ProtocolError as exc:
             await self._send_handshake_ack(
                 "error", f"Invalid handshake: {exc}", request_id
@@ -163,7 +192,12 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             return
 
         await self._establish_authenticated_connection(
-            result.project, system_info, client_version, capabilities, request_id
+            result.project,
+            system_info,
+            client_version,
+            capabilities,
+            update_in_flight_id,
+            request_id,
         )
 
     async def _establish_authenticated_connection(
@@ -172,6 +206,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         system_info: dict[str, Any],
         client_version: str,
         capabilities: Sequence[str],
+        update_in_flight_id: str | None,
         request_id: str,
     ) -> None:
         self._authenticated = True
@@ -183,6 +218,14 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await self.channel_layer.group_add(group_name, self.channel_name)
         previous_channel_name = await self._authenticator.claim_connection(
             project, self.channel_name, system_info, client_version, capabilities
+        )
+        # A runner started by a self-update reports the target version here;
+        # an old runner reconnecting mid-update reports the update it is
+        # installing; any other runner ends the in-flight update as lost.
+        # Settling before the old runner is superseded keeps the panel from
+        # showing a lost update in between.
+        await sync_to_async(settle_runner_update_on_handshake)(
+            project.id, client_version, update_in_flight_id
         )
         if previous_channel_name:
             # Drop the replaced connection from the group even if its consumer
@@ -346,6 +389,12 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self, event: CleanupEnvironmentActionEvent
     ) -> None:
         await self._forward_action(event)
+
+    async def controller_update_runner(self, event: UpdateRunnerEvent) -> None:
+        # Fire and forget: progress comes back as ``update_status`` messages.
+        await self.send(
+            text_data=self._message_builder.build_update_runner_message(event)
+        )
 
     async def _send_handshake_ack(
         self,

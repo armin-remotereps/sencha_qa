@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Final, NotRequired, TypedDict
 
 from controller_client.protocol import MessageType, serialize_message
@@ -150,6 +151,21 @@ class CleanupEnvironmentActionEvent(BaseActionEvent):
     pass
 
 
+class UpdateRunnerEvent(TypedDict):
+    """Channel-layer event ``controller.update_runner``.
+
+    Fire and forget: the runner answers with ``update_status`` messages
+    keyed by ``update_id``, not with a reply on a ``reply_channel``.
+    """
+
+    type: str
+    update_id: str
+    target_version: str
+    archive_base64: str
+    archive_sha256: str
+    archive_size: int
+
+
 class ActionTypeRegistry:
     _ACTION_TYPE_MAP: Final[dict[str, MessageType]] = {
         "controller.click": MessageType.CLICK,
@@ -181,6 +197,7 @@ class ActionTypeRegistry:
         "controller.close_tab": MessageType.CLOSE_TAB,
         "controller.check_app_installed": MessageType.CHECK_APP_INSTALLED,
         "controller.cleanup_environment": MessageType.CLEANUP_ENVIRONMENT,
+        "controller.update_runner": MessageType.UPDATE_RUNNER,
     }
 
     _PAYLOAD_KEYS: Final[dict[str, tuple[str, ...]]] = {
@@ -220,6 +237,13 @@ class ActionTypeRegistry:
         "controller.close_tab": ("app_name",),
         "controller.check_app_installed": ("app_name",),
         "controller.cleanup_environment": (),
+        "controller.update_runner": (
+            "update_id",
+            "target_version",
+            "archive_base64",
+            "archive_sha256",
+            "archive_size",
+        ),
     }
 
     @classmethod
@@ -240,12 +264,18 @@ class ControllerMessageBuilder:
         self._registry = registry
 
     def build_action_message(self, event: BaseActionEvent, request_id: str) -> str:
-        event_type: str = event["type"]
+        return self._build_message(event["type"], event, request_id)
+
+    def build_update_runner_message(self, event: UpdateRunnerEvent) -> str:
+        # The update id doubles as the request id so runner logs correlate.
+        return self._build_message(event["type"], event, event["update_id"])
+
+    def _build_message(
+        self, event_type: str, event: Mapping[str, object], request_id: str
+    ) -> str:
         message_type = self._registry.get_message_type(event_type)
         payload_keys = self._registry.get_payload_keys(event_type)
-
-        raw: dict[str, Any] = dict(event)
         payload_kwargs: dict[str, Any] = {
-            key: raw[key] for key in payload_keys if key in raw
+            key: event[key] for key in payload_keys if key in event
         }
         return serialize_message(message_type, request_id, **payload_kwargs)

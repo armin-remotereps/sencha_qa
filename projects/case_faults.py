@@ -78,9 +78,15 @@ _ASK_BY_REASON: dict[BlockedReason, str] = {
 
 
 # Faults after which the machine may have restarted, so the earlier steps'
-# state has to be restored before the step runs again.
+# state has to be restored before the step runs again. Runner outdated is
+# fixed by updating the Test Runner, whose handover closes the browsers and
+# apps the old runner opened.
 _RESTORE_FAULTS = frozenset(
-    {BlockedReason.RUNNER_DISCONNECTED, BlockedReason.RUNNER_UNRESPONSIVE}
+    {
+        BlockedReason.RUNNER_DISCONNECTED,
+        BlockedReason.RUNNER_UNRESPONSIVE,
+        BlockedReason.RUNNER_OUTDATED,
+    }
 )
 
 

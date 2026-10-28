@@ -545,6 +545,32 @@ def lock_help_request_for_chat(*, project: Project, pivot_id: int) -> CaseHelpRe
     return request
 
 
+def restore_open_help_after_runner_update(project_id: int) -> int:
+    """Switch the project's open current-screen help requests to restore.
+
+    Called when a Test Runner update succeeded, inside a transaction that
+    already holds the project row lock: the handover closed the browsers and
+    apps the old runner opened, so the screen a paused case stopped at is gone.
+    A current-screen request always has a checkpoint (no checkpoint means from
+    scratch), so Continue can restore the earlier steps instead. Locks the
+    project's paused runs (in id order) before writing their requests, the
+    order every help action uses. Returns the number of requests switched.
+    """
+    run_ids = list(
+        TestRun.objects.select_for_update()
+        .filter(project_id=project_id, status=TestRunStatus.PAUSED)
+        .order_by("pk")
+        .values_list("pk", flat=True)
+    )
+    if not run_ids:
+        return 0
+    return CaseHelpRequest.objects.filter(
+        resolution=HelpResolution.OPEN,
+        continue_mode=HelpContinueMode.CURRENT_SCREEN,
+        test_run_test_case__test_run_id__in=run_ids,
+    ).update(continue_mode=HelpContinueMode.RESTORE)
+
+
 def continue_paused_run(*, test_run: TestRun, user: CustomUser) -> None:
     """Queue the pending cases of a paused run whose help request is resolved.
 

@@ -2,17 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import io
 import logging
 import secrets
 import time
 import uuid
-import zipfile
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
-from pathlib import Path
 from typing import Any, Final, NoReturn, Protocol, TypedDict, TypeVar
 
 from asgiref.sync import async_to_sync
@@ -165,6 +162,11 @@ from projects.person_step_rows import (
 )
 from projects.run_case_order import PICKER_CASE_ORDERING, RUN_CASE_ORDERING
 from projects.run_finished_notifications import notify_run_finished
+from projects.runner_bundle import build_runner_archive
+from projects.runner_update_state import (
+    RUNNER_UPDATE_RUNNING_MESSAGE,
+    runner_update_in_progress,
+)
 from visual_engine.services.parse_screenshot import parse_screenshot
 from visual_engine.services.pool_status import (
     get_visual_engine_status,
@@ -775,6 +777,24 @@ def _no_machine_setup_check(project: Project) -> ReadinessCheck:
     )
 
 
+def _no_runner_update_check(project: Project) -> ReadinessCheck:
+    passed = not runner_update_in_progress(project.id, timezone.now())
+    if passed:
+        title = "Test Runner is not updating"
+        help_text = ""
+    else:
+        title = "Test Runner is updating"
+        help_text = RUNNER_UPDATE_RUNNING_MESSAGE
+    return ReadinessCheck(
+        key="no_runner_update",
+        passed=passed,
+        blocking=True,
+        title=title,
+        help=help_text,
+        link_url=reverse("projects:environment", args=[project.id]),
+    )
+
+
 def get_run_readiness(
     project: Project,
     *,
@@ -790,6 +810,7 @@ def get_run_readiness(
         _visual_engine_ready_check(visual_engine),
         _no_active_run_check(project, test_run),
         _no_machine_setup_check(project),
+        _no_runner_update_check(project),
         _application_context_check(project),
     )
     return RunReadiness(checks=checks)
@@ -2503,8 +2524,11 @@ def start_test_run(test_run: TestRun, *, help_mode: str) -> None:
         raise ValueError("Test run is not in WAITING status.")
     if _has_active_test_run(test_run.project):
         raise ValueError("Another test run is already in progress for this project.")
-    if live_turn_exists(test_run.project_id, timezone.now()):
+    now = timezone.now()
+    if live_turn_exists(test_run.project_id, now):
         raise ValueError(MACHINE_SETUP_RUNNING_MESSAGE)
+    if runner_update_in_progress(test_run.project_id, now):
+        raise ValueError(RUNNER_UPDATE_RUNNING_MESSAGE)
 
     test_run.status = TestRunStatus.STARTED
     test_run.help_mode = help_mode
@@ -3886,25 +3910,6 @@ def finish_test_run(
 # CONTROLLER CLIENT DOWNLOAD SERVICES
 # ============================================================================
 
-_CONTROLLER_CLIENT_EXCLUDE_DIRS = {
-    ".venv",
-    "__pycache__",
-    ".pytest_cache",
-    ".mypy_cache",
-    "tests",
-    "weights",
-}
-_CONTROLLER_CLIENT_EXCLUDE_FILES = {".env"}
-
-
-def _should_include_path(relative_path: Path) -> bool:
-    for part in relative_path.parts:
-        if part in _CONTROLLER_CLIENT_EXCLUDE_DIRS:
-            return False
-    if relative_path.name in _CONTROLLER_CLIENT_EXCLUDE_FILES:
-        return False
-    return True
-
 
 def _generate_env_content(project: Project) -> str:
     return (
@@ -3919,20 +3924,5 @@ def _generate_env_content(project: Project) -> str:
 
 
 def generate_controller_client_zip(project: Project) -> bytes:
-    controller_dir = settings.BASE_DIR / "controller_client"
-    buffer = io.BytesIO()
-
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(controller_dir.rglob("*")):
-            if not file_path.is_file():
-                continue
-            relative = file_path.relative_to(controller_dir)
-            if not _should_include_path(relative):
-                continue
-            arcname = str(Path("controller_client") / relative)
-            zf.write(file_path, arcname)
-
-        env_content = _generate_env_content(project)
-        zf.writestr("controller_client/.env", env_content)
-
-    return buffer.getvalue()
+    """The download ZIP: the runner source plus a ``.env`` with the Connection key."""
+    return build_runner_archive(_generate_env_content(project))

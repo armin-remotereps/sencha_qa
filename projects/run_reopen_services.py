@@ -27,6 +27,10 @@ from projects.models import (
     TestRunTestCaseStatus,
 )
 from projects.run_case_order import RUN_CASE_ORDERING
+from projects.runner_update_state import (
+    RUNNER_UPDATE_RUNNING_MESSAGE,
+    runner_update_in_progress,
+)
 from projects.services import (
     MachineState,
     broadcast_run_and_pivots,
@@ -96,8 +100,11 @@ def list_reopen_blockers(test_run: TestRun, project: Project) -> list[str]:
     machine_blocker = _machine_blocker(project)
     if machine_blocker:
         blockers.append(machine_blocker)
-    if live_turn_exists(project.pk, timezone.now()):
+    now = timezone.now()
+    if live_turn_exists(project.pk, now):
         blockers.append(MACHINE_SETUP_RUNNING_MESSAGE)
+    if runner_update_in_progress(project.pk, now):
+        blockers.append(RUNNER_UPDATE_RUNNING_MESSAGE)
     return blockers
 
 
