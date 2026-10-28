@@ -1,0 +1,157 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Insights > Machine health: why cases needed help (faults per day and in
+   total), how Night auto-fix did, and how help requests were resolved, across the
+   user's projects or one of them. Server-rendered bars (.progress), no chart library.
+
+   Context contract (dashboard/health_views.py):
+     form   — dashboard.health_forms.MachineHealthFilterForm (GET: project, days)
+     health — dashboard.services.machine_health.MachineHealth
+              (days, start_day, end_day, total_requests, per_day, by_fault,
+              auto_fix, resolutions)
+     active_nav — "insights" {% endcomment %}
+
+{% block title %}Machine health · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <h1>Machine health</h1>
+    <p class="subtitle">Why test cases needed help, how the Night auto-fix did, and how people resolved help requests, {{ health.start_day|date:"M j" }} – {{ health.end_day|date:"M j, Y" }}.</p>
+  </div>
+</div>
+
+<form class="toolbar" action="{% url 'dashboard:machine_health' %}" method="get" role="search">
+  <div>
+    <label class="visually-hidden" for="{{ form.project.id_for_label }}">{{ form.project.label }}</label>
+    {{ form.project }}
+  </div>
+  <div>
+    <label class="visually-hidden" for="{{ form.days.id_for_label }}">{{ form.days.label }}</label>
+    {{ form.days }}
+  </div>
+  <button type="submit" class="btn btn-sm btn-secondary">Apply</button>
+</form>
+
+{% if not health.total_requests %}
+  {% include "partials/empty_state.html" with icon="✓" title="No help requests" body="No test case needed help in this period. Help requests show here when a case pauses for a fault on the test machine or the agent asks a person." only %}
+{% else %}
+<div class="stack">
+  <div class="grid grid-4">
+    <div class="stat-card">
+      <div class="stat-label">Help requests</div>
+      <div class="stat-value">{{ health.total_requests }}</div>
+      <div class="stat-note">Last {{ health.days }} days</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Auto-fix success</div>
+      <div class="stat-value{% if health.auto_fix.success_percent is not None %} is-success{% endif %}">
+        {% if health.auto_fix.success_percent is None %}—{% else %}{{ health.auto_fix.success_percent }}%{% endif %}
+      </div>
+      <div class="stat-note">
+        {% if health.auto_fix.ended %}{{ health.auto_fix.fixed }} of {{ health.auto_fix.ended }} Night auto-fix{{ health.auto_fix.ended|pluralize:"es" }} fixed{% else %}No Night auto-fix ended{% endif %}
+      </div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Auto-fix not fixed</div>
+      <div class="stat-value{% if health.auto_fix.not_fixed %} is-warning{% endif %}">{{ health.auto_fix.not_fixed }}</div>
+      <div class="stat-note">Handed to a person</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Auto-fix running</div>
+      <div class="stat-value{% if health.auto_fix.running %} is-info{% endif %}">{{ health.auto_fix.running }}</div>
+      <div class="stat-note">Not ended yet</div>
+    </div>
+  </div>
+
+  <div class="grid grid-2">
+    <section class="card" aria-labelledby="health-faults-h">
+      <div class="card-header">
+        <h2 id="health-faults-h">By fault</h2>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Fault</th>
+              <th scope="col">Requests</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for fault in health.by_fault %}
+              <tr>
+                <td data-label="Fault" class="cell-primary">{{ fault.label }}</td>
+                <td data-label="Requests">
+                  <div class="progress" role="presentation"><span style="width: {{ fault.bar_percent }}%;"></span></div>
+                  <p class="muted small">{{ fault.count }}</p>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="health-resolutions-h">
+      <div class="card-header">
+        <h2 id="health-resolutions-h">How they were resolved</h2>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Resolution</th>
+              <th scope="col">Requests</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for resolution in health.resolutions %}
+              <tr>
+                <td data-label="Resolution" class="cell-primary">{{ resolution.label }}</td>
+                <td data-label="Requests">
+                  <div class="progress" role="presentation"><span style="width: {{ resolution.bar_percent }}%;"></span></div>
+                  <p class="muted small">{{ resolution.count }}</p>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+  <section class="card" aria-labelledby="health-days-h">
+    <div class="card-header">
+      <h2 id="health-days-h">Per day</h2>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th scope="col">Day</th>
+            <th scope="col">Requests</th>
+            <th scope="col">Faults</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for day in health.per_day reversed %}
+            <tr>
+              <td data-label="Day" class="cell-primary">
+                <time datetime="{{ day.day|date:"Y-m-d" }}">{{ day.day|date:"D, M j" }}</time>
+              </td>
+              <td data-label="Requests">
+                <div class="progress" role="presentation"><span style="width: {{ day.bar_percent }}%;"></span></div>
+                <p class="muted small">{{ day.total }}</p>
+              </td>
+              <td data-label="Faults" class="muted small">
+                {% for fault in day.faults %}{{ fault.label }} {{ fault.count }}{% if not forloop.last %} · {% endif %}{% empty %}—{% endfor %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endif %}
+{% endblock %}
