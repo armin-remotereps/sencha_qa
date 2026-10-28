@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
+from datetime import timedelta
 
 from django.conf import settings
 from django.db import models
@@ -77,6 +78,17 @@ class TestRunTestCaseStatus(models.TextChoices):
     # Stopped without a verdict at a failing step; waits for a person (or the
     # auto-fix agent) with the checkpoint and the machine state kept.
     NEED_HELP = "need_help", "Need help"
+
+
+# Statuses after which a case's ``active_duration`` is final.
+FINISHED_CASE_STATUSES = frozenset(
+    {
+        TestRunTestCaseStatus.SUCCESS,
+        TestRunTestCaseStatus.FAILED,
+        TestRunTestCaseStatus.BLOCKED,
+        TestRunTestCaseStatus.CANCELLED,
+    }
+)
 
 
 class BlockedReason(models.TextChoices):
@@ -521,6 +533,14 @@ class TestRunTestCase(models.Model):
                 fields=["status", "-finished_at"], name="run_case_status_finished_idx"
             )
         ]
+
+    @property
+    def shown_duration(self) -> timedelta | None:
+        """The case's time taken once it has finished; None (shown "—") while
+        it is queued, running or waiting for help, whose total is partial."""
+        if self.status not in FINISHED_CASE_STATUSES:
+            return None
+        return self.active_duration
 
     def __str__(self) -> str:
         return f"TRTC #{self.pk} — {self.test_case.title[:50]}"

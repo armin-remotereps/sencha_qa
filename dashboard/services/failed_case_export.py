@@ -3,19 +3,20 @@
 The export is read one page at a time (``failed_case_csv_page``), newest
 failure first, so the streaming response never holds more than one page of
 rows: under ASGI a sync iterator would be drained into memory before the
-first byte is sent, so the view drives these sync pages from an async
-iterator instead.
+first byte is sent, so ``stream_failed_case_csv`` drives these sync pages
+from an async iterator instead.
 """
 
 from __future__ import annotations
 
 import csv
 import io
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from django.db.models import F, Q
+from channels.db import database_sync_to_async
+from django.db.models import Q
 
 from auto_tester.csv_safe import neutralize_cell
 from dashboard.services.failed_case_filters import (
@@ -80,13 +81,15 @@ class ExportPage:
 
 
 def _after(cursor: ExportCursor) -> Q:
-    """Rows after ``cursor`` in ``finished_at DESC NULLS LAST, id DESC``."""
+    """Rows after ``cursor`` in ``finished_at DESC, id DESC`` (Postgres puts
+    NULLs first in a descending order, as the ``(status, -finished_at)``
+    index does)."""
     if cursor.finished_at is None:
-        return Q(finished_at__isnull=True, id__lt=cursor.pivot_id)
-    return (
-        Q(finished_at__lt=cursor.finished_at)
-        | Q(finished_at=cursor.finished_at, id__lt=cursor.pivot_id)
-        | Q(finished_at__isnull=True)
+        return Q(finished_at__isnull=True, id__lt=cursor.pivot_id) | Q(
+            finished_at__isnull=False
+        )
+    return Q(finished_at__lt=cursor.finished_at) | Q(
+        finished_at=cursor.finished_at, id__lt=cursor.pivot_id
     )
 
 
@@ -116,11 +119,7 @@ def failed_case_csv_page(
     queryset = failed_case_queryset(project_ids, filters)
     if after is not None:
         queryset = queryset.filter(_after(after))
-    rows = list(
-        queryset.order_by(F("finished_at").desc(nulls_last=True), "-id").values_list(
-            *_COLUMNS
-        )[:limit]
-    )
+    rows = list(queryset.order_by("-finished_at", "-id").values_list(*_COLUMNS)[:limit])
     lines: list[list[str]] = []
     for (
         project_name,
@@ -153,3 +152,28 @@ def failed_case_csv_page(
         last = rows[-1]
         cursor = ExportCursor(finished_at=last[6], pivot_id=last[3])
     return ExportPage(text=_csv_text(lines), rows=len(rows), cursor=cursor)
+
+
+async def stream_failed_case_csv(
+    project_ids: list[int], filters: FailedCaseFilters
+) -> AsyncIterator[str]:
+    """The whole export as CSV chunks: one bounded query per chunk in a
+    worker thread, at most ``EXPORT_ROW_LIMIT`` rows, so under ASGI the
+    response streams instead of being drained into memory first."""
+    read_page = database_sync_to_async(failed_case_csv_page)
+    yield failed_case_csv_header()
+    cursor: ExportCursor | None = None
+    remaining = EXPORT_ROW_LIMIT
+    while remaining > 0:
+        chunk = await read_page(
+            project_ids,
+            filters,
+            after=cursor,
+            limit=min(EXPORT_PAGE_SIZE, remaining),
+        )
+        if chunk.text:
+            yield chunk.text
+        remaining -= chunk.rows
+        cursor = chunk.cursor
+        if cursor is None:
+            break

@@ -10,9 +10,8 @@ every selected id itself.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import Sequence
 
-from channels.db import database_sync_to_async
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Page
@@ -27,7 +26,7 @@ from django.http.response import HttpResponseBase
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_POST, require_safe
 
 from accounts.types import AuthenticatedRequest
 from auto_tester.pagination import (
@@ -48,12 +47,7 @@ from dashboard.forms import (
 )
 from dashboard.services.export_throttle import check_export_throttle
 from dashboard.services.failed_case_bulk import apply_failed_case_bulk
-from dashboard.services.failed_case_export import (
-    EXPORT_PAGE_SIZE,
-    EXPORT_ROW_LIMIT,
-    failed_case_csv_header,
-    failed_case_csv_page,
-)
+from dashboard.services.failed_case_export import stream_failed_case_csv
 from dashboard.services.failed_case_filters import (
     FailedCaseFilters,
     FailedCaseView,
@@ -102,7 +96,7 @@ def _failures_redirect(query: str) -> HttpResponseRedirect:
 
 
 @login_required
-@require_GET
+@require_safe
 def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
     project_choices = member_project_choices(request.user)
     project_ids = [project_id for project_id, _ in project_choices]
@@ -155,33 +149,8 @@ def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
     return render(request, "dashboard/failed_cases.html", context)
 
 
-async def _stream_failed_case_csv(
-    project_ids: list[int], filters: FailedCaseFilters
-) -> AsyncIterator[str]:
-    """Async adapter over the sync export pages: one bounded query per
-    chunk in a worker thread, so under ASGI the response streams instead of
-    being drained into memory first."""
-    read_page = database_sync_to_async(failed_case_csv_page)
-    yield failed_case_csv_header()
-    cursor = None
-    remaining = EXPORT_ROW_LIMIT
-    while remaining > 0:
-        chunk = await read_page(
-            project_ids,
-            filters,
-            after=cursor,
-            limit=min(EXPORT_PAGE_SIZE, remaining),
-        )
-        if chunk.text:
-            yield chunk.text
-        remaining -= chunk.rows
-        cursor = chunk.cursor
-        if cursor is None:
-            break
-
-
 @login_required
-@require_GET
+@require_safe
 def failed_cases_export(request: AuthenticatedRequest) -> HttpResponseBase:
     project_choices = member_project_choices(request.user)
     form = _bind_filter_form(request.GET, project_choices)
@@ -196,7 +165,7 @@ def failed_cases_export(request: AuthenticatedRequest) -> HttpResponseBase:
         return _failures_redirect(filter_query)
     project_ids = [project_id for project_id, _ in project_choices]
     response = StreamingHttpResponse(
-        _stream_failed_case_csv(project_ids, form.to_filters()),
+        stream_failed_case_csv(project_ids, form.to_filters()),
         content_type="text/csv; charset=utf-8",
     )
     filename = f"failed-cases-{timezone.now():%Y%m%d}.csv"
