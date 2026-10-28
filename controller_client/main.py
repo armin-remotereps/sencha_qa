@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 
 def main(argv: list[str] | None = None) -> None:
     config = load_config(argv)
-    setup_logging(config.log_level)
+    setup_logging(config.log_level, config.effective_log_file)
+    if config.update_id is not None:
+        logger.info("Started by a Test Runner update (update %s)", config.update_id)
 
     try:
         verify_environment()
@@ -52,6 +54,12 @@ def main(argv: list[str] | None = None) -> None:
     except KeyboardInterrupt:
         logger.info("Keyboard interrupt received")
         loop.run_until_complete(client.stop())
+    except Exception:
+        # A runner started by an update may have no terminal: keep the reason
+        # in its log file.
+        logger.exception("The Test Runner stopped because of an error")
+        loop.run_until_complete(client.stop())
+        raise
     finally:
         loop.close()
         logger.info("Controller client stopped")

@@ -12,6 +12,11 @@ from controller_client.browser_executor import BrowserSession
 from controller_client.interactive_session import InteractiveSessionManager
 from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import ActionResultPayload
+from controller_client.update_layout import (
+    RUNNING_PACKAGE_DIR,
+    base_for_install_root,
+    start_script_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +33,20 @@ class ClearDirectoryResult:
 
 
 def default_protected_paths() -> tuple[Path, ...]:
-    """Paths the cleanup must never delete: this client's install dir and venv.
+    """Paths the cleanup must never delete.
 
-    The controller has been installed straight into ~/Downloads on client
-    machines, so clearing that folder blindly deleted the running client's own
+    This client's install dir, its venv, and the self-update's start script
+    (``<base>/start-test-runner.sh|.cmd``, next to the install). The controller
+    has been installed straight into ~/Downloads on client machines, so
+    clearing that folder blindly deleted the running client's own
     site-packages until Windows refused to unlink a loaded .pyd.
     """
-    return (Path(__file__).resolve().parent, Path(sys.prefix).resolve())
+    base = base_for_install_root(RUNNING_PACKAGE_DIR.parent)
+    return (
+        RUNNING_PACKAGE_DIR,
+        Path(sys.prefix).resolve(),
+        start_script_path(base).resolve(),
+    )
 
 
 def execute_cleanup(

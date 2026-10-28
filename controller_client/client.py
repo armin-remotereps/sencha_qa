@@ -38,6 +38,7 @@ from controller_client.exceptions import (
     HandshakeError,
     ProtocolError,
     UnknownMessageTypeError,
+    UpdateError,
 )
 from controller_client.executor import (
     execute_click,
@@ -59,7 +60,9 @@ from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import (
     CLIENT_CAPABILITIES,
     CLIENT_VERSION,
+    MAX_MESSAGE_SIZE,
     TERMINAL_CLOSE_CODES,
+    UPDATE_STATUS_DETAIL_MAX_LENGTH,
     ActionResultPayload,
     BrowserContentResultPayload,
     CloseCode,
@@ -69,6 +72,7 @@ from controller_client.protocol import (
     MessageType,
     ScreenshotResponsePayload,
     StreamName,
+    UpdatePhase,
     deserialize_server_message,
     parse_browser_click_payload,
     parse_browser_download_payload,
@@ -94,14 +98,17 @@ from controller_client.protocol import (
     parse_type_text_payload,
     parse_wait_for_command_payload,
     peek_request_id,
+    peek_update_id,
     serialize_message,
 )
 from controller_client.system_info import gather_system_info
+from controller_client.update_runner import (
+    RunnerUpdate,
+    finish_update_as_new_runner,
+    prepare_update,
+)
 
 logger = logging.getLogger(__name__)
-
-_MB = 1024 * 1024
-MAX_MESSAGE_SIZE = 10 * _MB
 
 # How long the server may take to answer the handshake before we drop the
 # socket and try again; without it a server that accepts but never acks would
@@ -185,6 +192,19 @@ class ControllerClient:
             MessageType.CHECK_APP_INSTALLED: self._handle_check_app_installed,
             MessageType.CLEANUP_ENVIRONMENT: self._handle_cleanup_environment,
         }
+        # Self-update (SELF_UPDATE_V1).
+        self._handlers[MessageType.UPDATE_RUNNER] = self._handle_update_runner
+        # The accepted update (its workflow lives in update_runner) and the
+        # task running it.
+        self._update: RunnerUpdate | None = None
+        self._update_task: asyncio.Task[None] | None = None
+        # Last update_status (update_id, phase, detail), re-sent after a
+        # reconnect while the update runs or when its send failed.
+        self._last_update_status: tuple[str, UpdatePhase, str] | None = None
+        self._update_status_unsent = False
+        self._handed_over = False
+        # The new runner's post-handshake work (marker, start script, removal).
+        self._update_finish_task: asyncio.Task[None] | None = None
         # Set by stop() so a pending reconnect backoff ends immediately.
         self._stop_event = asyncio.Event()
         # Whether the current session got an "ok" handshake ack; run() resets
@@ -206,11 +226,14 @@ class ControllerClient:
                 break
             except ConnectionTerminatedError as e:
                 logger.error("%s. Not reconnecting.", e)
+                self._log_handover_if_superseded(e.code)
                 break
             except Exception as e:
                 reason = str(e) or type(e).__name__
 
             if not self._running:
+                break
+            if await self._handover_ends_session():
                 break
             if self._session_authenticated:
                 attempt = 0
@@ -262,6 +285,7 @@ class ControllerClient:
     async def stop(self) -> None:
         self._running = False
         self._stop_event.set()
+        await self._cancel_update_tasks()
         self._process_tracker.kill_all()
         self._session_manager.terminate_all()
         # The executor is not shut down: stop() can run twice (signal, then
@@ -293,6 +317,7 @@ class ControllerClient:
             self._connection = connection
             try:
                 await self._perform_handshake(connection)
+                await self._after_handshake()
                 await self._message_loop(connection)
             except ConnectionClosed as e:
                 session_error = e
@@ -358,13 +383,19 @@ class ControllerClient:
 
     async def _send_handshake(self, connection: ClientConnection) -> None:
         system_info = await asyncio.to_thread(gather_system_info)
-        message = serialize_message(
-            MessageType.HANDSHAKE,
-            api_key=self._config.api_key,
-            client_version=CLIENT_VERSION,
-            capabilities=[capability.value for capability in CLIENT_CAPABILITIES],
-            system_info=system_info.to_dict(),
-        )
+        payload: dict[str, object] = {
+            "api_key": self._config.api_key,
+            "client_version": CLIENT_VERSION,
+            "capabilities": [capability.value for capability in CLIENT_CAPABILITIES],
+            "system_info": system_info.to_dict(),
+        }
+        update_id = self._update_id_to_keep()
+        if update_id is not None:
+            # Reconnected mid-update, or with its final status still unsent:
+            # lets the server keep the update row until _after_handshake
+            # re-sends that status (a terminal one keeps its real detail).
+            payload["update_in_flight_id"] = update_id
+        message = serialize_message(MessageType.HANDSHAKE, None, **payload)
         await connection.send(message)
         logger.info("Handshake sent (client_version=%s)", CLIENT_VERSION)
 
@@ -938,3 +969,171 @@ class ControllerClient:
             duration_ms=result.duration_ms,
         )
         await self._send_message(message)
+
+    # --- Self-update (SELF_UPDATE_V1) -------------------------------------
+    #
+    # The workflow lives in update_runner; the client only accepts or refuses
+    # the message, sends the statuses (re-sending the last one after a
+    # reconnect) and ends this runner once the new one took over.
+
+    async def _handle_update_runner(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        update_id = peek_update_id(data)
+        if update_id is None:
+            # Nothing to report on: the server cannot match it to an update.
+            await self._send_error(
+                request_id,
+                ErrorCode.INVALID_MESSAGE,
+                "Missing or invalid 'update_id': expected a UUID",
+            )
+            return
+        running = self._update_in_flight()
+        if running is not None:
+            if running.update_id == update_id:
+                logger.warning("Ignoring a repeated update_runner for %s", update_id)
+                return
+            await self._refuse_update(
+                update_id,
+                f"Another update ({running.update_id}) is already in progress",
+            )
+            return
+        try:
+            payload, layout = await asyncio.to_thread(prepare_update, data)
+        except (ProtocolError, UpdateError, OSError) as e:
+            await self._refuse_update(update_id, str(e) or type(e).__name__)
+            return
+        update = RunnerUpdate(payload, layout, self._config, self._send_update_status)
+        self._update = update
+        await self._send_update_status(update_id, UpdatePhase.ACCEPTED)
+        # In the background, so pings and actions keep being answered.
+        self._update_task = asyncio.create_task(self._run_update(update))
+
+    def _update_in_flight(self) -> RunnerUpdate | None:
+        task = self._update_task
+        if task is None or task.done():
+            return None
+        return self._update
+
+    def _update_id_to_keep(self) -> str | None:
+        """The update the server must keep in flight across this handshake."""
+        in_flight = self._update_in_flight()
+        if in_flight is not None:
+            return in_flight.update_id
+        last = self._last_update_status
+        update = self._update
+        if (
+            self._update_status_unsent
+            and last is not None
+            and update is not None
+            and last[0] == update.update_id
+        ):
+            return update.update_id
+        return None
+
+    async def _run_update(self, update: RunnerUpdate) -> None:
+        if await update.run():
+            await self._finish_handover()
+
+    async def _refuse_update(self, update_id: str, reason: str) -> None:
+        """Report a refused ``update_runner`` on its update row.
+
+        Sent once and not remembered, so it never replaces the status of an
+        update that is still running (re-sent after a reconnect).
+        """
+        detail = reason[:UPDATE_STATUS_DETAIL_MAX_LENGTH]
+        logger.error("Refused update %s: %s", update_id, detail)
+        await self._try_send_update_status((update_id, UpdatePhase.FAILED, detail))
+
+    async def _finish_handover(self) -> None:
+        """The new runner took over: end this runner as if superseded."""
+        self._handed_over = True
+        self._log_handover()
+        self._running = False
+        self._stop_event.set()
+        if self._connection is not None:
+            await self._connection.close()
+
+    def _log_handover(self) -> None:
+        handover = self._update.handover if self._update is not None else None
+        if handover is not None:
+            logger.info(
+                "Updated to %s; the new Test Runner runs from %s",
+                handover.version,
+                handover.new_root,
+            )
+
+    def _log_handover_if_superseded(self, close_code: int) -> None:
+        if (
+            close_code == CloseCode.SUPERSEDED
+            and self._update is not None
+            and self._update.handover is not None
+        ):
+            self._handed_over = True
+            self._log_handover()
+
+    async def _handover_ends_session(self) -> bool:
+        """After a drop while the new runner may be connecting, do not reconnect.
+
+        Reconnecting would supersede the new runner. Wait for the update task
+        instead: it ends on handover (stop) or on failure (reconnect to report
+        it).
+        """
+        task = self._update_task
+        update = self._update
+        if update is None or update.handover is None or task is None or task.done():
+            return self._handed_over
+        logger.info("Waiting for the new Test Runner to take over before reconnecting")
+        stopped = asyncio.create_task(self._stop_event.wait())
+        try:
+            await asyncio.wait({task, stopped}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stopped.cancel()
+        return self._handed_over or not self._running
+
+    async def _send_update_status(
+        self, update_id: str, phase: UpdatePhase, detail: str = ""
+    ) -> None:
+        detail = detail[:UPDATE_STATUS_DETAIL_MAX_LENGTH]
+        logger.info("Update %s: %s %s", update_id, phase.value, detail)
+        self._last_update_status = (update_id, phase, detail)
+        self._update_status_unsent = not await self._try_send_update_status(
+            self._last_update_status
+        )
+
+    async def _try_send_update_status(
+        self, status: tuple[str, UpdatePhase, str] | None
+    ) -> bool:
+        connection = self._connection
+        # Before the handshake is accepted the server closes the socket on any
+        # other message; _after_handshake re-sends what is still unsent.
+        if status is None or connection is None or not self._session_authenticated:
+            return False
+        update_id, phase, detail = status
+        message = serialize_message(
+            MessageType.UPDATE_STATUS, update_id=update_id, phase=phase, detail=detail
+        )
+        try:
+            await connection.send(message)
+        except ConnectionClosed:
+            return False
+        return True
+
+    async def _after_handshake(self) -> None:
+        if self._update_status_unsent or self._update_in_flight() is not None:
+            self._update_status_unsent = not await self._try_send_update_status(
+                self._last_update_status
+            )
+        update_id = self._config.update_id
+        if update_id is not None and self._update_finish_task is None:
+            self._update_finish_task = asyncio.create_task(
+                finish_update_as_new_runner(
+                    self._config, update_id, self._send_update_status
+                )
+            )
+
+    async def _cancel_update_tasks(self) -> None:
+        for task in (self._update_task, self._update_finish_task):
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.wait({task})

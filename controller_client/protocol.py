@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import IntEnum, StrEnum
@@ -184,6 +185,10 @@ class HandshakePayload:
     client_version: str
     capabilities: tuple[str, ...]
     system_info: dict[str, str | int]
+    # Sent only by an old runner that reconnected while its own self-update
+    # still runs (normalized UUID); absent otherwise, including on the new
+    # runner an update started (it connects at the target version).
+    update_in_flight_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -398,9 +403,24 @@ class CheckAppInstalledPayload:
     app_name: str
 
 
+_MIB: Final[int] = 1024 * 1024
+# Largest WebSocket message the runner accepts (``websockets`` ``max_size``).
+MAX_MESSAGE_SIZE: Final[int] = 10 * _MIB
 # Largest runner bundle (the ZIP, before base64) an ``update_runner`` may carry.
 # Both sides must agree, so it lives here rather than in settings.
-MAX_UPDATE_ARCHIVE_BYTES: Final[int] = 8 * 1024 * 1024
+MAX_UPDATE_ARCHIVE_BYTES: Final[int] = 7 * _MIB
+# Room for the rest of an ``update_runner`` message besides the base64 text.
+_UPDATE_RUNNER_JSON_OVERHEAD_BYTES: Final[int] = 64 * 1024
+# Base64 of n bytes is 4 * ceil(n / 3) characters; the whole message must fit
+# in what the runner accepts.
+assert (
+    4 * -(-MAX_UPDATE_ARCHIVE_BYTES // 3) + _UPDATE_RUNNER_JSON_OVERHEAD_BYTES
+    <= MAX_MESSAGE_SIZE
+), "MAX_UPDATE_ARCHIVE_BYTES does not fit in MAX_MESSAGE_SIZE"
+# The runner's whole self-update, from accepting ``update_runner`` to the
+# handover (or ``failed``), inclusive. The server's update timeout must not be
+# shorter.
+UPDATE_MAX_SECONDS: Final[int] = 3600
 # Longest ``detail`` of an ``update_status``; longer text is truncated.
 UPDATE_STATUS_DETAIL_MAX_LENGTH: Final[int] = 500
 # Longest version string ``version_tuple`` accepts (matches the server column).
@@ -747,12 +767,43 @@ def parse_close_tab_payload(data: dict[str, object]) -> CloseTabPayload:
     )
 
 
-def _extract_update_id(data: dict[str, object]) -> str:
-    raw = _extract_str(data, "update_id")
+def _normalized_uuid(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
     try:
-        return str(uuid.UUID(raw))
-    except ValueError as e:
-        raise ProtocolError("Invalid 'update_id': expected a UUID") from e
+        return str(uuid.UUID(value))
+    except ValueError:
+        return None
+
+
+def _extract_update_id(data: Mapping[str, object]) -> str:
+    update_id = _normalized_uuid(data.get("update_id"))
+    if update_id is None:
+        raise ProtocolError("Missing or invalid 'update_id': expected a UUID")
+    return update_id
+
+
+def peek_update_id(data: Mapping[str, object]) -> str | None:
+    """The normalized ``update_id`` of a message, or None if it has none.
+
+    Lets the runner report a refused ``update_runner`` on its update row even
+    when the rest of the message is invalid.
+    """
+    return _normalized_uuid(data.get("update_id"))
+
+
+def parse_update_in_flight_id(data: Mapping[str, object]) -> str | None:
+    """The handshake's optional ``update_in_flight_id`` (normalized UUID).
+
+    None when absent or null. Raises ProtocolError for any other non-UUID value.
+    """
+    raw = data.get("update_in_flight_id")
+    if raw is None:
+        return None
+    update_id = _normalized_uuid(raw)
+    if update_id is None:
+        raise ProtocolError("Invalid 'update_in_flight_id': expected a UUID")
+    return update_id
 
 
 def parse_update_runner_payload(data: dict[str, object]) -> UpdateRunnerPayload:
