@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from agents.types import ToolCategory, ToolDefinition, ToolParameter
-from controller_client.protocol import BrowserName
+from controller_client.protocol import (
+    DEFAULT_SCROLL_AMOUNT,
+    MAX_SCROLL_AMOUNT,
+    BrowserName,
+    ScrollDirection,
+)
 
 
 def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
@@ -34,7 +39,8 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     name="cwd",
                     type="string",
                     description=(
-                        "Optional working directory to run the command in. "
+                        "Optional working directory to run the command in: an "
+                        "absolute path, or ~/... on macOS and Linux. "
                         "Each command runs in a fresh shell, so a standalone 'cd' has no effect "
                         "on later commands. Use this parameter instead."
                     ),
@@ -169,6 +175,45 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
             ),
         ),
         ToolDefinition(
+            name="click_at",
+            description=(
+                "Left-click at pixel coordinates of the desktop screenshot, for targets "
+                "click cannot find by description: window chrome, a blank area, the end "
+                "of a text line, a scrollbar. Get the coordinates from take_screenshot, "
+                "which reports pixel coordinates and the screenshot size. It is a real "
+                "mouse click, so it moves keyboard focus. Not verified unless "
+                "expected_result is given, and never retried. Prefer click whenever the "
+                "target can be described. Never use it for web pages opened with "
+                "browser_navigate — use browser_click for those."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                ToolParameter(
+                    name="x",
+                    type="integer",
+                    description="Horizontal pixel coordinate in the latest screenshot.",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="y",
+                    type="integer",
+                    description="Vertical pixel coordinate in the latest screenshot.",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="expected_result",
+                    type="string",
+                    description=(
+                        "Optional. What the screen should show after the click (e.g. "
+                        "'the caret is at the end of the Editor 3 text'). The tool then "
+                        "compares the screen before and after once and reports whether "
+                        "it is shown; it never clicks again."
+                    ),
+                    required=False,
+                ),
+            ),
+        ),
+        ToolDefinition(
             name="type_text",
             description=(
                 "Type text using the keyboard."
@@ -259,6 +304,57 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                         "runs only when this is given; the tool retries other candidates when "
                         "the action missed, and stops and reports it as performed but not "
                         "confirmed when the intended element was acted on but the result differs."
+                    ),
+                    required=False,
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="scroll",
+            description=(
+                "Scroll the desktop with the mouse wheel, for content outside the "
+                "visible area of a native app or window. Give x and y of a point over "
+                "the area to scroll (pixel coordinates from take_screenshot); without "
+                "them it scrolls where the pointer is. Take a screenshot afterwards to "
+                "see the revealed content. Not for web pages opened with "
+                "browser_navigate."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                ToolParameter(
+                    name="direction",
+                    type="string",
+                    description=(
+                        "Wheel direction: down reveals content below, up content "
+                        "above, left and right content to the sides."
+                    ),
+                    required=True,
+                    enum=tuple(direction.value for direction in ScrollDirection),
+                ),
+                ToolParameter(
+                    name="amount",
+                    type="integer",
+                    description=(
+                        f"Wheel notches, 1-{MAX_SCROLL_AMOUNT}. Optional, default "
+                        f"{DEFAULT_SCROLL_AMOUNT}."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
+                    name="x",
+                    type="integer",
+                    description=(
+                        "Optional. Horizontal pixel coordinate of a point over the "
+                        "area to scroll; give it together with y."
+                    ),
+                    required=False,
+                ),
+                ToolParameter(
+                    name="y",
+                    type="integer",
+                    description=(
+                        "Optional. Vertical pixel coordinate of a point over the area "
+                        "to scroll; give it together with x."
                     ),
                     required=False,
                 ),

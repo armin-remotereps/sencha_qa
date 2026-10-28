@@ -47,6 +47,7 @@ from projects.controller_protocol import (
     LaunchAppActionEvent,
     RunCommandActionEvent,
     ScreenshotActionEvent,
+    ScrollActionEvent,
     SendInputActionEvent,
     StartInteractiveCmdActionEvent,
     TerminateInteractiveCmdActionEvent,
@@ -242,6 +243,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await self._forward_action(event)
 
     async def controller_hover(self, event: HoverActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_scroll(self, event: ScrollActionEvent) -> None:
         await self._forward_action(event)
 
     async def controller_drag(self, event: DragActionEvent) -> None:

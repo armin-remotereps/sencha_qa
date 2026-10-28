@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Final, TypedDict
+from typing import Any, Final, NotRequired, TypedDict
 
 from controller_client.protocol import MessageType, serialize_message
 
@@ -20,6 +20,13 @@ class ClickActionEvent(BaseActionEvent):
 class DoubleClickActionEvent(BaseActionEvent):
     x: int
     y: int
+
+
+class ScrollActionEvent(BaseActionEvent):
+    direction: str
+    amount: int
+    x: NotRequired[int]
+    y: NotRequired[int]
 
 
 class HoverActionEvent(BaseActionEvent):
@@ -148,6 +155,7 @@ class ActionTypeRegistry:
         "controller.click": MessageType.CLICK,
         "controller.double_click": MessageType.DOUBLE_CLICK,
         "controller.hover": MessageType.HOVER,
+        "controller.scroll": MessageType.SCROLL,
         "controller.drag": MessageType.DRAG,
         "controller.type_text": MessageType.TYPE_TEXT,
         "controller.key_press": MessageType.KEY_PRESS,
@@ -179,6 +187,7 @@ class ActionTypeRegistry:
         "controller.click": ("x", "y", "button"),
         "controller.double_click": ("x", "y"),
         "controller.hover": ("x", "y"),
+        "controller.scroll": ("direction", "amount", "x", "y"),
         "controller.drag": (
             "start_x",
             "start_y",

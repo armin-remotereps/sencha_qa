@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from agents.command_output import clean_command_output
 from agents.services.browser_element_finder import find_element_index
 from agents.services.shell_command import build_shell_command
 from agents.services.tool_utils import safe_tool_call
@@ -29,6 +30,7 @@ from controller_client.protocol import (
     BROWSER_DISPLAY_NAMES,
     BrowserName,
     ClientCapability,
+    ScrollDirection,
 )
 from projects.browser_selection_services import ensure_runner_supports_browser
 from projects.exceptions import ControllerActionError
@@ -61,6 +63,7 @@ from projects.services import (
     controller_key_press,
     controller_launch_app,
     controller_screenshot,
+    controller_scroll,
     controller_send_input,
     controller_start_interactive_command,
     controller_type_text,
@@ -83,6 +86,13 @@ def _ensure_action_succeeded(result: ActionResult) -> None:
     raise ControllerActionError(
         result["message"] or "Controller reported the action failed"
     )
+
+
+def _clean_output(result: InteractiveCommandResult) -> InteractiveCommandResult:
+    """Strip terminal noise from command output before the log and the model see it."""
+    cleaned = result.copy()
+    cleaned["output"] = clean_command_output(result["output"])
+    return cleaned
 
 
 def _format_interactive_output(
@@ -114,7 +124,9 @@ def execute_command(
         # InvalidShellCommandError is an ordinary exception, so
         # safe_tool_call turns it into a tool error the agent can correct.
         effective_command = build_shell_command(command, cwd, os_name)
-        result = controller_start_interactive_command(project_id, effective_command)
+        result = _clean_output(
+            controller_start_interactive_command(project_id, effective_command)
+        )
         if on_log is not None and result["output"]:
             on_log(f"{_LOG_PREFIX}{result['output'].rstrip()}")
         if not result["is_alive"]:
@@ -137,7 +149,9 @@ def send_command_input(
     project_id: int, *, session_id: str, input_text: str
 ) -> ToolResult:
     def _do() -> ToolResult:
-        result = controller_send_input(project_id, session_id, input_text)
+        result = _clean_output(
+            controller_send_input(project_id, session_id, input_text)
+        )
         content = _format_interactive_output(result)
         return ToolResult(tool_call_id="", content=content, is_error=False)
 
@@ -151,7 +165,7 @@ def wait_for_command(
     on_log: LogCallback | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        result = controller_wait_for_command(project_id, session_id)
+        result = _clean_output(controller_wait_for_command(project_id, session_id))
         if on_log is not None and result["output"]:
             on_log(f"{_LOG_PREFIX}{result['output'].rstrip()}")
         content = _format_interactive_output(result)
@@ -173,7 +187,21 @@ def take_screenshot(
         image_base64 = result["image_base64"]
         if on_screenshot is not None:
             on_screenshot(image_base64, "take_screenshot")
-        answer = answer_screenshot_question(vision_config, image_base64, question)
+        width, height = result["width"], result["height"]
+        # An old runner may omit the size; then neither the model nor the agent
+        # is told one rather than a wrong 0 x 0.
+        known_size = width > 0 and height > 0
+        answer = answer_screenshot_question(
+            vision_config,
+            image_base64,
+            question,
+            image_size=(width, height) if known_size else None,
+        )
+        if known_size:
+            answer = (
+                f"{answer}\n(Screenshot: {width} x {height} pixels; click_at and "
+                "scroll use these coordinates.)"
+            )
         return ToolResult(tool_call_id="", content=answer, is_error=False)
 
     return safe_tool_call("take_screenshot", _do)
@@ -366,6 +394,120 @@ def double_click(
         deadline=deadline,
         precheck=_precheck,
     )
+
+
+def click_at(
+    project_id: int,
+    *,
+    x: int,
+    y: int,
+    vision_config: LLMConfig | None,
+    expected_result: str = "",
+    on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
+    deadline: float | None = None,
+) -> ToolResult:
+    """Left-click at screenshot pixel (x, y), for targets OmniParser cannot name.
+
+    Sends the existing ``click`` message, so every Test Runner can do it. There
+    is no element to resolve; the outcome is checked once, only when
+    ``expected_result`` is given, and a miss is reported, never retried.
+    """
+    success_message = f"Clicked at ({x}, {y})"
+
+    def _do() -> ToolResult:
+        budget = VerificationBudget(
+            deadline=deadline, cancellation_check=cancellation_check
+        )
+        budget.raise_if_cancelled()
+        if not expected_result:
+            _ensure_action_succeeded(controller_click(project_id, x, y))
+            return ToolResult(
+                tool_call_id="", content=f"{success_message}.", is_error=False
+            )
+        if vision_config is None:
+            return ToolResult(
+                tool_call_id="",
+                content="Vision model not configured, so expected_result cannot "
+                "be checked. Call click_at without it.",
+                is_error=True,
+            )
+        before_image = take_before_screenshot(project_id)
+        _ensure_action_succeeded(controller_click(project_id, x, y))
+        verdict = confirm_action(
+            project_id,
+            vision_config,
+            budget,
+            acted_on=(),
+            before_image_base64=before_image,
+            action_summary=f"clicked at ({x}, {y})",
+            expected_result=expected_result,
+            tool_name="click_at",
+            on_screenshot=on_screenshot,
+        )
+        if verdict.status == "confirmed":
+            return ToolResult(
+                tool_call_id="",
+                content=f"{success_message}; expected result confirmed.",
+                is_error=False,
+            )
+        if verdict.status == "unexpected":
+            return ToolResult(
+                tool_call_id="",
+                content=format_unconfirmed_message(
+                    success_message, verdict.reason, budget
+                ),
+                is_error=False,
+            )
+        reason = " ".join(verdict.reason.split()).rstrip(".")
+        return ToolResult(
+            tool_call_id="",
+            content=(
+                f"{success_message}, but the expected result is NOT shown: "
+                f"{reason}. Take a screenshot and ask for the target's "
+                "coordinates again."
+            ),
+            is_error=True,
+        )
+
+    return safe_tool_call("click_at", _do)
+
+
+_SCROLL_OUTDATED_MESSAGE = (
+    "This Test Runner is too old for scroll. Click inside the area first, then "
+    "use key_press (Page_Down, Page_Up, space, or arrow keys); ask a person to "
+    "update the Test Runner from the Environment page."
+)
+
+
+def scroll(
+    project_id: int,
+    *,
+    direction: ScrollDirection,
+    amount: int,
+    x: int | None = None,
+    y: int | None = None,
+) -> ToolResult:
+    def _do() -> ToolResult:
+        # Like close_app: an old Test Runner gets a tool error with a key_press
+        # fallback instead of pausing the case for help.
+        if not runner_supports(project_id, ClientCapability.SCROLL_V1):
+            return ToolResult(
+                tool_call_id="", content=_SCROLL_OUTDATED_MESSAGE, is_error=True
+            )
+        _ensure_action_succeeded(controller_scroll(project_id, direction, amount, x, y))
+        notches = "notch" if amount == 1 else "notches"
+        where = "at the pointer" if x is None or y is None else f"at ({x}, {y})"
+        return ToolResult(
+            tool_call_id="",
+            content=(
+                f"Scrolled {direction.value} {amount} {notches} {where}. "
+                "Take a screenshot to see the result."
+            ),
+            is_error=False,
+        )
+
+    return safe_tool_call("scroll", _do)
 
 
 def type_text(project_id: int, *, text: str) -> ToolResult:

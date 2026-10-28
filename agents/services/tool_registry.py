@@ -15,11 +15,50 @@ from agents.types import (
     ToolDispatcher,
     ToolResult,
 )
-from controller_client.protocol import BrowserName
+from controller_client.protocol import (
+    DEFAULT_SCROLL_AMOUNT,
+    MAX_SCROLL_AMOUNT,
+    BrowserName,
+    ScrollDirection,
+)
 
 logger = logging.getLogger(__name__)
 
 _HandlerFunc = Callable[[ToolContext, dict[str, object]], ToolResult]
+
+
+class _InvalidArgumentError(ValueError):
+    """A tool argument broke its rule; the message names the rule."""
+
+
+def _invalid_argument_result(error: _InvalidArgumentError) -> ToolResult:
+    return ToolResult(tool_call_id="", content=str(error), is_error=True)
+
+
+def _strict_int(name: str, raw: object) -> int:
+    """Read a JSON integer: an int, or a float with no fraction; never bool or str."""
+    if isinstance(raw, bool):
+        raise _InvalidArgumentError(f"{name} must be an integer, not a boolean.")
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float) and raw.is_integer():
+        return int(raw)
+    raise _InvalidArgumentError(f"{name} must be an integer, got {raw!r}.")
+
+
+def _read_point(arguments: dict[str, object]) -> tuple[int | None, int | None]:
+    """Read the optional x/y pair of screenshot pixel coordinates (both or neither)."""
+    raw_x, raw_y = arguments.get("x"), arguments.get("y")
+    if raw_x is None and raw_y is None:
+        return None, None
+    if raw_x is None or raw_y is None:
+        raise _InvalidArgumentError("x and y must be given together, or both omitted.")
+    x, y = _strict_int("x", raw_x), _strict_int("y", raw_y)
+    if x < 0 or y < 0:
+        raise _InvalidArgumentError(
+            "x and y are screenshot pixel coordinates and cannot be negative."
+        )
+    return x, y
 
 
 def dispatch_tool_call(tool_call: ToolCall, context: ToolContext) -> ToolResult:
@@ -145,6 +184,58 @@ def _handle_double_click(
         on_screenshot=context.on_screenshot,
         cancellation_check=context.cancellation_check,
         deadline=context.deadline,
+    )
+
+
+def _handle_click_at(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    try:
+        x, y = _read_point(arguments)
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
+    if x is None or y is None:
+        return ToolResult(
+            tool_call_id="",
+            content="click_at needs both x and y (screenshot pixel coordinates).",
+            is_error=True,
+        )
+    return tools_controller.click_at(
+        context.project_id,
+        x=x,
+        y=y,
+        expected_result=_read_expected_result(arguments),
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
+    )
+
+
+def _handle_scroll(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    try:
+        direction = ScrollDirection(str(arguments.get("direction", "")))
+    except ValueError:
+        allowed = ", ".join(d.value for d in ScrollDirection)
+        return ToolResult(
+            tool_call_id="",
+            content=f"direction must be one of: {allowed}.",
+            is_error=True,
+        )
+    try:
+        raw_amount = arguments.get("amount")
+        amount = (
+            DEFAULT_SCROLL_AMOUNT
+            if raw_amount is None
+            else _strict_int("amount", raw_amount)
+        )
+        if not 1 <= amount <= MAX_SCROLL_AMOUNT:
+            raise _InvalidArgumentError(
+                f"amount must be between 1 and {MAX_SCROLL_AMOUNT} wheel notches."
+            )
+        x, y = _read_point(arguments)
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
+    return tools_controller.scroll(
+        context.project_id, direction=direction, amount=amount, x=x, y=y
     )
 
 
@@ -396,6 +487,8 @@ _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "take_screenshot": _handle_take_screenshot,
     "click": _handle_click,
     "double_click": _handle_double_click,
+    "click_at": _handle_click_at,
+    "scroll": _handle_scroll,
     "type_text": _handle_type_text,
     "key_press": _handle_key_press,
     "hover": _handle_hover,

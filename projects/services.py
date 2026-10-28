@@ -61,6 +61,7 @@ from controller_client.protocol import (
     BrowserName,
     ClientCapability,
     ErrorCode,
+    ScrollDirection,
 )
 from machine_setup.auto_fix_stop import request_auto_fix_stop
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
@@ -1317,6 +1318,34 @@ def controller_double_click(
         x=x,
         y=y,
         runner_local=True,
+    )
+    return _build_action_result(reply)
+
+
+def controller_scroll(
+    project_id: int,
+    direction: ScrollDirection,
+    amount: int,
+    x: int | None,
+    y: int | None,
+    timeout: float = 30.0,
+) -> ActionResult:
+    """Scroll ``amount`` wheel notches, at screenshot pixel (x, y) or the pointer.
+
+    ``x``/``y`` are sent only when given: the message builder skips keys the
+    event lacks, so the runner then scrolls at the current pointer position.
+    """
+    # Any: a dict[str, int] splat would also have to fit the bool keyword
+    # runner_local of _dispatch_controller_action, which mypy rejects.
+    point: dict[str, Any] = {} if x is None or y is None else {"x": x, "y": y}
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.scroll",
+        timeout,
+        runner_local=True,
+        direction=direction.value,
+        amount=amount,
+        **point,
     )
     return _build_action_result(reply)
 
