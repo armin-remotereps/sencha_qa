@@ -5,6 +5,7 @@ from dataclasses import replace
 
 from django.conf import settings
 
+from agents.exceptions import AIServiceError
 from agents.services.llm_client import send_chat_completion
 from agents.services.llm_config import (
     build_llm_config,
@@ -26,6 +27,7 @@ from agents.types import (
     BrowserSelection,
     CancellationCheck,
     ChatMessage,
+    FinalAnswerPolicy,
     LogCallback,
     ToolContext,
     ToolDefinition,
@@ -206,11 +208,31 @@ def run_tool_loop(
         elapsed = agent_monotonic() - start_time
         if elapsed > config.timeout_seconds:
             logger.warning("Agent timed out after %.1f seconds", elapsed)
+            error = f"Timed out after {elapsed:.1f} seconds"
+            if config.final_answer is not None:
+                answer = _ask_final_answer(
+                    messages,
+                    config=config,
+                    policy=config.final_answer,
+                    tool_definitions=tool_definitions,
+                )
+                if answer is not None:
+                    _append(
+                        ChatMessage(role="user", content=config.final_answer.prompt)
+                    )
+                    _append(answer)
+                    return AgentResult(
+                        stop_reason=AgentStopReason.TIMEOUT,
+                        iterations=iterations + 1,
+                        messages=tuple(messages),
+                        error=error,
+                        answered_after_timeout=True,
+                    )
             return AgentResult(
                 stop_reason=AgentStopReason.TIMEOUT,
                 iterations=iterations,
                 messages=tuple(messages),
-                error=f"Timed out after {elapsed:.1f} seconds",
+                error=error,
             )
 
         iterations += 1
@@ -267,6 +289,49 @@ def run_tool_loop(
         iterations=iterations,
         messages=tuple(messages),
     )
+
+
+def _ask_final_answer(
+    messages: list[ChatMessage],
+    *,
+    config: AgentConfig,
+    policy: FinalAnswerPolicy,
+    tool_definitions: tuple[ToolDefinition, ...],
+) -> ChatMessage | None:
+    """One tool-free turn after the time budget ran out; None means fall back.
+
+    Every earlier function call already has its output here (the deadline is
+    checked at the top of the loop), so the input is well formed. The same tool
+    list keeps the request prefix identical; ``tool_choice="none"`` forbids
+    calls.
+    """
+    _check_cancellation(config.cancellation_check)
+    _debug_log("[Agent] Time budget used up; asking for a final answer", config.on_log)
+    try:
+        response = send_chat_completion(
+            config.llm,
+            (*messages, ChatMessage(role="user", content=policy.prompt)),
+            tool_definitions,
+            tool_choice="none",
+            timeout_seconds=policy.timeout_seconds,
+        )
+    except AIServiceError as exc:
+        # A provider fault in the grace turn must not turn a timed-out step into
+        # an ai_service pause: the step times out as it did before.
+        logger.warning("[Agent] Final answer after timeout failed: %s", exc)
+        return None
+    _check_cancellation(config.cancellation_check)
+
+    if response.reasoning_content:
+        _debug_log(f"[Thinking] {response.reasoning_content}", config.on_log)
+    text = response.message.content
+    if not isinstance(text, str) or not text.strip():
+        logger.warning("[Agent] Final answer after timeout had no text")
+        return None
+    _debug_log(f"[Agent] {text}", config.on_log)
+    # Calls made despite tool_choice="none" are dropped: nothing runs them, and
+    # an unanswered function call would make the transcript malformed.
+    return replace(response.message, tool_calls=None)
 
 
 def _cap_tool_result(content: str) -> str:

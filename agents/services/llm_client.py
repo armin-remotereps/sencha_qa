@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 import httpx
 from django.conf import settings
@@ -33,6 +34,7 @@ def _build_payload(
     config: LLMConfig,
     messages: tuple[ChatMessage, ...],
     tools: tuple[ToolDefinition, ...],
+    tool_choice: Literal["auto", "none"],
 ) -> dict[str, object]:
     instructions, input_items = _serialize_input(messages)
     payload: dict[str, object] = {
@@ -54,7 +56,9 @@ def _build_payload(
 
     if tools:
         payload["tools"] = _serialize_tools(tools)
-        payload["tool_choice"] = "auto"
+        # "none" keeps the tool list (same request prefix, so the prompt cache
+        # still hits) while forbidding calls.
+        payload["tool_choice"] = tool_choice
 
     return payload
 
@@ -63,10 +67,19 @@ def send_chat_completion(
     config: LLMConfig,
     messages: tuple[ChatMessage, ...],
     tools: tuple[ToolDefinition, ...] = (),
+    *,
+    tool_choice: Literal["auto", "none"] = "auto",
+    timeout_seconds: float | None = None,
 ) -> LLMResponse:
+    """Send one Responses request; ``timeout_seconds`` None means
+    ``OPENAI_REQUEST_TIMEOUT``."""
     headers = _build_headers(config)
-    timeout = float(settings.OPENAI_REQUEST_TIMEOUT)
-    payload = _build_payload(config, messages, tools)
+    timeout = (
+        float(settings.OPENAI_REQUEST_TIMEOUT)
+        if timeout_seconds is None
+        else float(timeout_seconds)
+    )
+    payload = _build_payload(config, messages, tools, tool_choice)
 
     logger.info(
         "LLM request: model=%s messages=%d tools=%d",

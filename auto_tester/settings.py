@@ -442,3 +442,8 @@ SUB_AGENT_MIN_TIMEOUT_SECONDS: int = config(
 SUB_AGENT_MAX_TIMEOUT_SECONDS: int = config(
     "SUB_AGENT_MAX_TIMEOUT_SECONDS", default=900, cast=int
 )
+# Cap for the one tool-free LLM turn a step/recovery/restore sub-agent gets when
+# its time budget runs out, to answer in its RESULT format. 0 disables it.
+AGENT_FINAL_ANSWER_TIMEOUT_SECONDS: int = config(
+    "AGENT_FINAL_ANSWER_TIMEOUT_SECONDS", default=90, cast=int
+)

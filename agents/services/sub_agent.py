@@ -29,6 +29,10 @@ _SUMMARY_PATTERN = re.compile(r"SUMMARY:\s*(.+)", re.IGNORECASE | re.DOTALL)
 
 SubTaskStatus = Literal["pass", "fail"]
 
+# Marks a PASS given in the tool-free turn after the time budget ran out, so the
+# verdict and a person reviewing the case can see it.
+_ANSWERED_AFTER_TIMEOUT_SUFFIX = " (answered when the step's time budget ran out)"
+
 
 def run_sub_agent(
     sub_task: SubTask,
@@ -51,6 +55,7 @@ def run_sub_agent(
         system_info=system_info,
         project_prompt=project_prompt,
         tool_names=tool_names,
+        final_turn_on_timeout=config.final_answer is not None,
     )
 
     summarizer_config = build_llm_config()
@@ -93,6 +98,14 @@ def _parse_sub_task_result(agent_result: AgentResult) -> SubTaskResult:
             logger.info(
                 "Sub-agent result parsing: found explicit RESULT: %s", status.upper()
             )
+            if status == "pass" and agent_result.answered_after_timeout:
+                # Counts as a normal pass: the final-answer prompt allowed PASS
+                # only on evidence already seen in the conversation.
+                return SubTaskResult(
+                    status="pass",
+                    summary=f"{summary}{_ANSWERED_AFTER_TIMEOUT_SUFFIX}",
+                    iterations=agent_result.iterations,
+                )
             return SubTaskResult(
                 status=status,
                 summary=summary,

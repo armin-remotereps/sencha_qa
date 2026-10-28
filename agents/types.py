@@ -160,6 +160,18 @@ class AttemptScreenshotCallback(Protocol):
 
 
 @dataclass(frozen=True)
+class FinalAnswerPolicy:
+    """One last tool-free turn when the time budget runs out.
+
+    ``prompt`` is the user message sent then; ``timeout_seconds`` caps that one
+    LLM call.
+    """
+
+    prompt: str
+    timeout_seconds: int
+
+
+@dataclass(frozen=True)
 class AgentConfig:
     llm: LLMConfig
     vision_llm: LLMConfig | None = None
@@ -168,6 +180,8 @@ class AgentConfig:
     on_log: LogCallback | None = None
     on_screenshot: ScreenshotCallback | None = None
     cancellation_check: CancellationCheck | None = None
+    # None keeps the old behaviour: the loop stops at the deadline unanswered.
+    final_answer: FinalAnswerPolicy | None = None
 
 
 @dataclass(frozen=True)
@@ -178,6 +192,8 @@ class AgentResult:
     error: str | None = None
     # Set only with ``AgentStopReason.NEEDS_HUMAN_HELP``.
     help: HelpRequestInfo | None = None
+    # The last message was the final answer given after the time budget ran out.
+    answered_after_timeout: bool = False
 
 
 @dataclass(frozen=True)

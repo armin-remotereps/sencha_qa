@@ -42,6 +42,7 @@ from agents.services.orchestrator_prompts import (
     was_resumed,
 )
 from agents.services.sub_agent import run_sub_agent
+from agents.services.sub_agent_prompts import build_final_answer_prompt
 from agents.services.sub_task_budget import (
     TimeoutBounds,
     build_timeout_bounds,
@@ -60,6 +61,7 @@ from agents.types import (
     CheckpointHelp,
     DecisionAction,
     FailureCause,
+    FinalAnswerPolicy,
     HelpRequestInfo,
     LLMConfig,
     LogCallback,
@@ -676,6 +678,9 @@ def _build_sub_agent_execution_config(
     cancellation_check: CancellationCheck | None,
 ) -> AgentConfig:
     # Shared by every sub-agent run; on_screenshot is set per attempt.
+    # Steps, recoveries and restores get one tool-free answer turn when their
+    # budget runs out (0 disables it); the teardown builds its own config.
+    final_answer_timeout = settings.AGENT_FINAL_ANSWER_TIMEOUT_SECONDS
     return AgentConfig(
         llm=sub_agent_llm,
         vision_llm=vision_llm,
@@ -683,6 +688,14 @@ def _build_sub_agent_execution_config(
         timeout_seconds=settings.SUB_AGENT_TIMEOUT_SECONDS,
         on_log=on_log,
         cancellation_check=cancellation_check,
+        final_answer=(
+            FinalAnswerPolicy(
+                prompt=build_final_answer_prompt(),
+                timeout_seconds=final_answer_timeout,
+            )
+            if final_answer_timeout > 0
+            else None
+        ),
     )
 
 
