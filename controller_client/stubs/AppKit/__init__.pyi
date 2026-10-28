@@ -1,6 +1,8 @@
 # Local stub for pyobjc-framework-Cocoa's AppKit, which ships no type
 # information. It covers only what app_closer_macos uses to find and quit
-# running apps. Extend it when the controller uses more of AppKit.
+# running apps and what person_window_front_app uses to give the front back to
+# the app the person-step window took it from. Extend it when the controller
+# uses more of AppKit.
 from collections.abc import Sequence
 from typing import Final
 
@@ -20,10 +22,13 @@ class NSRunningApplication:
     def isTerminated(self) -> bool: ...
     def terminate(self) -> bool: ...
     def forceTerminate(self) -> bool: ...
+    def activateWithOptions_(self, options: int) -> bool: ...
 
 class NSWorkspace:
     @classmethod
     def sharedWorkspace(cls) -> NSWorkspace: ...
     def runningApplications(self) -> Sequence[NSRunningApplication]: ...
+    def frontmostApplication(self) -> NSRunningApplication | None: ...
 
 NSApplicationActivationPolicyRegular: Final[int]
+NSApplicationActivateIgnoringOtherApps: Final[int]
