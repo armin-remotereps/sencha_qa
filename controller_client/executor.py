@@ -41,7 +41,7 @@ from controller_client.shell_encoding import SHELL_OUTPUT_ENCODING
 _DESKTOP: Final[DesktopBackend] = get_desktop_backend()
 
 
-def _to_input(x: int, y: int) -> tuple[int, int]:
+def to_input(x: int, y: int) -> tuple[int, int]:
     """Map a point from the latest screenshot into the backend's input space."""
     spaces = ScreenSpaces(_DESKTOP.capture_size(), _DESKTOP.input_size())
     return map_to_input(x, y, spaces)
@@ -57,7 +57,7 @@ def _point(x: int, y: int, input_x: int, input_y: int) -> str:
 def execute_click(payload: ClickPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
-    x, y = _to_input(payload.x, payload.y)
+    x, y = to_input(payload.x, payload.y)
     try:
         _DESKTOP.click(x, y, payload.button)
     except ExecutionError:
@@ -78,7 +78,7 @@ def execute_click(payload: ClickPayload) -> ActionResultPayload:
 def execute_double_click(payload: DoubleClickPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
-    x, y = _to_input(payload.x, payload.y)
+    x, y = to_input(payload.x, payload.y)
     try:
         _DESKTOP.double_click(x, y)
     except ExecutionError:
@@ -96,7 +96,7 @@ def execute_double_click(payload: DoubleClickPayload) -> ActionResultPayload:
 def execute_hover(payload: HoverPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
-    x, y = _to_input(payload.x, payload.y)
+    x, y = to_input(payload.x, payload.y)
     try:
         _DESKTOP.move_to(x, y)
     except ExecutionError:
@@ -114,8 +114,8 @@ def execute_hover(payload: HoverPayload) -> ActionResultPayload:
 def execute_drag(payload: DragPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
-    start_x, start_y = _to_input(payload.start_x, payload.start_y)
-    end_x, end_y = _to_input(payload.end_x, payload.end_y)
+    start_x, start_y = to_input(payload.start_x, payload.start_y)
+    end_x, end_y = to_input(payload.end_x, payload.end_y)
     try:
         _DESKTOP.drag(
             start_x,
@@ -145,7 +145,7 @@ def execute_scroll(payload: ScrollPayload) -> ActionResultPayload:
     ensure_input_not_blocked()
     start = time.monotonic()
     if payload.x is not None and payload.y is not None:
-        x, y = _to_input(payload.x, payload.y)
+        x, y = to_input(payload.x, payload.y)
         input_x: int | None = x
         input_y: int | None = y
         where = f"at {_point(payload.x, payload.y, x, y)}"

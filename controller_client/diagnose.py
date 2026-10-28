@@ -5,6 +5,7 @@ from controller_client.browser_diagnostics import build_browser_steps
 from controller_client.config import setup_logging
 from controller_client.desktop import get_desktop_backend
 from controller_client.diagnostics import run_diagnostics
+from controller_client.input_diagnostics import format_summary, run_input_checks
 from controller_client.protocol import BrowserName
 
 _ALL_BROWSERS = "all"
@@ -36,16 +37,27 @@ def _run_browser_diagnostics(browsers: tuple[BrowserName, ...]) -> None:
     sys.exit(1)
 
 
+def _run_input_checks(*, interactive: bool) -> None:
+    report = run_input_checks(interactive=interactive, ask=input, report=print)
+    print()
+    print(format_summary(report))
+    if report.failed:
+        sys.exit(1)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m controller_client.diagnose",
         description=(
             "Check that this machine lets the Test Runner capture the screen "
             "and drive input. "
-            "With --browsers, check the browsers instead."
+            "With --browsers, check the browsers instead. "
+            "With --input, check the pointer mapping, scroll direction and "
+            "modifier release live, ending with a summary to copy and paste."
         ),
     )
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--browsers",
         nargs="?",
         const=_ALL_BROWSERS,
@@ -57,9 +69,28 @@ def main(argv: list[str] | None = None) -> None:
             f"{', '.join(b.value for b in BrowserName)} when no list is given)"
         ),
     )
+    mode.add_argument(
+        "--input",
+        action="store_true",
+        help=(
+            "check screenshot-to-pointer mapping, scroll direction and "
+            "modifier release; moves the pointer and asks yes/no questions"
+        ),
+    )
+    parser.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="with --input, run only the automatic checks (no questions)",
+    )
     parser.add_argument("--log-level", type=str, default="INFO")
     args = parser.parse_args(argv)
+    if args.no_interactive and not args.input:
+        parser.error("--no-interactive can only be used with --input")
     setup_logging(args.log_level)
+
+    if args.input:
+        _run_input_checks(interactive=not args.no_interactive)
+        return
 
     if args.browsers is not None:
         _run_browser_diagnostics(args.browsers)

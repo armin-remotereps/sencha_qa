@@ -85,6 +85,7 @@ scripts/verify_server_image.sh          # build the server image and assert it c
 # from the directory that contains controller_client/)
 python -m controller_client.diagnose    # screen capture
 python -m controller_client.diagnose --browsers   # launch each browser (or --browsers firefox,msedge) and report what is missing
+python -m controller_client.diagnose --input      # screen scale vs OS, pointer mapping, scroll direction, stuck modifiers; prints a summary block to paste back (--no-interactive: automatic checks only)
 
 # Vision worker (on the GPU machine, inside vision_worker/.venv, from the repo root; see vision_worker/README.md)
 python -m vision_worker.main            # connect to VISION_SERVER_URL and serve parse requests
