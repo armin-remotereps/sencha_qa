@@ -41,19 +41,35 @@ def get_preference_view(user: CustomUser) -> PreferenceView | None:
     row = (
         NotificationPreference.objects.filter(user=user)
         .values_list(
-            "enabled", "topic", "notify_need_help", "notify_failed", "notify_chat_reply"
+            "enabled",
+            "topic",
+            "notify_need_help",
+            "notify_failed",
+            "notify_chat_reply",
+            "notify_run_finished",
+            "notify_night_digest",
         )
         .first()
     )
     if row is None:
         return None
-    enabled, topic, notify_need_help, notify_failed, notify_chat_reply = row
+    (
+        enabled,
+        topic,
+        notify_need_help,
+        notify_failed,
+        notify_chat_reply,
+        notify_run_finished,
+        notify_night_digest,
+    ) = row
     return PreferenceView(
         enabled=enabled,
         topic=topic,
         notify_need_help=notify_need_help,
         notify_failed=notify_failed,
         notify_chat_reply=notify_chat_reply,
+        notify_run_finished=notify_run_finished,
+        notify_night_digest=notify_night_digest,
         links=ntfy_subscribe_links(topic),
     )
 
@@ -112,7 +128,13 @@ def regenerate_topic(user: CustomUser) -> None:
 
 
 def update_kinds(
-    user: CustomUser, *, need_help: bool, failed: bool, chat_reply: bool
+    user: CustomUser,
+    *,
+    need_help: bool,
+    failed: bool,
+    chat_reply: bool,
+    run_finished: bool,
+    night_digest: bool,
 ) -> None:
     """Choose which kinds of notification the user gets.
 
@@ -122,6 +144,8 @@ def update_kinds(
         notify_need_help=need_help,
         notify_failed=failed,
         notify_chat_reply=chat_reply,
+        notify_run_finished=run_finished,
+        notify_night_digest=night_digest,
         updated_at=timezone.now(),
     )
     if updated == 0:

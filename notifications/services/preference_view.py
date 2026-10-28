@@ -20,4 +20,6 @@ class PreferenceView:
     notify_need_help: bool
     notify_failed: bool
     notify_chat_reply: bool
+    notify_run_finished: bool
+    notify_night_digest: bool
     links: NtfySubscribeLinks

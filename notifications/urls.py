@@ -17,4 +17,19 @@ urlpatterns: list[URLPattern] = [
     ),
     path("notifications/kinds/", views.update_notification_kinds, name="kinds"),
     path("notifications/test/", views.test_notification, name="test"),
+    path(
+        "notifications/inbox/failures/<int:item_id>/dismiss/",
+        views.dismiss_failure,
+        name="dismiss_failure",
+    ),
+    path(
+        "notifications/inbox/replies/<int:item_id>/dismiss/",
+        views.dismiss_reply,
+        name="dismiss_reply",
+    ),
+    path(
+        "notifications/inbox/dismiss-all/",
+        views.dismiss_all_inbox,
+        name="dismiss_all",
+    ),
 ]

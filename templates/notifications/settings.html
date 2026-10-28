@@ -17,7 +17,7 @@
 <div class="page-header">
   <div>
     <h1>Notifications</h1>
-    <p class="subtitle">Get a notification in the ntfy app on your phone or computer when a test case in one of your projects needs help or fails, or when the Machine setup agent answers you while you are away.</p>
+    <p class="subtitle">Get a notification in the ntfy app on your phone or computer when a test case in one of your projects needs help or fails, when a run finishes, or when the Machine setup agent answers you while you are away.</p>
   </div>
 </div>
 
@@ -127,6 +127,14 @@
       <label class="checkbox" for="{{ kinds_form.chat_reply.id_for_label }}">
         {{ kinds_form.chat_reply }}
         <span><strong>{{ kinds_form.chat_reply.label }}</strong><br><span class="muted small">The Machine setup agent answered a message you sent while you were not looking at the chat.</span></span>
+      </label>
+      <label class="checkbox" for="{{ kinds_form.run_finished.id_for_label }}">
+        {{ kinds_form.run_finished }}
+        <span><strong>{{ kinds_form.run_finished.label }}</strong><br><span class="muted small">A run in one of your projects finished, with its passed, failed and blocked counts and how long it took.</span></span>
+      </label>
+      <label class="checkbox" for="{{ kinds_form.night_digest.id_for_label }}">
+        {{ kinds_form.night_digest }}
+        <span><strong>{{ kinds_form.night_digest.label }}</strong><br><span class="muted small">One morning summary of the night runs in your projects: how many cases passed, failed or still need help.</span></span>
       </label>
       <div class="actions">
         <button type="submit" class="btn btn-primary btn-sm">Save</button>
