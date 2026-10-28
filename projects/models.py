@@ -107,6 +107,19 @@ class BlockedReason(models.TextChoices):
     PERSON_REVIEW = "person_review", "Marked blocked by a person after review"
 
 
+class FailedBy(models.TextChoices):
+    """Who made a run case Failed; meaningful only while its status is FAILED.
+
+    Readers always filter on ``status=FAILED`` too, so a value left behind by a
+    re-run or a result change is never shown. Blank: not recorded (rows older
+    than the field).
+    """
+
+    AGENT = "agent", "AI verdict"
+    HELP = "help", "Marked failed (help)"
+    REVIEW = "review", "Changed after review"
+
+
 class ApplicationPlatform(models.TextChoices):
     WEB = "web", "Web application"
     WINDOWS = "windows", "Windows desktop"
@@ -417,6 +430,8 @@ class TestRun(models.Model):
     testrail_source_push_summary = models.CharField(
         max_length=255, blank=True, default=""
     )
+    # Claim marker of the morning Night digest: set once, when a digest covers it.
+    night_digest_sent_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self) -> str:
         return f"TestRun #{self.pk} — {self.project.name}"
@@ -452,9 +467,19 @@ class TestRunTestCase(models.Model):
     blocked_reason = models.CharField(
         max_length=32, choices=BlockedReason.choices, blank=True, default=""
     )
+    # Set only while status is FAILED (see ``FailedBy``).
+    failed_by = models.CharField(
+        max_length=16, choices=FailedBy.choices, blank=True, default=""
+    )
     logs = models.TextField(blank=True, default="")
+    # First pick-up by a worker since the case last started from scratch.
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
+    # When the worker that owns the case now picked it up; null when none does.
+    segment_started_at = models.DateTimeField(null=True, blank=True)
+    # Sum of the closed execution segments since the last from-scratch start
+    # (``projects.case_duration_services``); null means unknown.
+    active_duration = models.DurationField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     testrail_result_id = models.PositiveIntegerField(null=True, blank=True)
@@ -490,6 +515,12 @@ class TestRunTestCase(models.Model):
 
     class Meta:
         unique_together = ("test_run", "test_case")
+        indexes = [
+            # Failed cases list, newest first (built concurrently by 0035).
+            models.Index(
+                fields=["status", "-finished_at"], name="run_case_status_finished_idx"
+            )
+        ]
 
     def __str__(self) -> str:
         return f"TRTC #{self.pk} — {self.test_case.title[:50]}"

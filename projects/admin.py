@@ -151,13 +151,17 @@ class TestRunTestCaseAdmin(admin.ModelAdmin[TestRunTestCase]):
         "status",
         "started_at",
         "finished_at",
+        "active_duration",
         "created_at",
     )
     list_filter = ("status",)
     readonly_fields = (
         "status",
+        "failed_by",
         "result",
         "logs",
+        "segment_started_at",
+        "active_duration",
         "testrail_source_run_id",
         "checked_at",
         "checked_by",

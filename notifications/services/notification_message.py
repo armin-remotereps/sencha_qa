@@ -18,6 +18,8 @@ class NotificationKind(StrEnum):
     NEED_HELP = "need_help"
     FAILED = "failed"
     CHAT_REPLY = "chat_reply"
+    NIGHT_DIGEST = "night_digest"
+    RUN_FINISHED = "run_finished"
     TEST = "test"
 
 
@@ -35,6 +37,10 @@ _DELIVERY: dict[NotificationKind, NotificationDelivery] = {
     NotificationKind.CHAT_REPLY: NotificationDelivery(
         priority=3, tags=("speech_balloon",)
     ),
+    NotificationKind.NIGHT_DIGEST: NotificationDelivery(priority=3, tags=("sunrise",)),
+    NotificationKind.RUN_FINISHED: NotificationDelivery(
+        priority=3, tags=("checkered_flag",)
+    ),
     NotificationKind.TEST: NotificationDelivery(priority=3, tags=("white_check_mark",)),
 }
 
@@ -44,6 +50,8 @@ _PREFERENCE_FLAG: dict[NotificationKind, str | None] = {
     NotificationKind.NEED_HELP: "notify_need_help",
     NotificationKind.FAILED: "notify_failed",
     NotificationKind.CHAT_REPLY: "notify_chat_reply",
+    NotificationKind.NIGHT_DIGEST: "notify_night_digest",
+    NotificationKind.RUN_FINISHED: "notify_run_finished",
     NotificationKind.TEST: None,
 }
 

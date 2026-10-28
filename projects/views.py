@@ -5,7 +5,6 @@ from typing import Any
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.core.paginator import Page
 from django.http import (
     Http404,
     HttpRequest,
@@ -20,6 +19,12 @@ from django.views.decorators.http import require_GET, require_POST
 
 from accounts.models import CustomUser
 from accounts.types import AuthenticatedRequest
+from auto_tester.pagination import (
+    ALLOWED_PER_PAGE,
+    elided_page_range,
+    parse_page,
+    parse_per_page,
+)
 from projects.application_context_services import (
     get_context_provenance,
     list_context_versions,
@@ -175,24 +180,7 @@ from projects.testrail_results_services import get_testrail_push_panel
 from projects.testrail_services import get_testrail_picker_state
 from visual_engine.services.pool_status import get_visual_engine_status
 
-ALLOWED_PER_PAGE = [10, 20, 50, 100]
-DEFAULT_PER_PAGE = 20
 PROJECTS_DEFAULT_PER_PAGE = 9
-
-
-def _parse_per_page(request: HttpRequest, default: int = DEFAULT_PER_PAGE) -> int:
-    try:
-        value = int(request.GET.get("per_page", ""))
-    except ValueError:
-        return default
-    return value if value in ALLOWED_PER_PAGE else default
-
-
-def _parse_page(request: HttpRequest) -> int:
-    try:
-        return max(1, int(request.GET.get("page", "1")))
-    except ValueError:
-        return 1
 
 
 def _build_query_params(request: HttpRequest) -> str:
@@ -200,15 +188,6 @@ def _build_query_params(request: HttpRequest) -> str:
     params.pop("page", None)
     encoded = params.urlencode()
     return f"&{encoded}" if encoded else ""
-
-
-def _get_elided_page_range(page_obj: Page[Any]) -> list[int | str]:
-    return [
-        int(p) if isinstance(p, int) else str(p)
-        for p in page_obj.paginator.get_elided_page_range(
-            page_obj.number, on_each_side=1, on_ends=1
-        )
-    ]
 
 
 def _parse_test_case_ids(request: HttpRequest) -> list[int]:
@@ -248,8 +227,8 @@ def project_list(request: AuthenticatedRequest) -> HttpResponse:
     search = request.GET.get("search", "").strip() or None
     tag_filter = request.GET.get("tag", "").strip() or None
     show_archived = request.GET.get("archived") == "1"
-    page = _parse_page(request)
-    per_page = _parse_per_page(request, PROJECTS_DEFAULT_PER_PAGE)
+    page = parse_page(request)
+    per_page = parse_per_page(request, PROJECTS_DEFAULT_PER_PAGE)
 
     projects = list_projects_for_user(
         user=user,
@@ -279,7 +258,7 @@ def project_list(request: AuthenticatedRequest) -> HttpResponse:
             "show_archived": show_archived,
             "per_page": per_page,
             "allowed_per_page": ALLOWED_PER_PAGE,
-            "elided_page_range": _get_elided_page_range(projects),
+            "elided_page_range": elided_page_range(projects),
             "query_params": _build_query_params(request),
             "active_nav": "projects",
         },
@@ -605,8 +584,8 @@ def test_case_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
     upload_filter = request.GET.get("upload", "").strip() or None
     upload_id: int | None = int(upload_filter) if upload_filter else None
     status_filter = request.GET.get("status", "").strip() or None
-    page = _parse_page(request)
-    per_page = _parse_per_page(request)
+    page = parse_page(request)
+    per_page = parse_per_page(request)
 
     test_cases = list_test_cases_for_project(
         project=project,
@@ -638,7 +617,7 @@ def test_case_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
             "other_projects": other_projects,
             "per_page": per_page,
             "allowed_per_page": ALLOWED_PER_PAGE,
-            "elided_page_range": _get_elided_page_range(test_cases),
+            "elided_page_range": elided_page_range(test_cases),
             "query_params": _build_query_params(request),
             "active_tab": "test_cases",
             "active_nav": "projects",
@@ -731,8 +710,8 @@ def test_case_copy_to_project(
 @project_membership_required
 def test_case_import(request: HttpRequest, project: Project) -> HttpResponse:
     """Display the TestRail import cards and the paginated upload history."""
-    page = _parse_page(request)
-    per_page = _parse_per_page(request)
+    page = parse_page(request)
+    per_page = parse_per_page(request)
     uploads = list_uploads_for_project(project=project, page=page, per_page=per_page)
     return render(
         request,
@@ -742,7 +721,7 @@ def test_case_import(request: HttpRequest, project: Project) -> HttpResponse:
             "uploads": uploads,
             "per_page": per_page,
             "allowed_per_page": ALLOWED_PER_PAGE,
-            "elided_page_range": _get_elided_page_range(uploads),
+            "elided_page_range": elided_page_range(uploads),
             "query_params": _build_query_params(request),
             "testrail_picker": get_testrail_picker_state(project),
             "active_tab": "test_cases",
@@ -786,8 +765,8 @@ def upload_delete(
 
 @project_membership_required
 def test_run_list(request: HttpRequest, project: Project) -> HttpResponse:
-    page = _parse_page(request)
-    per_page = _parse_per_page(request)
+    page = parse_page(request)
+    per_page = parse_per_page(request)
     test_runs = list_test_runs_for_project(
         project=project, page=page, per_page=per_page
     )
@@ -799,7 +778,7 @@ def test_run_list(request: HttpRequest, project: Project) -> HttpResponse:
             "test_runs": test_runs,
             "per_page": per_page,
             "allowed_per_page": ALLOWED_PER_PAGE,
-            "elided_page_range": _get_elided_page_range(test_runs),
+            "elided_page_range": elided_page_range(test_runs),
             "query_params": _build_query_params(request),
             "active_tab": "runs",
             "active_nav": "projects",
@@ -968,8 +947,8 @@ def _rerun_test_run_cases(
 def _build_test_run_detail_context(
     request: HttpRequest, project: Project, test_run: TestRun
 ) -> dict[str, Any]:
-    page = _parse_page(request)
-    per_page = _parse_per_page(request)
+    page = parse_page(request)
+    per_page = parse_per_page(request)
     cases = list_test_run_cases(test_run=test_run, page=page, per_page=per_page)
     summary = get_test_run_summary(test_run)
     failed_titles = list_failed_case_titles(test_run) if summary["failed"] else []
@@ -989,7 +968,7 @@ def _build_test_run_detail_context(
         "summary": summary,
         "per_page": per_page,
         "allowed_per_page": ALLOWED_PER_PAGE,
-        "elided_page_range": _get_elided_page_range(cases),
+        "elided_page_range": elided_page_range(cases),
         "query_params": _build_query_params(request),
         "form": TestCaseForm(),
         "can_edit": can_edit_test_case_in_run(test_run),

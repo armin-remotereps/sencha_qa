@@ -6,17 +6,16 @@ import logging
 import re
 
 from django.db import transaction
-from django.urls import reverse
 
 from machine_setup.models import (
     SetupConversation,
-    SetupConversationKind,
     SetupMessage,
     SetupMessageKind,
     SetupTurn,
     SetupTurnEndReason,
     SetupTurnStatus,
 )
+from machine_setup.services.conversation_url import conversation_path
 from machine_setup.services.viewer_presence import is_viewing
 from notifications.services.enqueue_notification import enqueue_notification
 from notifications.services.notification_message import (
@@ -85,18 +84,6 @@ def _title_and_body(turn: SetupTurn, notice: str) -> tuple[str, str]:
     return f"Reply · {project_name}", _last_reply_text(turn) or _NO_REPLY_TEXT
 
 
-def _path(turn: SetupTurn) -> str:
-    if turn.conversation.kind == SetupConversationKind.CHAT:
-        return reverse("machine_setup:chat", kwargs={"project_id": turn.project_id})
-    return reverse(
-        "machine_setup:thread",
-        kwargs={
-            "project_id": turn.project_id,
-            "conversation_id": turn.conversation_id,
-        },
-    )
-
-
 def notify_turn_reply(turn: SetupTurn, *, notice: str) -> None:
     """Notify the person who sent ``turn`` that it ended, unless they are watching.
 
@@ -133,7 +120,7 @@ def notify_turn_reply(turn: SetupTurn, *, notice: str) -> None:
             kind=NotificationKind.CHAT_REPLY,
             title=title,
             body=_preview(body),
-            path=_path(turn),
+            path=conversation_path(turn.conversation),
         )
         transaction.on_commit(lambda: enqueue_notification(user_ids, message))
     except Exception:

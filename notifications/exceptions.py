@@ -30,3 +30,10 @@ class TestNotificationThrottledError(NotificationError):
         super().__init__(
             f"A test notification was just sent. Try again in {retry_seconds} seconds."
         )
+
+
+class InboxItemNotFoundError(NotificationError):
+    """The inbox item does not exist or belongs to another user."""
+
+    def __init__(self) -> None:
+        super().__init__("That item is no longer in your inbox.")

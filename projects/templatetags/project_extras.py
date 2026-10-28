@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import timedelta
 from typing import Any
 
 from django import template
+
+from auto_tester.durations import format_duration
 
 register = template.Library()
 
@@ -21,3 +24,9 @@ def get_item(mapping: Mapping[Any, Any] | None, key: Any) -> Any:
     if mapping is None:
         return None
     return mapping.get(key)
+
+
+@register.filter
+def duration(value: timedelta | None) -> str:
+    """Render a duration with :func:`auto_tester.durations.format_duration`."""
+    return format_duration(value)
