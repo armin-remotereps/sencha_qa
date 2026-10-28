@@ -139,6 +139,22 @@ echo "To start the controller client:"
 echo "  cd $ROOT_DIR"
 echo "  controller_client/.venv/bin/python -m controller_client.main"
 echo ""
+# Self-update (Update Test Runner on the Environment page) installs the new
+# version side by side in <base>/test-runner-<version>/ and deletes the old
+# copy; <base> is the parent of a test-runner-* folder an update created (it
+# holds .punk-hazard-runner), else this root.
+UPDATE_BASE_DIR="$ROOT_DIR"
+case "$(basename "$ROOT_DIR")" in
+    test-runner-[0-9]*)
+        if [[ -f "$ROOT_DIR/.punk-hazard-runner" ]]; then
+            UPDATE_BASE_DIR="$(dirname "$ROOT_DIR")"
+        fi
+        ;;
+esac
+echo "After an update from the panel (Update Test Runner), the new version runs from"
+echo "$UPDATE_BASE_DIR/test-runner-<version>/ and this copy is deleted. Start it from then on with:"
+echo "  $UPDATE_BASE_DIR/start-test-runner.sh"
+echo ""
 if [[ "$(uname -s)" == "Linux" ]]; then
     echo "Start the Test Runner from a terminal inside the desktop session, not over SSH:"
     echo "it needs that session's D-Bus and screen."

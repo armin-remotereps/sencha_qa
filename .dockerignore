@@ -10,6 +10,12 @@ controller_client/venv/
 controller_client/.env
 controller_client/.pytest_cache/
 controller_client/.mypy_cache/
+controller_client/logs/
+# Side-by-side installs and start script left by a runner self-update run
+# from this checkout (they also hold a copy of controller_client/.env).
+test-runner-*/
+start-test-runner.sh
+start-test-runner.cmd
 # Same for vision_worker: the server imports vision_worker.protocol, so the
 # source stays; its venv, model weights and .env are per-machine artifacts.
 vision_worker/.venv/

@@ -1,6 +1,6 @@
 # feat: Update the Test Runner from the panel (side-by-side install)
 
-Status: In progress
+Status: Done
 Created: 2026-10-28
 Request: Updating the Test Runner (`controller_client`) by hand on every test machine is
 slow and error-prone. When the connected runner reports a version older than the server's
@@ -424,9 +424,9 @@ New modules, all stdlib plus what the venv already has. Windows code goes under
   gates and the offer. It is written `expired` lazily on the next offer or request.
 
 ### Settings / infrastructure
-- `RUNNER_UPDATE_TIMEOUT_SECONDS` (default 2700: pip 20 min + Playwright 30 min worst case,
-  minus overlap) in `settings.py` via decouple, and added to `example.env`.
-- The 8 MiB `MAX_UPDATE_ARCHIVE_BYTES` lives in the protocol, not in settings, because both
+- `RUNNER_UPDATE_TIMEOUT_SECONDS` (default `UPDATE_MAX_SECONDS` + 300 = 3900; below + 60 is
+  refused at settings load) in `settings.py` via decouple, and added to `example.env`.
+- The 7 MiB `MAX_UPDATE_ARCHIVE_BYTES` lives in the protocol, not in settings, because both
   sides must agree on it.
 - `.gitignore` / `.dockerignore` / ZIP excludes: `controller_client/logs/`.
 - `scripts/verify_server_image.sh`: also import `projects.runner_bundle` and build the
@@ -644,3 +644,16 @@ Parallel parts. Each owns its files:
   decision. The in-place swap, supervisor/launcher, watchdog and rollback were dropped,
   together with the open questions they raised.
 - 2026-10-28: user answers: Q1–Q6 the recommendations as written (mechanism: the user's side-by-side install, no rollback). Status In progress; build before feat-hitl-runner-chat.
+- 2026-10-28: implemented (shared protocol/model, then parallel parts A+D, B, C, E+F, G) and reviewed in three reviewer/verifier rounds. Deviations from the plan, all from review:
+  - Overall runner deadline `UPDATE_MAX_SECONDS` = 3600 (`asyncio.timeout` around the whole update; Playwright 25 min); server timeout = that + 300, refused below + 60.
+  - Every runner refusal (busy, invalid, not newer, source checkout, disk space) reports `update_status failed` with the update id; `error` only when the id cannot be parsed.
+  - Lost updates: the handshake carries `update_in_flight_id` (also while a final status is still unsent); settle marks the newest in-flight row succeeded (target version), keeps it (same id) or fails it ("restarted or reconnected without the update"). Status sends wait for an accepted handshake.
+  - Paused help requests switch to `restore` only when an update settles succeeded, not at request time.
+  - Handover marker `logs/connected-<update_id>`; the start script is written by the new runner after it connects; a runner in a source checkout (`.git`, `manage.py`, `auto_tester`) refuses to update and is never deleted.
+  - Folders the updater creates carry `.punk-hazard-runner`; only marked `test-runner-*` folders count as managed (deletable). Environment cleanup protects `start-test-runner.*`.
+  - `--api-key` is never carried on the new runner's command line; `install_env_file` writes it into the new `.env` (0600).
+  - Archive cap 7 MiB, `MAX_MESSAGE_SIZE` in the protocol with an assert that the encoded update fits.
+  - Update workflow lives in `controller_client/update_runner.py`, not `ControllerClient`.
+  - Accepted residual: after a server-side expiry, a second Update pressed while the first install still runs can be marked succeeded by the first install's new runner (settle compares `to_version`; the new runner does not report which update it came from).
+  - Accepted residual: if a final status is lost and a new `update_runner` is accepted before any reconnect, the older row stays in flight until it expires.
+  - Status Done.

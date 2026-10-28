@@ -101,9 +101,27 @@ if errorlevel 1 (
 echo.
 echo Setup complete!
 echo.
+:: Self-update (Update Test Runner on the Environment page) installs the new
+:: version side by side in <base>\test-runner-<version>\ and deletes the old
+:: copy; <base> is the parent of a test-runner-* folder an update created
+:: (it holds .punk-hazard-runner), else this root.
+for %%I in ("%ROOT_DIR%") do set "ROOT_NAME=%%~nxI"
+for %%I in ("%ROOT_DIR%\..") do set "ROOT_PARENT=%%~fI"
+set "UPDATE_BASE_DIR=%ROOT_DIR%"
+if /I "%ROOT_NAME:~0,12%"=="test-runner-" if exist "%ROOT_DIR%\.punk-hazard-runner" set "UPDATE_BASE_DIR=%ROOT_PARENT%"
+:: Paths are printed with delayed expansion, which inserts them after the
+:: line is parsed, so characters such as & or ) in a folder name are printed
+:: instead of being run. Enabled only here: the sets above would mangle a !.
+setlocal EnableDelayedExpansion
 echo To start the controller client:
-echo   cd %ROOT_DIR%
+echo   cd /d "!ROOT_DIR!"
 echo   controller_client\.venv\Scripts\python -m controller_client.main
+echo.
+echo After an update from the panel (Update Test Runner), the new version runs from
+echo   !UPDATE_BASE_DIR!\test-runner-^<version^>\
+echo and this copy is deleted. Start it from then on with:
+echo   "!UPDATE_BASE_DIR!\start-test-runner.cmd"
+endlocal
 echo.
 echo To check that the Test Runner can capture the screen:
 echo   controller_client\.venv\Scripts\python -m controller_client.diagnose

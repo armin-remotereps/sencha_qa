@@ -97,6 +97,19 @@ Write-Host "To start the controller client:"
 Write-Host "  cd $RootDir"
 Write-Host "  controller_client\.venv\Scripts\python -m controller_client.main"
 Write-Host ""
+# Self-update (Update Test Runner on the Environment page) installs the new
+# version side by side in <base>\test-runner-<version>\ and deletes the old
+# copy; <base> is the parent of a test-runner-* folder an update created (it
+# holds .punk-hazard-runner), else this root.
+if (((Split-Path -Leaf $RootDir) -match '^test-runner-\d') -and (Test-Path -LiteralPath (Join-Path $RootDir '.punk-hazard-runner') -PathType Leaf)) {
+    $UpdateBaseDir = Split-Path -Parent $RootDir
+} else {
+    $UpdateBaseDir = $RootDir
+}
+Write-Host "After an update from the panel (Update Test Runner), the new version runs from"
+Write-Host "$UpdateBaseDir\test-runner-<version>\ and this copy is deleted. Start it from then on with:"
+Write-Host "  $UpdateBaseDir\start-test-runner.cmd"
+Write-Host ""
 Write-Host "To check that the Test Runner can capture the screen:"
 Write-Host "  controller_client\.venv\Scripts\python -m controller_client.diagnose"
 Write-Host ""

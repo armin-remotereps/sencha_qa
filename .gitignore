@@ -56,6 +56,13 @@ plan.md
 !static/branding/*.png
 .playwright-mcp/
 
+# Test Runner runtime artifacts: file logs, and the side-by-side installs and
+# start script a self-update writes when a runner is run from this checkout
+controller_client/logs/
+/test-runner-*/
+/start-test-runner.sh
+/start-test-runner.cmd
+
 # Vision worker runtime artifacts (OmniParser weights, venv, secrets)
 vision_worker/.venv/
 vision_worker/venv/
