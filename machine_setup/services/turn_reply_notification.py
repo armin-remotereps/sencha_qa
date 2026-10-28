@@ -1,4 +1,8 @@
-"""Tell the person who sent a setup turn that it ended while they were away (ntfy)."""
+"""Tell the person who sent a setup turn that it ended while they were away.
+
+The turn lands in their attention inbox (with a live nudge); if they opted in,
+an ntfy push follows.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +10,7 @@ import logging
 import re
 
 from django.db import transaction
+from django.utils import timezone
 
 from machine_setup.models import (
     SetupConversation,
@@ -17,13 +22,16 @@ from machine_setup.models import (
 )
 from machine_setup.services.conversation_url import conversation_path
 from machine_setup.services.viewer_presence import is_viewing
+from notifications.models import MissedReplyOutcome
 from notifications.services.enqueue_notification import enqueue_notification
+from notifications.services.inbox_broadcast import broadcast_inbox_changed
 from notifications.services.notification_message import (
     NotificationKind,
     NotificationMessage,
 )
 from notifications.services.ntfy_config import ntfy_configured
 from notifications.services.recipients import recipient_user_ids
+from notifications.services.record_missed_reply import record_missed_reply
 
 logger = logging.getLogger(__name__)
 
@@ -75,13 +83,27 @@ def _last_reply_text(turn: SetupTurn) -> str:
     return text or ""
 
 
-def _title_and_body(turn: SetupTurn, notice: str) -> tuple[str, str]:
+def _title_and_body(
+    turn: SetupTurn, notice: str
+) -> tuple[MissedReplyOutcome, str, str]:
     project_name = turn.project.name
     if turn.status == SetupTurnStatus.FAILED:
-        return f"Turn failed · {project_name}", turn.error_message
+        return (
+            MissedReplyOutcome.FAILED,
+            f"Turn failed · {project_name}",
+            turn.error_message,
+        )
     if turn.ended_reason in _LIMIT_REASONS:
-        return f"Paused · {project_name}", notice or _NO_REPLY_TEXT
-    return f"Reply · {project_name}", _last_reply_text(turn) or _NO_REPLY_TEXT
+        return (
+            MissedReplyOutcome.PAUSED,
+            f"Paused · {project_name}",
+            notice or _NO_REPLY_TEXT,
+        )
+    return (
+        MissedReplyOutcome.REPLY,
+        f"Reply · {project_name}",
+        _last_reply_text(turn) or _NO_REPLY_TEXT,
+    )
 
 
 def notify_turn_reply(turn: SetupTurn, *, notice: str) -> None:
@@ -92,16 +114,16 @@ def notify_turn_reply(turn: SetupTurn, *, notice: str) -> None:
     notice row's text (shown for a step or time limit ending). Only answered
     or limit-ended (COMPLETED) and FAILED turns a person started notify;
     nothing for Stop, Reset, the Night auto-fix turn or an archived thread.
-    Enqueues ``notifications.tasks.send_notification`` on commit and never
-    raises.
+    Records a missed reply for the sender (live nudge on commit) whether or
+    not ntfy is configured, then enqueues
+    ``notifications.tasks.send_notification`` on commit if they opted in.
+    Never raises.
     """
     try:
         user_id = turn.requested_by_id
         if turn.auto_fix or user_id is None:
             return
         if turn.status not in (SetupTurnStatus.COMPLETED, SetupTurnStatus.FAILED):
-            return
-        if not ntfy_configured():
             return
         if is_viewing(turn.conversation_id, user_id):
             return
@@ -110,16 +132,27 @@ def notify_turn_reply(turn: SetupTurn, *, notice: str) -> None:
             pk=turn.conversation_id, archived_at__isnull=True
         ).exists():
             return
+        outcome, title, body = _title_and_body(turn, notice)
+        preview = _preview(body)
+        record_missed_reply(
+            user_id=user_id,
+            conversation_id=turn.conversation_id,
+            outcome=outcome,
+            preview=preview,
+            occurred_at=timezone.now(),
+        )
+        transaction.on_commit(lambda: broadcast_inbox_changed([user_id]))
+        if not ntfy_configured():
+            return
         user_ids = recipient_user_ids(
             turn.project_id, NotificationKind.CHAT_REPLY, among=[user_id]
         )
         if not user_ids:
             return
-        title, body = _title_and_body(turn, notice)
         message = NotificationMessage.create(
             kind=NotificationKind.CHAT_REPLY,
             title=title,
-            body=_preview(body),
+            body=preview,
             path=conversation_path(turn.conversation),
         )
         transaction.on_commit(lambda: enqueue_notification(user_ids, message))

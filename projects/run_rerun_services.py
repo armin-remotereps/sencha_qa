@@ -139,6 +139,8 @@ def rerun_test_run_cases(
             result="",
             started_at=None,
             finished_at=None,
+            segment_started_at=None,
+            active_duration=None,
             execution_checkpoint={},
             checked_at=None,
             checked_by=None,
@@ -188,6 +190,8 @@ def _reset_in_memory(pivot: TestRunTestCase, now: datetime) -> None:
     pivot.result = ""
     pivot.started_at = None
     pivot.finished_at = None
+    pivot.segment_started_at = None
+    pivot.active_duration = None
     pivot.execution_checkpoint = {}
     pivot.checked_at = None
     pivot.checked_by = None

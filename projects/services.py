@@ -24,6 +24,7 @@ from django.core.files.base import ContentFile
 from django.core.paginator import Page, Paginator
 from django.db import transaction
 from django.db.models import (
+    Avg,
     Case,
     Count,
     F,
@@ -63,10 +64,17 @@ from controller_client.protocol import (
 )
 from machine_setup.auto_fix_stop import request_auto_fix_stop
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
+from notifications.services.inbox_broadcast import broadcast_project_attention_changed
 from projects.application_context_services import write_application_context
 from projects.case_checkpoint_services import (
     build_checkpoint_callback,
     load_resume_checkpoint,
+)
+from projects.case_duration_services import (
+    AVERAGE_CASE_STATUSES,
+    CASE_SEGMENT_OPEN_FIELDS,
+    close_case_segment,
+    open_case_segment,
 )
 from projects.case_failed_notifications import notify_case_failed
 from projects.case_faults import (
@@ -114,6 +122,7 @@ from projects.models import (
     CasePlanRevision,
     CaseResultChange,
     ContextWriteSource,
+    FailedBy,
     HelpAutoFixState,
     HelpContinueMode,
     HelpProposalAction,
@@ -135,6 +144,7 @@ from projects.models import (
     UploadStatus,
 )
 from projects.run_case_order import PICKER_CASE_ORDERING, RUN_CASE_ORDERING
+from projects.run_finished_notifications import notify_run_finished
 from visual_engine.services.parse_screenshot import parse_screenshot
 from visual_engine.services.pool_status import (
     get_visual_engine_status,
@@ -488,6 +498,8 @@ def _annotate_run_counts(qs: QuerySet[TestRun]) -> QuerySet[TestRun]:
 
     Shared by `list_test_runs_for_project` and `get_project_overview` so
     both surfaces report the same numbers from the same query shape.
+    ``avg_case_duration`` is the mean active duration of the Passed / Failed
+    cases with a known duration (None when there is none), on the same join.
     """
     return qs.annotate(
         case_count=Count("pivot_entries"),
@@ -502,6 +514,10 @@ def _annotate_run_counts(qs: QuerySet[TestRun]) -> QuerySet[TestRun]:
         blocked_count=Count(
             "pivot_entries",
             filter=Q(pivot_entries__status=TestRunTestCaseStatus.BLOCKED),
+        ),
+        avg_case_duration=Avg(
+            "pivot_entries__active_duration",
+            filter=Q(pivot_entries__status__in=AVERAGE_CASE_STATUSES),
         ),
     )
 
@@ -2334,6 +2350,8 @@ def reset_test_run(test_run: TestRun) -> None:
         pivot.logs = ""
         pivot.started_at = None
         pivot.finished_at = None
+        pivot.segment_started_at = None
+        pivot.active_duration = None
         pivot.checked_at = None
         pivot.checked_by = None
         pivot.testrail_source_result_id = None
@@ -2349,6 +2367,8 @@ def reset_test_run(test_run: TestRun) -> None:
                 "logs",
                 "started_at",
                 "finished_at",
+                "segment_started_at",
+                "active_duration",
                 "checked_at",
                 "checked_by",
                 "testrail_source_result_id",
@@ -2772,7 +2792,9 @@ def _broadcast_case_steps(
     event: CaseStepsEvent = {
         "type": "test_run_case.steps",
         "steps": case_step_payload(
-            checkpoint_data, TestRunTestCaseStatus.IN_PROGRESS, pivot.started_at
+            checkpoint_data,
+            TestRunTestCaseStatus.IN_PROGRESS,
+            pivot.segment_started_at,
         ),
     }
     async_to_sync(layer.group_send)(_test_run_case_group(pivot.id), event)
@@ -3021,7 +3043,7 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         if not _is_stale_execution(run_id, generation):
             if not paused_for_help:
                 _safe_cleanup(project.id, wait_for_runner=False)
-            _update_test_run_status_if_needed(pivot.test_run)
+            _update_test_run_status_if_needed(pivot.test_run, generation=generation)
 
 
 def _restore_attempt_count(checkpoint: OrchestratorCheckpoint) -> int:
@@ -3108,8 +3130,9 @@ def _fetch_pivot(pivot_id: int) -> TestRunTestCase:
 
 def _mark_pivot_in_progress(pivot: TestRunTestCase) -> None:
     pivot.status = TestRunTestCaseStatus.IN_PROGRESS
-    pivot.started_at = timezone.now()
-    pivot.save(update_fields=["status", "started_at", "updated_at"])
+    # Keeps the first start and the time of earlier segments (Continue, Resume).
+    open_case_segment(pivot, timezone.now())
+    pivot.save(update_fields=["status", *CASE_SEGMENT_OPEN_FIELDS, "updated_at"])
 
     test_run = pivot.test_run
     status_changed = False
@@ -3220,10 +3243,17 @@ def _finalize_pivot(pivot: TestRunTestCase, result: AgentResult) -> None:
         pivot.status = TestRunTestCaseStatus.SUCCESS
     else:
         pivot.status = TestRunTestCaseStatus.FAILED
+        pivot.failed_by = FailedBy.AGENT
 
+    now = timezone.now()
     pivot.result = _extract_agent_summary(result)
-    pivot.finished_at = timezone.now()
-    pivot.save(update_fields=["status", "result", "finished_at", "updated_at"])
+    pivot.finished_at = now
+    pivot.save(
+        update_fields=["status", "result", "finished_at", "failed_by", "updated_at"]
+    )
+    # The segment ends at the verdict; the teardown that follows is not counted.
+    close_case_segment(pivot.pk, now)
+    pivot.segment_started_at = None
     _broadcast_pivot_status_to_run(pivot)
     _broadcast_pivot_status_to_case(pivot)
 
@@ -3292,6 +3322,9 @@ def _pause_run_for_help(
             pivot.pk, step_num
         )
         now = timezone.now()
+        # The worker stops owning the case: waiting for help is not counted.
+        close_case_segment(pivot.pk, now)
+        pivot.segment_started_at = None
         # At most one open request per case: close a leftover before opening.
         CaseHelpRequest.objects.filter(
             test_run_test_case_id=pivot.pk, resolution=HelpResolution.OPEN
@@ -3332,11 +3365,13 @@ def _pause_run_for_help(
             log_line += " The machine setup agent will try to fix it."
         logged = _append_pivot_log(pivot.pk, log_line, generation)
         help_request_id = help_request.pk
+        project_id = test_run.project_id
 
         def _after_commit() -> None:
             if logged:
                 _broadcast_log(pivot, log_line)
             broadcast_run_and_pivots(test_run, [pivot])
+            broadcast_project_attention_changed(project_id)
             if auto_fix:
                 enqueue_case_auto_fix(help_request_id)
             else:
@@ -3354,9 +3389,16 @@ def _extract_agent_summary(result: AgentResult) -> str:
 
 
 def _mark_pivot_cancelled(pivot: TestRunTestCase) -> None:
+    now = timezone.now()
     pivot.status = TestRunTestCaseStatus.CANCELLED
-    pivot.finished_at = timezone.now()
+    pivot.finished_at = now
     pivot.save(update_fields=["status", "finished_at", "updated_at"])
+    # Need help and Created cases have no open segment: skip the query (abort
+    # cancels many). The close itself is idempotent when an abort races the
+    # worker's own cancel; that worker's pivot still shows its segment.
+    if pivot.segment_started_at is not None:
+        close_case_segment(pivot.pk, now)
+        pivot.segment_started_at = None
     _broadcast_pivot_status_to_run(pivot)
     _broadcast_pivot_status_to_case(pivot)
 
@@ -3426,13 +3468,16 @@ def _cancel_run_help_requests(test_run: TestRun, now: datetime) -> None:
         steps=[],
         previous_steps=[],
     )
-    open_requests.update(
+    cancelled = open_requests.update(
         resolution=HelpResolution.CANCELLED,
         resolved_at=now,
         agent_proposal_action=HelpProposalAction.NONE,
         agent_proposal_note="",
         agent_proposal_at=None,
     )
+    if cancelled:
+        project_id = test_run.project_id
+        transaction.on_commit(lambda: broadcast_project_attention_changed(project_id))
     auto_fixing_ids = list(
         requests.filter(auto_fix_state=HelpAutoFixState.RUNNING).values_list(
             "id", flat=True
@@ -3459,16 +3504,24 @@ def abort_active_test_run_on_disconnect(project: Project) -> None:
         abort_test_run(active_run, reason="Controller client disconnected")
 
 
-def _update_test_run_status_if_needed(test_run: TestRun) -> None:
+def _update_test_run_status_if_needed(test_run: TestRun, *, generation: int) -> bool:
+    """Finish the run once every case settled; True for the one caller that did.
+
+    The STARTED -> DONE write is a conditional UPDATE on the status and
+    ``generation``: when two case workers finish together, Postgres re-checks
+    the WHERE of the second after the first commits, so exactly one caller per
+    generation finishes the run and sends the run-finished notification (on
+    commit). A worker of an older generation matches nothing.
+    """
     test_run.refresh_from_db()
     # A paused run finishes only after its Need help case is resolved.
     if test_run.status in (TestRunStatus.CANCELLED, TestRunStatus.PAUSED):
-        return
+        return False
 
     all_pivots = test_run.pivot_entries.all()
 
     if not all_pivots.exists():
-        return
+        return False
 
     all_done = not all_pivots.filter(
         status__in=[
@@ -3478,11 +3531,23 @@ def _update_test_run_status_if_needed(test_run: TestRun) -> None:
         ]
     ).exists()
 
-    if all_done:
-        test_run.status = TestRunStatus.DONE
-        test_run.finished_at = timezone.now()
-        test_run.save(update_fields=["status", "finished_at", "updated_at"])
-        broadcast_test_run_status(test_run)
+    if not all_done:
+        return False
+    now = timezone.now()
+    finished = TestRun.objects.filter(
+        pk=test_run.pk,
+        status=TestRunStatus.STARTED,
+        execution_generation=generation,
+    ).update(status=TestRunStatus.DONE, finished_at=now, updated_at=now)
+    if finished != 1:
+        return False
+    test_run.status = TestRunStatus.DONE
+    test_run.finished_at = now
+    test_run.updated_at = now
+    broadcast_test_run_status(test_run)
+    run_id = test_run.pk
+    transaction.on_commit(lambda: notify_run_finished(run_id, generation=generation))
+    return True
 
 
 # ============================================================================

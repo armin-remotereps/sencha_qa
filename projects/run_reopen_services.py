@@ -126,8 +126,10 @@ def reset_case_for_restart(pivot: TestRunTestCase, now: datetime) -> None:
     """Put a case back to CREATED in memory, as Resume does (`RESTART_RESET_FIELDS`).
 
     Clears the verdict, finish time and Checked/Sent marks; the log,
-    screenshots and checkpoint are kept (``started_at`` is set again when the
-    worker picks the case up).
+    screenshots and checkpoint are kept. ``started_at`` (the first start) and
+    ``active_duration`` (time of the earlier segments) are kept too: the worker
+    opens a new segment when it picks the case up
+    (``projects.case_duration_services.open_case_segment``).
     """
     pivot.status = TestRunTestCaseStatus.CREATED
     pivot.blocked_reason = ""

@@ -37,6 +37,7 @@ from machine_setup.turn_state import (
     auto_fix_turn_live,
     person_turn_live,
 )
+from notifications.services.inbox_broadcast import broadcast_project_attention_changed
 from projects.case_help_notifications import notify_case_needs_help
 from projects.case_help_proposal_services import clear_agent_proposal
 from projects.case_plan_revision_services import (
@@ -51,6 +52,7 @@ from projects.models import (
     HELP_NOTE_MAX_LENGTH,
     BlockedReason,
     CaseHelpRequest,
+    FailedBy,
     HelpAutoFixState,
     HelpContinueMode,
     HelpResolution,
@@ -344,7 +346,15 @@ def continue_after_help(
             supersede_pending_revisions(request)
 
         note = _cap_note(note)
-        _resolve(request, HelpResolution.CONTINUED, user, note, now, auto_fix_live)
+        _resolve(
+            request,
+            HelpResolution.CONTINUED,
+            user,
+            note,
+            now,
+            auto_fix_live,
+            project_id=test_run.project_id,
+        )
         _set_continue_pending(locked_pivot, request, "human")
         return _queue_or_wait(test_run, request, locked_pivot, auto_fix_live)
 
@@ -360,8 +370,17 @@ def mark_failed_after_help(
         auto_fix_live = auto_fix_turn_live(request.pk)
         note = _cap_note(note)
         supersede_pending_revisions(request)
-        _resolve(request, HelpResolution.MARKED_FAILED, user, note, now, auto_fix_live)
+        _resolve(
+            request,
+            HelpResolution.MARKED_FAILED,
+            user,
+            note,
+            now,
+            auto_fix_live,
+            project_id=test_run.project_id,
+        )
         locked_pivot.status = TestRunTestCaseStatus.FAILED
+        locked_pivot.failed_by = FailedBy.HELP
         locked_pivot.blocked_reason = ""
         locked_pivot.result = _verdict_text(
             f"Marked failed by {_user_label(user)} at step {request.step_num} "
@@ -373,6 +392,7 @@ def mark_failed_after_help(
         locked_pivot.save(
             update_fields=[
                 "status",
+                "failed_by",
                 "blocked_reason",
                 "result",
                 "finished_at",
@@ -398,7 +418,15 @@ def mark_blocked_after_help(
         note = _cap_note(note)
         # The blocked case resumes later on its current (old) plan.
         supersede_pending_revisions(request)
-        _resolve(request, HelpResolution.SKIPPED, user, note, now, auto_fix_live)
+        _resolve(
+            request,
+            HelpResolution.SKIPPED,
+            user,
+            note,
+            now,
+            auto_fix_live,
+            project_id=test_run.project_id,
+        )
         locked_pivot.status = TestRunTestCaseStatus.BLOCKED
         locked_pivot.blocked_reason = BlockedReason.HELP_SKIPPED
         fault = f" ({_fault_label(request)})" if request.fault else ""
@@ -439,9 +467,11 @@ def stop_auto_fix(*, pivot: TestRunTestCase, user: CustomUser) -> None:
         request.auto_fix_state = HelpAutoFixState.NOT_FIXED
         request.save(update_fields=["auto_fix_state"])
         request_id = request.pk
+        project_id = test_run.project_id
 
         def _after_commit() -> None:
             broadcast_run_and_pivots(test_run, [locked_pivot])
+            broadcast_project_attention_changed(project_id)
             notify_case_needs_help(request_id, after_auto_fix=True)
 
         transaction.on_commit(_after_commit)
@@ -477,6 +507,7 @@ def lock_help_request_for_chat(*, project: Project, pivot_id: int) -> CaseHelpRe
         transaction.on_commit(
             lambda: broadcast_run_and_pivots(test_run, [locked_pivot])
         )
+        transaction.on_commit(lambda: broadcast_project_attention_changed(project.pk))
     return request
 
 
@@ -582,6 +613,11 @@ def finish_case_auto_fix(*, help_request_id: int, fixed: bool, summary: str) -> 
             request.auto_fix_state = HelpAutoFixState.NOT_FIXED
             request.save(update_fields=["auto_fix_state", "auto_fix_summary"])
             notify_case_needs_help(request.pk, after_auto_fix=True)
+            # "Auto-fix is trying" ends: members' attention lists change.
+            not_fixed_project_id = test_run.project_id
+            transaction.on_commit(
+                lambda: broadcast_project_attention_changed(not_fixed_project_id)
+            )
             return
 
         try:
@@ -603,6 +639,11 @@ def finish_case_auto_fix(*, help_request_id: int, fixed: bool, summary: str) -> 
                 clear_agent_proposal(request)
                 _set_continue_pending(pivot, request, "auto_fix")
                 queue_pending_cases(test_run)
+                project_id = test_run.project_id
+                # The help request closed: members' attention lists change.
+                transaction.on_commit(
+                    lambda: broadcast_project_attention_changed(project_id)
+                )
         except RunHelpError:
             # The gates refused (runner gone, ...): back to a person, with the
             # agent's report kept on the request.
@@ -659,6 +700,8 @@ def _resolve(
     note: str,
     now: datetime,
     auto_fix_live: bool,
+    *,
+    project_id: int,
 ) -> None:
     request.resolution = resolution
     request.resolved_by = user
@@ -672,6 +715,8 @@ def _resolve(
         update_fields.append("auto_fix_state")
     request.save(update_fields=update_fields)
     clear_agent_proposal(request)
+    # The help request closed: the project members' attention lists change.
+    transaction.on_commit(lambda: broadcast_project_attention_changed(project_id))
 
 
 def _latest_screenshot_url(pivot_id: int) -> str:

@@ -1,4 +1,8 @@
-"""Tell the project's members that the agent judged a run case Failed (ntfy)."""
+"""Tell the project's members that the agent judged a run case Failed.
+
+Every active member gets a missed failure in their attention inbox (and a
+live nudge); members who opted in also get an ntfy push.
+"""
 
 from __future__ import annotations
 
@@ -6,14 +10,17 @@ import logging
 
 from django.db import transaction
 from django.urls import reverse
+from django.utils import timezone
 
+from notifications.services.enqueue_notification import enqueue_notification
+from notifications.services.inbox_broadcast import broadcast_inbox_changed
 from notifications.services.notification_message import (
     NotificationKind,
     NotificationMessage,
 )
 from notifications.services.ntfy_config import ntfy_configured
 from notifications.services.recipients import recipient_user_ids
-from notifications.tasks import send_notification
+from notifications.services.record_missed_failure import record_missed_failure
 from projects.models import TestRunTestCase, TestRunTestCaseStatus
 
 logger = logging.getLogger(__name__)
@@ -39,27 +46,16 @@ def _build_message(pivot: TestRunTestCase) -> NotificationMessage:
     )
 
 
-def _enqueue(user_ids: list[int], message: NotificationMessage) -> None:
-    try:
-        send_notification.delay(
-            user_ids, message.kind.value, message.title, message.body, message.path
-        )
-    except Exception:
-        logger.exception("Could not enqueue the Failed notification")
-
-
 def notify_case_failed(pivot_id: int, *, generation: int) -> None:
-    """Notify every project member who opted into Failed notifications.
+    """Record the failure in every member's inbox, then push to those opted in.
 
     Only for the agent's verdict: call it right after the verdict is saved.
-    Sends nothing unless the case is still Failed and the run is still on
-    ``generation`` (a newer Start, Resume or Re-run owns it otherwise).
-    Enqueues ``notifications.tasks.send_notification`` on commit and never
-    raises.
+    Does nothing unless the case is still Failed and the run is still on
+    ``generation`` (a newer Start, Resume or Re-run owns it otherwise). The
+    inbox rows are written whether or not ntfy is configured; the live nudge
+    and ``notifications.tasks.send_notification`` run on commit. Never raises.
     """
     try:
-        if not ntfy_configured():
-            return
         pivot = (
             TestRunTestCase.objects.select_related("test_case", "test_run__project")
             .only(
@@ -79,12 +75,18 @@ def notify_case_failed(pivot_id: int, *, generation: int) -> None:
         )
         if pivot is None:
             return
-        user_ids = recipient_user_ids(
-            pivot.test_run.project_id, NotificationKind.FAILED
+        project_id = pivot.test_run.project_id
+        member_ids = record_missed_failure(
+            pivot_id=pivot.pk, project_id=project_id, occurred_at=timezone.now()
         )
+        if member_ids:
+            transaction.on_commit(lambda: broadcast_inbox_changed(member_ids))
+        if not ntfy_configured():
+            return
+        user_ids = recipient_user_ids(project_id, NotificationKind.FAILED)
         if not user_ids:
             return
         message = _build_message(pivot)
-        transaction.on_commit(lambda: _enqueue(user_ids, message))
+        transaction.on_commit(lambda: enqueue_notification(user_ids, message))
     except Exception:
         logger.exception("Failed notification failed for pivot %s", pivot_id)

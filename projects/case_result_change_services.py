@@ -35,6 +35,7 @@ from projects.models import (
     RESULT_CHANGE_SUMMARY_MAX_LENGTH,
     BlockedReason,
     CaseResultChange,
+    FailedBy,
     ResultChangeStatus,
     TestRun,
     TestRunTestCase,
@@ -247,6 +248,10 @@ def apply_result_change(
             if new_status == TestRunTestCaseStatus.BLOCKED
             else ""
         )
+        update_fields = ["status", "blocked_reason", "result"]
+        if new_status == TestRunTestCaseStatus.FAILED:
+            locked.failed_by = FailedBy.REVIEW
+            update_fields.append("failed_by")
         locked.result = format_changed_result(
             from_status=from_status,
             to_status=new_status,
@@ -255,15 +260,7 @@ def apply_result_change(
             summary=change.summary,
         )
         clear_checked_and_sent(locked)
-        locked.save(
-            update_fields=[
-                "status",
-                "blocked_reason",
-                "result",
-                *CHECKED_SENT_FIELDS,
-                "updated_at",
-            ]
-        )
+        locked.save(update_fields=[*update_fields, *CHECKED_SENT_FIELDS, "updated_at"])
 
         change.from_status = from_status
         change.from_blocked_reason = from_blocked_reason
@@ -354,4 +351,3 @@ def _effects(to_status: str) -> str:
         "and Sent marks on this case are cleared, so a new TestRail result can "
         "be sent."
     )
-
