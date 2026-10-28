@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from controller_client.config import API_KEY_ENV_NAME
+from controller_client.config import API_KEY_ENV_NAME, PERSON_EMAIL_ENV_NAME
 from controller_client.exceptions import UpdateError
 from controller_client.protocol import version_tuple
 
@@ -162,19 +162,35 @@ def check_free_space(base: Path) -> None:
 
 
 def install_env_file(
-    old_package_dir: Path, new_package_dir: Path, cli_api_key: str | None
+    old_package_dir: Path,
+    new_package_dir: Path,
+    cli_api_key: str | None,
+    cli_person_email: str | None = None,
 ) -> bool:
     """Write the new install's ``.env`` (owner-only on POSIX); False if none.
 
     The old ``.env`` is copied byte for byte. ``cli_api_key`` is the Connection
-    key the old runner got on its command line (it is never passed on the new
-    runner's command line): when the copy does not already hold exactly that
-    key, its ``CONTROLLER_API_KEY`` line is set to it.
+    key and ``cli_person_email`` the person email the old runner got on its
+    command line (neither is passed on the new runner's command line): when
+    the copy does not already hold exactly that value, its
+    ``CONTROLLER_API_KEY`` / ``CONTROLLER_PERSON_EMAIL`` line is set to it.
     """
     source = old_package_dir / ENV_FILE_NAME
     content = source.read_bytes() if source.is_file() else b""
     if cli_api_key:
-        content = _with_api_key(content, cli_api_key)
+        content = _with_env_value(
+            content,
+            API_KEY_ENV_NAME,
+            cli_api_key,
+            "The Connection key given on the command line is invalid",
+        )
+    if cli_person_email:
+        content = _with_env_value(
+            content,
+            PERSON_EMAIL_ENV_NAME,
+            cli_person_email,
+            "The person email given on the command line is invalid",
+        )
     if not content:
         return False
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
@@ -186,14 +202,15 @@ def install_env_file(
     return True
 
 
-def _with_api_key(content: bytes, api_key: str) -> bytes:
-    """``content`` with its API key assignment set to ``api_key``.
+def _with_env_value(content: bytes, name: str, value: str, invalid: str) -> bytes:
+    """``content`` with its ``name`` assignment set to ``value``.
 
     Parsed the way python-decouple reads ``.env`` (``KEY = value``, optional
-    quotes, ``#`` comment lines); unchanged when it already holds that key.
+    quotes, ``#`` comment lines); unchanged when it already holds that value.
+    ``invalid`` is the error raised for a value that cannot be one line.
     """
-    if any(c in api_key for c in "\r\n\x00"):
-        raise UpdateError("The Connection key given on the command line is invalid")
+    if any(c in value for c in "\r\n\x00"):
+        raise UpdateError(invalid)
     # surrogateescape: bytes that are not UTF-8 survive the round trip as-is.
     lines = content.decode("utf-8", "surrogateescape").splitlines(keepends=True)
     kept: list[str] = []
@@ -203,19 +220,19 @@ def _with_api_key(content: bytes, api_key: str) -> bytes:
         if stripped.startswith("#") or "=" not in stripped:
             kept.append(line)
             continue
-        key, value = stripped.split("=", 1)
-        if key.strip() != API_KEY_ENV_NAME:
+        key, assigned = stripped.split("=", 1)
+        if key.strip() != name:
             kept.append(line)
             continue
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-            value = value[1:-1]
-        current.append(value)
-    if current and all(value == api_key for value in current):
+        assigned = assigned.strip()
+        if len(assigned) >= 2 and assigned[0] == assigned[-1] and assigned[0] in "'\"":
+            assigned = assigned[1:-1]
+        current.append(assigned)
+    if current and all(assigned == value for assigned in current):
         return content
     if kept and not kept[-1].endswith(("\n", "\r")):
         kept.append("\n")
-    kept.append(f"{API_KEY_ENV_NAME}={api_key}\n")
+    kept.append(f"{name}={value}\n")
     return "".join(kept).encode("utf-8", "surrogateescape")
 
 

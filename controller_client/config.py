@@ -1,6 +1,9 @@
 import argparse
 import logging
+import os
+import stat
 import sys
+import tempfile
 import uuid
 from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
@@ -9,11 +12,19 @@ from typing import Final
 
 from decouple import config as decouple_config
 
+from controller_client.exceptions import ProtocolError
+from controller_client.protocol import normalize_person_email
+
 # Folder the server's cleanup_environment action empties between test cases.
 # Overridable so the controller can live in ~/Downloads without wiping itself.
 DEFAULT_CLEANUP_DIR: Final[str] = "~/Downloads"
 # The Connection key's variable in controller_client/.env.
 API_KEY_ENV_NAME: Final[str] = "CONTROLLER_API_KEY"
+# The person at this machine (their Punk Hazard email), sent in the handshake
+# so steps answered in the Test Runner window are recorded as theirs.
+PERSON_EMAIL_ENV_NAME: Final[str] = "CONTROLLER_PERSON_EMAIL"
+# The runner's own .env (the one a self-update copies to the new install).
+RUNNER_ENV_FILE: Final[Path] = Path(__file__).resolve().parent / ".env"
 
 # File log of a runner started by a self-update (it has no terminal on
 # macOS/Linux): <install root>/controller_client/logs/runner.log, 5 MB x 3.
@@ -24,8 +35,9 @@ _LOG_FILE_MAX_BYTES: Final[int] = 5 * 1024 * 1024
 _LOG_FILE_BACKUPS: Final[int] = 3
 _LOG_FORMAT: Final[str] = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 # Flags a self-update passes on to the new runner, with their argparse dest.
-# Not --api-key: a command line is visible to every local user, so the update
-# writes a key given that way into the new install's .env instead.
+# Not --api-key or --person-email: a command line is visible to every local
+# user, so the update writes values given that way into the new install's .env
+# instead.
 _CARRIED_FLAGS: Final[tuple[tuple[str, str], ...]] = (
     ("--host", "host"),
     ("--port", "port"),
@@ -34,6 +46,10 @@ _CARRIED_FLAGS: Final[tuple[tuple[str, str], ...]] = (
     ("--max-reconnect-attempts", "max_reconnect_attempts"),
     ("--log-level", "log_level"),
     ("--cleanup-dir", "cleanup_dir"),
+)
+# Value-less flags a self-update passes on, with their argparse dest.
+_CARRIED_SWITCHES: Final[tuple[tuple[str, str], ...]] = (
+    ("--no-person-window", "no_person_window"),
 )
 
 
@@ -49,6 +65,17 @@ class ClientConfig:
     max_reconnect_attempts: int
     log_level: str
     cleanup_dir: str = DEFAULT_CLEANUP_DIR
+    # Whether the person step window may be used (CONTROLLER_PERSON_WINDOW,
+    # --no-person-window); it is still off when Tk does not work.
+    person_window: bool = True
+    # Normalized CONTROLLER_PERSON_EMAIL / --person-email; None when unset.
+    person_email: str | None = None
+    # Why the .env value of CONTROLLER_PERSON_EMAIL was ignored (logged once
+    # logging is set up); None when it was valid or unset.
+    person_email_problem: str | None = None
+    # Whether person_email came from --person-email (a self-update then writes
+    # it into the new install's .env).
+    person_email_from_cli: bool = False
     # The CLI overrides this process got, re-passed to the runner a self-update
     # starts (update flags excluded).
     cli_overrides: tuple[str, ...] = ()
@@ -84,6 +111,29 @@ def _env_int(key: str, default: int) -> int:
     return int(str(decouple_config(key, default=str(default))))
 
 
+def _env_bool(key: str, default: bool) -> bool:
+    return bool(decouple_config(key, default=default, cast=bool))
+
+
+def _person_email_arg(value: str) -> str:
+    try:
+        email = normalize_person_email(value)
+    except ProtocolError as e:
+        raise argparse.ArgumentTypeError(str(e)) from e
+    if email is None:
+        raise argparse.ArgumentTypeError("expected an email address")
+    return email
+
+
+def _env_person_email() -> tuple[str | None, str | None]:
+    """CONTROLLER_PERSON_EMAIL from .env/the environment, and why it was ignored."""
+    raw = _env_str(PERSON_EMAIL_ENV_NAME, "")
+    try:
+        return normalize_person_email(raw), None
+    except ProtocolError as e:
+        return None, f"{PERSON_EMAIL_ENV_NAME} is ignored: {e}"
+
+
 def _uuid_arg(value: str) -> str:
     try:
         return str(uuid.UUID(value))
@@ -97,6 +147,9 @@ def _carried_overrides(args: argparse.Namespace) -> tuple[str, ...]:
         value = getattr(args, dest)
         if value is not None:
             carried.extend((flag, str(value)))
+    for flag, dest in _CARRIED_SWITCHES:
+        if getattr(args, dest):
+            carried.append(flag)
     return tuple(carried)
 
 
@@ -111,6 +164,17 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
     parser.add_argument("--log-level", type=str, default=None)
     parser.add_argument("--cleanup-dir", type=str, default=None)
     parser.add_argument("--log-file", type=str, default=None)
+    parser.add_argument(
+        "--no-person-window",
+        action="store_true",
+        help="never show the window for Human in the loop steps",
+    )
+    parser.add_argument(
+        "--person-email",
+        type=_person_email_arg,
+        default=None,
+        help="your Punk Hazard email, recorded on steps answered in the window",
+    )
     # Passed by the old runner to the runner a self-update starts.
     parser.add_argument("--update-id", type=_uuid_arg, default=None)
     parser.add_argument("--replaces-pid", type=int, default=None)
@@ -118,6 +182,10 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
     parser.add_argument("--remove-old-install", type=str, default=None)
 
     args = parser.parse_args(argv)
+    if args.person_email is not None:
+        person_email, person_email_problem = args.person_email, None
+    else:
+        person_email, person_email_problem = _env_person_email()
 
     return ClientConfig(
         host=args.host or _env_str("CONTROLLER_HOST", "localhost"),
@@ -141,6 +209,12 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
         log_level=args.log_level or _env_str("CONTROLLER_LOG_LEVEL", "INFO"),
         cleanup_dir=args.cleanup_dir
         or _env_str("CONTROLLER_CLEANUP_DIR", DEFAULT_CLEANUP_DIR),
+        person_window=(
+            not args.no_person_window and _env_bool("CONTROLLER_PERSON_WINDOW", True)
+        ),
+        person_email=person_email,
+        person_email_problem=person_email_problem,
+        person_email_from_cli=args.person_email is not None,
         cli_overrides=_carried_overrides(args),
         api_key_from_cli=bool(args.api_key),
         update_id=args.update_id,
@@ -178,3 +252,61 @@ def setup_logging(log_level: str, log_file: Path | None = None) -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=handlers,
     )
+
+
+def save_env_value(key: str, value: str, env_file: Path = RUNNER_ENV_FILE) -> bool:
+    """Set ``key=value`` in an existing ``.env``; False when there is none.
+
+    Other lines are kept byte for byte (an earlier assignment of ``key`` is
+    replaced, a missing one appended), the file mode is kept and the file is
+    replaced atomically, so a crash never leaves a half-written ``.env``. A
+    missing file is not created: python-decouple would then stop reading the
+    ``.env`` it uses today (in a parent folder) for every other setting.
+    Raises OSError when it cannot be written.
+    """
+    if any(c in value for c in "\r\n\x00") or any(c in key for c in "=\r\n\x00"):
+        raise ValueError("A .env value cannot contain line breaks")
+    if not env_file.is_file():
+        return False
+    # surrogateescape: bytes that are not UTF-8 survive the round trip as-is.
+    content = env_file.read_bytes().decode("utf-8", "surrogateescape")
+    lines = content.splitlines(keepends=True)
+    assignment = f"{key}={value}"
+    replaced = False
+    kept: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        is_key = (
+            not stripped.startswith("#")
+            and "=" in stripped
+            and stripped.split("=", 1)[0].strip() == key
+        )
+        if not is_key:
+            kept.append(line)
+        elif not replaced:
+            ending = line[len(line.rstrip("\r\n")) :] or "\n"
+            kept.append(assignment + ending)
+            replaced = True
+        # A later duplicate is dropped: decouple would let it win.
+    if not replaced:
+        if kept and not kept[-1].endswith(("\n", "\r")):
+            kept[-1] += "\n"
+        kept.append(assignment + "\n")
+    _replace_file(env_file, "".join(kept).encode("utf-8", "surrogateescape"))
+    return True
+
+
+def _replace_file(path: Path, data: bytes) -> None:
+    mode = stat.S_IMODE(path.stat().st_mode)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise

@@ -167,9 +167,15 @@ class RunnerUpdate:
             verify_and_extract, self._payload, layout.new_root
         )
         self._new_root = bundle.root
-        cli_api_key = self._config.api_key if self._config.api_key_from_cli else None
+        config = self._config
+        cli_api_key = config.api_key if config.api_key_from_cli else None
+        cli_email = config.person_email if config.person_email_from_cli else None
         await asyncio.to_thread(
-            install_env_file, self._old_package_dir, bundle.package_dir, cli_api_key
+            install_env_file,
+            self._old_package_dir,
+            bundle.package_dir,
+            cli_api_key,
+            cli_email,
         )
         new_python = await install(layout, Path(sys.executable), self._on_phase)
         spawned = await asyncio.to_thread(

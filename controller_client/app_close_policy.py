@@ -9,10 +9,11 @@ the reply texts the agent acts on.
 from __future__ import annotations
 
 import sys
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Final, TypeVar
+from typing import Final, TypeAlias, TypeVar
 
 import psutil
 
@@ -36,6 +37,26 @@ UNKNOWN_TAB_REFUSAL: Final[str] = (
 
 T = TypeVar("T")
 
+# Where to read the pids of processes the runner started for itself (the
+# person step window), which close_app / close_tab must never close. A source
+# is asked at every close (the window process may have been restarted), from
+# close_app's worker thread, so it must only read a value.
+HelperPidSource: TypeAlias = Callable[[], int | None]
+_helper_pid_sources: list[HelperPidSource] = []
+_helper_pid_sources_lock = threading.Lock()
+
+
+def register_helper_pid_source(source: HelperPidSource) -> None:
+    """Protect the runner's helper process that ``source`` names from close_app."""
+    with _helper_pid_sources_lock:
+        _helper_pid_sources.append(source)
+
+
+def unregister_helper_pid_source(source: HelperPidSource) -> None:
+    with _helper_pid_sources_lock:
+        if source in _helper_pid_sources:
+            _helper_pid_sources.remove(source)
+
 
 @dataclass(frozen=True)
 class RunnerProcesses:
@@ -46,9 +67,13 @@ class RunnerProcesses:
     # Controlling terminal (e.g. "/dev/ttys003"); None when there is none or
     # on Windows, where terminals have no tty.
     terminal: str | None
+    # The runner's helper processes (the person step window) and their
+    # children: a Windows venv python.exe is a launcher whose child owns the
+    # window, and on macOS the window shows as a "Python" app.
+    helper_pids: frozenset[int] = frozenset()
 
     def is_runner(self, pid: int) -> bool:
-        return pid == self.own_pid
+        return pid == self.own_pid or pid in self.helper_pids
 
     def hosts_runner(self, pid: int) -> bool:
         return pid in self.ancestor_pids
@@ -63,12 +88,27 @@ def current_runner_processes() -> RunnerProcesses:
             own_pid=me.pid,
             ancestor_pids=frozenset(a.pid for a in ancestors),
             terminal=_controlling_terminal([me, *ancestors]),
+            helper_pids=_current_helper_pids(),
         )
     except psutil.Error as e:
         raise ExecutionError(
             f"Cannot identify the Test Runner's own processes, so nothing is "
             f"closed: {e}"
         ) from e
+
+
+def _current_helper_pids() -> frozenset[int]:
+    """The helper pids now running plus their children (an exited one is skipped)."""
+    with _helper_pid_sources_lock:
+        sources = tuple(_helper_pid_sources)
+    roots = tuple(pid for pid in (source() for source in sources) if pid is not None)
+    pids: set[int] = set(roots)
+    for pid in roots:
+        try:
+            pids.update(child.pid for child in psutil.Process(pid).children(True))
+        except psutil.NoSuchProcess:
+            continue
+    return frozenset(pids)
 
 
 if sys.platform == "win32":

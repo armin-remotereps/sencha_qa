@@ -1,7 +1,9 @@
 import asyncio
+import contextlib
 import functools
 import logging
-from collections.abc import Callable, Coroutine
+import uuid
+from collections.abc import AsyncIterator, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Final, ParamSpec, TypeAlias, TypeVar
@@ -11,6 +13,10 @@ from websockets.asyncio.client import ClientConnection
 from websockets.exceptions import ConnectionClosed
 
 from controller_client.app_checker import execute_check_app_installed
+from controller_client.app_close_policy import (
+    register_helper_pid_source,
+    unregister_helper_pid_source,
+)
 from controller_client.app_closer import execute_close_app, execute_close_tab
 from controller_client.app_launcher import execute_launch_app
 from controller_client.browser_executor import (
@@ -56,9 +62,9 @@ from controller_client.executor import (
     execute_wait_for_command,
 )
 from controller_client.interactive_session import InteractiveSessionManager
+from controller_client.person_window import PersonWindow
 from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import (
-    CLIENT_CAPABILITIES,
     CLIENT_VERSION,
     MAX_MESSAGE_SIZE,
     TERMINAL_CLOSE_CODES,
@@ -70,9 +76,12 @@ from controller_client.protocol import (
     ErrorCode,
     InteractiveOutputPayload,
     MessageType,
+    PersonStepActionPayload,
+    PersonStepActionResultPayload,
     ScreenshotResponsePayload,
     StreamName,
     UpdatePhase,
+    advertised_capabilities,
     deserialize_server_message,
     parse_browser_click_payload,
     parse_browser_download_payload,
@@ -90,6 +99,8 @@ from controller_client.protocol import (
     parse_hover_payload,
     parse_key_press_payload,
     parse_launch_app_payload,
+    parse_person_step_action_result_payload,
+    parse_person_step_state_payload,
     parse_run_command_payload,
     parse_scroll_payload,
     parse_send_input_payload,
@@ -100,6 +111,7 @@ from controller_client.protocol import (
     peek_request_id,
     peek_update_id,
     serialize_message,
+    serialize_person_step_action,
 )
 from controller_client.system_info import gather_system_info
 from controller_client.update_runner import (
@@ -124,6 +136,33 @@ _TERMINAL_HANDSHAKE_STATUSES: Final[frozenset[str]] = frozenset(
 )
 # Keeps the backoff exponent small; the delay is capped long before this.
 _MAX_BACKOFF_EXPONENT: Final[int] = 16
+# How long a person's answer from the window waits for the server's result
+# before the window gets its buttons back.
+PERSON_STEP_ANSWER_TIMEOUT_SECONDS: Final[float] = 30.0
+# Messages that never touch or capture the screen, so the person step window
+# stays up while they are handled. Every other message is an agent action and
+# runs with the window hidden (it must never be in a screenshot, the vision
+# parse or under a click).
+_WINDOW_SAFE_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
+    {
+        MessageType.PING,
+        MessageType.PERSON_STEP_STATE,
+        MessageType.PERSON_STEP_ACTION_RESULT,
+        MessageType.UPDATE_RUNNER,
+    }
+)
+_ANSWER_NO_REPLY: Final[str] = "No answer from the server; check Punk Hazard."
+_ANSWER_CONNECTION_LOST: Final[str] = (
+    "The connection to Punk Hazard was lost before it answered; check Punk "
+    "Hazard whether your answer was saved."
+)
+_ANSWER_NOT_CONNECTED: Final[str] = (
+    "Not connected to Punk Hazard; answer again once the Test Runner reconnects."
+)
+_ANSWER_BUSY: Final[str] = "Your previous answer is still being sent; wait for it."
+_ANSWER_UNREADABLE: Final[str] = (
+    "The server's reply could not be read; check Punk Hazard."
+)
 
 MessageHandler: TypeAlias = Callable[
     [str, dict[str, object]], Coroutine[Any, Any, None]
@@ -131,6 +170,10 @@ MessageHandler: TypeAlias = Callable[
 
 _P = ParamSpec("_P")
 _R = TypeVar("_R")
+
+
+def _answer_failed(message: str) -> PersonStepActionResultPayload:
+    return PersonStepActionResultPayload(ok=False, message=message, queued=False)
 
 
 def _browser_error_code(exc: Exception, fallback: ErrorCode) -> ErrorCode:
@@ -147,6 +190,7 @@ class ControllerClient:
         self,
         config: ClientConfig,
         interactive_cmd_timeout: float = 300.0,
+        person_window: PersonWindow | None = None,
     ) -> None:
         self._config = config
         self._running = False
@@ -210,11 +254,30 @@ class ControllerClient:
         # Whether the current session got an "ok" handshake ack; run() resets
         # the backoff only after such a session.
         self._session_authenticated = False
+        # Person steps (PERSON_STEPS_V1): the window, when enabled and Tk
+        # works; None advertises no capability and the server sends nothing.
+        self._window = person_window
+        self._handlers[MessageType.PERSON_STEP_STATE] = self._handle_person_step_state
+        self._handlers[MessageType.PERSON_STEP_ACTION_RESULT] = (
+            self._handle_person_step_action_result
+        )
+        # Forwards the window's answers to the server (started by run()).
+        self._answer_task: asyncio.Task[None] | None = None
+        # The one answer waiting for its result: (request_id, its timeout).
+        self._pending_answer: tuple[str, asyncio.Task[None]] | None = None
+        self._window_pid_source: Callable[[], int | None] | None = None
+        if person_window is not None:
+            self._window_pid_source = lambda: person_window.pid
+            # close_app / close_tab never close the window process.
+            register_helper_pid_source(self._window_pid_source)
 
     async def run(self) -> None:
         self._running = True
         self._stop_event.clear()
         attempt = 0
+        window = self._window
+        if window is not None and self._answer_task is None:
+            self._answer_task = asyncio.create_task(self._forward_answers(window))
 
         while self._running:
             self._session_authenticated = False
@@ -286,6 +349,7 @@ class ControllerClient:
         self._running = False
         self._stop_event.set()
         await self._cancel_update_tasks()
+        await self._stop_person_window()
         self._process_tracker.kill_all()
         self._session_manager.terminate_all()
         # The executor is not shut down: stop() can run twice (signal, then
@@ -317,12 +381,15 @@ class ControllerClient:
             self._connection = connection
             try:
                 await self._perform_handshake(connection)
+                if self._window is not None:
+                    self._window.set_connected(True)
                 await self._after_handshake()
                 await self._message_loop(connection)
             except ConnectionClosed as e:
                 session_error = e
             finally:
                 self._connection = None
+                self._on_session_ended()
 
         # Leaving the context manager closed the socket, so close_code is set.
         self._raise_if_terminated(connection.close_code)
@@ -386,9 +453,18 @@ class ControllerClient:
         payload: dict[str, object] = {
             "api_key": self._config.api_key,
             "client_version": CLIENT_VERSION,
-            "capabilities": [capability.value for capability in CLIENT_CAPABILITIES],
+            "capabilities": [
+                capability.value
+                for capability in advertised_capabilities(
+                    person_window=self._window is not None
+                )
+            ],
             "system_info": system_info.to_dict(),
         }
+        if self._config.person_email is not None:
+            # Names the member answering in the window; the server records
+            # them only when the email is an active member of the project.
+            payload["person_email"] = self._config.person_email
         update_id = self._update_id_to_keep()
         if update_id is not None:
             # Reconnected mid-update, or with its final status still unsent:
@@ -499,9 +575,13 @@ class ControllerClient:
         request_id: str,
         data: dict[str, object],
     ) -> None:
-        """Run a handler without letting its failure drop the connection."""
+        """Run a handler without letting its failure drop the connection.
+
+        Agent actions run with the person step window hidden.
+        """
         try:
-            await handler(request_id, data)
+            async with self._window_hidden(message_type):
+                await handler(request_id, data)
         except ProtocolError as e:
             logger.error(
                 "Invalid %s message (request_id=%s): %s", message_type, request_id, e
@@ -512,6 +592,41 @@ class ControllerClient:
                 "Handler for %s failed (request_id=%s)", message_type, request_id
             )
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    @contextlib.asynccontextmanager
+    async def _window_hidden(self, message_type: MessageType) -> AsyncIterator[None]:
+        """Hide the person step window for an agent action, if one could show.
+
+        The window re-shows itself later (rules in person_window). A failure to hide
+        never stops the action (it is logged).
+        """
+        window = self._window
+        if window is None or message_type in _WINDOW_SAFE_MESSAGE_TYPES:
+            yield
+            return
+        hold = window.hidden_for_action()
+        try:
+            await hold.__aenter__()
+            entered = True
+        except Exception:
+            logger.warning(
+                "Could not hide the person step window before %s",
+                message_type.value,
+                exc_info=True,
+            )
+            entered = False
+        try:
+            yield
+        finally:
+            if entered:
+                try:
+                    await hold.__aexit__(None, None, None)
+                except Exception:
+                    logger.warning(
+                        "Person step window failed after %s",
+                        message_type.value,
+                        exc_info=True,
+                    )
 
     async def _send_message(self, message: str) -> None:
         if self._connection is not None:
@@ -1049,6 +1164,9 @@ class ControllerClient:
         """The new runner took over: end this runner as if superseded."""
         self._handed_over = True
         self._log_handover()
+        # The new runner shows its own window; on Windows this one's process
+        # would also keep the old install's python.exe locked.
+        await self._stop_person_window()
         self._running = False
         self._stop_event.set()
         if self._connection is not None:
@@ -1137,3 +1255,124 @@ class ControllerClient:
             if task is not None and not task.done():
                 task.cancel()
                 await asyncio.wait({task})
+
+    # --- Person steps (PERSON_STEPS_V1) -----------------------------------
+    #
+    # The window (person_window) shows the open Human in the loop steps the
+    # server pushes and hands back the person's answers, which are sent one at
+    # a time and matched to their result by request_id.
+
+    async def _handle_person_step_state(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        # A push, not a request: a bad one is logged, never answered.
+        try:
+            state = parse_person_step_state_payload(data)
+        except ProtocolError as e:
+            logger.warning("Ignoring an invalid person_step_state: %s", e)
+            return
+        if self._window is None:
+            logger.debug("Ignoring person_step_state: the window is off")
+            return
+        self._window.apply_state(state.steps)
+
+    async def _handle_person_step_action_result(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        pending = self._pending_answer
+        if pending is None or pending[0] != request_id:
+            logger.info(
+                "Ignoring a person step result no answer waits for (request_id=%s)",
+                request_id,
+            )
+            return
+        try:
+            result = parse_person_step_action_result_payload(data)
+        except ProtocolError as e:
+            logger.warning("Invalid person_step_action_result: %s", e)
+            result = _answer_failed(_ANSWER_UNREADABLE)
+        self._settle_answer(request_id, result)
+
+    async def _forward_answers(self, window: PersonWindow) -> None:
+        async for action in window.actions():
+            try:
+                await self._send_answer(window, action)
+            except Exception:
+                logger.exception("Could not send the person's answer")
+                window.show_result(_answer_failed(_ANSWER_NOT_CONNECTED))
+
+    async def _send_answer(
+        self, window: PersonWindow, action: PersonStepActionPayload
+    ) -> None:
+        # One answer at a time: the window disables its buttons meanwhile, so
+        # this only bounds a misbehaving window process.
+        if self._pending_answer is not None:
+            window.show_result(_answer_failed(_ANSWER_BUSY))
+            return
+        connection = self._connection
+        if connection is None or not self._session_authenticated:
+            window.show_result(_answer_failed(_ANSWER_NOT_CONNECTED))
+            return
+        request_id = str(uuid.uuid4())
+        expiry = asyncio.create_task(self._expire_answer(request_id))
+        self._pending_answer = (request_id, expiry)
+        logger.info(
+            "Sending the person's answer (%s) for step %d round %d",
+            action.action.value,
+            action.person_step_id,
+            action.round,
+        )
+        try:
+            await connection.send(serialize_person_step_action(action, request_id))
+        except ConnectionClosed:
+            self._settle_answer(request_id, _answer_failed(_ANSWER_CONNECTION_LOST))
+
+    async def _expire_answer(self, request_id: str) -> None:
+        await asyncio.sleep(PERSON_STEP_ANSWER_TIMEOUT_SECONDS)
+        logger.warning("No result for the person's answer (request_id=%s)", request_id)
+        self._settle_answer(request_id, _answer_failed(_ANSWER_NO_REPLY))
+
+    def _settle_answer(
+        self, request_id: str, result: PersonStepActionResultPayload
+    ) -> None:
+        pending = self._pending_answer
+        if pending is None or pending[0] != request_id:
+            return
+        self._pending_answer = None
+        expiry = pending[1]
+        if expiry is not asyncio.current_task():
+            expiry.cancel()
+        if self._window is not None:
+            self._window.show_result(result)
+
+    def _on_session_ended(self) -> None:
+        """The socket is gone: the window shows it, a waiting answer is released."""
+        pending = self._pending_answer
+        if pending is not None:
+            self._settle_answer(pending[0], _answer_failed(_ANSWER_CONNECTION_LOST))
+        if self._window is not None:
+            self._window.set_connected(False)
+
+    async def _stop_person_window(self) -> None:
+        """Stop the window process for good (shutdown or self-update handover)."""
+        window = self._window
+        if window is None:
+            return
+        task = self._answer_task
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.wait({task})
+        pending = self._pending_answer
+        if pending is not None:
+            self._pending_answer = None
+            pending[1].cancel()
+        try:
+            await window.stop()
+        except Exception:
+            logger.warning("Could not stop the person step window", exc_info=True)
+        # After stop(): close_app keeps protecting it until it is gone.
+        if self._window_pid_source is not None:
+            unregister_helper_pid_source(self._window_pid_source)
+            self._window_pid_source = None
+        # Nothing may start it again (apply_state would).
+        self._window = None
