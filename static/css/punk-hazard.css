@@ -4133,3 +4133,19 @@ details.card[open] > summary,
 .bar-cell .progress {
   flex: 1;
 }
+
+/* Environment Connection card: Test Runner version with its update badge
+   (_environment_connection.html). Wraps under the label on narrow screens. */
+.runner-version {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px 8px;
+}
+
+/* Runner-provided failure text: escaped, may be long and unbroken. */
+.runner-update-detail {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

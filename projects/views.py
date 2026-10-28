@@ -115,6 +115,7 @@ from projects.run_resume_services import (
     resume_test_run,
     resume_test_run_case,
 )
+from projects.runner_update_offer import get_runner_update_offer
 from projects.services import (
     STATUS_FILTER_CHOICES,
     RerunScope,
@@ -432,6 +433,7 @@ def project_environment(request: HttpRequest, project: Project) -> HttpResponse:
             "project": project,
             "machine_state": machine_state,
             "visual_engine": visual_engine.to_payload(),
+            "runner_update": get_runner_update_offer(project),
             "active_tab": "environment",
             "active_nav": "projects",
         },

@@ -3,8 +3,14 @@
   scope declared in projects/environment.html.
 
   Context contract:
-    project — the current Project (used for the disconnect form's action
-              URL and the "setup was completed on" fallback date)
+    project       — the current Project (used for the disconnect form's action
+                    URL and the "setup was completed on" fallback date)
+    runner_update — projects.runner_update_offer.RunnerUpdateOffer; only
+                    .server_version is read here (the update form's
+                    expected_version). The live update state is
+                    environmentLive().runnerUpdate / updateState /
+                    canUpdate / updateInFlight / updateOutcome.
+  Runner-provided text (versions, failure detail) is bound with x-text only.
 {% endcomment %}
 <section aria-labelledby="connection-h" class="card">
   <div class="card-header">
@@ -35,14 +41,123 @@
     </div>
     <div>
       <dt>Test Runner version</dt>
-      <dd x-text="clientVersion || '—'"></dd>
+      <dd>
+        <span class="runner-version">
+          <span x-text="clientVersion || '—'"></span>
+          <span class="badge badge-warning" x-show="canUpdate" x-cloak x-text="'Update available (' + runnerUpdate.server_version + ')'"></span>
+          <span class="badge badge-warning" x-show="updateState === 'manual_required' || updateState === 'blocked'" x-cloak x-text="'Newer version ' + runnerUpdate.server_version"></span>
+          <span class="badge badge-running" x-show="updateState === 'in_progress'" x-cloak>Updating</span>
+          <span class="badge badge-connected" x-show="updateState === 'up_to_date'" x-cloak>Up to date</span>
+        </span>
+      </dd>
     </div>
   </dl>
 
+  <div class="alert alert-info" role="status" x-show="updateInFlight" x-cloak>
+    <span class="alert-icon" aria-hidden="true"><span class="live-dot"></span></span>
+    <div>
+      <strong>
+        Updating the Test Runner to <span x-text="runnerUpdate.latest && runnerUpdate.latest.to_version"></span>:
+        <span x-text="updatePhaseLabel"></span>…
+      </strong>
+      <p>
+        Elapsed <span x-text="updateElapsed"></span>. Installing dependencies and browsers can take several minutes.
+        Runs, resumes and Machine setup wait until the update finishes. The new Test Runner connects by itself and the old one closes.
+      </p>
+    </div>
+  </div>
+
+  <div class="alert alert-success" role="status" x-show="updateOutcome === 'succeeded'" x-cloak>
+    <span class="alert-icon" aria-hidden="true">✓</span>
+    <div>
+      <strong>Updated to Test Runner <span x-text="runnerUpdate.server_version"></span>.</strong>
+      <p x-show="runnerUpdate.latest && runnerUpdate.latest.old_removal === 'failed'">
+        The old Test Runner folder could not be deleted. Remove it by hand on the test machine.
+      </p>
+      <p x-show="runnerUpdate.latest && runnerUpdate.latest.old_removal === ''">The old Test Runner folder is deleted once the old Test Runner has closed.</p>
+    </div>
+  </div>
+
+  <div class="alert alert-danger" role="status" x-show="updateOutcome === 'failed' || updateOutcome === 'expired'" x-cloak>
+    <span class="alert-icon" aria-hidden="true">⚠</span>
+    <div>
+      <strong x-text="updateOutcome === 'failed' ? 'The Test Runner update failed.' : 'The Test Runner update did not finish in time.'"></strong>
+      <p class="runner-update-detail" x-show="runnerUpdate.latest && runnerUpdate.latest.detail" x-text="runnerUpdate.latest && runnerUpdate.latest.detail"></p>
+      <p>
+        The old Test Runner may still be connected, or none may be. Check the test machine, and the log in the
+        new <code>test-runner-<span x-text="runnerUpdate.server_version"></span></code> folder
+        under <code>controller_client/logs/</code>.
+      </p>
+    </div>
+  </div>
+
+  <div class="alert alert-warning" role="status" x-show="updateState === 'blocked'" x-cloak>
+    <span class="alert-icon" aria-hidden="true">⚠</span>
+    <div>
+      <strong>The Test Runner can be updated when the test machine is free.</strong>
+      <ul>
+        <template x-for="reason in runnerUpdate.blockers" :key="reason">
+          <li x-text="reason"></li>
+        </template>
+      </ul>
+    </div>
+  </div>
+
+  <div class="alert alert-info" role="status" x-show="updateState === 'manual_required'" x-cloak>
+    <span class="alert-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <strong>This Test Runner is too old to update itself.</strong>
+      <p>
+        Download it and set it up once more with the <a href="#download-runner">steps below</a>.
+        From then on it updates with one click from this card.
+      </p>
+    </div>
+  </div>
+
   <div class="actions" x-show="agentConnected" x-cloak>
+    <button class="btn btn-primary" type="button" x-show="canUpdate" @click="$dispatch('open-runner-update')">Update Test Runner</button>
     <button class="btn btn-danger" type="button" @click="$dispatch('open-disconnect-machine')">Disconnect test machine</button>
   </div>
 </section>
 
 {% url 'projects:force_disconnect' project.id as disconnect_url %}
 {% include "partials/confirm_dialog.html" with dialog_id="disconnect-machine" title="Disconnect the test machine?" body="The current connection is closed immediately. Any run in progress on it will be interrupted. You can reconnect at any time by starting the Test Runner again." confirm_label="Disconnect test machine" confirm_class="btn-danger-solid" action_url=disconnect_url %}
+
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-runner-update.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div
+    class="dialog"
+    role="alertdialog"
+    aria-modal="true"
+    aria-labelledby="runner-update-title"
+    aria-describedby="runner-update-desc"
+  >
+    <h3 id="runner-update-title">Update the Test Runner to {{ runner_update.server_version }}?</h3>
+    <div id="runner-update-desc">
+      <p>
+        The Test Runner installs version {{ runner_update.server_version }} into a new folder next to the current one
+        and downloads its dependencies and browsers there (about 300 MB). This takes a few minutes.
+      </p>
+      <p>
+        It then restarts from the new folder: the browsers and apps it opened are closed, and the old folder is
+        deleted. Runs, resumes and Machine setup wait until the update finishes.
+      </p>
+    </div>
+    <form method="post" action="{% url 'projects:runner_update' project.id %}">
+      {% csrf_token %}
+      <input type="hidden" name="expected_version" value="{{ runner_update.server_version }}">
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Update Test Runner</button>
+      </div>
+    </form>
+  </div>
+</div>

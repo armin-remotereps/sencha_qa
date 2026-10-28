@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from django.urls import URLPattern, path
 
-from projects import member_views, person_step_views, testrail_views, views
+from projects import (
+    member_views,
+    person_step_views,
+    runner_update_views,
+    testrail_views,
+    views,
+)
 
 app_name = "projects"
 
@@ -104,6 +110,11 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/download-client/",
         views.download_controller_client,
         name="download_controller_client",
+    ),
+    path(
+        "<int:project_id>/runner-update/",
+        runner_update_views.runner_update,
+        name="runner_update",
     ),
     path(
         "<int:project_id>/force-disconnect/",

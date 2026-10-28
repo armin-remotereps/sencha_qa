@@ -10,6 +10,7 @@ from django.forms import BaseForm
 from django.http import QueryDict
 from django.utils.text import Truncator
 
+from controller_client.protocol import MAX_VERSION_LENGTH
 from projects.case_checkpoint_services import ResumeStepOption
 from projects.models import (
     HELP_NOTE_MAX_LENGTH,
@@ -640,3 +641,15 @@ class TestRailPushStartForm(forms.Form):
     """
 
     testrail_project_id = forms.IntegerField(required=False, min_value=1)
+
+
+class RunnerUpdateForm(forms.Form):
+    """Environment page: update the connected Test Runner.
+
+    ``expected_version`` is the server version the page showed; the service
+    refuses it if the server has since been redeployed with another version.
+    """
+
+    expected_version = forms.CharField(
+        max_length=MAX_VERSION_LENGTH, strip=True, widget=forms.HiddenInput
+    )

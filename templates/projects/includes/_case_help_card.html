@@ -17,7 +17,9 @@
                   continue_mode (HelpContinueMode: "current_screen" |
                   "restore" | "from_scratch"; drives the Continue hint).
                   request.fault / get_fault_display: the infrastructure
-                  fault that stopped the case ("" when the agent asked)
+                  fault that stopped the case ("" when the agent asked);
+                  "runner_outdated" adds a link to the Environment page,
+                  where the Test Runner updates itself
      help_form  — CaseHelpResolutionForm (the person's optional note, never
                   pre-filled from the agent's suggestion; use_plan_revision,
                   unticked here: the draft is only summarised on this page)
@@ -54,6 +56,9 @@
     {% if help_request.ask %}
       <div class="label">{% if help_request.fault %}What to fix{% else %}What the agent asks you to do{% endif %}</div>
       <p class="help-quote">{{ help_request.ask }}</p>
+    {% endif %}
+    {% if help_request.fault == "runner_outdated" %}
+      <p><a href="{% url 'projects:environment' project.id %}#connection-h">Update the Test Runner on the Environment page</a></p>
     {% endif %}
 
     {% if help_request.auto_fix_state == "running" %}

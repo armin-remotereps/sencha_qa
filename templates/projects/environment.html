@@ -15,6 +15,11 @@
                     ready_count, connected_count, workers); seeds
                     environmentLive().visualEngine, then kept live over the
                     agent-status WS ("visual_engine" messages)
+    runner_update — projects.runner_update_offer.RunnerUpdateOffer; its
+                    .payload (RunnerUpdatePayload) seeds
+                    environmentLive().runnerUpdate, then kept live over the
+                    agent-status WS ("runner_update" messages); its
+                    .server_version is the confirm form's expected_version
 
   The whole page body runs inside the environmentLive() Alpine scope so
   partials/advanced_diagnostics.html (which reads clientVersion,
@@ -37,14 +42,17 @@
 {{ project.agent_system_info|json_script:"env-system-info" }}
 {{ project.agent_capabilities|json_script:"env-capabilities" }}
 {{ visual_engine|json_script:"env-visual-engine" }}
+{{ runner_update.payload|json_script:"env-runner-update" }}
 <div x-data="environmentLive()">
-  {% include "projects/includes/_environment_connection.html" with project=project %}
+  {% include "projects/includes/_environment_connection.html" with project=project runner_update=runner_update %}
   {% include "projects/includes/_environment_visual_engine_failure.html" only %}
   {% include "projects/includes/_environment_visual_engine.html" only %}
 
   <section aria-labelledby="setup-h">
     <h2 id="setup-h" class="visually-hidden">Set up the Test Runner on another machine</h2>
-    {% include "partials/runner_download_card.html" with project=project %}
+    <div id="download-runner">
+      {% include "partials/runner_download_card.html" with project=project %}
+    </div>
     <div class="card">
       <div class="card-header">
         <h2>Set it up</h2>
@@ -70,9 +78,15 @@ document.addEventListener('alpine:init', () => {
     clientVersion: '{{ project.agent_client_version|escapejs }}',
     capabilities: JSON.parse(document.getElementById('env-capabilities').textContent),
     visualEngine: JSON.parse(document.getElementById('env-visual-engine').textContent),
+    // RunnerUpdatePayload (projects/runner_update_offer.py). Runner-provided
+    // text (detail, versions) is only ever bound with x-text, never x-html.
+    runnerUpdate: JSON.parse(document.getElementById('env-runner-update').textContent),
+    now: Date.now(),
     ws: null,
 
     init() {
+      // Elapsed timer for an in-flight Test Runner update.
+      setInterval(() => { if (this.updateInFlight) this.now = Date.now(); }, 1000);
       this.ws = new WebSocket(window.punkHazard.wsUrl('/ws/projects/{{ project.id }}/agent-status/'));
       this.ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
@@ -85,6 +99,8 @@ document.addEventListener('alpine:init', () => {
           if (data.visual_engine) this.visualEngine = data.visual_engine;
         } else if (data.type === 'visual_engine') {
           this.visualEngine = data.visual_engine;
+        } else if (data.type === 'runner_update') {
+          this.runnerUpdate = data.runner_update;
         }
       };
     },
@@ -130,6 +146,47 @@ document.addEventListener('alpine:init', () => {
       if (!iso) return '—';
       const date = new Date(iso);
       return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+    },
+
+    // Test Runner self-update (Connection card). The offer state comes from
+    // the server; connection and version changes seen live over agent_status
+    // override it until the next runner_update message refreshes it.
+    get updateInFlight() {
+      return Boolean(this.runnerUpdate.latest && this.runnerUpdate.latest.in_flight);
+    },
+
+    get updateState() {
+      if (this.updateInFlight) return 'in_progress';
+      if (!this.agentConnected) return 'not_connected';
+      if (this.clientVersion && this.clientVersion === this.runnerUpdate.server_version) return 'up_to_date';
+      return this.runnerUpdate.state;
+    },
+
+    get canUpdate() {
+      return ['available', 'last_failed', 'last_expired'].includes(this.updateState) && this.runnerUpdate.can_update;
+    },
+
+    get updatePhaseLabel() {
+      const latest = this.runnerUpdate.latest;
+      if (!latest) return '';
+      return latest.phase_label || latest.status_label;
+    },
+
+    get updateElapsed() {
+      const latest = this.runnerUpdate.latest;
+      if (!latest || !latest.created_at) return '';
+      const started = new Date(latest.created_at).getTime();
+      if (Number.isNaN(started)) return '';
+      const seconds = Math.max(0, Math.floor((this.now - started) / 1000));
+      const minutes = Math.floor(seconds / 60);
+      return minutes + ':' + String(seconds % 60).padStart(2, '0');
+    },
+
+    // The latest attempt at this server's version, once it has ended.
+    get updateOutcome() {
+      const latest = this.runnerUpdate.latest;
+      if (!latest || latest.in_flight || latest.to_version !== this.runnerUpdate.server_version) return '';
+      return latest.status;
     },
 
     get osLabel() {
