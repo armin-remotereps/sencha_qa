@@ -60,7 +60,7 @@ def build_system_prompt(
 ) -> str:
     sections = [
         _build_role_description(system_info=system_info),
-        build_tool_guidelines(),
+        build_tool_guidelines(system_info=system_info),
     ]
     if project_prompt:
         sections.append(build_project_context(project_prompt))

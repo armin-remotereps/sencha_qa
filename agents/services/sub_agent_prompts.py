@@ -32,7 +32,7 @@ def build_sub_agent_system_prompt(
             build_environment_obstacle_rules(),
             build_tool_taxonomy(),
             build_environment_context(system_info=system_info),
-            build_tool_guidelines(),
+            build_tool_guidelines(system_info=system_info),
             _build_current_browser_section(current_browser),
             _build_time_budget_section(timeout_seconds),
             _build_result_format_instructions(),

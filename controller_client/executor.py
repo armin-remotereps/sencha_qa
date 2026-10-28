@@ -34,6 +34,7 @@ from controller_client.protocol import (
     WaitForCommandPayload,
 )
 from controller_client.screen_capture import capture_screen
+from controller_client.shell_encoding import SHELL_OUTPUT_ENCODING
 
 _DESKTOP: Final[DesktopBackend] = get_desktop_backend()
 
@@ -214,7 +215,8 @@ def execute_command(
             payload.command,
             shell=True,  # noqa: S602
             capture_output=True,
-            text=True,
+            encoding=SHELL_OUTPUT_ENCODING,
+            errors="replace",
             timeout=_NON_INTERACTIVE_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
@@ -270,7 +272,8 @@ def execute_command_streaming(
             shell=True,  # noqa: S602
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
+            encoding=SHELL_OUTPUT_ENCODING,
+            errors="replace",
             bufsize=1,
             env=env,
         )

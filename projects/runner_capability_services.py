@@ -31,3 +31,25 @@ def ensure_runner_supports_double_click(project_id: int) -> None:
         "This Test Runner is too old to double-click. Download a fresh Test "
         "Runner from the Environment page."
     )
+
+
+def runner_os_name(project_id: int) -> str:
+    """Return the runner-reported OS name (``"Windows"``, ...), or ``""``."""
+    info = (
+        Project.objects.filter(pk=project_id)
+        .values_list("agent_system_info", flat=True)
+        .get()
+    )
+    return str(info.get("os", "")) if isinstance(info, dict) else ""
+
+
+def ensure_runner_supports_windows_shell(project_id: int, os_name: str) -> None:
+    """Raise ``RunnerOutdatedError`` when a Windows runner predates cmd.exe shells."""
+    if os_name != "Windows":
+        return
+    if runner_supports(project_id, ClientCapability.WINDOWS_SHELL_V1):
+        return
+    raise RunnerOutdatedError(
+        "This Test Runner cannot run shell commands on Windows. Download a fresh "
+        "Test Runner from the Environment page."
+    )

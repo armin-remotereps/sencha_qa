@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import os
-import platform
 import re
 import subprocess
+import sys
 import time
+from pathlib import Path
 
 from controller_client.app_discovery import (
     MATCH_THRESHOLD,
     AppCandidate,
+    AppLaunchKind,
     compute_match_score,
     discover_apps,
     find_best_match,
@@ -18,6 +20,7 @@ from controller_client.protocol import ActionResultPayload, LaunchAppPayload
 
 _MAX_SUGGESTIONS = 5
 _FIELD_CODE_PATTERN = re.compile(r"\s*%[a-zA-Z]")
+_ERROR_ELEVATION_REQUIRED = 740
 
 
 def execute_launch_app(
@@ -54,17 +57,16 @@ def execute_launch_app(
 def _launch_app(
     candidate: AppCandidate, process_tracker: ProcessTracker
 ) -> tuple[str, bool]:
-    system = platform.system()
     try:
-        if system == "Darwin":
+        if sys.platform == "win32":
+            _launch_windows_app(candidate, process_tracker)
+        elif sys.platform == "darwin":
             proc = subprocess.Popen(
                 ["open", "-a", candidate.exec_path],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
             process_tracker.register(proc.pid)
-        elif system == "Windows":
-            os.startfile(candidate.exec_path)  # type: ignore[attr-defined]  # noqa: S606
         else:
             exec_cmd = _strip_field_codes(candidate.exec_path)
             proc = subprocess.Popen(
@@ -79,6 +81,33 @@ def _launch_app(
         return f"Failed to launch '{candidate.display_name}': {exc}", False
 
     return f"Launched '{candidate.display_name}'.", True
+
+
+if sys.platform == "win32":
+
+    def _launch_windows_app(
+        candidate: AppCandidate, process_tracker: ProcessTracker
+    ) -> None:
+        path = candidate.exec_path
+        if candidate.kind == AppLaunchKind.WINDOWS_APP_ID:
+            os.startfile("shell:AppsFolder\\" + path)  # noqa: S606
+            return
+        if candidate.kind != AppLaunchKind.WINDOWS_EXE:
+            os.startfile(path)  # noqa: S606
+            return
+        try:
+            proc = subprocess.Popen(
+                [path],
+                cwd=str(Path(path).parent),
+                creationflags=subprocess.CREATE_NEW_CONSOLE,
+            )
+        except OSError as exc:
+            if getattr(exc, "winerror", None) != _ERROR_ELEVATION_REQUIRED:
+                raise
+            # ShellExecute shows the UAC prompt that CreateProcess refuses.
+            os.startfile(path)  # noqa: S606
+            return
+        process_tracker.register(proc.pid)
 
 
 def _build_suggestion_message(

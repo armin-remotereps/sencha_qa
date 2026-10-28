@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from agents.services.browser_element_finder import find_element_index
+from agents.services.shell_command import build_shell_command
 from agents.services.tool_utils import safe_tool_call
 from agents.services.verified_element_actions import (
     VerificationBudget,
@@ -33,6 +34,8 @@ from projects.browser_selection_services import ensure_runner_supports_browser
 from projects.exceptions import ControllerActionError
 from projects.runner_capability_services import (
     ensure_runner_supports_double_click,
+    ensure_runner_supports_windows_shell,
+    runner_os_name,
     runner_supports,
 )
 from projects.services import (
@@ -103,9 +106,14 @@ def execute_command(
     cwd: str = "",
     on_log: LogCallback | None = None,
 ) -> ToolResult:
-    effective_command = f"cd {cwd} && {command}" if cwd else command
-
     def _do() -> ToolResult:
+        os_name = runner_os_name(project_id)
+        # Raises RunnerOutdatedError, which pauses the case for help (see
+        # double_click): an old Windows runner would only fail on pexpect.
+        ensure_runner_supports_windows_shell(project_id, os_name)
+        # InvalidShellCommandError is an ordinary exception, so
+        # safe_tool_call turns it into a tool error the agent can correct.
+        effective_command = build_shell_command(command, cwd, os_name)
         result = controller_start_interactive_command(project_id, effective_command)
         if on_log is not None and result["output"]:
             on_log(f"{_LOG_PREFIX}{result['output'].rstrip()}")

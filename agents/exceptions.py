@@ -78,3 +78,7 @@ class PlanRevisionInvalid(Exception):
     def __init__(self, message: str) -> None:
         super().__init__(message)
         self.message = message
+
+
+class InvalidShellCommandError(Exception):
+    """A command or its working directory cannot run safely in the runner's shell."""

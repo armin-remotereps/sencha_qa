@@ -166,6 +166,7 @@ def build_environment_context(
         return (
             "ENVIRONMENT:\n"
             "- This is a macOS system.\n"
+            "- Shell commands (execute_command) run in bash.\n"
             "- A browser is available via browser tools (Playwright): chromium (default), "
             "firefox, webkit, chrome (Google Chrome), msedge (Microsoft Edge). "
             "Use browser_navigate to open a URL.\n"
@@ -183,6 +184,7 @@ def build_environment_context(
         return (
             "ENVIRONMENT:\n"
             "- This is a Windows system.\n"
+            "- Shell commands (execute_command) run in cmd.exe.\n"
             "- A browser is available via browser tools (Playwright): chromium (default), "
             "firefox, webkit, chrome (Google Chrome), msedge (Microsoft Edge). "
             "Use browser_navigate to open a URL.\n"
@@ -214,6 +216,7 @@ def build_environment_context(
     return (
         "ENVIRONMENT:\n"
         f"{desktop_line}"
+        "- Shell commands (execute_command) run in bash.\n"
         "- A browser is available via browser tools (Playwright): chromium (default), "
         "firefox, webkit, chrome (Google Chrome), msedge (Microsoft Edge). "
         "Use browser_navigate to open a URL — no need to launch a browser manually.\n"
@@ -226,7 +229,7 @@ def build_environment_context(
     )
 
 
-def build_tool_guidelines() -> str:
+def build_tool_guidelines(*, system_info: dict[str, object] | None) -> str:
     return "\n\n".join(
         [
             "TOOL USAGE:",
@@ -237,7 +240,7 @@ def build_tool_guidelines() -> str:
             build_app_lifecycle_rules(),
             build_search_tool_examples(),
             build_utility_tool_examples(),
-            build_shell_rules(),
+            build_shell_rules(system_info=system_info),
             build_retry_limits(),
             (
                 "When you have completed the task, respond with a text message summarizing "
@@ -278,8 +281,8 @@ def build_desktop_tool_examples() -> str:
         '- close_tab(app_name="Terminal") — close the front tab you opened (click that tab first)\n'
         '- key_press(keys="Return") — press a key or key combination\n'
         '- take_screenshot(question="What is on screen?") — capture desktop and ask about it\n'
-        '- execute_command(command="ls -la") — run a shell command\n'
-        '- execute_command(command="npm install", cwd="/home/user/project") — run in a specific directory\n'
+        '- execute_command(command="git --version") — run a shell command\n'
+        '- execute_command(command="npm install", cwd="<the project directory>") — run in a specific directory\n'
         '- send_command_input(session_id="...", input_text="password123") — send input to an interactive session'
     )
 
@@ -397,14 +400,39 @@ def build_utility_tool_examples() -> str:
     )
 
 
-def build_shell_rules() -> str:
-    return (
-        "SHELL RULES:\n"
+def build_shell_rules(*, system_info: dict[str, object] | None) -> str:
+    background = (
         "- BACKGROUND SHELL: execute_command runs in a hidden background shell. No terminal "
         "window opens and nothing changes on screen, so do NOT take a screenshot to see a "
         "command run or to read its output. The tool result already contains the output "
         "and exit code; judge the command from that. Take a screenshot only to check a GUI "
         "application the command launched.\n"
+    )
+    if get_os_name(system_info) == "Windows":
+        return (
+            "SHELL RULES:\n"
+            "- Commands run in `cmd.exe /c`, not PowerShell or bash. For PowerShell, use "
+            '`powershell -NoProfile -Command "..."`. A command must be a single line; '
+            "chain steps with &&.\n"
+            f"{background}"
+            "- STATELESS SHELL: Each execute_command runs in a fresh session. A standalone 'cd' has "
+            "NO effect on later commands. To run a command in a specific directory, EITHER use the "
+            "cwd parameter (preferred) OR chain commands: 'cd /d \"C:\\path\" && your_command'.\n"
+            '- Start a GUI application with launch_app or \'start "" "C:\\path\\app.exe"\'. '
+            "Start a long-running console process (e.g. flask run, node server.js) with "
+            "'start \"\" /b your_command'; otherwise the command will block and time out. "
+            "Never append ' &'.\n"
+            "- There is no sudo. Commands run as the Test Runner's user. A UAC prompt cannot "
+            "be answered from the hidden shell; check administrator rights with `net session`.\n"
+            "- execute_command handles interactive prompts automatically. If a command needs "
+            "input (a password, Y/n confirmation), it returns a session_id. Use "
+            "send_command_input to respond to each prompt. Pass empty input_text to read "
+            "more output without sending anything."
+        )
+    return (
+        "SHELL RULES:\n"
+        "- Commands run in `/bin/bash -c`.\n"
+        f"{background}"
         "- STATELESS SHELL: Each execute_command runs in a fresh session. A standalone 'cd' has "
         "NO effect on later commands. To run a command in a specific directory, EITHER use the "
         "cwd parameter (preferred) OR chain commands: 'cd /path && your_command'.\n"

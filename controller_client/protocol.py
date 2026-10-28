@@ -10,7 +10,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.6.1"
+CLIENT_VERSION: Final[str] = "0.6.2"
 
 
 class CloseCode(IntEnum):
@@ -80,6 +80,9 @@ class ClientCapability(StrEnum):
     # Optional: ``close_app`` and ``close_tab``. Older controllers answer
     # UNKNOWN_COMMAND.
     CLOSE_APP_V1 = "close_app_v1"
+    # Optional: interactive commands run in ``cmd.exe`` on Windows. Older
+    # controllers fail every command there; only Windows runners are checked.
+    WINDOWS_SHELL_V1 = "windows_shell_v1"
 
 
 # What this client advertises in its handshake.
@@ -87,7 +90,8 @@ CLIENT_CAPABILITIES: Final[tuple[ClientCapability, ...]] = tuple(ClientCapabilit
 
 # What the server insists on; a controller missing any of them would
 # authenticate fine and then silently time out on first use. Optional
-# capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1) are checked where they are used instead.
+# capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1,
+# WINDOWS_SHELL_V1) are checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,

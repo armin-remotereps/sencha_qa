@@ -10,7 +10,7 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
             name="execute_command",
             description=(
                 "Execute a shell command. Handles both interactive and non-interactive commands. "
-                "If the command needs input (sudo password, Y/n confirmation), it returns a "
+                "If the command needs input (a password, Y/n confirmation), it returns a "
                 "session_id — use send_command_input to respond. "
                 "Each command runs in a FRESH shell session — use the cwd parameter "
                 "to set the working directory instead of a separate cd command. "
@@ -24,7 +24,10 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                 ToolParameter(
                     name="command",
                     type="string",
-                    description="The shell command to execute.",
+                    description=(
+                        "The command line, in the shell named in ENVIRONMENT "
+                        "(cmd.exe on Windows, bash elsewhere)."
+                    ),
                     required=True,
                 ),
                 ToolParameter(

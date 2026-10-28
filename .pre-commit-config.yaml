@@ -29,6 +29,16 @@ repos:
         types: [python]
         files: ^controller_client/
 
+      # Same check for the Windows-only branches (sys.platform == "win32"),
+      # which the host pass treats as unreachable. Own cache so the two passes
+      # do not invalidate each other.
+      - id: mypy-controller-client-win32
+        name: mypy (controller_client, win32)
+        entry: controller_client/.venv/bin/mypy --config-file controller_client/setup.cfg --platform win32 --cache-dir .mypy_cache/controller_client_win32
+        language: system
+        types: [python]
+        files: ^controller_client/
+
       - id: mypy-vision-worker
         name: mypy (vision_worker)
         entry: vision_worker/.venv/bin/mypy --config-file vision_worker/setup.cfg

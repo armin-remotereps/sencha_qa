@@ -49,7 +49,7 @@ def build_setup_task_system_prompt(
         build_tool_selection_rules(),
         build_search_tool_examples(),
         build_utility_tool_examples(),
-        build_shell_rules(),
+        build_shell_rules(system_info=system_info),
         build_retry_limits(),
         _build_current_browser_section(current_browser),
         _build_budget_section(

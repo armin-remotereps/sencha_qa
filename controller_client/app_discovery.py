@@ -5,18 +5,39 @@ import logging
 import os
 import platform
 import subprocess
+import sys
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 MATCH_THRESHOLD = 0.7
 
+_START_APPS_SCRIPT = (
+    "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+    "Get-StartApps | ConvertTo-Json -Compress"
+)
+
+# Setting the output encoding calls SetConsoleOutputCP; without a console of its
+# own PowerShell would change the runner terminal's code page.
+if sys.platform == "win32":
+    _NO_WINDOW = subprocess.CREATE_NO_WINDOW
+else:
+    _NO_WINDOW = 0
+
+
+class AppLaunchKind(StrEnum):
+    PATH = "path"
+    WINDOWS_EXE = "windows_exe"
+    WINDOWS_APP_ID = "windows_app_id"
+
 
 @dataclass(frozen=True)
 class AppCandidate:
     display_name: str
     exec_path: str
+    kind: AppLaunchKind = AppLaunchKind.PATH
 
 
 def compute_match_score(query: str, candidate: AppCandidate) -> float:
@@ -187,11 +208,14 @@ def _discover_windows_start_apps(
                 "powershell",
                 "-NoProfile",
                 "-Command",
-                "Get-StartApps | ConvertTo-Json",
+                _START_APPS_SCRIPT,
             ],
             capture_output=True,
-            text=True,
+            # Windows PowerShell 5.1 may start UTF-8 output with a BOM.
+            encoding="utf-8-sig",
+            errors="replace",
             timeout=15,
+            creationflags=_NO_WINDOW,
         )
         if result.returncode != 0:
             return
@@ -204,9 +228,16 @@ def _discover_windows_start_apps(
             app_id = app.get("AppID", "")
             if name and app_id and name not in seen_names:
                 seen_names.add(name)
-                candidates.append(AppCandidate(name, app_id))
+                candidates.append(AppCandidate(name, app_id, _start_app_kind(app_id)))
     except (subprocess.TimeoutExpired, OSError, ValueError):
         logger.warning("PowerShell Get-StartApps failed", exc_info=True)
+
+
+def _start_app_kind(app_id: str) -> AppLaunchKind:
+    path = Path(app_id)
+    if path.is_absolute() and path.suffix.lower() == ".exe" and path.is_file():
+        return AppLaunchKind.WINDOWS_EXE
+    return AppLaunchKind.WINDOWS_APP_ID
 
 
 def _scan_windows_start_menu(
@@ -284,7 +315,9 @@ def _scan_exe_dir(
                 name = entry.stem
                 if name not in seen_names:
                     seen_names.add(name)
-                    candidates.append(AppCandidate(name, str(entry)))
+                    candidates.append(
+                        AppCandidate(name, str(entry), AppLaunchKind.WINDOWS_EXE)
+                    )
             elif entry.is_dir() and current_depth < max_depth:
                 _scan_exe_dir(
                     entry, candidates, seen_names, max_depth, current_depth + 1
