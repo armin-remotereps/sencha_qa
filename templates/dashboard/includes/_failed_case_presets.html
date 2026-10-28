@@ -1,0 +1,35 @@
+{% comment %} Saved filter presets: chips (link + delete) and "Save these filters".
+
+   Context contract (from dashboard/failed_cases.html):
+     presets      — list[PresetItem] (id, name, query)
+     preset_form  — FailedCasePresetForm (initial query = filter_query)
+     filter_query — encoded cleaned filters of the current page {% endcomment %}
+<div class="card">
+  <div class="card-header">
+    <h2>Saved filters</h2>
+  </div>
+  {% if presets %}
+  <ul class="toolbar" aria-label="Saved filters">
+    {% for preset in presets %}
+    <li class="chip">
+      <a href="{% url 'dashboard:failed_cases' %}{% if preset.query %}?{{ preset.query }}{% endif %}">{{ preset.name }}</a>
+      <form method="post" action="{% url 'dashboard:preset_delete' preset.id %}">
+        {% csrf_token %}
+        <input type="hidden" name="return_query" value="{{ filter_query }}">
+        <button type="submit" class="icon-btn" aria-label="Delete saved filter {{ preset.name }}" title="Delete">✕</button>
+      </form>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="hint">Save the current filters to come back to them with one click.</p>
+  {% endif %}
+  <form method="post" action="{% url 'dashboard:preset_save' %}" class="toolbar">
+    {% csrf_token %}
+    {{ preset_form.query }}
+    <label class="visually-hidden" for="{{ preset_form.name.id_for_label }}">Name for these filters</label>
+    <input class="input" type="text" name="name" id="{{ preset_form.name.id_for_label }}" maxlength="{{ preset_form.fields.name.max_length }}" placeholder="Name these filters" required autocomplete="off">
+    <button type="submit" class="btn btn-sm btn-secondary">Save these filters</button>
+    <p class="hint">Saving under an existing name replaces it.</p>
+  </form>
+</div>

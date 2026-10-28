@@ -1,30 +1,117 @@
-{% comment %} Section: Needs your attention.
+{% comment %} Section: Needs your attention. Also served alone by
+   dashboard:attention_fragment; the live refresh (attentionLive in
+   static/js/punk-hazard.js) replaces #attention-card with that response, so
+   keep the root id and add no Alpine directives inside.
 
    Context contract:
-     attention — list of dashboard.services.AttentionItem
-                 (kind, project, title, detail, url, occurred_at); kind is
-                 "need_help_run" (a paused run; listed first),
-                 "failed_run", "blocked_run" or "disconnected_machine". {% endcomment %}
-<section aria-labelledby="attention-h" class="card card-tone-warning">
+     attention  — dashboard.services.attention.Attention
+                  (help_items, help_total, help_more, inbox, failure_more,
+                  reply_more, total, rendered_at)
+     csrf_token — for the dismiss forms {% endcomment %}
+<section id="attention-card" aria-labelledby="attention-h" class="card{% if attention.total %} card-tone-warning{% endif %}" data-fragment-url="{% url 'dashboard:attention_fragment' %}">
   <div class="card-header">
     <h2 id="attention-h">Needs your attention</h2>
+    {% if attention.total %}<span class="muted card-header-count">{{ attention.total }}</span>{% endif %}
   </div>
 
-  <ul class="activity">
-    {% for item in attention %}
-      <li>
-        <span class="activity-icon{% if item.kind == "need_help_run" %} is-warning{% endif %}" aria-hidden="true">
-          {% if item.kind == "need_help_run" %}✋{% elif item.kind == "failed_run" %}✕{% elif item.kind == "blocked_run" %}⚠{% elif item.kind == "disconnected_machine" %}⏻{% else %}•{% endif %}
-        </span>
-        <div>
-          <strong>{{ item.title }}</strong>
-          <div class="muted small">{{ item.detail }}</div>
-          <a class="btn btn-sm {% if item.kind == "need_help_run" %}btn-primary{% else %}btn-secondary{% endif %}" href="{{ item.url }}">
-            {% if item.kind == "need_help_run" %}Help this run{% elif item.kind == "failed_run" %}Review failures{% elif item.kind == "blocked_run" %}Re-run blocked cases{% else %}Reconnect machine{% endif %}
-          </a>
-        </div>
-        <time datetime="{{ item.occurred_at|date:'c' }}">{{ item.occurred_at|timesince }} ago</time>
-      </li>
-    {% endfor %}
-  </ul>
+  {% if not attention.total %}
+    <p class="muted">Nothing needs you right now.</p>
+  {% endif %}
+
+  {% if attention.help_items %}
+    <div class="attention-group">
+      <h3 class="attention-group-title">Needs help <span class="muted">({{ attention.help_total }})</span></h3>
+      <ul class="activity">
+        {% for item in attention.help_items %}
+          <li>
+            <span class="activity-icon is-warning" aria-hidden="true">✋</span>
+            <div class="attention-body">
+              <strong>{{ item.case_title }}</strong>{% if item.testrail_id %} <span class="muted small">{{ item.testrail_id }}</span>{% endif %}
+              <div class="muted small">{{ item.project_name }} · {{ item.run_name }}</div>
+              <div class="attention-tags">
+                {% if item.fault_label %}<span class="chip">{{ item.fault_label }}</span>{% else %}<span class="chip">Agent asked</span>{% endif %}
+                {% if item.auto_fix_trying %}<span class="badge badge-running">Auto-fix is trying</span>{% endif %}
+              </div>
+              {% if item.ask %}<div class="small attention-text">{{ item.ask|truncatechars:200 }}</div>{% endif %}
+              <a class="btn btn-sm btn-primary" href="{{ item.url }}">Help this case</a>
+            </div>
+            <time datetime="{{ item.requested_at|date:'c' }}">{{ item.requested_at|timesince }} ago</time>
+          </li>
+        {% endfor %}
+      </ul>
+      {% if attention.help_more > 0 %}<p class="muted small">and {{ attention.help_more }} more</p>{% endif %}
+    </div>
+  {% endif %}
+
+  {% if attention.inbox.failures %}
+    <div class="attention-group">
+      <div class="attention-group-header">
+        <h3 class="attention-group-title">Missed failures <span class="muted">({{ attention.inbox.failure_total }})</span></h3>
+        <form method="post" action="{% url 'notifications:dismiss_all' %}">
+          <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
+          <input type="hidden" name="kind" value="failures">
+          <input type="hidden" name="up_to" value="{{ attention.rendered_at|date:'c' }}">
+          <input type="hidden" name="next" value="{% url 'dashboard:index' %}">
+          <button type="submit" class="btn btn-sm btn-ghost">Dismiss all</button>
+        </form>
+      </div>
+      <ul class="activity">
+        {% for item in attention.inbox.failures %}
+          <li>
+            <span class="activity-icon is-danger" aria-hidden="true">✕</span>
+            <div class="attention-body">
+              <strong>{{ item.case_title }}</strong>{% if item.testrail_id %} <span class="muted small">{{ item.testrail_id }}</span>{% endif %}
+              <div class="muted small">{{ item.project_name }} · {{ item.run_name }}</div>
+              {% if item.verdict %}<div class="small attention-text">{{ item.verdict }}</div>{% endif %}
+              <div class="attention-actions">
+                <a class="btn btn-sm btn-secondary" href="{{ item.url }}">Open</a>
+                <form method="post" action="{% url 'notifications:dismiss_failure' item.id %}">
+                  <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
+                  <button type="submit" class="btn btn-sm btn-ghost">Dismiss</button>
+                </form>
+              </div>
+            </div>
+            <time datetime="{{ item.occurred_at|date:'c' }}">{{ item.occurred_at|timesince }} ago</time>
+          </li>
+        {% endfor %}
+      </ul>
+      {% if attention.failure_more > 0 %}<p class="muted small">and {{ attention.failure_more }} more</p>{% endif %}
+    </div>
+  {% endif %}
+
+  {% if attention.inbox.replies %}
+    <div class="attention-group">
+      <div class="attention-group-header">
+        <h3 class="attention-group-title">Missed replies <span class="muted">({{ attention.inbox.reply_total }})</span></h3>
+        <form method="post" action="{% url 'notifications:dismiss_all' %}">
+          <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
+          <input type="hidden" name="kind" value="replies">
+          <input type="hidden" name="up_to" value="{{ attention.rendered_at|date:'c' }}">
+          <input type="hidden" name="next" value="{% url 'dashboard:index' %}">
+          <button type="submit" class="btn btn-sm btn-ghost">Dismiss all</button>
+        </form>
+      </div>
+      <ul class="activity">
+        {% for item in attention.inbox.replies %}
+          <li>
+            <span class="activity-icon" aria-hidden="true">✉</span>
+            <div class="attention-body">
+              <strong>{{ item.conversation_label }}</strong> <span class="muted small">{{ item.outcome_label }}</span>
+              <div class="muted small">{{ item.project_name }}</div>
+              {% if item.preview %}<div class="small attention-text">{{ item.preview }}</div>{% endif %}
+              <div class="attention-actions">
+                <a class="btn btn-sm btn-secondary" href="{{ item.url }}">Open</a>
+                <form method="post" action="{% url 'notifications:dismiss_reply' item.id %}">
+                  <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
+                  <button type="submit" class="btn btn-sm btn-ghost">Dismiss</button>
+                </form>
+              </div>
+            </div>
+            <time datetime="{{ item.occurred_at|date:'c' }}">{{ item.occurred_at|timesince }} ago</time>
+          </li>
+        {% endfor %}
+      </ul>
+      {% if attention.reply_more > 0 %}<p class="muted small">and {{ attention.reply_more }} more</p>{% endif %}
+    </div>
+  {% endif %}
 </section>

@@ -9,6 +9,9 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "auto_tester.settings")
 
 django_asgi_app = get_asgi_application()
 
+from dashboard.routing import (  # noqa: E402
+    websocket_urlpatterns as dashboard_websocket_urlpatterns,
+)
 from machine_setup.routing import (  # noqa: E402
     websocket_urlpatterns as machine_setup_websocket_urlpatterns,
 )
@@ -27,6 +30,7 @@ application = ProtocolTypeRouter(
                 + websocket_urlpatterns
                 + machine_setup_websocket_urlpatterns
                 + visual_engine_websocket_urlpatterns
+                + dashboard_websocket_urlpatterns
             )
         ),
     }

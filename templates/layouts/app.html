@@ -4,7 +4,13 @@
    Replaces the old dashboard/base_dashboard.html.
 
    Context contract:
-     active_nav — "dashboard" | "projects", forwarded to the nav partials
+     active_nav      — "dashboard" | "projects" | "failures" | "insights" |
+                       "notifications", forwarded to the nav partials
+     attention_count — items needing the user (dashboard.context_processors.attention_badge);
+                       seeds attentionLive, which opens ws/attention/ and keeps
+                       the nav badge, the tab title and (on the dashboard) the
+                       attention card live. Only this layout opens the socket,
+                       so auth pages do not.
 
    Blocks for pages extending this layout directly (e.g. dashboard/index.html,
    projects/list.html):
@@ -13,7 +19,7 @@
                    own via partials/breadcrumbs.html, or leave it empty)
      page        — the page's own content {% endcomment %}
 {% block body %}
-<div class="app" x-data>
+<div class="app" x-data="attentionLive" data-attention-count="{{ attention_count|default:0 }}">
   {% include "partials/sidebar.html" %}
 
   <div>

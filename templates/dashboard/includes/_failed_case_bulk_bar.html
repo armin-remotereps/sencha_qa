@@ -1,0 +1,92 @@
+{% comment %} Failures bulk bar: Check, Re-run (one run only), Send checked to TestRail.
+
+   Must sit inside the `runOf` + `bulkSelect` scopes of _failed_case_table.html.
+   Every form posts to dashboard:failed_cases_bulk with the selected ids, the
+   action and return_query (filter_query; re-validated by the server). The
+   server re-checks scope, status and the one-run rule.
+
+   Re-run and Send confirm first. They use the dialog pattern of
+   partials/README.md rather than partials/confirm_dialog.html because the
+   form must carry the live selection.
+
+   Context contract: filter_query. {% endcomment %}
+<div class="bulk-bar" x-show="count > 0" x-cloak>
+  <span x-text="count + ' selected'"></span>
+  <form method="post" action="{% url 'dashboard:failed_cases_bulk' %}">
+    {% csrf_token %}
+    <input type="hidden" name="action" value="check">
+    <input type="hidden" name="return_query" value="{{ filter_query }}">
+    <template x-for="id in selected" :key="id">
+      <input type="hidden" name="pivot_ids" :value="id">
+    </template>
+    <button type="submit" class="btn btn-sm btn-primary" x-text="'Check (' + count + ')'">Check</button>
+  </form>
+  <button
+    type="button"
+    class="btn btn-sm btn-secondary"
+    :disabled="new Set(selected.map((id) => runOf[id])).size !== 1"
+    :title="new Set(selected.map((id) => runOf[id])).size === 1 ? '' : 'Select cases from a single run to re-run them'"
+    @click="$dispatch('open-failures-rerun')"
+    x-text="'Re-run (' + count + ')'"
+  >Re-run</button>
+  <button type="button" class="btn btn-sm btn-secondary" @click="$dispatch('open-failures-send')">Send checked to TestRail</button>
+  <button type="button" class="btn btn-sm btn-ghost" @click="clear()">Clear</button>
+</div>
+
+{# Re-run confirm #}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-failures-rerun.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="failures-rerun-title" aria-describedby="failures-rerun-desc">
+    <h3 id="failures-rerun-title" x-text="'Re-run ' + count + (count === 1 ? ' case?' : ' cases?')">Re-run the selected cases?</h3>
+    <p id="failures-rerun-desc">The selected cases run again from step 1 on their run, in run order, keeping the run's help mode. Their log, screenshots and step progress are replaced; the previous result stays in each case's history. Checked marks are cleared. The run must be finished and its test machine ready.</p>
+    <form method="post" action="{% url 'dashboard:failed_cases_bulk' %}">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="rerun">
+      <input type="hidden" name="return_query" value="{{ filter_query }}">
+      <template x-for="id in selected" :key="id">
+        <input type="hidden" name="pivot_ids" :value="id">
+      </template>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary" :disabled="count === 0" x-text="'Re-run (' + count + ')'">Re-run</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# Send confirm: the existing per-run send covers every checked, unsent case of each run #}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-failures-send.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="failures-send-title" aria-describedby="failures-send-desc">
+    <h3 id="failures-send-title" x-text="(new Set(selected.map((id) => runOf[id])).size === 1) ? 'Send the checked results of 1 run to TestRail?' : 'Send the checked results of ' + new Set(selected.map((id) => runOf[id])).size + ' runs to TestRail?'">Send checked results to TestRail?</h3>
+    <p id="failures-send-desc">This sends <strong>all checked cases not yet sent</strong> of every run the selected cases belong to, not only the selected cases, exactly as "Send checked to TestRail" on the run page does. Selected cases that are not checked are not sent: check them first. Runs without TestRail settings, or still running, are reported and skipped.</p>
+    <form method="post" action="{% url 'dashboard:failed_cases_bulk' %}">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="send">
+      <input type="hidden" name="return_query" value="{{ filter_query }}">
+      <template x-for="id in selected" :key="id">
+        <input type="hidden" name="pivot_ids" :value="id">
+      </template>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary" :disabled="count === 0">Send to TestRail</button>
+      </div>
+    </form>
+  </div>
+</div>

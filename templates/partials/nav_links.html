@@ -2,7 +2,12 @@
    the mobile nav panel in partials/topbar.html so they never drift apart.
 
    Context contract:
-     active_nav — "dashboard" | "projects" | "notifications" | anything else for no match {% endcomment %}
-<a class="nav-link" href="{% url 'dashboard:index' %}"{% if active_nav == "dashboard" %} aria-current="page"{% endif %}>◈ Dashboard</a>
+     active_nav      — "dashboard" | "projects" | "failures" | "insights" |
+                       "notifications" | anything else for no match
+     attention_count — items needing the user (dashboard.context_processors.attention_badge);
+                       the Dashboard badge, kept live by attentionLive via [data-attention-badge] {% endcomment %}
+<a class="nav-link" href="{% url 'dashboard:index' %}"{% if active_nav == "dashboard" %} aria-current="page"{% endif %}>◈ Dashboard <span class="nav-badge" data-attention-badge{% if not attention_count %} hidden{% endif %}><span data-attention-badge-count>{{ attention_count|default:0 }}</span><span class="visually-hidden"> items need attention</span></span></a>
 <a class="nav-link" href="{% url 'projects:list' %}"{% if active_nav == "projects" %} aria-current="page"{% endif %}>▣ Projects</a>
+<a class="nav-link" href="{% url 'dashboard:failed_cases' %}"{% if active_nav == "failures" %} aria-current="page"{% endif %}>✕ Failures</a>
+<a class="nav-link" href="{% url 'dashboard:machine_health' %}"{% if active_nav == "insights" %} aria-current="page"{% endif %}>◔ Insights</a>
 <a class="nav-link" href="{% url 'notifications:settings' %}"{% if active_nav == "notifications" %} aria-current="page"{% endif %}>◉ Notifications</a>

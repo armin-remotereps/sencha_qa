@@ -4,7 +4,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{% block title %}{{ brand_name|default:"Punk Hazard" }}{% endblock %}</title>
+  <title>{% if attention_count %}({{ attention_count }}) {% endif %}{% block title %}{{ brand_name|default:"Punk Hazard" }}{% endblock %}</title>
 
   <link rel="stylesheet" href="{% static 'css/punk-hazard.css' %}">
   <link rel="icon" type="image/png" href="{% static 'branding/punk-hazard-mark.png' %}">

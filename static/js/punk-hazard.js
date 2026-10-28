@@ -192,6 +192,114 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
+  /**
+   * The app shell's attention socket (templates/layouts/app.html, one per
+   * tab). Opens ws/attention/, reconnects with backoff, and on every
+   * `{"type": "attention", "count": N}` updates the nav badges
+   * ([data-attention-badge]), the `(N) ` tab-title prefix and the dashboard
+   * subtitle; on the dashboard it also re-fetches #attention-card from its
+   * data-fragment-url and swaps it in (server-rendered, escaped HTML; the
+   * card holds no Alpine directives, so it needs no re-initialisation).
+   */
+  Alpine.data("attentionLive", () => ({
+    socket: null,
+    retryDelay: 1000,
+    stopped: false,
+    fetchSeq: 0,
+    baseTitle: "",
+
+    init() {
+      this.baseTitle = document.title.replace(/^\(\d+\) /, "");
+      this.connect();
+    },
+
+    destroy() {
+      this.stopped = true;
+      if (this.socket) {
+        this.socket.close();
+      }
+    },
+
+    connect() {
+      if (this.stopped) {
+        return;
+      }
+      const socket = new WebSocket(window.punkHazard.wsUrl("/ws/attention/"));
+      this.socket = socket;
+      socket.onopen = () => {
+        this.retryDelay = 1000;
+      };
+      socket.onmessage = (event) => {
+        let data;
+        try {
+          data = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (data.type === "attention" && Number.isInteger(data.count)) {
+          this.apply(data.count);
+        }
+      };
+      socket.onclose = () => {
+        if (this.stopped) {
+          return;
+        }
+        setTimeout(() => this.connect(), this.retryDelay);
+        this.retryDelay = Math.min(this.retryDelay * 2, 30000);
+      };
+    },
+
+    apply(count) {
+      document.title = (count > 0 ? `(${count}) ` : "") + this.baseTitle;
+      document.querySelectorAll("[data-attention-badge]").forEach((badge) => {
+        badge.hidden = count <= 0;
+        const number = badge.querySelector("[data-attention-badge-count]");
+        if (number) {
+          number.textContent = String(count);
+        }
+      });
+      const subtitle = document.querySelector("[data-attention-subtitle]");
+      if (subtitle) {
+        subtitle.hidden = count <= 0;
+        subtitle.textContent =
+          `${count} item${count === 1 ? "" : "s"} ` +
+          `need${count === 1 ? "s" : ""} your attention`;
+      }
+      this.refreshCard();
+    },
+
+    async refreshCard() {
+      const card = document.getElementById("attention-card");
+      const url = card?.dataset.fragmentUrl;
+      if (!url) {
+        return;
+      }
+      const seq = ++this.fetchSeq;
+      try {
+        const response = await fetch(url, {
+          credentials: "same-origin",
+          headers: { Accept: "text/html" },
+        });
+        if (!response.ok || seq !== this.fetchSeq) {
+          return;
+        }
+        const html = await response.text();
+        if (seq !== this.fetchSeq) {
+          return;
+        }
+        const template = document.createElement("template");
+        template.innerHTML = html.trim();
+        const fresh = template.content.firstElementChild;
+        const current = document.getElementById("attention-card");
+        if (fresh && fresh.id === "attention-card" && current) {
+          current.replaceWith(fresh);
+        }
+      } catch {
+        // Offline or the session ended: the next event retries.
+      }
+    },
+  }));
+
   /** The ⋯ row-action dropdown (templates/partials's `.row-menu` markup). */
   Alpine.data("rowMenu", () => ({
     open: false,

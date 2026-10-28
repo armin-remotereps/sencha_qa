@@ -1,29 +1,24 @@
 {% extends "layouts/app.html" %}
 
-{% comment %} Dashboard home.
+{% comment %} Dashboard home: the user's "Needs your attention" card and the
+   "Failed cases" widget.
 
-   Context contract (dashboard/services.py):
-     dashboard — DashboardData (has_projects, summary, attention, projects, activity) {% endcomment %}
+   Context contract (dashboard/services/dashboard_data.py):
+     dashboard — DashboardData (has_projects, attention, failed_widget)
+     attention_count — dashboard.attention.total (also drives the badge) {% endcomment %}
 
 {% block title %}Dashboard · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
 {% block page %}
-{# Section: Welcome + primary action #}
 {% now "G" as current_hour %}
-{% with hour=current_hour|add:0 in_progress=dashboard.summary.runs_in_progress attention_count=dashboard.attention|length %}
+{% with hour=current_hour|add:0 total=dashboard.attention.total %}
 <div class="page-header">
   <div>
     <h1>
       {% if hour < 12 %}Good morning{% elif hour < 18 %}Good afternoon{% else %}Good evening{% endif %},
       {{ user.first_name|default:user.email }}
     </h1>
-    {% if in_progress or attention_count %}
-      <p class="subtitle">
-        {% if in_progress %}{{ in_progress }} run{{ in_progress|pluralize }} in progress{% endif %}
-        {% if in_progress and attention_count %} · {% endif %}
-        {% if attention_count %}{{ attention_count }} item{{ attention_count|pluralize }} need{{ attention_count|pluralize:"s," }} attention{% endif %}
-      </p>
-    {% endif %}
+    <p class="subtitle" data-attention-subtitle{% if not total %} hidden{% endif %}>{{ total }} item{{ total|pluralize }} need{{ total|pluralize:"s," }} your attention</p>
   </div>
   <div class="actions">
     <a class="btn btn-primary" href="{% url 'projects:create' %}">+ New project</a>
@@ -35,16 +30,9 @@
   {% url 'projects:create' as create_url %}
   {% include "partials/empty_state.html" with icon="▣" title="No projects yet" body="A project is one application under test. Create your first one and the setup wizard walks you through context, test cases, and connecting a test machine." primary_label="Create your first project" primary_url=create_url only %}
 {% else %}
-<div class="stack">
-  {% if dashboard.attention %}
-    {% include "dashboard/includes/_attention.html" with attention=dashboard.attention only %}
-  {% endif %}
-
-  {% include "dashboard/includes/_run_summary.html" with summary=dashboard.summary only %}
-
-  {% include "dashboard/includes/_recent_projects.html" with projects=dashboard.projects only %}
-
-  {% include "dashboard/includes/_recent_activity.html" with activity=dashboard.activity only %}
+<div class="dashboard-grid">
+  {% include "dashboard/includes/_attention.html" with attention=dashboard.attention csrf_token=csrf_token only %}
+  {% include "dashboard/includes/_failed_widget.html" with widget=dashboard.failed_widget only %}
 </div>
 {% endif %}
 {% endblock %}

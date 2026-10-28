@@ -1,0 +1,47 @@
+{% comment %} Section: Failed cases (last 7 days).
+
+   Context contract:
+     widget — dashboard.services.failed_case_widget.FailedCaseWidget
+              (since, total, not_checked, top_projects, latest, all_url) {% endcomment %}
+<section aria-labelledby="failed-widget-h" class="card">
+  <div class="card-header">
+    <h2 id="failed-widget-h">Failed cases</h2>
+    <span class="muted small">Last 7 days</span>
+  </div>
+
+  <div class="failed-widget-totals">
+    <div><span class="failed-widget-number">{{ widget.total }}</span> <span class="muted small">failed</span></div>
+    <div><span class="failed-widget-number">{{ widget.not_checked }}</span> <span class="muted small">not checked</span></div>
+  </div>
+
+  {% if widget.top_projects %}
+    <h3 class="attention-group-title">Top projects</h3>
+    <ul class="failed-widget-list">
+      {% for row in widget.top_projects %}
+        <li><a href="{{ row.url }}">{{ row.project_name }}</a> <span class="badge badge-failed">{{ row.failures }}</span></li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if widget.latest %}
+    <h3 class="attention-group-title">Latest</h3>
+    <ul class="failed-widget-list">
+      {% for row in widget.latest %}
+        <li>
+          <div>
+            <a href="{{ row.url }}">{{ row.case_title }}</a>
+            <div class="muted small">{{ row.project_name }} · {{ row.run_name }}</div>
+          </div>
+          {% if row.finished_at %}<time class="muted small" datetime="{{ row.finished_at|date:'c' }}">{{ row.finished_at|timesince }} ago</time>{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">No failures in the last 7 days.</p>
+  {% endif %}
+
+  <div class="card-actions">
+    <a class="btn btn-sm btn-secondary" href="{{ widget.all_url }}">View all failures</a>
+    <a class="btn btn-sm btn-ghost" href="{% url 'dashboard:machine_health' %}">Machine health</a>
+  </div>
+</section>

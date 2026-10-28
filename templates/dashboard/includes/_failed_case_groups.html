@@ -1,0 +1,38 @@
+{% comment %} Failures "By test case" view: test cases by number of failures (no bulk actions).
+
+   Context contract (from dashboard/failed_cases.html):
+     page_obj — Page[FailingCaseRow] (test_case_id, title, testrail_id,
+                project_id, project_name, failures, runs, last_failed,
+                latest_pivot_id, latest_run_id). The run filter does not apply here. {% endcomment %}
+<div class="card">
+  <p class="hint">Each test case with how often it failed in the filtered period, newest failure linked. The run filter does not apply to this view.</p>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th scope="col">Case</th>
+          <th scope="col">Project</th>
+          <th scope="col">Failures</th>
+          <th scope="col">Runs</th>
+          <th scope="col">Last failed</th>
+          <th scope="col"><span class="visually-hidden">Latest failure</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in page_obj %}
+        <tr>
+          <td data-label="Case" class="cell-primary">
+            {{ row.title }}
+            {% if row.testrail_id %}<div class="muted small">{{ row.testrail_id }}</div>{% endif %}
+          </td>
+          <td data-label="Project"><a href="{% url 'projects:detail' row.project_id %}">{{ row.project_name }}</a></td>
+          <td data-label="Failures"><span class="badge badge-failed">{{ row.failures }}</span></td>
+          <td data-label="Runs">{{ row.runs }}</td>
+          <td data-label="Last failed">{% if row.last_failed %}<time datetime="{{ row.last_failed|date:'c' }}">{{ row.last_failed|date:"M j, Y H:i" }}</time>{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
+          <td data-label="Latest failure"><a class="btn btn-sm btn-ghost" href="{% url 'projects:test_run_case_detail' row.project_id row.latest_run_id row.latest_pivot_id %}">Latest failure</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

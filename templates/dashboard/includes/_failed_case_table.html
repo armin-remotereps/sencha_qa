@@ -1,0 +1,70 @@
+{% comment %} Failures "Cases" view: one row per Failed run case, with bulk selection.
+
+   Context contract (from dashboard/failed_cases.html):
+     page_obj       — Page[TestRunTestCase] (select_related test_case / test_run /
+                      project; `verdict` is the result's first 200 characters)
+     selectable_ids — pivot ids on this page
+     run_of_pivot   — {pivot id: run id}, so the bulk bar knows whether the
+                      selection is from one run (ints only)
+     filter_query   — for the bulk forms' return_query
+
+   Scopes: the outer x-data holds `runOf`; the inner `bulkSelect` (static/js/punk-hazard.js)
+   holds the selection. The bulk bar and its dialogs live inside both. {% endcomment %}
+<div x-data="{ runOf: { {% for pivot_id, run_id in run_of_pivot.items %}{{ pivot_id }}: {{ run_id }}{% if not forloop.last %}, {% endif %}{% endfor %} } }">
+<div x-data="bulkSelect([{% for pid in selectable_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}])">
+<div class="card">
+  <p class="hint">Select cases to mark them checked, re-run them (cases from one run) or send the checked results of their runs to TestRail.</p>
+
+  {% include "dashboard/includes/_failed_case_bulk_bar.html" %}
+
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th scope="col" class="cell-check">
+            <input type="checkbox" aria-label="Select all cases on this page" :checked="allSelected" :disabled="allIds.length === 0" @change="toggleAll()">
+          </th>
+          <th scope="col">Case</th>
+          <th scope="col">Project</th>
+          <th scope="col">Run</th>
+          <th scope="col">Failed</th>
+          <th scope="col">Failed by</th>
+          <th scope="col">Verdict</th>
+          <th scope="col">Review</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for pivot in page_obj %}
+        {% with run=pivot.test_run project=pivot.test_run.project %}
+        <tr data-pivot-id="{{ pivot.id }}">
+          <td data-label="" class="cell-check">
+            <input type="checkbox" aria-label="Select {{ pivot.test_case.title }}" :checked="selected.includes({{ pivot.id }})" @change="toggle({{ pivot.id }})">
+          </td>
+          <td data-label="Case" class="cell-primary">
+            <a href="{% url 'projects:test_run_case_detail' project.id run.id pivot.id %}">{{ pivot.test_case.title }}</a>
+            {% if pivot.test_case.testrail_id %}<div class="muted small">{{ pivot.test_case.testrail_id }}</div>{% endif %}
+          </td>
+          <td data-label="Project"><a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a></td>
+          <td data-label="Run"><a href="{% url 'projects:test_run_detail' project.id run.id %}">{{ run.display_name }}</a></td>
+          <td data-label="Failed">{% if pivot.finished_at %}<time datetime="{{ pivot.finished_at|date:'c' }}">{{ pivot.finished_at|date:"M j, Y H:i" }}</time>{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
+          <td data-label="Failed by">
+            {% if pivot.failed_by == "agent" %}<span class="badge badge-failed">{{ pivot.get_failed_by_display }}</span>
+            {% elif pivot.failed_by == "help" %}<span class="badge badge-need-help">{{ pivot.get_failed_by_display }}</span>
+            {% elif pivot.failed_by == "review" %}<span class="badge badge-warning">{{ pivot.get_failed_by_display }}</span>
+            {% else %}<span class="muted">Not recorded</span>{% endif %}
+          </td>
+          <td data-label="Verdict" class="muted">{% if pivot.verdict %}{{ pivot.verdict|truncatechars:200 }}{% else %}&mdash;{% endif %}</td>
+          <td data-label="Review">
+            {% if pivot.testrail_source_result_id %}<span class="badge badge-passed">Sent{% if pivot.testrail_source_run_id %} to R{{ pivot.testrail_source_run_id }}{% endif %}</span>
+            {% elif pivot.checked_at %}<span class="badge badge-passed">Checked</span>
+            {% else %}<span class="muted">Not checked</span>{% endif %}
+          </td>
+        </tr>
+        {% endwith %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+</div>
+</div>

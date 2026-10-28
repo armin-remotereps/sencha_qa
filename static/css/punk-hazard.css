@@ -886,6 +886,11 @@ a.stat-card:hover {
   grid-template-columns: repeat(2, 1fr);
 }
 
+/* Six tiles (run detail stats with the average case time): same steps. */
+.grid-6 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
 @media (min-width: 768px) {
   .grid-2 {
     grid-template-columns: repeat(2, 1fr);
@@ -902,11 +907,19 @@ a.stat-card:hover {
   .grid-5 {
     grid-template-columns: repeat(3, 1fr);
   }
+
+  .grid-6 {
+    grid-template-columns: repeat(3, 1fr);
+  }
 }
 
 @media (min-width: 1024px) {
   .grid-5 {
     grid-template-columns: repeat(5, 1fr);
+  }
+
+  .grid-6 {
+    grid-template-columns: repeat(6, 1fr);
   }
 }
 
@@ -3764,4 +3777,195 @@ details.card[open] > summary,
   align-items: center;
   gap: 8px 12px;
   margin-top: 12px;
+}
+
+/* --------------------------------------------------------------------------
+   Attention badge (nav + mobile menu toggle), kept live by attentionLive()
+   -------------------------------------------------------------------------- */
+
+.nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--brand-orange);
+  color: var(--brand-white);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.nav-badge[hidden] {
+  display: none;
+}
+
+.mobile-nav-toggle .nav-badge {
+  margin-left: 6px;
+}
+
+/* --------------------------------------------------------------------------
+   Dashboard: "Needs your attention" card + "Failed cases" widget
+   -------------------------------------------------------------------------- */
+
+.dashboard-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+@media (min-width: 1024px) {
+  .dashboard-grid {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  }
+}
+
+.attention-group + .attention-group {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.attention-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.attention-group-title {
+  margin: 0 0 6px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.attention-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.attention-text {
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.attention-tags,
+.attention-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.attention-actions form {
+  margin: 0;
+}
+
+.failed-widget-totals {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 14px;
+}
+
+.failed-widget-number {
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.failed-widget-list {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+}
+
+.failed-widget-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.failed-widget-list li:last-child {
+  border-bottom: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Failures page (/failures/): sticky bulk bar, preset chips, verdict cell
+   -------------------------------------------------------------------------- */
+
+.bulk-bar-sticky {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  box-shadow: var(--shadow);
+}
+
+.preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.preset-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 10px;
+  border-radius: 999px;
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.preset-chip form {
+  margin: 0;
+}
+
+.preset-chip-delete {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0 6px;
+  font: inherit;
+}
+
+.preset-chip-delete:hover {
+  color: var(--danger);
+}
+
+.verdict-preview {
+  max-width: 42ch;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* Simple horizontal bar in a table cell (machine health counts). */
+.bar-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 120px;
+}
+
+.bar-cell .progress {
+  flex: 1;
 }
