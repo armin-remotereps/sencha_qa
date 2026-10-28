@@ -186,6 +186,14 @@ class ResultChangeError(Exception):
         self.message = message
 
 
+class PersonStepError(Exception):
+    """A person step cannot be reported or closed; ``message`` is user-safe."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 class ProjectMembershipError(Exception):
     """Base for invite / leave failures; ``message`` is safe to show the user."""
 

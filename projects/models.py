@@ -53,7 +53,9 @@ class TestRunStatus(models.TextChoices):
     STARTED = "started", "Started"
     DONE = "done", "Done"
     CANCELLED = "cancelled", "Cancelled"
-    # Asleep: a case needs help; nothing in the run executes until it is resolved.
+    # Asleep: a case needs help, or (Human in the loop) waits for a person to
+    # perform a step; nothing in the run executes until it is resolved. Pages
+    # tell the two apart by ``projects.case_help_state.RunHelpState``.
     PAUSED = "paused", "Needs help"
 
 
@@ -62,10 +64,16 @@ ACTIVE_RUN_STATUSES: tuple[str, ...] = (TestRunStatus.STARTED, TestRunStatus.PAU
 
 
 class RunHelpMode(models.TextChoices):
-    """What happens when a case of the run needs help."""
+    """What happens when a case of the run needs help.
+
+    ``HUMAN_IN_THE_LOOP``: a person performs every step and the agent confirms
+    it; help requests then behave as in Attended (no auto-fix). The value is
+    short because ``TestRun.help_mode`` is ``max_length=16``.
+    """
 
     ATTENDED = "attended", "Attended"
     NIGHT = "night", "Night (auto-fix first)"
+    HUMAN_IN_THE_LOOP = "hitl", "Human in the loop"
 
 
 class TestRunTestCaseStatus(models.TextChoices):
@@ -78,6 +86,9 @@ class TestRunTestCaseStatus(models.TextChoices):
     # Stopped without a verdict at a failing step; waits for a person (or the
     # auto-fix agent) with the checkpoint and the machine state kept.
     NEED_HELP = "need_help", "Need help"
+    # Human in the loop: a step was handed to a person (``CasePersonStep``);
+    # the checkpoint and the machine state are kept. Not a finished status.
+    AWAITING_PERSON = "awaiting_person", "Waiting for a person"
 
 
 # Statuses after which a case's ``active_duration`` is final.
@@ -899,6 +910,155 @@ class CaseResultChange(models.Model):
 
     def __str__(self) -> str:
         return f"Result change #{self.pk} of TRTC #{self.test_run_test_case_id}"
+
+
+# Caps on the texts of a person step (Human in the loop). The database does
+# not enforce them; services truncate.
+PERSON_STEP_INSTRUCTION_MAX_LENGTH = 2000
+PERSON_STEP_EXPECTED_MAX_LENGTH = 1000
+PERSON_STEP_COMMAND_MAX_LENGTH = 2000
+PERSON_STEP_OUTPUT_MAX_LENGTH = 20000
+PERSON_STEP_AGENT_TEXT_MAX_LENGTH = 1000
+
+
+class PersonStepKind(models.TextChoices):
+    """What a person is asked to do in a Human in the loop run."""
+
+    INTERACTIVE = "interactive", "Interactive step"
+    # A command the test case states; the person runs it in the machine's shell.
+    COMMAND = "command", "Command"
+    # The state restore before a resumed case (replaces the AI restore).
+    RESTORE = "restore", "Restore the earlier steps"
+
+
+class PersonStepStatus(models.TextChoices):
+    # The person's turn.
+    WAITING = "waiting", "Waiting for a person"
+    # The agent is confirming the report.
+    REPORTED = "reported", "Being confirmed"
+    # Open again: the agent could not confirm the report (``agent_objection``).
+    NOT_CONFIRMED = "not_confirmed", "Not confirmed"
+    PASSED = "passed", "Passed"
+    FAILED = "failed", "Failed"
+    CANCELLED = "cancelled", "Cancelled"
+    # The run left Human in the loop; the agent runs the step itself.
+    HANDED_BACK = "handed_back", "Handed back to the agent"
+
+
+# Statuses of a person step that is still open (one per case at most).
+OPEN_PERSON_STEP_STATUSES: tuple[str, ...] = (
+    PersonStepStatus.WAITING,
+    PersonStepStatus.REPORTED,
+    PersonStepStatus.NOT_CONFIRMED,
+)
+
+
+class PersonStepOutcome(models.TextChoices):
+    """The person's report; blank until they report."""
+
+    AS_EXPECTED = "as_expected", "As expected"
+    DIFFERENT = "different", "The result was different"
+
+
+class PersonStepClose(models.TextChoices):
+    """How a person step ended; blank while it is open."""
+
+    OPEN = "", "Open"
+    CONFIRMED = "confirmed", "Confirmed by the agent"
+    OVERRULED = "overruled", "Overruled by a person"
+    REPORTED_DIFFERENT = "reported_different", "Reported a different result"
+    MARKED_FAILED = "marked_failed", "Marked failed"
+    MARKED_BLOCKED = "marked_blocked", "Marked blocked"
+
+
+class CasePersonStep(models.Model):
+    """One step of a run case handed to a person (Human in the loop).
+
+    A redo after "not confirmed" reuses the row and bumps ``round``.
+    """
+
+    test_run_test_case = models.ForeignKey(
+        TestRunTestCase, on_delete=models.CASCADE, related_name="person_steps"
+    )
+    # 1-based plan step; for ``restore`` the step the restore prepares.
+    step_num = models.PositiveSmallIntegerField()
+    kind = models.CharField(max_length=16, choices=PersonStepKind.choices)
+    # 1-based hand-off round of this step.
+    round = models.PositiveSmallIntegerField(default=1)
+    # Model-written; shown escaped.
+    instruction = models.TextField(max_length=PERSON_STEP_INSTRUCTION_MAX_LENGTH)
+    expected_result = models.TextField(
+        max_length=PERSON_STEP_EXPECTED_MAX_LENGTH, blank=True, default=""
+    )
+    # Model-written, taken from the test case text; blank unless ``command``.
+    command = models.TextField(
+        max_length=PERSON_STEP_COMMAND_MAX_LENGTH, blank=True, default=""
+    )
+    # Server-derived from the runner's OS (e.g. "Terminal (bash)"); never
+    # model-chosen.
+    shell_label = models.CharField(max_length=64, blank=True, default="")
+    status = models.CharField(
+        max_length=16,
+        choices=PersonStepStatus.choices,
+        default=PersonStepStatus.WAITING,
+    )
+    requested_at = models.DateTimeField(auto_now_add=True)
+    reported_at = models.DateTimeField(null=True, blank=True)
+    reported_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    outcome = models.CharField(
+        max_length=16, choices=PersonStepOutcome.choices, blank=True, default=""
+    )
+    # The person's note and pasted command output; shown escaped.
+    note = models.TextField(max_length=HELP_NOTE_MAX_LENGTH, blank=True, default="")
+    output = models.TextField(
+        max_length=PERSON_STEP_OUTPUT_MAX_LENGTH, blank=True, default=""
+    )
+    # The agent's confirmation text; and its reason while ``not_confirmed``.
+    agent_summary = models.TextField(
+        max_length=PERSON_STEP_AGENT_TEXT_MAX_LENGTH, blank=True, default=""
+    )
+    agent_objection = models.TextField(
+        max_length=PERSON_STEP_AGENT_TEXT_MAX_LENGTH, blank=True, default=""
+    )
+    closed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    closed_at = models.DateTimeField(null=True, blank=True)
+    close_reason = models.CharField(
+        max_length=24, choices=PersonStepClose.choices, blank=True, default=""
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["test_run_test_case"],
+                condition=models.Q(status__in=OPEN_PERSON_STEP_STATUSES),
+                name="person_step_one_open",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["test_run_test_case", "step_num", "-requested_at"],
+                name="person_step_pivot_step_idx",
+            )
+        ]
+
+    @property
+    def is_open(self) -> bool:
+        return self.status in OPEN_PERSON_STEP_STATUSES
+
+    def __str__(self) -> str:
+        return f"Person step #{self.pk} of TRTC #{self.test_run_test_case_id}"
 
 
 def _screenshot_upload_path(instance: "TestRunScreenshot", filename: str) -> str:

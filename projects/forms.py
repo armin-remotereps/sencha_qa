@@ -13,8 +13,10 @@ from django.utils.text import Truncator
 from projects.case_checkpoint_services import ResumeStepOption
 from projects.models import (
     HELP_NOTE_MAX_LENGTH,
+    PERSON_STEP_OUTPUT_MAX_LENGTH,
     PROJECT_PROMPT_MAX_LENGTH,
     ApplicationPlatform,
+    PersonStepOutcome,
     Project,
     RunHelpMode,
     TestCaseData,
@@ -267,6 +269,9 @@ class TestRunCreateForm(forms.Form):
 RUN_CASE_SELECTION_MAX_IDS = 500
 
 
+_HELP_MODE_INVALID = "Choose Attended, Night or Human in the loop."
+
+
 class TestRunStartForm(forms.Form):
     """Start a draft run: what happens when one of its cases needs help."""
 
@@ -277,7 +282,7 @@ class TestRunStartForm(forms.Form):
         widget=forms.RadioSelect,
         error_messages={
             "required": "Choose what happens when a case needs help.",
-            "invalid_choice": "Choose Attended or Night.",
+            "invalid_choice": _HELP_MODE_INVALID,
         },
     )
 
@@ -290,7 +295,7 @@ class RunHelpModeForm(forms.Form):
         choices=RunHelpMode.choices,
         required=False,
         widget=forms.Select(attrs={"class": "select"}),
-        error_messages={"invalid_choice": "Choose Attended or Night."},
+        error_messages={"invalid_choice": _HELP_MODE_INVALID},
     )
 
     def clean_help_mode(self) -> str | None:
@@ -307,7 +312,7 @@ class RunHelpModeChangeForm(forms.Form):
         widget=forms.Select(attrs={"class": "select"}),
         error_messages={
             "required": "Choose what happens when a case needs help.",
-            "invalid_choice": "Choose Attended or Night.",
+            "invalid_choice": _HELP_MODE_INVALID,
         },
     )
 
@@ -340,6 +345,77 @@ class CaseHelpResolutionForm(forms.Form):
     # The help-chat thread to return to; checked by the service.
     return_thread_id = forms.IntegerField(
         required=False, min_value=1, widget=forms.HiddenInput
+    )
+
+
+class PersonStepReportForm(forms.Form):
+    """A person's report of a step they performed (Human in the loop)."""
+
+    # The open step the card was rendered for; the service refuses a stale id.
+    person_step_id = forms.IntegerField(min_value=1, widget=forms.HiddenInput)
+    outcome = forms.ChoiceField(
+        label="How did it go?",
+        choices=PersonStepOutcome.choices,
+        initial=PersonStepOutcome.AS_EXPECTED,
+        widget=forms.RadioSelect,
+        error_messages={
+            "required": "Choose how the step went.",
+            "invalid_choice": "Choose how the step went.",
+        },
+    )
+    note = forms.CharField(
+        label="Note for the agent",
+        required=False,
+        max_length=HELP_NOTE_MAX_LENGTH,
+        strip=True,
+        widget=forms.Textarea(
+            attrs={
+                "class": "textarea",
+                "rows": 3,
+                "placeholder": "What you did and what you saw",
+            }
+        ),
+    )
+    # Command steps only; pasted from the test machine's shell.
+    output = forms.CharField(
+        label="Command output",
+        required=False,
+        max_length=PERSON_STEP_OUTPUT_MAX_LENGTH,
+        strip=False,
+        widget=forms.Textarea(
+            attrs={
+                "class": "textarea",
+                "rows": 6,
+                "placeholder": "Paste the command's output",
+            }
+        ),
+    )
+
+    def clean(self) -> dict[str, Any]:
+        cleaned_data = super().clean() or {}
+        if cleaned_data.get(
+            "outcome"
+        ) == PersonStepOutcome.DIFFERENT and not cleaned_data.get("note"):
+            self.add_error("note", "Describe what was different.")
+        return cleaned_data
+
+
+class PersonStepDecisionForm(forms.Form):
+    """Overrule / Mark failed / Mark blocked on a person step, with an optional note."""
+
+    person_step_id = forms.IntegerField(min_value=1, widget=forms.HiddenInput)
+    note = forms.CharField(
+        label="Note",
+        required=False,
+        max_length=HELP_NOTE_MAX_LENGTH,
+        strip=True,
+        widget=forms.Textarea(
+            attrs={
+                "class": "textarea",
+                "rows": 3,
+                "placeholder": "Optional: why",
+            }
+        ),
     )
 
 

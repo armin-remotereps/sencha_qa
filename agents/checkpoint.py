@@ -18,10 +18,15 @@ from typing import Literal, cast
 
 from agents.types import (
     CheckpointHelp,
+    CheckpointPersonStep,
     DecisionAction,
+    HandOffKind,
     HelpSource,
     OrchestratorCheckpoint,
     OrchestratorPhase,
+    PersonReportOutcome,
+    PersonStepCheckpointState,
+    PersonStepHandOff,
     PlanRevisionRecord,
     StepDecision,
     SubTask,
@@ -37,9 +42,21 @@ CHECKPOINT_VERSION = 1
 _ATTEMPT_KINDS = ("step", "recovery", "resume")
 _RESULT_STATUSES = ("pass", "fail")
 _DECISION_ACTIONS = ("continue", "recover", "stop", "need_help")
-_PHASES = ("step", "evaluating", "recovery", "resume", "verdict", "awaiting_help")
+_PHASES = (
+    "step",
+    "evaluating",
+    "recovery",
+    "resume",
+    "verdict",
+    "awaiting_help",
+    "awaiting_person",
+)
 _HELP_SOURCES = ("human", "auto_fix")
 _HELP_KEY = "help"
+_PERSON_KEY = "person"
+_HAND_OFF_KINDS = ("interactive", "command", "restore")
+_PERSON_STATES = ("waiting", "reported", "overruled", "handed_back")
+_PERSON_OUTCOMES = ("as_expected", "different")
 _PLAN_VERSION_KEY = "plan_version"
 _PLAN_REVISIONS_KEY = "plan_revisions"
 # Only the newest earlier plans are kept (display and prompt data).
@@ -63,6 +80,8 @@ def checkpoint_to_json(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
     data = _checkpoint_body(checkpoint)
     if checkpoint.help is not None:
         data[_HELP_KEY] = help_to_json(checkpoint.help)
+    if checkpoint.person is not None:
+        data[_PERSON_KEY] = person_step_to_json(checkpoint.person)
     if checkpoint.plan_version:
         data[_PLAN_VERSION_KEY] = checkpoint.plan_version
     if checkpoint.plan_revisions:
@@ -89,6 +108,12 @@ def _attempt_to_json(attempt: SubTaskAttempt) -> dict[str, object]:
     # Absent for synthetic carried attempts and attempts recorded before ids.
     if attempt.attempt_id:
         data["attempt_id"] = attempt.attempt_id
+    # Only person attempts carry these (Human in the loop); the kind stays
+    # ``step``/``resume`` so older parsers still read the checkpoint.
+    if attempt.performed_by == "person":
+        data["performed_by"] = "person"
+        if attempt.person_step_id is not None:
+            data["person_step_id"] = attempt.person_step_id
     return data
 
 
@@ -214,6 +239,73 @@ def clear_help_continue_pending(checkpoint_json: object) -> dict[str, object]:
     return data
 
 
+def person_step_to_json(person: CheckpointPersonStep) -> dict[str, object]:
+    hand_off = person.hand_off
+    return {
+        "step_num": hand_off.step_num,
+        "kind": hand_off.kind,
+        "instruction": hand_off.instruction,
+        "expected_result": hand_off.expected_result,
+        "command": hand_off.command,
+        "objection": hand_off.objection,
+        "request_id": person.request_id,
+        "state": person.state,
+        "outcome": person.outcome,
+        "note": person.note,
+        "output": person.output,
+        "reporter": person.reporter,
+        "requested_at": (
+            person.requested_at.isoformat() if person.requested_at else None
+        ),
+        "reported_at": person.reported_at.isoformat() if person.reported_at else None,
+        "continue_pending": person.continue_pending,
+    }
+
+
+def read_checkpoint_person_step(
+    checkpoint_json: object,
+) -> CheckpointPersonStep | None:
+    """The ``person`` key of a stored checkpoint; ``None`` when absent or malformed.
+
+    Reads only that key, so callers need not parse the whole checkpoint.
+    """
+    if not isinstance(checkpoint_json, dict):
+        return None
+    return _parse_person(cast(dict[str, object], checkpoint_json).get(_PERSON_KEY))
+
+
+def with_person_step(
+    checkpoint_json: object, person: CheckpointPersonStep
+) -> dict[str, object]:
+    """A copy of a stored checkpoint with its ``person`` key set to ``person``.
+
+    A value that is not a non-empty object has no progress to continue from,
+    so ``{}`` (plan from scratch) is returned unchanged.
+    """
+    if not isinstance(checkpoint_json, dict) or not checkpoint_json:
+        return {}
+    data = dict(cast(dict[str, object], checkpoint_json))
+    data[_PERSON_KEY] = person_step_to_json(person)
+    return data
+
+
+def clear_person_continue_pending(checkpoint_json: object) -> dict[str, object]:
+    """A copy of a stored checkpoint whose ``person`` no longer asks to continue.
+
+    Without a (valid) ``person`` key the checkpoint is returned as a plain copy;
+    a value that is not an object becomes ``{}``.
+    """
+    if not isinstance(checkpoint_json, dict):
+        return {}
+    data = dict(cast(dict[str, object], checkpoint_json))
+    person = _parse_person(data.get(_PERSON_KEY))
+    if person is not None and person.continue_pending:
+        data[_PERSON_KEY] = person_step_to_json(
+            dataclasses.replace(person, continue_pending=False)
+        )
+    return data
+
+
 def truncate_checkpoint(
     checkpoint: OrchestratorCheckpoint, from_step: int
 ) -> OrchestratorCheckpoint:
@@ -260,6 +352,7 @@ def _parse(data: object) -> OrchestratorCheckpoint:
         phase=_parse_phase(root.get("phase")),
         phase_started_at=_parse_datetime(root.get("phase_started_at")),
         help=_parse_help(root.get(_HELP_KEY)),
+        person=_parse_person(root.get(_PERSON_KEY)),
         plan_version=_parse_plan_version(root.get(_PLAN_VERSION_KEY)),
         plan_revisions=_parse_revisions(root.get(_PLAN_REVISIONS_KEY)),
     )
@@ -287,6 +380,9 @@ def _parse_attempt(item: dict[str, object]) -> SubTaskAttempt:
         # Absent from attempts that were not carried over a plan redesign.
         carried_from=_parse_positive_int(item.get("carried_from")),
         attempt_id=_parse_attempt_id(item.get("attempt_id")),
+        # Absent from agent attempts (and every attempt before Human in the loop).
+        performed_by="person" if item.get("performed_by") == "person" else "agent",
+        person_step_id=_parse_positive_int(item.get("person_step_id")),
     )
 
 
@@ -369,6 +465,50 @@ def _parse_help(value: object) -> CheckpointHelp | None:
         auto_fix_fixed=item.get("auto_fix_fixed") is True,
         fault=fault if isinstance(fault, str) else "",
     )
+
+
+def _parse_person(value: object) -> CheckpointPersonStep | None:
+    # Absent outside Human in the loop; a malformed key is dropped, never fatal.
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        logger.warning("Dropping malformed person step key: not an object")
+        return None
+    item = cast(dict[str, object], value)
+    step_num, kind, state, outcome = (
+        _parse_positive_int(item.get("step_num")),
+        item.get("kind"),
+        item.get("state"),
+        item.get("outcome"),
+    )
+    if step_num is None or kind not in _HAND_OFF_KINDS or state not in _PERSON_STATES:
+        logger.warning("Dropping malformed person step key: bad step, kind or state")
+        return None
+    return CheckpointPersonStep(
+        hand_off=PersonStepHandOff(
+            step_num=step_num,
+            kind=cast(HandOffKind, kind),
+            instruction=_str_or_empty(item.get("instruction")),
+            expected_result=_str_or_empty(item.get("expected_result")),
+            command=_str_or_empty(item.get("command")),
+            objection=_str_or_empty(item.get("objection")),
+        ),
+        request_id=_parse_positive_int(item.get("request_id")),
+        state=cast(PersonStepCheckpointState, state),
+        outcome=(
+            cast(PersonReportOutcome, outcome) if outcome in _PERSON_OUTCOMES else None
+        ),
+        note=_str_or_empty(item.get("note")),
+        output=_str_or_empty(item.get("output")),
+        reporter=_str_or_empty(item.get("reporter")),
+        requested_at=_parse_datetime(item.get("requested_at")),
+        reported_at=_parse_datetime(item.get("reported_at")),
+        continue_pending=item.get("continue_pending") is True,
+    )
+
+
+def _str_or_empty(value: object) -> str:
+    return value if isinstance(value, str) else ""
 
 
 def _parse_plan_version(value: object) -> int:

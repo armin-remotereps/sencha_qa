@@ -27,6 +27,9 @@ class AgentStopReason(Enum):
     # The orchestrator paused the case at a failing step for a person (or the
     # setup agent) to fix the machine; ``AgentResult.help`` says why.
     NEEDS_HUMAN_HELP = "needs_human_help"
+    # Human in the loop: the orchestrator handed the cursor step to a person
+    # and stopped; ``AgentResult.person_step`` holds the hand-off.
+    AWAITING_PERSON = "awaiting_person"
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,29 @@ class HelpRequestInfo:
     reason: str
     # One or two imperative sentences: what to fix on the machine.
     ask: str
+
+
+# What a person is asked to do in a Human in the loop run: a plain
+# interactive step, a command the test case states (run by the person in the
+# test machine's shell), or the state restore before a resumed case.
+HandOffKind = Literal["interactive", "command", "restore"]
+
+
+@dataclass(frozen=True)
+class PersonStepHandOff:
+    """A step handed to a person instead of a sub-agent (Human in the loop)."""
+
+    # 1-based plan step; for ``restore`` the step the restore prepares.
+    step_num: int
+    kind: HandOffKind
+    # Model-written, person-facing; shown escaped.
+    instruction: str
+    expected_result: str
+    # The exact command for ``kind == "command"``; empty otherwise.
+    command: str
+    # Why the agent could not confirm the person's last report of this step;
+    # empty on a first hand-off.
+    objection: str = ""
 
 
 @dataclass(frozen=True)
@@ -192,6 +218,8 @@ class AgentResult:
     error: str | None = None
     # Set only with ``AgentStopReason.NEEDS_HUMAN_HELP``.
     help: HelpRequestInfo | None = None
+    # Set only with ``AgentStopReason.AWAITING_PERSON``.
+    person_step: PersonStepHandOff | None = None
     # The last message was the final answer given after the time budget ran out.
     answered_after_timeout: bool = False
 
@@ -231,6 +259,11 @@ class SubTaskAttempt:
     # the same id. Empty for checkpoints written before screenshots were tagged
     # and for synthetic carried attempts.
     attempt_id: str = ""
+    # Human in the loop: a person performed the step and the agent confirmed
+    # it; ``person_step_id`` is the ``projects.CasePersonStep`` id. Both are
+    # stored only for person attempts.
+    performed_by: Literal["agent", "person"] = "agent"
+    person_step_id: int | None = None
 
 
 # What the orchestrator decides after a failed step.
@@ -262,21 +295,30 @@ class StepDecision:
 
 # What the orchestrator is doing at the cursor step: running it, judging its
 # failure, running a recovery, restoring state before a resume, writing the
-# verdict, or waiting for help at a failed step.
+# verdict, waiting for help at a failed step, or waiting for a person to
+# perform the step (Human in the loop).
 OrchestratorPhase = Literal[
-    "step", "evaluating", "recovery", "resume", "verdict", "awaiting_help"
+    "step",
+    "evaluating",
+    "recovery",
+    "resume",
+    "verdict",
+    "awaiting_help",
+    "awaiting_person",
 ]
 
 
 @dataclass(frozen=True)
 class OrchestratorResult:
-    status: Literal["pass", "fail", "need_help"]
+    status: Literal["pass", "fail", "need_help", "awaiting_person"]
     summary: str
     attempts: tuple[SubTaskAttempt, ...]
     total_iterations: int
     error: str | None = None
     # Set only when ``status == "need_help"``.
     help: HelpRequestInfo | None = None
+    # Set only when ``status == "awaiting_person"``.
+    person_step: PersonStepHandOff | None = None
 
 
 # Who fixed the machine after a case asked for help.
@@ -314,6 +356,43 @@ class CheckpointHelp:
     # Label of the infrastructure fault that interrupted the step; empty when
     # the agent asked for help (and on older checkpoints).
     fault: str = ""
+
+
+# Where a person step stands in the checkpoint: handed out and waiting, the
+# person reported it, the person overruled the agent's objection, or the run
+# left Human in the loop and the agent runs the step itself.
+PersonStepCheckpointState = Literal["waiting", "reported", "overruled", "handed_back"]
+
+# The person's report: the step went as expected, or the result was different.
+PersonReportOutcome = Literal["as_expected", "different"]
+
+
+@dataclass(frozen=True)
+class CheckpointPersonStep:
+    """The step a person performs in a Human in the loop run (checkpoint ``person``).
+
+    The orchestrator writes the hand-off when it stops for the person, so a
+    re-entry never prepares it again; ``projects`` writes the report, the
+    overrule and the hand-back, and the orchestrator reads them on resume.
+    """
+
+    hand_off: PersonStepHandOff
+    # ``projects.CasePersonStep`` id; None until ``projects`` has the row.
+    request_id: int | None
+    state: PersonStepCheckpointState
+    # The report; ``outcome`` is None until the person reports.
+    outcome: PersonReportOutcome | None = None
+    note: str = ""
+    # Pasted command output (command steps); capped by ``projects``.
+    output: str = ""
+    # Display name of the person who reported (or overruled).
+    reporter: str = ""
+    # When the step was handed out and reported (the person attempt's duration).
+    requested_at: datetime | None = None
+    reported_at: datetime | None = None
+    # True until the resumed case writes its first checkpoint: the pre-case
+    # cleanup and the restore sub-task are skipped while it is set.
+    continue_pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -367,6 +446,8 @@ class OrchestratorCheckpoint:
     phase: OrchestratorPhase = "step"
     phase_started_at: datetime | None = None
     help: CheckpointHelp | None = None
+    # Human in the loop: the step handed to a person; None in other modes.
+    person: CheckpointPersonStep | None = None
     # Number of help-chat redesigns applied, and the newest earlier plans.
     plan_version: int = 0
     plan_revisions: tuple[PlanRevisionRecord, ...] = ()

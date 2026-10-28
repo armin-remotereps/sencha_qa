@@ -370,6 +370,11 @@ CLEANUP_TIMEOUT_SECONDS: int = config("CLEANUP_TIMEOUT_SECONDS", default=30, cas
 CASE_TEARDOWN_TIMEOUT_SECONDS: int = config(
     "CASE_TEARDOWN_TIMEOUT_SECONDS", default=120, cast=int
 )
+# Human in the loop: budget of the sub-agent that confirms a person's report
+# of a step (read-only screenshot and command checks).
+PERSON_STEP_CONFIRM_TIMEOUT_SECONDS: int = config(
+    "PERSON_STEP_CONFIRM_TIMEOUT_SECONDS", default=120, cast=int
+)
 
 # Visual engine (remote vision workers running OmniParser)
 # Shared secret every vision worker sends in its handshake. Empty rejects all.
