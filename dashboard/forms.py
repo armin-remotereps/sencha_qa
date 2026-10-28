@@ -53,14 +53,9 @@ class FailedCaseFilterForm(forms.Form):
         coerce=int,
         empty_value=None,
         choices=(),
-        # Run choices belong to one project: a new project clears the run.
-        widget=forms.Select(
-            attrs={
-                "class": "select",
-                "onchange": "if (this.form.run) { this.form.run.value = ''; } "
-                "this.form.requestSubmit()",
-            }
-        ),
+        # Run choices belong to one project: a new project clears the run
+        # (failureFilters.projectChanged in static/js/punk-hazard.js).
+        widget=forms.Select(attrs={"class": "select", "x-on:change": "projectChanged"}),
         error_messages={
             "invalid_choice": "That project is not one of your projects; "
             "showing all projects."

@@ -23,3 +23,10 @@ class PresetNotFoundError(DashboardError):
 
     def __init__(self) -> None:
         super().__init__("That saved filter no longer exists.")
+
+
+class ExportThrottledError(DashboardError):
+    """The user started too many CSV exports in the current window."""
+
+    def __init__(self) -> None:
+        super().__init__("Too many exports in a short time. Try again in a minute.")

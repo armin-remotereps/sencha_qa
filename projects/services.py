@@ -3533,10 +3533,29 @@ def _update_test_run_status_if_needed(test_run: TestRun, *, generation: int) -> 
 
     if not all_done:
         return False
+    if not finish_test_run(
+        test_run, from_status=TestRunStatus.STARTED, generation=generation
+    ):
+        return False
+    broadcast_test_run_status(test_run)
+    return True
+
+
+def finish_test_run(
+    test_run: TestRun, *, from_status: TestRunStatus, generation: int
+) -> bool:
+    """The single point that moves a run to DONE; True when this call did it.
+
+    A conditional UPDATE on ``from_status`` (STARTED, or PAUSED once its last
+    Need help case is settled) and ``generation``, so exactly one caller per
+    generation finishes the run. Only then are the in-memory fields set and the
+    run-finished notification and the members' attention nudge scheduled on
+    commit. Status broadcasts stay with the callers.
+    """
     now = timezone.now()
     finished = TestRun.objects.filter(
         pk=test_run.pk,
-        status=TestRunStatus.STARTED,
+        status=from_status,
         execution_generation=generation,
     ).update(status=TestRunStatus.DONE, finished_at=now, updated_at=now)
     if finished != 1:
@@ -3544,9 +3563,14 @@ def _update_test_run_status_if_needed(test_run: TestRun, *, generation: int) -> 
     test_run.status = TestRunStatus.DONE
     test_run.finished_at = now
     test_run.updated_at = now
-    broadcast_test_run_status(test_run)
     run_id = test_run.pk
-    transaction.on_commit(lambda: notify_run_finished(run_id, generation=generation))
+    project_id = test_run.project_id
+
+    def _after_commit() -> None:
+        notify_run_finished(run_id, generation=generation)
+        broadcast_project_attention_changed(project_id)
+
+    transaction.on_commit(_after_commit)
     return True
 
 

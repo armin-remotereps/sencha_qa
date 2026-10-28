@@ -1,13 +1,14 @@
 """Machine health insights: why cases needed help, how Night auto-fix did and
 how help requests were resolved, over a recent window of days.
 
-Scoped to the user's non-archived member projects (optionally one of them).
-Bounded: one query for the scope, then three aggregate queries whatever the
+Scoped to the user's non-archived member projects (optionally one of them),
+which the caller passes in. Bounded: three aggregate queries whatever the
 window or the number of help requests.
 """
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
@@ -15,8 +16,6 @@ from django.db.models import Count, QuerySet
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 
-from accounts.models import CustomUser
-from dashboard.services.member_projects import member_project_ids
 from projects.models import (
     BlockedReason,
     CaseHelpRequest,
@@ -29,6 +28,9 @@ DEFAULT_MACHINE_HEALTH_DAYS = 30
 
 AGENT_ASKED_LABEL = "Agent asked"
 
+# Bar widths are rendered with the ``.bar-w-0`` … ``.bar-w-100`` classes.
+BAR_STEP_PERCENT = 5
+
 
 @dataclass(frozen=True)
 class FaultCount:
@@ -37,7 +39,8 @@ class FaultCount:
     fault: str
     label: str
     count: int
-    # Share of the largest count in its list, 0-100, for the bar width.
+    # Share of the largest count in its list, for the bar width: 0-100 in
+    # steps of BAR_STEP_PERCENT (a ``.bar-w-N`` class).
     bar_percent: int
 
 
@@ -95,6 +98,16 @@ def _percent(part: int, whole: int) -> int:
     return round(part * 100 / whole) if whole else 0
 
 
+def _bar_percent(part: int, whole: int) -> int:
+    """``part / whole`` as a bar width, 0-100 in steps of
+    ``BAR_STEP_PERCENT`` (the ``.bar-w-N`` classes); a non-zero part never
+    rounds down to an empty bar."""
+    if not whole or not part:
+        return 0
+    step = round(part * 100 / whole / BAR_STEP_PERCENT) * BAR_STEP_PERCENT
+    return max(BAR_STEP_PERCENT, min(100, step))
+
+
 def _fault_label(fault: str) -> str:
     if not fault:
         return AGENT_ASKED_LABEL
@@ -119,7 +132,7 @@ def _fault_counts(counts: dict[str, int]) -> list[FaultCount]:
             fault=fault,
             label=_fault_label(fault),
             count=count,
-            bar_percent=_percent(count, top),
+            bar_percent=_bar_percent(count, top),
         )
         for fault, count in ordered
     ]
@@ -135,18 +148,19 @@ def _window_requests(
 
 
 def get_machine_health(
-    user: CustomUser, project_id: int | None, days: int
+    member_project_ids: Sequence[int], project_id: int | None, days: int
 ) -> MachineHealth:
-    """Help-request health of the user's projects over the last ``days`` days
-    (today included). A ``project_id`` outside the user's projects yields an
-    empty result rather than another project's data."""
+    """Help-request health of the user's projects (``member_project_ids``,
+    their member non-archived projects) over the last ``days`` days (today
+    included). A ``project_id`` outside them yields an empty result rather
+    than another project's data."""
     if days not in MACHINE_HEALTH_DAY_CHOICES:
         days = DEFAULT_MACHINE_HEALTH_DAYS
     end_day = timezone.localdate()
     start_day = end_day - timedelta(days=days - 1)
     start = timezone.make_aware(datetime.combine(start_day, time.min))
 
-    project_ids = member_project_ids(user)
+    project_ids = list(member_project_ids)
     if project_id is not None:
         project_ids = [pid for pid in project_ids if pid == project_id]
 
@@ -192,7 +206,7 @@ def get_machine_health(
         HealthDay(
             day=day,
             total=day_totals.get(day, 0),
-            bar_percent=_percent(day_totals.get(day, 0), top_day),
+            bar_percent=_bar_percent(day_totals.get(day, 0), top_day),
             faults=_fault_counts(day_fault.get(day, {})),
         )
         for day in (start_day + timedelta(days=offset) for offset in range(days))
@@ -219,7 +233,7 @@ def get_machine_health(
             resolution=resolution,
             label=_resolution_label(resolution),
             count=count,
-            bar_percent=_percent(count, top_resolution),
+            bar_percent=_bar_percent(count, top_resolution),
         )
         for resolution, count in ordered_resolutions
     ]

@@ -1,9 +1,21 @@
-"""CSV export of the filtered Failed cases (streamed, bounded)."""
+"""CSV export of the filtered Failed cases (bounded, read in keyset pages).
+
+The export is read one page at a time (``failed_case_csv_page``), newest
+failure first, so the streaming response never holds more than one page of
+rows: under ASGI a sync iterator would be drained into memory before the
+first byte is sent, so the view drives these sync pages from an async
+iterator instead.
+"""
 
 from __future__ import annotations
 
 import csv
-from collections.abc import Iterator, Sequence
+import io
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime
+
+from django.db.models import F, Q
 
 from auto_tester.csv_safe import neutralize_cell
 from dashboard.services.failed_case_filters import (
@@ -15,7 +27,11 @@ from dashboard.services.failed_case_filters import (
 
 # At most this many rows per export (newest failures first).
 EXPORT_ROW_LIMIT = 50_000
-_CHUNK_SIZE = 1000
+# Rows per database round trip (and per streamed chunk).
+EXPORT_PAGE_SIZE = 1000
+
+# A UTF-8 byte order mark, so spreadsheets detect the encoding.
+_BOM = "﻿"
 
 EXPORT_HEADER = [
     "Project",
@@ -30,32 +46,82 @@ EXPORT_HEADER = [
     "Verdict",
 ]
 
+_COLUMNS = (
+    "test_run__project__name",
+    "test_run__name",
+    "test_run_id",
+    "id",
+    "test_case__testrail_id",
+    "test_case__title",
+    "finished_at",
+    "failed_by",
+    "checked_at",
+    "testrail_source_result_id",
+    "result",
+)
 
-def iter_failed_case_rows(
-    project_ids: Sequence[int], filters: FailedCaseFilters
-) -> Iterator[list[str]]:
-    """The header, then one row per Failed case (newest first, at most
-    ``EXPORT_ROW_LIMIT``), read in chunks with a server-side cursor. Every
-    cell is neutralised against spreadsheet formula injection. The full
-    verdict is included; logs and checkpoints never are."""
-    yield list(EXPORT_HEADER)
-    rows = (
-        failed_case_queryset(project_ids, filters)
-        .order_by("-finished_at", "-id")
-        .values_list(
-            "test_run__project__name",
-            "test_run__name",
-            "test_run_id",
-            "id",
-            "test_case__testrail_id",
-            "test_case__title",
-            "finished_at",
-            "failed_by",
-            "checked_at",
-            "testrail_source_result_id",
-            "result",
-        )[:EXPORT_ROW_LIMIT]
+
+@dataclass(frozen=True)
+class ExportCursor:
+    """The ``(finished_at, id)`` of the last exported row; the next page
+    starts strictly after it in the export order."""
+
+    finished_at: datetime | None
+    pivot_id: int
+
+
+@dataclass(frozen=True)
+class ExportPage:
+    """One page of CSV lines; ``cursor`` is None when the export is done."""
+
+    text: str
+    rows: int
+    cursor: ExportCursor | None
+
+
+def _after(cursor: ExportCursor) -> Q:
+    """Rows after ``cursor`` in ``finished_at DESC NULLS LAST, id DESC``."""
+    if cursor.finished_at is None:
+        return Q(finished_at__isnull=True, id__lt=cursor.pivot_id)
+    return (
+        Q(finished_at__lt=cursor.finished_at)
+        | Q(finished_at=cursor.finished_at, id__lt=cursor.pivot_id)
+        | Q(finished_at__isnull=True)
     )
+
+
+def _csv_text(rows: Sequence[Sequence[str]]) -> str:
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerows(rows)
+    return buffer.getvalue()
+
+
+def failed_case_csv_header() -> str:
+    """The byte order mark and the header line."""
+    return _BOM + _csv_text([EXPORT_HEADER])
+
+
+def failed_case_csv_page(
+    project_ids: Sequence[int],
+    filters: FailedCaseFilters,
+    *,
+    after: ExportCursor | None,
+    limit: int,
+) -> ExportPage:
+    """Up to ``limit`` Failed cases after ``after`` (newest failure first) as
+    CSV lines, in one query. Every cell is neutralised against spreadsheet
+    formula injection. The full verdict is included; logs and checkpoints
+    never are. The caller bounds the total (``EXPORT_ROW_LIMIT``)."""
+    queryset = failed_case_queryset(project_ids, filters)
+    if after is not None:
+        queryset = queryset.filter(_after(after))
+    rows = list(
+        queryset.order_by(F("finished_at").desc(nulls_last=True), "-id").values_list(
+            *_COLUMNS
+        )[:limit]
+    )
+    lines: list[list[str]] = []
     for (
         project_name,
         run_name,
@@ -68,7 +134,7 @@ def iter_failed_case_rows(
         checked_at,
         source_result_id,
         result,
-    ) in rows.iterator(chunk_size=_CHUNK_SIZE):
+    ) in rows:
         cells = [
             project_name,
             run_name or f"Run #{run_id}",
@@ -81,22 +147,9 @@ def iter_failed_case_rows(
             review_state_label(checked_at, source_result_id),
             result,
         ]
-        yield [neutralize_cell(cell) for cell in cells]
-
-
-class _Echo:
-    """A write-only file object: ``csv.writer`` returns each formatted line."""
-
-    def write(self, value: str) -> str:
-        return value
-
-
-def iter_failed_case_csv(
-    project_ids: Sequence[int], filters: FailedCaseFilters
-) -> Iterator[str]:
-    """``iter_failed_case_rows`` formatted as CSV lines, for streaming,
-    after a UTF-8 byte order mark so spreadsheets detect the encoding."""
-    yield "\ufeff"
-    writer = csv.writer(_Echo())
-    for row in iter_failed_case_rows(project_ids, filters):
-        yield writer.writerow(row)
+        lines.append([neutralize_cell(cell) for cell in cells])
+    cursor: ExportCursor | None = None
+    if len(rows) == limit and rows:
+        last = rows[-1]
+        cursor = ExportCursor(finished_at=last[6], pivot_id=last[3])
+    return ExportPage(text=_csv_text(lines), rows=len(rows), cursor=cursor)

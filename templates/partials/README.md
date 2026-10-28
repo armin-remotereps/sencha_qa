@@ -128,6 +128,3 @@ A finished run's badge resolves in a fixed order: `failed_count` > 0 reads
 Failed, else `blocked_count` > 0 reads Blocked, else Passed. Every include of
 `badge_run_status.html` passes both counts, so a run with blocked cases never
 reads Passed.
-
-`stat_card.html` tones: `success`, `danger`, `warning`, `info` (each maps to a
-`.stat-value.is-<tone>` class); Blocked counts use `warning`.

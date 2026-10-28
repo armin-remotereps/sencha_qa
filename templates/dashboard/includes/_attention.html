@@ -1,7 +1,7 @@
-{% comment %} Section: Needs your attention. Also served alone by
-   dashboard:attention_fragment; the live refresh (attentionLive in
-   static/js/punk-hazard.js) replaces #attention-card with that response, so
-   keep the root id and add no Alpine directives inside.
+{% comment %} Section: Needs your attention. Also re-rendered by
+   dashboard:attention_fragment (_live_cards.html); the live refresh
+   (attentionLive in static/js/punk-hazard.js) replaces #attention-card with
+   it, so keep the root id and add no Alpine directives inside.
 
    Context contract:
      attention  — dashboard.services.attention.Attention

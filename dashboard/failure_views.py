@@ -10,11 +10,12 @@ every selected id itself.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import AsyncIterator, Sequence
 
+from channels.db import database_sync_to_async
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.paginator import Page
 from django.http import (
     Http404,
     HttpResponse,
@@ -28,7 +29,6 @@ from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_POST
 
-from accounts.models import CustomUser
 from accounts.types import AuthenticatedRequest
 from auto_tester.pagination import (
     ALLOWED_PER_PAGE,
@@ -36,20 +36,33 @@ from auto_tester.pagination import (
     parse_page,
     parse_per_page,
 )
-from dashboard.exceptions import PresetLimitError, PresetNotFoundError
+from dashboard.exceptions import (
+    ExportThrottledError,
+    PresetLimitError,
+    PresetNotFoundError,
+)
 from dashboard.forms import (
     FailedCaseBulkForm,
     FailedCaseFilterForm,
     FailedCasePresetForm,
 )
+from dashboard.services.export_throttle import check_export_throttle
 from dashboard.services.failed_case_bulk import apply_failed_case_bulk
-from dashboard.services.failed_case_export import iter_failed_case_csv
+from dashboard.services.failed_case_export import (
+    EXPORT_PAGE_SIZE,
+    EXPORT_ROW_LIMIT,
+    failed_case_csv_header,
+    failed_case_csv_page,
+)
 from dashboard.services.failed_case_filters import (
     FailedCaseFilters,
     FailedCaseView,
     encode_filters,
 )
-from dashboard.services.failed_case_groups import list_failing_test_cases
+from dashboard.services.failed_case_groups import (
+    FailingCaseRow,
+    list_failing_test_cases,
+)
 from dashboard.services.failed_case_presets import (
     delete_preset,
     list_presets,
@@ -61,6 +74,7 @@ from dashboard.services.failed_cases import (
 )
 from dashboard.services.member_projects import member_project_choices
 from projects.forms import form_error_text
+from projects.models import TestRunTestCase
 
 
 def _bind_filter_form(
@@ -75,10 +89,10 @@ def _bind_filter_form(
     return form
 
 
-def _clean_query(user: CustomUser, raw_query: str) -> str:
+def _clean_query(project_choices: Sequence[tuple[int, str]], raw_query: str) -> str:
     """``raw_query`` re-validated against the user's projects and re-encoded
     (invalid fields dropped), so it is only ever a filter query string."""
-    form = _bind_filter_form(QueryDict(raw_query), member_project_choices(user))
+    form = _bind_filter_form(QueryDict(raw_query), project_choices)
     return encode_filters(form.to_filters(), view=form.selected_view())
 
 
@@ -97,21 +111,24 @@ def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
     view = form.selected_view()
     page = parse_page(request)
     per_page = parse_per_page(request)
-    page_obj: Any
+    page_obj: Page[FailingCaseRow] | Page[TestRunTestCase]
+    run_of_pivot: dict[int, int] = {}
     if view == FailedCaseView.BY_CASE:
         page_obj = list_failing_test_cases(
             project_ids, filters, page=page, per_page=per_page
         )
-        run_of_pivot: dict[int, int] = {}
     else:
-        page_obj = list_failed_cases(project_ids, filters, page=page, per_page=per_page)
-        run_of_pivot = {pivot.id: pivot.test_run_id for pivot in page_obj}
+        cases_page = list_failed_cases(
+            project_ids, filters, page=page, per_page=per_page
+        )
+        run_of_pivot = {pivot.id: pivot.test_run_id for pivot in cases_page}
+        page_obj = cases_page
 
     filter_query = encode_filters(filters, view=view)
     cases_query = encode_filters(filters)
     by_case_query = encode_filters(filters, view=FailedCaseView.BY_CASE)
     base_url = reverse("dashboard:failed_cases")
-    context: dict[str, Any] = {
+    context: dict[str, object] = {
         "form": form,
         "filters": filters,
         "view": view,
@@ -138,6 +155,31 @@ def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
     return render(request, "dashboard/failed_cases.html", context)
 
 
+async def _stream_failed_case_csv(
+    project_ids: list[int], filters: FailedCaseFilters
+) -> AsyncIterator[str]:
+    """Async adapter over the sync export pages: one bounded query per
+    chunk in a worker thread, so under ASGI the response streams instead of
+    being drained into memory first."""
+    read_page = database_sync_to_async(failed_case_csv_page)
+    yield failed_case_csv_header()
+    cursor = None
+    remaining = EXPORT_ROW_LIMIT
+    while remaining > 0:
+        chunk = await read_page(
+            project_ids,
+            filters,
+            after=cursor,
+            limit=min(EXPORT_PAGE_SIZE, remaining),
+        )
+        if chunk.text:
+            yield chunk.text
+        remaining -= chunk.rows
+        cursor = chunk.cursor
+        if cursor is None:
+            break
+
+
 @login_required
 @require_GET
 def failed_cases_export(request: AuthenticatedRequest) -> HttpResponseBase:
@@ -146,9 +188,15 @@ def failed_cases_export(request: AuthenticatedRequest) -> HttpResponseBase:
     if form.errors:
         messages.error(request, form_error_text(form))
         return _failures_redirect(request.GET.urlencode())
+    filter_query = encode_filters(form.to_filters(), view=form.selected_view())
+    try:
+        check_export_throttle(request.user)
+    except ExportThrottledError as exc:
+        messages.error(request, exc.message)
+        return _failures_redirect(filter_query)
     project_ids = [project_id for project_id, _ in project_choices]
     response = StreamingHttpResponse(
-        iter_failed_case_csv(project_ids, form.to_filters()),
+        _stream_failed_case_csv(project_ids, form.to_filters()),
         content_type="text/csv; charset=utf-8",
     )
     filename = f"failed-cases-{timezone.now():%Y%m%d}.csv"
@@ -161,12 +209,14 @@ def failed_cases_export(request: AuthenticatedRequest) -> HttpResponseBase:
 @require_POST
 def failed_cases_bulk(request: AuthenticatedRequest) -> HttpResponse:
     form = FailedCaseBulkForm(request.POST)
-    return_query = _clean_query(request.user, request.POST.get("return_query", ""))
+    project_choices = member_project_choices(request.user)
+    return_query = _clean_query(project_choices, request.POST.get("return_query", ""))
     if not form.is_valid():
         messages.error(request, form_error_text(form))
         return _failures_redirect(return_query)
     outcome = apply_failed_case_bulk(
         user=request.user,
+        project_ids=[project_id for project_id, _ in project_choices],
         action=form.selected_action(),
         pivot_ids=form.cleaned_data["pivot_ids"],
         links_base_url=request.build_absolute_uri("/"),
@@ -189,7 +239,9 @@ def failed_cases_bulk(request: AuthenticatedRequest) -> HttpResponse:
 @require_POST
 def preset_save(request: AuthenticatedRequest) -> HttpResponse:
     form = FailedCasePresetForm(request.POST)
-    query = _clean_query(request.user, request.POST.get("query", ""))
+    query = _clean_query(
+        member_project_choices(request.user), request.POST.get("query", "")
+    )
     if not form.is_valid():
         messages.error(request, form_error_text(form))
         return _failures_redirect(query)
@@ -211,5 +263,8 @@ def preset_delete(request: AuthenticatedRequest, preset_id: int) -> HttpResponse
         raise Http404 from exc
     messages.success(request, "Deleted the saved filter.")
     return _failures_redirect(
-        _clean_query(request.user, request.POST.get("return_query", ""))
+        _clean_query(
+            member_project_choices(request.user),
+            request.POST.get("return_query", ""),
+        )
     )

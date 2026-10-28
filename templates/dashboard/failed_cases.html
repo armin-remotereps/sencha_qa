@@ -48,7 +48,7 @@
 
 {# Section: Filters #}
 <div class="card">
-  <form method="get" action="{% url 'dashboard:failed_cases' %}" role="search" aria-label="Filter failed cases">
+  <form method="get" action="{% url 'dashboard:failed_cases' %}" role="search" aria-label="Filter failed cases" x-data="failureFilters">
     {{ form.view }}
     {% for error in form.non_field_errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
     <div class="grid grid-3">

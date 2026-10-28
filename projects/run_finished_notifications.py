@@ -86,7 +86,8 @@ def _build_message(test_run: TestRun, counts: _RunCaseCounts) -> NotificationMes
 def notify_run_finished(run_id: int, *, generation: int) -> None:
     """Notify every project member who opted into Run finished notifications.
 
-    Call it on commit of the single conditional STARTED -> DONE transition.
+    Call it only from ``projects.services.finish_test_run`` (on commit of the
+    single conditional STARTED / PAUSED -> DONE transition).
     Sends nothing unless the run is still Done on ``generation`` (a newer
     Start, Resume or Re-run owns it otherwise). Enqueues
     ``notifications.tasks.send_notification`` on commit and never raises.

@@ -1,0 +1,10 @@
+{% comment %} The dashboard's live cards, served alone by dashboard:attention_fragment.
+   attentionLive (static/js/punk-hazard.js) swaps each root by id:
+   #attention-card and, when the user has projects, #failed-widget.
+
+   Context contract:
+     dashboard — dashboard.services.dashboard_data.DashboardData {% endcomment %}
+{% include "dashboard/includes/_attention.html" with attention=dashboard.attention csrf_token=csrf_token only %}
+{% if dashboard.failed_widget %}
+  {% include "dashboard/includes/_failed_widget.html" with widget=dashboard.failed_widget only %}
+{% endif %}

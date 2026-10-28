@@ -7,7 +7,7 @@ import json
 import logging
 from typing import Any
 
-from asgiref.sync import sync_to_async
+from channels.db import database_sync_to_async
 
 from accounts.models import CustomUser
 from dashboard.services.attention import count_attention
@@ -78,5 +78,5 @@ class AttentionConsumer(AuthenticatedConsumer):
 
     async def _send_count(self) -> None:
         self._last_sent_at = asyncio.get_running_loop().time()
-        count = await sync_to_async(count_attention)(self._user)
+        count = await database_sync_to_async(count_attention)(self._user)
         await self.send(text_data=json.dumps({"type": "attention", "count": count}))

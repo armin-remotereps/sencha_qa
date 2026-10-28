@@ -1,4 +1,5 @@
-"""Everything the dashboard home renders: the attention card and failed widget."""
+"""Everything the dashboard home renders: the attention card and failed widget
+(also re-rendered alone by the live refresh, ``dashboard:attention_fragment``)."""
 
 from __future__ import annotations
 
@@ -40,8 +41,3 @@ def get_dashboard_data(
         attention=attention,
         failed_widget=get_failed_case_widget(project_ids, current_time),
     )
-
-
-def get_attention_fragment(user: CustomUser) -> Attention:
-    """The attention card alone, for the dashboard's live refresh."""
-    return get_attention(user, member_project_ids(user))

@@ -1,9 +1,12 @@
-{% comment %} Section: Failed cases (last 7 days).
+{% comment %} Section: Failed cases (last 7 days). Also re-rendered by
+   dashboard:attention_fragment (_live_cards.html); the live refresh
+   (attentionLive in static/js/punk-hazard.js) replaces #failed-widget with
+   it, so keep the root id and add no Alpine directives inside.
 
    Context contract:
      widget — dashboard.services.failed_case_widget.FailedCaseWidget
               (since, total, not_checked, top_projects, latest, all_url) {% endcomment %}
-<section aria-labelledby="failed-widget-h" class="card">
+<section id="failed-widget" aria-labelledby="failed-widget-h" class="card">
   <div class="card-header">
     <h2 id="failed-widget-h">Failed cases</h2>
     <span class="muted small">Last 7 days</span>

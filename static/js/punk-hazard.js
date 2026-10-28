@@ -197,10 +197,13 @@ document.addEventListener("alpine:init", () => {
    * tab). Opens ws/attention/, reconnects with backoff, and on every
    * `{"type": "attention", "count": N}` updates the nav badges
    * ([data-attention-badge]), the `(N) ` tab-title prefix and the dashboard
-   * subtitle; on the dashboard it also re-fetches #attention-card from its
-   * data-fragment-url and swaps it in (server-rendered, escaped HTML; the
-   * card holds no Alpine directives, so it needs no re-initialisation).
+   * subtitle; on the dashboard it also re-fetches the live cards from
+   * #attention-card's data-fragment-url and swaps each of LIVE_CARD_IDS in
+   * by id (server-rendered, escaped HTML; the cards hold no Alpine
+   * directives, so they need no re-initialisation).
    */
+  const LIVE_CARD_IDS = ["attention-card", "failed-widget"];
+
   Alpine.data("attentionLive", () => ({
     socket: null,
     retryDelay: 1000,
@@ -289,14 +292,31 @@ document.addEventListener("alpine:init", () => {
         }
         const template = document.createElement("template");
         template.innerHTML = html.trim();
-        const fresh = template.content.firstElementChild;
-        const current = document.getElementById("attention-card");
-        if (fresh && fresh.id === "attention-card" && current) {
-          current.replaceWith(fresh);
+        for (const id of LIVE_CARD_IDS) {
+          const fresh = template.content.getElementById(id);
+          const current = document.getElementById(id);
+          if (fresh && current) {
+            current.replaceWith(fresh);
+          }
         }
       } catch {
         // Offline or the session ended: the next event retries.
       }
+    },
+  }));
+
+  /**
+   * The Failures page filter form (templates/dashboard/failed_cases.html):
+   * run choices belong to one project, so a new project clears the run and
+   * re-submits the form.
+   */
+  Alpine.data("failureFilters", () => ({
+    projectChanged(event) {
+      const form = event.target.form;
+      if (form.elements.run) {
+        form.elements.run.value = "";
+      }
+      form.requestSubmit();
     },
   }));
 

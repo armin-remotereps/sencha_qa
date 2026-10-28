@@ -31,6 +31,7 @@ from projects.services import (
     MachineState,
     broadcast_run_and_pivots,
     broadcast_test_run_status,
+    finish_test_run,
     get_machine_state,
     queue_test_run_cases,
 )
@@ -214,11 +215,17 @@ def queue_pending_cases(test_run: TestRun) -> None:
 
 
 def _finish_run(test_run: TestRun) -> None:
-    """Every case of the woken run is settled: the run is DONE."""
-    test_run.status = TestRunStatus.DONE
-    test_run.finished_at = timezone.now()
-    test_run.save(update_fields=["status", "finished_at", "updated_at"])
-    transaction.on_commit(lambda: broadcast_test_run_status(test_run))
+    """Every case of the woken PAUSED run is settled: the run is DONE.
+
+    Goes through `finish_test_run` (conditional on PAUSED and the run's
+    current generation), which also schedules the run-finished notification.
+    """
+    if finish_test_run(
+        test_run,
+        from_status=TestRunStatus.PAUSED,
+        generation=test_run.execution_generation,
+    ):
+        transaction.on_commit(lambda: broadcast_test_run_status(test_run))
 
 
 def _has_other_started_run(project_id: int, test_run_id: int) -> bool:

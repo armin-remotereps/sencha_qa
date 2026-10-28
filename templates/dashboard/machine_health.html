@@ -2,7 +2,8 @@
 
 {% comment %} Insights > Machine health: why cases needed help (faults per day and in
    total), how Night auto-fix did, and how help requests were resolved, across the
-   user's projects or one of them. Server-rendered bars (.progress), no chart library.
+   user's projects or one of them. Server-rendered bars (.progress with a
+   .bar-w-N width class; the count is printed beside each), no chart library.
 
    Context contract (dashboard/health_views.py):
      form   — dashboard.health_forms.MachineHealthFilterForm (GET: project, days)
@@ -82,7 +83,7 @@
               <tr>
                 <td data-label="Fault" class="cell-primary">{{ fault.label }}</td>
                 <td data-label="Requests">
-                  <div class="progress" role="presentation"><span style="width: {{ fault.bar_percent }}%;"></span></div>
+                  <div class="progress" aria-hidden="true"><span class="bar-w-{{ fault.bar_percent }}"></span></div>
                   <p class="muted small">{{ fault.count }}</p>
                 </td>
               </tr>
@@ -109,7 +110,7 @@
               <tr>
                 <td data-label="Resolution" class="cell-primary">{{ resolution.label }}</td>
                 <td data-label="Requests">
-                  <div class="progress" role="presentation"><span style="width: {{ resolution.bar_percent }}%;"></span></div>
+                  <div class="progress" aria-hidden="true"><span class="bar-w-{{ resolution.bar_percent }}"></span></div>
                   <p class="muted small">{{ resolution.count }}</p>
                 </td>
               </tr>
@@ -140,7 +141,7 @@
                 <time datetime="{{ day.day|date:"Y-m-d" }}">{{ day.day|date:"D, M j" }}</time>
               </td>
               <td data-label="Requests">
-                <div class="progress" role="presentation"><span style="width: {{ day.bar_percent }}%;"></span></div>
+                <div class="progress" aria-hidden="true"><span class="bar-w-{{ day.bar_percent }}"></span></div>
                 <p class="muted small">{{ day.total }}</p>
               </td>
               <td data-label="Faults" class="muted small">

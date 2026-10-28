@@ -451,7 +451,7 @@
                 <span class="muted">&mdash;</span>
               {% endif %}
             </td>
-            <td data-label="Duration">{{ pivot.active_duration|duration }}</td>
+            <td data-label="Duration">{% if pivot.status == "success" or pivot.status == "failed" or pivot.status == "blocked" or pivot.status == "cancelled" %}{{ pivot.active_duration|duration }}{% else %}—{% endif %}</td>
             <td data-label="Reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>{% if help_panel and help_panel.request.fault and help_panel.request.test_run_test_case_id == pivot.id %}{{ help_panel.request.get_fault_display }}{% else %}Needs help{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
             {% if can_edit %}
             <td data-label="" x-show="testRunStatus === 'waiting'" x-cloak>

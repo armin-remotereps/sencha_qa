@@ -16,11 +16,12 @@ from dashboard.services.member_projects import member_project_choices
 def machine_health(request: AuthenticatedRequest) -> HttpResponse:
     """Insights > Machine health: help requests by fault, Night auto-fix
     success and resolutions across the user's projects."""
-    form = MachineHealthFilterForm(
-        member_project_choices(request.user), data=request.GET or None
-    )
+    project_choices = member_project_choices(request.user)
+    form = MachineHealthFilterForm(project_choices, data=request.GET or None)
     project_id, days = form.filters()
-    health = get_machine_health(request.user, project_id, days)
+    health = get_machine_health(
+        [choice_id for choice_id, _ in project_choices], project_id, days
+    )
     return render(
         request,
         "dashboard/machine_health.html",

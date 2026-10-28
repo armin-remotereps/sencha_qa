@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from urllib.parse import urlencode
 
-from django.db.models import Count, Q, QuerySet
+from django.db.models import Count, Q
 from django.urls import reverse
 
-from projects.models import TestRunTestCase, TestRunTestCaseStatus
+from dashboard.services.failed_case_filters import (
+    FailedCaseFilters,
+    failed_case_queryset,
+)
 
 FAILED_WIDGET_DAYS = 7
 FAILED_WIDGET_TOP_PROJECTS = 5
@@ -47,28 +51,27 @@ class FailedCaseWidget:
     all_url: str
 
 
-def _window_failures(
-    project_ids: list[int], since: datetime
-) -> QuerySet[TestRunTestCase]:
-    # Same scope as the failures page (Failed, member projects, finished in the
-    # window); served by the (status, -finished_at) index.
-    return TestRunTestCase.objects.filter(
-        status=TestRunTestCaseStatus.FAILED,
-        test_run__project_id__in=project_ids,
-        finished_at__gte=since,
-    )
-
-
 def _failures_url(params: dict[str, str]) -> str:
     return f"{reverse('dashboard:failed_cases')}?{urlencode(params)}"
 
 
-def get_failed_case_widget(project_ids: list[int], now: datetime) -> FailedCaseWidget:
-    """Totals, top projects and latest failures of the last 7 days (3 queries)."""
-    since_at = now - timedelta(days=FAILED_WIDGET_DAYS)
-    since = since_at.date()
+def _window_start(now: datetime) -> date:
+    """The first UTC day of the window: the last ``FAILED_WIDGET_DAYS`` UTC
+    days, today included (the Failures page reads ``date_from`` as a UTC day)."""
+    return now.astimezone(UTC).date() - timedelta(days=FAILED_WIDGET_DAYS - 1)
+
+
+def get_failed_case_widget(
+    project_ids: Sequence[int], now: datetime
+) -> FailedCaseWidget:
+    """Totals, top projects and latest failures of the last 7 days (3 queries).
+
+    The window is exactly the Failures page filtered on ``date_from=since``
+    (``failed_case_queryset``), so every count matches the page it links to.
+    """
+    since = _window_start(now)
     date_from = since.isoformat()
-    scope = _window_failures(project_ids, since_at)
+    scope = failed_case_queryset(project_ids, FailedCaseFilters(date_from=since))
 
     totals = scope.aggregate(
         total=Count("id"), not_checked=Count("id", filter=Q(checked_at__isnull=True))

@@ -813,8 +813,8 @@ a:hover {
   padding: 16px 18px;
 }
 
-/* Linked stat cards (partials/stat_card.html with a url) read as tiles,
-   not as text links. */
+/* Linked stat cards (an <a class="stat-card">) read as tiles, not as
+   text links. */
 a.stat-card,
 a.stat-card:hover {
   color: inherit;
@@ -1892,6 +1892,92 @@ code {
   height: 100%;
   border-radius: 999px;
   background: var(--brand-cyan);
+}
+
+/* Server-rendered bar widths in 5% steps (no inline styles), e.g.
+   <div class="progress"><span class="bar-w-35"></span></div>. */
+.progress > .bar-w-0 {
+  width: 0%;
+}
+
+.progress > .bar-w-5 {
+  width: 5%;
+}
+
+.progress > .bar-w-10 {
+  width: 10%;
+}
+
+.progress > .bar-w-15 {
+  width: 15%;
+}
+
+.progress > .bar-w-20 {
+  width: 20%;
+}
+
+.progress > .bar-w-25 {
+  width: 25%;
+}
+
+.progress > .bar-w-30 {
+  width: 30%;
+}
+
+.progress > .bar-w-35 {
+  width: 35%;
+}
+
+.progress > .bar-w-40 {
+  width: 40%;
+}
+
+.progress > .bar-w-45 {
+  width: 45%;
+}
+
+.progress > .bar-w-50 {
+  width: 50%;
+}
+
+.progress > .bar-w-55 {
+  width: 55%;
+}
+
+.progress > .bar-w-60 {
+  width: 60%;
+}
+
+.progress > .bar-w-65 {
+  width: 65%;
+}
+
+.progress > .bar-w-70 {
+  width: 70%;
+}
+
+.progress > .bar-w-75 {
+  width: 75%;
+}
+
+.progress > .bar-w-80 {
+  width: 80%;
+}
+
+.progress > .bar-w-85 {
+  width: 85%;
+}
+
+.progress > .bar-w-90 {
+  width: 90%;
+}
+
+.progress > .bar-w-95 {
+  width: 95%;
+}
+
+.progress > .bar-w-100 {
+  width: 100%;
 }
 
 /* Toolbar row above tables: search + filters + bulk actions */

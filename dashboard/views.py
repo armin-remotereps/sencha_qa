@@ -4,14 +4,14 @@ from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
 from django.shortcuts import render
 from django.views.decorators.cache import never_cache
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_safe
 
 from accounts.types import AuthenticatedRequest
-from dashboard.services.dashboard_data import get_attention_fragment, get_dashboard_data
+from dashboard.services.dashboard_data import get_dashboard_data
 
 
 @login_required
-@require_GET
+@require_safe
 def index(request: AuthenticatedRequest) -> HttpResponse:
     dashboard = get_dashboard_data(request.user)
     return render(
@@ -28,11 +28,12 @@ def index(request: AuthenticatedRequest) -> HttpResponse:
 
 @never_cache
 @login_required
-@require_GET
+@require_safe
 def attention_fragment(request: AuthenticatedRequest) -> HttpResponse:
-    """The "Needs your attention" card alone (HTML), swapped in live."""
+    """The dashboard's live cards alone (HTML): "Needs your attention" and
+    "Failed cases", swapped in by id on every attention event."""
     return render(
         request,
-        "dashboard/includes/_attention.html",
-        {"attention": get_attention_fragment(request.user)},
+        "dashboard/includes/_live_cards.html",
+        {"dashboard": get_dashboard_data(request.user)},
     )

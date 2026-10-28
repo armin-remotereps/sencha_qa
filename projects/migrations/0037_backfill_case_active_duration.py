@@ -1,9 +1,12 @@
 """Backfill ``active_duration`` for finished cases that provably ran in one segment.
 
-A case ran its current execution in one segment when no help request was
-opened since its ``started_at`` and no Resume / Redesign snapshot is newer than
-its latest Re-run snapshot (or exists at all, if it was never re-run). For
-those, ``finished_at - started_at`` is exact. Everything else stays null
+A case ran its current execution in one segment when neither a help request
+nor a Resume / Redesign snapshot is newer than its latest Re-run snapshot (or
+exists at all, if it was never re-run). ``started_at`` cannot be trusted for
+this: before active durations, every pickup (also the one after a help
+Continue, which writes no snapshot) reset it, so a help request older than
+``started_at`` still means an earlier segment. For single-segment cases,
+``finished_at - started_at`` is exact. Everything else stays null
 ("unknown"). One set-based UPDATE; idempotent (only null rows); reverse is a
 no-op.
 """
@@ -23,10 +26,14 @@ def backfill(apps: Apps, schema_editor: BaseDatabaseSchemaEditor) -> None:
     TestRunCaseResume = apps.get_model("projects", "TestRunCaseResume")
     CaseHelpRequest = apps.get_model("projects", "CaseHelpRequest")
 
-    help_since_start = CaseHelpRequest.objects.filter(
-        test_run_test_case=OuterRef("pk"),
-        requested_at__gte=OuterRef("started_at"),
+    rerun_after_help = TestRunCaseResume.objects.filter(
+        test_run_test_case=OuterRef(OuterRef("pk")),
+        kind=_RERUN_KIND,
+        created_at__gt=OuterRef("requested_at"),
     )
+    help_since_rerun = CaseHelpRequest.objects.filter(
+        test_run_test_case=OuterRef("pk")
+    ).filter(~Exists(rerun_after_help))
     rerun_after_resume = TestRunCaseResume.objects.filter(
         test_run_test_case=OuterRef(OuterRef("pk")),
         kind=_RERUN_KIND,
@@ -42,7 +49,7 @@ def backfill(apps: Apps, schema_editor: BaseDatabaseSchemaEditor) -> None:
         started_at__isnull=False,
         finished_at__isnull=False,
         finished_at__gte=F("started_at"),
-    ).filter(~Exists(help_since_start), ~Exists(resume_since_rerun)).update(
+    ).filter(~Exists(help_since_rerun), ~Exists(resume_since_rerun)).update(
         active_duration=F("finished_at") - F("started_at")
     )
 

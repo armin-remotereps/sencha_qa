@@ -20,7 +20,6 @@ from dashboard.services.failed_case_filters import (
     FailedCaseFilters,
     failed_case_queryset,
 )
-from dashboard.services.member_projects import member_project_ids
 from projects.exceptions import CheckedPushError, RunCaseCheckError, RunRerunError
 from projects.models import TestRun
 from projects.run_case_check_services import check_run_cases, format_check_message
@@ -62,11 +61,15 @@ def _run_label(test_run: TestRun) -> str:
 def apply_failed_case_bulk(
     *,
     user: CustomUser,
+    project_ids: Sequence[int],
     action: BulkAction,
     pivot_ids: Sequence[int],
     links_base_url: str,
 ) -> BulkOutcome:
     """Apply ``action`` to the selected Failed cases, run by run.
+
+    ``project_ids`` are the user's member, non-archived projects (the view
+    already loaded them); every selected id is re-resolved against them here.
 
     - check: ``check_run_cases`` per run;
     - rerun: only when every selected case is in one run; keeps the run's
@@ -75,7 +78,6 @@ def apply_failed_case_bulk(
       checked, unsent case of that run (as the run page does).
     """
     selected = set(pivot_ids)
-    project_ids = member_project_ids(user)
     resolved = list(
         failed_case_queryset(project_ids, FailedCaseFilters())
         .filter(id__in=selected)
