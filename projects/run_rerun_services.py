@@ -37,6 +37,8 @@ from projects.run_reopen_services import (
     lock_project_and_run,
     reopen_run,
 )
+from test_sessions.case_activity import CaseActivity
+from test_sessions.services.record_case_activity import record_case_activity
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +126,9 @@ def rerun_test_run_cases(
         if not pivots:
             raise RunRerunError(_NOTHING_SELECTED)
         selected_ids = [pivot.pk for pivot in pivots]
+        record_case_activity(
+            user=user, pivot_ids=selected_ids, activity=CaseActivity.RERUN
+        )
 
         TestRunCaseResume.objects.bulk_create(
             [_snapshot(pivot, user) for pivot in pivots]

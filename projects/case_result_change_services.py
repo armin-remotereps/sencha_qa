@@ -48,6 +48,8 @@ from projects.run_reopen_services import (
     lock_project_and_run,
 )
 from projects.services import broadcast_run_and_pivots
+from test_sessions.case_activity import CaseActivity
+from test_sessions.services.record_case_activity import record_case_activity
 
 RESULT_CHANGEABLE_STATUSES: tuple[str, ...] = (
     TestRunTestCaseStatus.SUCCESS,
@@ -261,6 +263,9 @@ def apply_result_change(
         )
         clear_checked_and_sent(locked)
         locked.save(update_fields=[*update_fields, *CHECKED_SENT_FIELDS, "updated_at"])
+        record_case_activity(
+            user=user, pivot_ids=[locked.pk], activity=CaseActivity.RESULT_CHANGE
+        )
 
         change.from_status = from_status
         change.from_blocked_reason = from_blocked_reason

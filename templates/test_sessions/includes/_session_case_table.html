@@ -1,0 +1,50 @@
+{% load project_extras %}
+{% comment %} The cases a tester acted on in one session (test_sessions/detail.html).
+
+   Context contract:
+     page_obj — Page[SessionCaseRow]; `status` "" means the case is gone ("Not available"),
+                `case_url` None means no link (case deleted or no longer a member),
+                `is_live` false means the outcome is a snapshot {% endcomment %}
+<div class="card">
+  <p class="hint">Duration is the case's total active time, across every attempt. Live rows show the case as it is now; a snapshot is its result when the session ended or its verdict was replaced.</p>
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th scope="col">Case</th>
+          <th scope="col">Project</th>
+          <th scope="col">Run</th>
+          <th scope="col">Result</th>
+          <th scope="col">Started</th>
+          <th scope="col">Finished</th>
+          <th scope="col">Duration</th>
+          <th scope="col">Performed by</th>
+          <th scope="col">Your actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in page_obj %}
+        <tr>
+          <td data-label="Case" class="cell-primary">
+            {% if row.case_url %}<a href="{{ row.case_url }}">{{ row.case_title }}</a>{% else %}{{ row.case_title }}{% endif %}
+            {% if row.testrail_id %}<div class="muted small">{{ row.testrail_id }}</div>{% endif %}
+          </td>
+          <td data-label="Project">{{ row.project_name|default:"—" }}</td>
+          <td data-label="Run">{{ row.run_name|default:"—" }}</td>
+          <td data-label="Result">
+            {% if row.status %}{% include "partials/badge_case_status.html" with status=row.status only %}{% else %}<span class="muted">{{ row.status_label }}</span>{% endif %}
+            {% if row.failed_by_label %}<div class="muted small">{{ row.failed_by_label }}</div>{% endif %}
+            {% if row.blocked_reason_label %}<div class="muted small">{{ row.blocked_reason_label }}</div>{% endif %}
+            {% if not row.is_live %}<div class="muted small">Snapshot</div>{% endif %}
+          </td>
+          <td data-label="Started">{% if row.started_at %}<time datetime="{{ row.started_at|date:'c' }}">{{ row.started_at|date:"M j, Y H:i" }}</time>{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
+          <td data-label="Finished">{% if row.finished_at %}<time datetime="{{ row.finished_at|date:'c' }}">{{ row.finished_at|date:"M j, Y H:i" }}</time>{% else %}<span class="muted">&mdash;</span>{% endif %}</td>
+          <td data-label="Duration">{{ row.duration|duration }}</td>
+          <td data-label="Performed by">{{ row.performed_by_label }}{% if row.person_step_count %}<div class="muted small">{{ row.person_step_count }} person step{{ row.person_step_count|pluralize }}</div>{% endif %}</td>
+          <td data-label="Your actions">{{ row.actions_label|default:"—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

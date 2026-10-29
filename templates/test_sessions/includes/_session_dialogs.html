@@ -1,0 +1,64 @@
+{% comment %} Stop / Edit / Delete dialogs of the session detail page (README dialog convention).
+
+   Context contract (from test_sessions/detail.html):
+     session   — TestSession
+     stop_form — TestSessionStopForm (rendered only while the session is open)
+     edit_form — TestSessionEditForm {% endcomment %}
+{% if session.is_open %}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-stop-session.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="stop-session-title">
+    <div class="card-header">
+      <h3 id="stop-session-title">Stop session</h3>
+      <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+    </div>
+    <p>The session ends now. Cases that already finished keep their result as of now.</p>
+    <form method="post" action="{% url 'test_sessions:stop' session.id %}">
+      {% csrf_token %}
+      {% include "partials/form_field.html" with field=stop_form.note only %}
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Stop session</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-edit-session.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="edit-session-title">
+    <div class="card-header">
+      <h3 id="edit-session-title">Edit session</h3>
+      <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+    </div>
+    <form method="post" action="{% url 'test_sessions:edit' session.id %}">
+      {% csrf_token %}
+      {% include "partials/form_field.html" with field=edit_form.name only %}
+      {% include "partials/form_field.html" with field=edit_form.note only %}
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% url 'test_sessions:delete' session.id as delete_url %}
+{% include "partials/confirm_dialog.html" with dialog_id="delete-session" title="Delete this session?" body="The session and its record of tests are deleted. The runs and their results are not touched. This can't be undone." confirm_label="Delete session" action_url=delete_url csrf_token=csrf_token only %}

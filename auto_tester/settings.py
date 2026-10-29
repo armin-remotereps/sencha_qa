@@ -58,6 +58,7 @@ INSTALLED_APPS: list[str] = [
     "machine_setup",
     "visual_engine",
     "notifications",
+    "test_sessions",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -85,6 +86,7 @@ TEMPLATES = [
                 "auto_tester.context_processors.branding",
                 "dashboard.context_processors.attention_badge",
                 "projects.context_processors.project_access",
+                "test_sessions.context_processors.open_test_session",
             ],
         },
     },
@@ -163,6 +165,11 @@ if not 0 <= NIGHT_DIGEST_HOUR <= 23:
 NIGHT_DIGEST_LOOKBACK_HOURS: int = config(
     "NIGHT_DIGEST_LOOKBACK_HOURS", default=24, cast=int
 )
+# A test session open longer than this many hours is closed by the beat task
+# (test_sessions.tasks.close_stale_test_sessions) at its start + this; 0: never.
+TEST_SESSION_MAX_HOURS: int = config("TEST_SESSION_MAX_HOURS", default=12, cast=int)
+if TEST_SESSION_MAX_HOURS < 0:
+    raise ImproperlyConfigured("TEST_SESSION_MAX_HOURS must be 0 or more")
 CELERY_BROKER_URL: str = REDIS_URL
 CELERY_RESULT_BACKEND = "django-db"
 CELERY_CACHE_BACKEND = "default"
@@ -194,6 +201,7 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     # Its own small worker, so a notification is never stuck behind TestRail imports.
     "notifications.tasks.send_notification": {"queue": "notify"},
     "notifications.tasks.send_night_digest": {"queue": "notify"},
+    "test_sessions.tasks.close_stale_test_sessions": {"queue": "notify"},
 }
 # Installed into django-celery-beat's tables by its DatabaseScheduler when
 # beat starts (machine_setup.task_names.SWEEP_STALE_AUTO_FIXES).
@@ -211,6 +219,12 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "task": "notifications.tasks.send_night_digest",
         "schedule": crontab(hour=NIGHT_DIGEST_HOUR, minute=0),
         "options": {"expire_seconds": 3600},
+    },
+    # Ends test sessions left open past TEST_SESSION_MAX_HOURS (a no-op at 0).
+    "test-sessions-close-stale": {
+        "task": "test_sessions.tasks.close_stale_test_sessions",
+        "schedule": 900.0,
+        "options": {"expire_seconds": 840},
     },
 }
 

@@ -80,6 +80,8 @@ from projects.run_reopen_services import (
     queue_pending_cases,
 )
 from projects.services import broadcast_run_and_pivots
+from test_sessions.case_activity import CaseActivity
+from test_sessions.services.record_case_activity import record_case_activity
 
 _NOT_PAUSED = "This run is not waiting for help."
 _NO_OPEN_REQUEST = "This case no longer needs help. Reload the page."
@@ -816,6 +818,11 @@ def _resolve(
         update_fields.append("auto_fix_state")
     request.save(update_fields=update_fields)
     clear_agent_proposal(request)
+    record_case_activity(
+        user=user,
+        pivot_ids=[request.test_run_test_case_id],
+        activity=CaseActivity.HELP,
+    )
     # The help request closed: the project members' attention lists change.
     transaction.on_commit(lambda: broadcast_project_attention_changed(project_id))
 

@@ -380,4 +380,3 @@ def _screenshots(pivot_id: int) -> tuple[tuple[ScreenshotEntry, ...], int]:
         ),
         total,
     )
-

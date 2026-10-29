@@ -8,34 +8,67 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('machine_setup', '0005_documents_run_proposals'),
-        ('projects', '0032_case_result_chat'),
+        ("machine_setup", "0005_documents_run_proposals"),
+        ("projects", "0032_case_result_chat"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='setupconversation',
-            name='result_case',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='result_conversations', to='projects.testruntestcase'),
+            model_name="setupconversation",
+            name="result_case",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name="result_conversations",
+                to="projects.testruntestcase",
+            ),
         ),
         migrations.AddField(
-            model_name='setupmessage',
-            name='plan_revision',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to='projects.caseplanrevision'),
+            model_name="setupmessage",
+            name="plan_revision",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name="+",
+                to="projects.caseplanrevision",
+            ),
         ),
         migrations.AddField(
-            model_name='setupmessage',
-            name='result_change',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to='projects.caseresultchange'),
+            model_name="setupmessage",
+            name="result_change",
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name="+",
+                to="projects.caseresultchange",
+            ),
         ),
         migrations.AlterField(
-            model_name='setupconversation',
-            name='kind',
-            field=models.CharField(choices=[('chat', 'Chat'), ('auto_fix', 'Auto-fix'), ('case_help', 'Help chat'), ('case_result', 'Result chat')], default='chat', max_length=16),
+            model_name="setupconversation",
+            name="kind",
+            field=models.CharField(
+                choices=[
+                    ("chat", "Chat"),
+                    ("auto_fix", "Auto-fix"),
+                    ("case_help", "Help chat"),
+                    ("case_result", "Result chat"),
+                ],
+                default="chat",
+                max_length=16,
+            ),
         ),
         migrations.AddConstraint(
-            model_name='setupconversation',
-            constraint=models.UniqueConstraint(condition=models.Q(('archived_at__isnull', True), ('result_case__isnull', False)), fields=('result_case',), name='setup_one_result_thread_per_case'),
+            model_name="setupconversation",
+            constraint=models.UniqueConstraint(
+                condition=models.Q(
+                    ("archived_at__isnull", True), ("result_case__isnull", False)
+                ),
+                fields=("result_case",),
+                name="setup_one_result_thread_per_case",
+            ),
         ),
     ]
