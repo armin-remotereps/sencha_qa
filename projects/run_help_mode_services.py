@@ -28,7 +28,7 @@ from accounts.models import CustomUser
 from machine_setup.models import SetupConversation
 from projects.case_help_policy import auto_fix_eligible
 from projects.case_help_state import enqueue_case_auto_fix, mark_auto_fix_running
-from projects.exceptions import RunHelpError
+from projects.exceptions import HelpModeNotAllowedError, RunHelpError
 from projects.models import (
     CaseHelpRequest,
     HelpAutoFixState,
@@ -69,10 +69,14 @@ def change_run_help_mode(
 ) -> HelpModeChange:
     """Save ``help_mode`` on the run; start an auto-fix where Night now applies.
 
-    ``user`` is the member making the change (authorized by the view).
+    ``user`` is the member making the change (authorized by the view). Only a
+    superuser may change the mode (``HelpModeNotAllowedError``), whatever the
+    value, refused before any lock.
     """
     if not is_valid_help_mode(help_mode):
         raise RunHelpError(_UNKNOWN_MODE)
+    if not user.is_superuser:
+        raise HelpModeNotAllowedError()
     with transaction.atomic():
         _, locked_run = lock_project_and_run(test_run.pk)
         if locked_run.status not in _CHANGEABLE_STATUSES:

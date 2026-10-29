@@ -24,6 +24,7 @@ from django.db.models import (
     Avg,
     Case,
     Count,
+    Exists,
     F,
     IntegerField,
     OuterRef,
@@ -136,6 +137,8 @@ from projects.models import (
     PersonStepStatus,
     PlanRevisionStatus,
     Project,
+    ProjectMembership,
+    ProjectRole,
     RunHelpMode,
     Tag,
     TestCase,
@@ -162,6 +165,7 @@ from projects.person_step_rows import (
 )
 from projects.run_case_order import PICKER_CASE_ORDERING, RUN_CASE_ORDERING
 from projects.run_finished_notifications import notify_run_finished
+from projects.run_help_mode_policy import resolve_help_mode
 from projects.runner_bundle import build_runner_archive
 from projects.runner_person_step_push import nudge_runner_person_steps
 from projects.runner_update_state import (
@@ -278,9 +282,13 @@ def copy_test_cases_to_project(
 def list_other_projects_for_user(
     *, user: CustomUser, exclude_project: Project
 ) -> QuerySet[Project]:
-    """Results are ordered alphabetically by name."""
+    """Projects the user may copy cases into (writable member), by name."""
     return (
-        Project.objects.filter(members=user, archived=False)
+        Project.objects.filter(
+            memberships__user=user,
+            memberships__role=ProjectRole.MEMBER,
+            archived=False,
+        )
         .exclude(id=exclude_project.id)
         .order_by("name")
     )
@@ -353,6 +361,11 @@ def list_projects_for_user(
         case_count=Count("test_cases", distinct=True),
         member_count=Count("members", distinct=True),
         latest_run_id=Subquery(latest_run_qs.values("pk")[:1]),
+        viewer_can_write=Exists(
+            ProjectMembership.objects.filter(
+                project=OuterRef("pk"), user=user, role=ProjectRole.MEMBER
+            )
+        ),
     ).order_by("-created_at")
 
     if search:
@@ -2502,18 +2515,27 @@ def _has_active_test_run(project: Project) -> bool:
 
 
 @transaction.atomic
-def start_test_run(test_run: TestRun, *, help_mode: str) -> None:
-    """Start a WAITING run with ``help_mode`` (a ``RunHelpMode`` value)."""
-    if help_mode not in RunHelpMode.values:
+def start_test_run(
+    test_run: TestRun, *, user: CustomUser, help_mode: str | None
+) -> None:
+    """Start a WAITING run with ``help_mode`` (a ``RunHelpMode`` value).
+
+    ``None`` keeps the run's stored mode. Only a superuser may choose a mode
+    other than the stored one (``HelpModeNotAllowedError`` otherwise).
+    """
+    if help_mode is not None and help_mode not in RunHelpMode.values:
         raise ValueError("Choose what happens when a case needs help.")
     # Same lock order as resume (project, then run): it serializes a Start
     # against another Start or Resume in the project, so the "no other run is
     # active" check below cannot race.
     Project.objects.select_for_update().only("id").get(pk=test_run.project_id)
-    locked_status = (
+    locked_status, locked_help_mode = (
         TestRun.objects.select_for_update()
-        .values_list("status", flat=True)
+        .values_list("status", "help_mode")
         .get(pk=test_run.pk)
+    )
+    resolved_help_mode = resolve_help_mode(
+        user=user, requested=help_mode, current=locked_help_mode
     )
 
     pivot_ids = list(
@@ -2532,7 +2554,9 @@ def start_test_run(test_run: TestRun, *, help_mode: str) -> None:
         raise ValueError(RUNNER_UPDATE_RUNNING_MESSAGE)
 
     test_run.status = TestRunStatus.STARTED
-    test_run.help_mode = help_mode
+    test_run.help_mode = (
+        locked_help_mode if resolved_help_mode is None else resolved_help_mode
+    )
     test_run.started_at = timezone.now()
     test_run.finished_at = None
     test_run.execution_generation += 1

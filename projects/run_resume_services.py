@@ -37,6 +37,7 @@ from projects.models import (
     TestRunTestCaseStatus,
 )
 from projects.run_case_order import RUN_CASE_ORDERING
+from projects.run_help_mode_policy import resolve_help_mode
 from projects.run_reopen_services import (
     REOPENABLE_RUN_STATUSES,
     RESTART_RESET_FIELDS,
@@ -136,7 +137,7 @@ def resume_test_run(
     """Resume every Blocked and Cancelled case of the run; returns the count.
 
     ``help_mode`` (a ``RunHelpMode`` value) changes the run's mode; ``None``
-    keeps it.
+    keeps it. Only a superuser may change it (``HelpModeNotAllowedError``).
     """
     return _resume_pivots(
         test_run_id=test_run.pk,
@@ -181,6 +182,9 @@ def _resume_pivots(
         raise RunResumeError(_INVALID_HELP_MODE)
     with transaction.atomic():
         test_run, pivots = _lock_and_check(test_run_id, pivot_id)
+        resolved_help_mode = resolve_help_mode(
+            user=user, requested=help_mode, current=test_run.help_mode
+        )
         now = timezone.now()
         resumes: list[TestRunCaseResume] = []
         # Logs, screenshots and the checkpoint are kept.
@@ -194,7 +198,7 @@ def _resume_pivots(
             reset_case_for_restart(pivot, now)
         TestRunCaseResume.objects.bulk_create(resumes)
         TestRunTestCase.objects.bulk_update(pivots, update_fields)
-        reopen_run(test_run, pivots, help_mode=help_mode)
+        reopen_run(test_run, pivots, help_mode=resolved_help_mode)
     return len(pivots)
 
 

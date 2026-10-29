@@ -60,6 +60,7 @@ from projects.models import (
     TestRunCaseResume,
     TestRunTestCase,
 )
+from projects.run_help_mode_policy import resolve_help_mode
 from projects.run_reopen_services import (
     REOPENABLE_RUN_STATUSES,
     RESTART_RESET_FIELDS,
@@ -236,11 +237,15 @@ def rerun_with_redesigned_plan(
 
     Raises ``RunResumeError`` (run status and reopen gates) or
     ``PlanRevisionError`` (the draft); both messages are user-safe.
+    ``HelpModeNotAllowedError`` when a non-superuser asks for another mode.
     """
     if help_mode is not None and not is_valid_help_mode(help_mode):
         raise RunResumeError(_INVALID_HELP_MODE)
     with transaction.atomic():
         project, test_run = lock_project_and_run(pivot.test_run_id)
+        resolved_help_mode = resolve_help_mode(
+            user=user, requested=help_mode, current=test_run.help_mode
+        )
         if test_run.status not in REOPENABLE_RUN_STATUSES:
             raise RunResumeError(_NOT_FINISHED)
         blockers = list_reopen_blockers(test_run, project)
@@ -322,7 +327,7 @@ def rerun_with_redesigned_plan(
         revision.save(update_fields=["status", "decided_by", "decided_at"])
         supersede_pending_result_change(locked.pk)
 
-        reopen_run(test_run, [locked], help_mode=help_mode)
+        reopen_run(test_run, [locked], help_mode=resolved_help_mode)
 
 
 # ---------------------------------------------------------------------------
