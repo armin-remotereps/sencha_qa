@@ -77,6 +77,10 @@ def _record(
     )
     if not pivots:
         return
+    # Insert in the caller's order (the run's case order), so the session's
+    # rows and its export follow it.
+    position = {pivot_id: index for index, pivot_id in enumerate(pivot_ids)}
+    pivots.sort(key=lambda pivot: position[pivot["id"]])
     found_ids = [pivot["id"] for pivot in pivots]
     now = timezone.now()
     session_id = _open_session_id(user) if user is not None else None
