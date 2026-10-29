@@ -24,6 +24,7 @@ from notifications.services.notification_message import (
 from notifications.services.ntfy_config import ntfy_configured
 from projects.models import (
     FailedBy,
+    ProjectRole,
     RunHelpMode,
     TestRun,
     TestRunStatus,
@@ -122,14 +123,19 @@ def _load_runs(run_ids: list[int]) -> list[_DigestRun]:
 
 
 def _recipients_by_project(project_ids: list[int]) -> dict[int, set[int]]:
-    """User id -> the claimed projects they are an active member of (one query)."""
+    """User id -> the claimed projects they are an active writable member of.
+
+    One query; project and role sit in one ``filter()`` so both conditions and
+    the selected project id use the same membership row.
+    """
     by_user: dict[int, set[int]] = defaultdict(set)
     rows = NotificationPreference.objects.filter(
         enabled=True,
         notify_night_digest=True,
         user__is_active=True,
-        user__projects__id__in=project_ids,
-    ).values_list("user_id", "user__projects__id")
+        user__project_memberships__project_id__in=project_ids,
+        user__project_memberships__role=ProjectRole.MEMBER,
+    ).values_list("user_id", "user__project_memberships__project_id")
     for user_id, project_id in rows:
         by_user[user_id].add(project_id)
     return by_user

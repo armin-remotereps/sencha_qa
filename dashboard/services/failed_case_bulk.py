@@ -68,7 +68,7 @@ def apply_failed_case_bulk(
 ) -> BulkOutcome:
     """Apply ``action`` to the selected Failed cases, run by run.
 
-    ``project_ids`` are the user's member, non-archived projects (the view
+    ``project_ids`` are the user's writable, non-archived projects (the view
     already loaded them); every selected id is re-resolved against them here.
 
     - check: ``check_run_cases`` per run;

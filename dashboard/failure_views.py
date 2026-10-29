@@ -5,7 +5,7 @@ Thin views: bind the forms with choices from the services, call a service,
 map domain errors to messages. Every query is scoped to the user's member,
 non-archived projects (``member_project_choices``), so a project or run id
 from another project is an invalid choice, and the bulk service re-resolves
-every selected id itself.
+every selected id itself, against the writable projects only.
 """
 
 from __future__ import annotations
@@ -66,7 +66,10 @@ from dashboard.services.failed_cases import (
     failed_case_run_choices,
     list_failed_cases,
 )
-from dashboard.services.member_projects import member_project_choices
+from dashboard.services.member_projects import (
+    member_project_choices,
+    member_project_choices_and_writable_ids,
+)
 from projects.forms import form_error_text
 from projects.models import TestRunTestCase
 
@@ -178,14 +181,18 @@ def failed_cases_export(request: AuthenticatedRequest) -> HttpResponseBase:
 @require_POST
 def failed_cases_bulk(request: AuthenticatedRequest) -> HttpResponse:
     form = FailedCaseBulkForm(request.POST)
-    project_choices = member_project_choices(request.user)
+    # Filters keep every member project; the action is scoped to the writable
+    # ones, so cases of read-only projects count as skipped.
+    project_choices, writable_ids = member_project_choices_and_writable_ids(
+        request.user
+    )
     return_query = _clean_query(project_choices, request.POST.get("return_query", ""))
     if not form.is_valid():
         messages.error(request, form_error_text(form))
         return _failures_redirect(return_query)
     outcome = apply_failed_case_bulk(
         user=request.user,
-        project_ids=[project_id for project_id, _ in project_choices],
+        project_ids=writable_ids,
         action=form.selected_action(),
         pivot_ids=form.cleaned_data["pivot_ids"],
         links_base_url=request.build_absolute_uri("/"),
@@ -199,7 +206,7 @@ def failed_cases_bulk(request: AuthenticatedRequest) -> HttpResponse:
         messages.info(
             request,
             f"{outcome.skipped} selected {noun} skipped: no longer a failed case "
-            "in your projects.",
+            "in your projects, or in a read-only project.",
         )
     return _failures_redirect(return_query)
 

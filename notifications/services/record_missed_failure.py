@@ -1,4 +1,4 @@
-"""Put a run case the agent judged Failed into every member's attention inbox."""
+"""Put a run case the agent judged Failed into every writable member's attention inbox."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from django.db import transaction
 
 from accounts.models import CustomUser
 from notifications.models import MissedFailure
+from projects.models import ProjectRole
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 def record_missed_failure(
     *, pivot_id: int, project_id: int, occurred_at: datetime
 ) -> list[int]:
-    """Add (or re-open) the case's missed failure for each active project member.
+    """Add (or re-open) the case's missed failure for each active writable project member.
 
     One query for the member ids and one bulk upsert: a member who already has
     a row for the case gets it back with ``occurred_at`` moved on and
@@ -29,7 +30,9 @@ def record_missed_failure(
         with transaction.atomic():
             user_ids = list(
                 CustomUser.objects.filter(
-                    projects__id=project_id, is_active=True
+                    project_memberships__project_id=project_id,
+                    project_memberships__role=ProjectRole.MEMBER,
+                    is_active=True,
                 ).values_list("id", flat=True)
             )
             if not user_ids:

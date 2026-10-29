@@ -16,7 +16,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from accounts.models import CustomUser
-from dashboard.services.member_projects import member_project_ids
+from dashboard.services.member_projects import writable_member_project_ids
 from notifications.services.inbox import (
     Inbox,
     InboxPersonStep,
@@ -149,7 +149,8 @@ def _help_items(project_ids: list[int], limit: int) -> list[HelpItem]:
 def get_attention(
     user: CustomUser, project_ids: list[int], *, now: datetime | None = None
 ) -> Attention:
-    """The attention card for ``user`` over ``project_ids`` (their member projects).
+    """The attention card for ``user`` over ``project_ids`` (their writable
+    member projects: read-only members get no attention items).
 
     One help list query and one person step list query (each plus one count
     only when its list is full) and the inbox's queries; none when
@@ -185,8 +186,11 @@ def get_attention(
 
 
 def count_attention(user: CustomUser) -> int:
-    """How many items need ``user``: the nav badge and tab title (5 queries)."""
-    project_ids = member_project_ids(user)
+    """How many items need ``user``: the nav badge and tab title (5 queries).
+
+    Only the user's writable projects count.
+    """
+    project_ids = writable_member_project_ids(user)
     if not project_ids:
         return 0
     help_total = _open_help_requests(project_ids).count()

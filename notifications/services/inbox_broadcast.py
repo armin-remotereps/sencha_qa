@@ -13,6 +13,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import BaseChannelLayer, get_channel_layer
 
 from accounts.models import CustomUser
+from projects.models import ProjectRole
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ def broadcast_inbox_changed(user_ids: list[int]) -> None:
 
 
 def broadcast_project_attention_changed(project_id: int) -> None:
-    """Nudge the attention sockets of every active member of the project.
+    """Nudge the attention sockets of every active writable member of the project.
 
     One member id query, then one group send per member. Call it from
     ``transaction.on_commit``. Never raises.
@@ -60,7 +61,9 @@ def broadcast_project_attention_changed(project_id: int) -> None:
             return
         user_ids = list(
             CustomUser.objects.filter(
-                projects__id=project_id, is_active=True
+                project_memberships__project_id=project_id,
+                project_memberships__role=ProjectRole.MEMBER,
+                is_active=True,
             ).values_list("id", flat=True)
         )
         _send(layer, user_ids)

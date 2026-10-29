@@ -7,20 +7,24 @@ from notifications.services.notification_message import (
     NotificationKind,
     preference_flag,
 )
+from projects.models import ProjectRole
 
 
 def recipient_user_ids(
     project_id: int, kind: NotificationKind, *, among: list[int] | None = None
 ) -> list[int]:
-    """Members of the project with notifications on and ``kind`` opted in.
+    """Writable members of the project with notifications on and ``kind`` opted in.
 
     ``among`` narrows the answer to those users (e.g. the one person a chat
-    reply is for). One query: preferences joined to the project's member
-    table. A user is a member of a project at most once, so no DISTINCT is
-    needed.
+    reply is for). Read-only members get nothing. One query: preferences
+    joined to the project's membership row (project and role in one
+    ``filter()`` so both hit the same row). A user is a member of a project
+    at most once, so no DISTINCT is needed.
     """
     queryset = NotificationPreference.objects.filter(
-        user__projects__id=project_id, enabled=True
+        user__project_memberships__project_id=project_id,
+        user__project_memberships__role=ProjectRole.MEMBER,
+        enabled=True,
     )
     if among is not None:
         queryset = queryset.filter(user_id__in=among)
