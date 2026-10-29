@@ -58,6 +58,7 @@ INSTALLED_APPS: list[str] = [
     "machine_setup",
     "visual_engine",
     "notifications",
+    "test_sessions",
 ]
 
 MIDDLEWARE: list[str] = [
