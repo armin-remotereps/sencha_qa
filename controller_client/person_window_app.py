@@ -111,6 +111,13 @@ _RESTORE_POLL_MS: Final[int] = 10
 _READ_CHUNK_BYTES: Final[int] = 64 * 1024
 _TITLE: Final[str] = "Test Runner: your step"
 _WRAP: Final[int] = 480
+# Room left for the title bar, menu bar and taskbar when the content is tall.
+_SCREEN_MARGIN: Final[int] = 160
+# Page scrolling: one wheel step, a Windows wheel notch and its steps.
+_WHEEL_STEP_PX: Final[int] = 20
+_WHEEL_DELTA: Final[int] = 120
+_WHEEL_NOTCH_STEPS: Final[int] = 3
+_SHIFT_MASK: Final[int] = 0x1
 _WARN_COLOR: Final[str] = "#b45309"
 _ERROR_COLOR: Final[str] = "#b91c1c"
 _OK_COLOR: Final[str] = "#15803d"
@@ -267,6 +274,8 @@ class PersonWindowApp:
             master=root, value=PersonStepWireOutcome.AS_EXPECTED.value
         )
         self._picker_var = tk.StringVar(master=root)
+        # Windows wheel delta not yet scrolled (less than one notch).
+        self._wheel_rest = 0
         self._build()
         root.protocol("WM_DELETE_WINDOW", self._on_user_close)
         if sys.platform == "darwin":
@@ -283,8 +292,7 @@ class PersonWindowApp:
         root.minsize(420, 360)
         root.columnconfigure(0, weight=1)
         root.rowconfigure(0, weight=1)
-        frame = ttk.Frame(root, padding=12)
-        frame.grid(row=0, column=0, sticky="nsew")
+        frame = self._build_scroll_area()
         frame.columnconfigure(0, weight=1)
         self._frame = frame
 
@@ -303,6 +311,8 @@ class PersonWindowApp:
         )
         self._picker.pack(side="left", fill="x", expand=True, padx=(6, 0))
         self._picker.bind("<<ComboboxSelected>>", self._on_pick)
+        for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+            self._picker.bind(sequence, self._on_picker_wheel)
         self._picker_frame.grid(row=2, column=0, sticky="ew", pady=(0, 6))
 
         self._status = ttk.Label(
@@ -442,6 +452,95 @@ class PersonWindowApp:
             side="right"
         )
         self._url_frame.grid(row=6, column=0, sticky="ew", pady=(8, 0))
+
+    def _build_scroll_area(self) -> "ttk.Frame":
+        """A vertically scrollable content frame filling the window.
+
+        The window asks for its content's height up to the screen's, so a long
+        step (how-to list, Q&A) scrolls instead of growing off the screen. The
+        scrollbar shows only when the content does not fit.
+        """
+        root = self._root
+        background = ttk.Style(root).lookup("TFrame", "background")
+        canvas = tk.Canvas(
+            root, borderwidth=0, highlightthickness=0, yscrollincrement=_WHEEL_STEP_PX
+        )
+        if background:
+            canvas.configure(background=background)
+        scroll = ttk.Scrollbar(root, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=self._on_canvas_scroll)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        scroll.grid(row=0, column=1, sticky="ns")
+        frame = ttk.Frame(canvas, padding=12)
+        item = canvas.create_window(0, 0, window=frame, anchor="nw")
+        frame.bind("<Configure>", self._on_content_configure)
+        canvas.bind(
+            "<Configure>", lambda event: canvas.itemconfigure(item, width=event.width)
+        )
+        root.bind_all("<MouseWheel>", self._on_wheel, add="+")
+        root.bind_all("<Button-4>", self._on_wheel, add="+")
+        root.bind_all("<Button-5>", self._on_wheel, add="+")
+        self._canvas = canvas
+        self._scrollbar = scroll
+        return frame
+
+    def _on_content_configure(self, _event: "tk.Event[ttk.Frame]") -> None:
+        canvas = self._canvas
+        frame = self._frame
+        canvas.configure(scrollregion=canvas.bbox("all"))
+        max_height = self._root.winfo_screenheight() - _SCREEN_MARGIN
+        canvas.configure(
+            width=frame.winfo_reqwidth(),
+            height=min(frame.winfo_reqheight(), max_height),
+        )
+
+    def _on_canvas_scroll(self, first: float | str, last: float | str) -> None:
+        # Tk passes the fractions as strings.
+        self._scrollbar.set(first, last)
+        if float(first) <= 0.0 and float(last) >= 1.0:
+            self._scrollbar.grid_remove()
+        else:
+            self._scrollbar.grid()
+
+    def _on_wheel(self, event: "tk.Event[tk.Misc]") -> None:
+        widget = event.widget
+        # Only this window's content; a text box that scrolls itself keeps the
+        # wheel (its class binding already handles it).
+        path = str(widget)
+        # The picker's open list is Tk's own widget: tkinter hands its path.
+        if not path.startswith(str(self._canvas)) or ".popdown" in path:
+            return
+        # A text box's own scrollbar scrolls that text box.
+        if isinstance(widget, ttk.Scrollbar) and widget is not self._scrollbar:
+            return
+        if isinstance(widget, tk.Text) and widget.yview() != (0.0, 1.0):
+            return
+        self._scroll_page(event)
+
+    def _on_picker_wheel(self, event: "tk.Event[ttk.Combobox]") -> str:
+        # The combobox's own wheel binding would switch the selected step.
+        self._scroll_page(event)
+        return "break"
+
+    def _scroll_page(self, event: "tk.Event[tk.Misc] | tk.Event[ttk.Combobox]") -> None:
+        # Shift+wheel is a horizontal swipe (macOS trackpads): no vertical scroll.
+        # (state is a string only for events that are not key or button ones.)
+        if isinstance(event.state, int) and event.state & _SHIFT_MASK:
+            return
+        if event.num == 4:
+            units = -1
+        elif event.num == 5:
+            units = 1
+        elif sys.platform == "darwin":
+            units = -event.delta
+        else:
+            # Windows: 120 per notch; precision touchpads send smaller deltas.
+            self._wheel_rest += event.delta
+            notches = int(self._wheel_rest / _WHEEL_DELTA)
+            self._wheel_rest -= notches * _WHEEL_DELTA
+            units = -notches * _WHEEL_NOTCH_STEPS
+        if units:
+            self._canvas.yview_scroll(units, "units")
 
     def _build_ask(self, body: "ttk.Frame", *, row: int) -> None:
         """The collapsible "Ask the AI" section (only when questions work)."""
@@ -639,6 +738,8 @@ class PersonWindowApp:
                 self._set_ask_status("", _OK_COLOR)
             view.rendered = key
             self._load_draft()
+            # A new step or round starts at the top.
+            self._canvas.yview_moveto(0.0)
         self._render_picker(step)
         if step is None:
             self._header.configure(text="Nothing is waiting for you right now.")
