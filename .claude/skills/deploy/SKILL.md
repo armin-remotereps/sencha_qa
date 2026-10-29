@@ -83,7 +83,7 @@ ssh -o BatchMode=yes RRAutoTester 'cd ~/sencha_qa && docker compose up -d nginx 
 ## 6. Verify
 
 ```bash
-ssh -o BatchMode=yes RRAutoTester 'cd ~/sencha_qa && sleep 5 && docker compose ps --format "{{.Service}} {{.State}} {{.Status}}" && docker compose logs --since 2m api execution-celery notify-celery 2>&1 | grep -iE "error|traceback|exception" | grep -v VISION_WORKER | head'
+ssh -o BatchMode=yes RRAutoTester 'cd ~/sencha_qa && sleep 5 && docker compose ps --format "{{.Service}} {{.State}} {{.Status}}" && docker compose logs --since 2m api execution-celery notify-celery assist-celery 2>&1 | grep -iE "error|traceback|exception" | grep -v VISION_WORKER | head'
 curl -s -o /dev/null -w "%{http_code}\n" https://sench.remotereps.com/accounts/login/
 ```
 

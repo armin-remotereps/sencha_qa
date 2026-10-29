@@ -102,6 +102,7 @@ from projects.case_step_progress import (
     case_step_payload,
     pivot_step_payload,
 )
+from projects.case_task_text import build_task_description
 from projects.case_teardown_policy import needs_teardown
 from projects.checked_push_limits import is_checked_push_live
 from projects.controller_outage_clock import agent_monotonic, reset_outage_clock
@@ -259,7 +260,9 @@ def duplicate_project(
     *, source_project: Project, user: CustomUser, name: str
 ) -> Project:
     """Copies tags and test cases (without upload association) from the source."""
-    new_project = Project.objects.create(name=name)
+    new_project = Project.objects.create(
+        name=name, default_help_mode=source_project.default_help_mode
+    )
     _sync_tags(new_project, list(source_project.tags.values_list("name", flat=True)))
     new_project.members.add(user)
     source_cases = TestCase.objects.filter(project=source_project)
@@ -2267,7 +2270,9 @@ def list_completed_uploads_for_project(*, project: Project) -> QuerySet[TestCase
 def create_test_run_with_cases(
     *, project: Project, test_case_ids: list[int], name: str = ""
 ) -> TestRun:
-    test_run = TestRun.objects.create(project=project, name=name)
+    test_run = TestRun.objects.create(
+        project=project, name=name, help_mode=project.default_help_mode
+    )
     valid_cases = TestCase.objects.filter(id__in=test_case_ids, project=project).only(
         "id", "testrail_source_run_id"
     )
@@ -2668,8 +2673,8 @@ def rerun_cases(test_run: TestRun, scope: RerunScope) -> TestRun:
 
     new_run = TestRun.objects.create(
         project=test_run.project,
-        # Pre-selects the source run's mode at Start.
-        help_mode=test_run.help_mode,
+        # A new run takes the project mode (Start pre-selects it).
+        help_mode=test_run.project.default_help_mode,
         name=f"{test_run.display_name} — {scope.value} rerun",
         testrail_project_id=test_run.testrail_project_id,
         testrail_suite_id=test_run.testrail_suite_id,
@@ -3115,7 +3120,7 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
 
         on_log = _build_log_callback(pivot, generation)
         on_screenshot = _build_screenshot_callback(pivot, generation)
-        task_description = _build_task_description(pivot.test_case)
+        task_description = build_task_description(pivot.test_case)
 
         project.refresh_from_db(
             fields=["project_prompt", "application_url", "application_platform"]
@@ -3403,17 +3408,6 @@ def _persist_screenshot(
         step_num=step_num,
     )
     _broadcast_screenshot(pivot, screenshot)
-
-
-def _build_task_description(test_case: TestCase) -> str:
-    parts: list[str] = [f"Test Case: {test_case.title}"]
-    if test_case.preconditions:
-        parts.append(f"\nPreconditions:\n{test_case.preconditions}")
-    if test_case.steps:
-        parts.append(f"\nSteps:\n{test_case.steps}")
-    if test_case.expected:
-        parts.append(f"\nExpected Result:\n{test_case.expected}")
-    return "\n".join(parts)
 
 
 def _finalize_pivot(pivot: TestRunTestCase, result: AgentResult) -> None:

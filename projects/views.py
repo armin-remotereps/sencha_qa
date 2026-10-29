@@ -70,6 +70,7 @@ from projects.forms import (
     CaseResumeForm,
     ContextRestoreForm,
     HelpReturnForm,
+    PersonStepQuestionForm,
     PersonStepReportForm,
     ProjectForm,
     RunCaseSelectionForm,
@@ -1074,9 +1075,10 @@ def test_run_case_detail(
             "help_requests": list_case_help_requests(pivot),
             # Human in the loop: the step this case waits on a person for.
             "person_step_panel": get_person_step_panel(
-                pivot.test_run, project, pivot=pivot
+                pivot.test_run, project, pivot=pivot, include_questions=True
             ),
             "person_step_form": PersonStepReportForm(),
+            "person_step_question_form": PersonStepQuestionForm(),
             # The agent's suggested note is shown, never pre-filled: the
             # Continue note reaches the tester as the person's own words.
             # The draft is only summarised here, so it is not applied by default.
@@ -1601,8 +1603,8 @@ def _handle_setup_run_submit(
         name=form.cleaned_data["name"],
     )
     try:
-        # The wizard has no mode choice: a first run is attended.
-        start_test_run(test_run, user=request.user, help_mode=RunHelpMode.ATTENDED)
+        # The wizard has no mode choice: the run keeps the project's run mode.
+        start_test_run(test_run, user=request.user, help_mode=None)
     except HelpModeNotAllowedError as exc:
         messages.error(request, exc.message)
     except ValueError as exc:

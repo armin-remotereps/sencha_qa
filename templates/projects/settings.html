@@ -1,7 +1,7 @@
 {% extends "layouts/project.html" %}
 
-{% comment %} Project settings tab: the Members card (invite by email, leave) and
-   the TestRail integration used by "Import from TestRail account".
+{% comment %} Project settings tab: the Members card (invite by email, leave), the
+   project Run mode card and the TestRail integration used by "Import from TestRail account".
 
    Context contract (projects.testrail_views.render_project_settings):
      project      — current Project
@@ -15,6 +15,11 @@
      invite_form  — ProjectMemberInviteForm (email, read_only checkbox)
      role_form    — unbound ProjectMemberRoleForm; its role choices fill each
                     row's select, which posts `role` to projects:member_role
+     run_mode_form — ProjectRunModeForm (help_mode, apply_to); unbound with
+                    initial = the project mode, or bound after an invalid post
+     run_mode_label — label of project.default_help_mode
+     can_change_run_mode — bool, superuser and writable member: the Run mode
+                    card shows the form, else the mode as text
      project_can_write (context processor) — false hides the invite form,
                     role selects and the TestRail forms; a read-only member
                     sees the members table and Leave only. {% endcomment %}
@@ -123,6 +128,57 @@
   {% url 'projects:leave' project.id as leave_url %}
   {% include "partials/confirm_dialog.html" with dialog_id="leave-project" title="Leave this project?" body="You lose access to this project and stop getting its notifications. Another member can add you again." confirm_label="Leave project" action_url=leave_url csrf_token=csrf_token only %}
 {% endif %}
+
+<div class="card" id="run-mode">
+  <div class="card-header">
+    <h2>Run mode</h2>
+    <span class="badge badge-draft">{{ run_mode_label }}</span>
+  </div>
+  {% if can_change_run_mode %}
+  <p class="muted">
+    Every new run in this project starts in this mode. A superuser can still
+    pick another mode for a single run when starting, resuming or re-running it.
+  </p>
+  <form method="post" action="{% url 'projects:settings_run_mode' project.id %}" novalidate
+        x-data="{ applyTo: '' }"
+        x-init="applyTo = ($el.querySelector('input[name=apply_to]:checked') || {}).value || ''">
+    {% csrf_token %}
+    {% include "partials/form_field.html" with field=run_mode_form.help_mode only %}
+    <fieldset class="radio-card-stack">
+      <legend class="label">{{ run_mode_form.apply_to.label }}</legend>
+      {% for value, label in run_mode_form.fields.apply_to.choices %}
+      <label class="radio-card" :class="{ selected: applyTo === '{{ value }}' }">
+        <input type="radio" name="apply_to" value="{{ value }}" x-model="applyTo"{% if value == run_mode_form.apply_to.value %} checked{% endif %}>
+        <div>
+          <div class="radio-title">{{ label }}</div>
+          <div class="muted small">
+            {% if value == "new_only" %}
+            Existing runs keep their mode.
+            {% elif value == "drafts" %}
+            Runs that have not started yet switch too.
+            {% elif value == "open" %}
+            Running and paused runs switch as well. Leaving Human in the loop hands a step waiting for a person back to the agent; a paused run switched to Night may start an auto-fix.
+            {% else %}
+            Finished runs switch as well, so a later Resume or Re-run uses this mode.
+            {% endif %}
+          </div>
+        </div>
+      </label>
+      {% endfor %}
+      {% for error in run_mode_form.apply_to.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+    </fieldset>
+    {% for error in run_mode_form.non_field_errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+    <div class="dialog-actions">
+      <button class="btn btn-primary" type="submit">Save</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="muted">
+    New runs in this project use: <strong>{{ run_mode_label }}</strong>.
+    Only a superuser can change it.
+  </p>
+  {% endif %}
+</div>
 
 {% if project_can_write %}
 <div class="card">

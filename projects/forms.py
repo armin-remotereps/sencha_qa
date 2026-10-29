@@ -15,11 +15,13 @@ from projects.case_checkpoint_services import ResumeStepOption
 from projects.models import (
     HELP_NOTE_MAX_LENGTH,
     PERSON_STEP_OUTPUT_MAX_LENGTH,
+    PERSON_STEP_QUESTION_MAX_LENGTH,
     PROJECT_PROMPT_MAX_LENGTH,
     ApplicationPlatform,
     PersonStepOutcome,
     Project,
     ProjectRole,
+    ProjectRunModeScope,
     RunHelpMode,
     TestCaseData,
     TestCasePriority,
@@ -307,7 +309,7 @@ class TestRunStartForm(forms.Form):
     help_mode = forms.ChoiceField(
         label="When a case needs help",
         choices=RunHelpMode.choices,
-        initial=RunHelpMode.ATTENDED,
+        initial=RunHelpMode.HUMAN_IN_THE_LOOP,
         required=False,
         widget=forms.RadioSelect,
         error_messages={"invalid_choice": _HELP_MODE_INVALID},
@@ -347,6 +349,38 @@ class RunHelpModeChangeForm(forms.Form):
             "invalid_choice": _HELP_MODE_INVALID,
         },
     )
+
+
+class ProjectRunModeForm(forms.Form):
+    """A superuser sets the project's run mode and which existing runs follow it."""
+
+    help_mode = forms.ChoiceField(
+        label="Run mode",
+        choices=RunHelpMode.choices,
+        widget=forms.Select(attrs={"class": "select"}),
+        error_messages={
+            "required": "Choose a run mode.",
+            "invalid_choice": _HELP_MODE_INVALID,
+        },
+    )
+    apply_to = forms.ChoiceField(
+        label="Apply to",
+        choices=[
+            (ProjectRunModeScope.NEW_ONLY.value, "New runs only"),
+            (ProjectRunModeScope.DRAFTS.value, "New runs and drafts"),
+            (ProjectRunModeScope.OPEN.value, "Also running and paused runs"),
+            (ProjectRunModeScope.ALL.value, "All runs, including finished ones"),
+        ],
+        initial=ProjectRunModeScope.DRAFTS.value,
+        widget=forms.RadioSelect,
+        error_messages={
+            "required": "Choose which runs to apply the mode to.",
+            "invalid_choice": "Choose which runs to apply the mode to.",
+        },
+    )
+
+    def clean_apply_to(self) -> ProjectRunModeScope:
+        return ProjectRunModeScope(self.cleaned_data["apply_to"])
 
 
 class CaseHelpResolutionForm(forms.Form):
@@ -432,6 +466,28 @@ class PersonStepReportForm(forms.Form):
         return cleaned_data
 
 
+class PersonStepQuestionForm(forms.Form):
+    """A person's question to the AI about the step waiting for them."""
+
+    # The open step the card was rendered for; the service refuses a stale id.
+    person_step_id = forms.IntegerField(
+        min_value=1, max_value=_MAX_BIGINT, widget=forms.HiddenInput
+    )
+    question = forms.CharField(
+        label="Ask the AI about this step",
+        max_length=PERSON_STEP_QUESTION_MAX_LENGTH,
+        strip=True,
+        widget=forms.Textarea(
+            attrs={
+                "class": "textarea",
+                "rows": 3,
+                "placeholder": "For example: how do I do this on this machine?",
+            }
+        ),
+        error_messages={"required": "Type a question."},
+    )
+
+
 class PersonStepDecisionForm(forms.Form):
     """Overrule / Mark failed / Mark blocked on a person step, with an optional note."""
 
@@ -500,6 +556,20 @@ class RunnerPersonStepActionForm(forms.Form):
         if outcome == PersonStepOutcome.DIFFERENT and not cleaned_data.get("note"):
             self.add_error("note", "Describe what was different.")
         return cleaned_data
+
+
+class RunnerPersonStepQuestionForm(forms.Form):
+    """A person's question to the AI sent from the Test Runner window.
+
+    Fed from the ``person_step_question`` message (not a rendered form). The
+    same rules as ``PersonStepQuestionForm``; an over-long question is refused,
+    not cut.
+    """
+
+    person_step_id = forms.IntegerField(min_value=1, max_value=_MAX_BIGINT)
+    # The round the window showed; ``CasePersonStep.round`` is a small int.
+    round = forms.IntegerField(min_value=1, max_value=_MAX_SMALLINT)
+    question = _WireTextField(max_length=PERSON_STEP_QUESTION_MAX_LENGTH, strip=True)
 
 
 class HelpReturnForm(forms.Form):

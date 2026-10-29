@@ -24,6 +24,7 @@ from agents.types import (
     HelpSource,
     OrchestratorCheckpoint,
     OrchestratorPhase,
+    PersonHowToItem,
     PersonReportOutcome,
     PersonStepCheckpointState,
     PersonStepHandOff,
@@ -241,7 +242,7 @@ def clear_help_continue_pending(checkpoint_json: object) -> dict[str, object]:
 
 def person_step_to_json(person: CheckpointPersonStep) -> dict[str, object]:
     hand_off = person.hand_off
-    return {
+    data: dict[str, object] = {
         "step_num": hand_off.step_num,
         "kind": hand_off.kind,
         "instruction": hand_off.instruction,
@@ -260,6 +261,12 @@ def person_step_to_json(person: CheckpointPersonStep) -> dict[str, object]:
         "reported_at": person.reported_at.isoformat() if person.reported_at else None,
         "continue_pending": person.continue_pending,
     }
+    # Optional: written only when present, so older parsers see no change.
+    if hand_off.how_to:
+        data["how_to"] = [
+            {"text": item.text, "command": item.command} for item in hand_off.how_to
+        ]
+    return data
 
 
 def read_checkpoint_person_step(
@@ -504,6 +511,7 @@ def _parse_person(value: object) -> CheckpointPersonStep | None:
             expected_result=_str_or_empty(item.get("expected_result")),
             command=_str_or_empty(item.get("command")),
             objection=_str_or_empty(item.get("objection")),
+            how_to=_parse_how_to(item.get("how_to")),
         ),
         request_id=_parse_positive_int(item.get("request_id")),
         state=cast(PersonStepCheckpointState, state),
@@ -517,6 +525,25 @@ def _parse_person(value: object) -> CheckpointPersonStep | None:
         reported_at=_parse_datetime(item.get("reported_at")),
         continue_pending=item.get("continue_pending") is True,
     )
+
+
+def _parse_how_to(value: object) -> tuple[PersonHowToItem, ...]:
+    # Absent from checkpoints written before the how-to existed; a malformed
+    # item is dropped on its own, never the hand-off.
+    if not isinstance(value, list):
+        return ()
+    items: list[PersonHowToItem] = []
+    for raw in cast(list[object], value):
+        if not isinstance(raw, dict):
+            logger.warning("Dropping malformed how-to item: not an object")
+            continue
+        entry = cast(dict[str, object], raw)
+        text, command = entry.get("text"), entry.get("command", "")
+        if not isinstance(text, str) or not text or not isinstance(command, str):
+            logger.warning("Dropping malformed how-to item: bad text or command")
+            continue
+        items.append(PersonHowToItem(text=text, command=command))
+    return tuple(items)
 
 
 def _str_or_empty(value: object) -> str:

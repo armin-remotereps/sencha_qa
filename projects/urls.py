@@ -4,7 +4,9 @@ from django.urls import URLPattern, path
 
 from projects import (
     member_views,
+    person_step_question_views,
     person_step_views,
+    project_run_mode_views,
     runner_update_views,
     testrail_views,
     views,
@@ -74,6 +76,11 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/settings/members/<int:user_id>/role/",
         member_views.member_role,
         name="member_role",
+    ),
+    path(
+        "<int:project_id>/settings/run-mode/",
+        project_run_mode_views.settings_run_mode,
+        name="settings_run_mode",
     ),
     path("<int:project_id>/leave/", member_views.project_leave, name="leave"),
     path(
@@ -326,6 +333,11 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/person-step/block/",
         person_step_views.test_run_case_person_block,
         name="test_run_case_person_block",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/person-step/ask/",
+        person_step_question_views.test_run_case_person_ask,
+        name="test_run_case_person_ask",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:test_case_id>/edit/",

@@ -9,7 +9,7 @@ key. Leaf module: models, ``agents.checkpoint`` and ``agents.os_shell`` only
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from datetime import datetime
 from typing import Literal
@@ -27,6 +27,7 @@ from agents.types import (
     CheckpointPersonStep,
     HandOffKind,
     OrchestratorCheckpoint,
+    PersonHowToItem,
     PersonStepHandOff,
     SubTaskAttempt,
 )
@@ -35,6 +36,9 @@ from projects.models import (
     PERSON_STEP_AGENT_TEXT_MAX_LENGTH,
     PERSON_STEP_COMMAND_MAX_LENGTH,
     PERSON_STEP_EXPECTED_MAX_LENGTH,
+    PERSON_STEP_HOW_TO_COMMAND_MAX_LENGTH,
+    PERSON_STEP_HOW_TO_MAX_ITEMS,
+    PERSON_STEP_HOW_TO_TEXT_MAX_LENGTH,
     PERSON_STEP_INSTRUCTION_MAX_LENGTH,
     CasePersonStep,
     PersonStepClose,
@@ -45,6 +49,7 @@ from projects.models import (
 logger = logging.getLogger(__name__)
 
 _FALLBACK_OBJECTION = "The agent could not confirm the reported result."
+_HAND_OFF_KINDS: tuple[HandOffKind, ...] = ("interactive", "command", "restore")
 
 
 def cap_text(text: str, limit: int) -> str:
@@ -53,6 +58,52 @@ def cap_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
+
+
+def how_to_rows(how_to: Sequence[PersonHowToItem]) -> list[dict[str, str]]:
+    """``CasePersonStep.how_to`` for a hand-off's items, capped again.
+
+    Items without text are dropped; a command keeps its first line only.
+    """
+    rows: list[dict[str, str]] = []
+    for item in how_to:
+        text = cap_text(item.text, PERSON_STEP_HOW_TO_TEXT_MAX_LENGTH)
+        if not text:
+            continue
+        command_lines = item.command.strip().splitlines()
+        command = (
+            cap_text(command_lines[0], PERSON_STEP_HOW_TO_COMMAND_MAX_LENGTH)
+            if command_lines
+            else ""
+        )
+        rows.append({"text": text, "command": command})
+        if len(rows) >= PERSON_STEP_HOW_TO_MAX_ITEMS:
+            break
+    return rows
+
+
+def stored_how_to(value: object) -> tuple[PersonHowToItem, ...]:
+    """A row's stored ``how_to`` as items; malformed entries are skipped."""
+    if not isinstance(value, list):
+        return ()
+    items: list[PersonHowToItem] = []
+    for entry in value[:PERSON_STEP_HOW_TO_MAX_ITEMS]:
+        if not isinstance(entry, dict):
+            continue
+        text = entry.get("text")
+        command = entry.get("command", "")
+        if not isinstance(text, str) or not text or not isinstance(command, str):
+            continue
+        items.append(PersonHowToItem(text=text, command=command))
+    return tuple(items)
+
+
+def stored_hand_off_kind(kind: str) -> HandOffKind:
+    """A row's stored ``kind`` as a hand-off kind ("interactive" if unknown)."""
+    for known in _HAND_OFF_KINDS:
+        if kind == known:
+            return known
+    return "interactive"
 
 
 def command_shell_label(kind: HandOffKind, system_info: object) -> str:
@@ -316,10 +367,11 @@ def open_person_step_row(
 
     A ``reported`` row of the same step means the agent could not confirm the
     report: the row is reused (``not_confirmed``, next round, the objection)
-    and pushed. A ``waiting`` or ``not_confirmed`` row of the same step is a
-    re-entry and is kept as it is. Any other open row is cancelled and a new
-    row opened, pushed unless it plainly follows a step passed in this
-    execution segment (``segment_started_at``). The caller holds the run lock.
+    and pushed; it keeps its stored ``how_to``. A ``waiting`` or
+    ``not_confirmed`` row of the same step is a re-entry and is kept as it
+    is. Any other open row is cancelled and a new row opened, pushed unless
+    it plainly follows a step passed in this execution segment
+    (``segment_started_at``). The caller holds the run lock.
     """
     instruction = cap_text(hand_off.instruction, PERSON_STEP_INSTRUCTION_MAX_LENGTH)
     expected = cap_text(hand_off.expected_result, PERSON_STEP_EXPECTED_MAX_LENGTH)
@@ -381,6 +433,7 @@ def open_person_step_row(
         expected_result=expected,
         command=command,
         shell_label=shell_label,
+        how_to=how_to_rows(hand_off.how_to),
         agent_objection=cap_text(hand_off.objection, PERSON_STEP_AGENT_TEXT_MAX_LENGTH),
     )
     return row, push

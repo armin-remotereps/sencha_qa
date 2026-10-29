@@ -17,18 +17,23 @@ from typing import Final
 from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
     PERSON_STEP_ACTION_MAX_BYTES,
+    PERSON_STEP_QUESTION_MAX_BYTES,
     PERSON_STEP_RESULT_MESSAGE_MAX_CHARS,
     PersonStepActionPayload,
+    PersonStepQuestionAskPayload,
     PersonStepStatePayload,
     parse_person_step_action_payload,
+    parse_person_step_question_payload,
     parse_person_step_state_payload,
 )
 
 # Largest runner -> window line. A full snapshot (5 steps at the protocol's
 # display caps, every character escaped) stays well below it.
 IPC_TO_WINDOW_MAX_BYTES: Final[int] = 2 * 1024 * 1024
-# Largest window -> runner line: one answer (note + output) at most.
-IPC_TO_RUNNER_MAX_BYTES: Final[int] = PERSON_STEP_ACTION_MAX_BYTES
+# Largest window -> runner line: one answer (note + output) or one question.
+IPC_TO_RUNNER_MAX_BYTES: Final[int] = max(
+    PERSON_STEP_ACTION_MAX_BYTES, PERSON_STEP_QUESTION_MAX_BYTES
+)
 
 _MAX_SEQ: Final[int] = 2**31 - 1
 
@@ -39,12 +44,14 @@ class WindowIpcType(StrEnum):
     SHOW = "show"
     HIDE = "hide"
     RESULT = "result"
+    QUESTION_RESULT = "question_result"
     CONNECTION = "connection"
     QUIT = "quit"
     # window -> runner
     READY = "ready"
     HIDDEN = "hidden"
     ACTION = "action"
+    QUESTION = "question"
     CLOSED_BY_USER = "closed_by_user"
 
 
@@ -56,6 +63,8 @@ class StateCommand:
     """Replace the window's steps (newest first); empty hides the window."""
 
     steps: tuple[PersonStepStatePayload, ...]
+    # The server takes questions (PERSON_STEP_ASSIST_V1): show the Ask AI box.
+    questions_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -79,6 +88,18 @@ class ResultCommand:
 
 
 @dataclass(frozen=True)
+class QuestionResultCommand:
+    """The server's acknowledgement of the person's last question.
+
+    The answer itself arrives later in a ``StateCommand`` (the step's
+    ``questions``).
+    """
+
+    ok: bool
+    message: str
+
+
+@dataclass(frozen=True)
 class ConnectionCommand:
     connected: bool
 
@@ -93,6 +114,7 @@ WindowCommand = (
     | ShowCommand
     | HideCommand
     | ResultCommand
+    | QuestionResultCommand
     | ConnectionCommand
     | QuitCommand
 )
@@ -119,11 +141,18 @@ class ActionEvent:
 
 
 @dataclass(frozen=True)
+class QuestionEvent:
+    """The person asked the AI about a step; the window stays visible."""
+
+    question: PersonStepQuestionAskPayload
+
+
+@dataclass(frozen=True)
 class ClosedByUserEvent:
     """The person closed the window; it stays hidden until a new step."""
 
 
-WindowEvent = ReadyEvent | HiddenEvent | ActionEvent | ClosedByUserEvent
+WindowEvent = ReadyEvent | HiddenEvent | ActionEvent | QuestionEvent | ClosedByUserEvent
 
 
 # --- encoding ---------------------------------------------------------------
@@ -172,6 +201,13 @@ def _bool(data: dict[str, object], field: str) -> bool:
     return value
 
 
+def _message(data: dict[str, object]) -> str:
+    message = data.get("message", "")
+    if not isinstance(message, str):
+        raise ProtocolError("Invalid window message: 'message' not a string")
+    return message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS]
+
+
 def _seq(data: dict[str, object]) -> int:
     value = data.get("seq")
     if (
@@ -191,10 +227,11 @@ def next_seq(seq: int) -> int:
 def encode_command(command: WindowCommand) -> bytes:
     payload: dict[str, object]
     match command:
-        case StateCommand(steps=steps):
+        case StateCommand(steps=steps, questions_enabled=questions_enabled):
             payload = {
                 "type": WindowIpcType.STATE.value,
                 "steps": [step.to_wire() for step in steps],
+                "questions_enabled": questions_enabled,
             }
         case ShowCommand():
             payload = {"type": WindowIpcType.SHOW.value}
@@ -203,6 +240,12 @@ def encode_command(command: WindowCommand) -> bytes:
         case ResultCommand(ok=ok, message=message):
             payload = {
                 "type": WindowIpcType.RESULT.value,
+                "ok": ok,
+                "message": message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
+            }
+        case QuestionResultCommand(ok=ok, message=message):
+            payload = {
+                "type": WindowIpcType.QUESTION_RESULT.value,
                 "ok": ok,
                 "message": message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
             }
@@ -218,19 +261,18 @@ def decode_command(line: bytes) -> WindowCommand:
     kind, data = _decode(line, IPC_TO_WINDOW_MAX_BYTES)
     match kind:
         case WindowIpcType.STATE:
-            return StateCommand(steps=parse_person_step_state_payload(data).steps)
+            state = parse_person_step_state_payload(data)
+            return StateCommand(
+                steps=state.steps, questions_enabled=state.questions_enabled
+            )
         case WindowIpcType.SHOW:
             return ShowCommand()
         case WindowIpcType.HIDE:
             return HideCommand(seq=_seq(data))
         case WindowIpcType.RESULT:
-            message = data.get("message", "")
-            if not isinstance(message, str):
-                raise ProtocolError("Invalid window message: 'message' not a string")
-            return ResultCommand(
-                ok=_bool(data, "ok"),
-                message=message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
-            )
+            return ResultCommand(ok=_bool(data, "ok"), message=_message(data))
+        case WindowIpcType.QUESTION_RESULT:
+            return QuestionResultCommand(ok=_bool(data, "ok"), message=_message(data))
         case WindowIpcType.CONNECTION:
             return ConnectionCommand(connected=_bool(data, "connected"))
         case WindowIpcType.QUIT:
@@ -255,6 +297,13 @@ def encode_event(event: WindowEvent) -> bytes:
                 "note": action.note,
                 "output": action.output,
             }
+        case QuestionEvent(question=question):
+            payload = {
+                "type": WindowIpcType.QUESTION.value,
+                "person_step_id": question.person_step_id,
+                "round": question.round,
+                "question": question.question,
+            }
         case ClosedByUserEvent():
             payload = {"type": WindowIpcType.CLOSED_BY_USER.value}
     return _encode(payload, IPC_TO_RUNNER_MAX_BYTES)
@@ -263,8 +312,9 @@ def encode_event(event: WindowEvent) -> bytes:
 def decode_event(line: bytes) -> WindowEvent:
     """Parse one window -> runner line (runner side); ProtocolError if invalid.
 
-    An action is validated with the shared protocol parser (caps, outcome,
-    note required for "different"), exactly as the server will.
+    An action or a question is validated with the shared protocol parser
+    (caps, outcome, note required for "different", a non-empty question),
+    exactly as the server will.
     """
     kind, data = _decode(line, IPC_TO_RUNNER_MAX_BYTES)
     match kind:
@@ -274,6 +324,8 @@ def decode_event(line: bytes) -> WindowEvent:
             return HiddenEvent(seq=_seq(data))
         case WindowIpcType.ACTION:
             return ActionEvent(action=parse_person_step_action_payload(data))
+        case WindowIpcType.QUESTION:
+            return QuestionEvent(question=parse_person_step_question_payload(data))
         case WindowIpcType.CLOSED_BY_USER:
             return ClosedByUserEvent()
     raise ProtocolError(f"Not a window event: {kind.value}")

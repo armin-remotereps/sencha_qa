@@ -27,7 +27,7 @@ from django.utils import timezone
 from agents.checkpoint import read_checkpoint_person_step, with_person_step
 from agents.types import (
     CheckpointPersonStep,
-    HandOffKind,
+    PersonHowToItem,
     PersonReportOutcome,
     PersonStepHandOff,
 )
@@ -54,6 +54,12 @@ from projects.models import (
     TestRunTestCaseStatus,
 )
 from projects.person_step_actor import PersonStepActor
+from projects.person_step_question_services import (
+    PersonStepAskState,
+    get_person_step_ask_state,
+)
+from projects.person_step_question_view import PersonStepQuestionView
+from projects.person_step_rows import stored_hand_off_kind, stored_how_to
 from projects.run_reopen_services import (
     list_reopen_blockers,
     lock_project_and_run,
@@ -75,7 +81,6 @@ _ACTIONABLE_STATUSES: tuple[str, ...] = (
     PersonStepStatus.NOT_CONFIRMED,
 )
 _OUTPUT_OMITTED = "\n… output shortened …\n"
-_HAND_OFF_KINDS: tuple[HandOffKind, ...] = ("interactive", "command", "restore")
 
 
 @dataclass(frozen=True)
@@ -107,6 +112,19 @@ class PersonStepPanel:
     # The member who reported the step (name, else email); blank before a
     # report and for an anonymous Test Runner report. Never runner-sent text.
     reporter_label: str
+    # The model-written "How to do it" items (commands are AI suggestions).
+    how_to: tuple[PersonHowToItem, ...]
+    # The step has a command to run (case-stated or suggested): the report
+    # form asks for the pasted output.
+    has_commands: bool
+    # Ask AI: the newest questions of the step, oldest first.
+    questions: tuple[PersonStepQuestionView, ...]
+    # A person may ask the AI about the step now.
+    can_ask: bool
+    # Why not (user-safe); "" when ``can_ask``.
+    ask_blocker: str
+    # A fresh pending question is the only ask blocker (False without questions).
+    has_pending: bool
 
     @property
     def holds_run(self) -> bool:
@@ -138,13 +156,17 @@ def get_person_step_panel(
     *,
     pivot: TestRunTestCase | None = None,
     blockers: Sequence[str] | None = None,
+    include_questions: bool = False,
 ) -> PersonStepPanel | None:
     """The person step panel of an active run; None (no queries) otherwise.
 
     The run's open step (``waiting``, ``not_confirmed``, or ``reported`` while
     the agent confirms it, which also happens after the run was re-queued).
-    One query (with the reporter joined), plus the reopen gates while the run is PAUSED unless the caller
-    passes them as ``blockers`` (``list_reopen_blockers``).
+    One query (with the reporter joined), plus the reopen gates while the run
+    is PAUSED unless the caller passes them as ``blockers``
+    (``list_reopen_blockers``). With ``include_questions`` (the case card; the
+    run banner never shows Ask AI) one more for the step's questions;
+    without, ``questions`` is empty and ``can_ask`` False.
 
     With ``pivot`` (the case page, which already loaded it with its checkpoint
     and test case): only that case's step, attached to ``pivot``, labelled
@@ -182,6 +204,14 @@ def get_person_step_panel(
     elif blockers is None:
         blockers = list_reopen_blockers(test_run, project)
     not_confirmed = step.status == PersonStepStatus.NOT_CONFIRMED
+    how_to = stored_how_to(step.how_to)
+    ask = (
+        get_person_step_ask_state(step, run_paused=paused)
+        if include_questions
+        else PersonStepAskState(
+            questions=(), can_ask=False, ask_blocker="", has_pending=False
+        )
+    )
     return PersonStepPanel(
         step=step,
         step_label=step_label,
@@ -194,6 +224,12 @@ def get_person_step_panel(
         runner_can_answer=paused and is_open and _runner_shows_steps(project),
         reported_at_runner=step.reported_via == PersonStepChannel.RUNNER,
         reporter_label=person_label(step.reported_by),
+        how_to=how_to,
+        has_commands=bool(step.command) or any(item.command for item in how_to),
+        questions=ask.questions,
+        can_ask=ask.can_ask,
+        ask_blocker=ask.ask_blocker,
+        has_pending=ask.has_pending,
     )
 
 
@@ -507,11 +543,12 @@ def _checkpoint_person(
     return CheckpointPersonStep(
         hand_off=PersonStepHandOff(
             step_num=step.step_num,
-            kind=_hand_off_kind(step.kind),
+            kind=stored_hand_off_kind(step.kind),
             instruction=step.instruction,
             expected_result=step.expected_result,
             command=step.command,
             objection=step.agent_objection,
+            how_to=stored_how_to(step.how_to),
         ),
         request_id=step.pk,
         state="waiting",
@@ -644,13 +681,6 @@ def _parse_outcome(outcome: str) -> PersonReportOutcome:
 
 def _stored_outcome(step: CasePersonStep) -> PersonReportOutcome | None:
     return _parse_outcome(step.outcome) if step.outcome else None
-
-
-def _hand_off_kind(kind: str) -> HandOffKind:
-    for known in _HAND_OFF_KINDS:
-        if kind == known:
-            return known
-    return "interactive"
 
 
 def _open_objection(step: CasePersonStep) -> str:

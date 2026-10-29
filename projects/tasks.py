@@ -8,6 +8,7 @@ from celery import shared_task
 from celery.app.task import Task
 from celery.exceptions import SoftTimeLimitExceeded
 from channels.layers import get_channel_layer
+from django.conf import settings
 from django.db import transaction
 
 from projects.checked_push_limits import (
@@ -22,6 +23,10 @@ from projects.models import (
     TestCaseUpload,
     TestRun,
     UploadStatus,
+)
+from projects.person_step_question_services import (
+    ANSWER_PERSON_STEP_QUESTION_TASK,
+    answer_person_step_question_now,
 )
 from projects.prompt_refiner import refine_project_prompt
 from projects.services import _agent_status_group, save_project_prompt
@@ -363,6 +368,18 @@ def refine_project_prompt_task(
             project_id,
         )
         _send_prompt_refined(project_id, error="Refinement service unavailable.")
+
+
+@shared_task(
+    name=ANSWER_PERSON_STEP_QUESTION_TASK,
+    max_retries=0,
+    # A lost task is settled lazily: the next ask fails the stale pending row.
+    soft_time_limit=settings.PERSON_STEP_QUESTION_TIMEOUT_SECONDS + 15,
+    time_limit=settings.PERSON_STEP_QUESTION_TIMEOUT_SECONDS + 45,
+)
+def answer_person_step_question(question_id: int) -> None:
+    """Ask AI: answer one person's question about their step (``assist`` queue)."""
+    answer_person_step_question_now(question_id)
 
 
 def _fetch_test_run(test_run_id: int) -> TestRun | None:

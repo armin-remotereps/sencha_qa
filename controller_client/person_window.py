@@ -18,6 +18,10 @@ before every agent action:
 - A server reply the person must see is shown once when no step is open:
   after that show is hidden (by an agent action or the person) the window
   stays hidden until a new step or round arrives.
+- A question to the AI (``questions()``) never hides the window and never
+  changes when it shows: the person keeps working on the step. Its answer
+  arrives in a later snapshot whose step keys are unchanged, so that snapshot
+  only re-renders the window in place.
 - A dead window process is restarted while a step is open, at most
   ``_MAX_STARTS`` times per ``_START_WINDOW_SECONDS``; then the runner keeps
   working without it (people answer on Punk Hazard).
@@ -43,6 +47,8 @@ from controller_client.person_window_ipc import (
     ConnectionCommand,
     HiddenEvent,
     HideCommand,
+    QuestionEvent,
+    QuestionResultCommand,
     QuitCommand,
     ReadyEvent,
     ResultCommand,
@@ -56,6 +62,8 @@ from controller_client.person_window_ipc import (
 from controller_client.protocol import (
     PersonStepActionPayload,
     PersonStepActionResultPayload,
+    PersonStepQuestionAskPayload,
+    PersonStepQuestionResultPayload,
     PersonStepStatePayload,
 )
 
@@ -87,6 +95,10 @@ _REFUSED_STALE: Final[str] = "This step was already answered or is no longer wai
 _REFUSED_INVALID: Final[str] = (
     "The window sent an answer the Test Runner could not read. Answer on "
     "Punk Hazard instead."
+)
+_QUESTION_STALE: Final[str] = "This step is no longer waiting; nothing was asked."
+_QUESTION_UNAVAILABLE: Final[str] = (
+    "Asking the AI is not available on this server; ask on Punk Hazard."
 )
 
 _StepKey = tuple[int, int]
@@ -184,6 +196,8 @@ class PersonWindow:
 
     def __init__(self) -> None:
         self._steps: tuple[PersonStepStatePayload, ...] = ()
+        # The last snapshot said the server takes questions.
+        self._questions_enabled = False
         self._connected = True
         self._process: asyncio.subprocess.Process | None = None
         self._ready = False
@@ -204,6 +218,7 @@ class PersonWindow:
         self._hide_seq = 0
         self._hide_waiters: dict[int, asyncio.Future[None]] = {}
         self._actions: asyncio.Queue[PersonStepActionPayload] = asyncio.Queue()
+        self._questions: asyncio.Queue[PersonStepQuestionAskPayload] = asyncio.Queue()
         self._starts: deque[float] = deque()
         self._disabled = False
         self._stopping = False
@@ -218,15 +233,25 @@ class PersonWindow:
             return None
         return process.pid
 
-    def apply_state(self, steps: Sequence[PersonStepStatePayload]) -> None:
-        """The latest ``person_step_state`` snapshot (newest first)."""
+    def apply_state(
+        self,
+        steps: Sequence[PersonStepStatePayload],
+        *,
+        questions_enabled: bool = False,
+    ) -> None:
+        """The latest ``person_step_state`` snapshot (newest first).
+
+        ``questions_enabled``: the server takes ``person_step_question`` from
+        this runner, so the window offers the Ask AI box.
+        """
         if self._disabled or self._stopping:
             return
         self._steps = tuple(steps)
+        self._questions_enabled = questions_enabled
         keys = {_key(step) for step in self._steps}
         self._suppressed &= keys
         self._shown &= keys
-        self._send(StateCommand(steps=self._steps))
+        self._send(self._state_command())
         if not self._steps:
             # The window hides itself on an empty snapshot.
             self._visible = False
@@ -252,10 +277,22 @@ class PersonWindow:
             self._result_needs_attention = not result.queued
         self._sync_visibility()
 
+    def show_question_result(self, result: PersonStepQuestionResultPayload) -> None:
+        """The server's acknowledgement of the person's last question.
+
+        Never changes visibility: the window stayed up while the person asked.
+        """
+        self._send(QuestionResultCommand(ok=result.ok, message=result.message))
+
     async def actions(self) -> AsyncIterator[PersonStepActionPayload]:
         """Every validated answer the person sends, forever."""
         while True:
             yield await self._actions.get()
+
+    async def questions(self) -> AsyncIterator[PersonStepQuestionAskPayload]:
+        """Every validated question the person asks the AI, forever."""
+        while True:
+            yield await self._questions.get()
 
     @contextlib.asynccontextmanager
     async def hidden_for_action(self) -> AsyncIterator[None]:
@@ -437,7 +474,7 @@ class PersonWindow:
             return
         self._ready = True
         self._send(ConnectionCommand(connected=self._connected))
-        self._send(StateCommand(steps=self._steps))
+        self._send(self._state_command())
         self._sync_visibility()
         while True:
             try:
@@ -451,7 +488,9 @@ class PersonWindow:
                 event = decode_event(line)
             except ProtocolError as e:
                 logger.warning("Invalid message from the person-step window: %s", e)
+                # Either kind of request may be waiting: release both.
                 self._send(ResultCommand(ok=False, message=_REFUSED_INVALID))
+                self._send(QuestionResultCommand(ok=False, message=""))
                 continue
             match event:
                 case HiddenEvent(seq=seq):
@@ -460,6 +499,8 @@ class PersonWindow:
                         waiter.set_result(None)
                 case ActionEvent(action=action):
                     self._on_action(action)
+                case QuestionEvent(question=question):
+                    self._on_question(question)
                 case ClosedByUserEvent():
                     self._visible = False
                     self._result_needs_attention = False
@@ -482,6 +523,25 @@ class PersonWindow:
         # Stay hidden until a new step or round, or a refusal.
         self._suppressed = keys
         self._actions.put_nowait(action)
+
+    def _on_question(self, question: PersonStepQuestionAskPayload) -> None:
+        # The window stays as it is: no hide, no suppression.
+        keys = {_key(step) for step in self._steps}
+        if (question.person_step_id, question.round) not in keys:
+            message = _QUESTION_STALE
+        elif not self._questions_enabled:
+            message = _QUESTION_UNAVAILABLE
+        else:
+            self._questions.put_nowait(question)
+            return
+        self.show_question_result(
+            PersonStepQuestionResultPayload(ok=False, message=message)
+        )
+
+    def _state_command(self) -> StateCommand:
+        return StateCommand(
+            steps=self._steps, questions_enabled=self._questions_enabled
+        )
 
     def _send(self, command: WindowCommand) -> None:
         process = self._process

@@ -194,6 +194,10 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "projects.tasks.import_testrail_run_cases": {"queue": "upload"},
     "projects.tasks.push_test_run_results": {"queue": "upload"},
     "projects.tasks.push_checked_results_to_testrail": {"queue": "upload"},
+    # An LLM call of tens of seconds on its own small queue: not "notify"
+    # (kept quick), not "execution" (may be full of long cases), not "upload"
+    # (a long TestRail import would hold a person waiting on an answer).
+    "projects.tasks.answer_person_step_question": {"queue": "assist"},
     "machine_setup.tasks.run_setup_turn": {"queue": "execution"},
     "machine_setup.tasks.start_case_auto_fix": {"queue": "execution"},
     # Not "execution": it must run when that pool is busy or failing.
@@ -391,6 +395,11 @@ CASE_TEARDOWN_TIMEOUT_SECONDS: int = config(
 # of a step (read-only screenshot and command checks).
 PERSON_STEP_CONFIRM_TIMEOUT_SECONDS: int = config(
     "PERSON_STEP_CONFIRM_TIMEOUT_SECONDS", default=120, cast=int
+)
+# Human in the loop, Ask AI: timeout of the LLM call answering a person's
+# question; a question still pending 60 s past it is failed at the next ask.
+PERSON_STEP_QUESTION_TIMEOUT_SECONDS: int = config(
+    "PERSON_STEP_QUESTION_TIMEOUT_SECONDS", default=120, cast=int
 )
 # Test Runner self-update: an update with no outcome after this long counts as
 # expired. It must outlast the runner's own deadline (UPDATE_MAX_SECONDS), or

@@ -3529,6 +3529,106 @@ details.card[open] > summary,
   font-size: inherit;
 }
 
+/* "How to do it": the AI's numbered advice. A suggested command is dashed
+   and info-tinted so it never reads as the case-stated command above. */
+.person-step-howto {
+  margin: 0 0 14px;
+  padding-left: 22px;
+  display: grid;
+  gap: 10px;
+}
+
+.person-step-howto-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.person-step-suggested {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px dashed var(--info);
+  border-radius: var(--radius-sm);
+  background: var(--info-soft);
+}
+
+.person-step-suggested-tag {
+  color: var(--info);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.person-step-suggested .code-block {
+  margin-bottom: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.person-step-suggested code {
+  background: none;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+
+.person-step-suggested .hint {
+  margin: 0;
+}
+
+/* "Ask the AI about this step": the Q&A list and the ask form. */
+.person-step-ask {
+  margin: 4px 0 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.person-step-qa {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.person-step-qa-item {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+}
+
+.person-step-qa-question,
+.person-step-qa-answer {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.person-step-qa-question {
+  font-weight: 600;
+}
+
+.person-step-qa-item .muted {
+  margin: 2px 0 8px;
+}
+
+.person-step-qa-answer {
+  padding-left: 10px;
+  border-left: 3px solid var(--info);
+}
+
+.person-step-qa-answer.is-pending {
+  color: var(--text-muted);
+  font-style: italic;
+  border-left-color: var(--border-strong);
+}
+
+.person-step-qa-answer.is-failed {
+  color: var(--warning);
+  border-left-color: var(--warning);
+}
+
 .person-step-outcome {
   display: grid;
   gap: 8px;

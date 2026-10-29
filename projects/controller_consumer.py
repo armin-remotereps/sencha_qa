@@ -12,18 +12,22 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
     PERSON_STEP_ACTION_MAX_BYTES,
+    PERSON_STEP_QUESTION_MAX_BYTES,
     ClientCapability,
     CloseCode,
     ErrorCode,
     MessageType,
     PersonStepActionKind,
     PersonStepActionResultPayload,
+    PersonStepQuestionAskPayload,
+    PersonStepQuestionResultPayload,
     PersonStepStatePayload,
     parse_handshake_capabilities,
     parse_person_email,
     parse_update_in_flight_id,
     parse_update_status_payload,
     serialize_person_step_action_result,
+    serialize_person_step_question_result,
     serialize_person_step_state,
 )
 from projects.controller_authenticator import (
@@ -67,13 +71,18 @@ from projects.controller_protocol import (
     WaitForCommandActionEvent,
 )
 from projects.controller_reply_tracker import ReplyTracker
-from projects.exceptions import PersonStepError
-from projects.forms import RunnerPersonStepActionForm, form_error_text
+from projects.exceptions import PersonStepError, PersonStepQuestionError
+from projects.forms import (
+    RunnerPersonStepActionForm,
+    RunnerPersonStepQuestionForm,
+    form_error_text,
+)
 from projects.models import Project
 from projects.person_step_services import PersonStepActionResult
 from projects.runner_person_step_services import (
     RunnerPersonStepAnswer,
     answer_from_runner,
+    ask_from_runner,
     get_runner_person_steps,
     resolve_runner_person,
 )
@@ -96,6 +105,9 @@ _PERSON_STEP_DONE: dict[PersonStepActionKind, str] = {
 _PERSON_STEPS_UNSUPPORTED = "This Test Runner did not offer person steps."
 _PERSON_STEP_TOO_LARGE = "The answer is too long."
 _PERSON_STEP_FAILED = "The answer could not be saved. Answer on Punk Hazard."
+_PERSON_STEP_QUESTION_UNSUPPORTED = "This Test Runner did not offer Ask AI."
+_PERSON_STEP_QUESTION_TOO_LARGE = "The question is too long."
+_PERSON_STEP_QUESTION_FAILED = "The question could not be sent. Ask on Punk Hazard."
 # Longest ``request_id`` echoed back; a longer one gets a fresh id.
 _MAX_REQUEST_ID_LENGTH = 128
 
@@ -108,6 +120,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     _message_builder: ControllerMessageBuilder
     # The runner shows person steps (it advertised PERSON_STEPS_V1).
     _person_steps_enabled: bool
+    # The runner shows how-to lists and Ask AI (PERSON_STEP_ASSIST_V1).
+    _assist_enabled: bool
     # The active member the handshake's ``person_email`` named; re-checked
     # when an answer arrives. The email itself is never kept.
     _person_user_id: int | None
@@ -118,6 +132,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self._authenticated = False
         self._project = None
         self._person_steps_enabled = False
+        self._assist_enabled = False
         self._person_user_id = None
         self._person_steps_sent = None
         self._reply_tracker = ReplyTracker(self.channel_layer)
@@ -176,6 +191,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
         if msg_type == MessageType.PERSON_STEP_ACTION:
             await self._handle_person_step_action(data, raw_length)
+            return
+
+        if msg_type == MessageType.PERSON_STEP_QUESTION:
+            await self._handle_person_step_question(data, raw_length)
             return
 
         handlers = {
@@ -246,6 +265,11 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         )
         self._person_steps_enabled = (
             ClientCapability.PERSON_STEPS_V1.value in capabilities
+        )
+        # Advertised only together with PERSON_STEPS_V1 (the window).
+        self._assist_enabled = (
+            self._person_steps_enabled
+            and ClientCapability.PERSON_STEP_ASSIST_V1.value in capabilities
         )
         await self._establish_authenticated_connection(
             result.project,
@@ -339,7 +363,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         if not self._person_steps_enabled or self._project is None:
             return
         try:
-            views = await sync_to_async(get_runner_person_steps)(self._project.id)
+            views = await sync_to_async(get_runner_person_steps)(
+                self._project.id, assist=self._assist_enabled
+            )
         except Exception:
             logger.exception(
                 "Reading person steps failed for project %s", self._project.id
@@ -351,18 +377,16 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         if not force and steps == self._person_steps_sent:
             return
         self._person_steps_sent = steps
-        await self.send(text_data=serialize_person_step_state(steps))
+        await self.send(
+            text_data=serialize_person_step_state(
+                steps, questions_enabled=self._assist_enabled
+            )
+        )
 
     async def _handle_person_step_action(
         self, data: dict[str, Any], raw_length: int
     ) -> None:
-        raw_request_id = data.get("request_id")
-        request_id = (
-            raw_request_id
-            if isinstance(raw_request_id, str)
-            and 0 < len(raw_request_id) <= _MAX_REQUEST_ID_LENGTH
-            else ""
-        )
+        request_id = _echoed_request_id(data)
         result = await self._answer_person_step(data, raw_length)
         await self.send(
             text_data=serialize_person_step_action_result(result, request_id)
@@ -405,6 +429,54 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             )
             return _refused(_PERSON_STEP_FAILED)
         return _answered(answer.action, outcome)
+
+    async def _handle_person_step_question(
+        self, data: dict[str, Any], raw_length: int
+    ) -> None:
+        request_id = _echoed_request_id(data)
+        result = await self._ask_person_step(data, raw_length)
+        await self.send(
+            text_data=serialize_person_step_question_result(result, request_id)
+        )
+        if not result.ok:
+            await self._push_person_steps(force=True)
+
+    async def _ask_person_step(
+        self, data: dict[str, Any], raw_length: int
+    ) -> PersonStepQuestionResultPayload:
+        if not self._assist_enabled or self._project is None:
+            return _question_refused(_PERSON_STEP_QUESTION_UNSUPPORTED)
+        if raw_length > PERSON_STEP_QUESTION_MAX_BYTES:
+            return _question_refused(_PERSON_STEP_QUESTION_TOO_LARGE)
+        form = RunnerPersonStepQuestionForm(
+            {
+                field: data.get(field)
+                for field in RunnerPersonStepQuestionForm.base_fields
+            }
+        )
+        if not form.is_valid():
+            return _question_refused(form_error_text(form))
+        question = PersonStepQuestionAskPayload(
+            person_step_id=form.cleaned_data["person_step_id"],
+            round=form.cleaned_data["round"],
+            question=form.cleaned_data["question"],
+        )
+        try:
+            await sync_to_async(ask_from_runner)(
+                project_id=self._project.id,
+                channel_name=self.channel_name,
+                person_id=self._person_user_id,
+                question=question,
+            )
+        except PersonStepQuestionError as exc:
+            return _question_refused(exc.message)
+        except Exception:
+            logger.exception(
+                "Person step question failed for project %s", self._project.id
+            )
+            return _question_refused(_PERSON_STEP_QUESTION_FAILED)
+        # The answer arrives in a later ``person_step_state``.
+        return PersonStepQuestionResultPayload(ok=True, message="")
 
     async def _forward_action(self, event: BaseActionEvent) -> None:
         request_id: str = event.get("request_id") or str(uuid.uuid4())
@@ -553,6 +625,21 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     @staticmethod
     def _controller_group_name(project_id: int) -> str:
         return f"controller_{project_id}"
+
+
+def _echoed_request_id(data: dict[str, Any]) -> str:
+    """The message's ``request_id`` when it is a short string; blank otherwise."""
+    raw_request_id = data.get("request_id")
+    if (
+        isinstance(raw_request_id, str)
+        and 0 < len(raw_request_id) <= _MAX_REQUEST_ID_LENGTH
+    ):
+        return raw_request_id
+    return ""
+
+
+def _question_refused(message: str) -> PersonStepQuestionResultPayload:
+    return PersonStepQuestionResultPayload(ok=False, message=message)
 
 
 def _refused(message: str) -> PersonStepActionResultPayload:

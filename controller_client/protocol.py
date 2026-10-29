@@ -12,7 +12,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.9.0"
+CLIENT_VERSION: Final[str] = "0.10.0"
 
 
 class CloseCode(IntEnum):
@@ -79,6 +79,11 @@ class MessageType(StrEnum):
     PERSON_STEP_STATE = "person_step_state"
     PERSON_STEP_ACTION = "person_step_action"
     PERSON_STEP_ACTION_RESULT = "person_step_action_result"
+    # Ask AI (PERSON_STEP_ASSIST_V1): runner -> server with a person's question
+    # about an open step, server -> runner with its acknowledgement (same
+    # request_id). The answer itself arrives in the next ``person_step_state``.
+    PERSON_STEP_QUESTION = "person_step_question"
+    PERSON_STEP_QUESTION_RESULT = "person_step_question_result"
 
 
 class ClientCapability(StrEnum):
@@ -106,6 +111,16 @@ class ClientCapability(StrEnum):
     # ``person_step_action_result`` (the person step window). Advertised only
     # when the window is enabled and Tk works (``advertised_capabilities``).
     PERSON_STEPS_V1 = "person_steps_v1"
+    # Optional: the window renders a step's ``how_to`` items and offers the Ask
+    # AI box (``person_step_question`` / ``person_step_question_result``, the
+    # snapshot's ``questions``). Advertised only together with PERSON_STEPS_V1.
+    PERSON_STEP_ASSIST_V1 = "person_step_assist_v1"
+
+
+# Capabilities that need the person step window; dropped without it.
+_PERSON_WINDOW_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
+    {ClientCapability.PERSON_STEPS_V1, ClientCapability.PERSON_STEP_ASSIST_V1}
+)
 
 
 # Everything this client build knows. The handshake sends
@@ -119,20 +134,22 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
     ``person_window`` is False when the person step window is disabled
     (``CONTROLLER_PERSON_WINDOW=false``) or Tk is unavailable; the server then
     never sends ``person_step_state`` and the person answers on the web.
+    PERSON_STEP_ASSIST_V1 is dropped with it.
     """
     if person_window:
         return CLIENT_CAPABILITIES
     return tuple(
         capability
         for capability in CLIENT_CAPABILITIES
-        if capability is not ClientCapability.PERSON_STEPS_V1
+        if capability not in _PERSON_WINDOW_CAPABILITIES
     )
 
 
 # What the server insists on; a controller missing any of them would
 # authenticate fine and then silently time out on first use. Optional
 # capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1,
-# WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1) are checked
+# WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1,
+# PERSON_STEP_ASSIST_V1) are checked
 # where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
@@ -956,6 +973,18 @@ PERSON_STEP_URL_MAX_CHARS: Final[int] = 2000
 PERSON_STEP_MAX_BLOCKERS: Final[int] = 10
 # Longest user-safe ``message`` of a ``person_step_action_result``.
 PERSON_STEP_RESULT_MESSAGE_MAX_CHARS: Final[int] = 1000
+# "How to do it" items of a step (PERSON_STEP_ASSIST_V1); the server's
+# PERSON_STEP_HOW_TO_* caps in projects.models. Cut when parsed.
+PERSON_STEP_HOW_TO_MAX_ITEMS: Final[int] = 8
+PERSON_STEP_HOW_TO_TEXT_MAX_CHARS: Final[int] = 400
+PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS: Final[int] = 500
+# Ask AI: a question is refused when longer (PERSON_STEP_QUESTION_MAX_LENGTH
+# on the server); a snapshot carries a step's newest questions, oldest first.
+PERSON_STEP_QUESTION_MAX_CHARS: Final[int] = 1000
+PERSON_STEP_ANSWER_MAX_CHARS: Final[int] = 4000
+PERSON_STEP_STATE_MAX_QUESTIONS: Final[int] = 10
+# Largest raw ``person_step_question`` message the server reads.
+PERSON_STEP_QUESTION_MAX_BYTES: Final[int] = 16 * 1024
 # ``CasePersonStep.round`` is a PositiveSmallIntegerField.
 _PERSON_STEP_MAX_ROUND: Final[int] = 32767
 _PERSON_STEP_MAX_ID: Final[int] = 2**63 - 1
@@ -993,6 +1022,51 @@ class PersonStepWireOutcome(StrEnum):
     DIFFERENT = "different"
 
 
+class PersonStepQuestionWireStatus(StrEnum):
+    """Values of PersonStepQuestionStatus."""
+
+    PENDING = "pending"
+    ANSWERED = "answered"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class PersonHowToPayload:
+    """One numbered "How to do it" item; ``command`` is an AI suggestion."""
+
+    text: str
+    # One line for the step's shell; blank when the item has none.
+    command: str = ""
+
+    def to_wire(self) -> dict[str, object]:
+        return {"text": self.text, "command": self.command}
+
+
+@dataclass(frozen=True)
+class PersonStepQuestionPayload:
+    """One Ask AI question of a step and its answer, as the window shows it."""
+
+    question_id: int
+    # The step round it was asked in.
+    round: int
+    status: PersonStepQuestionWireStatus
+    question: str
+    # Blank while pending; the user-safe failure text when failed.
+    answer: str
+    # Server-built display label of the asker (never runner-sent text).
+    asked_by: str
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "question_id": self.question_id,
+            "round": self.round,
+            "status": self.status.value,
+            "question": self.question,
+            "answer": self.answer,
+            "asked_by": self.asked_by,
+        }
+
+
 @dataclass(frozen=True)
 class PersonStepStatePayload:
     """One open person step as the Test Runner window shows it."""
@@ -1016,6 +1090,10 @@ class PersonStepStatePayload:
     blockers: tuple[str, ...]
     # Absolute case page URL; blank when the server has no SITE_URL.
     case_url: str
+    # PERSON_STEP_ASSIST_V1 only; empty from an older server.
+    how_to: tuple[PersonHowToPayload, ...] = ()
+    # The step's newest questions, oldest first (≤ PERSON_STEP_STATE_MAX_QUESTIONS).
+    questions: tuple[PersonStepQuestionPayload, ...] = ()
 
     def to_wire(self) -> dict[str, object]:
         return {
@@ -1033,6 +1111,13 @@ class PersonStepStatePayload:
             "objection": self.objection,
             "blockers": list(self.blockers),
             "case_url": self.case_url,
+            "how_to": [
+                item.to_wire() for item in self.how_to[:PERSON_STEP_HOW_TO_MAX_ITEMS]
+            ],
+            "questions": [
+                question.to_wire()
+                for question in self.questions[-PERSON_STEP_STATE_MAX_QUESTIONS:]
+            ],
         }
 
 
@@ -1040,6 +1125,9 @@ class PersonStepStatePayload:
 class PersonStepStateMessage:
     # Newest request first; empty means "nothing for you; hide".
     steps: tuple[PersonStepStatePayload, ...]
+    # The server takes ``person_step_question`` from this runner; the window
+    # shows the Ask AI box only then (an older server never sets it).
+    questions_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -1062,6 +1150,26 @@ class PersonStepActionResultPayload:
     message: str
     # The run continues now (False: a gate refused; ``message`` says why).
     queued: bool
+
+
+@dataclass(frozen=True)
+class PersonStepQuestionAskPayload:
+    """A person's question to the AI about an open step (``person_step_question``)."""
+
+    person_step_id: int
+    # The round the window showed; a reopened step refuses an older round.
+    round: int
+    # Stripped, non-empty, ≤ PERSON_STEP_QUESTION_MAX_CHARS.
+    question: str
+
+
+@dataclass(frozen=True)
+class PersonStepQuestionResultPayload:
+    """The acknowledgement of a question; the answer comes in a snapshot."""
+
+    ok: bool
+    # User-safe text to show in the window (why it was refused, or blank).
+    message: str
 
 
 def _extract_bounded_int(data: Mapping[str, object], field: str, maximum: int) -> int:
@@ -1149,6 +1257,67 @@ def _parse_person_step(raw: object) -> PersonStepStatePayload:
         case_url=_extract_text(
             item, "case_url", PERSON_STEP_URL_MAX_CHARS, truncate=True
         ),
+        how_to=_parse_how_to(item.get("how_to", [])),
+        questions=_parse_questions(item.get("questions", [])),
+    )
+
+
+def _parse_how_to(raw: object) -> tuple[PersonHowToPayload, ...]:
+    # Absent from an older server; items beyond the cap dropped, texts cut.
+    if not isinstance(raw, list):
+        raise ProtocolError("Invalid 'how_to': expected a list")
+    items: list[PersonHowToPayload] = []
+    for entry in raw[:PERSON_STEP_HOW_TO_MAX_ITEMS]:
+        if not isinstance(entry, dict):
+            raise ProtocolError("Invalid how-to item: expected an object")
+        item: dict[str, object] = entry
+        items.append(
+            PersonHowToPayload(
+                text=_extract_text(
+                    item, "text", PERSON_STEP_HOW_TO_TEXT_MAX_CHARS, truncate=True
+                ),
+                command=_extract_text(
+                    item,
+                    "command",
+                    PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS,
+                    truncate=True,
+                ),
+            )
+        )
+    return tuple(items)
+
+
+def _parse_questions(raw: object) -> tuple[PersonStepQuestionPayload, ...]:
+    # Absent from an older server; oldest first, so the newest are kept.
+    if not isinstance(raw, list):
+        raise ProtocolError("Invalid 'questions': expected a list")
+    return tuple(
+        _parse_question(entry) for entry in raw[-PERSON_STEP_STATE_MAX_QUESTIONS:]
+    )
+
+
+def _parse_question(raw: object) -> PersonStepQuestionPayload:
+    if not isinstance(raw, dict):
+        raise ProtocolError("Invalid question: expected an object")
+    item: dict[str, object] = raw
+    raw_status = _extract_str(item, "status")
+    try:
+        status = PersonStepQuestionWireStatus(raw_status)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown question status: {raw_status[:40]!r}") from e
+    return PersonStepQuestionPayload(
+        question_id=_extract_bounded_int(item, "question_id", _PERSON_STEP_MAX_ID),
+        round=_extract_bounded_int(item, "round", _PERSON_STEP_MAX_ROUND),
+        status=status,
+        question=_extract_text(
+            item, "question", PERSON_STEP_QUESTION_MAX_CHARS, truncate=True
+        ),
+        answer=_extract_text(
+            item, "answer", PERSON_STEP_ANSWER_MAX_CHARS, truncate=True
+        ),
+        asked_by=_extract_text(
+            item, "asked_by", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
+        ),
     )
 
 
@@ -1166,16 +1335,23 @@ def parse_person_step_state_payload(
     return PersonStepStateMessage(
         steps=tuple(
             _parse_person_step(raw) for raw in raw_steps[:PERSON_STEP_STATE_MAX_STEPS]
-        )
+        ),
+        questions_enabled=_extract_bool(data, "questions_enabled", default=False),
     )
 
 
-def serialize_person_step_state(steps: Sequence[PersonStepStatePayload]) -> str:
-    """A ``person_step_state`` message (server side; fresh request_id)."""
+def serialize_person_step_state(
+    steps: Sequence[PersonStepStatePayload], *, questions_enabled: bool = False
+) -> str:
+    """A ``person_step_state`` message (server side; fresh request_id).
+
+    ``questions_enabled`` only for a runner with PERSON_STEP_ASSIST_V1.
+    """
     return serialize_message(
         MessageType.PERSON_STEP_STATE,
         None,
         steps=[step.to_wire() for step in steps[:PERSON_STEP_STATE_MAX_STEPS]],
+        questions_enabled=questions_enabled,
     )
 
 
@@ -1266,6 +1442,65 @@ def serialize_person_step_action_result(
         ok=result.ok,
         message=result.message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
         queued=result.queued,
+    )
+
+
+def parse_person_step_question_payload(
+    data: Mapping[str, object],
+) -> PersonStepQuestionAskPayload:
+    """Validate a ``person_step_question`` (both sides).
+
+    The question is stripped (as the web form does); an empty or over-long
+    question raises ProtocolError (refused, not cut).
+    """
+    question = _extract_text(
+        data, "question", PERSON_STEP_QUESTION_MAX_CHARS, truncate=False
+    ).strip()
+    if not question:
+        raise ProtocolError("Missing 'question'")
+    return PersonStepQuestionAskPayload(
+        person_step_id=_extract_bounded_int(
+            data, "person_step_id", _PERSON_STEP_MAX_ID
+        ),
+        round=_extract_bounded_int(data, "round", _PERSON_STEP_MAX_ROUND),
+        question=question,
+    )
+
+
+def serialize_person_step_question(
+    question: PersonStepQuestionAskPayload, request_id: str
+) -> str:
+    """A ``person_step_question`` message (runner side; one request_id per question)."""
+    return serialize_message(
+        MessageType.PERSON_STEP_QUESTION,
+        request_id,
+        person_step_id=question.person_step_id,
+        round=question.round,
+        question=question.question,
+    )
+
+
+def parse_person_step_question_result_payload(
+    data: dict[str, object],
+) -> PersonStepQuestionResultPayload:
+    """Validate a ``person_step_question_result`` (runner side)."""
+    return PersonStepQuestionResultPayload(
+        ok=_extract_bool(data, "ok"),
+        message=_extract_text(
+            data, "message", PERSON_STEP_RESULT_MESSAGE_MAX_CHARS, truncate=True
+        ),
+    )
+
+
+def serialize_person_step_question_result(
+    result: PersonStepQuestionResultPayload, request_id: str
+) -> str:
+    """A ``person_step_question_result`` (server side; echoes the question's id)."""
+    return serialize_message(
+        MessageType.PERSON_STEP_QUESTION_RESULT,
+        request_id,
+        ok=result.ok,
+        message=result.message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
     )
 
 

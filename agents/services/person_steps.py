@@ -22,6 +22,9 @@ from agents.services.llm_client import send_chat_completion
 from agents.services.person_step_prompts import (
     COMMAND_MAX_CHARS,
     EXPECTED_RESULT_MAX_CHARS,
+    HOW_TO_COMMAND_MAX_CHARS,
+    HOW_TO_MAX_ITEMS,
+    HOW_TO_TEXT_MAX_CHARS,
     INSTRUCTION_MAX_CHARS,
     build_confirm_sub_task,
     build_prepare_system_prompt,
@@ -38,6 +41,7 @@ from agents.types import (
     ChatMessage,
     CheckpointPersonStep,
     LLMConfig,
+    PersonHowToItem,
     PersonStepHandOff,
     SubTask,
     SubTaskResult,
@@ -122,7 +126,8 @@ def parse_hand_off(
 
     A command the test case does not state as a whole command
     (``_is_explicit_command``) is never handed out: the answer is then
-    unusable and the caller falls back to the plan text.
+    unusable and the caller falls back to the plan text. ``how_to`` is parsed
+    leniently: bad items are dropped, never the hand-off.
     """
     data = _json_object(raw)
     if data is None:
@@ -160,7 +165,55 @@ def parse_hand_off(
             strip_executor_vocabulary(expected), EXPECTED_RESULT_MAX_CHARS
         ),
         command=command,
+        how_to=_parse_how_to(data.get("how_to"), step_num=step_num),
     )
+
+
+def _parse_how_to(value: object, *, step_num: int) -> tuple[PersonHowToItem, ...]:
+    """The usable "How to do it" items; suggested commands are not checked
+    against the case text (only ``kind="command"`` is), only for shape."""
+    if not isinstance(value, list):
+        return ()
+    items: list[PersonHowToItem] = []
+    dropped = 0
+    for raw_item in value:
+        item = _how_to_item(raw_item)
+        if item is None:
+            dropped += 1
+            continue
+        if len(items) < HOW_TO_MAX_ITEMS:
+            items.append(item)
+    if dropped:
+        logger.info("Person step %d: %d how-to item(s) dropped", step_num, dropped)
+    return tuple(items)
+
+
+def _how_to_item(value: object) -> PersonHowToItem | None:
+    if not isinstance(value, dict):
+        return None
+    text = value.get("text")
+    command = value.get("command") or ""
+    if not isinstance(text, str) or not isinstance(command, str):
+        return None
+    text = cap_text(strip_executor_vocabulary(text), HOW_TO_TEXT_MAX_CHARS)
+    command = _unwrap_command(command)
+    if not text or len(command) > HOW_TO_COMMAND_MAX_CHARS:
+        return None
+    if "\n" in command or "\r" in command:
+        return None
+    return PersonHowToItem(text=text, command=command)
+
+
+def _unwrap_command(command: str) -> str:
+    """``command`` without wrapping backticks or quotes; a quote
+    that belongs to the command (``"C:\\Program Files\\..." -version``) stays."""
+    command = command.strip()
+    while len(command) >= 2 and command[0] == command[-1] and command[0] in _QUOTES:
+        inner = command[1:-1]
+        if command[0] != "`" and command[0] in inner:
+            break
+        command = inner.strip()
+    return command
 
 
 def _is_explicit_command(command: str, task_description: str) -> bool:

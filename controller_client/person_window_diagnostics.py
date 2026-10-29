@@ -4,7 +4,8 @@ The Test Runner window (where a person answers Human in the loop steps on the
 test machine) is a Tk program in its own process. The automatic checks say
 whether this Python has tkinter, which Tk it has, which display Tk would use
 and whether a Tk window opens in a separate process the way the runner starts
-it. The interactive check then shows a sample step in the real window, asks
+it. The interactive check then shows a sample step (with "How to do it"
+items and a sample Ask the AI exchange) in the real window, asks
 whether it is visible, hides it the way the runner does before every agent
 action, takes one screenshot with the desktop backend and asks the person to
 confirm the window is not in it.
@@ -28,7 +29,11 @@ from controller_client.desktop import get_desktop_backend
 from controller_client.diagnostics import DiagnosticStep
 from controller_client.person_window import PersonWindow, probe_person_window
 from controller_client.protocol import (
+    PersonHowToPayload,
     PersonStepActionResultPayload,
+    PersonStepQuestionPayload,
+    PersonStepQuestionResultPayload,
+    PersonStepQuestionWireStatus,
     PersonStepStatePayload,
     PersonStepWireKind,
     PersonStepWireStatus,
@@ -142,6 +147,16 @@ def build_window_steps() -> tuple[DiagnosticStep, ...]:
     )
 
 
+if sys.platform == "win32":
+    _SAMPLE_SHELL: Final[str] = "Command Prompt (cmd.exe)"
+    _SAMPLE_OPEN_SHELL: Final[str] = "press Win+R, type cmd, press Enter"
+    _SAMPLE_COMMAND: Final[str] = "echo %USERPROFILE%"
+else:
+    _SAMPLE_SHELL = "Terminal (bash)"
+    _SAMPLE_OPEN_SHELL = "open the Terminal app"
+    _SAMPLE_COMMAND = "echo $HOME"
+
+
 def _sample_step() -> PersonStepStatePayload:
     return PersonStepStatePayload(
         person_step_id=1,
@@ -158,10 +173,27 @@ def _sample_step() -> PersonStepStatePayload:
         ),
         expected_result="You can read this window.",
         command="",
-        shell_label="",
+        shell_label=_SAMPLE_SHELL,
         objection="",
         blockers=(),
         case_url="",
+        how_to=(
+            PersonHowToPayload(text=f"Open a terminal: {_SAMPLE_OPEN_SHELL}."),
+            PersonHowToPayload(
+                text="Run this command and look for a folder path in its output.",
+                command=_SAMPLE_COMMAND,
+            ),
+        ),
+        questions=(
+            PersonStepQuestionPayload(
+                question_id=1,
+                round=1,
+                status=PersonStepQuestionWireStatus.ANSWERED,
+                question="What should the output look like?",
+                answer="A folder path. Nothing is sent to Punk Hazard here.",
+                asked_by="diagnose --window",
+            ),
+        ),
     )
 
 
@@ -181,14 +213,25 @@ async def _answer_nothing(window: PersonWindow) -> None:
         )
 
 
+async def _answer_no_questions(window: PersonWindow) -> None:
+    # The sample Ask button gets a reply too, so it comes back.
+    async for _ in window.questions():
+        window.show_question_result(
+            PersonStepQuestionResultPayload(
+                ok=False, message="Diagnose only: nothing was asked."
+            )
+        )
+
+
 async def _run_window_check(
     ask: Callable[[str], str], report: Callable[[str], None]
 ) -> bool:
     window = PersonWindow()
     drain = asyncio.create_task(_answer_nothing(window))
+    drain_questions = asyncio.create_task(_answer_no_questions(window))
     try:
         window.set_connected(True)
-        window.apply_state((_sample_step(),))
+        window.apply_state((_sample_step(),), questions_enabled=True)
         report("A sample step should now be shown in the Test Runner window.")
         seen = await asyncio.to_thread(
             ask, "Do you see the Test Runner window with the sample step? [y/n] "
@@ -227,6 +270,7 @@ async def _run_window_check(
         return True
     finally:
         drain.cancel()
+        drain_questions.cancel()
         await window.stop()
 
 

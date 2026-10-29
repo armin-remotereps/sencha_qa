@@ -50,6 +50,18 @@ HandOffKind = Literal["interactive", "command", "restore"]
 
 
 @dataclass(frozen=True)
+class PersonHowToItem:
+    """One numbered "How to do it" item of a hand-off (model-written).
+
+    ``command`` is an AI suggestion for the runner's shell (one line), never
+    the case-stated command; empty when the item has none.
+    """
+
+    text: str
+    command: str = ""
+
+
+@dataclass(frozen=True)
 class PersonStepHandOff:
     """A step handed to a person instead of a sub-agent (Human in the loop)."""
 
@@ -64,6 +76,30 @@ class PersonStepHandOff:
     # Why the agent could not confirm the person's last report of this step;
     # empty on a first hand-off.
     objection: str = ""
+    # Exact OS-specific steps (open the app, the command, what to look for);
+    # empty when the model wrote none.
+    how_to: tuple[PersonHowToItem, ...] = ()
+
+
+@dataclass(frozen=True)
+class PersonStepAdviceContext:
+    """What the Ask AI advisor knows about the step a person is performing.
+
+    Text only: no screen, no machine access.
+    """
+
+    # ``platform.system()`` of the runner (e.g. "Windows").
+    os_name: str
+    # The runner's shell (``agents.os_shell.shell_label``).
+    shell_label: str
+    case_text: str
+    # The project's application context, capped by the caller.
+    project_prompt: str
+    # "Step N of M" or "Step N".
+    step_label: str
+    hand_off: PersonStepHandOff
+    # Earlier (question, answer) pairs of this step, oldest first (≤ 6).
+    history: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

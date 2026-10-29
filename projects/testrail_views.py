@@ -13,13 +13,15 @@ from projects.exceptions import CheckedPushError, TestRailRunImportError
 from projects.forms import (
     ProjectMemberInviteForm,
     ProjectMemberRoleForm,
+    ProjectRunModeForm,
     TestRailImportStartForm,
     TestRailPushStartForm,
     TestRailRunImportForm,
     TestRailSettingsForm,
     TestRailSuiteForm,
 )
-from projects.models import Project, TestRun
+from projects.models import Project, RunHelpMode, TestRun
+from projects.project_access import get_request_project_access
 from projects.project_member_services import list_project_members
 from projects.services import get_test_run_for_project
 from projects.testrail_checked_push_services import start_checked_push
@@ -57,6 +59,7 @@ def render_project_settings(
     *,
     testrail_form: TestRailSettingsForm | None = None,
     invite_form: ProjectMemberInviteForm | None = None,
+    run_mode_form: ProjectRunModeForm | None = None,
 ) -> HttpResponse:
     """Render the Settings tab; a card whose form is not given gets a fresh one."""
     if testrail_form is None:
@@ -66,6 +69,12 @@ def render_project_settings(
         )
     if invite_form is None:
         invite_form = ProjectMemberInviteForm()
+    if run_mode_form is None:
+        run_mode_form = ProjectRunModeForm(
+            initial={"help_mode": project.default_help_mode}
+        )
+    access = get_request_project_access(request)
+    project_can_write = access is not None and access.can_write
     members = list_project_members(project, viewer=request.user)
     return render(
         request,
@@ -80,6 +89,9 @@ def render_project_settings(
             "invite_form": invite_form,
             # Unbound: the Members card renders its role choices per row.
             "role_form": ProjectMemberRoleForm(),
+            "run_mode_form": run_mode_form,
+            "run_mode_label": RunHelpMode(project.default_help_mode).label,
+            "can_change_run_mode": request.user.is_superuser and project_can_write,
             "active_tab": "settings",
             "active_nav": "projects",
         },

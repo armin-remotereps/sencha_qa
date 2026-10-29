@@ -4,6 +4,7 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from django.conf import settings
@@ -84,6 +85,19 @@ class RunHelpMode(models.TextChoices):
     ATTENDED = "attended", "Attended"
     NIGHT = "night", "Night (auto-fix first)"
     HUMAN_IN_THE_LOOP = "hitl", "Human in the loop"
+
+
+class ProjectRunModeScope(StrEnum):
+    """Which existing runs follow a new project run mode (form ``apply_to``)."""
+
+    # New runs only.
+    NEW_ONLY = "new_only"
+    # New runs and drafts (WAITING).
+    DRAFTS = "drafts"
+    # Also running and paused runs.
+    OPEN = "open"
+    # All runs, including finished (DONE, CANCELLED) ones.
+    ALL = "all"
 
 
 class TestRunTestCaseStatus(models.TextChoices):
@@ -258,6 +272,13 @@ class Project(models.Model):
     testrail_url = models.URLField(max_length=500, blank=True, default="")
     testrail_email = models.EmailField(blank=True, default="")
     testrail_api_key_encrypted = models.TextField(blank=True, default="")
+    # The run mode of every new run in the project; set by a superuser on the
+    # Settings tab (``project_run_mode_services``).
+    default_help_mode = models.CharField(
+        max_length=16,
+        choices=RunHelpMode.choices,
+        default=RunHelpMode.HUMAN_IN_THE_LOOP,
+    )
 
     def __str__(self) -> str:
         return self.name
@@ -478,9 +499,12 @@ class TestRun(models.Model):
     # Bumped by every Start and Resume; chain tasks carry the value they were
     # queued with and stand down (no execution, no writes) once it moves on.
     execution_generation = models.PositiveIntegerField(default=0)
-    # Chosen at Start; kept by Resume and Re-run in place unless changed there.
+    # Set from ``Project.default_help_mode`` when the run is created; chosen
+    # at Start; kept by Resume and Re-run in place unless changed there.
     help_mode = models.CharField(
-        max_length=16, choices=RunHelpMode.choices, default=RunHelpMode.ATTENDED
+        max_length=16,
+        choices=RunHelpMode.choices,
+        default=RunHelpMode.HUMAN_IN_THE_LOOP,
     )
     name = models.CharField(max_length=255, blank=True, default="")
     started_at = models.DateTimeField(null=True, blank=True)
@@ -976,6 +1000,13 @@ PERSON_STEP_EXPECTED_MAX_LENGTH = 1000
 PERSON_STEP_COMMAND_MAX_LENGTH = 2000
 PERSON_STEP_OUTPUT_MAX_LENGTH = 20000
 PERSON_STEP_AGENT_TEXT_MAX_LENGTH = 1000
+# "How to do it" items of a hand-off and the Ask AI questions of a step.
+PERSON_STEP_HOW_TO_MAX_ITEMS = 8
+PERSON_STEP_HOW_TO_TEXT_MAX_LENGTH = 400
+PERSON_STEP_HOW_TO_COMMAND_MAX_LENGTH = 500
+PERSON_STEP_QUESTION_MAX_LENGTH = 1000
+PERSON_STEP_ANSWER_MAX_LENGTH = 4000
+PERSON_STEP_QUESTIONS_PER_STEP = 20
 
 
 class PersonStepKind(models.TextChoices):
@@ -1068,6 +1099,10 @@ class CasePersonStep(models.Model):
     # Server-derived from the runner's OS (e.g. "Terminal (bash)"); never
     # model-chosen.
     shell_label = models.CharField(max_length=64, blank=True, default="")
+    # Model-written "How to do it" items: a list of ``{"text", "command"}``
+    # (commands are AI suggestions, not case-stated), capped by the
+    # ``PERSON_STEP_HOW_TO_*`` constants; shown escaped.
+    how_to = models.JSONField(default=list, blank=True)
     status = models.CharField(
         max_length=16,
         choices=PersonStepStatus.choices,
@@ -1139,6 +1174,64 @@ class CasePersonStep(models.Model):
 
     def __str__(self) -> str:
         return f"Person step #{self.pk} of TRTC #{self.test_run_test_case_id}"
+
+
+class PersonStepQuestionStatus(models.TextChoices):
+    PENDING = "pending", "Waiting for the AI"
+    ANSWERED = "answered", "Answered"
+    FAILED = "failed", "Not answered"
+
+
+class PersonStepQuestion(models.Model):
+    """A person's question to the AI about the step waiting for them.
+
+    Advisory only: answering never changes the step, case or run. At most one
+    ``pending`` question per step; a stale pending one is failed lazily.
+    """
+
+    person_step = models.ForeignKey(
+        CasePersonStep, on_delete=models.CASCADE, related_name="questions"
+    )
+    # The step round it was asked in.
+    round = models.PositiveSmallIntegerField()
+    # Person-written and model-written; shown escaped.
+    question = models.TextField(max_length=PERSON_STEP_QUESTION_MAX_LENGTH)
+    answer = models.TextField(
+        max_length=PERSON_STEP_ANSWER_MAX_LENGTH, blank=True, default=""
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=PersonStepQuestionStatus.choices,
+        default=PersonStepQuestionStatus.PENDING,
+    )
+    asked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    asked_via = models.CharField(max_length=8, choices=PersonStepChannel.choices)
+    created_at = models.DateTimeField(auto_now_add=True)
+    answered_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["person_step"],
+                condition=models.Q(status=PersonStepQuestionStatus.PENDING),
+                name="person_step_question_one_pending",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["person_step", "created_at"],
+                name="person_step_question_step_idx",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"Question #{self.pk} on person step #{self.person_step_id}"
 
 
 class RunnerUpdateStatus(models.TextChoices):

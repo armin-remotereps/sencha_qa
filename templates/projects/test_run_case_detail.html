@@ -72,7 +72,11 @@
      (projects.person_step_services.PersonStepPanel, or None unless the run is
      paused on this case's person step; see includes/_person_step_card.html,
      rendered while it is open or confirming), person_step_form (unbound
-     PersonStepReportForm). The page reloads when the case moves into, out
+     PersonStepReportForm), person_step_question_form (unbound
+     PersonStepQuestionForm, the card's Ask the AI form). Socket event
+     "person_step_questions" ({person_step_id, questions}) is re-dispatched
+     as the window event "person-step-questions" for the card's
+     personStepAsk list. The page reloads when the case moves into, out
      of, or stays in "awaiting_person"; the abort dialog is also rendered
      for it.
 
@@ -235,7 +239,7 @@
 
   {% if person_step_panel.holds_run and person_step_panel.is_open or person_step_panel.holds_run and person_step_panel.confirming %}
   {# Section: Your turn — a person performs the step, the agent confirms it (server-rendered). Hidden while the case is in Need help (a fault while confirming): the help card above owns the case then. #}
-  {% include "projects/includes/_person_step_card.html" with project=project test_run=test_run pivot=pivot person_step_panel=person_step_panel person_step_form=person_step_form csrf_token=csrf_token can_write=project_can_write only %}
+  {% include "projects/includes/_person_step_card.html" with project=project test_run=test_run pivot=pivot person_step_panel=person_step_panel person_step_form=person_step_form person_step_question_form=person_step_question_form csrf_token=csrf_token can_write=project_can_write only %}
   {% endif %}
 
   {# Section: Steps — the agent's planned steps, live while the case runs #}
@@ -723,6 +727,127 @@
 {{ step_progress|json_script:"initial-steps" }}
 <script>
 document.addEventListener('alpine:init', () => {
+  // "Ask the AI" list of the Your turn card. `live` stays null (the
+  // server-rendered list shows) until the first socket update for this step.
+  Alpine.data('personStepAsk', (stepId, hadPending) => ({
+    live: null,
+
+    receive(detail) {
+      if (!detail || detail.person_step_id !== stepId) return;
+      this.live = Array.isArray(detail.questions) ? detail.questions : [];
+    },
+
+    answerText(q) {
+      if (q.status === 'pending') return 'The AI is thinking…';
+      return q.answer || '';
+    },
+
+    // The form was hidden only because a question was pending and the
+    // live list no longer has one: offer a reload to ask again.
+    get canAskAgain() {
+      return hadPending && this.live !== null && !this.live.some((q) => q.status === 'pending');
+    },
+  }));
+
+  // Keeps the Your turn report's half-typed note and output across a page
+  // reload (asking the AI posts the page). sessionStorage can be missing or
+  // throw (private mode, blocked storage): the form then works without it.
+  Alpine.data('personStepDraft', (key) => ({
+    fields: ['note', 'output'],
+
+    init() {
+      let saved = null;
+      try {
+        saved = JSON.parse(sessionStorage.getItem(key) || 'null');
+      } catch {
+        return;
+      }
+      if (!saved || typeof saved !== 'object') return;
+      for (const name of this.fields) {
+        const field = this.$el.elements.namedItem(name);
+        if (field && 'value' in field && !field.value && typeof saved[name] === 'string') {
+          field.value = saved[name];
+        }
+      }
+    },
+
+    save() {
+      const draft = {};
+      for (const name of this.fields) {
+        const field = this.$el.elements.namedItem(name);
+        if (field && 'value' in field) draft[name] = field.value;
+      }
+      try {
+        sessionStorage.setItem(key, JSON.stringify(draft));
+      } catch {
+        // Storage unavailable or full: the draft is simply not kept.
+      }
+    },
+
+    clear() {
+      try {
+        sessionStorage.removeItem(key);
+      } catch {
+        // Nothing to clear when storage is unavailable.
+      }
+    },
+  }));
+
+  // Keeps the typed Ask AI question across the post-redirect, so a refused
+  // ask (or an invalid form) does not lose it. After a submit the text comes
+  // back only when the ask view redirected with ?ask=refused; an accepted ask
+  // drops it. Unsent text survives a plain reload.
+  Alpine.data('personStepQuestionDraft', (key) => ({
+    init() {
+      const field = this.$el.elements.namedItem('question');
+      if (!field || !('value' in field)) return;
+      let saved = null;
+      let sent = false;
+      try {
+        saved = sessionStorage.getItem(key);
+        sent = sessionStorage.getItem(key + ':sent') === '1';
+        sessionStorage.removeItem(key + ':sent');
+      } catch {
+        return;
+      }
+      const refused = new URLSearchParams(window.location.search).get('ask') === 'refused';
+      if (sent && !refused) {
+        this.clear();
+        return;
+      }
+      if (typeof saved === 'string' && saved.trim() && !field.value) {
+        field.value = saved;
+      }
+    },
+
+    save() {
+      const field = this.$el.elements.namedItem('question');
+      if (!field || !('value' in field)) return;
+      try {
+        sessionStorage.setItem(key, field.value);
+      } catch {
+        // Storage unavailable or full: the question is simply not kept.
+      }
+    },
+
+    markSent() {
+      this.save();
+      try {
+        sessionStorage.setItem(key + ':sent', '1');
+      } catch {
+        // Without storage there is no draft to keep or drop.
+      }
+    },
+
+    clear() {
+      try {
+        sessionStorage.removeItem(key);
+      } catch {
+        // Nothing to clear when storage is unavailable.
+      }
+    },
+  }));
+
   Alpine.data('testRunCaseLive', () => ({
     status: '{{ pivot.status }}',
     testRunStatus: '{{ test_run.status }}',
@@ -919,6 +1044,13 @@ document.addEventListener('alpine:init', () => {
           this.blockedReason = data.blocked_reason || '';
           this.blockedReasonLabel = data.blocked_reason_label || '';
           this.steps = data.steps;
+          return;
+        }
+
+        if (data.type === 'person_step_questions') {
+          // The card's personStepAsk list listens on window; it ignores
+          // another step's id and renders the questions with x-text only.
+          window.dispatchEvent(new CustomEvent('person-step-questions', { detail: data }));
           return;
         }
 
