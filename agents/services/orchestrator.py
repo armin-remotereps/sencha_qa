@@ -27,6 +27,10 @@ from agents.services.llm_config import (
 from agents.services.orchestrator_prompts import (
     build_evaluate_prompt,
     build_evaluate_system_prompt,
+    build_person_failure_prompt,
+    build_person_failure_system_prompt,
+    build_person_failure_verdict_prompt,
+    build_person_failure_verdict_system_prompt,
     build_plan_system_prompt,
     build_verdict_prompt,
     format_attempt_lines,
@@ -1190,7 +1194,8 @@ def _execute_sub_tasks(
         progress.next_step = step_num
 
         # Human in the loop: a person performs the step and the agent confirms
-        # it. No failure evaluation, recovery or need_help on a person step.
+        # it. No recovery or need_help on a person step; a failed one only asks
+        # whether the remaining steps depend on it.
         person = _person_for_step(progress, step_num)
         reported = person is not None and person.state in ("reported", "overruled")
         settled: SubTaskAttempt | None = None
@@ -1226,13 +1231,34 @@ def _execute_sub_tasks(
                 progress.checkpoint()
                 i += 1
                 continue
-            # The person saw a different result: the step failed and the case
-            # stops; the verdict follows.
-            reason = "A person reported a different result"
-            progress.decisions.append(
-                StepDecision(step_num=step_num, action="stop", reason=reason)
-            )
-            _log(on_log, f"[Orchestrator]   Stopping: {reason}")
+            # The person saw a different result: the step failed. The case goes
+            # on unless a remaining step depends on it; the verdict then judges
+            # whether the difference fails the case.
+            if step_num == total:
+                person_decision = StepDecision(
+                    step_num=step_num,
+                    action="continue",
+                    reason="Last step: the verdict judges this difference",
+                )
+            else:
+                progress.set_phase("evaluating")
+                person_decision = _evaluate_person_failure(
+                    orchestrator_llm=orchestrator_llm,
+                    step_num=step_num,
+                    sub_task=sub_task,
+                    result=person_result,
+                    state_description=state_description,
+                    remaining=sub_tasks[i + 1 :],
+                    on_log=on_log,
+                )
+            progress.decisions.append(person_decision)
+            if person_decision.action == "continue":
+                state_lines.append(f"Step {step_num}: FAILED — {person_result.summary}")
+                progress.next_step = step_num + 1
+                progress.checkpoint()
+                i += 1
+                continue
+            _log(on_log, f"[Orchestrator]   Stopping: {person_decision.reason}")
             state_lines.append(
                 f"Step {step_num}: FAILED (stopped) — {person_result.summary}"
             )
@@ -1401,6 +1427,7 @@ def _execute_sub_tasks(
             progress.help, attempts, progress.decisions, progress.plan_revisions
         ),
         revisions=progress.plan_revisions,
+        decisions=progress.decisions,
     )
 
 
@@ -1562,6 +1589,7 @@ def _build_verdict(
     *,
     helped: CheckpointHelp | None = None,
     revisions: Sequence[PlanRevisionRecord] = (),
+    decisions: Sequence[StepDecision] = (),
 ) -> OrchestratorResult:
     # A step that failed, was recovered and then passed on retry counts as passed:
     # only each planned step's final attempt decides, recoveries never do.
@@ -1574,6 +1602,26 @@ def _build_verdict(
     error = finals[max(failed_steps)].summary if failed_steps else None
 
     attempts_tuple = tuple(attempts)
+    judged = _judged_person_failures(attempts, decisions)
+    if len(finals) == len(plan) and failed_steps and set(failed_steps) <= judged:
+        # Every failure is a person-reported difference the case continued
+        # past: the verdict decides whether it fails the case.
+        overall_status, summary = _judge_person_failures(
+            orchestrator_llm,
+            attempts_tuple,
+            plan,
+            sorted(failed_steps),
+            helped=helped,
+            revisions=revisions,
+        )
+        return OrchestratorResult(
+            status=overall_status,
+            summary=summary,
+            attempts=attempts_tuple,
+            total_iterations=total_iterations,
+            error=error if overall_status == "fail" else None,
+        )
+
     verdict_prompt = build_verdict_prompt(
         attempts_tuple, overall_status, plan, helped=helped, revisions=revisions
     )
@@ -1600,6 +1648,66 @@ def _build_verdict(
         attempts=attempts_tuple,
         total_iterations=total_iterations,
         error=error,
+    )
+
+
+def _judged_person_failures(
+    attempts: list[SubTaskAttempt], decisions: Sequence[StepDecision]
+) -> set[int]:
+    """Steps whose final attempt is a person's failure the case continued past."""
+    newest: dict[int, StepDecision] = {d.step_num: d for d in decisions}
+    judged: set[int] = set()
+    for step_num, index in final_step_indices(attempts).items():
+        attempt = attempts[index]
+        decision = newest.get(step_num)
+        if (
+            attempt.performed_by == "person"
+            and attempt.result.status == "fail"
+            and decision is not None
+            and decision.action == "continue"
+        ):
+            judged.add(step_num)
+    return judged
+
+
+def _judge_person_failures(
+    orchestrator_llm: LLMConfig,
+    attempts: tuple[SubTaskAttempt, ...],
+    plan: Sequence[SubTask],
+    judged_steps: Sequence[int],
+    *,
+    helped: CheckpointHelp | None,
+    revisions: Sequence[PlanRevisionRecord],
+) -> tuple[Literal["pass", "fail"], str]:
+    # Passes only on an explicit, explained "pass"; anything else fails.
+    messages = (
+        ChatMessage(
+            role="system", content=build_person_failure_verdict_system_prompt()
+        ),
+        ChatMessage(
+            role="user",
+            content=build_person_failure_verdict_prompt(
+                attempts, plan, judged_steps, helped=helped, revisions=revisions
+            ),
+        ),
+    )
+    try:
+        response = send_chat_completion(orchestrator_llm, messages)
+        parsed = _parse_json_response(_extract_text(response.message))
+    except AIServiceError as exc:
+        logger.warning("Person-failure verdict failed (%s), failing the case", exc.kind)
+        summary = _deterministic_summary(
+            attempts, "fail", plan, helped=helped, revisions=revisions
+        )
+        return "fail", (
+            f"{summary}\nThe AI could not judge the result a person reported as "
+            "different, so the case fails."
+        )
+    summary = str(parsed.get("summary") or "").strip()
+    if parsed.get("result") == "pass" and summary:
+        return "pass", summary
+    return "fail", summary or _deterministic_summary(
+        attempts, "fail", plan, helped=helped, revisions=revisions
     )
 
 
@@ -1696,6 +1804,50 @@ def _evaluate_failure(
         cause=cause,
         help_ask=help_ask,
     )
+
+
+def _evaluate_person_failure(
+    *,
+    orchestrator_llm: LLMConfig,
+    step_num: int,
+    sub_task: SubTask,
+    result: SubTaskResult,
+    state_description: str,
+    remaining: Sequence[SubTask],
+    on_log: LogCallback | None,
+) -> StepDecision:
+    """Continue past a person's failed step unless a remaining step needs it."""
+    messages = (
+        ChatMessage(role="system", content=build_person_failure_system_prompt()),
+        ChatMessage(
+            role="user",
+            content=build_person_failure_prompt(
+                sub_task,
+                result,
+                state_description,
+                remaining,
+                first_remaining=step_num + 1,
+            ),
+        ),
+    )
+    response = send_chat_completion(orchestrator_llm, messages)
+    try:
+        parsed = _parse_json_response(_extract_text(response.message))
+    except OrchestratorParseError:
+        # Cannot tell whether it blocks: stop, as before.
+        parsed = {}
+    reason = str(parsed.get("reason") or "").strip()
+    action: DecisionAction = (
+        "continue" if parsed.get("decision") == "continue" else "stop"
+    )
+    if not reason:
+        reason = (
+            "A person reported a different result"
+            if action == "stop"
+            else "The remaining steps do not depend on this step"
+        )
+    _log(on_log, f"[Orchestrator]   Person-step decision: {action} — {reason}")
+    return StepDecision(step_num=step_num, action=action, reason=reason)
 
 
 def _parse_cause(value: object) -> FailureCause | None:

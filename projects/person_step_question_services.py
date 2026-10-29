@@ -114,7 +114,9 @@ def list_person_step_questions(
     One query. Keyed by person step id; a step without questions is absent.
     """
     return {
-        step_id: tuple(build_question_view(row) for row in rows[-QUESTIONS_SHOWN_PER_STEP:])
+        step_id: tuple(
+            build_question_view(row) for row in rows[-QUESTIONS_SHOWN_PER_STEP:]
+        )
         for step_id, rows in _load_questions(step_ids).items()
     }
 
@@ -128,7 +130,9 @@ def get_person_step_ask_state(
     stale pending question does not block (the next ask fails it).
     """
     rows = _load_questions([step.pk]).get(step.pk, [])
-    questions = tuple(build_question_view(row) for row in rows[-QUESTIONS_SHOWN_PER_STEP:])
+    questions = tuple(
+        build_question_view(row) for row in rows[-QUESTIONS_SHOWN_PER_STEP:]
+    )
     blocker = _ask_blocker(step, run_paused=run_paused, rows=rows)
     return PersonStepAskState(
         questions=questions,
@@ -294,9 +298,7 @@ def answer_person_step_question_now(question_id: int) -> None:
         ).update(status=status, answer=answer, answered_at=timezone.now())
         if updated:
             transaction.on_commit(
-                lambda: broadcast_person_step_questions(
-                    pivot_id, project_id, step_id
-                )
+                lambda: broadcast_person_step_questions(pivot_id, project_id, step_id)
             )
 
 
