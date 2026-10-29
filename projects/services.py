@@ -168,6 +168,11 @@ from projects.runner_update_state import (
     RUNNER_UPDATE_RUNNING_MESSAGE,
     runner_update_in_progress,
 )
+from test_sessions.case_activity import CaseActivity
+from test_sessions.services.record_case_activity import (
+    freeze_session_cases_of_run,
+    record_case_activity,
+)
 from visual_engine.services.parse_screenshot import parse_screenshot
 from visual_engine.services.pool_status import (
     get_visual_engine_status,
@@ -2416,6 +2421,8 @@ def reset_test_run(test_run: TestRun) -> None:
     # A stale PUSHING (killed worker) does not block the reset.
     if is_checked_push_live(locked, timezone.now()):
         raise ValueError("Wait for the checked results to finish sending to TestRail.")
+    # Session rows keep the outcome the reset is about to wipe.
+    freeze_session_cases_of_run(test_run.pk)
     for pivot in test_run.pivot_entries.all():
         for screenshot in pivot.screenshots.all():
             screenshot.image.delete(save=False)
@@ -2502,7 +2509,7 @@ def _has_active_test_run(project: Project) -> bool:
 
 
 @transaction.atomic
-def start_test_run(test_run: TestRun, *, help_mode: str) -> None:
+def start_test_run(test_run: TestRun, *, help_mode: str, user: CustomUser) -> None:
     """Start a WAITING run with ``help_mode`` (a ``RunHelpMode`` value)."""
     if help_mode not in RunHelpMode.values:
         raise ValueError("Choose what happens when a case needs help.")
@@ -2546,6 +2553,7 @@ def start_test_run(test_run: TestRun, *, help_mode: str) -> None:
             "updated_at",
         ]
     )
+    record_case_activity(user=user, pivot_ids=pivot_ids, activity=CaseActivity.START)
 
     def _enqueue() -> None:
         if queue_test_run_cases(test_run, pivot_ids):

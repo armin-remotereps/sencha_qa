@@ -46,6 +46,8 @@ from projects.run_reopen_services import (
     reopen_run,
     reset_case_for_restart,
 )
+from test_sessions.case_activity import CaseActivity
+from test_sessions.services.record_case_activity import record_case_activity
 
 RESUMABLE_STATUSES: tuple[str, ...] = (
     TestRunTestCaseStatus.BLOCKED,
@@ -181,6 +183,11 @@ def _resume_pivots(
         raise RunResumeError(_INVALID_HELP_MODE)
     with transaction.atomic():
         test_run, pivots = _lock_and_check(test_run_id, pivot_id)
+        record_case_activity(
+            user=user,
+            pivot_ids=[pivot.pk for pivot in pivots],
+            activity=CaseActivity.RESUME,
+        )
         now = timezone.now()
         resumes: list[TestRunCaseResume] = []
         # Logs, screenshots and the checkpoint are kept.

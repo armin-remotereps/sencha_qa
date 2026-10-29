@@ -69,6 +69,8 @@ from projects.run_reopen_services import (
     reopen_run,
     reset_case_for_restart,
 )
+from test_sessions.case_activity import CaseActivity
+from test_sessions.services.record_case_activity import record_case_activity
 
 _NOT_CHANGEABLE = (
     "Only a Passed, Failed or Blocked case can be redesigned and re-run; this "
@@ -311,6 +313,9 @@ def rerun_with_redesigned_plan(
             previous_blocked_reason=locked.blocked_reason,
             previous_result=locked.result,
             previous_finished_at=locked.finished_at,
+        )
+        record_case_activity(
+            user=user, pivot_ids=[locked.pk], activity=CaseActivity.REDESIGN_RERUN
         )
         reset_case_for_restart(locked, now)
         # Logs and screenshots are kept.

@@ -830,7 +830,7 @@ def test_run_add_cases(
 @project_membership_required
 @require_POST
 def test_run_start(
-    request: HttpRequest, project: Project, test_run_id: int
+    request: AuthenticatedRequest, project: Project, test_run_id: int
 ) -> HttpResponse:
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
@@ -840,7 +840,9 @@ def test_run_start(
         messages.error(request, form_error_text(form))
     else:
         try:
-            start_test_run(test_run, help_mode=form.cleaned_data["help_mode"])
+            start_test_run(
+                test_run, help_mode=form.cleaned_data["help_mode"], user=request.user
+            )
         except ValueError as exc:
             messages.error(request, str(exc))
     return redirect(
@@ -1579,7 +1581,9 @@ def _render_wizard_run(
 RUN_BLOCKED_MESSAGE = "This run can't start yet — resolve the failed checks below."
 
 
-def _handle_setup_run_submit(request: HttpRequest, project: Project) -> HttpResponse:
+def _handle_setup_run_submit(
+    request: AuthenticatedRequest, project: Project
+) -> HttpResponse:
     form = TestRunCreateForm(project, request.POST)
     selected_ids = frozenset(_parse_test_case_ids(request))
     if not form.is_valid():
@@ -1599,7 +1603,7 @@ def _handle_setup_run_submit(request: HttpRequest, project: Project) -> HttpResp
     )
     try:
         # The wizard has no mode choice: a first run is attended.
-        start_test_run(test_run, help_mode=RunHelpMode.ATTENDED)
+        start_test_run(test_run, help_mode=RunHelpMode.ATTENDED, user=request.user)
     except ValueError as exc:
         messages.error(request, str(exc))
     return redirect(
@@ -1608,7 +1612,7 @@ def _handle_setup_run_submit(request: HttpRequest, project: Project) -> HttpResp
 
 
 @project_membership_required
-def setup_run(request: HttpRequest, project: Project) -> HttpResponse:
+def setup_run(request: AuthenticatedRequest, project: Project) -> HttpResponse:
     """Wizard step 5: pick cases, name the run, and start it."""
     if request.method == "POST":
         return _handle_setup_run_submit(request, project)

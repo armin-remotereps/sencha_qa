@@ -60,6 +60,8 @@ from projects.run_reopen_services import (
     queue_pending_cases,
 )
 from projects.services import broadcast_run_and_pivots
+from test_sessions.case_activity import CaseActivity
+from test_sessions.services.record_case_activity import record_case_activity
 
 _NOT_PAUSED = "This run is not waiting for a person."
 _STEP_GONE = "This step was already answered or is no longer waiting."
@@ -255,7 +257,7 @@ def report_person_step(
             continue_pending=True,
         )
         _resume_case(locked_pivot, person)
-        return _after_action(project, test_run, locked_pivot)
+        return _after_action(project, test_run, locked_pivot, actor)
 
 
 def overrule_person_step(
@@ -298,7 +300,7 @@ def overrule_person_step(
             continue_pending=True,
         )
         _resume_case(locked_pivot, person)
-        return _after_action(project, test_run, locked_pivot)
+        return _after_action(project, test_run, locked_pivot, actor)
 
 
 def mark_failed_person_step(
@@ -342,7 +344,7 @@ def mark_failed_person_step(
                 "updated_at",
             ]
         )
-        return _after_action(project, test_run, locked_pivot)
+        return _after_action(project, test_run, locked_pivot, actor)
 
 
 def mark_blocked_person_step(
@@ -395,7 +397,7 @@ def mark_blocked_person_step(
                 "updated_at",
             ]
         )
-        return _after_action(project, test_run, locked_pivot)
+        return _after_action(project, test_run, locked_pivot, actor)
 
 
 def hand_back_person_step(test_run: TestRun) -> PersonStepActionResult | None:
@@ -579,9 +581,16 @@ def _runner_shows_steps(project: Project) -> bool:
 
 
 def _after_action(
-    project: Project, test_run: TestRun, pivot: TestRunTestCase
+    project: Project,
+    test_run: TestRun,
+    pivot: TestRunTestCase,
+    actor: PersonStepActor,
 ) -> PersonStepActionResult:
     """Broadcast after commit, then queue the pending cases (savepoint)."""
+    # An anonymous Test Runner answer (no user) is not attributed.
+    record_case_activity(
+        user=actor.user, pivot_ids=[pivot.pk], activity=CaseActivity.PERSON_STEP
+    )
     project_id = project.pk
     # Registered before the queue's own callbacks, so a broker failure that
     # cancels the run is the last word on the page.
