@@ -1,0 +1,133 @@
+{% extends "layouts/app.html" %}
+{% load project_extras %}
+
+{% comment %} Test session detail: totals, breakdowns and the cases acted on in the session.
+
+   Context contract (test_sessions/views.py::session_detail):
+     session     — TestSession (owned by the user)
+     summary     — SessionSummary (wall_clock, test_time, test_count, project_count,
+                   person_step_count, status_counts: list[StatusCount],
+                   by_project: list[ProjectBreakdown])
+     page_obj    — Page[SessionCaseRow]
+     elided_page_range, per_page, allowed_per_page, query_params — pagination
+     stop_form   — TestSessionStopForm (note; empty keeps the current note)
+     edit_form   — TestSessionEditForm (name, note; initial = current values)
+     export_url  — the CSV export link {% endcomment %}
+
+{% block title %}{{ session.display_name }} · Test sessions · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="{% url 'dashboard:index' %}">Dashboard</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'test_sessions:list' %}">Test sessions</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">{{ session.display_name }}</span>
+</nav>
+{% endblock %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <h1>{{ session.display_name }} {% if session.is_open %}<span class="badge badge-running">Live</span>{% endif %}</h1>
+    <p class="subtitle">
+      Started <time datetime="{{ session.started_at|date:'c' }}">{{ session.started_at|date:"M j, Y H:i" }}</time>
+      {% if session.ended_at %}· ended <time datetime="{{ session.ended_at|date:'c' }}">{{ session.ended_at|date:"M j, Y H:i" }}</time>{% if session.closed_automatically %} (closed automatically){% endif %}{% endif %}
+    </p>
+  </div>
+  <div class="actions">
+    {% if session.is_open %}<button type="button" class="btn btn-primary" @click="$dispatch('open-stop-session')">Stop session</button>{% endif %}
+    <a class="btn btn-secondary" href="{{ export_url }}">Export CSV</a>
+    <button type="button" class="btn btn-ghost" @click="$dispatch('open-edit-session')">Edit</button>
+    <button type="button" class="btn btn-danger" @click="$dispatch('open-delete-session')">Delete</button>
+  </div>
+</div>
+
+{% if session.note %}
+<div class="card">
+  <p class="muted small">Note</p>
+  <p>{{ session.note|linebreaksbr }}</p>
+</div>
+{% endif %}
+
+{# Section: Totals #}
+<div class="grid grid-5">
+  <div class="stat-card">
+    <div class="stat-label">Session time</div>
+    <div class="stat-value">{{ summary.wall_clock|duration }}</div>
+    <div class="stat-note">{% if session.is_open %}So far{% else %}Start to end{% endif %}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Test time</div>
+    <div class="stat-value">{{ summary.test_time|duration }}</div>
+    <div class="stat-note">Active time of finished cases</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Tests</div>
+    <div class="stat-value">{{ summary.test_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Projects</div>
+    <div class="stat-value">{{ summary.project_count }}</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">Person steps</div>
+    <div class="stat-value">{{ summary.person_step_count }}</div>
+  </div>
+</div>
+
+{% if summary.test_count %}
+{# Section: Breakdowns #}
+<div class="grid grid-2">
+  <div class="card">
+    <div class="card-header"><h2>By result</h2></div>
+    <dl class="kv">
+      {% for item in summary.status_counts %}
+      <div>
+        <dt>{% if item.status %}{% include "partials/badge_case_status.html" with status=item.status only %}{% else %}{{ item.label }}{% endif %}</dt>
+        <dd>{{ item.count }}</dd>
+      </div>
+      {% endfor %}
+    </dl>
+  </div>
+  <div class="card">
+    <div class="card-header"><h2>By project</h2></div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th scope="col">Project</th>
+            <th scope="col">Tests</th>
+            <th scope="col">Test time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for project in summary.by_project %}
+          <tr>
+            <td data-label="Project" class="cell-primary">{{ project.project_name|default:"Deleted project" }}</td>
+            <td data-label="Tests">{{ project.test_count }}</td>
+            <td data-label="Test time">{{ project.test_time|duration }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# Section: Cases #}
+{% if not page_obj.object_list %}
+  {% if session.is_open %}
+    {% include "partials/empty_state.html" with icon="◷" title="No tests yet" body="Start, resume, re-run or answer a case in any of your projects and it is recorded in this session." only %}
+  {% else %}
+    {% include "partials/empty_state.html" with icon="◷" title="No tests in this session" body="No case was started, resumed, re-run or answered while this session was open." only %}
+  {% endif %}
+{% else %}
+{% include "test_sessions/includes/_session_case_table.html" %}
+{% comment %} `request` is passed explicitly for the per-page form's hidden fields. {% endcomment %}
+{% include "partials/pagination.html" with page_obj=page_obj query_params=query_params per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range request=request %}
+{% endif %}
+
+{% include "test_sessions/includes/_session_dialogs.html" %}
+{% endblock %}

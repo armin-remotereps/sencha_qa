@@ -4,8 +4,11 @@
    Replaces the old dashboard/base_dashboard.html.
 
    Context contract:
-     active_nav      — "dashboard" | "projects" | "failures" | "insights" |
-                       "notifications", forwarded to the nav partials
+     active_nav      — "dashboard" | "projects" | "failures" | "sessions" |
+                       "insights" | "notifications", forwarded to the nav partials
+     open_test_session — the user's open test session or None
+                       (test_sessions.context_processors.open_test_session);
+                       the "Live" chip on the Sessions nav link
      attention_count — items needing the user (dashboard.context_processors.attention_badge);
                        seeds attentionLive, which opens ws/attention/ and keeps
                        the nav badge, the tab title and (on the dashboard) the

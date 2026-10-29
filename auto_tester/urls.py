@@ -9,6 +9,8 @@ urlpatterns: list[URLResolver | URLPattern] = [
     path("", include("dashboard.urls")),
     # The Notifications page and its actions, all under /notifications/.
     path("", include("notifications.urls")),
+    # Test sessions, all under /test-sessions/.
+    path("", include("test_sessions.urls")),
     path("projects/", include("projects.urls")),
     path(
         "projects/<int:project_id>/machine-setup/",

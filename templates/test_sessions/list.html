@@ -1,0 +1,103 @@
+{% extends "layouts/app.html" %}
+{% load project_extras %}
+
+{% comment %} Test sessions list: the user's sessions, newest first, and Start / Stop.
+
+   Context contract (test_sessions/views.py::session_list):
+     open_session      — the user's open TestSession or None (Start card when None)
+     open_test_session — same value, reused by the nav chip
+     start_form        — TestSessionStartForm (name, note; both optional)
+     page_obj          — Page[SessionListRow]
+     elided_page_range, per_page, allowed_per_page, query_params — pagination {% endcomment %}
+
+{% block title %}Test sessions · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="{% url 'dashboard:index' %}">Dashboard</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Test sessions</span>
+</nav>
+{% endblock %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <h1>Test sessions</h1>
+    <p class="subtitle">Start a session before you test; the runs and cases you act on are recorded with their hours.</p>
+  </div>
+</div>
+
+{% if open_session %}
+{# Section: the open session #}
+<div class="card card-tone-info">
+  <div class="card-header">
+    <h2><a href="{% url 'test_sessions:detail' open_session.id %}">{{ open_session.display_name }}</a> <span class="badge badge-running">Live</span></h2>
+    <div class="actions">
+      <a class="btn btn-secondary btn-sm" href="{% url 'test_sessions:detail' open_session.id %}">Open</a>
+      <button type="button" class="btn btn-primary btn-sm" @click="$dispatch('open-stop-session')">Stop session</button>
+    </div>
+  </div>
+  <p class="muted small">Started <time datetime="{{ open_session.started_at|date:'c' }}">{{ open_session.started_at|date:"M j, Y H:i" }}</time> ({{ open_session.started_at|timesince }} ago)</p>
+</div>
+{% url 'test_sessions:stop' open_session.id as stop_url %}
+{% include "partials/confirm_dialog.html" with dialog_id="stop-session" title="Stop this session?" body="The session ends now. Cases that already finished keep their result as of now; you can add a note on the session page." confirm_label="Stop session" confirm_class="btn-primary" action_url=stop_url only %}
+{% else %}
+{# Section: Start a session #}
+<div class="card">
+  <div class="card-header"><h2>Start a session</h2></div>
+  <form method="post" action="{% url 'test_sessions:start' %}">
+    {% csrf_token %}
+    <div class="grid grid-2">
+      {% include "partials/form_field.html" with field=start_form.name only %}
+      {% include "partials/form_field.html" with field=start_form.note only %}
+    </div>
+    <div class="actions">
+      <button type="submit" class="btn btn-primary">Start session</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
+{# Section: All sessions #}
+{% if not page_obj.object_list %}
+  {% include "partials/empty_state.html" with icon="◷" title="No test sessions yet" body="Sessions you start are listed here with their session time, test time, tests and projects." only %}
+{% else %}
+<div class="card">
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th scope="col">Session</th>
+          <th scope="col">Started</th>
+          <th scope="col">Ended</th>
+          <th scope="col">Session time</th>
+          <th scope="col">Test time</th>
+          <th scope="col">Tests</th>
+          <th scope="col">Projects</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in page_obj %}
+        <tr>
+          <td data-label="Session" class="cell-primary"><a href="{% url 'test_sessions:detail' row.id %}">{{ row.display_name }}</a></td>
+          <td data-label="Started"><time datetime="{{ row.started_at|date:'c' }}">{{ row.started_at|date:"M j, Y H:i" }}</time></td>
+          <td data-label="Ended">
+            {% if row.is_open %}<span class="badge badge-running">Live</span>
+            {% else %}<time datetime="{{ row.ended_at|date:'c' }}">{{ row.ended_at|date:"M j, Y H:i" }}</time>{% if row.closed_automatically %}<div class="muted small">Closed automatically</div>{% endif %}{% endif %}
+          </td>
+          <td data-label="Session time">{{ row.wall_clock|duration }}</td>
+          <td data-label="Test time">{{ row.test_time|duration }}</td>
+          <td data-label="Tests">{{ row.test_count }}</td>
+          <td data-label="Projects">{{ row.project_count }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% comment %} `request` is passed explicitly for the per-page form's hidden fields. {% endcomment %}
+{% include "partials/pagination.html" with page_obj=page_obj query_params=query_params per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range request=request %}
+{% endblock %}
