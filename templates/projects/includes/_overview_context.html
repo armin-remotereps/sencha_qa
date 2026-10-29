@@ -5,13 +5,14 @@
     project        — the current Project
     context_source — projects.application_context_services.ContextProvenance
                      | None: who wrote the current notes (provenance line)
+    can_write      — project_can_write; false labels the link "View context"
 {% endcomment %}
 <section aria-labelledby="context-h" class="card">
   <div class="card-header">
     <h2 id="context-h">Application context</h2>
     <div class="actions">
       <a class="btn btn-ghost" href="{% url 'projects:application_context' project.id %}#context-history-h">History</a>
-      <a class="btn btn-secondary" href="{% url 'projects:application_context' project.id %}">Edit context</a>
+      <a class="btn btn-secondary" href="{% url 'projects:application_context' project.id %}">{% if can_write %}Edit context{% else %}View context{% endif %}</a>
     </div>
   </div>
   {% if context_source %}

@@ -18,7 +18,9 @@
    completed/failed transitions. That's also why the WS handler below only
    *updates* uploads already in the initial list rather than fabricating new
    rows from WS data (which carries no label — see projects/consumers.py's
-   UploadProgressConsumer). {% endcomment %}
+   UploadProgressConsumer).
+   project_can_write (context processor): a read-only member gets a notice
+   instead of the step's forms and actions. {% endcomment %}
 
 {% block title %}Add test cases · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -41,6 +43,16 @@
   <p class="subtitle">Bring in the cases Punk Hazard will run &mdash; import an existing TestRail suite or start from scratch.</p>
 
   {% include "partials/wizard_steps.html" with project=project wizard_step=wizard_step only %}
+
+  {% if project and not project_can_write %}
+  <div class="alert alert-info">
+    <span class="alert-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <strong>Read-only access</strong>
+      <p>The setup wizard changes the project, so it needs a member who can make changes. <a href="{% url 'projects:detail' project.id %}">Back to the project</a></p>
+    </div>
+  </div>
+  {% else %}
 
   <div class="card">
     <fieldset style="border: 0; padding: 0; margin: 0 0 20px;">
@@ -123,6 +135,7 @@
   </div>
   <p class="hint" x-show="!canContinue" x-cloak>Import at least one test case, or choose &ldquo;Create manually&rdquo;, to continue.</p>
 
+  {% endif %}{# project_can_write #}
 </div>
 {% endblock %}
 

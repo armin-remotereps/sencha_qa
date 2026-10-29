@@ -16,6 +16,8 @@
   created: links to the created runs, the skipped names, View all runs.
   superseded / discarded: muted, status only.
   Single root element (it is the content of an x-if template).
+  project_can_write (inherited): false hides the card's buttons; a
+  read-only member sees the proposal and its status only.
 {% endcomment %}
 <section class="chat-proposal" :class="{ 'is-closed': block.proposal.status === 'superseded' || block.proposal.status === 'discarded' }" aria-label="Proposed test runs">
   <header class="chat-proposal-header">
@@ -63,6 +65,7 @@
   <template x-if="block.proposal.status === 'pending'">
     <div class="chat-proposal-actions">
       <p class="chat-proposal-hint small">Nothing is created until you press Create runs. The runs are created as Drafts.</p>
+      {% if project_can_write %}
       <div class="chat-proposal-buttons">
         <form method="post" :action="proposalDiscardUrl(block.proposal.id)" @submit="proposalSubmitting = true">
           {% csrf_token %}
@@ -73,6 +76,7 @@
           <button type="submit" class="btn btn-primary btn-sm" :disabled="proposalSubmitting" x-text="'Create ' + block.proposal.runs.length + (block.proposal.runs.length === 1 ? ' run' : ' runs')">Create runs</button>
         </form>
       </div>
+      {% endif %}
     </div>
   </template>
 

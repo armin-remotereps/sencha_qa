@@ -7,9 +7,17 @@
      project      — current Project
      form         — TestRailSettingsForm (api key never pre-filled)
      api_key_hint — last characters of the stored API key, "" when none
-     members      — list of ProjectMemberRow (email, full_name, is_you, is_active)
-     can_leave    — bool, another active member would remain after leaving
-     invite_form  — ProjectMemberInviteForm {% endcomment %}
+     members      — list of ProjectMemberRow (user_id, email, full_name, is_you,
+                    is_active, role, role_label, can_write)
+     can_leave    — bool, the viewer may leave (another active member, and for a
+                    writable viewer another active writable one, remains)
+     viewer_can_write — bool, the viewer may change roles and invite
+     invite_form  — ProjectMemberInviteForm (email, read_only checkbox)
+     role_form    — unbound ProjectMemberRoleForm; its role choices fill each
+                    row's select, which posts `role` to projects:member_role
+     project_can_write (context processor) — false hides the invite form,
+                    role selects and the TestRail forms; a read-only member
+                    sees the members table and Leave only. {% endcomment %}
 {% block title %}Settings · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
 {% block page_header %}
@@ -28,8 +36,9 @@
     <span class="badge badge-draft">{{ members|length }}</span>
   </div>
   <p class="muted">
-    Every member can manage everything in this project and gets its
-    notifications once they turn them on.
+    Members can manage everything in this project and get its notifications
+    once they turn them on. Read-only members can view it but not change
+    anything, and get no notifications.
   </p>
 
   <div class="table-wrap">
@@ -38,6 +47,7 @@
         <tr>
           <th scope="col">Member</th>
           <th scope="col">Name</th>
+          <th scope="col">Role</th>
           <th scope="col"><span class="visually-hidden">Status</span></th>
         </tr>
       </thead>
@@ -46,6 +56,24 @@
           <tr{% if not member.is_active %} class="muted"{% endif %}>
             <td data-label="Member" class="cell-primary">{{ member.email }}</td>
             <td data-label="Name">{{ member.full_name|default:"—" }}</td>
+            <td data-label="Role">
+              {% if viewer_can_write and project_can_write %}
+                <form method="post" action="{% url 'projects:member_role' project.id member.user_id %}" class="member-role-form">
+                  {% csrf_token %}
+                  <label class="visually-hidden" for="member-role-{{ member.user_id }}">Role of {{ member.email }}</label>
+                  <select class="select select-sm" id="member-role-{{ member.user_id }}" name="role">
+                    {% for value, label in role_form.fields.role.choices %}
+                    <option value="{{ value }}"{% if value == member.role %} selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                  <button type="submit" class="btn btn-sm btn-secondary">Save</button>
+                </form>
+              {% elif member.can_write %}
+                {{ member.role_label }}
+              {% else %}
+                <span class="badge badge-draft">{{ member.role_label }}</span>
+              {% endif %}
+            </td>
             <td data-label="Status">
               {% if member.is_you %}<span class="badge badge-ready">You</span>{% endif %}
               {% if not member.is_active %}<span class="badge badge-draft">Inactive</span>{% endif %}
@@ -56,21 +84,39 @@
     </table>
   </div>
 
+  {% if viewer_can_write and project_can_write %}
   <form method="post" action="{% url 'projects:member_invite' project.id %}" novalidate>
     {% csrf_token %}
     {% include "partials/form_field.html" with field=invite_form.email only %}
+    <div class="field">
+      <label class="checkbox" for="{{ invite_form.read_only.id_for_label }}">
+        {{ invite_form.read_only }}
+        <span>{{ invite_form.read_only.label }}</span>
+      </label>
+      <p class="hint">{{ invite_form.read_only.help_text }}</p>
+      {% for error in invite_form.read_only.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+    </div>
     <div class="dialog-actions">
       {% if can_leave %}
         <button type="button" class="btn btn-ghost" @click="$dispatch('open-leave-project')">Leave project</button>
       {% else %}
-        <button type="button" class="btn btn-ghost" disabled title="You are the only active member. Add someone before you leave.">Leave project</button>
+        <button type="button" class="btn btn-ghost" disabled title="You are the only active member who can make changes. Add one before you leave.">Leave project</button>
       {% endif %}
       <button class="btn btn-primary" type="submit">Add member</button>
     </div>
     {% if not can_leave %}
-      <p class="hint">You are the only active member. Add someone before you leave.</p>
+      <p class="hint">You are the only active member who can make changes. Add one before you leave.</p>
     {% endif %}
   </form>
+  {% else %}
+  <div class="dialog-actions">
+    {% if can_leave %}
+      <button type="button" class="btn btn-ghost" @click="$dispatch('open-leave-project')">Leave project</button>
+    {% else %}
+      <button type="button" class="btn btn-ghost" disabled title="You are the only active member.">Leave project</button>
+    {% endif %}
+  </div>
+  {% endif %}
 </div>
 
 {% if can_leave %}
@@ -78,6 +124,7 @@
   {% include "partials/confirm_dialog.html" with dialog_id="leave-project" title="Leave this project?" body="You lose access to this project and stop getting its notifications. Another member can add you again." confirm_label="Leave project" action_url=leave_url csrf_token=csrf_token only %}
 {% endif %}
 
+{% if project_can_write %}
 <div class="card">
   <div class="card-header">
     <h2>TestRail integration</h2>
@@ -130,5 +177,18 @@
 {% if project.has_testrail_settings %}
   {% url 'projects:settings_testrail_clear' project.id as clear_url %}
   {% include "partials/confirm_dialog.html" with dialog_id="clear-testrail" title="Clear TestRail settings?" body="The URL, email and API key are removed from this project. Imported test cases are kept." confirm_label="Clear settings" action_url=clear_url csrf_token=csrf_token only %}
+{% endif %}
+{% else %}
+<div class="card">
+  <div class="card-header">
+    <h2>TestRail integration</h2>
+    {% if project.has_testrail_settings %}
+      <span class="badge badge-passed">Configured</span>
+    {% else %}
+      <span class="badge badge-draft">Not configured</span>
+    {% endif %}
+  </div>
+  <p class="muted">Only members who can make changes manage the TestRail connection.</p>
+</div>
 {% endif %}
 {% endblock %}

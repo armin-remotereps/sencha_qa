@@ -16,7 +16,9 @@
      parent_label        — breadcrumb label for the step before this one, e.g. "Import" / the run's name
      parent_url          — breadcrumb link target for parent_label
      suggested_suite_id  — int|None, preselected in the suite <select>
-     active_tab          — "test_cases" | "runs" | "" {% endcomment %}
+     active_tab          — "test_cases" | "runs" | ""
+     project_can_write   — (context processor) false replaces the form with
+                           a read-only notice {% endcomment %}
 {% block title %}Choose a suite · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
 {% block breadcrumb_extra %}
@@ -38,6 +40,9 @@
 
 {% block project_content %}
 <div class="card">
+  {% if not project_can_write %}
+  <p class="muted">You have read-only access to this project. <a href="{{ cancel_url }}">Go back</a></p>
+  {% else %}
   <form method="post" action="{{ form_action }}">
     {% csrf_token %}
     <div class="field">
@@ -54,5 +59,6 @@
       <button class="btn btn-primary" type="submit">{{ submit_label }}</button>
     </div>
   </form>
+  {% endif %}
 </div>
 {% endblock %}

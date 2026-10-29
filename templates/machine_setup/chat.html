@@ -44,6 +44,11 @@
     run_proposal_create_url_template, run_proposal_discard_url_template —
                  machine_setup:run_proposal_create / _discard reversed with
                  id 0 (end /run-proposals/0/create/ and /0/discard/)
+    project_can_write — (context processor) false makes the page read-only:
+                 no Reset, no composer (a notice instead), no card buttons,
+                 no help panel form and no confirm dialogs; the transcript,
+                 threads and screenshots stay. user.is_superuser gates the
+                 re-run dialog's run mode select.
 
   Initial state (json_script, replaced by the socket's current_state). The
   rows themselves arrive only with current_state (page.messages is empty here),
@@ -144,7 +149,7 @@
     <div class="actions">
       <span class="badge" :class="'badge-' + machineBadgeClass" x-text="machineBadgeLabel"></span>
       <span class="badge" x-show="turn" x-cloak :class="turnBadgeClass" x-text="turn ? turn.status_label : ''"></span>
-      {% if thread_kind == "chat" %}
+      {% if thread_kind == "chat" and project_can_write %}
       <button type="button" class="btn btn-secondary" @click="$dispatch('open-reset-machine-setup')">Reset</button>
       {% endif %}
     </div>
@@ -161,12 +166,16 @@
   <section class="chat" aria-label="{% if thread_kind == 'case_help' %}Help chat{% elif thread_kind == 'case_result' %}Result chat{% elif thread_kind == 'auto_fix' %}Auto-fix thread{% else %}Machine setup conversation{% endif %}">
     <p class="chat-connection muted small" x-show="!socketOpen" x-cloak>Live updates paused — reconnecting…</p>
     {% include "machine_setup/includes/_transcript.html" %}
+    {% if project_can_write %}
     {% include "machine_setup/includes/_composer.html" with project=project conversation=conversation %}
+    {% else %}
+    <p class="hint">You have read-only access to this project: you can follow this chat but not send messages.</p>
+    {% endif %}
   </section>
 
   {% include "machine_setup/includes/_lightbox.html" %}
 
-  {% if thread_kind == "case_result" %}
+  {% if thread_kind == "case_result" and project_can_write %}
   {# Section: Apply result change confirm (opened by a result change card) #}
   <div
     class="dialog-backdrop"
@@ -211,7 +220,7 @@
         {% csrf_token %}
         <p x-text="rerunCard ? rerunCard.confirm_body : ''"></p>
         {% if help_mode_form %}
-        {% include "projects/includes/_help_mode_select.html" with field_id="redesign-rerun-help-mode" choices=help_mode_form.fields.help_mode.choices current=result_thread.run_help_mode only %}
+        {% include "projects/includes/_help_mode_select.html" with field_id="redesign-rerun-help-mode" choices=help_mode_form.fields.help_mode.choices current=result_thread.run_help_mode can_change=user.is_superuser only %}
         {% endif %}
         <p class="hint">The run must be finished or cancelled, the test machine ready, and no other run, TestRail send or setup agent reply in progress.</p>
         <div class="dialog-actions">
@@ -223,7 +232,7 @@
   </div>
   {% endif %}
 
-  {% if thread_kind == "chat" %}
+  {% if thread_kind == "chat" and project_can_write %}
   {% url 'machine_setup:reset' project_id=project.id as reset_url %}
   {% include "partials/confirm_dialog.html" with dialog_id="reset-machine-setup" title="Reset the conversation?" body="Starts a new conversation. The agent forgets this chat. Changes already made to the test machine stay. Auto-fix threads are kept." confirm_label="Reset" action_url=reset_url csrf_token=csrf_token only %}
   {% endif %}

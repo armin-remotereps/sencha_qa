@@ -3,6 +3,8 @@
 
    Context contract:
      projects      — Page of Project, annotated with case_count / member_count
+                     and viewer_can_write (the viewer's role is writable; the
+                     Edit / Duplicate / Archive / Restore actions need it)
      show_archived — bool, whether archived rows are mixed in
      latest_runs   — dict of project id -> latest TestRun (annotated
                      success_count / failed_count), missing entries mean
@@ -56,7 +58,9 @@
           <td data-label="Members">{{ project.member_count }}</td>
           <td data-label="Actions" class="cell-actions">
             <div class="actions">
-              {% if project.archived %}
+              {% if not project.viewer_can_write %}
+                <span class="badge badge-draft">Read-only</span>
+              {% elif project.archived %}
                 <form method="post" action="{% url 'projects:restore' project.id %}">
                   {% csrf_token %}
                   {% if show_archived %}<input type="hidden" name="archived" value="1">{% endif %}

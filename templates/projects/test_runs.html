@@ -7,7 +7,9 @@
    Context contract (projects.views.test_run_list):
      project — current Project
      test_runs — Page[TestRun], each row annotated case_count / success_count / failed_count / blocked_count
-     per_page / allowed_per_page / elided_page_range / query_params — pagination {% endcomment %}
+     per_page / allowed_per_page / elided_page_range / query_params — pagination
+     project_can_write (context processor) — false hides New run, Delete and
+     the delete dialog (read-only member) {% endcomment %}
 {% block title %}Runs · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
 {% block page_header %}
@@ -16,21 +18,29 @@
     <h1>Runs</h1>
     <p class="subtitle">{{ test_runs.paginator.count }} run{{ test_runs.paginator.count|pluralize }}</p>
   </div>
+  {% if project_can_write %}
   <div class="actions">
     <a class="btn btn-primary" href="{% url 'projects:test_case_list' project.id %}">New run</a>
   </div>
+  {% endif %}
 </div>
 {% endblock %}
 
 {% block project_content %}
 {% if test_runs %}
-  {% include "projects/includes/_test_run_table.html" with project=project test_runs=test_runs only %}
+  {% include "projects/includes/_test_run_table.html" with project=project test_runs=test_runs can_write=project_can_write only %}
 {% else %}
   {% url 'projects:test_case_list' project.id as choose_cases_url %}
+  {% if project_can_write %}
   {% include "partials/empty_state.html" with icon="▶" title="No runs yet" body="Pick test cases to start your first run." primary_label="Choose test cases" primary_url=choose_cases_url only %}
+  {% else %}
+  {% include "partials/empty_state.html" with icon="▶" title="No runs yet" body="Runs of this project show up here." only %}
+  {% endif %}
 {% endif %}
 
 {% include "partials/pagination.html" with page_obj=test_runs per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range query_params=query_params %}
 
+{% if project_can_write %}
 {% include "projects/includes/_test_run_delete_dialog.html" with project=project %}
+{% endif %}
 {% endblock %}

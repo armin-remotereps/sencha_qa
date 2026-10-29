@@ -4,7 +4,8 @@
    Context contract:
      project   — current Project
      test_runs — Page[TestRun], each row annotated case_count / success_count / failed_count / blocked_count
-                 and avg_case_duration (timedelta | None: mean active_duration of its timed Passed / Failed cases) {% endcomment %}
+                 and avg_case_duration (timedelta | None: mean active_duration of its timed Passed / Failed cases)
+     can_write — project_can_write; false hides the Delete row action {% endcomment %}
 <div class="table-wrap">
   <table class="data-table">
     <thead>
@@ -63,7 +64,7 @@
           <td data-label="Avg per case" {% if run.avg_case_duration is None %}class="muted"{% endif %}>{{ run.avg_case_duration|duration }}</td>
 
           <td data-label="" class="cell-actions">
-            {% if run.status == "waiting" %}
+            {% if run.status == "waiting" and can_write %}
               <button
                 type="button"
                 class="btn btn-sm btn-danger"

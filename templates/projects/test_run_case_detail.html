@@ -91,7 +91,14 @@
      the first step that was not carried). An earlier plan with is_review was
      replaced after a result review (plan.label says which). The page reloads
      when the case moves between two finished statuses (a person applied a
-     result change), since these parts are server-rendered. {% endcomment %}
+     result change), since these parts are server-rendered.
+
+     Access: project_can_write (context processor) gates every write control —
+     Check / Uncheck, Edit, Remove, Resume, Discuss result, Abort, the help and
+     person-step cards' forms (passed in as can_write) and every dialog. A
+     read-only member keeps the result, steps, log, screenshots, history and the
+     "Go to result chat" link. user.is_superuser gates the Resume dialog's run
+     mode select. {% endcomment %}
 
 {% block title %}{{ pivot.test_case.title }} · {{ test_run.display_name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -141,14 +148,14 @@
         {% else %}
         <span class="badge badge-passed">Sent to TestRail R{{ pivot.testrail_source_run_id }}</span>
         {% endif %}
-      {% elif can_uncheck %}
+      {% elif can_uncheck and project_can_write %}
         <form method="post" action="{% url 'projects:test_run_cases_uncheck' project.id test_run.id %}">
           {% csrf_token %}
           <input type="hidden" name="pivot_ids" value="{{ pivot.id }}">
           <input type="hidden" name="next" value="{{ case_detail_url }}">
           <button type="submit" class="btn btn-secondary">Uncheck</button>
         </form>
-      {% elif can_check %}
+      {% elif can_check and project_can_write %}
         <form method="post" action="{% url 'projects:test_run_cases_check' project.id test_run.id %}">
           {% csrf_token %}
           <input type="hidden" name="pivot_ids" value="{{ pivot.id }}">
@@ -156,10 +163,10 @@
           <button type="submit" class="btn btn-primary">Mark as checked</button>
         </form>
       {% endif %}
-      {% if can_edit %}
+      {% if can_edit and project_can_write %}
       <button type="button" class="btn btn-secondary" x-show="testRunStatus !== 'started' && testRunStatus !== 'paused'" x-cloak @click="$dispatch('open-edit-case')">Edit test case</button>
       {% endif %}
-      {% if test_run.status == "waiting" %}
+      {% if test_run.status == "waiting" and project_can_write %}
       <button type="button" class="btn btn-danger" @click="$dispatch('open-remove-case')">Remove from run</button>
       {% endif %}
       <a class="btn btn-ghost" href="{% url 'projects:test_run_detail' project.id test_run.id %}">&larr; Back to run</a>
@@ -201,16 +208,18 @@
       {% if result_thread_id %}<a href="{% url 'machine_setup:thread' project.id result_thread_id %}">review in the result chat</a>{% else %}review in the result chat{% endif %}
     </p>
     {% endif %}
-    {% if result_thread_id or can_discuss_result %}
+    {% if result_thread_id or can_discuss_result and project_can_write %}
     <div class="result-actions">
       {% if result_thread_id %}
       <a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id result_thread_id %}">Go to result chat</a>
+      {% elif not project_can_write %}
       {% elif result_chat_blocker %}
       <button type="button" class="btn btn-sm btn-secondary" disabled aria-disabled="true" aria-describedby="result-chat-blocker" title="{{ result_chat_blocker }}">Discuss result</button>
       {% else %}
       <button type="button" class="btn btn-sm btn-secondary" @click="$dispatch('open-discuss-result')">Discuss result</button>
       {% endif %}
-      {% if result_chat_blocker %}
+      {% if not project_can_write %}
+      {% elif result_chat_blocker %}
       <span class="hint" id="result-chat-blocker">{{ result_chat_blocker }}</span>
       {% elif not result_thread_id %}
       <span class="hint">Talk to the agent about this result. It can check the test machine and propose a corrected result or a redesigned re-run; nothing changes until you apply it.</span>
@@ -221,12 +230,12 @@
 
   {% if help_panel %}
   {# Section: Need help — the agent's ask and the human actions (server-rendered) #}
-  {% include "projects/includes/_case_help_card.html" with project=project test_run=test_run pivot=pivot help_panel=help_panel help_form=help_form csrf_token=csrf_token only %}
+  {% include "projects/includes/_case_help_card.html" with project=project test_run=test_run pivot=pivot help_panel=help_panel help_form=help_form csrf_token=csrf_token can_write=project_can_write only %}
   {% endif %}
 
   {% if person_step_panel.holds_run and person_step_panel.is_open or person_step_panel.holds_run and person_step_panel.confirming %}
   {# Section: Your turn — a person performs the step, the agent confirms it (server-rendered). Hidden while the case is in Need help (a fault while confirming): the help card above owns the case then. #}
-  {% include "projects/includes/_person_step_card.html" with project=project test_run=test_run pivot=pivot person_step_panel=person_step_panel person_step_form=person_step_form csrf_token=csrf_token only %}
+  {% include "projects/includes/_person_step_card.html" with project=project test_run=test_run pivot=pivot person_step_panel=person_step_panel person_step_form=person_step_form csrf_token=csrf_token can_write=project_can_write only %}
   {% endif %}
 
   {# Section: Steps — the agent's planned steps, live while the case runs #}
@@ -314,14 +323,14 @@
     <p class="hint" x-show="blockedReason === 'help_skipped'"{% if pivot.blocked_reason != "help_skipped" %} x-cloak{% endif %}>A person marked this case blocked while it was waiting for help, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
     <p class="hint" x-show="blockedReason === 'person_review'"{% if pivot.blocked_reason != "person_review" %} x-cloak{% endif %}>A person marked this case blocked after reviewing its result with the agent, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
     <p class="hint" x-show="blockedReason !== 'help_skipped' && blockedReason !== 'person_review'"{% if pivot.blocked_reason == "help_skipped" or pivot.blocked_reason == "person_review" %} x-cloak{% endif %}>This case was not judged: an infrastructure problem stopped it before the agent could reach a verdict, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
-    {% if can_resume %}
+    {% if can_resume and project_can_write %}
     <div class="actions card-actions">
       <button type="button" class="btn btn-primary" @click="$dispatch('open-resume-case')">Resume case</button>
     </div>
     {% endif %}
   </section>
 
-  {% if can_resume %}
+  {% if can_resume and project_can_write %}
   {# Section: Resume a cancelled case — only for status "cancelled" #}
   <section aria-labelledby="cancelled-h" class="card" x-show="status === 'cancelled'" x-cloak>
     <div class="card-header">
@@ -528,6 +537,7 @@
     </div>
   </div>
 
+  {% if project_can_write %}
   {% if help_panel or person_step_panel %}
   {% url 'projects:test_run_abort' project.id test_run.id as test_run_abort_url %}
   {% include "partials/confirm_dialog.html" with dialog_id="abort-run" title="Abort this run?" body="This case and the pending cases will be marked as cancelled (a running auto-fix is asked to stop). Cases that already finished keep their result." confirm_label="Abort run" action_url=test_run_abort_url %}
@@ -567,7 +577,7 @@
         {% else %}
         <p>No progress was saved for this case, so it starts again from step 1 on this run.</p>
         {% endif %}
-        {% include "projects/includes/_help_mode_select.html" with field_id="resume-case-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode only %}
+        {% include "projects/includes/_help_mode_select.html" with field_id="resume-case-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode can_change=user.is_superuser only %}
         <p>The result stays on this run. A Checked mark on this case is cleared.</p>
         <div class="dialog-actions">
           <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
@@ -702,6 +712,7 @@
     </div>
   </div>
   {% endif %}
+  {% endif %}{# project_can_write #}
 
 </div>
 {% endblock %}

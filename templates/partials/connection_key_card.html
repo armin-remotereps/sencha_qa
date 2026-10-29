@@ -2,9 +2,13 @@
 
    Context contract:
      project — the current Project (key value and regenerate-key form action)
+     project_can_write — inherited (include it without `only`); the card
+                         renders nothing unless it is true (read-only
+                         members never see the key)
 
    Declares its own Alpine scope; needs nothing from an ancestor. Include it
    at most once per page: it owns the "regenerate-key" confirm dialog. {% endcomment %}
+{% if project_can_write %}
 <div class="card" x-data="{ revealed: false }">
   <div class="card-header">
     <h2>Connection key</h2>
@@ -63,3 +67,4 @@
 
 {% url 'projects:regenerate_api_key' project.id as regenerate_key_url %}
 {% include "partials/confirm_dialog.html" with dialog_id="regenerate-key" title="Regenerate the connection key?" body="The current key stops working for new connections. Any Test Runner still using it needs its CONTROLLER_API_KEY line updated and a restart." confirm_label="Regenerate" confirm_class="btn-danger-solid" action_url=regenerate_key_url %}
+{% endif %}

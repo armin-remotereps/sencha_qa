@@ -20,6 +20,8 @@
                   neither help_panel nor person_step_panel (a person step was
                   marked failed or blocked, or handed back, and a gate
                   refused the queueing); renders a plain "Continue run" banner
+     can_write — project_can_write; false hides every "Continue run" form
+                  (read-only members only see the state and the links)
    The agent's reason / ask is model text: autoescaped, never |safe. {% endcomment %}
 {% if help_state == "person_step" and person_step_panel %}
 {% with step=person_step_panel.step %}
@@ -41,11 +43,17 @@
       {% else %}
         <p>The run can continue now.</p>
       {% endif %}
+      {% if can_write %}
       <form method="post" action="{% url 'projects:test_run_continue' project.id test_run.id %}" class="help-actions">
         {% csrf_token %}
         <button type="submit" class="btn btn-sm btn-primary"{% if person_step_panel.blockers %} disabled aria-disabled="true"{% endif %}>Continue run</button>
         <a class="btn btn-sm btn-secondary" href="{% url 'projects:test_run_case_detail' project.id test_run.id case.id %}">Open the case</a>
       </form>
+      {% else %}
+      <div class="help-actions">
+        <a class="btn btn-sm btn-secondary" href="{% url 'projects:test_run_case_detail' project.id test_run.id case.id %}">Open the case</a>
+      </div>
+      {% endif %}
     {% endif %}
   </div>
 </div>
@@ -89,10 +97,12 @@
       {% else %}
         <p>The run can continue now.</p>
       {% endif %}
+      {% if can_write %}
       <form method="post" action="{% url 'projects:test_run_continue' project.id test_run.id %}" class="help-actions">
         {% csrf_token %}
         <button type="submit" class="btn btn-sm btn-primary"{% if help_panel.blockers %} disabled aria-disabled="true"{% endif %}>Continue run</button>
       </form>
+      {% endif %}
     {% endif %}
   </div>
 </div>
@@ -108,10 +118,12 @@
     {% else %}
       <p>The run can continue now.</p>
     {% endif %}
+    {% if can_write %}
     <form method="post" action="{% url 'projects:test_run_continue' project.id test_run.id %}" class="help-actions">
       {% csrf_token %}
       <button type="submit" class="btn btn-sm btn-primary"{% if paused_run_blockers %} disabled aria-disabled="true"{% endif %}>Continue run</button>
     </form>
+    {% endif %}
   </div>
 </div>
 {% endif %}

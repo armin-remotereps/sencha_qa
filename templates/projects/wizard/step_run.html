@@ -20,7 +20,9 @@
 
    The "cases_selected" readiness check is the one line item that can
    change without a round trip (as cases are (un)checked), so it's kept
-   in sync client-side — see updateCasesSelectedCheck() below. {% endcomment %}
+   in sync client-side — see updateCasesSelectedCheck() below.
+   project_can_write (context processor): a read-only member gets a notice
+   instead of the step's forms and actions. {% endcomment %}
 
 {% block title %}First run · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -86,6 +88,16 @@
 
   {% include "partials/wizard_steps.html" with project=project wizard_step=wizard_step only %}
 
+  {% if project and not project_can_write %}
+  <div class="alert alert-info">
+    <span class="alert-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <strong>Read-only access</strong>
+      <p>The setup wizard changes the project, so it needs a member who can make changes. <a href="{% url 'projects:detail' project.id %}">Back to the project</a></p>
+    </div>
+  </div>
+  {% else %}
+
   <form method="post" action="{% url 'projects:setup_run' project.id %}" novalidate>
     {% csrf_token %}
 
@@ -132,5 +144,6 @@
     {% include "partials/wizard_actions.html" with back_url=back_url next_label="Start run" next_large=True only %}
   </form>
 
+  {% endif %}{# project_can_write #}
 </div>
 {% endblock %}

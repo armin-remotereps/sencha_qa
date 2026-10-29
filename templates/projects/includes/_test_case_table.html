@@ -5,28 +5,34 @@
    Context contract:
      project    — current Project
      test_cases — Page[TestCase], each row annotated last_run_pivot_id /
-                  last_run_status / last_run_test_run_id / last_run_at {% endcomment %}
+                  last_run_status / last_run_test_run_id / last_run_at
+     can_write  — project_can_write; false drops the selection column and the
+                  row menu (Edit / Delete) {% endcomment %}
 <div class="table-wrap">
   <table class="data-table">
     <thead>
       <tr>
+        {% if can_write %}
         <th scope="col" class="cell-check">
           <input type="checkbox" aria-label="Select all" :checked="allSelected" @change="toggleAll()">
         </th>
+        {% endif %}
         <th scope="col">Case</th>
         <th scope="col">Type</th>
         <th scope="col">Priority</th>
         <th scope="col">Last result</th>
         <th scope="col">Last run</th>
-        <th scope="col"><span class="visually-hidden">Actions</span></th>
+        {% if can_write %}<th scope="col"><span class="visually-hidden">Actions</span></th>{% endif %}
       </tr>
     </thead>
     <tbody>
       {% for tc in test_cases %}
         <tr>
+          {% if can_write %}
           <td data-label="">
             <input type="checkbox" aria-label="Select {{ tc.title }}" :checked="selected.includes({{ tc.id }})" @change="toggle({{ tc.id }})">
           </td>
+          {% endif %}
           <td data-label="Case" class="cell-primary">
             <a href="#">{{ tc.title }}</a>
             {% if tc.testrail_id %}<div class="muted small">{{ tc.testrail_id }}</div>{% endif %}
@@ -45,6 +51,7 @@
           <td data-label="Last run" class="muted">
             {% if tc.last_run_at %}{{ tc.last_run_at|date:"M j, Y" }}{% else %}&mdash;{% endif %}
           </td>
+          {% if can_write %}
           <td data-label="" class="cell-actions">
             <div class="row-menu" x-data="rowMenu()" @click.outside="close()">
               <button
@@ -81,6 +88,7 @@
               </div>
             </div>
           </td>
+          {% endif %}
         </tr>
       {% endfor %}
     </tbody>

@@ -28,7 +28,13 @@
      page_header      — the page's own <div class="page-header">…</div>
                          (title, subtitle, actions) — not pre-wrapped here,
                          since its contents vary too much page to page.
-     project_content   — everything below the project tabs. {% endcomment %}
+     project_content   — everything below the project tabs.
+
+   From the projects.context_processors.project_access context processor (set
+   on every @project_membership_required page): project_can_write, project_role.
+   A read-only member sees a "Read-only access" badge after the breadcrumbs, so
+   the missing write controls are explained. Pages that override the breadcrumbs
+   block (wizard steps) do not show it. {% endcomment %}
 {% block breadcrumbs %}
 <nav class="breadcrumbs" aria-label="Breadcrumb">
   <a href="{% url 'dashboard:index' %}">Dashboard</a>
@@ -36,6 +42,7 @@
   <a href="{% url 'projects:list' %}">Projects</a>
   <span class="sep" aria-hidden="true">›</span>
   {% block breadcrumb_extra %}<span aria-current="page">{{ project.name }}</span>{% endblock %}
+  {% if project_role and not project_can_write %}<span class="badge badge-draft" title="You can view this project but not change it.">Read-only access</span>{% endif %}
 </nav>
 {% endblock %}
 

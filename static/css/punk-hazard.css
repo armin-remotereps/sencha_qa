@@ -1551,6 +1551,18 @@ a.stat-card:hover {
   font-size: 0.83rem;
 }
 
+/* Settings › Members: per-row role select + Save */
+.member-role-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.member-role-form .select {
+  width: auto;
+}
+
 .per-page-form {
   display: flex;
   align-items: center;

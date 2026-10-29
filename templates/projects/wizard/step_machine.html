@@ -9,7 +9,9 @@
    the agent-status WS — same fields/shape as the connection-status
    component in the old templates/projects/detail.html (L10-45), and the
    scope partials/advanced_diagnostics.html expects (see that partial's
-   docstring). {% endcomment %}
+   docstring).
+   project_can_write (context processor): a read-only member gets a notice
+   instead of the step's forms and actions. {% endcomment %}
 
 {% block title %}Connect a test machine · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -80,6 +82,16 @@
 
   {% include "partials/wizard_steps.html" with project=project wizard_step=wizard_step only %}
 
+  {% if project and not project_can_write %}
+  <div class="alert alert-info">
+    <span class="alert-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <strong>Read-only access</strong>
+      <p>The setup wizard changes the project, so it needs a member who can make changes. <a href="{% url 'projects:detail' project.id %}">Back to the project</a></p>
+    </div>
+  </div>
+  {% else %}
+
   <div class="card">
     <p>Punk Hazard doesn&rsquo;t run tests in the cloud &mdash; it drives a real machine you control, the same way a person would: clicking, typing, and taking screenshots. The <strong>Test Runner</strong> is a small program you install on that machine so Punk Hazard can connect to it.</p>
   </div>
@@ -130,5 +142,6 @@
     <a class="btn btn-primary" href="{% url 'projects:setup_run' project.id %}">Continue &rarr;</a>
   </div>
 
+  {% endif %}{# project_can_write #}
 </div>
 {% endblock %}

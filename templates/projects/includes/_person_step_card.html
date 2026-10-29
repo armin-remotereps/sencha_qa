@@ -16,6 +16,8 @@
                   reporting member's name; blank when anonymous)
      person_step_form — unbound PersonStepReportForm (outcome radios, note,
                   output; person_step_id is written from the panel's step)
+     can_write  — project_can_write; false renders the card read-only (the
+                  step and its state, no report form, no Abort)
    Report / Overrule / Mark failed / Mark blocked share one form and post to
    their own URL via formaction (the help card convention); the decision
    views read person_step_id and note and ignore the report fields. The
@@ -35,7 +37,7 @@
     <time datetime="{{ step.requested_at|date:'c' }}">{{ step.requested_at|timesince }}</time> ago.
     {% if person_step_panel.is_open %}Perform this step on the test machine yourself, then report how it went. The agent then checks the test machine to confirm it. Nothing else in this run executes until then.{% endif %}
   </p>
-  {% if person_step_panel.runner_can_answer %}
+  {% if person_step_panel.runner_can_answer and can_write %}
     <p class="hint">You can also answer this on the Test Runner window.</p>
   {% endif %}
 
@@ -70,7 +72,7 @@
         <div>
           <strong>{% if person_step_panel.reported_at_runner %}The report{% else %}Your report{% endif %} is saved, but the run could not continue</strong>
           {% if person_step_panel.blockers %}<p>{{ person_step_panel.blockers|join:" " }}</p>{% endif %}
-          <a class="btn btn-sm btn-primary" href="{% url 'projects:test_run_detail' project.id test_run.id %}">Continue it from the run page</a>
+          <a class="btn btn-sm btn-primary" href="{% url 'projects:test_run_detail' project.id test_run.id %}">{% if can_write %}Continue it from the run page{% else %}Go to the run page{% endif %}</a>
         </div>
       </div>
     {% else %}
@@ -99,6 +101,9 @@
       <p class="help-quote">{{ person_step_panel.objection }}</p>
     {% endif %}
 
+    {% if not can_write %}
+    <p class="hint">A member with write access performs and reports this step.</p>
+    {% else %}
     <form method="post" action="{% url 'projects:test_run_case_person_report' project.id test_run.id pivot.id %}">
       {% csrf_token %}
       <input type="hidden" name="person_step_id" value="{{ step.id }}">
@@ -137,6 +142,7 @@
         <button type="button" class="btn btn-danger" @click="$dispatch('open-abort-run')">Abort run</button>
       </div>
     </form>
+    {% endif %}
   {% endif %}
 </section>
 {% endwith %}

@@ -9,6 +9,8 @@
     visual_engine — VisualEngineStatusPayload; seeds overviewLive().visualEngine
     open_help_request — CaseHelpRequest (case loaded) of the paused active
                         run, or None
+    project_can_write — (context processor) false hides Restart setup wizard
+                        and Run tests (read-only member)
 
   The "Test machine" stat card below is a live view: it's kept in an
   ancestor Alpine scope (overviewLive(), extra_scripts) that opens the
@@ -33,10 +35,10 @@
     </p>
   </div>
   <div class="actions">
-    <a class="btn btn-ghost" href="{% url 'projects:setup_details' project.id %}">Restart setup wizard</a>
+    {% if project_can_write %}<a class="btn btn-ghost" href="{% url 'projects:setup_details' project.id %}">Restart setup wizard</a>{% endif %}
     {% if overview.active_run %}
       <a class="btn btn-primary" href="{% url 'projects:test_run_detail' project.id overview.active_run.id %}">{% if overview.active_run.status == "paused" %}View paused run{% else %}View running tests{% endif %}</a>
-    {% else %}
+    {% elif project_can_write %}
       <a class="btn btn-primary" href="{% url 'projects:test_case_list' project.id %}">Run tests</a>
     {% endif %}
   </div>
@@ -51,7 +53,7 @@
   {% include "projects/includes/_overview_stats.html" with project=project overview=overview only %}
 </div>
 
-{% include "projects/includes/_overview_context.html" with project=project context_source=context_source only %}
+{% include "projects/includes/_overview_context.html" with project=project context_source=context_source can_write=project_can_write only %}
 {% include "projects/includes/_overview_runs.html" with project=project overview=overview only %}
 {% endblock %}
 

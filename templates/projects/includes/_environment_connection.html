@@ -10,6 +10,8 @@
                     expected_version). The live update state is
                     environmentLive().runnerUpdate / updateState /
                     canUpdate / updateInFlight / updateOutcome.
+    project_can_write — inherited (included without `only`); false hides
+                    Update Test Runner, Disconnect and their dialogs
   Runner-provided text (versions, failure detail) is bound with x-text only.
 {% endcomment %}
 <section aria-labelledby="connection-h" class="card">
@@ -114,11 +116,15 @@
     </div>
   </div>
 
+  {% if project_can_write %}
   <div class="actions" x-show="agentConnected" x-cloak>
     <button class="btn btn-primary" type="button" x-show="canUpdate" @click="$dispatch('open-runner-update')">Update Test Runner</button>
     <button class="btn btn-danger" type="button" @click="$dispatch('open-disconnect-machine')">Disconnect test machine</button>
   </div>
+  {% endif %}
 </section>
+
+{% if project_can_write %}
 
 {% url 'projects:force_disconnect' project.id as disconnect_url %}
 {% include "partials/confirm_dialog.html" with dialog_id="disconnect-machine" title="Disconnect the test machine?" body="The current connection is closed immediately. Any run in progress on it will be interrupted. You can reconnect at any time by starting the Test Runner again." confirm_label="Disconnect test machine" confirm_class="btn-danger-solid" action_url=disconnect_url %}
@@ -161,3 +167,4 @@
     </form>
   </div>
 </div>
+{% endif %}

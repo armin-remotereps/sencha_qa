@@ -15,6 +15,8 @@
   outdated card (the case changed since) offers Discard only.
   applied / discarded / superseded: state only.
   Single root element (it is the content of an x-if template).
+  project_can_write (inherited): false hides the card's buttons; a
+  read-only member sees the proposal and its status only.
 {% endcomment %}
 <section class="chat-proposal result-change-card" :class="{ 'is-closed': block.change.status === 'superseded' || block.change.status === 'discarded' }" aria-label="Proposed result change">
   <header class="chat-proposal-header">
@@ -43,6 +45,7 @@
     <div class="chat-proposal-actions">
       <p class="chat-proposal-hint small" x-show="block.change.outdated">The case changed since this was proposed: it was re-run, resumed or its result changed. Ask the agent again.</p>
       <p class="chat-proposal-hint small" x-show="!block.change.outdated">Nothing changes until you press Apply. The earlier result is kept in the case's history.</p>
+      {% if project_can_write %}
       <div class="chat-proposal-buttons">
         <form method="post" :action="block.change.discard_url" @submit="cardSubmitting = true">
           {% csrf_token %}
@@ -50,6 +53,7 @@
         </form>
         <button type="button" class="btn btn-primary btn-sm" x-show="!block.change.outdated" :disabled="cardSubmitting" @click="openApplyResult(block.change)">Apply</button>
       </div>
+      {% endif %}
     </div>
   </template>
 

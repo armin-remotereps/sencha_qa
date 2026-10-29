@@ -23,6 +23,9 @@
      help_form  — CaseHelpResolutionForm (the person's optional note, never
                   pre-filled from the agent's suggestion; use_plan_revision,
                   unticked here: the draft is only summarised on this page)
+     can_write  — project_can_write; false renders the card read-only: no
+                  Stop auto-fix, no Open help chat form (the Go to help chat
+                  link stays), no Continue / Mark failed / Mark blocked / Abort
    Continue / Mark failed / Mark blocked share one form (the note) and post to their
    own URL via formaction. Abort opens the page's "abort-run" dialog. With a
    pending draft the form carries its hidden plan_revision_id and the
@@ -66,6 +69,7 @@
         <span class="alert-icon" aria-hidden="true">⚙</span>
         <div>
           <strong>The Machine setup agent is trying to fix this</strong>
+          {% if can_write %}
           <p>Continue, Mark failed and Mark blocked take effect when the auto-fix agent stops. Stop auto-fix to talk to it yourself in the help chat.</p>
           <div class="help-actions">
             <form method="post" action="{% url 'projects:test_run_case_help_stop_auto_fix' project.id test_run.id pivot.id %}">
@@ -73,6 +77,7 @@
               <button type="submit" class="btn btn-sm btn-danger">Stop auto-fix</button>
             </form>
           </div>
+          {% endif %}
         </div>
       </div>
     {% elif help_request.auto_fix_state == "not_fixed" %}
@@ -96,7 +101,7 @@
       <div class="help-actions">
         <a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id thread.id %}">Go to help chat</a>
       </div>
-    {% else %}
+    {% elif can_write %}
       <form method="post" action="{% url 'machine_setup:help_chat_open' project.id pivot.id %}" class="field">
         {% csrf_token %}
         <label class="label" for="help-chat-text">Talk to the agent about this case</label>
@@ -121,10 +126,16 @@
       <div class="help-suggestion">
         <strong>The agent suggests: {{ help_request.get_agent_proposal_action_display }}</strong>
         {% if help_request.agent_proposal_note %}<p class="pre-wrap small">{{ help_request.agent_proposal_note }}</p>{% endif %}
-        <p class="hint">Only you resolve the case. The agent's note is not sent to the tester; write your own note below if you want one.</p>
+        {% if can_write %}<p class="hint">Only you resolve the case. The agent's note is not sent to the tester; write your own note below if you want one.</p>{% endif %}
       </div>
     {% endif %}
 
+    {% if not can_write %}
+      {% if auto_fix_summary and help_request.auto_fix_state != "running" %}
+        <div class="label">What the Machine setup agent tried</div>
+        <p class="help-quote pre-wrap">{{ auto_fix_summary }}</p>
+      {% endif %}
+    {% else %}
     <form method="post" action="{% url 'projects:test_run_case_help_continue' project.id test_run.id pivot.id %}">
       {% csrf_token %}
       {% if auto_fix_summary and help_request.auto_fix_state != "running" %}
@@ -156,12 +167,13 @@
         <button type="button" class="btn btn-danger" @click="$dispatch('open-abort-run')">Abort run</button>
       </div>
     </form>
+    {% endif %}
   {% elif help_panel.waiting_for_auto_fix_stop %}
     <p>The run continues as soon as the auto-fix agent stops.</p>
     {% if thread %}<a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id thread.id %}">View the auto-fix thread</a>{% endif %}
   {% else %}
     <p>The run could not continue yet.{% if help_panel.blockers %} {{ help_panel.blockers|join:" " }}{% endif %}</p>
-    <a class="btn btn-sm btn-primary" href="{% url 'projects:test_run_detail' project.id test_run.id %}">Continue it from the run page</a>
+    <a class="btn btn-sm btn-primary" href="{% url 'projects:test_run_detail' project.id test_run.id %}">{% if can_write %}Continue it from the run page{% else %}Go to the run page{% endif %}</a>
   {% endif %}
 </section>
 {% endwith %}

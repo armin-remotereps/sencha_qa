@@ -68,6 +68,13 @@
      test_run also carries testrail_run_id, testrail_push_status,
      testrail_pushed_at, testrail_push_error, testrail_push_summary.
 
+   Access: project_can_write (context processor) gates every write control —
+     header actions, the Start form, the bulk bar and selection column, the
+     help banner's forms and every dialog. A read-only member keeps the read
+     views (results, logs, screenshots). user.is_superuser gates the run mode:
+     the Start radio, the mid-run switch and the Resume / Re-run selects;
+     others see the run's mode as text and post no help_mode.
+
    Known gap: `readiness` is computed once at page load. If another tab
    resets this run while this page is open, the WS flips testRunStatus
    back to "waiting" but the readiness checklist card won't have anything
@@ -112,13 +119,15 @@
         <template x-if="testRunStatus === 'done' || testRunStatus === 'cancelled'">
           <span>Finished <time datetime="{{ test_run.finished_at|date:'c' }}">{{ test_run.finished_at|date:"M j, H:i" }}</time>{% if test_run.finished_at and test_run.started_at %} · {{ test_run.started_at|timesince:test_run.finished_at }}{% endif %} · <span x-text="summary.total"></span> cases</span>
         </template>
-        <span x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak> · Help mode: <span x-text="helpModeLabel(runHelpMode)">{{ test_run.get_help_mode_display }}</span></span>
+        <span{% if user.is_superuser and project_can_write %} x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak{% endif %}> · Help mode: <span x-text="helpModeLabel(runHelpMode)">{{ test_run.get_help_mode_display }}</span></span>
       </p>
       {% comment %} Switch the help mode of a running or paused run. It applies from
          the next Need help; a paused case waiting for a person (never
          auto-fixed) is handed to the auto-fix at once when switched to Night.
          runHelpMode follows the run's WS events; the select keeps the
-         person's pick until it is saved. {% endcomment %}
+         person's pick until it is saved. Superusers only; others see the
+         mode as text in the subtitle. {% endcomment %}
+      {% if user.is_superuser and project_can_write %}
       <form
         method="post"
         action="{% url 'projects:test_run_help_mode' project.id test_run.id %}"
@@ -136,7 +145,9 @@
         <button type="submit" class="btn btn-sm btn-secondary" :disabled="helpModeChoice === runHelpMode" :aria-disabled="(helpModeChoice === runHelpMode).toString()">Save</button>
         <span class="visually-hidden" id="run-help-mode-hint">Applies from the next case that needs help. Night also hands a case waiting for a person to the Machine setup agent. Human in the loop hands the next step to a person; leaving it hands a step waiting for a person back to the agent.</span>
       </form>
+      {% endif %}
     </div>
+    {% if project_can_write %}
     <div class="actions">
       <a class="btn btn-secondary" x-show="testRunStatus === 'waiting'" x-cloak href="{% url 'projects:test_case_list' project.id %}">Add cases</a>
 
@@ -214,9 +225,10 @@
 
       <button type="button" class="btn btn-danger" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak @click="$dispatch('open-reset-run')">Reset run</button>
     </div>
+    {% endif %}
   </div>
 
-  {% if not resume_panel.can_resume and resume_panel.blockers %}
+  {% if project_can_write and not resume_panel.can_resume and resume_panel.blockers %}
   {# Section: Why "Resume run" is disabled — mirrors the header's finished-run visibility #}
   <p class="hint" id="resume-run-blockers" x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak>
     Resume run is unavailable: {{ resume_panel.blockers|join:" " }}
@@ -252,7 +264,7 @@
   {% include "projects/includes/_testrail_checked_push_status.html" %}
 
   {% if help_panel or person_step_panel or test_run.status == "paused" %}
-  {% include "projects/includes/_run_help_banner.html" with project=project test_run=test_run help_panel=help_panel person_step_panel=person_step_panel help_state=help_state paused_run_blockers=paused_run_blockers csrf_token=csrf_token only %}
+  {% include "projects/includes/_run_help_banner.html" with project=project test_run=test_run help_panel=help_panel person_step_panel=person_step_panel help_state=help_state paused_run_blockers=paused_run_blockers csrf_token=csrf_token can_write=project_can_write only %}
   {% endif %}
 
   {% include "partials/project_tabs.html" with project=project active_tab=active_tab only %}
@@ -264,9 +276,10 @@
         <h2>Ready to run?</h2>
       </div>
       {% include "partials/readiness_checklist.html" with readiness=readiness only %}
+      {% if project_can_write %}
       <form method="post" action="{% url 'projects:test_run_start' project.id test_run.id %}" style="margin-top: 16px;">
         {% csrf_token %}
-        {% if start_form %}
+        {% if start_form and user.is_superuser %}
         <fieldset class="radio-card-stack">
           <legend class="label">{{ start_form.help_mode.label }}</legend>
           {% for value, label in start_form.fields.help_mode.choices %}
@@ -287,12 +300,17 @@
           </label>
           {% endfor %}
         </fieldset>
+        {% else %}
+        <p class="hint">Run mode: {{ test_run.get_help_mode_display }}</p>
         {% endif %}
         <div class="actions">
           <button type="submit" class="btn btn-primary"{% if readiness.blockers %} disabled aria-disabled="true"{% endif %}>Start run</button>
         </div>
       </form>
       {% if readiness.blockers %}<p class="hint">Resolve the items above to start this run.</p>{% endif %}
+      {% else %}
+      <p class="hint">Run mode: {{ test_run.get_help_mode_display }}</p>
+      {% endif %}
     </div>
   </template>
 
@@ -356,8 +374,9 @@
     <div class="card-header">
       <h2>Case results</h2>
     </div>
-    <p class="hint">Logs and screenshots are recorded per case. Open a case to see its full execution log and every screenshot the agent took. Select finished cases to mark their result as checked{% if rerunnable_pivot_ids %}, or select any cases to re-run them from step 1 on this run{% endif %}.</p>
+    <p class="hint">Logs and screenshots are recorded per case. Open a case to see its full execution log and every screenshot the agent took.{% if project_can_write %} Select finished cases to mark their result as checked{% if rerunnable_pivot_ids %}, or select any cases to re-run them from step 1 on this run{% endif %}.{% endif %}</p>
 
+    {% if project_can_write %}
     <div class="bulk-bar" x-show="count > 0" x-cloak>
       <span x-text="count + ' selected'"></span>
       <form method="post" action="{% url 'projects:test_run_cases_check' project.id test_run.id %}">
@@ -407,26 +426,30 @@
       Re-run is unavailable: {{ rerun_panel.blockers|join:" " }}
     </p>
     {% endif %}
+    {% endif %}
 
     <div class="table-wrap">
       <table class="data-table">
         <thead>
           <tr>
+            {% if project_can_write %}
             <th scope="col" class="cell-check">
               <input type="checkbox" aria-label="Select all selectable cases on this page" :checked="allSelected" :disabled="allIds.length === 0" @change="toggleAll()">
             </th>
+            {% endif %}
             <th scope="col">Case</th>
             <th scope="col">Result</th>
             <th scope="col">Checked</th>
             <th scope="col">Duration</th>
             <th scope="col">Reason</th>
-            {% if can_edit %}<th scope="col" x-show="testRunStatus === 'waiting'" x-cloak><span class="visually-hidden">Edit / remove</span></th>{% endif %}
+            {% if can_edit and project_can_write %}<th scope="col" x-show="testRunStatus === 'waiting'" x-cloak><span class="visually-hidden">Edit / remove</span></th>{% endif %}
             <th scope="col"><span class="visually-hidden">Details</span></th>
           </tr>
         </thead>
         <tbody>
           {% for pivot in cases %}
           <tr data-pivot-id="{{ pivot.id }}">
+            {% if project_can_write %}
             <td data-label="" class="cell-check">
               {% if pivot.id in checkable_pivot_ids or pivot.id in uncheckable_pivot_ids or pivot.id in rerunnable_pivot_ids %}
               <input type="checkbox" aria-label="Select {{ pivot.test_case.title }}" :checked="selected.includes({{ pivot.id }})" @change="toggle({{ pivot.id }})">
@@ -438,6 +461,7 @@
               <input type="checkbox" disabled aria-label="{{ pivot.test_case.title }}: not finished yet, no verdict to check" title="Not finished yet: no verdict to check">
               {% endif %}
             </td>
+            {% endif %}
             <td data-label="Case" class="cell-primary">
               <a href="{% url 'projects:test_run_case_detail' project.id test_run.id pivot.id %}">{{ pivot.test_case.title }}</a>
               {% if pivot.test_case.testrail_id %}<div class="muted small">{{ pivot.test_case.testrail_id }}</div>{% endif %}
@@ -464,7 +488,7 @@
             </td>
             <td data-label="Duration">{{ pivot.shown_duration|duration }}</td>
             <td data-label="Reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>{% if help_panel and help_panel.request.fault and help_panel.request.test_run_test_case_id == pivot.id %}{{ help_panel.request.get_fault_display }}{% else %}Needs help{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "awaiting_person" %}<strong>{% if person_step_panel and person_step_panel.step.test_run_test_case_id == pivot.id %}Waiting for a person: {{ person_step_panel.step_label|lower }}{% else %}Waiting for a person{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
-            {% if can_edit %}
+            {% if can_edit and project_can_write %}
             <td data-label="" x-show="testRunStatus === 'waiting'" x-cloak>
               <div class="actions">
                 <button
@@ -493,12 +517,14 @@
         </tbody>
       </table>
     </div>
-    {% if not cases %}
+    {% if not cases and project_can_write %}
       {% include "partials/empty_state.html" with icon="▤" title="No cases in this run" body="Add test cases to this draft run before starting it." primary_label="Add cases" primary_url=test_case_list_url only %}
+    {% elif not cases %}
+      {% include "partials/empty_state.html" with icon="▤" title="No cases in this run" body="This draft run has no test cases yet." only %}
     {% endif %}
   </div>
 
-  {% if rerun_panel.can_rerun %}
+  {% if rerun_panel.can_rerun and project_can_write %}
   {# Re-run confirm — inside runCaseChecks so the form can post the selected ids (toRerun) #}
   <div
     class="dialog-backdrop"
@@ -519,7 +545,7 @@
         <template x-for="id in toRerun" :key="id">
           <input type="hidden" name="pivot_ids" :value="id">
         </template>
-        {% include "projects/includes/_help_mode_select.html" with field_id="rerun-selected-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode only %}
+        {% include "projects/includes/_help_mode_select.html" with field_id="rerun-selected-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode can_change=user.is_superuser only %}
         <div class="dialog-actions">
           <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
           <button type="submit" class="btn btn-primary" :disabled="toRerun.length === 0" x-text="'Re-run (' + toRerun.length + ')'">Re-run</button>
@@ -533,6 +559,7 @@
   {% include "partials/pagination.html" with page_obj=cases per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range query_params=query_params %}
 
   {# Section: Destructive-action confirm dialogs #}
+  {% if project_can_write %}
   {% include "partials/confirm_dialog.html" with dialog_id="delete-run" title="Delete this run?" body="This permanently deletes the run and all of its case results, logs, and screenshots." confirm_label="Delete run" action_url=test_run_delete_url %}
   {% include "partials/confirm_dialog.html" with dialog_id="abort-run" title="Abort this run?" body="In-progress, pending and Need help cases will be marked as cancelled (a running auto-fix is asked to stop). Cases that already finished keep their result." confirm_label="Abort run" action_url=test_run_abort_url %}
   {% if resume_panel.can_resume %}
@@ -552,7 +579,7 @@
       <p id="resume-run-desc">{{ resume_panel.confirm_body }}</p>
       <form method="post" action="{{ test_run_resume_url }}">
         {% csrf_token %}
-        {% include "projects/includes/_help_mode_select.html" with field_id="resume-run-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode only %}
+        {% include "projects/includes/_help_mode_select.html" with field_id="resume-run-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode can_change=user.is_superuser only %}
         <div class="dialog-actions">
           <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
           <button type="submit" class="btn btn-primary">Resume run</button>
@@ -570,8 +597,9 @@
     {% include "projects/includes/_testrail_push_dialog.html" with project=project test_run=test_run testrail_push=testrail_push csrf_token=csrf_token only %}
   {% endif %}
   {% endif %}
+  {% endif %}
 
-  {% if can_edit %}
+  {% if can_edit and project_can_write %}
   {% for pivot in cases %}
   <div
     class="dialog-backdrop"

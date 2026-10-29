@@ -9,7 +9,9 @@
      wizard_mode — "create" | "edit"
 
    Posts to projects:create in create mode, projects:setup_details in edit
-   mode ("Restart setup wizard", reached from the project overview). {% endcomment %}
+   mode ("Restart setup wizard", reached from the project overview).
+   project_can_write (context processor): a read-only member gets a notice
+   instead of the step's forms and actions. {% endcomment %}
 
 {% block title %}Project details · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -32,6 +34,16 @@
   <p class="subtitle">Name the project so you can find it later &mdash; this becomes the home for its application context, test cases, runs, and test machine.</p>
 
   {% include "partials/wizard_steps.html" with project=project wizard_step=wizard_step only %}
+
+  {% if project and not project_can_write %}
+  <div class="alert alert-info">
+    <span class="alert-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <strong>Read-only access</strong>
+      <p>The setup wizard changes the project, so it needs a member who can make changes. <a href="{% url 'projects:detail' project.id %}">Back to the project</a></p>
+    </div>
+  </div>
+  {% else %}
 
   <div class="alert alert-info">
     <span class="alert-icon" aria-hidden="true">ℹ</span>
@@ -67,5 +79,6 @@
     {% endif %}
   </form>
 
+  {% endif %}{# project_can_write #}
 </div>
 {% endblock %}

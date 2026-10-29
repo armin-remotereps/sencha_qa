@@ -2,9 +2,12 @@
    `help_mode`; the run keeps its mode when it is left as is).
 
    Context contract:
-     field_id — unique id for the <select> on the page
-     choices  — RunHelpModeForm().fields.help_mode.choices
-     current  — the run's help_mode value, pre-selected {% endcomment %}
+     field_id   — unique id for the <select> on the page
+     choices    — RunHelpModeForm().fields.help_mode.choices
+     current    — the run's help_mode value, pre-selected
+     can_change — user.is_superuser. When false only the current mode is shown as
+                  text and nothing is posted, so the run keeps its stored mode. {% endcomment %}
+{% if can_change %}
 <div class="field">
   <label class="label" for="{{ field_id }}">When a case needs help</label>
   <select class="select" id="{{ field_id }}" name="help_mode">
@@ -14,3 +17,6 @@
   </select>
   <p class="hint">Attended pauses the run and notifies people. Night lets the Machine setup agent try to fix the machine first. Human in the loop: a person performs every step; the agent prepares each step and confirms the result.</p>
 </div>
+{% else %}
+<p class="hint">Run mode: {% for value, label in choices %}{% if value == current %}{{ label }}{% endif %}{% endfor %}</p>
+{% endif %}

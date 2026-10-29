@@ -15,6 +15,9 @@
                  that turn itself (turnLive / otherThreadTurnLive of the
                  ancestor machineSetupChat), so the panel drops it from the
                  server's blockers
+    project_can_write — inherited (included without `only`); false hides
+                 Discard the draft and the Continue / Mark failed / Mark
+                 blocked form (read-only member: the panel is shown only)
 
   The draft and the agent's suggestion live in the Alpine `helpPanel`
   component (chat.html): initial state from the `help-initial` json_script,
@@ -75,11 +78,13 @@
         </div>
       </div>
       <p class="hint" x-text="resumeText"></p>
+      {% if project_can_write %}
       <form method="post" :action="discardUrl">
         {% csrf_token %}
         <input type="hidden" name="return_thread_id" value="{{ conversation.pk }}">
         <button type="submit" class="btn btn-sm btn-secondary">Discard the draft</button>
       </form>
+      {% endif %}
     </div>
   </template>
 
@@ -87,10 +92,11 @@
     <div class="help-suggestion">
       <strong x-text="'The agent suggests: ' + proposal.action_label"></strong>
       <p class="pre-wrap small" x-show="proposal.note" x-text="proposal.note"></p>
-      <p class="hint">Only you resolve the case. The agent's note is not sent to the tester; write your own note below if it should know something.</p>
+      {% if project_can_write %}<p class="hint">Only you resolve the case. The agent's note is not sent to the tester; write your own note below if it should know something.</p>{% endif %}
     </div>
   </template>
 
+  {% if project_can_write %}
   <form method="post" action="{% url 'projects:test_run_case_help_continue' project.id pivot.test_run_id pivot.pk %}" x-show="requestOpen">
     {% csrf_token %}
     <input type="hidden" name="return_thread_id" value="{{ conversation.pk }}">
@@ -114,6 +120,7 @@
       <button type="submit" class="btn btn-secondary" formaction="{% url 'projects:test_run_case_help_block' project.id pivot.test_run_id pivot.pk %}">Mark blocked</button>
     </div>
   </form>
+  {% endif %}
 </section>
 {% url 'projects:test_run_case_plan_revision_discard' project.id pivot.test_run_id pivot.pk 0 as discard_url_template %}
 {{ discard_url_template|json_script:"help-discard-url" }}

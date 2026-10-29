@@ -7,7 +7,10 @@
      project           — current Project
      uploads           — Page[TestCaseUpload], newest first
      per_page / allowed_per_page / elided_page_range / query_params — pagination
-     testrail_picker   — projects.testrail_services.TestRailPickerState {% endcomment %}
+     testrail_picker   — projects.testrail_services.TestRailPickerState
+     project_can_write (context processor) — false hides both import cards,
+                         Cancel / Delete and the delete dialog; a read-only
+                         member sees the history only {% endcomment %}
 {% block title %}Import · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
 {% block breadcrumb_extra %}
@@ -28,9 +31,11 @@
 {% endblock %}
 
 {% block project_content %}
+{% if project_can_write %}
 {% include "projects/includes/_testrail_import_card.html" with project=project testrail_picker=testrail_picker csrf_token=csrf_token only %}
 
 {% include "projects/includes/_testrail_run_import_card.html" with project=project csrf_token=csrf_token only %}
+{% endif %}
 
 <div class="card" x-data="uploadManager()">
   <div class="card-header">
@@ -46,7 +51,9 @@
   {% include "partials/pagination.html" with page_obj=uploads per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range query_params=query_params %}
 </div>
 
+{% if project_can_write %}
 {% include "projects/includes/_upload_delete_dialog.html" with project=project %}
+{% endif %}
 {% endblock %}
 
 {% block extra_scripts %}

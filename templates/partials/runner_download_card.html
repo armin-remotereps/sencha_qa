@@ -1,7 +1,11 @@
 {% comment %} "Set up on another machine" download card.
 
    Context contract:
-     project — the current Project {% endcomment %}
+     project — the current Project
+     project_can_write — inherited (include it without `only`); the card
+                         renders nothing unless it is true (read-only
+                         members never download the Test Runner) {% endcomment %}
+{% if project_can_write %}
 <div class="card">
   <div class="card-header">
     <h2>Download the Test Runner</h2>
@@ -49,3 +53,4 @@
     </div>
   </div>
 </div>
+{% endif %}

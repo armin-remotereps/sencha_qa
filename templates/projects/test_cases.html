@@ -16,7 +16,10 @@
      status_choices      — STATUS_FILTER_CHOICES (value, label) pairs
      waiting_test_runs   — draft TestRuns this project can add cases to
      other_projects      — other projects this user belongs to (Copy to project)
-     per_page / allowed_per_page / elided_page_range / query_params — pagination {% endcomment %}
+     per_page / allowed_per_page / elided_page_range / query_params — pagination
+     project_can_write (context processor) — false hides Create / Import, the
+     bulk bar, the selection column, row menus and every dialog (read-only
+     member; no Copy to project either) {% endcomment %}
 {% block title %}Test Cases · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
 {% block page_header %}
@@ -25,10 +28,12 @@
     <h1>Test Cases</h1>
     <p class="subtitle">{{ test_cases.paginator.count }} test case{{ test_cases.paginator.count|pluralize }}</p>
   </div>
+  {% if project_can_write %}
   <div class="actions">
     <button type="button" class="btn btn-secondary" @click="$dispatch('open-create-case')">Create test case</button>
     <a class="btn btn-primary" href="{% url 'projects:test_case_import' project.id %}">Import from TestRail</a>
   </div>
+  {% endif %}
 </div>
 {% endblock %}
 
@@ -65,6 +70,7 @@
   </form>
 
   {# Section: Bulk selection state #}
+  {% if project_can_write %}
   <div class="bulk-bar" x-show="count > 0" x-cloak>
     <span x-text="count + ' selected'"></span>
     <button type="button" class="btn btn-sm btn-secondary" @click="$dispatch('open-add-to-run')">Add to run</button>
@@ -74,20 +80,25 @@
     <button type="button" class="btn btn-sm btn-danger" @click="$dispatch('open-bulk-delete-cases')">Delete</button>
     <button type="button" class="btn btn-sm btn-ghost" @click="clear()">Clear</button>
   </div>
+  {% endif %}
 
   {% if test_cases %}
-    {% include "projects/includes/_test_case_table.html" with project=project test_cases=test_cases only %}
+    {% include "projects/includes/_test_case_table.html" with project=project test_cases=test_cases can_write=project_can_write only %}
   {% elif search or current_upload or current_status %}
     {% include "partials/empty_state.html" with icon="▣" title="No matching test cases" body="Try a different search term or clear the filters above." only %}
-  {% else %}
+  {% elif project_can_write %}
     {% include "partials/empty_state.html" with icon="▣" title="No test cases yet" body="Import your existing suite from TestRail, or create cases manually to get started." primary_label="Import from TestRail" primary_url=import_case_url secondary_label="Create manually" secondary_url="#" only %}
+  {% else %}
+    {% include "partials/empty_state.html" with icon="▣" title="No test cases yet" body="Test cases of this project show up here." only %}
   {% endif %}
 
   {% include "partials/pagination.html" with page_obj=test_cases per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range query_params=query_params %}
 
+  {% if project_can_write %}
   {% include "projects/includes/_test_case_create_dialog.html" with project=project form=form %}
   {% include "projects/includes/_test_case_edit_dialog.html" with project=project form=form %}
   {% include "projects/includes/_test_case_bulk_dialogs.html" with project=project waiting_test_runs=waiting_test_runs other_projects=other_projects %}
   {% include "projects/includes/_test_case_delete_dialog.html" with project=project %}
+  {% endif %}
 </div>
 {% endblock %}

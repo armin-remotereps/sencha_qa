@@ -13,6 +13,8 @@
                         | None: who wrote the current notes (provenance line)
     context_versions  — list[ApplicationContextVersion]: replaced versions,
                         newest first (version history card, when non-empty)
+    project_can_write — (context processor) false shows the context as text,
+                        with no form, Refine or Restore (read-only member)
 
   "Refine with AI" is applicationContextPrompt() below, ported from the
   old templates/projects/detail.html projectPrompt() component: it POSTs
@@ -47,6 +49,7 @@
     Written by {{ context_source.source_label }}{% if context_source.author_name %} ({{ context_source.author_name }}){% endif %}{% if context_source.written_at %} on {{ context_source.written_at|date:"M j, Y, H:i" }}{% endif %}{% if context_source.change_summary %} — {{ context_source.change_summary }}{% endif %}
   </p>
   {% endif %}
+  {% if project_can_write %}
   <form method="post" action="{% url 'projects:application_context' project.id %}" novalidate>
     {% csrf_token %}
 
@@ -59,14 +62,29 @@
       <button class="btn btn-primary" type="submit">Save context</button>
     </div>
   </form>
+  {% else %}
+  <dl class="kv">
+    <div>
+      <dt>Application URL</dt>
+      <dd>{{ project.application_url|default:"Not set" }}</dd>
+    </div>
+    <div>
+      <dt>Platform</dt>
+      <dd>{{ project.get_application_platform_display|default:"Not specified" }}</dd>
+    </div>
+  </dl>
+  <div class="label">Notes</div>
+  {% if project.project_prompt %}<pre class="code-block">{{ project.project_prompt }}</pre>{% else %}<p class="muted">No notes yet.</p>{% endif %}
+  {% endif %}
 </div>
 
 {% if context_versions %}
-  {% include "projects/includes/_context_history_card.html" with project=project context_versions=context_versions next=request.get_full_path csrf_token=csrf_token only %}
+  {% include "projects/includes/_context_history_card.html" with project=project context_versions=context_versions next=request.get_full_path csrf_token=csrf_token can_write=project_can_write only %}
 {% endif %}
 {% endblock %}
 
 {% block extra_scripts %}
+{% if project_can_write %}
 <script>
 document.addEventListener('alpine:init', () => {
   Alpine.data('applicationContextPrompt', () => ({
@@ -131,4 +149,5 @@ document.addEventListener('alpine:init', () => {
   }));
 });
 </script>
+{% endif %}
 {% endblock %}

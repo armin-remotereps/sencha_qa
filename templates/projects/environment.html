@@ -20,6 +20,9 @@
                     environmentLive().runnerUpdate, then kept live over the
                     agent-status WS ("runner_update" messages); its
                     .server_version is the confirm form's expected_version
+    project_can_write (context processor) — false hides the download / set-up
+                    section, the connection key card and the connection
+                    card's actions (read-only member: machine status only)
 
   The whole page body runs inside the environmentLive() Alpine scope so
   partials/advanced_diagnostics.html (which reads clientVersion,
@@ -48,6 +51,7 @@
   {% include "projects/includes/_environment_visual_engine_failure.html" only %}
   {% include "projects/includes/_environment_visual_engine.html" only %}
 
+  {% if project_can_write %}
   <section aria-labelledby="setup-h">
     <h2 id="setup-h" class="visually-hidden">Set up the Test Runner on another machine</h2>
     <div id="download-runner">
@@ -63,6 +67,7 @@
   </section>
 
   {% include "partials/connection_key_card.html" with project=project %}
+  {% endif %}
 
   {% include "partials/advanced_diagnostics.html" %}
 </div>

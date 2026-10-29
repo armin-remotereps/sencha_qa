@@ -18,7 +18,9 @@
    machine" step also listens on) and replace the textarea's value. There
    is no separate "save" step here — the whole form (including whatever
    the refine call replaced the textarea with) is saved by the wizard's
-   own "Save and continue" submit. {% endcomment %}
+   own "Save and continue" submit.
+   project_can_write (context processor): a read-only member gets a notice
+   instead of the step's forms and actions. {% endcomment %}
 
 {% block title %}Application context · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -41,6 +43,16 @@
   <p class="subtitle">Describe how {{ project.name }} works so the AI test runner understands the app before it starts clicking around.</p>
 
   {% include "partials/wizard_steps.html" with project=project wizard_step=wizard_step only %}
+
+  {% if project and not project_can_write %}
+  <div class="alert alert-info">
+    <span class="alert-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <strong>Read-only access</strong>
+      <p>The setup wizard changes the project, so it needs a member who can make changes. <a href="{% url 'projects:detail' project.id %}">Back to the project</a></p>
+    </div>
+  </div>
+  {% else %}
 
   <form method="post" action="{% url 'projects:setup_context' project.id %}" novalidate>
     {% csrf_token %}
@@ -96,6 +108,7 @@
     {% include "partials/wizard_actions.html" with back_url=back_url only %}
   </form>
 
+  {% endif %}{# project_can_write #}
 </div>
 {% endblock %}
 
