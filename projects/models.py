@@ -9,13 +9,13 @@ from typing import TYPE_CHECKING
 from django.conf import settings
 from django.db import models
 
-if TYPE_CHECKING:
-    from accounts.models import CustomUser
-
 from controller_client.protocol import (
     MAX_VERSION_LENGTH,
     UPDATE_STATUS_DETAIL_MAX_LENGTH,
 )
+
+if TYPE_CHECKING:
+    from accounts.models import CustomUser
 
 
 def _default_api_key() -> str:
