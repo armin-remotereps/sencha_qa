@@ -70,6 +70,11 @@ urlpatterns: list[URLPattern] = [
         member_views.member_invite,
         name="member_invite",
     ),
+    path(
+        "<int:project_id>/settings/members/<int:user_id>/role/",
+        member_views.member_role,
+        name="member_role",
+    ),
     path("<int:project_id>/leave/", member_views.project_leave, name="leave"),
     path(
         "<int:project_id>/settings/testrail/test/",

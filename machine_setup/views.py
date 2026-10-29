@@ -61,6 +61,7 @@ from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE
 from projects.case_help_services import HelpPanel
 from projects.decorators import project_membership_required
 from projects.exceptions import (
+    HelpModeNotAllowedError,
     PlanRevisionError,
     ResultChangeError,
     RunHelpError,
@@ -294,7 +295,7 @@ def plan_redesign_rerun(
             user=request.user,
             help_mode=form.cleaned_data["help_mode"],
         )
-    except (RunResumeError, PlanRevisionError) as exc:
+    except (RunResumeError, PlanRevisionError, HelpModeNotAllowedError) as exc:
         messages.error(request, exc.message)
         return _back_to_card(project, card)
     messages.success(request, f"Re-running from step {card.resume_step}.")

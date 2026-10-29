@@ -5,6 +5,7 @@ from typing import Any
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
+from django.core.exceptions import PermissionDenied
 from django.http import (
     Http404,
     HttpRequest,
@@ -57,6 +58,7 @@ from projects.case_step_progress import case_step_view
 from projects.decorators import project_membership_required
 from projects.exceptions import (
     ApplicationContextVersionNotFoundError,
+    HelpModeNotAllowedError,
     PlanRevisionError,
     RunCaseCheckError,
     RunHelpError,
@@ -89,6 +91,7 @@ from projects.models import (
     TestRunTestCase,
 )
 from projects.person_step_services import get_person_step_panel
+from projects.project_access_services import get_project_access
 from projects.run_case_check_services import (
     check_run_cases,
     format_check_message,
@@ -144,8 +147,6 @@ from projects.services import (
     get_case_position,
     get_latest_runs_by_project,
     get_machine_state,
-    get_project_by_id,
-    get_project_for_user,
     get_project_overview,
     get_project_tag_names,
     get_run_case_picker,
@@ -329,13 +330,22 @@ def setup_details(request: HttpRequest, project: Project) -> HttpResponse:
     return redirect("projects:setup_context", project_id=project.id)
 
 
+def _writable_project(
+    project_id: int, user: CustomUser, *, include_archived: bool = False
+) -> Project:
+    """The project for a list-row action: 404 for a non-member, 403 if read-only."""
+    access = get_project_access(project_id, user, include_archived=include_archived)
+    if access is None:
+        raise Http404
+    if not access.can_write:
+        raise PermissionDenied
+    return access.project
+
+
 @login_required
 @require_POST
 def project_edit(request: AuthenticatedRequest, project_id: int) -> HttpResponse:
-    user = request.user
-    project = get_project_for_user(project_id, user)
-    if project is None:
-        raise Http404
+    project = _writable_project(project_id, request.user)
 
     form = ProjectForm(request.POST)
     if not form.is_valid():
@@ -353,10 +363,7 @@ def project_edit(request: AuthenticatedRequest, project_id: int) -> HttpResponse
 @login_required
 @require_POST
 def project_archive(request: AuthenticatedRequest, project_id: int) -> HttpResponse:
-    user = request.user
-    project = get_project_for_user(project_id, user)
-    if project is None:
-        raise Http404
+    project = _writable_project(project_id, request.user)
 
     archive_project(project)
     return redirect("projects:list")
@@ -365,11 +372,8 @@ def project_archive(request: AuthenticatedRequest, project_id: int) -> HttpRespo
 @login_required
 @require_POST
 def project_restore(request: AuthenticatedRequest, project_id: int) -> HttpResponse:
-    """Restore an archived project. Uses `get_project_by_id` since the normal
-    project lookup excludes archived projects."""
-    project = get_project_by_id(project_id, request.user)
-    if project is None:
-        raise Http404
+    """Restore an archived project (the lookup includes archived projects)."""
+    project = _writable_project(project_id, request.user, include_archived=True)
 
     unarchive_project(project)
     messages.success(request, f'"{project.name}" restored.')
@@ -382,9 +386,7 @@ def project_restore(request: AuthenticatedRequest, project_id: int) -> HttpRespo
 @require_POST
 def project_duplicate(request: AuthenticatedRequest, project_id: int) -> HttpResponse:
     user: CustomUser = request.user
-    project = get_project_for_user(project_id, user)
-    if project is None:
-        raise Http404
+    project = _writable_project(project_id, user)
 
     name = request.POST.get("name", "").strip() or f"Copy of {project.name}"
     duplicate_project(source_project=project, user=user, name=name)
@@ -692,9 +694,11 @@ def test_case_copy_to_project(
     target_project_id = request.POST.get("target_project_id", "")
     if not target_project_id.isdigit():
         raise Http404
-    target_project = get_project_for_user(int(target_project_id), user)
-    if target_project is None:
+    # The target must be a project the user can change (not read-only there).
+    target_access = get_project_access(int(target_project_id), user)
+    if target_access is None or not target_access.can_write:
         raise Http404
+    target_project = target_access.project
 
     test_case_ids = _parse_test_case_ids(request)
     if not test_case_ids:
@@ -830,7 +834,7 @@ def test_run_add_cases(
 @project_membership_required
 @require_POST
 def test_run_start(
-    request: HttpRequest, project: Project, test_run_id: int
+    request: AuthenticatedRequest, project: Project, test_run_id: int
 ) -> HttpResponse:
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
@@ -840,7 +844,11 @@ def test_run_start(
         messages.error(request, form_error_text(form))
     else:
         try:
-            start_test_run(test_run, help_mode=form.cleaned_data["help_mode"])
+            start_test_run(
+                test_run, user=request.user, help_mode=form.cleaned_data["help_mode"]
+            )
+        except HelpModeNotAllowedError as exc:
+            messages.error(request, exc.message)
         except ValueError as exc:
             messages.error(request, str(exc))
     return redirect(
@@ -1117,7 +1125,7 @@ def test_run_resume(
             user=request.user,
             help_mode=form.cleaned_data["help_mode"],
         )
-    except RunResumeError as exc:
+    except (RunResumeError, HelpModeNotAllowedError) as exc:
         messages.error(request, exc.message)
     else:
         messages.success(
@@ -1161,7 +1169,7 @@ def test_run_case_resume(
             from_step=from_step,
             help_mode=form.cleaned_data["help_mode"],
         )
-    except RunResumeError as exc:
+    except (RunResumeError, HelpModeNotAllowedError) as exc:
         messages.error(request, exc.message)
     else:
         messages.success(request, "Resumed this case.")
@@ -1240,7 +1248,7 @@ def test_run_cases_rerun(
                 user=request.user,
                 help_mode=form.cleaned_data["help_mode"],
             )
-        except RunRerunError as exc:
+        except (RunRerunError, HelpModeNotAllowedError) as exc:
             messages.error(request, exc.message)
         else:
             messages.success(request, format_rerun_message(outcome))
@@ -1477,7 +1485,7 @@ def test_run_help_mode(
             user=request.user,
             help_mode=form.cleaned_data["help_mode"],
         )
-    except RunHelpError as exc:
+    except (RunHelpError, HelpModeNotAllowedError) as exc:
         messages.error(request, exc.message)
         return run_page
     label = RunHelpMode(change.help_mode).label
@@ -1579,7 +1587,9 @@ def _render_wizard_run(
 RUN_BLOCKED_MESSAGE = "This run can't start yet — resolve the failed checks below."
 
 
-def _handle_setup_run_submit(request: HttpRequest, project: Project) -> HttpResponse:
+def _handle_setup_run_submit(
+    request: AuthenticatedRequest, project: Project
+) -> HttpResponse:
     form = TestRunCreateForm(project, request.POST)
     selected_ids = frozenset(_parse_test_case_ids(request))
     if not form.is_valid():
@@ -1599,7 +1609,9 @@ def _handle_setup_run_submit(request: HttpRequest, project: Project) -> HttpResp
     )
     try:
         # The wizard has no mode choice: a first run is attended.
-        start_test_run(test_run, help_mode=RunHelpMode.ATTENDED)
+        start_test_run(test_run, user=request.user, help_mode=RunHelpMode.ATTENDED)
+    except HelpModeNotAllowedError as exc:
+        messages.error(request, exc.message)
     except ValueError as exc:
         messages.error(request, str(exc))
     return redirect(
@@ -1608,7 +1620,7 @@ def _handle_setup_run_submit(request: HttpRequest, project: Project) -> HttpResp
 
 
 @project_membership_required
-def setup_run(request: HttpRequest, project: Project) -> HttpResponse:
+def setup_run(request: AuthenticatedRequest, project: Project) -> HttpResponse:
     """Wizard step 5: pick cases, name the run, and start it."""
     if request.method == "POST":
         return _handle_setup_run_submit(request, project)

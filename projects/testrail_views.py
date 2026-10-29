@@ -12,6 +12,7 @@ from projects.decorators import project_membership_required
 from projects.exceptions import CheckedPushError, TestRailRunImportError
 from projects.forms import (
     ProjectMemberInviteForm,
+    ProjectMemberRoleForm,
     TestRailImportStartForm,
     TestRailPushStartForm,
     TestRailRunImportForm,
@@ -75,7 +76,10 @@ def render_project_settings(
             "api_key_hint": get_testrail_api_key_hint(project),
             "members": members.rows,
             "can_leave": members.can_leave,
+            "viewer_can_write": members.viewer_can_write,
             "invite_form": invite_form,
+            # Unbound: the Members card renders its role choices per row.
+            "role_form": ProjectMemberRoleForm(),
             "active_tab": "settings",
             "active_nav": "projects",
         },

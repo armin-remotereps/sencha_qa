@@ -48,6 +48,7 @@ from projects.models import (
     CasePersonStep,
     PersonStepStatus,
     Project,
+    ProjectRole,
     TestRunStatus,
     TestRunTestCase,
     TestRunTestCaseStatus,
@@ -254,7 +255,10 @@ def _as_int(value: object) -> int:
 
 
 def resolve_runner_person(project_id: int, email: str | None) -> int | None:
-    """The id of the active project member with ``email``; None otherwise.
+    """The id of the active writable project member with ``email``, or None.
+
+    A read-only member's email resolves to None: the runner then answers as
+    an anonymous "person at the Test Runner".
 
     Emails are unique only by exact case: the exact match wins, then a
     case-insensitive one counts only when it is unambiguous (as
@@ -262,7 +266,11 @@ def resolve_runner_person(project_id: int, email: str | None) -> int | None:
     """
     if not email:
         return None
-    members = CustomUser.objects.filter(is_active=True, projects__pk=project_id)
+    members = CustomUser.objects.filter(
+        is_active=True,
+        project_memberships__project_id=project_id,
+        project_memberships__role=ProjectRole.MEMBER,
+    )
     exact = members.filter(email=email).values_list("pk", flat=True).first()
     if exact is not None:
         return exact
@@ -273,11 +281,14 @@ def resolve_runner_person(project_id: int, email: str | None) -> int | None:
 
 
 def _current_member(project_id: int, user_id: int | None) -> CustomUser | None:
-    """The user if still an active member of the project; None otherwise."""
+    """The user if still an active writable project member; None otherwise."""
     if user_id is None:
         return None
     return CustomUser.objects.filter(
-        pk=user_id, is_active=True, projects__pk=project_id
+        pk=user_id,
+        is_active=True,
+        project_memberships__project_id=project_id,
+        project_memberships__role=ProjectRole.MEMBER,
     ).first()
 
 

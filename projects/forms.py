@@ -19,6 +19,7 @@ from projects.models import (
     ApplicationPlatform,
     PersonStepOutcome,
     Project,
+    ProjectRole,
     RunHelpMode,
     TestCaseData,
     TestCasePriority,
@@ -77,6 +78,25 @@ class ProjectMemberInviteForm(forms.Form):
                 "autocomplete": "off",
             }
         ),
+    )
+    read_only = forms.BooleanField(
+        label="Read-only",
+        required=False,
+        help_text="They can view the project but not change anything.",
+    )
+
+
+class ProjectMemberRoleForm(forms.Form):
+    """Change one member's role on the Settings Members card."""
+
+    role = forms.ChoiceField(
+        label="Role",
+        choices=ProjectRole.choices,
+        widget=forms.Select(attrs={"class": "select"}),
+        error_messages={
+            "required": "Choose a role.",
+            "invalid_choice": "Choose a valid role.",
+        },
     )
 
 
@@ -279,18 +299,24 @@ _HELP_MODE_INVALID = "Choose Attended, Night or Human in the loop."
 
 
 class TestRunStartForm(forms.Form):
-    """Start a draft run: what happens when one of its cases needs help."""
+    """Start a draft run: what happens when one of its cases needs help.
+
+    Optional: blank keeps the run's stored mode.
+    """
 
     help_mode = forms.ChoiceField(
         label="When a case needs help",
         choices=RunHelpMode.choices,
         initial=RunHelpMode.ATTENDED,
+        required=False,
         widget=forms.RadioSelect,
-        error_messages={
-            "required": "Choose what happens when a case needs help.",
-            "invalid_choice": _HELP_MODE_INVALID,
-        },
+        error_messages={"invalid_choice": _HELP_MODE_INVALID},
     )
+
+    def clean_help_mode(self) -> str | None:
+        # Blank keeps the run's stored mode (only superusers are offered a choice).
+        value: str = self.cleaned_data.get("help_mode") or ""
+        return value or None
 
 
 class RunHelpModeForm(forms.Form):
