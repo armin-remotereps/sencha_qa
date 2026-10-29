@@ -122,6 +122,7 @@ from projects.models import (
     ACTIVE_RUN_STATUSES,
     HELP_REQUEST_TEXT_MAX_LENGTH,
     OPEN_PERSON_STEP_STATUSES,
+    WRITABLE_ROLES,
     ApplicationPlatform,
     BlockedReason,
     CaseHelpRequest,
@@ -138,7 +139,6 @@ from projects.models import (
     PlanRevisionStatus,
     Project,
     ProjectMembership,
-    ProjectRole,
     RunHelpMode,
     Tag,
     TestCase,
@@ -286,7 +286,7 @@ def list_other_projects_for_user(
     return (
         Project.objects.filter(
             memberships__user=user,
-            memberships__role=ProjectRole.MEMBER,
+            memberships__role__in=WRITABLE_ROLES,
             archived=False,
         )
         .exclude(id=exclude_project.id)
@@ -297,13 +297,6 @@ def list_other_projects_for_user(
 def get_project_for_user(project_id: int, user: CustomUser) -> Project | None:
     try:
         return Project.objects.filter(id=project_id, archived=False, members=user).get()
-    except Project.DoesNotExist:
-        return None
-
-
-def get_project_by_id(project_id: int, user: CustomUser) -> Project | None:
-    try:
-        return Project.objects.filter(id=project_id, members=user).get()
     except Project.DoesNotExist:
         return None
 
@@ -363,7 +356,7 @@ def list_projects_for_user(
         latest_run_id=Subquery(latest_run_qs.values("pk")[:1]),
         viewer_can_write=Exists(
             ProjectMembership.objects.filter(
-                project=OuterRef("pk"), user=user, role=ProjectRole.MEMBER
+                project=OuterRef("pk"), user=user, role__in=WRITABLE_ROLES
             )
         ),
     ).order_by("-created_at")

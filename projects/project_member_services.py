@@ -14,11 +14,11 @@ from projects.exceptions import (
     LastProjectMemberError,
     LastWritableMemberError,
     MemberInviteThrottledError,
+    MemberManagementNotAllowedError,
     MemberNotFoundError,
-    MemberRoleChangeNotAllowedError,
     NotProjectMemberError,
 )
-from projects.models import Project, ProjectMembership, ProjectRole
+from projects.models import WRITABLE_ROLES, Project, ProjectMembership, ProjectRole
 
 # Invite attempts per inviter per window; limits probing which emails exist.
 INVITE_LIMIT = 10
@@ -128,11 +128,19 @@ def _lock_project(project: Project) -> None:
 def _has_other_active_writer(project: Project, *, user_id: int) -> bool:
     return (
         ProjectMembership.objects.filter(
-            project=project, role=ProjectRole.MEMBER, user__is_active=True
+            project=project, role__in=WRITABLE_ROLES, user__is_active=True
         )
         .exclude(user_id=user_id)
         .exists()
     )
+
+
+def _ensure_writer(project: Project, actor: CustomUser) -> None:
+    """Defence in depth behind the view's write gate (call under the lock)."""
+    if not ProjectMembership.objects.filter(
+        project=project, user=actor, role__in=WRITABLE_ROLES
+    ).exists():
+        raise MemberManagementNotAllowedError()
 
 
 def invite_member(
@@ -145,13 +153,15 @@ def invite_member(
     """Add the active user with ``email`` to ``project`` at once, with ``role``.
 
     Raises ``InvalidMemberRoleError``, ``MemberInviteThrottledError``,
-    ``MemberNotFoundError`` or ``AlreadyMemberError``.
+    ``MemberNotFoundError``, ``MemberManagementNotAllowedError`` (``inviter``
+    is not a writable member) or ``AlreadyMemberError``.
     """
     _validate_role(role)
     _check_invite_throttle(inviter)
     user = _find_active_user(email)
     with transaction.atomic():
         _lock_project(project)
+        _ensure_writer(project, inviter)
         if project.members.filter(pk=user.pk).exists():
             raise AlreadyMemberError()
         project.members.add(user, through_defaults={"role": role})
@@ -167,18 +177,16 @@ def change_member_role(
     one (yourself included) is refused. The same role is a no-op.
 
     Raises ``InvalidMemberRoleError``, ``NotProjectMemberError`` (the target
-    is no longer a member), ``LastWritableMemberError``, or ``MemberRoleChangeNotAllowedError``
-    when ``actor`` is not a writable member (the view's gate normally stops it).
+    is no longer a member), ``LastWritableMemberError``, or
+    ``MemberManagementNotAllowedError`` when ``actor`` is not a writable member
+    (the view's gate normally stops it).
     """
     _validate_role(role)
     with transaction.atomic():
         # Same lock as invite and leave, so two demotions cannot both pass the
         # "another writer remains" check.
         _lock_project(project)
-        if not ProjectMembership.objects.filter(
-            project=project, user=actor, role=ProjectRole.MEMBER
-        ).exists():
-            raise MemberRoleChangeNotAllowedError()
+        _ensure_writer(project, actor)
         membership = (
             ProjectMembership.objects.filter(project=project, user_id=user_id)
             .only("id", "role")
@@ -188,7 +196,7 @@ def change_member_role(
             raise NotProjectMemberError()
         if membership.role == role:
             return
-        if membership.role == ProjectRole.MEMBER and not _has_other_active_writer(
+        if membership.role in WRITABLE_ROLES and not _has_other_active_writer(
             project, user_id=user_id
         ):
             raise LastWritableMemberError()

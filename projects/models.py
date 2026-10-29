@@ -199,6 +199,11 @@ class ProjectRole(models.TextChoices):
     READ_ONLY = "read_only", "Read-only"
 
 
+# Roles that may change a project. Every "can write" check and recipient
+# query uses this, so a new role only needs adding here.
+WRITABLE_ROLES: frozenset[str] = frozenset({ProjectRole.MEMBER})
+
+
 class Project(models.Model):
     name = models.CharField(max_length=255)
     tags = models.ManyToManyField(Tag, blank=True, related_name="projects")
@@ -305,7 +310,7 @@ class ProjectMembership(models.Model):
 
     @property
     def can_write(self) -> bool:
-        return self.role == ProjectRole.MEMBER
+        return self.role in WRITABLE_ROLES
 
 
 class ApplicationContextVersion(models.Model):

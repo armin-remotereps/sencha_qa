@@ -23,8 +23,8 @@ from notifications.services.notification_message import (
 )
 from notifications.services.ntfy_config import ntfy_configured
 from projects.models import (
+    WRITABLE_ROLES,
     FailedBy,
-    ProjectRole,
     RunHelpMode,
     TestRun,
     TestRunStatus,
@@ -134,7 +134,7 @@ def _recipients_by_project(project_ids: list[int]) -> dict[int, set[int]]:
         notify_night_digest=True,
         user__is_active=True,
         user__project_memberships__project_id__in=project_ids,
-        user__project_memberships__role=ProjectRole.MEMBER,
+        user__project_memberships__role__in=WRITABLE_ROLES,
     ).values_list("user_id", "user__project_memberships__project_id")
     for user_id, project_id in rows:
         by_user[user_id].add(project_id)

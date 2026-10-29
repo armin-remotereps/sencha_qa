@@ -45,10 +45,10 @@ from controller_client.protocol import (
 from notifications.services.site_url import absolute_url
 from projects.exceptions import PersonStepError
 from projects.models import (
+    WRITABLE_ROLES,
     CasePersonStep,
     PersonStepStatus,
     Project,
-    ProjectRole,
     TestRunStatus,
     TestRunTestCase,
     TestRunTestCaseStatus,
@@ -269,7 +269,7 @@ def resolve_runner_person(project_id: int, email: str | None) -> int | None:
     members = CustomUser.objects.filter(
         is_active=True,
         project_memberships__project_id=project_id,
-        project_memberships__role=ProjectRole.MEMBER,
+        project_memberships__role__in=WRITABLE_ROLES,
     )
     exact = members.filter(email=email).values_list("pk", flat=True).first()
     if exact is not None:
@@ -288,7 +288,7 @@ def _current_member(project_id: int, user_id: int | None) -> CustomUser | None:
         pk=user_id,
         is_active=True,
         project_memberships__project_id=project_id,
-        project_memberships__role=ProjectRole.MEMBER,
+        project_memberships__role__in=WRITABLE_ROLES,
     ).first()
 
 

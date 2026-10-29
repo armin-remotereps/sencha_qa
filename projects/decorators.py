@@ -8,7 +8,9 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.http import Http404, HttpResponse
 
+from accounts.models import CustomUser
 from accounts.types import AuthenticatedRequest
+from projects.models import Project
 from projects.project_access import set_request_project_access
 from projects.project_access_services import get_project_access
 
@@ -45,3 +47,19 @@ def project_read_access_required(view_func: F) -> F:
     member may make (Leave project).
     """
     return _membership_view(view_func, gate_writes=False)
+
+
+def get_writable_project(
+    project_id: int, user: CustomUser, *, include_archived: bool = False
+) -> Project:
+    """For views that cannot take the decorator (project list-row actions).
+
+    Same rules as ``project_membership_required`` for a write: 404 for a
+    non-member, 403 for a read-only member.
+    """
+    access = get_project_access(project_id, user, include_archived=include_archived)
+    if access is None:
+        raise Http404
+    if not access.can_write:
+        raise PermissionDenied
+    return access.project

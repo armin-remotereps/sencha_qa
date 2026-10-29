@@ -8,7 +8,7 @@ cross-project writes (failures bulk) use only the writable ones.
 from __future__ import annotations
 
 from accounts.models import CustomUser
-from projects.models import Project, ProjectMembership, ProjectRole
+from projects.models import WRITABLE_ROLES, Project, ProjectMembership
 
 
 def member_project_ids(user: CustomUser) -> list[int]:
@@ -33,7 +33,7 @@ def writable_member_project_ids(user: CustomUser) -> list[int]:
     """Ids of the user's non-archived projects where they may write (one query)."""
     return list(
         ProjectMembership.objects.filter(
-            user=user, role=ProjectRole.MEMBER, project__archived=False
+            user=user, role__in=WRITABLE_ROLES, project__archived=False
         ).values_list("project_id", flat=True)
     )
 
@@ -53,7 +53,7 @@ def member_and_writable_project_ids(
     writable_ids: list[int] = []
     for project_id, role in rows:
         all_ids.append(project_id)
-        if role == ProjectRole.MEMBER:
+        if role in WRITABLE_ROLES:
             writable_ids.append(project_id)
     return all_ids, writable_ids
 
@@ -75,6 +75,6 @@ def member_project_choices_and_writable_ids(
     writable_ids: list[int] = []
     for project_id, name, role in rows:
         choices.append((project_id, name))
-        if role == ProjectRole.MEMBER:
+        if role in WRITABLE_ROLES:
             writable_ids.append(project_id)
     return choices, writable_ids

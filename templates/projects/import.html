@@ -7,7 +7,8 @@
      project           — current Project
      uploads           — Page[TestCaseUpload], newest first
      per_page / allowed_per_page / elided_page_range / query_params — pagination
-     testrail_picker   — projects.testrail_services.TestRailPickerState
+     testrail_picker   — projects.testrail_services.TestRailPickerState, or None
+                         for a read-only member (cards hidden, no TestRail call)
      project_can_write (context processor) — false hides both import cards,
                          Cancel / Delete and the delete dialog; a read-only
                          member sees the history only {% endcomment %}

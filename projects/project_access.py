@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 from django.http import HttpRequest
 
-from projects.models import Project, ProjectRole
+from projects.models import WRITABLE_ROLES, Project
 
 _REQUEST_ATTR = "_project_access"
 
@@ -22,7 +22,7 @@ class ProjectAccess:
 
     @property
     def can_write(self) -> bool:
-        return self.role == ProjectRole.MEMBER
+        return self.role in WRITABLE_ROLES
 
 
 def set_request_project_access(request: HttpRequest, access: ProjectAccess) -> None:

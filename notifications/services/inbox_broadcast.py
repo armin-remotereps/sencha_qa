@@ -13,7 +13,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import BaseChannelLayer, get_channel_layer
 
 from accounts.models import CustomUser
-from projects.models import ProjectRole
+from projects.models import WRITABLE_ROLES
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ def broadcast_project_attention_changed(project_id: int) -> None:
         user_ids = list(
             CustomUser.objects.filter(
                 project_memberships__project_id=project_id,
-                project_memberships__role=ProjectRole.MEMBER,
+                project_memberships__role__in=WRITABLE_ROLES,
                 is_active=True,
             ).values_list("id", flat=True)
         )

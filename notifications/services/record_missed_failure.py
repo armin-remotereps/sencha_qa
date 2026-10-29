@@ -9,7 +9,7 @@ from django.db import transaction
 
 from accounts.models import CustomUser
 from notifications.models import MissedFailure
-from projects.models import ProjectRole
+from projects.models import WRITABLE_ROLES
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +31,7 @@ def record_missed_failure(
             user_ids = list(
                 CustomUser.objects.filter(
                     project_memberships__project_id=project_id,
-                    project_memberships__role=ProjectRole.MEMBER,
+                    project_memberships__role__in=WRITABLE_ROLES,
                     is_active=True,
                 ).values_list("id", flat=True)
             )

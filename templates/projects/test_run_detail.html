@@ -119,7 +119,7 @@
         <template x-if="testRunStatus === 'done' || testRunStatus === 'cancelled'">
           <span>Finished <time datetime="{{ test_run.finished_at|date:'c' }}">{{ test_run.finished_at|date:"M j, H:i" }}</time>{% if test_run.finished_at and test_run.started_at %} · {{ test_run.started_at|timesince:test_run.finished_at }}{% endif %} · <span x-text="summary.total"></span> cases</span>
         </template>
-        <span{% if user.is_superuser and project_can_write %} x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'" x-cloak{% endif %}> · Help mode: <span x-text="helpModeLabel(runHelpMode)">{{ test_run.get_help_mode_display }}</span></span>
+        <span{% if user.is_superuser and project_can_write %} x-show="testRunStatus === 'done' || testRunStatus === 'cancelled'"{% else %} x-show="testRunStatus !== 'waiting'"{% endif %} x-cloak> · Help mode: <span x-text="helpModeLabel(runHelpMode)">{{ test_run.get_help_mode_display }}</span></span>
       </p>
       {% comment %} Switch the help mode of a running or paused run. It applies from
          the next Need help; a paused case waiting for a person (never

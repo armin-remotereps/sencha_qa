@@ -16,8 +16,8 @@ from projects.exceptions import (
     LastProjectMemberError,
     LastWritableMemberError,
     MemberInviteThrottledError,
+    MemberManagementNotAllowedError,
     MemberNotFoundError,
-    MemberRoleChangeNotAllowedError,
     NotProjectMemberError,
 )
 from projects.forms import (
@@ -55,6 +55,7 @@ def member_invite(request: AuthenticatedRequest, project: Project) -> HttpRespon
             InvalidMemberRoleError,
             MemberInviteThrottledError,
             MemberNotFoundError,
+            MemberManagementNotAllowedError,
             AlreadyMemberError,
         ) as exc:
             form.add_error("email", exc.message)
@@ -86,7 +87,7 @@ def member_role(
     except (
         InvalidMemberRoleError,
         LastWritableMemberError,
-        MemberRoleChangeNotAllowedError,
+        MemberManagementNotAllowedError,
     ) as exc:
         messages.error(request, exc.message)
     else:

@@ -5,7 +5,6 @@ from typing import Any
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
-from django.core.exceptions import PermissionDenied
 from django.http import (
     Http404,
     HttpRequest,
@@ -55,7 +54,7 @@ from projects.case_plan_revision_services import (
 )
 from projects.case_result_page import get_case_result_panel
 from projects.case_step_progress import case_step_view
-from projects.decorators import project_membership_required
+from projects.decorators import get_writable_project, project_membership_required
 from projects.exceptions import (
     ApplicationContextVersionNotFoundError,
     HelpModeNotAllowedError,
@@ -91,6 +90,7 @@ from projects.models import (
     TestRunTestCase,
 )
 from projects.person_step_services import get_person_step_panel
+from projects.project_access import get_request_project_access
 from projects.project_access_services import get_project_access
 from projects.run_case_check_services import (
     check_run_cases,
@@ -330,22 +330,10 @@ def setup_details(request: HttpRequest, project: Project) -> HttpResponse:
     return redirect("projects:setup_context", project_id=project.id)
 
 
-def _writable_project(
-    project_id: int, user: CustomUser, *, include_archived: bool = False
-) -> Project:
-    """The project for a list-row action: 404 for a non-member, 403 if read-only."""
-    access = get_project_access(project_id, user, include_archived=include_archived)
-    if access is None:
-        raise Http404
-    if not access.can_write:
-        raise PermissionDenied
-    return access.project
-
-
 @login_required
 @require_POST
 def project_edit(request: AuthenticatedRequest, project_id: int) -> HttpResponse:
-    project = _writable_project(project_id, request.user)
+    project = get_writable_project(project_id, request.user)
 
     form = ProjectForm(request.POST)
     if not form.is_valid():
@@ -363,7 +351,7 @@ def project_edit(request: AuthenticatedRequest, project_id: int) -> HttpResponse
 @login_required
 @require_POST
 def project_archive(request: AuthenticatedRequest, project_id: int) -> HttpResponse:
-    project = _writable_project(project_id, request.user)
+    project = get_writable_project(project_id, request.user)
 
     archive_project(project)
     return redirect("projects:list")
@@ -373,7 +361,7 @@ def project_archive(request: AuthenticatedRequest, project_id: int) -> HttpRespo
 @require_POST
 def project_restore(request: AuthenticatedRequest, project_id: int) -> HttpResponse:
     """Restore an archived project (the lookup includes archived projects)."""
-    project = _writable_project(project_id, request.user, include_archived=True)
+    project = get_writable_project(project_id, request.user, include_archived=True)
 
     unarchive_project(project)
     messages.success(request, f'"{project.name}" restored.')
@@ -386,7 +374,7 @@ def project_restore(request: AuthenticatedRequest, project_id: int) -> HttpRespo
 @require_POST
 def project_duplicate(request: AuthenticatedRequest, project_id: int) -> HttpResponse:
     user: CustomUser = request.user
-    project = _writable_project(project_id, user)
+    project = get_writable_project(project_id, user)
 
     name = request.POST.get("name", "").strip() or f"Copy of {project.name}"
     duplicate_project(source_project=project, user=user, name=name)
@@ -725,6 +713,9 @@ def test_case_import(request: HttpRequest, project: Project) -> HttpResponse:
     page = parse_page(request)
     per_page = parse_per_page(request)
     uploads = list_uploads_for_project(project=project, page=page, per_page=per_page)
+    access = get_request_project_access(request)
+    # The import cards are hidden from read-only members: skip the TestRail call.
+    can_write = access is not None and access.can_write
     return render(
         request,
         "projects/import.html",
@@ -735,7 +726,9 @@ def test_case_import(request: HttpRequest, project: Project) -> HttpResponse:
             "allowed_per_page": ALLOWED_PER_PAGE,
             "elided_page_range": elided_page_range(uploads),
             "query_params": _build_query_params(request),
-            "testrail_picker": get_testrail_picker_state(project),
+            "testrail_picker": (
+                get_testrail_picker_state(project) if can_write else None
+            ),
             "active_tab": "test_cases",
             "active_nav": "projects",
         },

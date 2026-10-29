@@ -7,7 +7,7 @@ from notifications.services.notification_message import (
     NotificationKind,
     preference_flag,
 )
-from projects.models import ProjectRole
+from projects.models import WRITABLE_ROLES
 
 
 def recipient_user_ids(
@@ -23,7 +23,7 @@ def recipient_user_ids(
     """
     queryset = NotificationPreference.objects.filter(
         user__project_memberships__project_id=project_id,
-        user__project_memberships__role=ProjectRole.MEMBER,
+        user__project_memberships__role__in=WRITABLE_ROLES,
         enabled=True,
     )
     if among is not None:

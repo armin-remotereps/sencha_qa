@@ -259,11 +259,11 @@ class LastWritableMemberError(ProjectMembershipError):
         )
 
 
-class MemberRoleChangeNotAllowedError(ProjectMembershipError):
-    """Only an active member who can make changes may change roles."""
+class MemberManagementNotAllowedError(ProjectMembershipError):
+    """Only a member who can make changes may invite members or change roles."""
 
     def __init__(self) -> None:
-        super().__init__("Only members who can make changes can change roles.")
+        super().__init__("Only members who can make changes can manage members.")
 
 
 class InvalidMemberRoleError(ProjectMembershipError):
