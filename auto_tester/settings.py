@@ -84,6 +84,7 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
                 "auto_tester.context_processors.branding",
                 "dashboard.context_processors.attention_badge",
+                "projects.context_processors.project_access",
             ],
         },
     },

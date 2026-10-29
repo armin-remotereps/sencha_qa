@@ -4,9 +4,13 @@ import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 from django.conf import settings
 from django.db import models
+
+if TYPE_CHECKING:
+    from accounts.models import CustomUser
 
 from controller_client.protocol import (
     MAX_VERSION_LENGTH,
@@ -190,11 +194,21 @@ class ContextWriteSource(models.TextChoices):
     RESTORE = "restore", "Restore"
 
 
+class ProjectRole(models.TextChoices):
+    MEMBER = "member", "Member"
+    READ_ONLY = "read_only", "Read-only"
+
+
 class Project(models.Model):
     name = models.CharField(max_length=255)
     tags = models.ManyToManyField(Tag, blank=True, related_name="projects")
-    members = models.ManyToManyField(
-        settings.AUTH_USER_MODEL, blank=True, related_name="projects"
+    members: models.ManyToManyField[CustomUser, ProjectMembership] = (
+        models.ManyToManyField(
+            settings.AUTH_USER_MODEL,
+            through="ProjectMembership",
+            blank=True,
+            related_name="projects",
+        )
     )
     archived = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -260,6 +274,38 @@ class Project(models.Model):
             and self.testrail_email
             and self.testrail_api_key_encrypted
         )
+
+
+class ProjectMembership(models.Model):
+    """One member of a project and their role.
+
+    Keeps the table and column of the former auto-created ``Project.members``
+    M2M (migration 0041 is state-only plus the ``role`` column).
+    """
+
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="memberships"
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="project_memberships",
+        db_column="customuser_id",
+    )
+    role = models.CharField(
+        max_length=16, choices=ProjectRole.choices, default=ProjectRole.MEMBER
+    )
+
+    class Meta:
+        db_table = "projects_project_members"
+        unique_together = [("project", "user")]
+
+    def __str__(self) -> str:
+        return f"{self.user_id} in {self.project_id} ({self.role})"
+
+    @property
+    def can_write(self) -> bool:
+        return self.role == ProjectRole.MEMBER
 
 
 class ApplicationContextVersion(models.Model):

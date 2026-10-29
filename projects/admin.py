@@ -8,6 +8,7 @@ from projects.models import (
     ApplicationContextVersion,
     CaseHelpRequest,
     Project,
+    ProjectMembership,
     RunnerUpdate,
     Tag,
     TestCase,
@@ -26,6 +27,13 @@ class TagAdmin(admin.ModelAdmin[Tag]):
     search_fields = ("name",)
 
 
+class ProjectMembershipInline(admin.TabularInline[ProjectMembership, Project]):
+    model = ProjectMembership
+    fields = ("user", "role")
+    autocomplete_fields = ("user",)
+    extra = 0
+
+
 @admin.register(Project)
 class ProjectAdmin(admin.ModelAdmin[Project]):
     list_display = (
@@ -36,7 +44,8 @@ class ProjectAdmin(admin.ModelAdmin[Project]):
         "created_at",
     )
     list_filter = ("archived", "agent_connected", "application_platform", "tags")
-    filter_horizontal = ("tags", "members")
+    filter_horizontal = ("tags",)
+    inlines = (ProjectMembershipInline,)
     readonly_fields = (
         "api_key",
         "agent_connected",
@@ -46,7 +55,6 @@ class ProjectAdmin(admin.ModelAdmin[Project]):
     fields = (
         "name",
         "tags",
-        "members",
         "archived",
         "application_url",
         "application_platform",

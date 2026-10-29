@@ -248,3 +248,27 @@ class NotProjectMemberError(ProjectMembershipError):
 
     def __init__(self) -> None:
         super().__init__("You are not a member of this project.")
+
+
+class LastWritableMemberError(ProjectMembershipError):
+    """The change would leave no active member who can make changes."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "A project needs at least one active member who can make changes."
+        )
+
+
+class InvalidMemberRoleError(ProjectMembershipError):
+    """The requested role is not a ``ProjectRole`` value."""
+
+    def __init__(self) -> None:
+        super().__init__("Unknown member role.")
+
+
+class HelpModeNotAllowedError(Exception):
+    """A non-superuser tried to choose or change a run's help mode."""
+
+    def __init__(self) -> None:
+        self.message = "Only a superuser can choose or change the run mode."
+        super().__init__(self.message)
