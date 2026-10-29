@@ -4,7 +4,7 @@
    <details>, so it can close on Escape and click-outside.
 
    Context contract:
-     active_nav      — "dashboard" | "projects" | "failures" | "insights" | "notifications",
+     active_nav      — "dashboard" | "projects" | "failures" | "insights" | "notifications" | "users",
                        forwarded to partials/nav_links.html
      attention_count — the attention badge count, forwarded to partials/nav_links.html {% endcomment %}
 <header class="topbar">
@@ -39,7 +39,7 @@
       x-trap.noscroll="open"
       aria-label="Main navigation"
     >
-      {% include "partials/nav_links.html" with active_nav=active_nav attention_count=attention_count only %}
+      {% include "partials/nav_links.html" with active_nav=active_nav attention_count=attention_count is_superuser=user.is_superuser only %}
       <form method="post" action="{% url 'accounts:logout' %}">
         {% csrf_token %}
         <button type="submit" class="nav-link-button">Sign out</button>

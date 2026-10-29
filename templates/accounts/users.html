@@ -1,0 +1,86 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Users page (superusers only): list every user and create a regular
+   user with an initial password. Editing, deactivating and password resets
+   stay in Django admin.
+
+   Context contract (accounts/user_views.py):
+     users             — Page of accounts.user_management_services.UserRow
+     form              — accounts.forms.UserCreateForm (bound after an invalid create)
+     page_obj, elided_page_range, per_page, allowed_per_page, query_params
+                       — partials/pagination.html keys {% endcomment %}
+
+{% block title %}Users · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <h1>Users</h1>
+    <p class="subtitle">Everyone who can sign in. Create an account with an initial password and share it with the person privately; they can then be invited to projects by email.</p>
+  </div>
+</div>
+
+<div class="stack">
+  <section class="card" aria-labelledby="user-create-heading">
+    <div class="card-header">
+      <h2 id="user-create-heading">Create a user</h2>
+    </div>
+    <p class="muted small">New users are regular users: not staff and not superusers.</p>
+    <form method="post" action="{% url 'accounts:user_create' %}" novalidate>
+      {% csrf_token %}
+      {% for error in form.non_field_errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+      {% include "partials/form_field.html" with field=form.email only %}
+      <div class="grid grid-2">
+        {% include "partials/form_field.html" with field=form.first_name only %}
+        {% include "partials/form_field.html" with field=form.last_name only %}
+      </div>
+      <div class="grid grid-2">
+        {% include "partials/form_field.html" with field=form.password1 only %}
+        {% include "partials/form_field.html" with field=form.password2 only %}
+      </div>
+      <div class="dialog-actions">
+        <button class="btn btn-primary" type="submit">Create user</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="user-list-heading">
+    <div class="card-header">
+      <h2 id="user-list-heading">All users</h2>
+    </div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th scope="col">Email</th>
+            <th scope="col">Name</th>
+            <th scope="col">Role</th>
+            <th scope="col">Status</th>
+            <th scope="col">Joined</th>
+            <th scope="col">Last login</th>
+            <th scope="col">Projects</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in users %}
+            <tr{% if not row.is_active %} class="muted"{% endif %}>
+              <td data-label="Email" class="cell-primary">{{ row.email }}</td>
+              <td data-label="Name">{{ row.full_name|default:"—" }}</td>
+              <td data-label="Role">{% if row.is_superuser %}<span class="badge badge-ready">Superuser</span>{% else %}<span class="muted">User</span>{% endif %}</td>
+              <td data-label="Status">{% if row.is_active %}<span class="badge badge-passed">Active</span>{% else %}<span class="badge badge-draft">Inactive</span>{% endif %}</td>
+              <td data-label="Joined">{{ row.date_joined|date:"M j, Y" }}</td>
+              <td data-label="Last login">{% if row.last_login %}{{ row.last_login|date:"M j, Y H:i" }}{% else %}<span class="muted">Never</span>{% endif %}</td>
+              <td data-label="Projects">{{ row.project_count }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% comment %} The pagination links are relative ("?page=…"), so they only
+       work on the GET page, not on a re-render after an invalid create POST. {% endcomment %}
+    {% if not form.is_bound %}
+      {% include "partials/pagination.html" %}
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
