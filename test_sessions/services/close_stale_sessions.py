@@ -11,7 +11,7 @@ from django.db.models import F
 
 from test_sessions.models import TestSession
 from test_sessions.services.record_case_activity import (
-    freeze_finished_cases_of_session,
+    freeze_finished_cases_of_sessions,
 )
 
 logger = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ CLOSE_BATCH_SIZE = 100
 
 def _close_batch(cutoff: datetime, max_open: timedelta, now: datetime) -> int:
     """Close up to ``CLOSE_BATCH_SIZE`` stale sessions and freeze their
-    finished cases (2 queries + 1 per session)."""
+    finished cases (3 queries)."""
     with transaction.atomic():
         session_ids = list(
             TestSession.objects.select_for_update(skip_locked=True)
@@ -37,8 +37,7 @@ def _close_batch(cutoff: datetime, max_open: timedelta, now: datetime) -> int:
             closed_automatically=True,
             updated_at=now,
         )
-        for session_id in session_ids:
-            freeze_finished_cases_of_session(session_id, now)
+        freeze_finished_cases_of_sessions(session_ids, now)
     return len(session_ids)
 
 

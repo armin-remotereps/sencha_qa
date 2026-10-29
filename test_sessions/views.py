@@ -135,6 +135,9 @@ def session_detail(request: AuthenticatedRequest, session_id: int) -> HttpRespon
         "export_url": reverse("test_sessions:export", args=[session.id]),
         "active_nav": "sessions",
     }
+    if session.is_open:
+        # The nav chip's answer is this session: no second lookup.
+        context["open_test_session"] = session
     return render(request, "test_sessions/detail.html", context)
 
 

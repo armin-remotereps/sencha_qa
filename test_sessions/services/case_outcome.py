@@ -14,7 +14,9 @@ from django.db.models import (
     CharField,
     DateTimeField,
     DurationField,
+    Exists,
     F,
+    OuterRef,
     Q,
     TextField,
     Value,
@@ -26,6 +28,7 @@ from projects.models import (
     FINISHED_CASE_STATUSES,
     BlockedReason,
     FailedBy,
+    Project,
     RunHelpMode,
     TestRunTestCaseStatus,
 )
@@ -47,6 +50,20 @@ AGENT_LABEL = "AI agent"
 _FROZEN = Q(frozen_at__isnull=False)
 _LIVE = "test_run_test_case__"
 
+
+def _owner_is_member() -> Q:
+    """The session's owner is still a member of the row's project: only then
+    is the live run case read (a former member sees frozen outcomes only)."""
+    return Q(
+        Exists(
+            Project.members.through.objects.filter(
+                project_id=OuterRef("project_id"),
+                customuser_id=OuterRef("session__user_id"),
+            )
+        )
+    )
+
+
 _STATUS_LABELS: dict[str, str] = dict(TestRunTestCaseStatus.choices)
 _FAILED_BY_LABELS: dict[str, str] = dict(FailedBy.choices)
 _BLOCKED_REASON_LABELS: dict[str, str] = dict(BlockedReason.choices)
@@ -58,7 +75,8 @@ def _frozen_or_live(
 ) -> Case:
     return Case(
         When(_FROZEN, then=F(f"frozen_{field}")),
-        default=F(f"{_LIVE}{field}"),
+        When(_owner_is_member(), then=F(f"{_LIVE}{field}")),
+        default=Value(None),
         output_field=output_field,
     )
 
@@ -66,19 +84,22 @@ def _frozen_or_live(
 def _frozen_or_live_time(field: str) -> Case:
     return Case(
         When(_FROZEN, then=F(f"frozen_{field}")),
-        default=F(f"{_LIVE}{field}"),
+        When(_owner_is_member(), then=F(f"{_LIVE}{field}")),
+        default=Value(None),
         output_field=DateTimeField(),
     )
 
 
 def effective_status() -> Case:
-    """The frozen status, else the live pivot's (NULL: pivot gone, not frozen)."""
+    """The frozen status, else the live pivot's (NULL: pivot gone, or the
+    owner left the project, and not frozen)."""
     return _frozen_or_live("status", CharField())
 
 
 def effective_duration() -> Case:
     """The frozen duration, else the live ``active_duration`` only once the
-    live case has finished (as ``TestRunTestCase.shown_duration``)."""
+    live case has finished (as ``TestRunTestCase.shown_duration``) and the
+    owner is still a member of its project."""
     return Case(
         When(_FROZEN, then=F("frozen_active_duration")),
         When(
@@ -88,7 +109,8 @@ def effective_duration() -> Case:
                         str(status) for status in FINISHED_CASE_STATUSES
                     )
                 }
-            ),
+            )
+            & _owner_is_member(),
             then=F(f"{_LIVE}active_duration"),
         ),
         default=Value(None, output_field=DurationField()),

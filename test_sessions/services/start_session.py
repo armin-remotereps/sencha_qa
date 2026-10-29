@@ -8,6 +8,7 @@ from django.utils import timezone
 from accounts.models import CustomUser
 from test_sessions.exceptions import SessionAlreadyOpenError
 from test_sessions.models import TestSession
+from test_sessions.services.session_queries import open_session_id
 
 
 def start_session(*, user: CustomUser, name: str, note: str) -> TestSession:
@@ -26,12 +27,8 @@ def start_session(*, user: CustomUser, name: str, note: str) -> TestSession:
                 started_at=timezone.now(),
             )
     except IntegrityError as error:
-        open_session_id = (
-            TestSession.objects.filter(user=user, ended_at__isnull=True)
-            .values_list("id", flat=True)
-            .first()
-        )
-        if open_session_id is None:
+        existing_id = open_session_id(user)
+        if existing_id is None:
             # Not the one-open-session constraint: a real error.
             raise
-        raise SessionAlreadyOpenError(open_session_id) from error
+        raise SessionAlreadyOpenError(existing_id) from error

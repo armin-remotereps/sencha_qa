@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from django.conf import settings
 from django.db import DatabaseError, transaction
 from django.db.models import F, OuterRef, QuerySet, Subquery, Value
 from django.db.models.functions import Coalesce
@@ -52,17 +53,34 @@ def _freeze(rows: QuerySet[TestSessionCase], now: datetime) -> int:
     )
 
 
-def _open_session_id(user: CustomUser) -> int | None:
-    return (
-        TestSession.objects.filter(user=user, ended_at__isnull=True)
-        .values_list("id", flat=True)
-        .first()
-    )
+def _active_session_id(user: CustomUser, now: datetime) -> int | None:
+    """The user's open session, unless it is past ``TEST_SESSION_MAX_HOURS``
+    and only waits for the auto-close beat (it ends at ``started_at + max``,
+    so later work does not belong to it)."""
+    sessions = TestSession.objects.filter(user=user, ended_at__isnull=True)
+    max_hours: int = settings.TEST_SESSION_MAX_HOURS
+    if max_hours > 0:
+        sessions = sessions.filter(started_at__gt=now - timedelta(hours=max_hours))
+    return sessions.values_list("id", flat=True).first()
 
 
 def _record(
     user: CustomUser | None, pivot_ids: list[int], activity: CaseActivity
 ) -> None:
+    now = timezone.now()
+    # The session first: most actions are by users without an open session,
+    # who then pay for at most this query and the freeze below.
+    session_id = _active_session_id(user, now) if user is not None else None
+
+    if activity in VERDICT_DISCARDING:
+        others = TestSessionCase.objects.filter(test_run_test_case_id__in=pivot_ids)
+        if session_id is not None:
+            others = others.exclude(session_id=session_id)
+        _freeze(others, now)
+
+    if session_id is None:
+        return
+
     pivots = list(
         TestRunTestCase.objects.filter(pk__in=pivot_ids).values(
             "id",
@@ -82,17 +100,6 @@ def _record(
     position = {pivot_id: index for index, pivot_id in enumerate(pivot_ids)}
     pivots.sort(key=lambda pivot: position[pivot["id"]])
     found_ids = [pivot["id"] for pivot in pivots]
-    now = timezone.now()
-    session_id = _open_session_id(user) if user is not None else None
-
-    if activity in VERDICT_DISCARDING:
-        others = TestSessionCase.objects.filter(test_run_test_case_id__in=found_ids)
-        if session_id is not None:
-            others = others.exclude(session_id=session_id)
-        _freeze(others, now)
-
-    if session_id is None:
-        return
 
     is_person_step = activity == CaseActivity.PERSON_STEP
     # Existing rows first, so the insert below only adds the missing ones.
@@ -152,7 +159,8 @@ def record_case_activity(
 
     For verdict-discarding activities, first freeze the other sessions' rows
     of those cases. Without a user or an open session nothing is recorded.
-    At most 5 queries, whatever the number of cases.
+    At most 5 queries, whatever the number of cases; 1 or 2 without an
+    open session.
     """
     if not pivot_ids:
         return
@@ -173,9 +181,7 @@ def freeze_session_cases_of_run(test_run_id: int) -> None:
     try:
         with transaction.atomic():
             _freeze(
-                TestSessionCase.objects.filter(
-                    test_run_test_case__test_run_id=test_run_id
-                ),
+                TestSessionCase.objects.filter(test_run_id=test_run_id),
                 timezone.now(),
             )
     except DatabaseError:
@@ -184,18 +190,27 @@ def freeze_session_cases_of_run(test_run_id: int) -> None:
         )
 
 
-def freeze_finished_cases_of_session(session_id: int, now: datetime) -> None:
-    """Freeze ``session_id``'s unfrozen rows whose case has finished (Stop)."""
+def freeze_finished_cases_of_sessions(
+    session_ids: Sequence[int], now: datetime
+) -> None:
+    """Freeze the sessions' unfrozen rows whose case has finished (Stop and
+    auto-close), in one UPDATE.
+
+    It can deadlock with a concurrent Resume/Re-run freezing the same rows;
+    Postgres then aborts this savepoint and those rows stay live (logged).
+    Accepted: they still follow the same execution."""
+    if not session_ids:
+        return
     try:
         with transaction.atomic():
             _freeze(
                 TestSessionCase.objects.filter(
-                    session_id=session_id,
+                    session_id__in=list(session_ids),
                     test_run_test_case__status__in=FINISHED_CASE_STATUSES,
                 ),
                 now,
             )
     except DatabaseError:
         logger.exception(
-            "Could not freeze finished cases of test session %s", session_id
+            "Could not freeze finished cases of test sessions %s", list(session_ids)
         )

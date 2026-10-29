@@ -153,6 +153,15 @@ def run_label(run_name: str, run_ref: int | None) -> str:
     return f"Run #{run_ref}" if run_ref is not None else ""
 
 
+def open_session_id(user: CustomUser) -> int | None:
+    """The id of the user's open session, if any (1 indexed query)."""
+    return (
+        TestSession.objects.filter(user=user, ended_at__isnull=True)
+        .values_list("id", flat=True)
+        .first()
+    )
+
+
 def get_open_session(user: CustomUser) -> TestSession | None:
     """The user's open session, if any (1 indexed query)."""
     return TestSession.objects.filter(user=user, ended_at__isnull=True).first()

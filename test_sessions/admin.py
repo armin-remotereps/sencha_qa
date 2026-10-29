@@ -65,3 +65,8 @@ class TestSessionAdmin(admin.ModelAdmin[TestSession]):
         self, request: HttpRequest, obj: TestSession | None = None
     ) -> bool:
         return False
+
+    def has_delete_permission(
+        self, request: HttpRequest, obj: TestSession | None = None
+    ) -> bool:
+        return False

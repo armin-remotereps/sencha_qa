@@ -41,7 +41,7 @@
   <p class="muted small">Started <time datetime="{{ open_session.started_at|date:'c' }}">{{ open_session.started_at|date:"M j, Y H:i" }}</time> ({{ open_session.started_at|timesince }} ago)</p>
 </div>
 {% url 'test_sessions:stop' open_session.id as stop_url %}
-{% include "partials/confirm_dialog.html" with dialog_id="stop-session" title="Stop this session?" body="The session ends now. Cases that already finished keep their result as of now; you can add a note on the session page." confirm_label="Stop session" confirm_class="btn-primary" action_url=stop_url only %}
+{% include "partials/confirm_dialog.html" with dialog_id="stop-session" title="Stop this session?" body="The session ends now. Cases that already finished keep their result as of now; you can add a note on the session page." confirm_label="Stop session" confirm_class="btn-primary" action_url=stop_url csrf_token=csrf_token only %}
 {% else %}
 {# Section: Start a session #}
 <div class="card">

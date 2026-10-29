@@ -61,4 +61,4 @@
 </div>
 
 {% url 'test_sessions:delete' session.id as delete_url %}
-{% include "partials/confirm_dialog.html" with dialog_id="delete-session" title="Delete this session?" body="The session and its record of tests are deleted. The runs and their results are not touched. This can't be undone." confirm_label="Delete session" action_url=delete_url only %}
+{% include "partials/confirm_dialog.html" with dialog_id="delete-session" title="Delete this session?" body="The session and its record of tests are deleted. The runs and their results are not touched. This can't be undone." confirm_label="Delete session" action_url=delete_url csrf_token=csrf_token only %}

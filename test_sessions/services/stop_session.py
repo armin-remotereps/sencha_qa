@@ -11,7 +11,7 @@ from accounts.models import CustomUser
 from test_sessions.exceptions import SessionAlreadyClosedError, SessionNotFoundError
 from test_sessions.models import TestSession
 from test_sessions.services.record_case_activity import (
-    freeze_finished_cases_of_session,
+    freeze_finished_cases_of_sessions,
 )
 
 
@@ -39,5 +39,5 @@ def stop_session(*, user: CustomUser, session_id: int, note: str | None) -> Test
             if TestSession.objects.filter(id=session_id, user=user).exists():
                 raise SessionAlreadyClosedError()
             raise SessionNotFoundError()
-        freeze_finished_cases_of_session(session_id, now)
+        freeze_finished_cases_of_sessions([session_id], now)
         return TestSession.objects.get(id=session_id)

@@ -671,3 +671,4 @@ There is no automated test suite. Verify as follows:
 ## Changelog
 
 - 2026-10-29: created (Draft).
+- 2026-10-29: review round 1 fixes: CSRF token forwarded to the Stop (list) and Delete confirm dialogs; live outcomes only while the session owner is still a member of the project (former members see frozen values, else "Not available"); admin also refuses delete; `record_case_activity` looks up the session first (1–2 queries without one) and ignores an open session already past `TEST_SESSION_MAX_HOURS`; one freeze for a batch of stale sessions (`freeze_finished_cases_of_sessions`); Reset freeze filters on `test_run_id`; detail page reuses the open session for the nav chip; shared `open_session_id`. Accepted, not changed: a Stop freeze racing a Resume freeze may deadlock and leave those rows live (logged, documented); a Test Runner answer is credited to the member its email names (existing attribution model).
