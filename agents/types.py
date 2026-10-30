@@ -79,6 +79,8 @@ class PersonStepHandOff:
     # Exact OS-specific steps (open the app, the command, what to look for);
     # empty when the model wrote none.
     how_to: tuple[PersonHowToItem, ...] = ()
+    # The plan step's ``SubTask.case_steps``; always empty for ``restore``.
+    case_steps: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -265,6 +267,9 @@ class SubTask:
     description: str
     expected_result: str
     timeout_seconds: int
+    # 1-based numbered test case steps this step performs or checks
+    # (``agents/case_step_refs.py``); empty when unknown or for added steps.
+    case_steps: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -487,6 +492,9 @@ class OrchestratorCheckpoint:
     # Number of help-chat redesigns applied, and the newest earlier plans.
     plan_version: int = 0
     plan_revisions: tuple[PlanRevisionRecord, ...] = ()
+    # Numbered test case steps when the case was planned (0: none, or not a
+    # steps-template case); the bound for ``SubTask.case_steps`` in redesigns.
+    case_step_count: int = 0
 
 
 CheckpointCallback = Callable[[OrchestratorCheckpoint], None]

@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from typing import Literal, cast
 
+from agents.case_step_refs import lenient_case_step_refs, normalize_case_step_refs
 from agents.types import (
     CheckpointHelp,
     CheckpointPersonStep,
@@ -60,6 +61,8 @@ _PERSON_STATES = ("waiting", "reported", "overruled", "handed_back")
 _PERSON_OUTCOMES = ("as_expected", "different")
 _PLAN_VERSION_KEY = "plan_version"
 _PLAN_REVISIONS_KEY = "plan_revisions"
+_CASE_STEP_COUNT_KEY = "case_step_count"
+_CASE_STEPS_KEY = "case_steps"
 # Only the newest earlier plans are kept (display and prompt data).
 MAX_PLAN_REVISION_RECORDS = 5
 
@@ -85,6 +88,8 @@ def checkpoint_to_json(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
         data[_PERSON_KEY] = person_step_to_json(checkpoint.person)
     if checkpoint.plan_version:
         data[_PLAN_VERSION_KEY] = checkpoint.plan_version
+    if checkpoint.case_step_count:
+        data[_CASE_STEP_COUNT_KEY] = checkpoint.case_step_count
     if checkpoint.plan_revisions:
         data[_PLAN_REVISIONS_KEY] = [
             _revision_to_json(record)
@@ -153,14 +158,7 @@ def _revision_to_json(record: PlanRevisionRecord) -> dict[str, object]:
 def _checkpoint_body(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
     return {
         "version": CHECKPOINT_VERSION,
-        "plan": [
-            {
-                "description": task.description,
-                "expected_result": task.expected_result,
-                "timeout_seconds": task.timeout_seconds,
-            }
-            for task in checkpoint.plan
-        ],
+        "plan": [_plan_item_to_json(task) for task in checkpoint.plan],
         "attempts": [_attempt_to_json(attempt) for attempt in checkpoint.attempts],
         "next_step": checkpoint.next_step,
         "browser": checkpoint.browser.value,
@@ -173,6 +171,18 @@ def _checkpoint_body(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
             else None
         ),
     }
+
+
+def _plan_item_to_json(task: SubTask) -> dict[str, object]:
+    item: dict[str, object] = {
+        "description": task.description,
+        "expected_result": task.expected_result,
+        "timeout_seconds": task.timeout_seconds,
+    }
+    # Optional: written only when present, so older parsers see no change.
+    if task.case_steps:
+        item[_CASE_STEPS_KEY] = list(task.case_steps)
+    return item
 
 
 def checkpoint_from_json(data: object) -> OrchestratorCheckpoint | None:
@@ -266,6 +276,8 @@ def person_step_to_json(person: CheckpointPersonStep) -> dict[str, object]:
         data["how_to"] = [
             {"text": item.text, "command": item.command} for item in hand_off.how_to
         ]
+    if hand_off.case_steps:
+        data[_CASE_STEPS_KEY] = list(hand_off.case_steps)
     return data
 
 
@@ -341,11 +353,13 @@ def _parse(data: object) -> OrchestratorCheckpoint:
     root = _as_dict(data, "checkpoint")
     if root.get("version") != CHECKPOINT_VERSION:
         raise _MalformedCheckpoint(f"unsupported version {root.get('version')!r}")
+    case_step_count = _parse_positive_int(root.get(_CASE_STEP_COUNT_KEY)) or 0
     plan = tuple(
         SubTask(
             description=_as_str(item.get("description"), "description"),
             expected_result=_as_str(item.get("expected_result"), "expected_result"),
             timeout_seconds=_as_int(item.get("timeout_seconds"), "timeout_seconds"),
+            case_steps=_parse_case_steps(item.get(_CASE_STEPS_KEY), case_step_count),
         )
         for item in (_as_dict(raw, "plan item") for raw in _as_list(root, "plan"))
     )
@@ -374,6 +388,7 @@ def _parse(data: object) -> OrchestratorCheckpoint:
         person=_parse_person(root.get(_PERSON_KEY)),
         plan_version=_parse_plan_version(root.get(_PLAN_VERSION_KEY)),
         plan_revisions=_parse_revisions(root.get(_PLAN_REVISIONS_KEY)),
+        case_step_count=case_step_count,
     )
 
 
@@ -512,6 +527,11 @@ def _parse_person(value: object) -> CheckpointPersonStep | None:
             command=_str_or_empty(item.get("command")),
             objection=_str_or_empty(item.get("objection")),
             how_to=_parse_how_to(item.get("how_to")),
+            case_steps=(
+                ()
+                if kind == "restore"
+                else lenient_case_step_refs(item.get(_CASE_STEPS_KEY))
+            ),
         ),
         request_id=_parse_positive_int(item.get("request_id")),
         state=cast(PersonStepCheckpointState, state),
@@ -544,6 +564,15 @@ def _parse_how_to(value: object) -> tuple[PersonHowToItem, ...]:
             continue
         items.append(PersonHowToItem(text=text, command=command))
     return tuple(items)
+
+
+def _parse_case_steps(value: object, case_step_count: int) -> tuple[int, ...]:
+    # Absent from checkpoints written before step references existed; a bad
+    # value is dropped, never fatal. Without a stored bound only the shape is
+    # checked.
+    if case_step_count:
+        return normalize_case_step_refs(value, case_step_count)
+    return lenient_case_step_refs(value)
 
 
 def _str_or_empty(value: object) -> str:
