@@ -13,7 +13,6 @@ from typing import Final
 
 from accounts.models import CustomUser
 from projects.models import (
-    RETEST_CLEARED,
     RETEST_FIELDS,
     RETEST_VERDICT_STATUSES,
     TestRunTestCase,
@@ -55,5 +54,7 @@ def apply_retest_mark(
 
 def clear_retest_mark(pivot: TestRunTestCase) -> None:
     """Clear the mark's fields in memory (`RETEST_FIELDS`); the status is the caller's."""
-    for field, value in RETEST_CLEARED.items():
-        setattr(pivot, field, value)
+    pivot.retest_from_status = ""
+    pivot.retest_marked_at = None
+    pivot.retest_marked_by = None
+    pivot.retest_note = ""

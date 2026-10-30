@@ -7,6 +7,8 @@ A superseded draft is shown as Superseded with its steps hidden, so its step lis
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from django.db.models import QuerySet
 from django.utils import timezone
 
@@ -16,6 +18,11 @@ from projects.models import CasePlanRevision, PlanRevisionSource, PlanRevisionSt
 def supersede_case_review_drafts(pivot_id: int) -> None:
     """Retire the case's pending review draft."""
     _supersede(CasePlanRevision.objects.filter(test_run_test_case_id=pivot_id))
+
+
+def supersede_cases_review_drafts(pivot_ids: Sequence[int]) -> None:
+    """Retire the pending review drafts of several cases in one UPDATE."""
+    _supersede(CasePlanRevision.objects.filter(test_run_test_case_id__in=pivot_ids))
 
 
 def supersede_run_review_drafts(test_run_id: int) -> None:
