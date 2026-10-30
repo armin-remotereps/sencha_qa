@@ -664,7 +664,8 @@ class TestRunTestCase(models.Model):
     )
     # Set once the result is added to the source run; the dedupe key.
     testrail_source_result_id = models.PositiveIntegerField(null=True, blank=True)
-    # TestRail test in the source run; kept across re-sends (same run and case).
+    # TestRail test in the source run: snapshot of test_case.testrail_source_test_id
+    # at creation, else set by the first send; kept across re-sends.
     testrail_source_test_id = models.PositiveIntegerField(null=True, blank=True)
     testrail_source_sent_at = models.DateTimeField(null=True, blank=True)
     # Screenshots already attached to that result; a re-send resumes from here.

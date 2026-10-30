@@ -22,8 +22,9 @@
      not yet sent to TestRail), source_run_url (TestRail URL of the source
      run the result was sent to; "" when not sent or TestRail unconfigured).
      testrail_result_url (TestRail page with this case's results: the test
-     it was sent to, else its source run's test recorded at import, else
-     that run, else its source run, else the case; ""
+     in its source run once a result was sent there, else the pushed run's
+     test, else the source run's test recorded at import, else that run,
+     else its source run, else the case; ""
      without a project TestRail URL or anything to link).
      can_send_testrail (TestRail configured and the case is failed, unsent and
      has a source TestRail run: "Send to TestRail" opens

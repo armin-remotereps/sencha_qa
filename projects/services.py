@@ -2288,13 +2288,14 @@ def create_test_run_with_cases(
         project=project, name=name, help_mode=project.default_help_mode
     )
     valid_cases = TestCase.objects.filter(id__in=test_case_ids, project=project).only(
-        "id", "testrail_source_run_id"
+        "id", "testrail_source_run_id", "testrail_source_test_id"
     )
     pivots = [
         TestRunTestCase(
             test_run=test_run,
             test_case=tc,
             testrail_source_run_id=tc.testrail_source_run_id,
+            testrail_source_test_id=tc.testrail_source_test_id,
         )
         for tc in valid_cases
     ]
@@ -2321,6 +2322,7 @@ def add_cases_to_test_run(*, test_run: TestRun, test_case_ids: list[int]) -> int
             test_run=test_run,
             test_case=tc,
             testrail_source_run_id=tc.testrail_source_run_id,
+            testrail_source_test_id=tc.testrail_source_test_id,
         )
         for tc in valid_cases
         if tc.id not in existing_case_ids
@@ -2685,7 +2687,7 @@ def rerun_cases(test_run: TestRun, scope: RerunScope) -> TestRun:
     """
     rows = list(
         test_run.pivot_entries.filter(status=_RERUN_SCOPE_STATUS[scope]).values_list(
-            "test_case_id", "testrail_source_run_id"
+            "test_case_id", "testrail_source_run_id", "testrail_source_test_id"
         )
     )
     if not can_rerun_cases(test_run, len(rows)):
@@ -2704,9 +2706,12 @@ def rerun_cases(test_run: TestRun, scope: RerunScope) -> TestRun:
     )
     pivots = [
         TestRunTestCase(
-            test_run=new_run, test_case_id=case_id, testrail_source_run_id=source_run_id
+            test_run=new_run,
+            test_case_id=case_id,
+            testrail_source_run_id=source_run_id,
+            testrail_source_test_id=source_test_id,
         )
-        for case_id, source_run_id in rows
+        for case_id, source_run_id, source_test_id in rows
     ]
     TestRunTestCase.objects.bulk_create(pivots)
     return new_run

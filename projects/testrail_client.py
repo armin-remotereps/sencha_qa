@@ -321,6 +321,15 @@ class TestRailClient:
             if raw.get("case_id") is not None
         }
 
+    def get_run_test_ids(self, run_id: int) -> dict[int, int]:
+        """Case id -> test id for every test in a run (first test per case)."""
+        method = f"get_tests/{run_id}&limit={TESTRAIL_PAGE_SIZE}"
+        test_ids: dict[int, int] = {}
+        for raw in self._paginate(method, "tests"):
+            if raw.get("case_id") is not None:
+                test_ids.setdefault(int(raw["case_id"]), int(raw["id"]))
+        return test_ids
+
     def iter_run_cases(self, run_id: int) -> Iterator[TestRailCase]:
         """Yield the case behind each test in a run; tests carry the case fields."""
         method = f"get_tests/{run_id}&limit={TESTRAIL_PAGE_SIZE}"

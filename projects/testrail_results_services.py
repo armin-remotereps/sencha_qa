@@ -231,24 +231,20 @@ def build_testrail_run_url(project: Project, run_id: int) -> str:
 def build_testrail_result_url(pivot: TestRunTestCase, project: Project) -> str:
     """TestRail page with this run case's results, best match first.
 
-    The test a result was sent to (source run first, then the pushed run),
-    else the source run's test recorded at import, else that run's page
-    (results sent before test ids were stored, or imported before import kept
-    test ids), else the source run it was imported from, else the case. ""
-    without a TestRail URL.
+    The source run's test once a result was sent there, else the pushed run's
+    test, else the source run's test recorded at import, else the run a
+    result went to (sent before test ids were stored), else the source run it
+    was imported from, else the case. "" without a TestRail URL.
     """
     if not project.testrail_url:
         return ""
-    source_run_id = pivot.testrail_source_run_id
-    test_id = pivot.testrail_source_test_id or pivot.testrail_test_id
-    # The case's import test belongs to its latest import run; use it only
-    # while that is still this run case's source run.
-    if not test_id and source_run_id is not None:
-        test_case = pivot.test_case
-        if test_case.testrail_source_run_id == source_run_id:
-            test_id = test_case.testrail_source_test_id
+    if pivot.testrail_source_result_id is not None:
+        test_id = pivot.testrail_source_test_id or pivot.testrail_test_id
+    else:
+        test_id = pivot.testrail_test_id or pivot.testrail_source_test_id
     if test_id:
         return f"{project.testrail_url}/index.php?/tests/view/{test_id}"
+    source_run_id = pivot.testrail_source_run_id
     # Same rule as ``testrail_checked_push_services.get_source_run_url``.
     if pivot.testrail_source_result_id is not None and source_run_id:
         return build_testrail_run_url(project, source_run_id)
