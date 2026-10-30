@@ -32,14 +32,14 @@
           </td>
 
           <td data-label="Status">
-            {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count blocked_count=run.blocked_count only %}
+            {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count blocked_count=run.blocked_count retest_count=run.retest_count only %}
           </td>
 
           <td data-label="Cases">{{ run.case_count }} case{{ run.case_count|pluralize }}</td>
 
           <td data-label="Result" {% if run.status == "waiting" or run.status == "started" or run.status == "paused" %}class="muted"{% endif %}>
             {% if run.status == "done" %}
-              {{ run.success_count }} passed{% if run.failed_count %} &middot; {{ run.failed_count }} failed{% endif %}{% if run.blocked_count %} &middot; {{ run.blocked_count }} blocked{% endif %}
+              {{ run.success_count }} passed{% if run.failed_count %} &middot; {{ run.failed_count }} failed{% endif %}{% if run.blocked_count %} &middot; {{ run.blocked_count }} blocked{% endif %}{% if run.retest_count %} &middot; {{ run.retest_count }} need{{ run.retest_count|pluralize:"s," }} re-test{% endif %}
             {% elif run.status == "started" %}
               In progress
             {% elif run.status == "paused" %}

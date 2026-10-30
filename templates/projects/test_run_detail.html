@@ -15,7 +15,8 @@
 
    Context contract (projects.views._build_test_run_detail_context):
      project, test_run, cases (Page[TestRunTestCase], failures first),
-     summary {total, created, in_progress, success, failed, blocked, cancelled},
+     summary {total, created, in_progress, success, failed, blocked, cancelled,
+     needs_retest},
      readiness (RunReadiness — present only while test_run.status == "waiting"),
      narrative, can_rerun_failed, failed_titles (unused directly here —
      narrative already folds them in), can_rerun_blocked, form (TestCaseForm, for the shared
@@ -29,8 +30,12 @@
      that can be checked / unchecked), rerunnable_pivot_ids (list[int], every
      id on this page when the run is Done / Cancelled, else empty),
      sendable_pivot_ids (list[int], failed, unsent ids on this page with a
-     source TestRail run; empty unless case_send_available); the union of the
-     four is the bulk selection,
+     source TestRail run; empty unless case_send_available),
+     retestable_pivot_ids (list[int], ids on this page not already Needs
+     re-test; empty for a Draft run); the union of the five is the bulk
+     selection. "Needs re-test (N)" in the bulk bar opens
+     includes/_retest_dialog.html (optional note, max retest_note_max chars),
+     which posts pivot_ids + note + next to projects:test_run_cases_retest,
      case_send_available (bool: TestRail configured and some case of the run
      has a source TestRail run). "Send to TestRail (N)" in the bulk bar and a
      row's Send open includes/_testrail_case_send_dialog.html, which posts
@@ -338,6 +343,10 @@
           <div class="stat-label">Blocked</div>
           <div class="stat-value is-warning" x-text="summary.blocked"></div>
         </div>
+        <div class="stat-card" x-show="summary.needs_retest > 0" x-cloak>
+          <div class="stat-label">Needs re-test</div>
+          <div class="stat-value is-retest" x-text="summary.needs_retest"></div>
+        </div>
         <div class="stat-card" x-show="summary.need_help > 0" x-cloak>
           <div class="stat-label">Need help</div>
           <div class="stat-value is-need-help" x-text="summary.need_help"></div>
@@ -372,18 +381,19 @@
   </template>
 
   {% comment %} Section: Case-level results, failures first. runCaseChecks scope (a
-     bulkSelect over the page's checkable + uncheckable + re-runnable pivots);
-     the Check, Uncheck, Re-run and Send to TestRail forms each post only the
-     selected ids valid for them (`toCheck` / `toUncheck` / `toRerun` /
-     `toSend`). The Re-run and Send to TestRail confirm dialogs live inside
-     this scope so their forms can render the selected ids. {% endcomment %}
+     bulkSelect over the page's checkable + uncheckable + re-runnable +
+     sendable + re-testable pivots); the Check, Uncheck, Re-run, Send to
+     TestRail and Needs re-test forms each post only the selected ids valid
+     for them (`toCheck` / `toUncheck` / `toRerun` / `toSend` / `toRetest`).
+     The Re-run, Send to TestRail and Needs re-test confirm dialogs live
+     inside this scope so their forms can render the selected ids. {% endcomment %}
   {% url 'projects:test_run_detail' project.id test_run.id as test_run_detail_url %}
-  <div x-data="runCaseChecks([{% for pid in checkable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}], [{% for pid in uncheckable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}], [{% for pid in rerunnable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}], [{% for pid in sendable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}])">
+  <div x-data="runCaseChecks([{% for pid in checkable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}], [{% for pid in uncheckable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}], [{% for pid in rerunnable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}], [{% for pid in sendable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}], [{% for pid in retestable_pivot_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}])">
   <div class="card">
     <div class="card-header">
       <h2>Case results</h2>
     </div>
-    <p class="hint">Logs and screenshots are recorded per case. Open a case to see its full execution log and every screenshot the agent took.{% if project_can_write %} Select finished cases to mark their result as checked{% if case_send_available %}, select failed cases to send them to their TestRail run now (also while the run is running){% endif %}{% if rerunnable_pivot_ids %}, or select any cases to re-run them from step 1 on this run{% endif %}.{% endif %}</p>
+    <p class="hint">Logs and screenshots are recorded per case. Open a case to see its full execution log and every screenshot the agent took.{% if project_can_write %} Select finished cases to mark their result as checked{% if case_send_available %}, select failed or Needs re-test cases to send them to their TestRail run now (also while the run is running){% endif %}{% if rerunnable_pivot_ids %}, or select any cases to re-run them from step 1 on this run{% endif %}{% if retestable_pivot_ids %}. Mark a result you don't trust as Needs re-test, even while the run is running{% endif %}.{% endif %}</p>
 
     {% if project_can_write %}
     <div class="bulk-bar" x-show="count > 0" x-cloak>
@@ -437,6 +447,15 @@
         x-text="'Send to TestRail (' + toSend.length + ')'"
       >Send to TestRail</button>
       {% endif %}
+      {% if retestable_pivot_ids %}
+      <button
+        type="button"
+        class="btn btn-sm btn-secondary"
+        :disabled="toRetest.length === 0"
+        @click="$dispatch('open-retest-cases')"
+        x-text="'Needs re-test (' + toRetest.length + ')'"
+      >Needs re-test</button>
+      {% endif %}
       <button type="button" class="btn btn-sm btn-ghost" @click="clear()">Clear</button>
     </div>
     {% if not rerun_panel.can_rerun and rerun_panel.blockers %}
@@ -470,7 +489,7 @@
           <tr data-pivot-id="{{ pivot.id }}">
             {% if project_can_write %}
             <td data-label="" class="cell-check">
-              {% if pivot.id in checkable_pivot_ids or pivot.id in uncheckable_pivot_ids or pivot.id in rerunnable_pivot_ids or pivot.id in sendable_pivot_ids %}
+              {% if pivot.id in checkable_pivot_ids or pivot.id in uncheckable_pivot_ids or pivot.id in rerunnable_pivot_ids or pivot.id in sendable_pivot_ids or pivot.id in retestable_pivot_ids %}
               <input type="checkbox" aria-label="Select {{ pivot.test_case.title }}" :checked="selected.includes({{ pivot.id }})" @change="toggle({{ pivot.id }})">
               {% elif pivot.testrail_source_result_id %}
               <input type="checkbox" disabled checked aria-label="{{ pivot.test_case.title }}: already sent to TestRail, can't be unchecked" title="Already sent to TestRail">
@@ -491,7 +510,7 @@
                 data-status="{{ pivot.status }}"
                 :class="pivotBadgeClass(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
                 x-text="pivotBadgeLabel(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
-              >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% elif pivot.status == "awaiting_person" %}Your turn{% endif %}</span>
+              >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% elif pivot.status == "awaiting_person" %}Your turn{% elif pivot.status == "needs_retest" %}Needs re-test{% endif %}</span>
             </td>
             <td data-label="Checked">
               {% if pivot.testrail_source_result_id %}
@@ -509,7 +528,7 @@
               {% endif %}
             </td>
             <td data-label="Duration">{{ pivot.shown_duration|duration }}</td>
-            <td data-label="Reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>{% if help_panel and help_panel.request.fault and help_panel.request.test_run_test_case_id == pivot.id %}{{ help_panel.request.get_fault_display }}{% else %}Needs help{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "awaiting_person" %}<strong>{% if person_step_panel and person_step_panel.step.test_run_test_case_id == pivot.id %}Waiting for a person: {{ person_step_panel.step_label|lower }}{% else %}Waiting for a person{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
+            <td data-label="Reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>{% if help_panel and help_panel.request.fault and help_panel.request.test_run_test_case_id == pivot.id %}{{ help_panel.request.get_fault_display }}{% else %}Needs help{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "awaiting_person" %}<strong>{% if person_step_panel and person_step_panel.step.test_run_test_case_id == pivot.id %}Waiting for a person: {{ person_step_panel.step_label|lower }}{% else %}Waiting for a person{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "needs_retest" %}<strong>Marked by {{ pivot.retest_marked_by.get_full_name|default:pivot.retest_marked_by.email|default:"a removed user" }}</strong>{% if pivot.retest_note %} · {{ pivot.retest_note|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
             {% if can_edit and project_can_write %}
             <td data-label="" x-show="testRunStatus === 'waiting'" x-cloak>
               <div class="actions">
@@ -579,6 +598,10 @@
   {% if case_send_available and project_can_write %}
   {# Send to TestRail confirm — inside runCaseChecks so it can post the selected ids (toSend) #}
   {% include "projects/includes/_testrail_case_send_dialog.html" with project=project test_run=test_run next=test_run_detail_url next_query=request.GET.urlencode csrf_token=csrf_token only %}
+  {% endif %}
+  {% if retestable_pivot_ids and project_can_write %}
+  {# Needs re-test confirm — inside runCaseChecks so it can post the selected ids (toRetest) #}
+  {% include "projects/includes/_retest_dialog.html" with project=project test_run=test_run next=test_run_detail_url next_query=request.GET.urlencode note_max=retest_note_max csrf_token=csrf_token only %}
   {% endif %}
   </div>
 
@@ -791,7 +814,8 @@ document.addEventListener('alpine:init', () => {
       blocked: {{ summary.blocked }},
       cancelled: {{ summary.cancelled }},
       need_help: {{ summary.need_help|default:0 }},
-      awaiting_person: {{ summary.awaiting_person|default:0 }}
+      awaiting_person: {{ summary.awaiting_person|default:0 }},
+      needs_retest: {{ summary.needs_retest|default:0 }}
     },
     pivotStatuses: {
       {% for pivot in cases %}
@@ -809,6 +833,7 @@ document.addEventListener('alpine:init', () => {
         cancelled: 'badge-cancelled',
         need_help: 'badge-need-help',
         awaiting_person: 'badge-your-turn',
+        needs_retest: 'badge-retest',
       }[status] || 'badge-draft';
     },
 
@@ -822,6 +847,7 @@ document.addEventListener('alpine:init', () => {
         cancelled: 'Cancelled',
         need_help: 'Need help',
         awaiting_person: 'Your turn',
+        needs_retest: 'Needs re-test',
       }[status] || status;
     },
 

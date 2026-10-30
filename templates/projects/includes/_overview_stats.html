@@ -27,7 +27,7 @@
     {% if overview.latest_run %}
       <a class="stat-card" href="{% url 'projects:test_run_detail' project.id overview.latest_run.id %}">
         <div class="stat-label">Latest run</div>
-        <div>{% include "partials/badge_run_status.html" with status=overview.latest_run.status failed_count=overview.latest_run_summary.failed blocked_count=overview.latest_run_summary.blocked only %}</div>
+        <div>{% include "partials/badge_run_status.html" with status=overview.latest_run.status failed_count=overview.latest_run_summary.failed blocked_count=overview.latest_run_summary.blocked retest_count=overview.latest_run_summary.needs_retest only %}</div>
         <div class="stat-note">{{ overview.latest_run.display_name }} · {% if overview.latest_run.started_at %}{{ overview.latest_run.finished_at|default:overview.latest_run.started_at|timesince }} ago{% else %}not started{% endif %}</div>
       </a>
     {% else %}

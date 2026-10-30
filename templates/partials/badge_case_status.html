@@ -6,7 +6,9 @@
      status    — TestRunTestCaseStatus value:
                  "created" | "in_progress" | "success" | "failed" | "blocked" |
                  "cancelled" | "need_help" | "awaiting_person" (Human in the
-                 loop: a person performs the step; reads "Your turn")
+                 loop: a person performs the step; reads "Your turn") |
+                 "needs_retest" (a person marked the result untrustworthy;
+                 reads "Needs re-test")
      never_run — optional bool; when status is "created" and never_run is
                  true, the badge reads "Never run" instead of "Not started"
      auto_fixing — optional bool; when status is "need_help" and the Night
@@ -27,4 +29,6 @@
   <span class="badge badge-need-help" data-status="{{ status }}">{% if auto_fixing %}Auto-fixing{% else %}Need help{% endif %}</span>
 {% elif status == "awaiting_person" %}
   <span class="badge badge-your-turn" data-status="{{ status }}">Your turn</span>
+{% elif status == "needs_retest" %}
+  <span class="badge badge-retest" data-status="{{ status }}">Needs re-test</span>
 {% endif %}

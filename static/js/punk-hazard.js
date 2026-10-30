@@ -118,24 +118,27 @@ document.addEventListener("alpine:init", () => {
   Alpine.data("bulkSelect", bulkSelectState);
 
   /**
-   * Check / Uncheck / Re-run / Send to TestRail selection for a run's case
-   * results table (templates/projects/test_run_detail.html). A `bulkSelect`
-   * over the de-duplicated union of the four id lists (check and re-run ids
-   * overlap on a finished run; send ids are failed, unsent cases, so also
-   * check or uncheck ids), plus `toCheck` / `toUncheck` / `toRerun` /
-   * `toSend`: the selected ids each action applies to. `rerunIds` is empty
+   * Check / Uncheck / Re-run / Send to TestRail / Needs re-test selection for
+   * a run's case results table (templates/projects/test_run_detail.html). A
+   * `bulkSelect` over the de-duplicated union of the five id lists (check and
+   * re-run ids overlap on a finished run; send ids are failed, unsent cases,
+   * so also check or uncheck ids; re-test ids are every case not already
+   * marked), plus `toCheck` / `toUncheck` / `toRerun` / `toSend` /
+   * `toRetest`: the selected ids each action applies to. `rerunIds` is empty
    * unless the run is Done or Cancelled; `sendIds` is empty unless TestRail
-   * is configured and the run has cases with a source TestRail run. Getters
-   * are copied as descriptors so they stay live.
+   * is configured and the run has cases with a source TestRail run;
+   * `retestIds` is empty for a Draft run. Getters are copied as descriptors
+   * so they stay live.
    */
-  Alpine.data("runCaseChecks", (checkIds = [], uncheckIds = [], rerunIds = [], sendIds = []) =>
+  Alpine.data("runCaseChecks", (checkIds = [], uncheckIds = [], rerunIds = [], sendIds = [], retestIds = []) =>
     Object.defineProperties(
-      bulkSelectState([...new Set([...checkIds, ...uncheckIds, ...rerunIds, ...sendIds])]),
+      bulkSelectState([...new Set([...checkIds, ...uncheckIds, ...rerunIds, ...sendIds, ...retestIds])]),
       Object.getOwnPropertyDescriptors({
         checkIds,
         uncheckIds,
         rerunIds,
         sendIds,
+        retestIds,
 
         get toCheck() {
           return this.selected.filter((id) => this.checkIds.includes(id));
@@ -151,6 +154,10 @@ document.addEventListener("alpine:init", () => {
 
         get toSend() {
           return this.selected.filter((id) => this.sendIds.includes(id));
+        },
+
+        get toRetest() {
+          return this.selected.filter((id) => this.retestIds.includes(id));
         },
       }),
     ),

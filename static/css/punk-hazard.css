@@ -35,6 +35,9 @@
   --info-soft: rgba(77, 163, 255, 0.14);
   --cyan-soft: rgba(46, 202, 228, 0.14);
   --orange-soft: rgba(253, 82, 41, 0.14);
+  /* Needs re-test: violet, mixed from info and danger. */
+  --retest: color-mix(in srgb, var(--info) 55%, var(--danger));
+  --retest-soft: color-mix(in srgb, var(--info-soft) 55%, var(--danger-soft));
 
   --radius-sm: 6px;
   --radius: 10px;
@@ -3500,6 +3503,23 @@ details.card[open] > summary,
   background: var(--cyan-soft);
   color: var(--brand-cyan);
   border-color: var(--brand-cyan);
+}
+
+/* Needs re-test: a person marked the result untrustworthy. Violet
+   (--retest), with no pulse (nothing is in flight), so
+   it never reads as Running (info blue), Need help, Blocked or Failed. */
+.badge-retest {
+  color: var(--retest);
+  background: var(--retest-soft);
+  border-color: color-mix(in srgb, var(--retest) 35%, transparent);
+}
+
+.card-tone-retest {
+  border-color: var(--retest);
+}
+
+.stat-value.is-retest {
+  color: var(--retest);
 }
 
 /* The command a person runs; Copy copies the <code> text. */

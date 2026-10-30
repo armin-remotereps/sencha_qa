@@ -18,8 +18,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from accounts.models import CustomUser
-from projects.exceptions import RunRerunError
 from projects.case_retest_marking import clear_retest_mark
+from projects.exceptions import RunRerunError
 from projects.models import (
     RETEST_CLEARED,
     CaseRestartKind,

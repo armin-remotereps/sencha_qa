@@ -84,6 +84,7 @@ from projects.forms import (
 )
 from projects.models import (
     PROJECT_PROMPT_MAX_LENGTH,
+    RETEST_NOTE_MAX_LENGTH,
     Project,
     RunHelpMode,
     TestRun,
@@ -101,6 +102,11 @@ from projects.run_case_check_services import (
     list_checkable_pivot_ids,
     list_uncheckable_pivot_ids,
     uncheck_run_cases,
+)
+from projects.run_case_retest_services import (
+    get_case_retest_panel,
+    is_case_retestable,
+    retestable_ids_on_page,
 )
 from projects.run_help_mode_services import change_run_help_mode
 from projects.run_pause_panel import get_run_pause_panels
@@ -162,6 +168,7 @@ from projects.services import (
     list_failed_case_titles,
     list_other_projects_for_user,
     list_projects_for_user,
+    list_retest_case_titles,
     list_test_cases_for_project,
     list_test_run_cases,
     list_test_runs_for_project,
@@ -973,7 +980,10 @@ def _build_test_run_detail_context(
     summary = get_test_run_summary(test_run)
     failed_titles = list_failed_case_titles(test_run) if summary["failed"] else []
     blocked_titles = list_blocked_case_titles(test_run) if summary["blocked"] else []
-    narrative = build_run_narrative(test_run, summary, failed_titles, blocked_titles)
+    retest_titles = list_retest_case_titles(test_run) if summary["needs_retest"] else []
+    narrative = build_run_narrative(
+        test_run, summary, failed_titles, blocked_titles, retest_titles
+    )
     testrail_push = get_testrail_push_panel(test_run)
 
     # Shared with Resume, so the reopen gates run once per page.
@@ -1013,6 +1023,9 @@ def _build_test_run_detail_context(
         "sendable_pivot_ids": (
             [p.id for p in cases if is_case_sendable(p)] if case_send_available else []
         ),
+        # Needs re-test: every case on this page not already marked (no query).
+        "retestable_pivot_ids": retestable_ids_on_page(test_run, cases),
+        "retest_note_max": RETEST_NOTE_MAX_LENGTH,
         "rerun_panel": rerun_panel,
         "help_panel": pause.help_panel,
         "help_state": pause.help_state,
@@ -1117,6 +1130,10 @@ def test_run_case_detail(
             "current_result_change": result_panel.current_result_change,
             "current_result_from_label": result_panel.current_result_from_label,
             "pending_review_redesign": result_panel.pending_review_redesign,
+            # Needs re-test: the header button and the case's card.
+            "can_mark_retest": is_case_retestable(pivot.test_run, pivot),
+            "retest_panel": get_case_retest_panel(pivot.test_run, pivot),
+            "retest_note_max": RETEST_NOTE_MAX_LENGTH,
             "active_tab": "runs",
             "active_nav": "projects",
         },

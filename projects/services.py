@@ -2365,7 +2365,7 @@ def get_test_run_case_detail(pivot_id: int, project: Project) -> TestRunTestCase
     try:
         return (
             TestRunTestCase.objects.select_related(
-                "test_run", "test_case", "checked_by"
+                "test_run", "test_case", "checked_by", "retest_marked_by"
             )
             .prefetch_related(
                 Prefetch(
@@ -2388,7 +2388,9 @@ def list_test_run_cases(
     TestRail order within each group.
     """
     qs = (
-        test_run.pivot_entries.select_related("test_case", "checked_by")
+        test_run.pivot_entries.select_related(
+            "test_case", "checked_by", "retest_marked_by"
+        )
         .annotate(
             _failure_priority=Case(
                 When(status=TestRunTestCaseStatus.FAILED, then=0),

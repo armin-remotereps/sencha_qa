@@ -10,7 +10,11 @@
      blocked_count — optional int; when status is "done", failed_count is 0 and
                      blocked_count > 0 the badge reads "Blocked". Order:
                      Failed, then Blocked, then Passed — a finished run with
-                     blocked cases never reads "Passed". {% endcomment %}
+                     blocked cases never reads "Passed".
+     retest_count  — optional int; when status is "done", failed_count and
+                     blocked_count are 0 and retest_count > 0 the badge reads
+                     "Needs re-test". Order: Failed > Blocked > Needs re-test >
+                     Passed. {% endcomment %}
 {% if status == "waiting" %}
   <span class="badge badge-draft">Draft</span>
 {% elif status == "started" %}
@@ -24,6 +28,8 @@
     <span class="badge badge-failed">Failed</span>
   {% elif blocked_count %}
     <span class="badge badge-blocked">Blocked</span>
+  {% elif retest_count %}
+    <span class="badge badge-retest">Needs re-test</span>
   {% else %}
     <span class="badge badge-passed">Passed</span>
   {% endif %}
