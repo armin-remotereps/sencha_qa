@@ -25,6 +25,7 @@ CHECKABLE_STATUSES: tuple[str, ...] = (
     TestRunTestCaseStatus.SUCCESS,
     TestRunTestCaseStatus.FAILED,
     TestRunTestCaseStatus.BLOCKED,
+    TestRunTestCaseStatus.NEEDS_RETEST,
 )
 
 _NOTHING_TO_CHECK_MESSAGE = (

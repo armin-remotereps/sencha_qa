@@ -31,6 +31,8 @@ _ESTIMATE_MAX = 50
 
 TESTRAIL_STATUS_PASSED: Final = 1
 TESTRAIL_STATUS_BLOCKED: Final = 2
+# TestRail's built-in Retest; valid in add_result(s) (3 = Untested is not).
+TESTRAIL_STATUS_RETEST: Final = 4
 TESTRAIL_STATUS_FAILED: Final = 5
 
 _WHITESPACE = re.compile(r"\s+")
@@ -44,12 +46,14 @@ _PIVOT_STATUS_TO_TESTRAIL: Mapping[str, int] = {
     TestRunTestCaseStatus.SUCCESS: TESTRAIL_STATUS_PASSED,
     TestRunTestCaseStatus.FAILED: TESTRAIL_STATUS_FAILED,
     TestRunTestCaseStatus.BLOCKED: TESTRAIL_STATUS_BLOCKED,
+    TestRunTestCaseStatus.NEEDS_RETEST: TESTRAIL_STATUS_RETEST,
 }
 
 _TESTRAIL_STATUS_TO_LABEL: Mapping[int, str] = {
     TESTRAIL_STATUS_PASSED: "Passed",
     TESTRAIL_STATUS_FAILED: "Failed",
     TESTRAIL_STATUS_BLOCKED: "Blocked",
+    TESTRAIL_STATUS_RETEST: "Retest",
 }
 
 # TestRail spells the lowest priority differently from our choice label.
@@ -133,8 +137,10 @@ class TestRailFieldMapper:
 def map_pivot_status_to_testrail(status: str) -> int | None:
     """Map a TestRunTestCase status to the TestRail result status id.
 
-    Only "success", "failed" and "blocked" are pushable; every other status
-    (created, in progress, cancelled) has no meaningful TestRail equivalent.
+    Only "success" (Passed), "failed" (Failed), "blocked" (Blocked) and
+    "needs_retest" (Retest) are pushable; every other status (created, in
+    progress, need help, awaiting person, cancelled) has no meaningful
+    TestRail equivalent.
     """
     return _PIVOT_STATUS_TO_TESTRAIL.get(status)
 

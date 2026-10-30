@@ -1,4 +1,4 @@
-"""Send selected failed cases to their source TestRail run now ("case send").
+"""Send selected failed (or Needs re-test) cases to their source TestRail run now ("case send").
 
 Unlike "Send checked to TestRail" (finished runs, every checked case), a case
 send works while the run is Running or Paused too, and sends exactly the
@@ -32,9 +32,13 @@ from projects.testrail_checked_push_services import (
 )
 from projects.testrail_services import TestRailNotConfiguredError
 
-# Verdicts that may be sent before the run finishes. A Failed case is final
-# for its execution, so running / Need help / Your turn cases never qualify.
-CASE_SEND_STATUSES: tuple[str, ...] = (TestRunTestCaseStatus.FAILED,)
+# Verdicts that may be sent before the run finishes. A Failed or Needs
+# re-test case is final for its execution (a mark stops its worker), so
+# running / Need help / Your turn cases never qualify.
+CASE_SEND_STATUSES: tuple[str, ...] = (
+    TestRunTestCaseStatus.FAILED,
+    TestRunTestCaseStatus.NEEDS_RETEST,
+)
 # Every run status except a draft; a concurrent reset to WAITING wins.
 CASE_SEND_RUN_STATUSES: tuple[str, ...] = (
     TestRunStatus.STARTED,
@@ -47,8 +51,8 @@ _RUN_NOT_STARTED_MESSAGE = (
     "None of the selected cases can be sent: the run has not started."
 )
 _NOTHING_TO_SEND_MESSAGE = (
-    "None of the selected cases can be sent: they are not failed, have no "
-    "source TestRail run or were already sent."
+    "None of the selected cases can be sent: they are not failed or marked "
+    "for re-test, have no source TestRail run or were already sent."
 )
 
 
@@ -72,7 +76,7 @@ def is_case_sendable(pivot: TestRunTestCase) -> bool:
 
 
 def is_case_missing_source(pivot: TestRunTestCase) -> bool:
-    """Whether a failed case can't be sent because it has no source TestRail
+    """Whether a failed (or Needs re-test) case can't be sent because it has no source TestRail
     run (imported from a suite, not a run link); no query."""
     return pivot.status in CASE_SEND_STATUSES and pivot.testrail_source_run_id is None
 

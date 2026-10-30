@@ -661,6 +661,12 @@ _PLAN_PIVOT_FIELDS = (
     "checked_by__first_name",
     "checked_by__last_name",
     "checked_by__email",
+    "retest_from_status",
+    "retest_note",
+    "retest_marked_by__id",
+    "retest_marked_by__first_name",
+    "retest_marked_by__last_name",
+    "retest_marked_by__email",
 )
 
 
@@ -681,7 +687,7 @@ def plan_checked_push(
         scope &= Q(id__in=list(pivot_ids))
     pivots = (
         test_run.pivot_entries.filter(scope)
-        .select_related("test_case", "checked_by")
+        .select_related("test_case", "checked_by", "retest_marked_by")
         .only(*_PLAN_PIVOT_FIELDS)
         .prefetch_related(
             Prefetch(
