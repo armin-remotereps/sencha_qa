@@ -2919,6 +2919,8 @@ def _broadcast_case_steps(
             checkpoint_data,
             TestRunTestCaseStatus.IN_PROGRESS,
             pivot.segment_started_at,
+            # The worker's pivot has its case loaded (``_fetch_pivot``).
+            testrail=bool(pivot.test_case.testrail_id),
         ),
     }
     async_to_sync(layer.group_send)(_test_run_case_group(pivot.id), event)

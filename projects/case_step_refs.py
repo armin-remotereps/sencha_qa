@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Final, cast
 
 from agents.case_step_refs import lenient_case_step_refs
+from projects.case_step_labels import format_case_steps_label
 from projects.models import (
     PERSON_STEP_CASE_STEP_TEXT_MAX_LENGTH,
     PERSON_STEP_CASE_STEPS_MAX_ITEMS,
@@ -56,19 +57,6 @@ def numbered_case_steps(test_case: TestCase) -> tuple[CaseStepText, ...]:
 
 def case_steps_label(test_case: TestCase, refs: Sequence[int]) -> str:
     return format_case_steps_label(refs, testrail=bool(test_case.testrail_id))
-
-
-def format_case_steps_label(refs: Sequence[int], *, testrail: bool) -> str:
-    """``""``, "TestRail step 3", "TestRail steps 3–5" or "Case steps 1, 3–5".
-
-    "Case" for a case not imported from TestRail.
-    """
-    if not refs:
-        return ""
-    numbers = sorted(set(refs))
-    source = "TestRail" if testrail else "Case"
-    noun = "step" if len(numbers) == 1 else "steps"
-    return f"{source} {noun} {_ranges(numbers)}"
 
 
 def case_step_rows(test_case: TestCase, refs: Sequence[int]) -> list[dict[str, object]]:
@@ -133,24 +121,3 @@ def _sections(
         end = starts[index + 1][1] if index + 1 < len(starts) else len(text)
         sections.append((num, text[body_start:end].strip()))
     return sections
-
-
-def _ranges(numbers: Sequence[int]) -> str:
-    parts: list[str] = []
-    start = previous = numbers[0]
-    for number in numbers[1:]:
-        if number != previous + 1:
-            parts.append(_range(start, previous))
-            start = number
-        previous = number
-    parts.append(_range(start, previous))
-    return ", ".join(parts)
-
-
-def _range(start: int, end: int) -> str:
-    if start == end:
-        return str(start)
-    # Two neighbours read better as a list than as a range.
-    if end == start + 1:
-        return f"{start}, {end}"
-    return f"{start}–{end}"

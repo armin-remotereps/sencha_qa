@@ -21,6 +21,7 @@ from agents.types import (
     StepDecision,
     SubTaskAttempt,
 )
+from projects.case_step_labels import format_case_steps_label
 from projects.models import TestRunTestCase, TestRunTestCaseStatus
 
 # Caps on LLM text sent to the browser; the page has the full log for more.
@@ -122,6 +123,9 @@ class CaseStepRow:
     # Who performed the step's final attempt: "agent", or "person" (Human in
     # the loop, confirmed or overruled; the summary says which).
     performed_by: str = "agent"
+    # The test case's own numbered steps this plan step covers, e.g.
+    # "TestRail steps 3–5"; "" when the planner tagged none.
+    case_steps_label: str = ""
 
     @property
     def status_label(self) -> str:
@@ -199,8 +203,14 @@ def build_case_step_progress(
     checkpoint_data: object,
     case_status: str,
     segment_started_at: datetime | None,
+    *,
+    testrail: bool = True,
 ) -> CaseStepProgress | None:
-    """Rows for every planned step; ``None`` without a usable checkpoint."""
+    """Rows for every planned step; ``None`` without a usable checkpoint.
+
+    ``testrail``: the case was imported from TestRail (labels say "TestRail
+    steps", else "Case steps").
+    """
     checkpoint = checkpoint_from_json(checkpoint_data)
     if checkpoint is None:
         return None
@@ -270,6 +280,9 @@ def build_case_step_progress(
                 carried_from=carried_from,
                 carried_label=_carried_label(revisions, carried_from),
                 performed_by=final.performed_by if final is not None else "agent",
+                case_steps_label=format_case_steps_label(
+                    task.case_steps, testrail=testrail
+                ),
             )
         )
 
@@ -489,6 +502,8 @@ class StepRowPayload(TypedDict):
     # "agent" or "person"; the label is "" for the agent.
     performed_by: str
     performed_by_label: str
+    # "TestRail steps 3–5" / "Case steps 1, 3"; "" when none.
+    case_steps_label: str
 
 
 class StepProgressPayload(TypedDict):
@@ -546,10 +561,12 @@ def case_step_payload(
     checkpoint_data: object,
     case_status: str,
     segment_started_at: datetime | None,
+    *,
+    testrail: bool = True,
 ) -> StepProgressPayload:
     """Payload for a case straight from its stored checkpoint and status."""
     progress = build_case_step_progress(
-        checkpoint_data, case_status, segment_started_at
+        checkpoint_data, case_status, segment_started_at, testrail=testrail
     )
     return step_progress_payload(progress, planning=_is_planning(progress, case_status))
 
@@ -557,7 +574,10 @@ def case_step_payload(
 def pivot_step_payload(pivot: TestRunTestCase) -> StepProgressPayload:
     """The case's step rows from its loaded checkpoint and status (no query)."""
     return case_step_payload(
-        pivot.execution_checkpoint, pivot.status, pivot.segment_started_at
+        pivot.execution_checkpoint,
+        pivot.status,
+        pivot.segment_started_at,
+        testrail=_pivot_is_testrail(pivot),
     )
 
 
@@ -566,12 +586,27 @@ def case_step_view(
 ) -> tuple[StepProgressPayload, tuple[EarlierPlan, ...]]:
     """The case page's step rows and earlier plans from one checkpoint parse."""
     progress = build_case_step_progress(
-        pivot.execution_checkpoint, pivot.status, pivot.segment_started_at
+        pivot.execution_checkpoint,
+        pivot.status,
+        pivot.segment_started_at,
+        testrail=_pivot_is_testrail(pivot),
     )
     payload = step_progress_payload(
         progress, planning=_is_planning(progress, pivot.status)
     )
     return payload, progress.earlier_plans if progress is not None else ()
+
+
+def _pivot_is_testrail(pivot: TestRunTestCase) -> bool:
+    """Whether the pivot's case came from TestRail, without a query.
+
+    Reads ``test_case`` only when the caller loaded it; otherwise assumes
+    TestRail, since only TestRail "Test Case (Steps)" cases have numbered
+    steps for the planner to tag.
+    """
+    if TestRunTestCase.test_case.is_cached(pivot):
+        return bool(pivot.test_case.testrail_id)
+    return True
 
 
 def _is_planning(progress: CaseStepProgress | None, case_status: str) -> bool:
@@ -615,6 +650,7 @@ def _row_payload(row: CaseStepRow) -> StepRowPayload:
         carried_label=_cap(row.carried_label),
         performed_by=row.performed_by,
         performed_by_label=row.performed_by_label,
+        case_steps_label=row.case_steps_label,
     )
 
 
