@@ -12,7 +12,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.10.2"
+CLIENT_VERSION: Final[str] = "0.10.3"
 
 
 class CloseCode(IntEnum):

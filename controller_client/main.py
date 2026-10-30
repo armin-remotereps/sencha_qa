@@ -136,7 +136,11 @@ def main(argv: list[str] | None = None) -> None:
         loop.close()
         logger.info("Keyboard interrupt received")
         return
-    logger.info("Starting controller client, connecting to %s", config.ws_url)
+    logger.info(
+        "Starting controller client, connecting to %s via proxy %s",
+        config.ws_url,
+        config.proxy_display,
+    )
 
     client = ControllerClient(config, person_window=window)
 

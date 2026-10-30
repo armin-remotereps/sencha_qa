@@ -1,4 +1,6 @@
 websockets~=15.0
+# Used by websockets to connect through a SOCKS proxy (CONTROLLER_PROXY).
+python-socks~=3.2.0
 # Talks to GNOME's remote desktop D-Bus API on Linux (Wayland); never
 # imported on Windows, where it has no wheel.
 dbus-fast~=5.2.0; sys_platform != "win32"

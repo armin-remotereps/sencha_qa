@@ -5,12 +5,15 @@ import stat
 import sys
 import tempfile
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Final
+from urllib.parse import urlsplit
 
 from decouple import config as decouple_config
+from websockets.exceptions import InvalidProxy
+from websockets.uri import parse_proxy
 
 from controller_client.exceptions import ProtocolError
 from controller_client.protocol import normalize_person_email
@@ -23,6 +26,10 @@ API_KEY_ENV_NAME: Final[str] = "CONTROLLER_API_KEY"
 # The person at this machine (their Punk Hazard email), sent in the handshake
 # so steps answered in the Test Runner window are recorded as theirs.
 PERSON_EMAIL_ENV_NAME: Final[str] = "CONTROLLER_PERSON_EMAIL"
+# Proxy for the connection to the server (socks5h/socks5/socks4a/socks4/http/
+# https URL, optional user:pass@). Empty = the system proxy settings, as before.
+# .env only: a command line is visible to every local user.
+PROXY_ENV_NAME: Final[str] = "CONTROLLER_PROXY"
 # The runner's own .env (the one a self-update copies to the new install).
 RUNNER_ENV_FILE: Final[Path] = Path(__file__).resolve().parent / ".env"
 
@@ -88,6 +95,18 @@ class ClientConfig:
     replaces_pid_created: float | None = None
     remove_old_install: str | None = None
     log_file: str | None = None
+    # Validated CONTROLLER_PROXY; None = system proxy settings. May hold
+    # credentials, so it is kept out of repr; log proxy_display instead.
+    proxy: str | None = field(default=None, repr=False)
+
+    @property
+    def proxy_display(self) -> str:
+        """The proxy without credentials, for logs."""
+        if self.proxy is None:
+            return "system settings"
+        parsed = parse_proxy(self.proxy)
+        host = f"[{parsed.host}]" if ":" in parsed.host else parsed.host
+        return f"{parsed.scheme}://{host}:{parsed.port}"
 
     @property
     def effective_log_file(self) -> Path | None:
@@ -132,6 +151,32 @@ def _env_person_email() -> tuple[str | None, str | None]:
         return normalize_person_email(raw), None
     except ProtocolError as e:
         return None, f"{PERSON_EMAIL_ENV_NAME} is ignored: {e}"
+
+
+def _env_proxy() -> tuple[str | None, str | None]:
+    """CONTROLLER_PROXY (None when empty) and why it is invalid.
+
+    The reason never contains the value itself, which may hold credentials.
+    """
+    raw = _env_str(PROXY_ENV_NAME, "").strip()
+    if not raw:
+        return None, None
+    try:
+        proxy = parse_proxy(raw)
+        port = urlsplit(raw).port
+    except InvalidProxy as e:
+        return None, f"{PROXY_ENV_NAME} is not a valid proxy: {e.msg}"
+    except ValueError:
+        # urllib rejects a port that is not a number in 0-65535; IDNA
+        # encoding (a UnicodeError) rejects a bad non-ASCII host.
+        return None, f"{PROXY_ENV_NAME} is not a valid proxy: invalid port or host"
+    if port is None and proxy.scheme.startswith("socks"):
+        # websockets would fall back to port 80, never what a SOCKS proxy uses.
+        return (
+            None,
+            f"{PROXY_ENV_NAME} is not a valid proxy: a SOCKS proxy needs a port",
+        )
+    return raw, None
 
 
 def _uuid_arg(value: str) -> str:
@@ -186,6 +231,9 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
         person_email, person_email_problem = args.person_email, None
     else:
         person_email, person_email_problem = _env_person_email()
+    proxy, proxy_problem = _env_proxy()
+    if proxy_problem is not None:
+        parser.error(proxy_problem)
 
     return ClientConfig(
         host=args.host or _env_str("CONTROLLER_HOST", "localhost"),
@@ -222,6 +270,7 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
         replaces_pid_created=args.replaces_pid_created,
         remove_old_install=args.remove_old_install,
         log_file=args.log_file,
+        proxy=proxy,
     )
 
 

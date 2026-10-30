@@ -414,6 +414,8 @@ class ControllerClient:
             close_timeout=CLOSE_TIMEOUT_SECONDS,
             ping_interval=PING_INTERVAL_SECONDS,
             ping_timeout=PING_TIMEOUT_SECONDS,
+            # True = the system proxy settings (HTTPS_PROXY, ...).
+            proxy=self._config.proxy or True,
         ) as connection:
             self._connection = connection
             try:

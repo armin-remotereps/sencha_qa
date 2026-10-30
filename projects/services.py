@@ -4112,6 +4112,8 @@ def _generate_env_content(project: Project) -> str:
         f"CONTROLLER_HOST={settings.CONTROLLER_SERVER_HOST}\n"
         f"CONTROLLER_PORT={settings.CONTROLLER_SERVER_PORT}\n"
         f"CONTROLLER_API_KEY={project.api_key}\n"
+        # Empty = the system proxy settings; see controller_client/example.env.
+        "CONTROLLER_PROXY=\n"
         "CONTROLLER_RECONNECT_INTERVAL=5\n"
         "CONTROLLER_MAX_RECONNECT_ATTEMPTS=0\n"
         "CONTROLLER_RECONNECT_MAX_INTERVAL=60\n"
