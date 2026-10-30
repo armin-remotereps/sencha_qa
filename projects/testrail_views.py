@@ -14,16 +14,23 @@ from projects.forms import (
     ProjectMemberInviteForm,
     ProjectMemberRoleForm,
     ProjectRunModeForm,
+    RunCaseSelectionForm,
     TestRailImportStartForm,
     TestRailPushStartForm,
     TestRailRunImportForm,
     TestRailSettingsForm,
     TestRailSuiteForm,
+    form_error_text,
 )
 from projects.models import Project, RunHelpMode, TestRun
 from projects.project_access import get_request_project_access
 from projects.project_member_services import list_project_members
 from projects.services import get_test_run_for_project
+from projects.testrail_case_send_services import (
+    format_case_send_message,
+    list_case_sendable_pivot_ids,
+    start_case_send,
+)
 from projects.testrail_checked_push_services import start_checked_push
 from projects.testrail_client import TestRailError, TestRailProject, TestRailSuite
 from projects.testrail_results_services import (
@@ -476,3 +483,43 @@ def testrail_send_checked(
         return _redirect_to_run(project, test_run)
     messages.info(request, "Sending checked results to TestRail…")
     return _redirect_to_run(project, test_run)
+
+
+_CASE_SEND_STALE_MESSAGE = (
+    "Some selected cases can no longer be sent. Reload the page and try again."
+)
+
+
+@project_membership_required
+@require_POST
+def test_run_cases_send_testrail(
+    request: AuthenticatedRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    """Check the selected failed cases and send them to their source TestRail run now."""
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    target_url = _safe_next(
+        request,
+        request.POST.get("next", ""),
+        reverse("projects:test_run_detail", args=[project.id, test_run.id]),
+    )
+    form = RunCaseSelectionForm(list_case_sendable_pivot_ids(test_run), request.POST)
+    if not form.is_valid():
+        if form.has_error("pivot_ids", "invalid_choice"):
+            messages.error(request, _CASE_SEND_STALE_MESSAGE)
+        else:
+            messages.error(request, form_error_text(form))
+        return redirect(target_url)
+    try:
+        outcome = start_case_send(
+            test_run=test_run,
+            pivot_ids=form.cleaned_data["pivot_ids"],
+            user=request.user,
+            links_base_url=request.build_absolute_uri("/"),
+        )
+    except (CheckedPushError, TestRailNotConfiguredError) as exc:
+        messages.error(request, exc.message)
+        return redirect(target_url)
+    messages.info(request, format_case_send_message(outcome))
+    return redirect(target_url)

@@ -180,6 +180,7 @@ from projects.services import (
     update_test_case,
 )
 from projects.tasks import refine_project_prompt_task
+from projects.testrail_case_send_services import CASE_SEND_STATUSES, is_case_sendable
 from projects.testrail_checked_push_services import (
     get_checked_push_panel,
     get_source_run_url,
@@ -972,6 +973,9 @@ def _build_test_run_detail_context(
     rerun_panel = get_rerun_panel(test_run, project)
     # Help request / Human in the loop person step / plain "Continue run".
     pause = get_run_pause_panels(test_run, project)
+    checked_push = get_checked_push_panel(test_run)
+    # Send to TestRail now: failed, unsent cases with a source run (no query).
+    case_send_available = checked_push.configured and checked_push.has_any_source
 
     context: dict[str, Any] = {
         "project": project,
@@ -993,11 +997,15 @@ def _build_test_run_detail_context(
         "testrail_push_confirm_body": format_push_confirm_body(
             testrail_push.pending_count, test_run.testrail_run_id or 0
         ),
-        "testrail_checked_push": get_checked_push_panel(test_run),
+        "testrail_checked_push": checked_push,
         "resume_panel": get_resume_panel(test_run, blockers=rerun_panel.blockers),
         "checkable_pivot_ids": [p.id for p in cases if is_checkable(p)],
         "uncheckable_pivot_ids": [p.id for p in cases if is_uncheckable(p)],
         "rerunnable_pivot_ids": rerunnable_ids_on_page(test_run, cases),
+        "case_send_available": case_send_available,
+        "sendable_pivot_ids": (
+            [p.id for p in cases if is_case_sendable(p)] if case_send_available else []
+        ),
         "rerun_panel": rerun_panel,
         "help_panel": pause.help_panel,
         "help_state": pause.help_state,
@@ -1040,6 +1048,7 @@ def test_run_case_detail(
     can_edit = can_edit_test_case_in_run(pivot.test_run)
     case_position, case_total = get_case_position(pivot)
     source_run_url = get_source_run_url(pivot, project)
+    testrail_configured = project.has_testrail_settings
     can_resume = can_resume_case(pivot)
     resume_steps = list_resume_steps(pivot) if can_resume else []
     step_progress, earlier_plans = case_step_view(pivot)
@@ -1058,6 +1067,13 @@ def test_run_case_detail(
             "case_total": case_total,
             "can_check": is_checkable(pivot),
             "can_uncheck": is_uncheckable(pivot),
+            "can_send_testrail": testrail_configured and is_case_sendable(pivot),
+            # A Failed case imported from a suite has no TestRail run to go to.
+            "testrail_send_no_source": (
+                testrail_configured
+                and pivot.status in CASE_SEND_STATUSES
+                and pivot.testrail_source_run_id is None
+            ),
             "source_run_url": source_run_url,
             "can_resume": can_resume,
             "resume_steps": resume_steps,
