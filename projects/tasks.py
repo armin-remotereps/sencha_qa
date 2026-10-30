@@ -400,8 +400,13 @@ def _fetch_test_run(test_run_id: int) -> TestRun | None:
     time_limit=660,
 )
 def push_test_run_results(
-    self: Task[[int, str], None], test_run_id: int, links_base_url: str
+    self: Task[[int, str], None], test_run_id: int, _links_base_url: str
 ) -> None:
+    """Push a finished run's changed results to its TestRail run.
+
+    `_links_base_url` is unused (TestRail gets no links back); it stays so
+    queued messages keep their argument positions.
+    """
     logger.info(
         "push_test_run_results started: task_id=%s test_run_id=%s",
         self.request.id,
@@ -418,7 +423,7 @@ def push_test_run_results(
         return
 
     try:
-        outcome = push_results_to_testrail(test_run, links_base_url=links_base_url)
+        outcome = push_results_to_testrail(test_run)
         mark_testrail_push_succeeded(test_run, outcome)
         logger.info(
             "push_test_run_results completed: task_id=%s test_run_id=%s "
@@ -462,11 +467,14 @@ def push_test_run_results(
 def push_checked_results_to_testrail(
     self: Task[[int, str, str, list[int] | None], None],
     test_run_id: int,
-    links_base_url: str,
+    _links_base_url: str,
     slot_token: str,
     pivot_ids: list[int] | None = None,
 ) -> None:
     """Send a run's checked results, with screenshots, to their source runs.
+
+    `_links_base_url` is unused (comments no longer link back); it stays so
+    queued messages keep their argument positions.
 
     `slot_token` is the PUSHING slot taken by `start_checked_push` or
     `start_case_send`; a redelivered task whose slot was taken over or reset
@@ -492,9 +500,7 @@ def push_checked_results_to_testrail(
         return
 
     try:
-        outcome = push_checked_results(
-            test_run, links_base_url=links_base_url, pivot_ids=pivot_ids
-        )
+        outcome = push_checked_results(test_run, pivot_ids=pivot_ids)
         mark_checked_push_succeeded(test_run, outcome)
         logger.info(
             "push_checked_results_to_testrail completed: task_id=%s test_run_id=%s "

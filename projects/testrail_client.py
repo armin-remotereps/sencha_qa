@@ -108,6 +108,8 @@ class TestRailResultInput:
 class TestRailResult:
     id: int
     status_id: int
+    # The run's test the result was added to; its page lists every result.
+    test_id: int | None = None
 
 
 def _str(value: Any) -> str:  # raw JSON field value, type varies by payload
@@ -124,6 +126,12 @@ def _order_int(value: Any) -> int | None:  # raw JSON field, only used for order
         return _optional_int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _positive_id(value: Any) -> int | None:  # raw JSON field, only used for links
+    """A positive id, or None when missing or malformed (never fails a push)."""
+    parsed = _order_int(value)
+    return parsed if parsed is not None and parsed > 0 else None
 
 
 def _parse_steps_separated(
@@ -200,6 +208,7 @@ def _parse_result(raw: dict[str, Any]) -> TestRailResult:  # raw JSON result obj
     return TestRailResult(
         id=int(raw["id"]),
         status_id=int(raw.get("status_id") or 0),
+        test_id=_positive_id(raw.get("test_id")),
     )
 
 

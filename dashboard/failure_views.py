@@ -208,7 +208,6 @@ def failed_cases_bulk(request: AuthenticatedRequest) -> HttpResponse:
         project_ids=writable_ids,
         action=form.selected_action(),
         pivot_ids=form.cleaned_data["pivot_ids"],
-        links_base_url=request.build_absolute_uri("/"),
     )
     for text in outcome.successes:
         messages.success(request, text)

@@ -338,10 +338,10 @@ def _push_error_message(
 
 
 def _start_push_and_notify(
-    request: HttpRequest, project: Project, test_run: TestRun, links_base_url: str
+    request: HttpRequest, project: Project, test_run: TestRun
 ) -> HttpResponse:
     try:
-        start_testrail_results_push(test_run=test_run, links_base_url=links_base_url)
+        start_testrail_results_push(test_run=test_run)
     except (ValueError, TestRailError, TestRailNotConfiguredError) as exc:
         messages.error(request, _push_error_message(exc))
         return _redirect_to_run(project, test_run)
@@ -354,19 +354,18 @@ def _set_target_and_push(
     project: Project,
     test_run: TestRun,
     target: TestRailImportTarget,
-    links_base_url: str,
 ) -> HttpResponse:
     set_testrail_target(test_run, target)
-    return _start_push_and_notify(request, project, test_run, links_base_url)
+    return _start_push_and_notify(request, project, test_run)
 
 
 def _push_with_existing_target(
-    request: HttpRequest, project: Project, test_run: TestRun, links_base_url: str
+    request: HttpRequest, project: Project, test_run: TestRun
 ) -> HttpResponse:
     if not test_run.has_testrail_target:
         messages.error(request, "Choose a TestRail project first.")
         return _redirect_to_run(project, test_run)
-    return _start_push_and_notify(request, project, test_run, links_base_url)
+    return _start_push_and_notify(request, project, test_run)
 
 
 def _render_push_suite_picker(
@@ -412,7 +411,6 @@ def testrail_push_start(
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
         raise Http404
-    links_base_url = request.build_absolute_uri("/")
 
     form = TestRailPushStartForm(request.POST)
     if not form.is_valid():
@@ -421,7 +419,7 @@ def testrail_push_start(
 
     testrail_project_id = form.cleaned_data["testrail_project_id"]
     if testrail_project_id is None:
-        return _push_with_existing_target(request, project, test_run, links_base_url)
+        return _push_with_existing_target(request, project, test_run)
 
     try:
         resolution = resolve_testrail_import(project, testrail_project_id)
@@ -433,7 +431,7 @@ def testrail_push_start(
     if single_suite is None:
         return _render_push_suite_picker(request, project, test_run, resolution)
     target = TestRailImportTarget(resolution.testrail_project, single_suite)
-    return _set_target_and_push(request, project, test_run, target, links_base_url)
+    return _set_target_and_push(request, project, test_run, target)
 
 
 @project_membership_required
@@ -448,7 +446,6 @@ def testrail_push_suite(
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
         raise Http404
-    links_base_url = request.build_absolute_uri("/")
 
     form = TestRailSuiteForm(request.POST)
     if not form.is_valid():
@@ -462,7 +459,7 @@ def testrail_push_suite(
     except (TestRailError, TestRailNotConfiguredError) as exc:
         messages.error(request, exc.message)
         return _redirect_to_run(project, test_run)
-    return _set_target_and_push(request, project, test_run, target, links_base_url)
+    return _set_target_and_push(request, project, test_run, target)
 
 
 @project_membership_required
@@ -475,9 +472,7 @@ def testrail_send_checked(
     if test_run is None:
         raise Http404
     try:
-        start_checked_push(
-            test_run=test_run, links_base_url=request.build_absolute_uri("/")
-        )
+        start_checked_push(test_run=test_run)
     except (CheckedPushError, TestRailNotConfiguredError) as exc:
         messages.error(request, exc.message)
         return _redirect_to_run(project, test_run)
@@ -517,7 +512,6 @@ def test_run_cases_send_testrail(
             test_run=test_run,
             pivot_ids=form.cleaned_data["pivot_ids"],
             user=request.user,
-            links_base_url=request.build_absolute_uri("/"),
         )
     except (CheckedPushError, TestRailNotConfiguredError) as exc:
         messages.error(request, exc.message)

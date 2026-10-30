@@ -78,7 +78,6 @@ from projects.testrail_mapping import (
     testrail_outcome_label,
 )
 from projects.testrail_results_services import (
-    build_case_detail_url,
     build_testrail_run_url,
     pivot_result_text,
     pivot_step_breakdown,
@@ -446,7 +445,6 @@ def take_checked_push_slot(
 def dispatch_checked_push(
     test_run: TestRun,
     *,
-    links_base_url: str,
     slot_token: str,
     pivot_ids: Sequence[int] | None,
 ) -> None:
@@ -459,7 +457,9 @@ def dispatch_checked_push(
     raised.
     """
     _broadcast_checked_push(test_run)
-    args: list[object] = [test_run.id, links_base_url, slot_token]
+    # The second argument is the task's retired links base, kept so the
+    # positions match messages queued by older code.
+    args: list[object] = [test_run.id, "", slot_token]
     if pivot_ids is not None:
         args.append(list(pivot_ids))
     try:
@@ -470,7 +470,7 @@ def dispatch_checked_push(
         raise CheckedPushError(_DISPATCH_FAILED_MESSAGE) from exc
 
 
-def start_checked_push(*, test_run: TestRun, links_base_url: str) -> None:
+def start_checked_push(*, test_run: TestRun) -> None:
     """Validate, take the PUSHING slot, broadcast and dispatch the Celery task.
 
     Sends every checked case of a finished run that still has something to
@@ -486,9 +486,7 @@ def start_checked_push(*, test_run: TestRun, links_base_url: str) -> None:
             "No checked case is waiting to be sent to a source TestRail run."
         )
     slot_token = take_checked_push_slot(test_run, run_statuses=_FINISHED_STATUSES)
-    dispatch_checked_push(
-        test_run, links_base_url=links_base_url, slot_token=slot_token, pivot_ids=None
-    )
+    dispatch_checked_push(test_run, slot_token=slot_token, pivot_ids=None)
 
 
 def get_checked_push_run(test_run_id: int, slot_token: str) -> TestRun | None:
@@ -597,7 +595,6 @@ def _plan_pivot(
     case_id: int,
     source_run_id: int,
     test_run: TestRun,
-    links_base_url: str,
 ) -> PlannedCheckedResult | None:
     """The planned send for one checked pivot with a source run and a case id.
 
@@ -618,9 +615,6 @@ def _plan_pivot(
         run_name=test_run.display_name,
         result_text=pivot_result_text(pivot),
         step_breakdown=pivot_step_breakdown(pivot),
-        case_url=build_case_detail_url(
-            test_run, pivot.id, links_base_url=links_base_url
-        ),
         checked_by_label=_checked_by_label(pivot.checked_by),
         checked_at=pivot.checked_at,
         screenshot_count=len(attached),
@@ -673,7 +667,6 @@ _PLAN_PIVOT_FIELDS = (
 def plan_checked_push(
     test_run: TestRun,
     *,
-    links_base_url: str,
     pivot_ids: Sequence[int] | None = None,
 ) -> tuple[list[PlannedCheckedResult], CheckedPushSkips]:
     """Plan every checked pivot that still has something to send (2 queries).
@@ -726,7 +719,6 @@ def plan_checked_push(
             case_id=case_id,
             source_run_id=source_run_id,
             test_run=test_run,
-            links_base_url=links_base_url,
         )
         if item is not None:
             planned.append(item)
@@ -763,11 +755,19 @@ def _record_results(
     pivots: list[TestRunTestCase] = []
     for item, result in zip(batch, results):
         item.pivot.testrail_source_result_id = result.id
+        # Kept when a response lacks it: a re-send goes to the same run's test.
+        if result.test_id is not None:
+            item.pivot.testrail_source_test_id = result.test_id
         item.pivot.testrail_source_sent_at = now
         pivots.append(item.pivot)
     with transaction.atomic():
         TestRunTestCase.objects.bulk_update(
-            pivots, ["testrail_source_result_id", "testrail_source_sent_at"]
+            pivots,
+            [
+                "testrail_source_result_id",
+                "testrail_source_test_id",
+                "testrail_source_sent_at",
+            ],
         )
 
 
@@ -905,7 +905,6 @@ def _send_group(
 def push_checked_results(
     test_run: TestRun,
     *,
-    links_base_url: str,
     pivot_ids: Sequence[int] | None = None,
 ) -> CheckedPushOutcome:
     """Send every checked, unsent result to its source run. Called by the task.
@@ -917,9 +916,7 @@ def push_checked_results(
     as failed. Everything recorded before the error survives, so a re-send
     resumes without duplicate results or attachments.
     """
-    planned, skips = plan_checked_push(
-        test_run, links_base_url=links_base_url, pivot_ids=pivot_ids
-    )
+    planned, skips = plan_checked_push(test_run, pivot_ids=pivot_ids)
     outcome = CheckedPushOutcome(
         already_sent=skips.already_sent,
         no_source=skips.no_source,

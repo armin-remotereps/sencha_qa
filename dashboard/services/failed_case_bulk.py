@@ -102,7 +102,6 @@ def apply_failed_case_bulk(
     project_ids: Sequence[int],
     action: BulkAction,
     pivot_ids: Sequence[int],
-    links_base_url: str,
 ) -> BulkOutcome:
     """Apply ``action`` to the selected Failed cases, run by run.
 
@@ -163,7 +162,6 @@ def apply_failed_case_bulk(
                     test_run=test_run,
                     pivot_ids=run_pivot_ids,
                     user=user,
-                    links_base_url=links_base_url,
                 )
                 message = format_case_send_message(send_outcome)
         except (

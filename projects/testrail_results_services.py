@@ -16,7 +16,6 @@ from typing import Any, TypedDict
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.db import transaction
-from django.urls import reverse
 from django.utils import timezone
 
 from auto_tester.celery import app as celery_app
@@ -39,6 +38,7 @@ from projects.testrail_client import (
     TestRailRun,
 )
 from projects.testrail_mapping import (
+    LEGACY_COMMENT_HASH,
     build_result_comment,
     comment_hash,
     format_blocked_result_text,
@@ -98,17 +98,6 @@ class _PivotPlanOutcome:
     not_pushable: bool
 
 
-def build_case_detail_url(
-    test_run: TestRun, pivot_id: int, *, links_base_url: str
-) -> str:
-    """Absolute URL to a run's case detail page, used in TestRail comments."""
-    path = reverse(
-        "projects:test_run_case_detail",
-        args=[test_run.project_id, test_run.id, pivot_id],
-    )
-    return f"{links_base_url.rstrip('/')}{path}"
-
-
 def pivot_result_text(pivot: TestRunTestCase) -> str:
     """The result text for the comment; blocked cases lead with their reason."""
     if pivot.status == TestRunTestCaseStatus.BLOCKED:
@@ -129,9 +118,7 @@ def pivot_step_breakdown(pivot: TestRunTestCase) -> str:
     return format_step_breakdown(progress) if progress is not None else ""
 
 
-def _plan_pivot(
-    pivot: TestRunTestCase, *, test_run: TestRun, links_base_url: str
-) -> _PivotPlanOutcome:
+def _plan_pivot(pivot: TestRunTestCase, *, test_run: TestRun) -> _PivotPlanOutcome:
     """Map one pivot to a planned result, or record why it cannot be pushed."""
     status_id = map_pivot_status_to_testrail(pivot.status)
     if status_id is None:
@@ -144,9 +131,6 @@ def _plan_pivot(
         run_name=test_run.display_name,
         result_text=pivot_result_text(pivot),
         step_breakdown=pivot_step_breakdown(pivot),
-        case_url=build_case_detail_url(
-            test_run, pivot.id, links_base_url=links_base_url
-        ),
     )
     planned = PlannedResult(
         pivot=pivot,
@@ -160,21 +144,20 @@ def _plan_pivot(
 
 def _is_changed(result: PlannedResult) -> bool:
     pivot = result.pivot
-    return (
-        pivot.testrail_pushed_status_id != result.status_id
-        or pivot.testrail_pushed_comment_hash != comment_hash(result.comment)
-    )
+    if pivot.testrail_pushed_status_id != result.status_id:
+        return True
+    stored_hash = pivot.testrail_pushed_comment_hash
+    if stored_hash == LEGACY_COMMENT_HASH:
+        return False
+    return stored_hash != comment_hash(result.comment)
 
 
-def plan_testrail_push(test_run: TestRun, *, links_base_url: str) -> TestRailPushPlan:
+def plan_testrail_push(test_run: TestRun) -> TestRailPushPlan:
     """Build the push plan for a run: one query over its pivots and cases."""
     pivots = test_run.pivot_entries.select_related("test_case").order_by(
         *RUN_CASE_ORDERING
     )
-    outcomes = [
-        _plan_pivot(pivot, test_run=test_run, links_base_url=links_base_url)
-        for pivot in pivots
-    ]
+    outcomes = [_plan_pivot(pivot, test_run=test_run) for pivot in pivots]
     results = [outcome.planned for outcome in outcomes if outcome.planned is not None]
     return TestRailPushPlan(
         results=results,
@@ -224,10 +207,29 @@ def build_testrail_run_url(project: Project, run_id: int) -> str:
     return f"{project.testrail_url}/index.php?/runs/view/{run_id}"
 
 
-def build_testrail_case_url(project: Project, raw_testrail_id: str) -> str:
-    """Public TestRail URL for a case, or "" without a TestRail URL or case id."""
-    case_id = parse_testrail_case_id(raw_testrail_id)
-    if case_id is None or not project.testrail_url:
+def build_testrail_result_url(pivot: TestRunTestCase, project: Project) -> str:
+    """TestRail page with this run case's results, best match first.
+
+    The test a result was sent to (source run first, then the pushed run),
+    else that run's page (results sent before test ids were stored), else the
+    source run it was imported from, else the case. "" without a TestRail URL.
+    """
+    if not project.testrail_url:
+        return ""
+    test_id = pivot.testrail_source_test_id or pivot.testrail_test_id
+    if test_id:
+        return f"{project.testrail_url}/index.php?/tests/view/{test_id}"
+    source_run_id = pivot.testrail_source_run_id
+    # Same rule as ``testrail_checked_push_services.get_source_run_url``.
+    if pivot.testrail_source_result_id is not None and source_run_id:
+        return build_testrail_run_url(project, source_run_id)
+    pushed_run_id = pivot.test_run.testrail_run_id
+    if pivot.testrail_result_id is not None and pushed_run_id:
+        return build_testrail_run_url(project, pushed_run_id)
+    if source_run_id:
+        return build_testrail_run_url(project, source_run_id)
+    case_id = parse_testrail_case_id(pivot.test_case.testrail_id)
+    if case_id is None:
         return ""
     return f"{project.testrail_url}/index.php?/cases/view/{case_id}"
 
@@ -250,16 +252,14 @@ def _picker_state_for_panel(
     return picker, suggested_project_id
 
 
-def _pending_count(test_run: TestRun, *, can_push: bool, links_base_url: str) -> int:
+def _pending_count(test_run: TestRun, *, can_push: bool) -> int:
     if not can_push:
         return 0
-    plan = plan_testrail_push(test_run, links_base_url=links_base_url)
+    plan = plan_testrail_push(test_run)
     return len(plan.changed)
 
 
-def get_testrail_push_panel(
-    test_run: TestRun, *, links_base_url: str
-) -> TestRailPushPanel:
+def get_testrail_push_panel(test_run: TestRun) -> TestRailPushPanel:
     """Assemble the run detail template's push panel context in one call."""
     project = test_run.project
     configured = project.has_testrail_settings
@@ -279,9 +279,7 @@ def get_testrail_push_panel(
         has_target=has_target,
         picker=picker,
         suggested_project_id=suggested_project_id,
-        pending_count=_pending_count(
-            test_run, can_push=can_push, links_base_url=links_base_url
-        ),
+        pending_count=_pending_count(test_run, can_push=can_push),
         run_url=run_url,
     )
 
@@ -313,7 +311,7 @@ def _validate_can_start_push(test_run: TestRun) -> None:
         raise ValueError("Choose a TestRail project and suite first.")
 
 
-def start_testrail_results_push(*, test_run: TestRun, links_base_url: str) -> None:
+def start_testrail_results_push(*, test_run: TestRun) -> None:
     """Validate the run, mark it pushing, and dispatch the Celery push task."""
     _validate_can_start_push(test_run)
     test_run.testrail_push_status = TestRailPushStatus.PUSHING
@@ -324,7 +322,9 @@ def start_testrail_results_push(*, test_run: TestRun, links_base_url: str) -> No
     _broadcast_testrail_push(test_run)
     celery_app.send_task(
         "projects.tasks.push_test_run_results",
-        args=[test_run.id, links_base_url],
+        # The second argument is the task's retired links base, kept so the
+        # positions match messages queued by older code.
+        args=[test_run.id, ""],
     )
 
 
@@ -357,23 +357,14 @@ def _collect_case_ids(test_run: TestRun, plan: TestRailPushPlan) -> list[int]:
     return sorted(case_ids)
 
 
-def _testrail_run_description(test_run: TestRun, *, links_base_url: str) -> str:
-    run_detail_path = reverse(
-        "projects:test_run_detail", args=[test_run.project_id, test_run.id]
-    )
-    run_detail_url = f"{links_base_url.rstrip('/')}{run_detail_path}"
-    return (
-        f"Results pushed from Punk Hazard project “{test_run.project.name}”.\n"
-        f"{run_detail_url}"
-    )
+def _testrail_run_description(test_run: TestRun) -> str:
+    return f"Results pushed from Punk Hazard project “{test_run.project.name}”."
 
 
 def _create_testrail_run(
     client: TestRailClient,
     test_run: TestRun,
     case_ids: Sequence[int],
-    *,
-    links_base_url: str,
 ) -> int:
     project_id = test_run.testrail_project_id
     suite_id = test_run.testrail_suite_id
@@ -383,7 +374,7 @@ def _create_testrail_run(
         project_id,
         suite_id=suite_id,
         name=f"Punk Hazard: {test_run.display_name}",
-        description=_testrail_run_description(test_run, links_base_url=links_base_url),
+        description=_testrail_run_description(test_run),
         case_ids=case_ids,
     )
     test_run.testrail_run_id = run.id
@@ -404,6 +395,7 @@ def _reset_pivot_tracking(test_run: TestRun) -> None:
     """Clear per-pivot push tracking so a fresh TestRail run gets every result again."""
     test_run.pivot_entries.update(
         testrail_result_id=None,
+        testrail_test_id=None,
         testrail_pushed_status_id=None,
         testrail_pushed_comment_hash="",
         testrail_pushed_at=None,
@@ -414,8 +406,6 @@ def _ensure_testrail_run(
     client: TestRailClient,
     test_run: TestRun,
     plan: TestRailPushPlan,
-    *,
-    links_base_url: str,
 ) -> tuple[int, TestRailPushPlan]:
     """Create, reuse or recreate the TestRail run this push writes into.
 
@@ -424,18 +414,14 @@ def _ensure_testrail_run(
     """
     case_ids = _collect_case_ids(test_run, plan)
     if test_run.testrail_run_id is None:
-        run_id = _create_testrail_run(
-            client, test_run, case_ids, links_base_url=links_base_url
-        )
+        run_id = _create_testrail_run(client, test_run, case_ids)
         return run_id, plan
 
     existing = _fetch_existing_run(client, test_run.testrail_run_id)
     if existing is None or existing.is_completed:
-        run_id = _create_testrail_run(
-            client, test_run, case_ids, links_base_url=links_base_url
-        )
+        run_id = _create_testrail_run(client, test_run, case_ids)
         _reset_pivot_tracking(test_run)
-        return run_id, plan_testrail_push(test_run, links_base_url=links_base_url)
+        return run_id, plan_testrail_push(test_run)
 
     client.update_run(existing.id, case_ids=case_ids)
     return existing.id, plan
@@ -456,6 +442,9 @@ def _record_pushed_results(
     for planned, result in zip(batch, results):
         pivot = planned.pivot
         pivot.testrail_result_id = result.id
+        # Overwritten every push: a re-push keeps the run's test, and a new run
+        # starts from a reset (``_reset_pivot_tracking``).
+        pivot.testrail_test_id = result.test_id
         pivot.testrail_pushed_status_id = planned.status_id
         pivot.testrail_pushed_comment_hash = comment_hash(planned.comment)
         pivot.testrail_pushed_at = now
@@ -465,6 +454,7 @@ def _record_pushed_results(
             pivots,
             [
                 "testrail_result_id",
+                "testrail_test_id",
                 "testrail_pushed_status_id",
                 "testrail_pushed_comment_hash",
                 "testrail_pushed_at",
@@ -489,14 +479,14 @@ def _push_batch(
 
 
 def push_test_run_results(
-    test_run: TestRun, *, links_base_url: str
+    test_run: TestRun,
 ) -> TestRailPushOutcome:
     """Push a run's changed results to TestRail. Called by the Celery task.
 
     Raises TestRailError / TestRailNotConfiguredError; callers stamp the run
     as failed rather than this function catching them.
     """
-    plan = plan_testrail_push(test_run, links_base_url=links_base_url)
+    plan = plan_testrail_push(test_run)
     if not plan.results:
         return TestRailPushOutcome(
             pushed=0,
@@ -505,9 +495,7 @@ def push_test_run_results(
             testrail_run_id=test_run.testrail_run_id or 0,
         )
     with build_testrail_client(test_run.project) as client:
-        run_id, plan = _ensure_testrail_run(
-            client, test_run, plan, links_base_url=links_base_url
-        )
+        run_id, plan = _ensure_testrail_run(client, test_run, plan)
         for batch in _batched(plan.changed, PUSH_BATCH_SIZE):
             _push_batch(client, run_id, batch)
     return TestRailPushOutcome(

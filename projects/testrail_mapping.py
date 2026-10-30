@@ -33,13 +33,6 @@ TESTRAIL_STATUS_PASSED: Final = 1
 TESTRAIL_STATUS_BLOCKED: Final = 2
 TESTRAIL_STATUS_FAILED: Final = 5
 
-RESULT_COMMENT_TEXT_MAX: Final = 4000
-
-# Caps for the agent's step list in a result comment (one line per field).
-STEP_BREAKDOWN_MAX: Final = 6000
-_STEP_DESCRIPTION_MAX: Final = 160
-_STEP_RESULT_MAX: Final = 200
-_STEP_REASON_MAX: Final = 200
 _WHITESPACE = re.compile(r"\s+")
 _DECISION_LABELS: Mapping[str, str] = {
     "stop": "Stopped here",
@@ -216,14 +209,11 @@ def format_blocked_result_text(reason_label: str, result_text: str) -> str:
     return reason or text
 
 
-def _one_line(text: str, limit: int) -> str:
-    """Collapse whitespace (newlines included) and cap at ``limit`` chars."""
+def _one_line(text: str) -> str:
+    """Collapse whitespace (newlines included) into one line, never shortened."""
     flat = _WHITESPACE.sub(" ", text).strip()
     # Drop leading markup TestRail's Markdown would reinterpret mid-list.
-    flat = flat.lstrip("#>").lstrip()
-    if len(flat) <= limit:
-        return flat
-    return flat[: limit - 1].rstrip() + "…"
+    return flat.lstrip("#>").lstrip()
 
 
 def _step_lines(row: CaseStepRow) -> str:
@@ -232,12 +222,12 @@ def _step_lines(row: CaseStepRow) -> str:
         if row.carried_from is not None
         else row.status_text
     )
-    line = f"{row.num}. {status}: " + _one_line(row.description, _STEP_DESCRIPTION_MAX)
-    result = _one_line(row.summary or row.error, _STEP_RESULT_MAX)
+    line = f"{row.num}. {status}: " + _one_line(row.description)
+    result = _one_line(row.summary or row.error)
     if result:
         line += f" — {result}"
     if row.decision is not None:
-        reason = _one_line(row.decision.reason, _STEP_REASON_MAX)
+        reason = _one_line(row.decision.reason)
         label = _DECISION_LABELS.get(row.decision.action, "Decision")
         if reason:
             line += f"\n   {label}: {reason}"
@@ -248,9 +238,8 @@ def format_step_breakdown(progress: CaseStepProgress) -> str:
     """Plain-text list of the agent's planned steps with status and result.
 
     Numbered like the verdict text ("Steps 4–7 were not run"), so a reader can
-    see what those steps were. Capped at ``STEP_BREAKDOWN_MAX``: trailing rows
-    that do not fit collapse into "… and N more steps, see Details". A plan a
-    help chat or a result review redesigned says so under the header.
+    see what those steps were. Every step is listed in full. A plan a help
+    chat or a result review redesigned says so under the header.
     """
     if not progress.rows:
         return ""
@@ -260,24 +249,7 @@ def format_step_breakdown(progress: CaseStepProgress) -> str:
     if any(plan.is_review for plan in progress.earlier_plans):
         header += "\nThe test plan was redesigned after a result review."
     entries = [_step_lines(row) for row in progress.rows]
-    text = "\n".join([header, *entries])
-    if len(text) <= STEP_BREAKDOWN_MAX:
-        return text
-    kept: list[str] = [header]
-    length = len(header)
-    for index, entry in enumerate(entries):
-        more = _more_steps_line(len(entries) - index - 1)
-        if length + 1 + len(entry) + 1 + len(more) > STEP_BREAKDOWN_MAX:
-            break
-        kept.append(entry)
-        length += 1 + len(entry)
-    kept.append(_more_steps_line(len(entries) - (len(kept) - 1)))
-    return "\n".join(kept)
-
-
-def _more_steps_line(count: int) -> str:
-    noun = "step" if count == 1 else "steps"
-    return f"… and {count} more {noun}, see Details"
+    return "\n".join([header, *entries])
 
 
 def build_result_comment(
@@ -286,21 +258,24 @@ def build_result_comment(
     run_name: str,
     result_text: str,
     step_breakdown: str,
-    case_url: str,
 ) -> str:
     """Build the TestRail result comment body for one pushed case result.
 
-    ``step_breakdown`` (from ``format_step_breakdown``; empty for none) sits
-    between the result text and the Details link.
+    The full result text, then ``step_breakdown`` (from
+    ``format_step_breakdown``; empty for none). No length cap and no link back.
     """
-    truncated_result_text = result_text.strip()[:RESULT_COMMENT_TEXT_MAX]
+    text = result_text.strip()
     paragraphs = [f"{outcome_label} by Punk Hazard in run “{run_name}”."]
-    if truncated_result_text:
-        paragraphs.append(truncated_result_text)
+    if text:
+        paragraphs.append(text)
     if step_breakdown:
         paragraphs.append(step_breakdown)
-    paragraphs.append(f"Details: {case_url}")
     return "\n\n".join(paragraphs)
+
+
+# Stored in place of the hash of results pushed before comments lost their
+# caps and link (migration 0044): those are re-sent only on a status change.
+LEGACY_COMMENT_HASH: Final = "legacy"
 
 
 def comment_hash(comment: str) -> str:
@@ -318,7 +293,6 @@ def build_checked_result_comment(
     run_name: str,
     result_text: str,
     step_breakdown: str,
-    case_url: str,
     checked_by_label: str,
     checked_at: datetime,
     screenshot_count: int,
@@ -335,7 +309,6 @@ def build_checked_result_comment(
             run_name=run_name,
             result_text=result_text,
             step_breakdown=step_breakdown,
-            case_url=case_url,
         ),
         f"Checked by {checked_by_label} on {checked_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC.",
     ]

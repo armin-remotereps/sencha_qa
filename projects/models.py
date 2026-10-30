@@ -587,6 +587,8 @@ class TestRunTestCase(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     testrail_result_id = models.PositiveIntegerField(null=True, blank=True)
+    # TestRail test (run + case) the pushed result went to; its page shows results.
+    testrail_test_id = models.PositiveIntegerField(null=True, blank=True)
     testrail_pushed_status_id = models.PositiveSmallIntegerField(null=True, blank=True)
     testrail_pushed_comment_hash = models.CharField(
         max_length=64, blank=True, default=""
@@ -605,6 +607,8 @@ class TestRunTestCase(models.Model):
     )
     # Set once the result is added to the source run; the dedupe key.
     testrail_source_result_id = models.PositiveIntegerField(null=True, blank=True)
+    # TestRail test in the source run; kept across re-sends (same run and case).
+    testrail_source_test_id = models.PositiveIntegerField(null=True, blank=True)
     testrail_source_sent_at = models.DateTimeField(null=True, blank=True)
     # Screenshots already attached to that result; a re-send resumes from here.
     testrail_source_attachment_count = models.PositiveSmallIntegerField(default=0)

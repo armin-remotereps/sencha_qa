@@ -190,7 +190,7 @@ from projects.testrail_checked_push_services import (
 )
 from projects.testrail_mapping import format_push_confirm_body
 from projects.testrail_results_services import (
-    build_testrail_case_url,
+    build_testrail_result_url,
     get_testrail_push_panel,
 )
 from projects.testrail_services import get_testrail_picker_state
@@ -971,9 +971,7 @@ def _build_test_run_detail_context(
     failed_titles = list_failed_case_titles(test_run) if summary["failed"] else []
     blocked_titles = list_blocked_case_titles(test_run) if summary["blocked"] else []
     narrative = build_run_narrative(test_run, summary, failed_titles, blocked_titles)
-    testrail_push = get_testrail_push_panel(
-        test_run, links_base_url=request.build_absolute_uri("/")
-    )
+    testrail_push = get_testrail_push_panel(test_run)
 
     # Shared with Resume, so the reopen gates run once per page.
     rerun_panel = get_rerun_panel(test_run, project)
@@ -1079,9 +1077,7 @@ def test_run_case_detail(
                 testrail_configured and is_case_missing_source(pivot)
             ),
             "source_run_url": source_run_url,
-            "testrail_case_url": build_testrail_case_url(
-                project, pivot.test_case.testrail_id
-            ),
+            "testrail_result_url": build_testrail_result_url(pivot, project),
             "can_resume": can_resume,
             "resume_steps": resume_steps,
             "resume_form": (

@@ -93,7 +93,6 @@ def start_case_send(
     test_run: TestRun,
     pivot_ids: Sequence[int],
     user: CustomUser,
-    links_base_url: str,
 ) -> CaseSendOutcome:
     """Check the selected sendable cases and queue sending exactly those.
 
@@ -167,7 +166,6 @@ def start_case_send(
     sendable_ids = [pivot.id for pivot in pivots]
     dispatch_checked_push(
         test_run,
-        links_base_url=links_base_url,
         slot_token=slot_token,
         pivot_ids=sendable_ids,
     )
