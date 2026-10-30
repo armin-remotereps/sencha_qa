@@ -203,14 +203,8 @@ def build_case_step_progress(
     checkpoint_data: object,
     case_status: str,
     segment_started_at: datetime | None,
-    *,
-    testrail: bool = True,
 ) -> CaseStepProgress | None:
-    """Rows for every planned step; ``None`` without a usable checkpoint.
-
-    ``testrail``: the case was imported from TestRail (labels say "TestRail
-    steps", else "Case steps").
-    """
+    """Rows for every planned step; ``None`` without a usable checkpoint."""
     checkpoint = checkpoint_from_json(checkpoint_data)
     if checkpoint is None:
         return None
@@ -281,7 +275,7 @@ def build_case_step_progress(
                 carried_label=_carried_label(revisions, carried_from),
                 performed_by=final.performed_by if final is not None else "agent",
                 case_steps_label=format_case_steps_label(
-                    task.case_steps, testrail=testrail
+                    task.case_steps, testrail=checkpoint.case_steps_testrail
                 ),
             )
         )
@@ -561,12 +555,10 @@ def case_step_payload(
     checkpoint_data: object,
     case_status: str,
     segment_started_at: datetime | None,
-    *,
-    testrail: bool = True,
 ) -> StepProgressPayload:
     """Payload for a case straight from its stored checkpoint and status."""
     progress = build_case_step_progress(
-        checkpoint_data, case_status, segment_started_at, testrail=testrail
+        checkpoint_data, case_status, segment_started_at
     )
     return step_progress_payload(progress, planning=_is_planning(progress, case_status))
 
@@ -577,7 +569,6 @@ def pivot_step_payload(pivot: TestRunTestCase) -> StepProgressPayload:
         pivot.execution_checkpoint,
         pivot.status,
         pivot.segment_started_at,
-        testrail=_pivot_is_testrail(pivot),
     )
 
 
@@ -589,24 +580,11 @@ def case_step_view(
         pivot.execution_checkpoint,
         pivot.status,
         pivot.segment_started_at,
-        testrail=_pivot_is_testrail(pivot),
     )
     payload = step_progress_payload(
         progress, planning=_is_planning(progress, pivot.status)
     )
     return payload, progress.earlier_plans if progress is not None else ()
-
-
-def _pivot_is_testrail(pivot: TestRunTestCase) -> bool:
-    """Whether the pivot's case came from TestRail, without a query.
-
-    Reads ``test_case`` only when the caller loaded it; otherwise assumes
-    TestRail, since only TestRail "Test Case (Steps)" cases have numbered
-    steps for the planner to tag.
-    """
-    if TestRunTestCase.test_case.is_cached(pivot):
-        return bool(pivot.test_case.testrail_id)
-    return True
 
 
 def _is_planning(progress: CaseStepProgress | None, case_status: str) -> bool:

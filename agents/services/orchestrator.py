@@ -118,6 +118,7 @@ def run_orchestrator(
     on_checkpoint: CheckpointCallback | None = None,
     person_mode: Callable[[], bool] | None = None,
     case_step_count: int = 0,
+    case_steps_testrail: bool = True,
 ) -> AgentResult:
     """Plan and run one test case.
 
@@ -127,7 +128,8 @@ def run_orchestrator(
 
     ``case_step_count`` is the number of numbered steps in the case text (0
     when it has none); the planner then tags each sub-task with the case
-    steps it covers.
+    steps it covers; ``case_steps_testrail`` says whether the case came
+    from TestRail (stored for the step labels).
     """
     # One model serves every role. The distinct names keep the call sites below
     # readable and make a future per-role split a one-line change.
@@ -165,6 +167,7 @@ def run_orchestrator(
         # The count the plan was made with; an older checkpoint has none yet.
         if resume.case_step_count > 0:
             case_step_count = resume.case_step_count
+            case_steps_testrail = resume.case_steps_testrail
         _log(
             on_log,
             f"[Orchestrator] Resuming at step {resume.next_step} of "
@@ -207,6 +210,7 @@ def run_orchestrator(
         sub_tasks, resume, browser_selection, on_checkpoint, on_screenshot
     )
     progress.case_step_count = case_step_count
+    progress.case_steps_testrail = case_steps_testrail
     progress.checkpoint()
 
     orchestrator_result = _execute_sub_tasks(
@@ -285,6 +289,7 @@ class _Progress:
     # Numbered case steps the plan was made from: the bound for later
     # redesigns' case step refs, carried like plan_version.
     case_step_count: int = 0
+    case_steps_testrail: bool = True
 
     def set_phase(self, phase: OrchestratorPhase) -> None:
         # Every call enters a new phase (a new step is a new "step" phase), so
@@ -311,6 +316,7 @@ class _Progress:
                 plan_version=self.plan_version,
                 plan_revisions=self.plan_revisions,
                 case_step_count=self.case_step_count,
+                case_steps_testrail=self.case_steps_testrail,
             )
         )
 

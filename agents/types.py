@@ -495,6 +495,8 @@ class OrchestratorCheckpoint:
     # Numbered test case steps when the case was planned (0: none, or not a
     # steps-template case); the bound for ``SubTask.case_steps`` in redesigns.
     case_step_count: int = 0
+    # The case came from TestRail ("TestRail steps 3–5"), else "Case steps".
+    case_steps_testrail: bool = True
 
 
 CheckpointCallback = Callable[[OrchestratorCheckpoint], None]

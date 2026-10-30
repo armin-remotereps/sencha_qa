@@ -20,6 +20,7 @@ from agents.case_step_refs import lenient_case_step_refs
 from projects.case_step_labels import format_case_steps_label
 from projects.models import (
     PERSON_STEP_CASE_STEP_TEXT_MAX_LENGTH,
+    PERSON_STEP_CASE_STEPS_LABEL_MAX_LENGTH,
     PERSON_STEP_CASE_STEPS_MAX_ITEMS,
     TestCase,
 )
@@ -47,21 +48,40 @@ def numbered_case_steps(test_case: TestCase) -> tuple[CaseStepText, ...]:
     """
     if test_case.template != STEPS_TEMPLATE_NAME:
         return ()
-    steps = _sections(test_case.steps, sequential=True, limit=None)
-    expected = dict(_sections(test_case.expected, sequential=False, limit=len(steps)))
+    # A case saved from the web form has CRLF line endings.
+    steps = _sections(_lf(test_case.steps), sequential=True, limit=None)
+    expected = dict(
+        _sections(_lf(test_case.expected), sequential=False, limit=len(steps))
+    )
     return tuple(
         CaseStepText(num=num, text=text, expected=expected.get(num, ""))
         for num, text in steps
     )
 
 
-def case_steps_label(test_case: TestCase, refs: Sequence[int]) -> str:
-    return format_case_steps_label(refs, testrail=bool(test_case.testrail_id))
+def case_steps_label(refs: Sequence[int], *, testrail: bool) -> str:
+    """The label as stored on ``CasePersonStep.case_steps_label`` (capped).
+
+    ``testrail`` is the plan's ``OrchestratorCheckpoint.case_steps_testrail``.
+    """
+    return format_case_steps_label(refs, testrail=testrail)[
+        :PERSON_STEP_CASE_STEPS_LABEL_MAX_LENGTH
+    ]
 
 
-def case_step_rows(test_case: TestCase, refs: Sequence[int]) -> list[dict[str, object]]:
-    """The covered steps as stored on ``CasePersonStep.case_steps`` (capped)."""
+def case_step_rows(
+    test_case: TestCase, refs: Sequence[int], *, case_step_count: int
+) -> list[dict[str, object]]:
+    """The covered steps as stored on ``CasePersonStep.case_steps`` (capped).
+
+    ``case_step_count`` is the plan's (``OrchestratorCheckpoint``): when the
+    case's steps changed since it was planned, the refs may point at other
+    steps now, so no text is stored (the label still is).
+    """
     if not refs:
+        return []
+    steps = numbered_case_steps(test_case)
+    if len(steps) != case_step_count:
         return []
     wanted = set(refs)
     return [
@@ -70,7 +90,7 @@ def case_step_rows(test_case: TestCase, refs: Sequence[int]) -> list[dict[str, o
             "text": step.text[:PERSON_STEP_CASE_STEP_TEXT_MAX_LENGTH],
             "expected": step.expected[:PERSON_STEP_CASE_STEP_TEXT_MAX_LENGTH],
         }
-        for step in numbered_case_steps(test_case)
+        for step in steps
         if step.num in wanted
     ][:PERSON_STEP_CASE_STEPS_MAX_ITEMS]
 
@@ -95,6 +115,10 @@ def stored_case_steps(value: object) -> tuple[CaseStepText, ...]:
             )
         )
     return tuple(steps[:PERSON_STEP_CASE_STEPS_MAX_ITEMS])
+
+
+def _lf(text: str) -> str:
+    return text.replace("\r\n", "\n")
 
 
 def _sections(

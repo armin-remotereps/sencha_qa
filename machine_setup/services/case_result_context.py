@@ -50,7 +50,6 @@ from projects.models import (
     CaseHelpRequest,
     CaseResultChange,
     ResultChangeStatus,
-    TestCase,
     TestRunCaseResume,
     TestRunScreenshot,
     TestRunTestCase,
@@ -145,7 +144,7 @@ def case_result_brief_data(pivot: TestRunTestCase) -> CaseResultBriefData:
             pivot.finished_at.strftime(_TIME_FORMAT) if pivot.finished_at else ""
         ),
         status_text=_status_text(pivot),
-        plan=_plan(checkpoint, case),
+        plan=_plan(checkpoint),
         decisions=(
             tuple(
                 ResultDecision(
@@ -188,9 +187,7 @@ def _status_text(pivot: TestRunTestCase) -> str:
     )
 
 
-def _plan(
-    checkpoint: OrchestratorCheckpoint | None, case: TestCase
-) -> tuple[ResultPlanStep, ...]:
+def _plan(checkpoint: OrchestratorCheckpoint | None) -> tuple[ResultPlanStep, ...]:
     if checkpoint is None:
         return ()
     carriable = carriable_steps(checkpoint)
@@ -217,7 +214,9 @@ def _plan(
                 summary=final.summary if final is not None else "",
                 carried_label=carried_labels.get(num, ""),
                 carriable=num in carriable,
-                case_steps_label=case_steps_label(case, task.case_steps),
+                case_steps_label=case_steps_label(
+                    task.case_steps, testrail=checkpoint.case_steps_testrail
+                ),
             )
         )
     return tuple(steps)

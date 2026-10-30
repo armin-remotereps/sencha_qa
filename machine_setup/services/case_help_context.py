@@ -28,7 +28,6 @@ from projects.models import (
     CaseHelpRequest,
     HelpContinueMode,
     HelpResolution,
-    TestCase,
     TestRunStatus,
     TestRunTestCaseStatus,
 )
@@ -98,7 +97,9 @@ def case_help_brief_data(
                 PlanStep(
                     description=task.description,
                     expected_result=task.expected_result,
-                    case_steps_label=case_steps_label(case, task.case_steps),
+                    case_steps_label=case_steps_label(
+                        task.case_steps, testrail=checkpoint.case_steps_testrail
+                    ),
                 )
                 for task in checkpoint.plan
             )
@@ -117,7 +118,7 @@ def case_help_brief_data(
     waiting = help_request_is_waiting(request)
     return dataclasses.replace(
         base,
-        plan=_person_plan(checkpoint, case),
+        plan=_person_plan(checkpoint),
         request_open=waiting,
         status_text=_status_text(request, waiting),
         help_history=_help_history(request),
@@ -181,9 +182,7 @@ def _status_text(request: CaseHelpRequest, waiting: bool) -> str:
     )
 
 
-def _person_plan(
-    checkpoint: OrchestratorCheckpoint | None, case: TestCase
-) -> tuple[PlanStep, ...]:
+def _person_plan(checkpoint: OrchestratorCheckpoint | None) -> tuple[PlanStep, ...]:
     if checkpoint is None:
         return ()
     carriable = carriable_steps(checkpoint)
@@ -193,7 +192,9 @@ def _person_plan(
             expected_result=snapshot.expected_result,
             status_label=_STATUS_LABELS[snapshot.status],
             carriable=num in carriable,
-            case_steps_label=case_steps_label(case, task.case_steps),
+            case_steps_label=case_steps_label(
+                task.case_steps, testrail=checkpoint.case_steps_testrail
+            ),
         )
         # ``snapshot_plan`` has one snapshot per plan step, in order.
         for num, (snapshot, task) in enumerate(

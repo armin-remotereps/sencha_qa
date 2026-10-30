@@ -990,7 +990,8 @@ PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS: Final[int] = 500
 # server's PERSON_STEP_CASE_STEPS_* caps in projects.models. Cut when parsed.
 PERSON_STEP_CASE_STEPS_MAX_ITEMS: Final[int] = 15
 PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS: Final[int] = 1000
-_PERSON_STEP_MAX_CASE_STEP_NUM: Final[int] = 10000
+# Any positive step number the server stored; only the type is checked.
+_PERSON_STEP_MAX_CASE_STEP_NUM: Final[int] = 2**31 - 1
 # Ask AI: a question is refused when longer (PERSON_STEP_QUESTION_MAX_LENGTH
 # on the server); a snapshot carries a step's newest questions, oldest first.
 PERSON_STEP_QUESTION_MAX_CHARS: Final[int] = 1000
