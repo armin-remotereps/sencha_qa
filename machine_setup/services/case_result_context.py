@@ -45,6 +45,7 @@ from projects.case_review_redesign_services import (
     get_pending_review_redesign,
     get_review_draft_view,
 )
+from projects.case_step_refs import case_steps_label
 from projects.models import (
     CaseHelpRequest,
     CaseResultChange,
@@ -200,7 +201,10 @@ def _plan(checkpoint: OrchestratorCheckpoint | None) -> tuple[ResultPlanStep, ..
             attempt, checkpoint.plan_revisions
         )
     steps = []
-    for num, snapshot in enumerate(snapshot_plan(checkpoint), start=1):
+    # ``snapshot_plan`` has one snapshot per plan step, in order.
+    for num, (snapshot, task) in enumerate(
+        zip(snapshot_plan(checkpoint), checkpoint.plan, strict=True), start=1
+    ):
         final = finals.get(num)
         steps.append(
             ResultPlanStep(
@@ -210,6 +214,9 @@ def _plan(checkpoint: OrchestratorCheckpoint | None) -> tuple[ResultPlanStep, ..
                 summary=final.summary if final is not None else "",
                 carried_label=carried_labels.get(num, ""),
                 carriable=num in carriable,
+                case_steps_label=case_steps_label(
+                    task.case_steps, testrail=checkpoint.case_steps_testrail
+                ),
             )
         )
     return tuple(steps)

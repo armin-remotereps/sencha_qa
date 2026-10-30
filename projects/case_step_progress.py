@@ -21,6 +21,7 @@ from agents.types import (
     StepDecision,
     SubTaskAttempt,
 )
+from projects.case_step_labels import format_case_steps_label
 from projects.models import TestRunTestCase, TestRunTestCaseStatus
 
 # Caps on LLM text sent to the browser; the page has the full log for more.
@@ -122,6 +123,9 @@ class CaseStepRow:
     # Who performed the step's final attempt: "agent", or "person" (Human in
     # the loop, confirmed or overruled; the summary says which).
     performed_by: str = "agent"
+    # The test case's own numbered steps this plan step covers, e.g.
+    # "TestRail steps 3–5"; "" when the planner tagged none.
+    case_steps_label: str = ""
 
     @property
     def status_label(self) -> str:
@@ -270,6 +274,9 @@ def build_case_step_progress(
                 carried_from=carried_from,
                 carried_label=_carried_label(revisions, carried_from),
                 performed_by=final.performed_by if final is not None else "agent",
+                case_steps_label=format_case_steps_label(
+                    task.case_steps, testrail=checkpoint.case_steps_testrail
+                ),
             )
         )
 
@@ -489,6 +496,8 @@ class StepRowPayload(TypedDict):
     # "agent" or "person"; the label is "" for the agent.
     performed_by: str
     performed_by_label: str
+    # "TestRail steps 3–5" / "Case steps 1, 3"; "" when none.
+    case_steps_label: str
 
 
 class StepProgressPayload(TypedDict):
@@ -557,7 +566,9 @@ def case_step_payload(
 def pivot_step_payload(pivot: TestRunTestCase) -> StepProgressPayload:
     """The case's step rows from its loaded checkpoint and status (no query)."""
     return case_step_payload(
-        pivot.execution_checkpoint, pivot.status, pivot.segment_started_at
+        pivot.execution_checkpoint,
+        pivot.status,
+        pivot.segment_started_at,
     )
 
 
@@ -566,7 +577,9 @@ def case_step_view(
 ) -> tuple[StepProgressPayload, tuple[EarlierPlan, ...]]:
     """The case page's step rows and earlier plans from one checkpoint parse."""
     progress = build_case_step_progress(
-        pivot.execution_checkpoint, pivot.status, pivot.segment_started_at
+        pivot.execution_checkpoint,
+        pivot.status,
+        pivot.segment_started_at,
     )
     payload = step_progress_payload(
         progress, planning=_is_planning(progress, pivot.status)
@@ -615,6 +628,7 @@ def _row_payload(row: CaseStepRow) -> StepRowPayload:
         carried_label=_cap(row.carried_label),
         performed_by=row.performed_by,
         performed_by_label=row.performed_by_label,
+        case_steps_label=row.case_steps_label,
     )
 
 

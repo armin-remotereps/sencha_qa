@@ -23,6 +23,7 @@ from machine_setup.case_help_brief import (
     build_case_help_update,
 )
 from projects.case_plan_revision_services import get_pending_plan_draft
+from projects.case_step_refs import case_steps_label
 from projects.models import (
     CaseHelpRequest,
     HelpContinueMode,
@@ -96,6 +97,9 @@ def case_help_brief_data(
                 PlanStep(
                     description=task.description,
                     expected_result=task.expected_result,
+                    case_steps_label=case_steps_label(
+                        task.case_steps, testrail=checkpoint.case_steps_testrail
+                    ),
                 )
                 for task in checkpoint.plan
             )
@@ -188,8 +192,14 @@ def _person_plan(checkpoint: OrchestratorCheckpoint | None) -> tuple[PlanStep, .
             expected_result=snapshot.expected_result,
             status_label=_STATUS_LABELS[snapshot.status],
             carriable=num in carriable,
+            case_steps_label=case_steps_label(
+                task.case_steps, testrail=checkpoint.case_steps_testrail
+            ),
         )
-        for num, snapshot in enumerate(snapshot_plan(checkpoint), start=1)
+        # ``snapshot_plan`` has one snapshot per plan step, in order.
+        for num, (snapshot, task) in enumerate(
+            zip(snapshot_plan(checkpoint), checkpoint.plan, strict=True), start=1
+        )
     )
 
 

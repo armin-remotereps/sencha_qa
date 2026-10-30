@@ -12,7 +12,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.10.1"
+CLIENT_VERSION: Final[str] = "0.10.2"
 
 
 class CloseCode(IntEnum):
@@ -115,11 +115,19 @@ class ClientCapability(StrEnum):
     # AI box (``person_step_question`` / ``person_step_question_result``, the
     # snapshot's ``questions``). Advertised only together with PERSON_STEPS_V1.
     PERSON_STEP_ASSIST_V1 = "person_step_assist_v1"
+    # Optional: the window renders a step's ``case_steps_label`` and the test
+    # case steps it covers (``case_steps``); older windows get the label inside
+    # ``step_label``. Advertised only together with PERSON_STEPS_V1.
+    PERSON_STEP_CASE_STEPS_V1 = "person_step_case_steps_v1"
 
 
 # Capabilities that need the person step window; dropped without it.
 _PERSON_WINDOW_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
-    {ClientCapability.PERSON_STEPS_V1, ClientCapability.PERSON_STEP_ASSIST_V1}
+    {
+        ClientCapability.PERSON_STEPS_V1,
+        ClientCapability.PERSON_STEP_ASSIST_V1,
+        ClientCapability.PERSON_STEP_CASE_STEPS_V1,
+    }
 )
 
 
@@ -134,7 +142,7 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
     ``person_window`` is False when the person step window is disabled
     (``CONTROLLER_PERSON_WINDOW=false``) or Tk is unavailable; the server then
     never sends ``person_step_state`` and the person answers on the web.
-    PERSON_STEP_ASSIST_V1 is dropped with it.
+    PERSON_STEP_ASSIST_V1 and PERSON_STEP_CASE_STEPS_V1 are dropped with it.
     """
     if person_window:
         return CLIENT_CAPABILITIES
@@ -149,7 +157,7 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
 # authenticate fine and then silently time out on first use. Optional
 # capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1,
 # WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1,
-# PERSON_STEP_ASSIST_V1) are checked
+# PERSON_STEP_ASSIST_V1, PERSON_STEP_CASE_STEPS_V1) are checked
 # where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
@@ -978,6 +986,12 @@ PERSON_STEP_RESULT_MESSAGE_MAX_CHARS: Final[int] = 1000
 PERSON_STEP_HOW_TO_MAX_ITEMS: Final[int] = 8
 PERSON_STEP_HOW_TO_TEXT_MAX_CHARS: Final[int] = 400
 PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS: Final[int] = 500
+# Test case steps a person step covers (PERSON_STEP_CASE_STEPS_V1); the
+# server's PERSON_STEP_CASE_STEPS_* caps in projects.models. Cut when parsed.
+PERSON_STEP_CASE_STEPS_MAX_ITEMS: Final[int] = 15
+PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS: Final[int] = 1000
+# Any positive step number the server stored; only the type is checked.
+_PERSON_STEP_MAX_CASE_STEP_NUM: Final[int] = 2**31 - 1
 # Ask AI: a question is refused when longer (PERSON_STEP_QUESTION_MAX_LENGTH
 # on the server); a snapshot carries a step's newest questions, oldest first.
 PERSON_STEP_QUESTION_MAX_CHARS: Final[int] = 1000
@@ -1043,6 +1057,19 @@ class PersonHowToPayload:
 
 
 @dataclass(frozen=True)
+class PersonCaseStepPayload:
+    """One numbered test case (TestRail) step a person step covers."""
+
+    num: int
+    text: str
+    # The step's expected result; blank when the case gives none.
+    expected: str = ""
+
+    def to_wire(self) -> dict[str, object]:
+        return {"num": self.num, "text": self.text, "expected": self.expected}
+
+
+@dataclass(frozen=True)
 class PersonStepQuestionPayload:
     """One Ask AI question of a step and its answer, as the window shows it."""
 
@@ -1076,7 +1103,8 @@ class PersonStepStatePayload:
     status: PersonStepWireStatus
     run_name: str
     case_title: str
-    # "Step N of M".
+    # "Step N of M"; for a runner without PERSON_STEP_CASE_STEPS_V1 followed
+    # by " · " and the case steps label.
     step_label: str
     kind: PersonStepWireKind
     instruction: str
@@ -1094,6 +1122,10 @@ class PersonStepStatePayload:
     how_to: tuple[PersonHowToPayload, ...] = ()
     # The step's newest questions, oldest first (≤ PERSON_STEP_STATE_MAX_QUESTIONS).
     questions: tuple[PersonStepQuestionPayload, ...] = ()
+    # PERSON_STEP_CASE_STEPS_V1 only; empty from an older server or when the
+    # case has no numbered steps. "TestRail steps 3–5" / "Case step 2".
+    case_steps_label: str = ""
+    case_steps: tuple[PersonCaseStepPayload, ...] = ()
 
     def to_wire(self) -> dict[str, object]:
         return {
@@ -1117,6 +1149,11 @@ class PersonStepStatePayload:
             "questions": [
                 question.to_wire()
                 for question in self.questions[-PERSON_STEP_STATE_MAX_QUESTIONS:]
+            ],
+            "case_steps_label": self.case_steps_label,
+            "case_steps": [
+                step.to_wire()
+                for step in self.case_steps[:PERSON_STEP_CASE_STEPS_MAX_ITEMS]
             ],
         }
 
@@ -1259,7 +1296,37 @@ def _parse_person_step(raw: object) -> PersonStepStatePayload:
         ),
         how_to=_parse_how_to(item.get("how_to", [])),
         questions=_parse_questions(item.get("questions", [])),
+        case_steps_label=_extract_text(
+            item, "case_steps_label", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
+        ),
+        case_steps=_parse_case_steps(item.get("case_steps", [])),
     )
+
+
+def _parse_case_steps(raw: object) -> tuple[PersonCaseStepPayload, ...]:
+    # Absent from an older server; items beyond the cap dropped, texts cut.
+    if not isinstance(raw, list):
+        raise ProtocolError("Invalid 'case_steps': expected a list")
+    items: list[PersonCaseStepPayload] = []
+    for entry in raw[:PERSON_STEP_CASE_STEPS_MAX_ITEMS]:
+        if not isinstance(entry, dict):
+            raise ProtocolError("Invalid case step: expected an object")
+        item: dict[str, object] = entry
+        items.append(
+            PersonCaseStepPayload(
+                num=_extract_bounded_int(item, "num", _PERSON_STEP_MAX_CASE_STEP_NUM),
+                text=_extract_text(
+                    item, "text", PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS, truncate=True
+                ),
+                expected=_extract_text(
+                    item,
+                    "expected",
+                    PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS,
+                    truncate=True,
+                ),
+            )
+        )
+    return tuple(items)
 
 
 def _parse_how_to(raw: object) -> tuple[PersonHowToPayload, ...]:

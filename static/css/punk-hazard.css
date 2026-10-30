@@ -3543,6 +3543,33 @@ details.card[open] > summary,
   overflow-wrap: anywhere;
 }
 
+/* "Covers TestRail steps 3–5": the case steps a person step covers. */
+.person-step-covers {
+  margin: 0 0 14px;
+}
+
+.person-step-case-steps {
+  margin: 0;
+  padding: 8px 12px;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  border-left: 3px solid var(--info);
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+}
+
+.person-step-case-steps li {
+  display: grid;
+  gap: 2px;
+}
+
+.person-step-case-step-text,
+.person-step-case-step-expected {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .person-step-suggested {
   margin-top: 6px;
   padding: 8px 10px;

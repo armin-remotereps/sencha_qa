@@ -6,6 +6,7 @@ the same way without importing ``projects.services``.
 
 from __future__ import annotations
 
+from projects.case_step_refs import numbered_case_steps
 from projects.models import TestCase
 
 
@@ -19,3 +20,8 @@ def build_task_description(test_case: TestCase) -> str:
     if test_case.expected:
         parts.append(f"\nExpected Result:\n{test_case.expected}")
     return "\n".join(parts)
+
+
+def numbered_case_step_count(test_case: TestCase) -> int:
+    """How many numbered steps a steps-template case has; 0 for any other case."""
+    return len(numbered_case_steps(test_case))

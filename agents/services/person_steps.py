@@ -115,8 +115,12 @@ def prepare_person_step(
         logger.warning(
             "Person step %d: unusable prepare answer, using the plan text", step_num
         )
-        return fallback_hand_off(sub_task, step_num=step_num, restore=restore)
-    return hand_off
+        hand_off = fallback_hand_off(sub_task, step_num=step_num, restore=restore)
+    if restore:
+        # A restore covers earlier steps; a case step label there would mislead.
+        return hand_off
+    # The refs belong to the plan step; the model never writes them.
+    return replace(hand_off, case_steps=sub_task.case_steps)
 
 
 def parse_hand_off(

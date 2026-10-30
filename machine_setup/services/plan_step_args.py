@@ -49,6 +49,15 @@ STEP_ITEM_SCHEMA: dict[str, object] = {
                 "(its final attempt passed). Omit for a step that will run."
             ),
         },
+        "case_steps": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": (
+                "Optional. The test case's numbered steps (1-based) this step "
+                "performs or checks. Omit for a carried step to keep its earlier "
+                "numbers."
+            ),
+        },
     },
     "required": ["description", "expected_result"],
 }
@@ -93,12 +102,24 @@ def parse_plan_steps(value: object) -> list[PlanStepInput]:
                 f"Step {num}: carried_from must be an earlier step number (1 or "
                 "more), or omitted."
             )
+        case_steps = raw.get("case_steps")
+        if case_steps is not None and (
+            not isinstance(case_steps, list)
+            or any(
+                not isinstance(ref, int) or isinstance(ref, bool) for ref in case_steps
+            )
+        ):
+            # Out-of-range numbers are dropped later, never an error.
+            raise PlanStepArgumentError(
+                f"Step {num}: case_steps must be a list of integers, or omitted."
+            )
         steps.append(
             PlanStepInput(
                 description=description,
                 expected_result=expected,
                 raw_timeout=timeout,
                 carried_from=carried,
+                case_steps=case_steps if case_steps is not None else (),
             )
         )
     return steps

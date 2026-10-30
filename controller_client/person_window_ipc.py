@@ -28,8 +28,9 @@ from controller_client.protocol import (
 )
 
 # Largest runner -> window line. A full snapshot (5 steps at the protocol's
-# display caps, every character escaped) stays well below it.
-IPC_TO_WINDOW_MAX_BYTES: Final[int] = 2 * 1024 * 1024
+# display caps, case steps included, every character escaped: about 3.3 MB)
+# stays below it.
+IPC_TO_WINDOW_MAX_BYTES: Final[int] = 4 * 1024 * 1024
 # Largest window -> runner line: one answer (note + output) or one question.
 IPC_TO_RUNNER_MAX_BYTES: Final[int] = max(
     PERSON_STEP_ACTION_MAX_BYTES, PERSON_STEP_QUESTION_MAX_BYTES

@@ -102,7 +102,11 @@ from projects.case_step_progress import (
     case_step_payload,
     pivot_step_payload,
 )
-from projects.case_task_text import build_task_description
+from projects.case_step_refs import case_step_rows, case_steps_label
+from projects.case_task_text import (
+    build_task_description,
+    numbered_case_step_count,
+)
 from projects.case_teardown_policy import needs_teardown
 from projects.checked_push_limits import is_checked_push_live
 from projects.controller_outage_clock import agent_monotonic, reset_outage_clock
@@ -3121,6 +3125,8 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         on_log = _build_log_callback(pivot, generation)
         on_screenshot = _build_screenshot_callback(pivot, generation)
         task_description = build_task_description(pivot.test_case)
+        case_step_count = numbered_case_step_count(pivot.test_case)
+        case_steps_testrail = bool(pivot.test_case.testrail_id)
 
         project.refresh_from_db(
             fields=["project_prompt", "application_url", "application_platform"]
@@ -3146,6 +3152,8 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
                     on_saved=checkpoint_saved_hook,
                 ),
                 person_mode=_build_person_mode_check(run_id),
+                case_step_count=case_step_count,
+                case_steps_testrail=case_steps_testrail,
             )
             # Once a Resume or Start took the run over, the pivot belongs to
             # the newer chain: this worker records nothing (here and below).
@@ -3633,11 +3641,21 @@ def _pause_run_for_person(
         # The worker stops owning the case: the person's time is not counted.
         close_case_segment(pivot.pk, now)
         pivot.segment_started_at = None
-        settle_person_steps(pivot.pk, load_resume_checkpoint(pivot))
+        checkpoint = load_resume_checkpoint(pivot)
+        settle_person_steps(pivot.pk, checkpoint)
         person_step, push = open_person_step_row(
             pivot.pk,
             hand_off,
             shell_label=shell_label,
+            case_steps=case_step_rows(
+                pivot.test_case,
+                hand_off.case_steps,
+                case_step_count=checkpoint.case_step_count if checkpoint else 0,
+            ),
+            case_steps_label=case_steps_label(
+                hand_off.case_steps,
+                testrail=checkpoint.case_steps_testrail if checkpoint else True,
+            ),
             segment_started_at=segment_started_at,
             now=now,
         )

@@ -13,6 +13,7 @@ from typing import Literal
 from django.conf import settings
 from django.utils import timezone
 
+from agents.case_step_refs import normalize_case_step_refs
 from agents.checkpoint import final_step_indices
 from agents.exceptions import (
     AIServiceError,
@@ -116,12 +117,19 @@ def run_orchestrator(
     resume: OrchestratorCheckpoint | None = None,
     on_checkpoint: CheckpointCallback | None = None,
     person_mode: Callable[[], bool] | None = None,
+    case_step_count: int = 0,
+    case_steps_testrail: bool = True,
 ) -> AgentResult:
     """Plan and run one test case.
 
     ``person_mode`` (Human in the loop) is asked at each step boundary: while
     it answers True the step goes to a person instead of a sub-agent, and the
     case stops with ``AgentStopReason.AWAITING_PERSON`` until they report.
+
+    ``case_step_count`` is the number of numbered steps in the case text (0
+    when it has none); the planner then tags each sub-task with the case
+    steps it covers; ``case_steps_testrail`` says whether the case came
+    from TestRail (stored for the step labels).
     """
     # One model serves every role. The distinct names keep the call sites below
     # readable and make a future per-role split a one-line change.
@@ -152,9 +160,14 @@ def run_orchestrator(
             bounds=bounds,
             project_prompt=project_prompt,
             on_log=on_log,
+            case_step_count=case_step_count,
         )
     else:
         sub_tasks = resume.plan
+        # The count the plan was made with; an older checkpoint has none yet.
+        if resume.case_step_count > 0:
+            case_step_count = resume.case_step_count
+            case_steps_testrail = resume.case_steps_testrail
         _log(
             on_log,
             f"[Orchestrator] Resuming at step {resume.next_step} of "
@@ -196,6 +209,8 @@ def run_orchestrator(
     progress = _new_progress(
         sub_tasks, resume, browser_selection, on_checkpoint, on_screenshot
     )
+    progress.case_step_count = case_step_count
+    progress.case_steps_testrail = case_steps_testrail
     progress.checkpoint()
 
     orchestrator_result = _execute_sub_tasks(
@@ -271,6 +286,10 @@ class _Progress:
     # carried into every checkpoint so a save after a resume keeps them.
     plan_version: int = 0
     plan_revisions: tuple[PlanRevisionRecord, ...] = ()
+    # Numbered case steps the plan was made from: the bound for later
+    # redesigns' case step refs, carried like plan_version.
+    case_step_count: int = 0
+    case_steps_testrail: bool = True
 
     def set_phase(self, phase: OrchestratorPhase) -> None:
         # Every call enters a new phase (a new step is a new "step" phase), so
@@ -296,6 +315,8 @@ class _Progress:
                 person=self.person,
                 plan_version=self.plan_version,
                 plan_revisions=self.plan_revisions,
+                case_step_count=self.case_step_count,
+                case_steps_testrail=self.case_steps_testrail,
             )
         )
 
@@ -1032,11 +1053,13 @@ def _plan_sub_tasks(
     bounds: TimeoutBounds,
     project_prompt: str | None = None,
     on_log: LogCallback | None = None,
+    case_step_count: int = 0,
 ) -> tuple[SubTask, ...]:
     system_prompt = build_plan_system_prompt(
         project_prompt=project_prompt,
         min_timeout_seconds=bounds.minimum,
         max_timeout_seconds=bounds.maximum,
+        case_step_count=case_step_count,
     )
     messages = (
         ChatMessage(role="system", content=system_prompt),
@@ -1057,7 +1080,7 @@ def _plan_sub_tasks(
     raw_sub_tasks = raw_sub_tasks[:max_subtasks]
 
     sub_tasks = tuple(
-        _build_sub_task(item, bounds)
+        _build_sub_task(item, bounds, case_step_count)
         for item in raw_sub_tasks
         if isinstance(item, dict)
     )
@@ -1072,11 +1095,14 @@ def _plan_sub_tasks(
     return sub_tasks
 
 
-def _build_sub_task(item: dict[str, object], bounds: TimeoutBounds) -> SubTask:
+def _build_sub_task(
+    item: dict[str, object], bounds: TimeoutBounds, case_step_count: int
+) -> SubTask:
     return SubTask(
         description=str(item.get("description", "")),
         expected_result=str(item.get("expected_result", "")),
         timeout_seconds=resolve_timeout_seconds(item.get("timeout_seconds"), bounds),
+        case_steps=normalize_case_step_refs(item.get("case_steps"), case_step_count),
     )
 
 
@@ -1795,7 +1821,8 @@ def _evaluate_failure(
     if action == "recover":
         raw_recovery = parsed.get("recovery_task")
         if isinstance(raw_recovery, dict):
-            recovery_task = _build_sub_task(raw_recovery, bounds)
+            # A recovery is not a case step: no refs.
+            recovery_task = _build_sub_task(raw_recovery, bounds, 0)
 
     return OrchestratorDecision(
         action=action,

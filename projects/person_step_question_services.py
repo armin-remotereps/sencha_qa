@@ -26,6 +26,7 @@ from agents.services.person_step_advisor import answer_person_step_question
 from agents.types import PersonStepAdviceContext, PersonStepHandOff
 from auto_tester.celery import app as celery_app
 from controller_client.protocol import PERSON_STEP_STATE_MAX_QUESTIONS
+from projects.case_step_refs import stored_case_steps
 from projects.case_task_text import build_task_description
 from projects.exceptions import PersonStepQuestionError
 from projects.models import (
@@ -411,7 +412,7 @@ def _advice_context(
         case_text=build_task_description(pivot.test_case),
         project_prompt=project_context[:_PROJECT_CONTEXT_MAX_LENGTH],
         # The checkpoint (with the plan's size) is not loaded here.
-        step_label=f"Step {step.step_num}",
+        step_label=_advice_step_label(step),
         hand_off=PersonStepHandOff(
             step_num=step.step_num,
             kind=stored_hand_off_kind(step.kind),
@@ -420,6 +421,15 @@ def _advice_context(
             command=step.command,
             objection=step.agent_objection,
             how_to=stored_how_to(step.how_to),
+            case_steps=tuple(item.num for item in stored_case_steps(step.case_steps)),
         ),
         history=history,
     )
+
+
+def _advice_step_label(step: CasePersonStep) -> str:
+    """The advisor's step label: "Step N", plus " · <case steps label>" when set."""
+    label = f"Step {step.step_num}"
+    if step.case_steps_label:
+        return f"{label} · {step.case_steps_label}"
+    return label

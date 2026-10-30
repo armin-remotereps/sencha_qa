@@ -15,6 +15,11 @@ Assist (PERSON_STEP_ASSIST_V1): a runner that advertised it gets each step's
 "How to do it" list and its Ask AI questions (``ask_from_runner``); an older
 runner gets the how-to inlined into the instruction text and no questions.
 
+Case steps (PERSON_STEP_CASE_STEPS_V1): a runner that advertised it gets the
+plain "Step N of M" label, the step's ``case_steps_label`` ("TestRail steps
+3–5") and the covered test case steps; an older runner gets the label joined
+into ``step_label`` ("Step 2 of 4 · TestRail steps 3–5") and no steps.
+
 Identity: the runner may carry a ``person_email``. It counts only when it is
 an active member of the runner's project (``resolve_runner_person``, at
 handshake) and still is when the answer arrives; otherwise the answer is
@@ -36,6 +41,8 @@ from accounts.models import CustomUser
 from agents.services.person_step_prompts import format_how_to_text
 from agents.types import PersonHowToItem
 from controller_client.protocol import (
+    PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS,
+    PERSON_STEP_CASE_STEPS_MAX_ITEMS,
     PERSON_STEP_COMMAND_MAX_CHARS,
     PERSON_STEP_EXPECTED_MAX_CHARS,
     PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS,
@@ -45,6 +52,7 @@ from controller_client.protocol import (
     PERSON_STEP_OBJECTION_MAX_CHARS,
     PERSON_STEP_STATE_MAX_STEPS,
     PERSON_STEP_URL_MAX_CHARS,
+    PersonCaseStepPayload,
     PersonHowToPayload,
     PersonStepActionKind,
     PersonStepQuestionAskPayload,
@@ -54,6 +62,7 @@ from controller_client.protocol import (
     PersonStepWireStatus,
 )
 from notifications.services.site_url import absolute_url
+from projects.case_step_refs import CaseStepText, stored_case_steps
 from projects.exceptions import PersonStepError, PersonStepQuestionError
 from projects.models import (
     WRITABLE_ROLES,
@@ -93,6 +102,8 @@ _THROTTLED = "Too many answers from this Test Runner. Wait a minute and try agai
 _STEP_NOT_FOUND = "This step was already answered or is no longer waiting."
 
 _HOW_TO_HEADING = "\n\nHow to do it:\n"
+# Joins the case steps label into ``step_label`` for an older runner.
+_CASE_STEPS_LABEL_SEPARATOR = " · "
 
 # The statuses a person may act on (as ``person_step_services``).
 _ACTIONABLE_STATUSES: tuple[str, ...] = (
@@ -111,6 +122,8 @@ _STEP_FIELDS: tuple[str, ...] = (
     "shell_label",
     "agent_objection",
     "how_to",
+    "case_steps",
+    "case_steps_label",
     "test_run_test_case_id",
     "test_run_test_case__test_run_id",
     "test_run_test_case__test_run__name",
@@ -129,7 +142,8 @@ class RunnerPersonStepView:
     status: PersonStepWireStatus
     run_name: str
     case_title: str
-    # "Step N of M" ("Step N" when the plan size is unknown).
+    # "Step N of M" ("Step N" when the plan size is unknown); for a runner
+    # without PERSON_STEP_CASE_STEPS_V1 followed by " · <case_steps_label>".
     step_label: str
     kind: PersonStepWireKind
     instruction: str
@@ -146,6 +160,10 @@ class RunnerPersonStepView:
     how_to: tuple[PersonHowToPayload, ...] = ()
     # Assist runners only: the step's newest questions, oldest first.
     questions: tuple[PersonStepQuestionPayload, ...] = ()
+    # Case steps runners only ("TestRail steps 3–5"; blank when none).
+    case_steps_label: str = ""
+    # Case steps runners only: the test case steps the step covers.
+    case_steps: tuple[PersonCaseStepPayload, ...] = ()
 
     def to_payload(self) -> PersonStepStatePayload:
         return PersonStepStatePayload(
@@ -165,6 +183,8 @@ class RunnerPersonStepView:
             case_url=self.case_url,
             how_to=self.how_to,
             questions=self.questions,
+            case_steps_label=self.case_steps_label,
+            case_steps=self.case_steps,
         )
 
 
@@ -189,7 +209,7 @@ class RunnerPersonStepAnswer:
 
 
 def get_runner_person_steps(
-    project_id: int, *, assist: bool
+    project_id: int, *, assist: bool, case_steps: bool
 ) -> tuple[RunnerPersonStepView, ...]:
     """The actionable person steps of the project's paused runs, newest first (≤ 5).
 
@@ -199,6 +219,10 @@ def get_runner_person_steps(
     ``assist`` (the runner advertised PERSON_STEP_ASSIST_V1): each step carries
     its how-to list and its questions (one more query, only when a step is
     open). Otherwise the how-to is inlined into the instruction text.
+
+    ``case_steps`` (the runner advertised PERSON_STEP_CASE_STEPS_V1): each
+    step carries its case steps label and covered steps. Otherwise the label
+    is joined into ``step_label``. No extra query either way.
     """
     plan = KeyTransform("plan", "test_run_test_case__execution_checkpoint")
     rows = list(
@@ -235,7 +259,14 @@ def get_runner_person_steps(
             ).items()
         }
     return tuple(
-        _build_view(project_id, row, assist=assist, questions=questions) for row in rows
+        _build_view(
+            project_id,
+            row,
+            assist=assist,
+            case_steps=case_steps,
+            questions=questions,
+        )
+        for row in rows
     )
 
 
@@ -244,6 +275,7 @@ def _build_view(
     row: dict[str, object],
     *,
     assist: bool,
+    case_steps: bool,
     questions: dict[int, tuple[PersonStepQuestionPayload, ...]],
 ) -> RunnerPersonStepView:
     person_step_id = _as_int(row["id"])
@@ -266,6 +298,9 @@ def _build_view(
         if plan_size >= step_num
         else f"Step {step_num}"
     )
+    case_steps_label = str(row["case_steps_label"] or "")
+    if case_steps_label and not case_steps:
+        step_label += _CASE_STEPS_LABEL_SEPARATOR + case_steps_label
     path = reverse(
         "projects:test_run_case_detail",
         kwargs={
@@ -289,7 +324,7 @@ def _build_view(
         case_title=str(row["test_run_test_case__test_case__title"])[
             :PERSON_STEP_LABEL_MAX_CHARS
         ],
-        step_label=step_label,
+        step_label=step_label[:PERSON_STEP_LABEL_MAX_CHARS],
         kind=kind,
         instruction=instruction[:PERSON_STEP_INSTRUCTION_MAX_CHARS],
         expected_result=str(row["expected_result"])[:PERSON_STEP_EXPECTED_MAX_CHARS],
@@ -300,6 +335,14 @@ def _build_view(
         case_url=(absolute_url(path) or "")[:PERSON_STEP_URL_MAX_CHARS],
         how_to=_how_to_payloads(how_to) if assist else (),
         questions=questions.get(person_step_id, ()),
+        case_steps_label=(
+            case_steps_label[:PERSON_STEP_LABEL_MAX_CHARS] if case_steps else ""
+        ),
+        case_steps=(
+            _case_step_payloads(stored_case_steps(row["case_steps"]))
+            if case_steps
+            else ()
+        ),
     )
 
 
@@ -312,6 +355,19 @@ def _how_to_payloads(
             command=item.command[:PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS],
         )
         for item in how_to
+    )
+
+
+def _case_step_payloads(
+    steps: Sequence[CaseStepText],
+) -> tuple[PersonCaseStepPayload, ...]:
+    return tuple(
+        PersonCaseStepPayload(
+            num=step.num,
+            text=step.text[:PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS],
+            expected=step.expected[:PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS],
+        )
+        for step in steps[:PERSON_STEP_CASE_STEPS_MAX_ITEMS]
     )
 
 

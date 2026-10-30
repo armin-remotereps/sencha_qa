@@ -267,6 +267,7 @@
                 <span class="badge" :class="stepBadgeClass(row.status)" x-text="row.status_label"></span>
               </span>
             </div>
+            <p class="step-detail muted" x-show="row.case_steps_label" x-cloak x-text="row.case_steps_label"></p>
             <p class="step-detail muted" x-show="row.carried_label" x-cloak x-text="row.carried_label"></p>
             <div class="step-meta" x-show="row.expected_result || row.duration_seconds !== null || row.activity_label">
               <span x-show="row.activity_label" x-text="row.activity_label + ' · '"></span>

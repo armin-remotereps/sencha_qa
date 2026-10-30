@@ -13,7 +13,10 @@
                   blockers, runner_can_answer (the connected Test Runner
                   shows the step in its window), reported_at_runner (the
                   report came from that window), reporter_label (the
-                  reporting member's name; blank when anonymous)
+                  reporting member's name; blank when anonymous),
+                  case_steps_label ("TestRail steps 3–5" / "Case step 2"; ""
+                  when the step covers none), case_steps (CaseStepText: num,
+                  text, expected; shown under "Covers …" when set)
      person_step_form — unbound PersonStepReportForm (outcome radios, note,
                   output; person_step_id is written from the panel's step)
      can_write  — project_can_write; false renders the card read-only (the
@@ -52,6 +55,24 @@
   </p>
   {% if person_step_panel.runner_can_answer and can_write %}
     <p class="hint">You can also answer this on the Test Runner window.</p>
+  {% endif %}
+
+  {% if person_step_panel.case_steps_label %}
+    <div class="person-step-covers">
+      <div class="label">Covers {{ person_step_panel.case_steps_label }}</div>
+      {% if person_step_panel.case_steps %}
+        <ul class="person-step-case-steps">
+          {% for case_step in person_step_panel.case_steps %}
+            <li>
+              <span class="person-step-case-step-text"><strong>{{ case_step.num }}.</strong> {{ case_step.text }}</span>
+              {% if case_step.expected %}
+                <span class="person-step-case-step-expected muted small">Expected: {{ case_step.expected }}</span>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </div>
   {% endif %}
 
   <div class="label">What to do</div>

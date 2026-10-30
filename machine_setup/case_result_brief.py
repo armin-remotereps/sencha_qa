@@ -64,6 +64,8 @@ class ResultPlanStep:
     carried_label: str
     # Its final attempt passed, so a redesign may carry it.
     carriable: bool
+    # "TestRail steps 3–5"; empty when the step names none.
+    case_steps_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -268,6 +270,8 @@ def _plan_sections(
         if step.carriable:
             state += ", can be carried"
         line = f"{num}. [{state}] {_cap(step.description, step_max)}"
+        if step.case_steps_label:
+            line += f" ({step.case_steps_label})"
         if step.expected_result.strip():
             line += f"\n   Expected: {_cap(step.expected_result, _EXPECTED_MAX)}"
         if step.carried_label:

@@ -26,6 +26,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, cast
 
+from agents.case_step_refs import lenient_case_step_refs, normalize_case_step_refs
 from agents.checkpoint import MAX_PLAN_REVISION_RECORDS
 from agents.exceptions import PlanRevisionInvalid
 from agents.timeout_bounds import TimeoutBounds, resolve_timeout_seconds
@@ -66,6 +67,8 @@ class PlanStepInput:
     expected_result: str
     raw_timeout: object
     carried_from: int | None
+    # The case's numbered steps this step covers, as sent (normalized later).
+    case_steps: object = ()
 
 
 @dataclass(frozen=True)
@@ -76,6 +79,7 @@ class RevisionStep:
     expected_result: str
     timeout_seconds: int
     carried_from: int | None
+    case_steps: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -211,7 +215,11 @@ def validate_plan_revision(
     bounds: TimeoutBounds,
     max_steps: int,
 ) -> ValidatedRevision:
-    """Check a proposed redesign; raises ``PlanRevisionInvalid`` (model-readable)."""
+    """Check a proposed redesign; raises ``PlanRevisionInvalid`` (model-readable).
+
+    Case step references never raise: bad ones are dropped, and a carried step
+    sent without any keeps those of the earlier step it is carried from.
+    """
     if not steps:
         raise PlanRevisionInvalid("The new plan has no steps.")
     if len(steps) > max_steps:
@@ -266,12 +274,18 @@ def validate_plan_revision(
             last_carried = carried
         else:
             in_prefix = False
+        case_steps = normalize_case_step_refs(
+            step.case_steps, checkpoint.case_step_count
+        )
+        if not case_steps and carried is not None:
+            case_steps = checkpoint.plan[carried - 1].case_steps
         validated.append(
             RevisionStep(
                 description=description,
                 expected_result=expected,
                 timeout_seconds=resolve_timeout_seconds(step.raw_timeout, bounds),
                 carried_from=carried,
+                case_steps=case_steps,
             )
         )
     if total_chars > MAX_TOTAL_TEXT_CHARS:
@@ -383,6 +397,7 @@ def apply_plan_revision(
                 description=step.description,
                 expected_result=step.expected_result,
                 timeout_seconds=step.timeout_seconds,
+                case_steps=step.case_steps,
             )
             for step in validated.steps
         ),
@@ -472,15 +487,19 @@ def attempt_origin_label(
 
 
 def revision_steps_to_json(steps: Sequence[RevisionStep]) -> list[dict[str, object]]:
-    return [
-        {
-            "description": step.description,
-            "expected_result": step.expected_result,
-            "timeout_seconds": step.timeout_seconds,
-            "carried_from": step.carried_from,
-        }
-        for step in steps
-    ]
+    return [_revision_step_to_json(step) for step in steps]
+
+
+def _revision_step_to_json(step: RevisionStep) -> dict[str, object]:
+    item: dict[str, object] = {
+        "description": step.description,
+        "expected_result": step.expected_result,
+        "timeout_seconds": step.timeout_seconds,
+        "carried_from": step.carried_from,
+    }
+    if step.case_steps:
+        item["case_steps"] = list(step.case_steps)
+    return item
 
 
 def revision_steps_from_json(value: object) -> tuple[RevisionStep, ...]:
@@ -506,6 +525,7 @@ def revision_steps_from_json(value: object) -> tuple[RevisionStep, ...]:
                     if isinstance(carried, int) and not isinstance(carried, bool)
                     else None
                 ),
+                case_steps=lenient_case_step_refs(item.get("case_steps")),
             )
         )
     return tuple(steps)
