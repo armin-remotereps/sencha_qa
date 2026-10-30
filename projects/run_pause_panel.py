@@ -1,7 +1,7 @@
 """The run page's view of a paused (or person-confirming) run: which banner
 shows, with what gates.
 
-The reopen gates (``list_reopen_blockers``) run once, only while the run is
+The wake gates (``list_wake_blockers``) run once, only while the run is
 PAUSED, and are shared by the person step panel, the help panel and the plain
 "Continue run" banner. The help panel is not loaded while a person step holds
 the run: the banner shows the person step then, and an earlier, resolved help
@@ -16,7 +16,7 @@ from projects.case_help_services import HelpPanel, get_help_panel
 from projects.case_help_state import RunHelpState, get_run_help_state
 from projects.models import Project, TestRun, TestRunStatus
 from projects.person_step_services import PersonStepPanel, get_person_step_panel
-from projects.run_reopen_services import list_reopen_blockers
+from projects.run_reopen_services import list_wake_blockers
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ def get_run_pause_panels(test_run: TestRun, project: Project) -> RunPausePanels:
     help panel as before, sharing the same gates.
     """
     paused = test_run.status == TestRunStatus.PAUSED
-    blockers = list_reopen_blockers(test_run, project) if paused else None
+    blockers = list_wake_blockers(test_run, project) if paused else None
     person_step_panel = get_person_step_panel(test_run, project, blockers=blockers)
     holds_run = person_step_panel is not None and person_step_panel.holds_run
     help_panel = (

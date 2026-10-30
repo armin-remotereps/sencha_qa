@@ -75,7 +75,7 @@ from projects.models import (
     TestRunTestCaseStatus,
 )
 from projects.run_reopen_services import (
-    list_reopen_blockers,
+    list_wake_blockers,
     lock_project_and_run,
     queue_pending_cases,
 )
@@ -202,7 +202,7 @@ def get_help_panel(
     """The help panel of a PAUSED run; None (no queries) for any other status.
 
     With ``pivot_id``, None unless the run's latest request is that case's.
-    ``blockers``: the run's reopen gates (``list_reopen_blockers``) when the
+    ``blockers``: the run's wake gates (``list_wake_blockers``) when the
     caller already computed them; computed here otherwise.
     """
     if test_run.status != TestRunStatus.PAUSED:
@@ -221,7 +221,7 @@ def get_help_panel(
         return None
     auto_fix_live = auto_fix_turn_live(request.pk)
     if blockers is None:
-        blockers = list_reopen_blockers(test_run, project)
+        blockers = list_wake_blockers(test_run, project)
     if auto_fix_live:
         # The live turn is this request's auto-fix: resolving the request
         # stops it, so it does not block the actions.
@@ -352,7 +352,7 @@ def continue_after_help(
         if person_turn_live(request.pk):
             raise RunHelpError(_AGENT_REPLYING)
         auto_fix_live = auto_fix_turn_live(request.pk)
-        blockers = list_reopen_blockers(test_run, project)
+        blockers = list_wake_blockers(test_run, project)
         if auto_fix_live:
             blockers = [b for b in blockers if b != MACHINE_SETUP_RUNNING_MESSAGE]
         if blockers:
