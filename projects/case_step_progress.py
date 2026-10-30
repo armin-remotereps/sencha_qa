@@ -24,6 +24,13 @@ from agents.types import (
 from projects.case_step_labels import format_case_steps_label
 from projects.models import TestRunTestCase, TestRunTestCaseStatus
 
+# A Needs re-test case marked from one of these verdicts shows its steps as
+# they were; marked from anything else, its cursor step reads as interrupted.
+_RETEST_KEPT_VERDICTS: tuple[str, ...] = (
+    TestRunTestCaseStatus.SUCCESS,
+    TestRunTestCaseStatus.FAILED,
+)
+
 # Caps on LLM text sent to the browser; the page has the full log for more.
 PAYLOAD_TEXT_LIMIT = 1000
 
@@ -203,8 +210,16 @@ def build_case_step_progress(
     checkpoint_data: object,
     case_status: str,
     segment_started_at: datetime | None,
+    *,
+    retest_from_status: str = "",
 ) -> CaseStepProgress | None:
-    """Rows for every planned step; ``None`` without a usable checkpoint."""
+    """Rows for every planned step; ``None`` without a usable checkpoint.
+
+    ``retest_from_status`` is the status a Needs re-test case was marked from
+    (`retest_from_status_of`): one marked from a Passed or Failed verdict shows
+    its steps as they were, one marked mid-run (or from Blocked) shows the step
+    it stopped at as interrupted.
+    """
     checkpoint = checkpoint_from_json(checkpoint_data)
     if checkpoint is None:
         return None
@@ -222,6 +237,9 @@ def build_case_step_progress(
     interrupted = case_status in (
         TestRunTestCaseStatus.BLOCKED,
         TestRunTestCaseStatus.CANCELLED,
+    ) or (
+        case_status == TestRunTestCaseStatus.NEEDS_RETEST
+        and retest_from_status not in _RETEST_KEPT_VERDICTS
     )
     cursor = checkpoint.next_step
     activity = _current_activity(checkpoint, segment_started_at) if running else None
@@ -555,12 +573,28 @@ def case_step_payload(
     checkpoint_data: object,
     case_status: str,
     segment_started_at: datetime | None,
+    *,
+    retest_from_status: str = "",
 ) -> StepProgressPayload:
     """Payload for a case straight from its stored checkpoint and status."""
     progress = build_case_step_progress(
-        checkpoint_data, case_status, segment_started_at
+        checkpoint_data,
+        case_status,
+        segment_started_at,
+        retest_from_status=retest_from_status,
     )
     return step_progress_payload(progress, planning=_is_planning(progress, case_status))
+
+
+def retest_from_status_of(pivot: TestRunTestCase) -> str:
+    """The status a Needs re-test case was marked from; "" for any other case.
+
+    Reads ``retest_from_status`` only for a Needs re-test case, so a pivot
+    loaded without that column costs no extra query unless it is marked.
+    """
+    if pivot.status != TestRunTestCaseStatus.NEEDS_RETEST:
+        return ""
+    return pivot.retest_from_status
 
 
 def pivot_step_payload(pivot: TestRunTestCase) -> StepProgressPayload:
@@ -569,6 +603,7 @@ def pivot_step_payload(pivot: TestRunTestCase) -> StepProgressPayload:
         pivot.execution_checkpoint,
         pivot.status,
         pivot.segment_started_at,
+        retest_from_status=retest_from_status_of(pivot),
     )
 
 
@@ -580,6 +615,7 @@ def case_step_view(
         pivot.execution_checkpoint,
         pivot.status,
         pivot.segment_started_at,
+        retest_from_status=retest_from_status_of(pivot),
     )
     payload = step_progress_payload(
         progress, planning=_is_planning(progress, pivot.status)

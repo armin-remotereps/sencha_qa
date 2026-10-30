@@ -51,6 +51,7 @@ class _DigestRun:
     passed: int
     failed: int
     blocked: int
+    needs_retest: int
     need_help: int
 
 
@@ -95,6 +96,9 @@ def _load_runs(run_ids: list[int]) -> list[_DigestRun]:
             passed=Count("id", filter=Q(status=TestRunTestCaseStatus.SUCCESS)),
             failed=Count("id", filter=Q(status=TestRunTestCaseStatus.FAILED)),
             blocked=Count("id", filter=Q(status=TestRunTestCaseStatus.BLOCKED)),
+            needs_retest=Count(
+                "id", filter=Q(status=TestRunTestCaseStatus.NEEDS_RETEST)
+            ),
             need_help=Count("id", filter=Q(status=TestRunTestCaseStatus.NEED_HELP)),
         )
     }
@@ -116,6 +120,7 @@ def _load_runs(run_ids: list[int]) -> list[_DigestRun]:
                 passed=int(row.get("passed", 0)),
                 failed=int(row.get("failed", 0)),
                 blocked=int(row.get("blocked", 0)),
+                needs_retest=int(row.get("needs_retest", 0)),
                 need_help=int(row.get("need_help", 0)),
             )
         )
@@ -141,13 +146,16 @@ def _recipients_by_project(project_ids: list[int]) -> dict[int, set[int]]:
     return by_user
 
 
-def _counts_label(passed: int, failed: int, blocked: int, need_help: int) -> str:
+def _counts_label(
+    passed: int, failed: int, blocked: int, needs_retest: int, need_help: int
+) -> str:
     parts = [
         f"{value} {label}"
         for value, label in (
             (passed, "passed"),
             (failed, "failed"),
             (blocked, "blocked"),
+            (needs_retest, "needs re-test" if needs_retest == 1 else "need re-test"),
             (need_help, "needs help" if need_help == 1 else "need help"),
         )
         if value > 0
@@ -161,14 +169,17 @@ def _build_message(
     passed = sum(run.passed for run in runs)
     failed = sum(run.failed for run in runs)
     blocked = sum(run.blocked for run in runs)
+    needs_retest = sum(run.needs_retest for run in runs)
     need_help = sum(run.need_help for run in runs)
     run_word = "run" if len(runs) == 1 else "runs"
     summary = f"{len(runs)} {run_word}, " + _counts_label(
-        passed, failed, blocked, need_help
+        passed, failed, blocked, needs_retest, need_help
     )
     lines = [
         f"{run.label}: "
-        f"{_counts_label(run.passed, run.failed, run.blocked, run.need_help)}"
+        + _counts_label(
+            run.passed, run.failed, run.blocked, run.needs_retest, run.need_help
+        )
         + (f" · {run.duration}" if run.duration else "")
         for run in runs
     ]
