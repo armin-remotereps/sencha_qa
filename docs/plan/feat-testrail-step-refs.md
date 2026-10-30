@@ -15,7 +15,7 @@ with existing checkpoints and redesigned plans. Older Test Runners must keep wor
 - Q1: numbers **and** the TestRail step text (plus its expected result), to cut
   back-and-forth between tester and PH. This replaces the "no protocol change"
   design below for the window: `CasePersonStep` stores the covered steps' texts
-  (`case_steps` = `[{num, text, expected}]`, ≤ 15 items, ≤ 1000 chars each,
+  (`case_steps` = `[{num, text, expected}]`, ≤ 50 items (15 on the wire), ≤ 1000 chars each,
   copied from the case when the step is handed out, in
   `services._pause_run_for_person` via `projects.case_step_refs.case_step_rows`)
   and their label (`case_steps_label`). Protocol 0.10.2 adds
@@ -428,3 +428,15 @@ After each wave, run `pre-commit run --all-files` (black, isort, mypy server +
 - 2026-10-30: created
 - 2026-10-30: answers recorded (Decisions); window gets a new wire field +
   capability + 0.10.2 instead of only the `step_label` suffix.
+- 2026-10-30: review round 1 fixes: CRLF steps (web form) normalised; the
+  TestRail/Case label source stored at plan time
+  (`OrchestratorCheckpoint.case_steps_testrail`, optional key) instead of read
+  from a possibly uncached `pivot.test_case`; label capped to 255; rows keep up
+  to 50 steps; no texts stored when the case's step count changed since
+  planning (stale guard); runner accepts any positive step number.
+- 2026-10-30: review round 2: a not-confirmed reopen keeps the row's stored
+  case steps and label. Accepted, not fixed: the stale guard compares only the
+  step count (a same-count reword mid-run shows the new text); a row rebuilt
+  without texts gives the Ask AI hand-off no numbers (its `step_label` still
+  has the label); the 15-item wire cap lists only the first 15 steps in the
+  window while the label names all.

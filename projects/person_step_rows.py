@@ -369,7 +369,8 @@ def open_person_step_row(
 
     A ``reported`` row of the same step means the agent could not confirm the
     report: the row is reused (``not_confirmed``, next round, the objection)
-    and pushed; it keeps its stored ``how_to``. A ``waiting`` or
+    and pushed; it keeps its stored ``how_to`` and case steps (the same plan
+    step, and a hand-off rebuilt from the row may have lost them). A ``waiting`` or
     ``not_confirmed`` row of the same step is a re-entry and is kept as it
     is. Any other open row is cancelled and a new row opened, pushed unless
     it plainly follows a step passed in this execution segment
@@ -407,8 +408,6 @@ def open_person_step_row(
         open_row.expected_result = expected
         open_row.command = command
         open_row.shell_label = shell_label
-        open_row.case_steps = case_steps
-        open_row.case_steps_label = case_steps_label
         open_row.requested_at = now
         open_row.save(
             update_fields=[
@@ -419,8 +418,6 @@ def open_person_step_row(
                 "expected_result",
                 "command",
                 "shell_label",
-                "case_steps",
-                "case_steps_label",
                 "requested_at",
             ]
         )
