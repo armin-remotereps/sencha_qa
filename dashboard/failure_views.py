@@ -3,7 +3,8 @@ actions and saved filter presets.
 
 Thin views: bind the forms with choices from the services, call a service,
 map domain errors to messages. Every query is scoped to the user's member,
-non-archived projects (``member_project_choices``), so a project or run id
+non-archived projects (``member_project_choices``, or with the writable ids
+``member_project_choices_and_writable_ids``), so a project or run id
 from another project is an invalid choice, and the bulk service re-resolves
 every selected id itself, against the writable projects only.
 """
@@ -46,7 +47,10 @@ from dashboard.forms import (
     FailedCasePresetForm,
 )
 from dashboard.services.export_throttle import check_export_throttle
-from dashboard.services.failed_case_bulk import apply_failed_case_bulk
+from dashboard.services.failed_case_bulk import (
+    apply_failed_case_bulk,
+    failed_case_sendable_ids,
+)
 from dashboard.services.failed_case_export import stream_failed_case_csv
 from dashboard.services.failed_case_filters import (
     FailedCaseFilters,
@@ -101,7 +105,9 @@ def _failures_redirect(query: str) -> HttpResponseRedirect:
 @login_required
 @require_safe
 def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
-    project_choices = member_project_choices(request.user)
+    project_choices, writable_ids = member_project_choices_and_writable_ids(
+        request.user
+    )
     project_ids = [project_id for project_id, _ in project_choices]
     form = _bind_filter_form(request.GET, project_choices)
     filters: FailedCaseFilters = form.to_filters()
@@ -110,6 +116,7 @@ def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
     per_page = parse_per_page(request)
     page_obj: Page[FailingCaseRow] | Page[TestRunTestCase]
     run_of_pivot: dict[int, int] = {}
+    sendable_ids: list[int] = []
     if view == FailedCaseView.BY_CASE:
         page_obj = list_failing_test_cases(
             project_ids, filters, page=page, per_page=per_page
@@ -119,6 +126,7 @@ def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
             project_ids, filters, page=page, per_page=per_page
         )
         run_of_pivot = {pivot.id: pivot.test_run_id for pivot in cases_page}
+        sendable_ids = failed_case_sendable_ids(cases_page, writable_ids)
         page_obj = cases_page
 
     filter_query = encode_filters(filters, view=view)
@@ -147,6 +155,7 @@ def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
         "bulk_form": FailedCaseBulkForm(initial={"return_query": filter_query}),
         "selectable_ids": list(run_of_pivot),
         "run_of_pivot": run_of_pivot,
+        "sendable_ids": sendable_ids,
         "active_nav": "failures",
     }
     return render(request, "dashboard/failed_cases.html", context)

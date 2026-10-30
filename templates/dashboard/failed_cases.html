@@ -16,7 +16,10 @@
      presets           — list[PresetItem]; preset_form — FailedCasePresetForm
      bulk_form         — FailedCaseBulkForm (initial return_query)
      selectable_ids    — pivot ids on this page (cases view; [] for by_case)
-     run_of_pivot      — {pivot id: run id} on this page (single-run Re-run gate) {% endcomment %}
+     run_of_pivot      — {pivot id: run id} on this page (single-run Re-run gate)
+     sendable_ids      — pivot ids on this page that Send to TestRail accepts now
+                         (sendable, writable project, TestRail configured;
+                         cases view only, [] for by_case) {% endcomment %}
 
 {% block title %}Failures · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 

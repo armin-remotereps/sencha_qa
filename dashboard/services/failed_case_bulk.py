@@ -10,7 +10,7 @@ others.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 from django.db import models
@@ -21,10 +21,14 @@ from dashboard.services.failed_case_filters import (
     failed_case_queryset,
 )
 from projects.exceptions import CheckedPushError, RunCaseCheckError, RunRerunError
-from projects.models import TestRun
+from projects.models import TestRun, TestRunTestCase
 from projects.run_case_check_services import check_run_cases, format_check_message
 from projects.run_rerun_services import format_rerun_message, rerun_test_run_cases
-from projects.testrail_checked_push_services import start_checked_push
+from projects.testrail_case_send_services import (
+    format_case_send_message,
+    is_case_sendable,
+    start_case_send,
+)
 from projects.testrail_services import TestRailNotConfiguredError
 
 # At most this many cases per bulk request (one page at the largest size).
@@ -42,7 +46,7 @@ _RERUN_ONE_RUN = (
 class BulkAction(models.TextChoices):
     CHECK = "check", "Check"
     RERUN = "rerun", "Re-run"
-    SEND = "send", "Send checked to TestRail"
+    SEND = "send", "Send to TestRail"
 
 
 @dataclass(frozen=True)
@@ -56,6 +60,27 @@ class BulkOutcome:
 
 def _run_label(test_run: TestRun) -> str:
     return f"{test_run.project.name} · {test_run.display_name}"
+
+
+def failed_case_sendable_ids(
+    pivots: Iterable[TestRunTestCase], writable_project_ids: Sequence[int]
+) -> list[int]:
+    """Ids of the listed rows that Send would accept now (no query).
+
+    ``pivots`` come from ``failed_case_list_queryset`` (project joined,
+    ``testrail_configured`` annotated); a row qualifies in a writable project
+    with TestRail settings when ``is_case_sendable``. Display only: the POST
+    re-checks everything under lock.
+    """
+    writable = set(writable_project_ids)
+    return [
+        pivot.id
+        for pivot in pivots
+        if pivot.test_run.project_id in writable
+        # Annotation of ``failed_case_list_queryset``, unknown to the stubs.
+        and bool(getattr(pivot, "testrail_configured", False))
+        and is_case_sendable(pivot)
+    ]
 
 
 def apply_failed_case_bulk(
@@ -74,8 +99,11 @@ def apply_failed_case_bulk(
     - check: ``check_run_cases`` per run;
     - rerun: only when every selected case is in one run; keeps the run's
       help mode;
-    - send: ``start_checked_push`` once per affected run, which sends every
-      checked, unsent case of that run (as the run page does).
+    - send: ``start_case_send`` once per affected run with only that run's
+      selected cases, also while the run is still running: it checks the
+      unchecked ones (by ``user``) and sends exactly those to the run's source
+      TestRail run. Each call owns its transaction and dispatches after its
+      commit, so this function must not run inside an outer transaction.
     """
     selected = set(pivot_ids)
     resolved = list(
@@ -118,8 +146,13 @@ def apply_failed_case_bulk(
                 )
                 message = format_rerun_message(rerun_outcome)
             else:
-                start_checked_push(test_run=test_run, links_base_url=links_base_url)
-                message = "Sending its checked results to TestRail…"
+                send_outcome = start_case_send(
+                    test_run=test_run,
+                    pivot_ids=run_pivot_ids,
+                    user=user,
+                    links_base_url=links_base_url,
+                )
+                message = format_case_send_message(send_outcome)
         except (
             RunCaseCheckError,
             RunRerunError,
