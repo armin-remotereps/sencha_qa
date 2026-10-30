@@ -24,7 +24,7 @@
     aria-describedby="refresh-case-desc"
   >
     <h3 id="refresh-case-title">Refresh <span x-text="label"></span> from TestRail?</h3>
-    <p id="refresh-case-desc">Replace this case's title, steps and other fields with the current version from TestRail. Local edits are lost, also in other cases of this project with the same TestRail ID. Runs that include this case, finished ones too, show the new text. A case still being run can't be refreshed until it has a result.</p>
+    <p id="refresh-case-desc">Replace this case's title, steps and other fields with the current version from TestRail. Local edits are lost, also in other cases of this project with the same TestRail ID. Runs that include this case, finished ones too, show the new text; a Resume continues the earlier plan, use Re-run to plan from the new text. A case still being run can't be refreshed until it has a result.</p>
     <form method="post" :action="'{% url 'projects:test_case_refresh_testrail' project.id 0 %}'.replace('/0/', '/' + caseId + '/')">
       {% csrf_token %}
       <input type="hidden" name="next" value="{{ next_url }}">

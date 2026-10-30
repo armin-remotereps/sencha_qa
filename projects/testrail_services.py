@@ -138,23 +138,27 @@ def build_testrail_client(
 
 
 def get_testrail_field_mapper(
-    project: Project, client: TestRailClient
+    project: Project, client: TestRailClient, case: TestRailCase
 ) -> TestRailFieldMapper:
     """Mapper from the case types and priorities, cached per project.
 
-    Fetches both vocabularies on a cache miss. Raises TestRailError.
+    Fetches both vocabularies on a cache miss, or when ``case`` uses a type or
+    priority the cached ones lack (added in TestRail since). Raises TestRailError.
     """
     key = testrail_vocab_cache_key(project.id)
     cached = cache.get(key)
     if isinstance(cached, dict):
         try:
-            return TestRailFieldMapper.from_vocabularies(
+            mapper = TestRailFieldMapper.from_vocabularies(
                 [TestRailCaseType(**item) for item in cached["types"]],
                 [TestRailPriority(**item) for item in cached["priorities"]],
             )
         except (KeyError, TypeError):
             # The cached shape can lag a deploy that changes the dataclasses.
             cache.delete(key)
+        else:
+            if _knows_vocabulary(mapper, case):
+                return mapper
     case_types = client.get_case_types()
     priorities = client.get_priorities()
     cache.set(
@@ -166,6 +170,12 @@ def get_testrail_field_mapper(
         TESTRAIL_VOCAB_CACHE_TTL,
     )
     return TestRailFieldMapper.from_vocabularies(case_types, priorities)
+
+
+def _knows_vocabulary(mapper: TestRailFieldMapper, case: TestRailCase) -> bool:
+    return (case.type_id is None or case.type_id in mapper.type_names) and (
+        case.priority_id is None or case.priority_id in mapper.priority_names
+    )
 
 
 @dataclass(frozen=True)

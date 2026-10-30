@@ -87,6 +87,9 @@ def refresh_test_case_from_testrail(
     Updates every case of the project with the same stored ``testrail_id``, as
     an import does. Refused while any of them is still being run (not finished
     in a Running or Needs-help run): its saved plan came from the old text.
+    The check runs again under the case row locks to narrow the window while
+    TestRail answers; run Start/Resume lock runs, not cases, so it is not a
+    full serialisation.
     Order fields and the source run are kept. Raises TestRailNotConfiguredError
     or a TestCaseRefreshError subclass; the message is safe to show.
     """
@@ -97,8 +100,8 @@ def refresh_test_case_from_testrail(
     siblings = TestCase.objects.filter(
         project=project, testrail_id=test_case.testrail_id
     )
-    _check_throttle(project.id)
     _ensure_not_running(siblings, label)
+    _check_throttle(project.id)
     remote, data = _fetch_case(project, case_id, label)
     with transaction.atomic():
         rows = list(siblings.select_for_update().order_by("pk"))
@@ -175,7 +178,7 @@ def _fetch_case(
     try:
         with build_testrail_client(project, max_rate_limit_retries=0) as client:
             remote = client.get_case(case_id)
-            mapper = get_testrail_field_mapper(project, client)
+            mapper = get_testrail_field_mapper(project, client, remote)
     except TestRailError as exc:
         logger.info(
             "TestRail refresh of a case in project %s failed with status %s",
