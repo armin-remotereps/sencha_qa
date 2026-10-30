@@ -14,6 +14,6 @@
 <a class="nav-link" href="{% url 'projects:list' %}"{% if active_nav == "projects" %} aria-current="page"{% endif %}>▣ Projects</a>
 <a class="nav-link" href="{% url 'dashboard:failed_cases' %}"{% if active_nav == "failures" %} aria-current="page"{% endif %}>✕ Failures</a>
 <a class="nav-link" href="{% url 'test_sessions:list' %}"{% if active_nav == "sessions" %} aria-current="page"{% endif %}>◷ Sessions{% if open_test_session %} <span class="badge badge-running">Live<span class="visually-hidden"> test session</span></span>{% endif %}</a>
-<a class="nav-link" href="{% url 'dashboard:machine_health' %}"{% if active_nav == "insights" %} aria-current="page"{% endif %}>◔ Insights</a>
+<a class="nav-link" href="{% url 'dashboard:leaderboard' %}"{% if active_nav == "insights" %} aria-current="page"{% endif %}>★ Leaderboard</a>
 <a class="nav-link" href="{% url 'notifications:settings' %}"{% if active_nav == "notifications" %} aria-current="page"{% endif %}>◉ Notifications</a>
 {% if is_superuser %}<a class="nav-link" href="{% url 'accounts:users' %}"{% if active_nav == "users" %} aria-current="page"{% endif %}>◎ Users</a>{% endif %}

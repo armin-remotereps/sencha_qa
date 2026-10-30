@@ -4308,3 +4308,245 @@ details.card[open] > summary,
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+
+/* --------------------------------------------------------------------------
+   Leaderboard (templates/dashboard/leaderboard.html + includes): podium with
+   #1 in the middle and taller on wide screens, medals, rank movement chips,
+   badges, the viewer's highlighted row and dimmed score-0 rows.
+   -------------------------------------------------------------------------- */
+
+.lb-podium {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.lb-podium-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-top-width: 4px;
+  border-radius: var(--radius);
+  padding: 18px 16px;
+}
+
+.lb-podium-card.lb-podium-gold {
+  border-top-color: var(--warning);
+  background: linear-gradient(180deg, var(--warning-soft), var(--surface) 60%);
+}
+
+.lb-podium-card.lb-podium-silver {
+  border-top-color: var(--text-muted);
+  background: linear-gradient(180deg, var(--surface-hover), var(--surface) 60%);
+}
+
+.lb-podium-card.lb-podium-bronze {
+  border-top-color: var(--brand-orange);
+  background: linear-gradient(180deg, var(--orange-soft), var(--surface) 60%);
+}
+
+.lb-podium-card.is-viewer {
+  box-shadow: 0 0 0 2px var(--brand-cyan);
+}
+
+.lb-podium-card .lb-medal {
+  font-size: 2.2rem;
+  line-height: 1;
+  margin-right: 0;
+}
+
+.lb-podium-rank {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.lb-podium-name {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.lb-podium-score {
+  font-size: 1.7rem;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+@media (min-width: 768px) {
+  .lb-podium {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: end;
+  }
+
+  .lb-podium-place-1 {
+    order: 2;
+    padding-top: 32px;
+    padding-bottom: 28px;
+  }
+
+  .lb-podium-place-1 .lb-medal {
+    font-size: 3rem;
+  }
+
+  .lb-podium-place-1 .lb-podium-score {
+    font-size: 2.2rem;
+  }
+
+  .lb-podium-place-2 {
+    order: 1;
+  }
+
+  .lb-podium-place-3 {
+    order: 3;
+  }
+}
+
+.lb-medal {
+  display: inline-block;
+  margin-right: 4px;
+  line-height: 1;
+}
+
+.lb-medal-gold,
+.lb-medal-silver,
+.lb-medal-bronze {
+  font-size: 1.15rem;
+}
+
+.lb-move {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--text-muted);
+  background: var(--surface-hover);
+}
+
+.lb-move-up {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.lb-move-down {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.lb-move-new {
+  color: var(--brand-cyan);
+  background: var(--cyan-soft);
+}
+
+.lb-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px;
+}
+
+.lb-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  margin: 1px 4px 1px 0;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 0.78rem;
+  font-weight: 650;
+  white-space: nowrap;
+  cursor: help;
+}
+
+.lb-badges .lb-badge {
+  margin: 0;
+}
+
+.lb-you {
+  color: var(--brand-cyan);
+  background: var(--cyan-soft);
+  border-color: color-mix(in srgb, var(--brand-cyan) 35%, transparent);
+}
+
+.leaderboard-table .lb-rank {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.leaderboard-table .lb-score {
+  font-weight: 700;
+  font-size: 1.05rem;
+  color: var(--brand-cyan);
+}
+
+.leaderboard-table td {
+  font-variant-numeric: tabular-nums;
+}
+
+.data-table tr.is-viewer {
+  background: var(--cyan-soft);
+  box-shadow: inset 3px 0 0 var(--brand-cyan);
+}
+
+.data-table tr.is-viewer:hover {
+  background: var(--cyan-soft);
+}
+
+.data-table tr.is-idle {
+  opacity: 0.55;
+}
+
+.data-table tr.is-idle .lb-score {
+  color: var(--text-muted);
+}
+
+.lb-your-position {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--brand-cyan) 35%, transparent);
+  background: var(--cyan-soft);
+  border-radius: var(--radius-sm);
+}
+
+.lb-your-position-rank {
+  font-size: 1.3rem;
+  font-weight: 700;
+  color: var(--brand-cyan);
+}
+
+.lb-footnotes > * + * {
+  margin-top: 10px;
+}
+
+.lb-footnotes p {
+  margin-bottom: 0;
+}
+
+.lb-points {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  max-width: 36ch;
+}
+
+.lb-points li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}

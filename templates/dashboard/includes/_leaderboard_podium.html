@@ -1,0 +1,22 @@
+{% comment %} Leaderboard podium: up to 3 cards, #1 in the middle and taller on wide
+   screens (CSS order on .lb-podium-place-N), stacked in rank order on phones.
+
+   Context contract:
+     podium — list of dashboard.leaderboard_types.LeaderboardRow (score > 0, ≤ 3,
+              in rank order) {% endcomment %}
+<ol class="lb-podium" aria-label="Top 3">
+  {% for row in podium %}
+    <li class="lb-podium-card lb-podium-place-{{ forloop.counter }}{% if row.medal %} lb-podium-{{ row.medal }}{% endif %}{% if row.is_viewer %} is-viewer{% endif %}">
+      <div class="lb-podium-medal">{% include "dashboard/includes/_leaderboard_medal.html" with row=row only %}</div>
+      <div class="lb-podium-rank">#{{ row.rank }}</div>
+      <div class="lb-podium-name">{{ row.name }}{% if row.is_viewer %} <span class="chip lb-you">You</span>{% endif %}</div>
+      <div class="lb-podium-score">{{ row.score }} <span class="muted small">pt{{ row.score|pluralize }}</span></div>
+      <div>{% include "dashboard/includes/_leaderboard_move.html" with row=row only %}</div>
+      {% if row.badges %}
+        <div class="lb-badges">
+          {% for badge in row.badges %}<span class="lb-badge" title="{{ badge.title }}">{{ badge.label }}</span>{% endfor %}
+        </div>
+      {% endif %}
+    </li>
+  {% endfor %}
+</ol>

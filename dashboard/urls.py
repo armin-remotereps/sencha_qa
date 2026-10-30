@@ -1,6 +1,6 @@
 from django.urls import URLPattern, path
 
-from dashboard import failure_views, health_views, views
+from dashboard import failure_views, health_views, leaderboard_views, views
 
 app_name = "dashboard"
 
@@ -20,5 +20,6 @@ urlpatterns: list[URLPattern] = [
         failure_views.preset_delete,
         name="preset_delete",
     ),
+    path("leaderboard/", leaderboard_views.leaderboard, name="leaderboard"),
     path("insights/machines/", health_views.machine_health, name="machine_health"),
 ]

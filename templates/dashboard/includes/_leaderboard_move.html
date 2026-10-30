@@ -1,0 +1,5 @@
+{% comment %} Rank movement chip of one leaderboard row: New, ▲n, ▼n or –.
+
+   Context contract:
+     row — dashboard.leaderboard_types.LeaderboardRow (is_new, movement) {% endcomment %}
+{% if row.is_new %}<span class="lb-move lb-move-new">New</span>{% elif row.movement and row.movement > 0 %}<span class="lb-move lb-move-up">▲{{ row.movement }}<span class="visually-hidden"> place{{ row.movement|pluralize }} up</span></span>{% elif row.movement and row.movement < 0 %}<span class="lb-move lb-move-down">▼{{ row.movement|cut:"-" }}<span class="visually-hidden"> place{{ row.movement|pluralize }} down</span></span>{% else %}<span class="lb-move">–<span class="visually-hidden"> no change</span></span>{% endif %}

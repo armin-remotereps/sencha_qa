@@ -1,0 +1,95 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Insights > Leaderboard: who finished the most test results, today or over
+   the last 7 days, across the viewer's projects or one of them. A podium of the
+   top 3, the full table, the viewer's own position, and how points work.
+   Period tabs are links built with {% querystring %} (needs the request context
+   processor) so they keep the other filters; the toolbar keeps the period in a
+   hidden field.
+
+   Context contract (dashboard/leaderboard_views.py):
+     form   — dashboard.leaderboard_forms.LeaderboardFilterForm
+              (GET: period [hidden], project, mode)
+     board  — dashboard.leaderboard_types.Leaderboard
+              (window, filters, rows, podium, viewer_row, unattributed_count, points)
+     active_nav — "insights" {% endcomment %}
+
+{% block title %}Leaderboard · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <h1>★ Leaderboard</h1>
+    <p class="subtitle">
+      {% if board.filters.period == "today" %}
+        Today since 00:00 {{ board.window.time_zone_name }}
+      {% else %}
+        Last 7 days, <time datetime="{{ board.window.start|date:"Y-m-d" }}">{{ board.window.start|date:"M j" }}</time> – <time datetime="{{ board.window.end|date:"Y-m-d" }}">{{ board.window.end|date:"M j, Y" }}</time>
+      {% endif %}
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-sm btn-secondary" href="{% url 'dashboard:machine_health' %}">◔ Machine health</a>
+  </div>
+</div>
+
+<nav class="tabs" aria-label="Leaderboard period">
+  <a class="tab" href="{% querystring period="today" %}"{% if board.filters.period == "today" %} aria-current="page"{% endif %}>Today</a>
+  <a class="tab" href="{% querystring period="7d" %}"{% if board.filters.period == "7d" %} aria-current="page"{% endif %}>Last 7 days</a>
+</nav>
+
+<form class="toolbar" action="{% url 'dashboard:leaderboard' %}" method="get" role="search">
+  {{ form.period }}
+  <div>
+    <label class="visually-hidden" for="{{ form.project.id_for_label }}">{{ form.project.label }}</label>
+    {{ form.project }}
+  </div>
+  <div>
+    <label class="visually-hidden" for="{{ form.mode.id_for_label }}">{{ form.mode.label }}</label>
+    {{ form.mode }}
+  </div>
+  <button type="submit" class="btn btn-sm btn-secondary">Apply</button>
+</form>
+
+<div class="stack">
+  {% if not board.podium %}
+    {% if board.filters.period == "today" %}
+      {% querystring period="7d" as week_url %}
+      {% include "partials/empty_state.html" with icon="★" title="No results yet today" body="Nobody has finished a test case, performed a step or resolved a help request today. Be the first on the board." secondary_label="See the last 7 days" secondary_url=week_url only %}
+    {% else %}
+      {% include "partials/empty_state.html" with icon="★" title="No results in the last 7 days" body="Nobody has finished a test case, performed a step or resolved a help request in the last 7 days. Results show here as soon as someone does." only %}
+    {% endif %}
+    {# Still list everyone: Need help now and Remaining are not windowed. #}
+    {% if board.rows %}
+      {% include "dashboard/includes/_leaderboard_table.html" with board=board only %}
+    {% endif %}
+  {% else %}
+    {% if board.viewer_row and board.viewer_row.rank > 10 %}
+      <div class="lb-your-position" role="status">
+        <span class="lb-your-position-rank">#{{ board.viewer_row.rank }}</span>
+        <span>Your position: <strong>{{ board.viewer_row.score }}</strong> point{{ board.viewer_row.score|pluralize }}{% if board.viewer_row.movement %}, {% if board.viewer_row.movement > 0 %}up {{ board.viewer_row.movement }}{% else %}down {{ board.viewer_row.movement|cut:"-" }}{% endif %} since the previous {% if board.filters.period == "today" %}day{% else %}7 days{% endif %}{% endif %}.</span>
+      </div>
+    {% endif %}
+
+    {% include "dashboard/includes/_leaderboard_podium.html" with podium=board.podium only %}
+    {% include "dashboard/includes/_leaderboard_table.html" with board=board only %}
+  {% endif %}
+
+  <section class="card lb-footnotes" aria-labelledby="lb-notes-h">
+    <h2 id="lb-notes-h" class="visually-hidden">Notes</h2>
+    {% if board.unattributed_count %}
+      <p class="muted small">{{ board.unattributed_count }} result{{ board.unattributed_count|pluralize }} in this period {{ board.unattributed_count|pluralize:"is,are" }} not credited to anyone listed above.</p>
+    {% endif %}
+    <details>
+      <summary>How points work</summary>
+      <ul class="lb-points">
+        {% for label, points in board.points %}
+          <li><span>{{ label }}</span> <strong>{{ points }} pt{{ points|pluralize }}</strong></li>
+        {% endfor %}
+      </ul>
+      <p class="muted small">Movement compares your rank with the previous {% if board.filters.period == "today" %}day at the same time{% else %}7 days{% endif %}.</p>
+    </details>
+    <p class="muted small">"All projects" totals include results in your teammates' other projects; those projects are not named here. Remaining counts cases without a verdict in Draft, Running and Needs-help runs of each person's projects.</p>
+  </section>
+</div>
+{% endblock %}
