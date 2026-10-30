@@ -35,10 +35,10 @@
   <button
     type="button"
     class="btn btn-sm btn-secondary"
-    :disabled="selected.filter((id) => sendable[id]).length === 0"
-    :title="selected.filter((id) => sendable[id]).length === 0 ? 'None of the selected cases can be sent: not in a writable project with TestRail settings, no source TestRail run, or already sent' : ''"
+    :disabled="sendableOf(selected).length === 0"
+    :title="sendableOf(selected).length === 0 ? 'None of the selected cases can be sent: not in a writable project with TestRail settings, no source TestRail run, or already sent' : ''"
     @click="$dispatch('open-failures-send')"
-    x-text="'Send to TestRail (' + selected.filter((id) => sendable[id]).length + ')'"
+    x-text="'Send to TestRail (' + sendableOf(selected).length + ')'"
   >Send to TestRail</button>
   <button type="button" class="btn btn-sm btn-ghost" @click="clear()">Clear</button>
 </div>
@@ -84,18 +84,18 @@
   @click.self="close()"
 >
   <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="failures-send-title" aria-describedby="failures-send-desc">
-    <h3 id="failures-send-title" x-text="'Send ' + (sendOnly || selected.filter((id) => sendable[id])).length + ((sendOnly || selected.filter((id) => sendable[id])).length === 1 ? ' failed case' : ' failed cases') + ' to TestRail?'">Send the failed cases to TestRail?</h3>
+    <h3 id="failures-send-title" x-text="'Send ' + (sendOnly || sendableOf(selected)).length + ((sendOnly || sendableOf(selected)).length === 1 ? ' failed case' : ' failed cases') + ' to TestRail?'">Send the failed cases to TestRail?</h3>
     <p id="failures-send-desc">This sends <strong>only these failed cases</strong> now, run by run, to the TestRail run each was imported from, also for runs still running. Cases that are not checked yet are marked checked by you. The failure screenshots are attached. Other cases of the same runs are not sent.</p>
     <form method="post" action="{% url 'dashboard:failed_cases_bulk' %}">
       {% csrf_token %}
       <input type="hidden" name="action" value="send">
       <input type="hidden" name="return_query" value="{{ filter_query }}">
-      <template x-for="id in (sendOnly || selected.filter((id) => sendable[id]))" :key="id">
+      <template x-for="id in (sendOnly || sendableOf(selected))" :key="id">
         <input type="hidden" name="pivot_ids" :value="id">
       </template>
       <div class="dialog-actions">
         <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
-        <button type="submit" class="btn btn-primary" :disabled="(sendOnly || selected.filter((id) => sendable[id])).length === 0">Send to TestRail</button>
+        <button type="submit" class="btn btn-primary" :disabled="(sendOnly || sendableOf(selected)).length === 0">Send to TestRail</button>
       </div>
     </form>
   </div>

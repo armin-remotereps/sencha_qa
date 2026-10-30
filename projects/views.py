@@ -180,7 +180,10 @@ from projects.services import (
     update_test_case,
 )
 from projects.tasks import refine_project_prompt_task
-from projects.testrail_case_send_services import CASE_SEND_STATUSES, is_case_sendable
+from projects.testrail_case_send_services import (
+    is_case_missing_source,
+    is_case_sendable,
+)
 from projects.testrail_checked_push_services import (
     get_checked_push_panel,
     get_source_run_url,
@@ -1070,9 +1073,7 @@ def test_run_case_detail(
             "can_send_testrail": testrail_configured and is_case_sendable(pivot),
             # A Failed case imported from a suite has no TestRail run to go to.
             "testrail_send_no_source": (
-                testrail_configured
-                and pivot.status in CASE_SEND_STATUSES
-                and pivot.testrail_source_run_id is None
+                testrail_configured and is_case_missing_source(pivot)
             ),
             "source_run_url": source_run_url,
             "can_resume": can_resume,

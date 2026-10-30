@@ -71,6 +71,12 @@ def is_case_sendable(pivot: TestRunTestCase) -> bool:
     )
 
 
+def is_case_missing_source(pivot: TestRunTestCase) -> bool:
+    """Whether a failed case can't be sent because it has no source TestRail
+    run (imported from a suite, not a run link); no query."""
+    return pivot.status in CASE_SEND_STATUSES and pivot.testrail_source_run_id is None
+
+
 def list_case_sendable_pivot_ids(test_run: TestRun) -> list[int]:
     """Pivot ids of `test_run` that can be sent now (1 query)."""
     return list(
@@ -103,6 +109,10 @@ def start_case_send(
     `RunNotFinishedError` (draft run), `CheckedPushInProgressError`,
     `NothingToSendError`, or `CheckedPushError` (broker unreachable).
     """
+    if transaction.get_connection().in_atomic_block:
+        # The task would be queued before the slot commits and then drop the
+        # send without an error (`get_checked_push_run` misses the slot).
+        raise RuntimeError("start_case_send must not run inside a transaction")
     if not test_run.project.has_testrail_settings:
         raise TestRailNotConfiguredError(TESTRAIL_NOT_CONFIGURED_MESSAGE)
     if test_run.status not in CASE_SEND_RUN_STATUSES:

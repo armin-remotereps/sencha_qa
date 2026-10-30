@@ -536,3 +536,4 @@ No test suite. Use a throwaway or dev database and a TestRail sandbox if availab
 
 - 2026-10-30: created (Draft).
 - 2026-10-30: user accepted every recommendation (Q1–Q9 as drafted); Ready, then In progress.
+- 2026-10-30: review pass 1 fixed: reopen blocker order kept as before (`_list_blockers`), Failures rows without a source run say why, `is_case_missing_source` moved to the service, the send view reuses the resolved project, `start_case_send` refuses inside an outer transaction, `sendableOf` getter on the Failures page. Not changed: `getattr` for the `testrail_configured` annotation (typed with `bool()` and commented, as the module already does for annotations); the case page Send is not disabled during a live send (no live run state there, Q6; the server refuses); a partly sent case is finished by the run-level Finish sending only (Risks).

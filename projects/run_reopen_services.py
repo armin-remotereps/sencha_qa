@@ -95,7 +95,7 @@ def list_reopen_blockers(test_run: TestRun, project: Project) -> list[str]:
     the review redesign re-run replace verdicts that a live send may be
     writing. Each caller checks the run status itself, with its own message.
     """
-    return list_wake_blockers(test_run, project) + list_testrail_push_blockers(test_run)
+    return _list_blockers(test_run, project, include_push=True)
 
 
 def list_wake_blockers(test_run: TestRun, project: Project) -> list[str]:
@@ -108,9 +108,17 @@ def list_wake_blockers(test_run: TestRun, project: Project) -> list[str]:
     with it. A path that changes a finished verdict must use
     `list_reopen_blockers` instead.
     """
+    return _list_blockers(test_run, project, include_push=False)
+
+
+def _list_blockers(
+    test_run: TestRun, project: Project, *, include_push: bool
+) -> list[str]:
     blockers: list[str] = []
     if _has_other_started_run(project.pk, test_run.pk):
         blockers.append(_OTHER_RUN_ACTIVE)
+    if include_push:
+        blockers.extend(list_testrail_push_blockers(test_run))
     machine_blocker = _machine_blocker(project)
     if machine_blocker:
         blockers.append(machine_blocker)

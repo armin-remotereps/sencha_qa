@@ -12,10 +12,11 @@
      filter_query   — for the bulk forms' return_query
 
    Scopes: the outer x-data holds `runOf`, `sendable` ({pivot id: true}) and
-   `sendOnly` (the ids of a per-row Send, null for the selection); the inner
+   `sendOnly` (the ids of a per-row Send, null for the selection) and
+   `sendableOf(ids)`; the inner
    `bulkSelect` (static/js/punk-hazard.js) holds the selection. The bulk bar
    and its dialogs live inside both. {% endcomment %}
-<div x-data="{ runOf: { {% for pivot_id, run_id in run_of_pivot.items %}{{ pivot_id }}: {{ run_id }}{% if not forloop.last %}, {% endif %}{% endfor %} }, sendable: { {% for pid in sendable_ids %}{{ pid }}: true{% if not forloop.last %}, {% endif %}{% endfor %} }, sendOnly: null }">
+<div x-data="{ runOf: { {% for pivot_id, run_id in run_of_pivot.items %}{{ pivot_id }}: {{ run_id }}{% if not forloop.last %}, {% endif %}{% endfor %} }, sendable: { {% for pid in sendable_ids %}{{ pid }}: true{% if not forloop.last %}, {% endif %}{% endfor %} }, sendOnly: null, sendableOf(ids) { return ids.filter((id) => this.sendable[id]); } }">
 <div x-data="bulkSelect([{% for pid in selectable_ids %}{{ pid }}{% if not forloop.last %},{% endif %}{% endfor %}])">
 <div class="card">
   <p class="hint">Select cases to mark them checked, re-run them (cases from one run) or send them to their TestRail run now, even while the run is still running. Send checks the cases it sends.</p>
@@ -63,6 +64,7 @@
             {% if pivot.testrail_source_result_id %}<span class="badge badge-passed">Sent{% if pivot.testrail_source_run_id %} to R{{ pivot.testrail_source_run_id }}{% endif %}</span>
             {% elif pivot.checked_at %}<span class="badge badge-passed">Checked</span>
             {% else %}<span class="muted">Not checked</span>{% endif %}
+            {% if not pivot.testrail_source_run_id and not pivot.testrail_source_result_id %}<span class="muted" title="Imported without a TestRail run link, so it can only go out with Push to TestRail after the run">Can't send: no TestRail run link</span>{% endif %}
             {% if pivot.id in sendable_ids %}<button type="button" class="btn btn-sm btn-secondary" @click="$dispatch('open-failures-send', { ids: [{{ pivot.id }}] })">Send</button>{% endif %}
           </td>
         </tr>

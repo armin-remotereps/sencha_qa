@@ -499,6 +499,7 @@ def test_run_cases_send_testrail(
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
         raise Http404
+    test_run.project = project
     target_url = _safe_next(
         request,
         request.POST.get("next", ""),
