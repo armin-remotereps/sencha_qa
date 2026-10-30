@@ -779,6 +779,12 @@ class TestRailRunImportForm(forms.Form):
     next = forms.CharField(required=False, max_length=2000, widget=forms.HiddenInput)
 
 
+class TestCaseRefreshForm(forms.Form):
+    """Refresh one test case from TestRail; ``next`` is checked same-host."""
+
+    next = forms.CharField(required=False, max_length=2000, widget=forms.HiddenInput)
+
+
 class ContextRestoreForm(forms.Form):
     """Restore one application context version; ``next`` is checked same-host."""
 

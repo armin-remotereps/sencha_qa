@@ -9,12 +9,17 @@ from django.views.decorators.http import require_POST
 
 from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
-from projects.exceptions import CheckedPushError, TestRailRunImportError
+from projects.exceptions import (
+    CheckedPushError,
+    TestCaseRefreshError,
+    TestRailRunImportError,
+)
 from projects.forms import (
     ProjectMemberInviteForm,
     ProjectMemberRoleForm,
     ProjectRunModeForm,
     RunCaseSelectionForm,
+    TestCaseRefreshForm,
     TestRailImportStartForm,
     TestRailPushStartForm,
     TestRailRunImportForm,
@@ -25,7 +30,11 @@ from projects.forms import (
 from projects.models import Project, RunHelpMode, TestRun
 from projects.project_access import get_request_project_access
 from projects.project_member_services import list_project_members
-from projects.services import get_test_run_for_project
+from projects.services import get_test_case_for_project, get_test_run_for_project
+from projects.testrail_case_refresh_services import (
+    format_refresh_message,
+    refresh_test_case_from_testrail,
+)
 from projects.testrail_case_send_services import (
     format_case_send_message,
     list_case_sendable_pivot_ids,
@@ -320,6 +329,35 @@ def testrail_run_import(
         return redirect(target_url)
 
     messages.success(request, f"Importing {upload.original_filename}.")
+    return redirect(target_url)
+
+
+@project_membership_required
+@require_POST
+def test_case_refresh_testrail(
+    request: AuthenticatedRequest, project: Project, test_case_id: int
+) -> HttpResponse:
+    """Overwrite one test case with its current version from TestRail."""
+    test_case = get_test_case_for_project(test_case_id, project)
+    if test_case is None:
+        raise Http404("Test case not found")
+    form = TestCaseRefreshForm(request.POST)
+    form.is_valid()
+    target_url = _safe_next(
+        request,
+        form.cleaned_data.get("next", ""),
+        reverse("projects:test_case_list", args=[project.id]),
+    )
+    try:
+        outcome = refresh_test_case_from_testrail(project=project, test_case=test_case)
+    except (TestRailNotConfiguredError, TestCaseRefreshError) as exc:
+        messages.error(request, exc.message)
+        return redirect(target_url)
+
+    if outcome.changed_fields:
+        messages.success(request, format_refresh_message(outcome))
+    else:
+        messages.info(request, format_refresh_message(outcome))
     return redirect(target_url)
 
 
