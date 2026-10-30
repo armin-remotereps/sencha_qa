@@ -59,6 +59,8 @@ class PlanStep:
     status_label: str = ""
     # Person brief only: its final attempt passed, so it may be carried.
     carriable: bool = False
+    # "TestRail steps 3–5"; empty when the step names none.
+    case_steps_label: str = ""
 
 
 @dataclass(frozen=True)
@@ -313,7 +315,10 @@ def _auto_fix_plan_block(plan: tuple[PlanStep, ...], step_num: int) -> str:
             state = "needs help"
         else:
             state = "not run yet"
-        lines.append(f"{index}. [{state}] {_cap(item.description, _PLAN_STEP_MAX)}")
+        lines.append(
+            f"{index}. [{state}] {_cap(item.description, _PLAN_STEP_MAX)}"
+            + _case_steps_suffix(item.case_steps_label)
+        )
     return _block("TESTER'S PLAN", "\n".join(lines))
 
 
@@ -329,10 +334,19 @@ def _person_plan_block(
         if item.carriable:
             state += ", can be carried"
         line = f"{index}. [{state}] {_cap(item.description, step_max)}"
+        line += _case_steps_suffix(item.case_steps_label)
         if item.expected_result.strip():
             line += f"\n   Expected: {_cap(item.expected_result, expected_max)}"
         lines.append(line)
     return _block("TESTER'S PLAN (each step with its status)", "\n".join(lines))
+
+
+def _case_steps_suffix(label: str) -> str:
+    """The plan line's case steps label in parentheses, or nothing.
+
+    Lets a redesign carry the numbers over.
+    """
+    return f" ({label})" if label else ""
 
 
 def _carriable_block(plan: tuple[PlanStep, ...]) -> str:

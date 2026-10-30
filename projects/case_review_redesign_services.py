@@ -286,6 +286,7 @@ def rerun_with_redesigned_plan(
                         expected_result=step.expected_result,
                         raw_timeout=step.timeout_seconds,
                         carried_from=step.carried_from,
+                        case_steps=step.case_steps,
                     )
                     for step in revision_steps_from_json(revision.steps)
                 ],
