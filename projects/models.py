@@ -475,6 +475,8 @@ class TestCase(models.Model):
     testrail_position = models.PositiveIntegerField(null=True, blank=True)
     # The TestRail run this case was last imported from with a run link.
     testrail_source_run_id = models.PositiveIntegerField(null=True, blank=True)
+    # That run's TestRail test for this case (tests/view/<id>); set with it.
+    testrail_source_test_id = models.PositiveIntegerField(null=True, blank=True)
     title = models.CharField(max_length=500)
     template = models.CharField(max_length=100, default="Test Case")
     type = models.CharField(

@@ -85,6 +85,8 @@ class TestRailCase:
     display_order: int | None
     # Set by get_case/get_cases; tests from get_tests carry no suite.
     suite_id: int | None
+    # The run's test this case came from; set by get_tests only.
+    test_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -157,12 +159,13 @@ def _parse_case(raw: dict[str, Any]) -> TestRailCase:  # raw JSON case object
 def _parse_test_as_case(
     raw: dict[str, Any],  # raw JSON test object; carries its case's fields
 ) -> TestRailCase:
-    return _case_from_fields(int(raw["case_id"]), raw)
+    return _case_from_fields(int(raw["case_id"]), raw, test_id=int(raw["id"]))
 
 
 def _case_from_fields(
     case_id: int,
     raw: dict[str, Any],  # raw JSON case or test object
+    test_id: int | None = None,
 ) -> TestRailCase:
     return TestRailCase(
         id=case_id,
@@ -179,6 +182,7 @@ def _case_from_fields(
         section_id=_order_int(raw.get("section_id")),
         display_order=_order_int(raw.get("display_order")),
         suite_id=_order_int(raw.get("suite_id")),
+        test_id=test_id,
     )
 
 
