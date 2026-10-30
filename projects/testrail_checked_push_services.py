@@ -98,10 +98,11 @@ CHECKED_PUSH_INTERRUPTED_MESSAGE = (
 )
 
 _FINISHED_STATUSES = (TestRunStatus.DONE, TestRunStatus.CANCELLED)
-_NOT_CONFIGURED_MESSAGE = (
+TESTRAIL_NOT_CONFIGURED_MESSAGE = (
     "TestRail is not configured for this project. "
     "Add the URL, email and API key under Settings."
 )
+_RUN_NOT_FINISHED_MESSAGE = "Only finished runs can send checked results to TestRail."
 _DISPATCH_FAILED_MESSAGE = (
     "Could not start sending to TestRail: the background worker is unreachable."
 )
@@ -380,7 +381,7 @@ def _stale_push_q(now: datetime) -> Q:
     )
 
 
-def _fail_stale_push(test_run: TestRun) -> None:
+def fail_stale_checked_push(test_run: TestRun) -> None:
     """Turn an interrupted (stale) PUSHING into FAILED (one conditional UPDATE)."""
     now = timezone.now()
     if not is_checked_push_stale(test_run, now):
@@ -400,20 +401,28 @@ def _fail_stale_push(test_run: TestRun) -> None:
         _broadcast_checked_push(test_run)
 
 
-def _take_push_slot(test_run: TestRun) -> str:
+def take_checked_push_slot(
+    test_run: TestRun,
+    *,
+    run_statuses: Sequence[str],
+    run_status_message: str = _RUN_NOT_FINISHED_MESSAGE,
+) -> str:
     """Mark the run PUSHING unless a live send holds it (one conditional UPDATE).
 
     Returns the slot token (the ISO `testrail_source_push_started_at`) that
     the task must present. A PUSHING status older than the task's hard limit
     plus a minute belongs to a killed worker and may be taken over. The run
-    must still be finished: a concurrent reset (WAITING) wins.
+    must still be in one of `run_statuses`: a concurrent reset (WAITING) wins,
+    and `RunNotFinishedError(run_status_message)` is raised. Inside a
+    transaction the UPDATE locks the run row until commit, so callers that
+    also lock pivots keep the order run -> pivots.
     """
     now = timezone.now()
     free_or_stale = ~Q(
         testrail_source_push_status=TestRailPushStatus.PUSHING
     ) | _stale_push_q(now)
     taken = (
-        TestRun.objects.filter(pk=test_run.pk, status__in=_FINISHED_STATUSES)
+        TestRun.objects.filter(pk=test_run.pk, status__in=run_statuses)
         .filter(free_or_stale)
         .update(
             testrail_source_push_status=TestRailPushStatus.PUSHING,
@@ -423,12 +432,8 @@ def _take_push_slot(test_run: TestRun) -> str:
         )
     )
     if not taken:
-        if not TestRun.objects.filter(
-            pk=test_run.pk, status__in=_FINISHED_STATUSES
-        ).exists():
-            raise RunNotFinishedError(
-                "Only finished runs can send checked results to TestRail."
-            )
+        if not TestRun.objects.filter(pk=test_run.pk, status__in=run_statuses).exists():
+            raise RunNotFinishedError(run_status_message)
         raise CheckedPushInProgressError(
             "Checked results are already being sent to TestRail."
         )
@@ -438,32 +443,52 @@ def _take_push_slot(test_run: TestRun) -> str:
     return now.isoformat()
 
 
-def start_checked_push(*, test_run: TestRun, links_base_url: str) -> None:
-    """Validate, take the PUSHING slot, broadcast and dispatch the Celery task.
+def dispatch_checked_push(
+    test_run: TestRun,
+    *,
+    links_base_url: str,
+    slot_token: str,
+    pivot_ids: Sequence[int] | None,
+) -> None:
+    """Broadcast PUSHING and queue the send task for a slot already taken.
 
-    Raises a `CheckedPushError` subclass or `TestRailNotConfiguredError`.
+    Call it after the slot's transaction committed, so the task can see the
+    slot. `pivot_ids` limits the send to those cases; None sends every
+    checked case (the task is then queued with its original three arguments).
+    On a broker error the slot is released (FAILED) and `CheckedPushError`
+    raised.
     """
-    if test_run.status not in _FINISHED_STATUSES:
-        raise RunNotFinishedError(
-            "Only finished runs can send checked results to TestRail."
-        )
-    if not test_run.project.has_testrail_settings:
-        raise TestRailNotConfiguredError(_NOT_CONFIGURED_MESSAGE)
-    _fail_stale_push(test_run)
-    if not _has_pending(test_run):
-        raise NothingToSendError(
-            "No checked case is waiting to be sent to a source TestRail run."
-        )
-    slot_token = _take_push_slot(test_run)
     _broadcast_checked_push(test_run)
+    args: list[object] = [test_run.id, links_base_url, slot_token]
+    if pivot_ids is not None:
+        args.append(list(pivot_ids))
     try:
-        celery_app.send_task(
-            CHECKED_PUSH_TASK, args=[test_run.id, links_base_url, slot_token]
-        )
+        celery_app.send_task(CHECKED_PUSH_TASK, args=args)
     except Exception as exc:
         # Broker unreachable: release the slot so the next attempt can start.
         mark_checked_push_failed(test_run, _DISPATCH_FAILED_MESSAGE)
         raise CheckedPushError(_DISPATCH_FAILED_MESSAGE) from exc
+
+
+def start_checked_push(*, test_run: TestRun, links_base_url: str) -> None:
+    """Validate, take the PUSHING slot, broadcast and dispatch the Celery task.
+
+    Sends every checked case of a finished run that still has something to
+    send. Raises a `CheckedPushError` subclass or `TestRailNotConfiguredError`.
+    """
+    if test_run.status not in _FINISHED_STATUSES:
+        raise RunNotFinishedError(_RUN_NOT_FINISHED_MESSAGE)
+    if not test_run.project.has_testrail_settings:
+        raise TestRailNotConfiguredError(TESTRAIL_NOT_CONFIGURED_MESSAGE)
+    fail_stale_checked_push(test_run)
+    if not _has_pending(test_run):
+        raise NothingToSendError(
+            "No checked case is waiting to be sent to a source TestRail run."
+        )
+    slot_token = take_checked_push_slot(test_run, run_statuses=_FINISHED_STATUSES)
+    dispatch_checked_push(
+        test_run, links_base_url=links_base_url, slot_token=slot_token, pivot_ids=None
+    )
 
 
 def get_checked_push_run(test_run_id: int, slot_token: str) -> TestRun | None:
@@ -646,18 +671,23 @@ _PLAN_PIVOT_FIELDS = (
 
 
 def plan_checked_push(
-    test_run: TestRun, *, links_base_url: str
+    test_run: TestRun,
+    *,
+    links_base_url: str,
+    pivot_ids: Sequence[int] | None = None,
 ) -> tuple[list[PlannedCheckedResult], CheckedPushSkips]:
     """Plan every checked pivot that still has something to send (2 queries).
 
-    Pivots an earlier send skipped (`testrail_source_skip_reason`) are left
-    out until unchecked. Only the fields the plan reads are loaded (no logs,
-    no test case body).
+    `pivot_ids` limits the plan to those pivots (a case send); None plans the
+    whole run. Pivots an earlier send skipped (`testrail_source_skip_reason`)
+    and pivots unchecked since dispatch are left out. Only the fields the
+    plan reads are loaded (no logs, no test case body).
     """
+    scope = Q(checked_at__isnull=False, testrail_source_skip_reason="")
+    if pivot_ids is not None:
+        scope &= Q(id__in=list(pivot_ids))
     pivots = (
-        test_run.pivot_entries.filter(
-            checked_at__isnull=False, testrail_source_skip_reason=""
-        )
+        test_run.pivot_entries.filter(scope)
         .select_related("test_case", "checked_by")
         .only(*_PLAN_PIVOT_FIELDS)
         .prefetch_related(
@@ -873,15 +903,23 @@ def _send_group(
 
 
 def push_checked_results(
-    test_run: TestRun, *, links_base_url: str
+    test_run: TestRun,
+    *,
+    links_base_url: str,
+    pivot_ids: Sequence[int] | None = None,
 ) -> CheckedPushOutcome:
     """Send every checked, unsent result to its source run. Called by the task.
+
+    `pivot_ids` limits the send to those pivots (a case send); None sends
+    every checked case of the run.
 
     Raises TestRailError / TestRailNotConfiguredError; the task stamps the run
     as failed. Everything recorded before the error survives, so a re-send
     resumes without duplicate results or attachments.
     """
-    planned, skips = plan_checked_push(test_run, links_base_url=links_base_url)
+    planned, skips = plan_checked_push(
+        test_run, links_base_url=links_base_url, pivot_ids=pivot_ids
+    )
     outcome = CheckedPushOutcome(
         already_sent=skips.already_sent,
         no_source=skips.no_source,
