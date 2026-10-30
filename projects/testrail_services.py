@@ -21,9 +21,12 @@ from projects.models import (
 from projects.secrets import SecretDecryptionError, decrypt_secret, encrypt_secret
 from projects.testrail_case_order import rank_testrail_cases
 from projects.testrail_client import (
+    TESTRAIL_MAX_RATE_LIMIT_RETRIES,
     TestRailCase,
+    TestRailCaseType,
     TestRailClient,
     TestRailError,
+    TestRailPriority,
     TestRailProject,
     TestRailSuite,
 )
@@ -33,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 TESTRAIL_PROJECTS_CACHE_TTL = 300
 TESTRAIL_PROJECTS_ERROR_CACHE_TTL = 60
+TESTRAIL_VOCAB_CACHE_TTL = 3600
 _API_KEY_HINT_LENGTH = 3
 
 
@@ -52,9 +56,14 @@ def testrail_projects_error_cache_key(project_id: int) -> str:
     return f"testrail_projects_error:{project_id}"
 
 
+def testrail_vocab_cache_key(project_id: int) -> str:
+    return f"testrail_vocab:{project_id}"
+
+
 def _invalidate_picker_cache(project: Project) -> None:
     cache.delete(testrail_projects_cache_key(project.id))
     cache.delete(testrail_projects_error_cache_key(project.id))
+    cache.delete(testrail_vocab_cache_key(project.id))
 
 
 # ============================================================================
@@ -110,15 +119,53 @@ def get_testrail_api_key_hint(project: Project) -> str:
     return _decrypt_api_key(project)[-_API_KEY_HINT_LENGTH:]
 
 
-def build_testrail_client(project: Project) -> TestRailClient:
+def build_testrail_client(
+    project: Project,
+    *,
+    max_rate_limit_retries: int = TESTRAIL_MAX_RATE_LIMIT_RETRIES,
+) -> TestRailClient:
     api_key = _decrypt_api_key(project)
     if not (project.testrail_url and project.testrail_email and api_key):
         raise TestRailNotConfiguredError(
             "TestRail is not configured for this project. Add the URL, email and API key under Settings."
         )
     return TestRailClient(
-        url=project.testrail_url, email=project.testrail_email, api_key=api_key
+        url=project.testrail_url,
+        email=project.testrail_email,
+        api_key=api_key,
+        max_rate_limit_retries=max_rate_limit_retries,
     )
+
+
+def get_testrail_field_mapper(
+    project: Project, client: TestRailClient
+) -> TestRailFieldMapper:
+    """Mapper from the case types and priorities, cached per project.
+
+    Fetches both vocabularies on a cache miss. Raises TestRailError.
+    """
+    key = testrail_vocab_cache_key(project.id)
+    cached = cache.get(key)
+    if isinstance(cached, dict):
+        try:
+            return TestRailFieldMapper.from_vocabularies(
+                [TestRailCaseType(**item) for item in cached["types"]],
+                [TestRailPriority(**item) for item in cached["priorities"]],
+            )
+        except (KeyError, TypeError):
+            # The cached shape can lag a deploy that changes the dataclasses.
+            cache.delete(key)
+    case_types = client.get_case_types()
+    priorities = client.get_priorities()
+    cache.set(
+        key,
+        {
+            "types": [asdict(item) for item in case_types],
+            "priorities": [asdict(item) for item in priorities],
+        },
+        TESTRAIL_VOCAB_CACHE_TTL,
+    )
+    return TestRailFieldMapper.from_vocabularies(case_types, priorities)
 
 
 @dataclass(frozen=True)
@@ -340,7 +387,7 @@ class TestRailUpsertCounts:
     updated: int
 
 
-_UPSERT_FIELDS = (
+TESTRAIL_CASE_FIELDS = (
     "title",
     "template",
     "type",
@@ -354,7 +401,8 @@ _UPSERT_FIELDS = (
 _ORDER_FIELDS = ("testrail_suite_id", "testrail_position")
 
 
-def _apply_data(test_case: TestCase, data: TestCaseData) -> None:
+def apply_testrail_case_data(test_case: TestCase, data: TestCaseData) -> None:
+    """Write the TESTRAIL_CASE_FIELDS of ``data``; imports and refresh share it."""
     test_case.title = data.title
     test_case.template = data.template
     test_case.type = data.type
@@ -387,7 +435,7 @@ def _new_test_case(
         testrail_id=data.testrail_id,
         testrail_source_run_id=source_run_id,
     )
-    _apply_data(test_case, data)
+    apply_testrail_case_data(test_case, data)
     return test_case
 
 
@@ -421,13 +469,13 @@ def _upsert_batch(
             continue
         updated += 1
         for test_case in matches:
-            _apply_data(test_case, data)
+            apply_testrail_case_data(test_case, data)
             _apply_order(test_case, suite_id, position)
             if source_run_id is not None:
                 test_case.testrail_source_run_id = source_run_id
             to_update.append(test_case)
 
-    update_fields = [*_UPSERT_FIELDS, *_ORDER_FIELDS, "updated_at"]
+    update_fields = [*TESTRAIL_CASE_FIELDS, *_ORDER_FIELDS, "updated_at"]
     if source_run_id is not None:
         update_fields.append("testrail_source_run_id")
     with transaction.atomic():
