@@ -34,6 +34,7 @@ from agents.types import (
 from controller_client.protocol import ClientCapability
 from notifications.services.inbox_broadcast import broadcast_project_attention_changed
 from projects.case_result_text import person_label
+from projects.case_step_refs import CaseStepText, stored_case_steps
 from projects.exceptions import PersonStepError, RunHelpError
 from projects.models import (
     ACTIVE_RUN_STATUSES,
@@ -114,6 +115,10 @@ class PersonStepPanel:
     reporter_label: str
     # The model-written "How to do it" items (commands are AI suggestions).
     how_to: tuple[PersonHowToItem, ...]
+    # "TestRail steps 3–5" / "Case step 2"; "" when the step covers none.
+    case_steps_label: str
+    # The covered case steps with their texts (from the row; no query).
+    case_steps: tuple[CaseStepText, ...]
     # The step has a command to run (case-stated or suggested): the report
     # form asks for the pasted output.
     has_commands: bool
@@ -225,6 +230,8 @@ def get_person_step_panel(
         reported_at_runner=step.reported_via == PersonStepChannel.RUNNER,
         reporter_label=person_label(step.reported_by),
         how_to=how_to,
+        case_steps_label=step.case_steps_label,
+        case_steps=stored_case_steps(step.case_steps),
         has_commands=bool(step.command) or any(item.command for item in how_to),
         questions=ask.questions,
         can_ask=ask.can_ask,
@@ -549,6 +556,7 @@ def _checkpoint_person(
             command=step.command,
             objection=step.agent_objection,
             how_to=stored_how_to(step.how_to),
+            case_steps=tuple(item.num for item in stored_case_steps(step.case_steps)),
         ),
         request_id=step.pk,
         state="waiting",
