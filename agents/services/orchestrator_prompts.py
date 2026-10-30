@@ -58,6 +58,7 @@ def build_plan_system_prompt(
     *,
     min_timeout_seconds: int,
     max_timeout_seconds: int,
+    case_step_count: int = 0,
 ) -> str:
     prompt = (
         "You are a QA test orchestrator. Your job is to turn a test case into the "
@@ -129,10 +130,26 @@ def build_plan_system_prompt(
         "- Do NOT include verification-only sub-tasks unless the test case explicitly requires "
         "checking something after an action. Instead, include verification in the expected_result "
         "of the action sub-task.\n"
-        f"{_build_timeout_rule(min_timeout_seconds, max_timeout_seconds)}\n"
+        f"{_build_timeout_rule(min_timeout_seconds, max_timeout_seconds)}"
+    )
+    # Only a case with numbered steps gets the rule; without it the prompt
+    # stays exactly as it was.
+    if case_step_count > 0:
+        prompt += (
+            f"- CASE STEP REFERENCES: the test case's Steps are numbered 1 to "
+            f"{case_step_count}. Give every sub-task `case_steps`: the numbers of "
+            "the case steps it performs or checks (one sub-task usually covers "
+            "several, e.g. [3, 4, 5]). Use [] for preconditions and implicit steps "
+            f"you added. Never invent numbers outside 1..{case_step_count}.\n"
+        )
+        output_item = '"timeout_seconds": N, "case_steps": [n, ...]}, ...]}'
+    else:
+        output_item = '"timeout_seconds": N}, ...]}'
+    prompt += (
+        "\n"
         "OUTPUT FORMAT — respond with ONLY this JSON, no other text:\n"
         '{"sub_tasks": [{"description": "...", "expected_result": "...", '
-        '"timeout_seconds": N}, ...]}'
+        f"{output_item}"
     )
     return prompt
 

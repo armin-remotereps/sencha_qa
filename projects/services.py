@@ -102,7 +102,10 @@ from projects.case_step_progress import (
     case_step_payload,
     pivot_step_payload,
 )
-from projects.case_task_text import build_task_description
+from projects.case_task_text import (
+    build_task_description,
+    numbered_case_step_count,
+)
 from projects.case_teardown_policy import needs_teardown
 from projects.checked_push_limits import is_checked_push_live
 from projects.controller_outage_clock import agent_monotonic, reset_outage_clock
@@ -3121,6 +3124,7 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         on_log = _build_log_callback(pivot, generation)
         on_screenshot = _build_screenshot_callback(pivot, generation)
         task_description = build_task_description(pivot.test_case)
+        case_step_count = numbered_case_step_count(pivot.test_case)
 
         project.refresh_from_db(
             fields=["project_prompt", "application_url", "application_platform"]
@@ -3146,6 +3150,7 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
                     on_saved=checkpoint_saved_hook,
                 ),
                 person_mode=_build_person_mode_check(run_id),
+                case_step_count=case_step_count,
             )
             # Once a Resume or Start took the run over, the pivot belongs to
             # the newer chain: this worker records nothing (here and below).
