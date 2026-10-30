@@ -102,6 +102,7 @@ from projects.case_step_progress import (
     case_step_payload,
     pivot_step_payload,
 )
+from projects.case_step_refs import case_step_rows, case_steps_label
 from projects.case_task_text import (
     build_task_description,
     numbered_case_step_count,
@@ -3643,6 +3644,8 @@ def _pause_run_for_person(
             pivot.pk,
             hand_off,
             shell_label=shell_label,
+            case_steps=case_step_rows(pivot.test_case, hand_off.case_steps),
+            case_steps_label=case_steps_label(pivot.test_case, hand_off.case_steps),
             segment_started_at=segment_started_at,
             now=now,
         )

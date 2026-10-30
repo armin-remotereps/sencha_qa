@@ -360,6 +360,8 @@ def open_person_step_row(
     hand_off: PersonStepHandOff,
     *,
     shell_label: str,
+    case_steps: list[dict[str, object]],
+    case_steps_label: str,
     segment_started_at: datetime | None,
     now: datetime,
 ) -> tuple[CasePersonStep, bool]:
@@ -371,7 +373,9 @@ def open_person_step_row(
     ``not_confirmed`` row of the same step is a re-entry and is kept as it
     is. Any other open row is cancelled and a new row opened, pushed unless
     it plainly follows a step passed in this execution segment
-    (``segment_started_at``). The caller holds the run lock.
+    (``segment_started_at``). ``case_steps`` / ``case_steps_label`` are the
+    test case steps the hand-off covers (``projects.case_step_refs``). The
+    caller holds the run lock.
     """
     instruction = cap_text(hand_off.instruction, PERSON_STEP_INSTRUCTION_MAX_LENGTH)
     expected = cap_text(hand_off.expected_result, PERSON_STEP_EXPECTED_MAX_LENGTH)
@@ -403,7 +407,8 @@ def open_person_step_row(
         open_row.expected_result = expected
         open_row.command = command
         open_row.shell_label = shell_label
-        open_row.case_steps = list(hand_off.case_steps)
+        open_row.case_steps = case_steps
+        open_row.case_steps_label = case_steps_label
         open_row.requested_at = now
         open_row.save(
             update_fields=[
@@ -415,6 +420,7 @@ def open_person_step_row(
                 "command",
                 "shell_label",
                 "case_steps",
+                "case_steps_label",
                 "requested_at",
             ]
         )
@@ -436,7 +442,8 @@ def open_person_step_row(
         command=command,
         shell_label=shell_label,
         how_to=how_to_rows(hand_off.how_to),
-        case_steps=list(hand_off.case_steps),
+        case_steps=case_steps,
+        case_steps_label=case_steps_label,
         agent_objection=cap_text(hand_off.objection, PERSON_STEP_AGENT_TEXT_MAX_LENGTH),
     )
     return row, push

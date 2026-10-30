@@ -1004,6 +1004,10 @@ PERSON_STEP_AGENT_TEXT_MAX_LENGTH = 1000
 PERSON_STEP_HOW_TO_MAX_ITEMS = 8
 PERSON_STEP_HOW_TO_TEXT_MAX_LENGTH = 400
 PERSON_STEP_HOW_TO_COMMAND_MAX_LENGTH = 500
+# Test case steps a person step covers: restated in controller_client.protocol
+# (PERSON_STEP_CASE_STEPS_MAX_ITEMS, PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS).
+PERSON_STEP_CASE_STEPS_MAX_ITEMS = 15
+PERSON_STEP_CASE_STEP_TEXT_MAX_LENGTH = 1000
 PERSON_STEP_QUESTION_MAX_LENGTH = 1000
 PERSON_STEP_ANSWER_MAX_LENGTH = 4000
 PERSON_STEP_QUESTIONS_PER_STEP = 20
@@ -1103,9 +1107,13 @@ class CasePersonStep(models.Model):
     # (commands are AI suggestions, not case-stated), capped by the
     # ``PERSON_STEP_HOW_TO_*`` constants; shown escaped.
     how_to = models.JSONField(default=list, blank=True)
-    # The 1-based numbered test case steps the plan step covers (a list of
-    # ints, from the hand-off); empty for restores and older rows.
+    # The numbered test case steps the plan step covers, as
+    # ``[{"num", "text", "expected"}]`` copied from the case when the step was
+    # handed out (``projects.case_step_refs.case_step_rows``, capped), and
+    # their label ("TestRail steps 3–5"); empty for restores, free-text cases
+    # and older rows. Shown escaped.
     case_steps = models.JSONField(default=list, blank=True)
+    case_steps_label = models.CharField(max_length=255, blank=True, default="")
     status = models.CharField(
         max_length=16,
         choices=PersonStepStatus.choices,
