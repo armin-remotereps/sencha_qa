@@ -403,6 +403,7 @@ def open_person_step_row(
         open_row.expected_result = expected
         open_row.command = command
         open_row.shell_label = shell_label
+        open_row.case_steps = list(hand_off.case_steps)
         open_row.requested_at = now
         open_row.save(
             update_fields=[
@@ -413,6 +414,7 @@ def open_person_step_row(
                 "expected_result",
                 "command",
                 "shell_label",
+                "case_steps",
                 "requested_at",
             ]
         )
@@ -434,6 +436,7 @@ def open_person_step_row(
         command=command,
         shell_label=shell_label,
         how_to=how_to_rows(hand_off.how_to),
+        case_steps=list(hand_off.case_steps),
         agent_objection=cap_text(hand_off.objection, PERSON_STEP_AGENT_TEXT_MAX_LENGTH),
     )
     return row, push

@@ -1103,6 +1103,9 @@ class CasePersonStep(models.Model):
     # (commands are AI suggestions, not case-stated), capped by the
     # ``PERSON_STEP_HOW_TO_*`` constants; shown escaped.
     how_to = models.JSONField(default=list, blank=True)
+    # The 1-based numbered test case steps the plan step covers (a list of
+    # ints, from the hand-off); empty for restores and older rows.
+    case_steps = models.JSONField(default=list, blank=True)
     status = models.CharField(
         max_length=16,
         choices=PersonStepStatus.choices,
