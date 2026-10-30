@@ -19,7 +19,11 @@ from django.db import transaction
 from django.utils import timezone
 
 from auto_tester.celery import app as celery_app
-from projects.case_step_progress import build_case_step_progress
+from projects.case_result_text import person_label
+from projects.case_step_progress import (
+    build_case_step_progress,
+    retest_from_status_of,
+)
 from projects.models import (
     Project,
     TestRailPushStatus,
@@ -99,21 +103,38 @@ class _PivotPlanOutcome:
 
 
 def pivot_result_text(pivot: TestRunTestCase) -> str:
-    """The result text for the comment; blocked cases lead with their reason."""
+    """The result text for the comment.
+
+    Blocked cases lead with their reason; Needs re-test cases with who marked
+    them and their note ("Marked for re-test by <name>: <note>"), then the
+    earlier result. Load ``retest_marked_by`` with ``select_related``.
+    """
     if pivot.status == TestRunTestCaseStatus.BLOCKED:
         return format_blocked_result_text(
             pivot.get_blocked_reason_display(), pivot.result
         )
+    if pivot.status == TestRunTestCaseStatus.NEEDS_RETEST:
+        person = person_label(pivot.retest_marked_by)
+        lead = f"Marked for re-test by {person}" if person else "Marked for re-test"
+        note = pivot.retest_note.strip()
+        if note:
+            lead = f"{lead}: {note}"
+        result = pivot.result.strip()
+        return f"{lead}\n\n{result}" if result else lead
     return pivot.result
 
 
 def pivot_step_breakdown(pivot: TestRunTestCase) -> str:
     """The agent's step list for the comment; empty without a checkpoint.
 
-    Reads only ``execution_checkpoint``, ``status`` and ``segment_started_at``.
+    Reads only ``execution_checkpoint``, ``status`` and ``segment_started_at``,
+    plus ``retest_from_status`` for a Needs re-test case.
     """
     progress = build_case_step_progress(
-        pivot.execution_checkpoint, pivot.status, pivot.segment_started_at
+        pivot.execution_checkpoint,
+        pivot.status,
+        pivot.segment_started_at,
+        retest_from_status=retest_from_status_of(pivot),
     )
     return format_step_breakdown(progress) if progress is not None else ""
 
@@ -154,9 +175,9 @@ def _is_changed(result: PlannedResult) -> bool:
 
 def plan_testrail_push(test_run: TestRun) -> TestRailPushPlan:
     """Build the push plan for a run: one query over its pivots and cases."""
-    pivots = test_run.pivot_entries.select_related("test_case").order_by(
-        *RUN_CASE_ORDERING
-    )
+    pivots = test_run.pivot_entries.select_related(
+        "test_case", "retest_marked_by"
+    ).order_by(*RUN_CASE_ORDERING)
     outcomes = [_plan_pivot(pivot, test_run=test_run) for pivot in pivots]
     results = [outcome.planned for outcome in outcomes if outcome.planned is not None]
     return TestRailPushPlan(

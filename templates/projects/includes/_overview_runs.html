@@ -35,7 +35,7 @@
                 </time>
               </td>
               <td data-label="Result">
-                {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count blocked_count=run.blocked_count only %}
+                {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count blocked_count=run.blocked_count retest_count=run.retest_count only %}
               </td>
               <td data-label="Cases">{{ run.case_count }}</td>
             </tr>

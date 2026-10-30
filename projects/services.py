@@ -127,6 +127,7 @@ from projects.models import (
     ACTIVE_RUN_STATUSES,
     HELP_REQUEST_TEXT_MAX_LENGTH,
     OPEN_PERSON_STEP_STATUSES,
+    RETEST_CLEARED,
     WRITABLE_ROLES,
     ApplicationPlatform,
     BlockedReason,
@@ -384,7 +385,7 @@ def list_projects_for_user(
 
 
 def get_latest_runs_by_project(projects: Iterable[Project]) -> dict[int, TestRun]:
-    """Fetch each project's latest run, with pass/fail/blocked counts, in one query.
+    """Fetch each project's latest run with its outcome counts, in one query.
 
     `projects` must come from a queryset annotated with `latest_run_id`
     (see `list_projects_for_user`); the result is keyed by `project_id`.
@@ -409,6 +410,10 @@ def get_latest_runs_by_project(projects: Iterable[Project]) -> dict[int, TestRun
         blocked_count=Count(
             "pivot_entries",
             filter=Q(pivot_entries__status=TestRunTestCaseStatus.BLOCKED),
+        ),
+        retest_count=Count(
+            "pivot_entries",
+            filter=Q(pivot_entries__status=TestRunTestCaseStatus.NEEDS_RETEST),
         ),
     )
     return {run.project_id: run for run in runs}
@@ -535,7 +540,7 @@ RECENT_RUNS_LIMIT = 5
 
 
 def _annotate_run_counts(qs: QuerySet[TestRun]) -> QuerySet[TestRun]:
-    """Annotate a `TestRun` queryset with its case/success/failure/blocked counts.
+    """Annotate a `TestRun` queryset with its case and outcome counts.
 
     Shared by `list_test_runs_for_project` and `get_project_overview` so
     both surfaces report the same numbers from the same query shape.
@@ -555,6 +560,10 @@ def _annotate_run_counts(qs: QuerySet[TestRun]) -> QuerySet[TestRun]:
         blocked_count=Count(
             "pivot_entries",
             filter=Q(pivot_entries__status=TestRunTestCaseStatus.BLOCKED),
+        ),
+        retest_count=Count(
+            "pivot_entries",
+            filter=Q(pivot_entries__status=TestRunTestCaseStatus.NEEDS_RETEST),
         ),
         avg_case_duration=Avg(
             "pivot_entries__active_duration",
@@ -2356,7 +2365,7 @@ def get_test_run_case_detail(pivot_id: int, project: Project) -> TestRunTestCase
     try:
         return (
             TestRunTestCase.objects.select_related(
-                "test_run", "test_case", "checked_by"
+                "test_run", "test_case", "checked_by", "retest_marked_by"
             )
             .prefetch_related(
                 Prefetch(
@@ -2374,17 +2383,20 @@ def get_test_run_case_detail(pivot_id: int, project: Project) -> TestRunTestCase
 def list_test_run_cases(
     *, test_run: TestRun, page: int, per_page: int
 ) -> Page[TestRunTestCase]:
-    """List a run's cases: failed, then blocked, then the rest.
+    """List a run's cases: failed, then blocked, then needs re-test, then the rest.
 
     TestRail order within each group.
     """
     qs = (
-        test_run.pivot_entries.select_related("test_case", "checked_by")
+        test_run.pivot_entries.select_related(
+            "test_case", "checked_by", "retest_marked_by"
+        )
         .annotate(
             _failure_priority=Case(
                 When(status=TestRunTestCaseStatus.FAILED, then=0),
                 When(status=TestRunTestCaseStatus.BLOCKED, then=1),
-                default=2,
+                When(status=TestRunTestCaseStatus.NEEDS_RETEST, then=2),
+                default=3,
                 output_field=IntegerField(),
             )
         )
@@ -2457,8 +2469,11 @@ def reset_test_run(test_run: TestRun) -> None:
         pivot.testrail_source_attachment_count = 0
         pivot.testrail_source_skip_reason = ""
         pivot.execution_checkpoint = {}
+        for field, value in RETEST_CLEARED.items():
+            setattr(pivot, field, value)
         pivot.save(
             update_fields=[
+                *RETEST_CLEARED,
                 "status",
                 "blocked_reason",
                 "result",
@@ -2628,6 +2643,7 @@ def get_test_run_summary(test_run: TestRun) -> dict[str, int]:
         failed=Count("id", filter=Q(status=TestRunTestCaseStatus.FAILED)),
         blocked=Count("id", filter=Q(status=TestRunTestCaseStatus.BLOCKED)),
         cancelled=Count("id", filter=Q(status=TestRunTestCaseStatus.CANCELLED)),
+        needs_retest=Count("id", filter=Q(status=TestRunTestCaseStatus.NEEDS_RETEST)),
         need_help=Count("id", filter=Q(status=TestRunTestCaseStatus.NEED_HELP)),
         awaiting_person=Count(
             "id", filter=Q(status=TestRunTestCaseStatus.AWAITING_PERSON)
@@ -2722,11 +2738,28 @@ def list_blocked_case_titles(test_run: TestRun) -> list[str]:
     )
 
 
+def list_retest_case_titles(test_run: TestRun) -> list[str]:
+    """First Needs re-test case titles of a run, for the "What happened" summary."""
+    return list(
+        test_run.pivot_entries.filter(status=TestRunTestCaseStatus.NEEDS_RETEST)
+        .order_by(*RUN_CASE_ORDERING)
+        .values_list("test_case__title", flat=True)[:NARRATIVE_TITLE_LIMIT]
+    )
+
+
+def _finished_case_count(summary: dict[str, int]) -> int:
+    """Cases with a settled outcome, a person's Needs re-test mark included."""
+    return (
+        summary.get("success", 0)
+        + summary.get("failed", 0)
+        + summary.get("blocked", 0)
+        + summary.get("needs_retest", 0)
+    )
+
+
 def _build_narrative_for_active_run(test_run: TestRun, summary: dict[str, int]) -> str:
     total = summary.get("total", 0)
-    finished = (
-        summary.get("success", 0) + summary.get("failed", 0) + summary.get("blocked", 0)
-    )
+    finished = _finished_case_count(summary)
     if test_run.status == TestRunStatus.CANCELLED:
         return f"Run cancelled after {finished} of {total} cases finished."
     if test_run.status == TestRunStatus.PAUSED:
@@ -2745,7 +2778,10 @@ def _build_narrative_for_active_run(test_run: TestRun, summary: dict[str, int]) 
 
 
 def _build_narrative_for_finished_run(
-    summary: dict[str, int], failed_titles: list[str], blocked_titles: list[str]
+    summary: dict[str, int],
+    failed_titles: list[str],
+    blocked_titles: list[str],
+    retest_titles: list[str],
 ) -> str:
     total = summary.get("total", 0)
     success = summary.get("success", 0)
@@ -2768,6 +2804,14 @@ def _build_narrative_for_finished_run(
         )
     elif blocked_count:
         sentence += f" {blocked_count} blocked (not judged)."
+    retest_count = summary.get("needs_retest", 0)
+    if retest_count and retest_titles:
+        sentence += (
+            f" {retest_count} need re-test: "
+            f"{_join_titles(retest_titles, retest_count)}."
+        )
+    elif retest_count:
+        sentence += f" {retest_count} need re-test."
     return sentence
 
 
@@ -2776,15 +2820,22 @@ def build_run_narrative(
     summary: dict[str, int],
     failed_titles: list[str],
     blocked_titles: list[str],
+    retest_titles: Sequence[str] = (),
 ) -> str:
-    """Build the deterministic "What happened" sentence for a run's page."""
+    """Build the deterministic "What happened" sentence for a run's page.
+
+    ``retest_titles``: `list_retest_case_titles`, queried only when the
+    summary counts Needs re-test cases.
+    """
     if test_run.status == TestRunStatus.WAITING:
         return (
             f"{summary.get('total', 0)} cases selected. This run has not started yet."
         )
     if test_run.status in (*ACTIVE_RUN_STATUSES, TestRunStatus.CANCELLED):
         return _build_narrative_for_active_run(test_run, summary)
-    return _build_narrative_for_finished_run(summary, failed_titles, blocked_titles)
+    return _build_narrative_for_finished_run(
+        summary, failed_titles, blocked_titles, list(retest_titles)
+    )
 
 
 # ============================================================================
@@ -3014,9 +3065,21 @@ def fetch_test_case_state(
 # ============================================================================
 
 
-def _build_cancellation_check(test_run_id: int, generation: int) -> Callable[[], bool]:
-    """True once the run is cancelled, or resumed/restarted by a newer chain."""
+def _build_cancellation_check(
+    test_run_id: int, generation: int, pivot_id: int | None = None
+) -> Callable[[], bool]:
+    """True once the run is cancelled, or resumed/restarted by a newer chain,
+    or (with ``pivot_id``) a person marked that case Needs re-test; still one
+    query per poll."""
     stopped = Q(status=TestRunStatus.CANCELLED) | ~Q(execution_generation=generation)
+    if pivot_id is not None:
+        stopped |= Q(
+            Exists(
+                TestRunTestCase.objects.filter(
+                    pk=pivot_id, status=TestRunTestCaseStatus.NEEDS_RETEST
+                )
+            )
+        )
 
     def _is_cancelled() -> bool:
         return TestRun.objects.filter(stopped, pk=test_run_id).exists()
@@ -3083,7 +3146,7 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
 
     project = pivot.test_run.project
     run_id = pivot.test_run.id
-    cancellation_check = _build_cancellation_check(run_id, generation)
+    cancellation_check = _build_cancellation_check(run_id, generation, pivot.pk)
     # A worker shutdown (BaseException) must not start an agent on its way out.
     allow_teardown = True
     # A case paused for help (or for a person's step, Human in the loop) keeps
@@ -3109,7 +3172,12 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         and 1 < resume.next_step <= len(resume.plan)
         else None
     )
-    _mark_pivot_in_progress(pivot)
+    if not _mark_pivot_in_progress(pivot):
+        # Marked Needs re-test before it was picked up: skip it, but a
+        # skipped last case still finishes the run.
+        logger.info("Skipping pivot %d marked for re-test", pivot_id)
+        _update_test_run_status_if_needed(pivot.test_run, generation=generation)
+        return
 
     try:
         wait_for_controller(project.id)
@@ -3180,20 +3248,24 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
                 settle_person_steps(
                     pivot.pk, load_resume_checkpoint(pivot), abandoned="all"
                 )
-                _finalize_pivot(pivot, result)
-                # Only the agent's verdict notifies; the entry point re-checks
-                # the generation, since _finalize_pivot holds no run lock.
-                if pivot.status == TestRunTestCaseStatus.FAILED:
+                # Only the agent's verdict notifies, and only when it was
+                # written (not after a re-test mark or an abort); the entry
+                # point re-checks the generation, since _finalize_pivot holds
+                # no run lock.
+                if (
+                    _finalize_pivot(pivot, result)
+                    and pivot.status == TestRunTestCaseStatus.FAILED
+                ):
                     notify_case_failed(pivot.pk, generation=generation)
             break
     except (AgentCancelledError, ControllerNotConnectedError):
         # Inside a case, wait_for_controller only reports "not connected" once
-        # the run is no longer STARTED, i.e. it was aborted.
-        logger.info("Test run cancelled for pivot %d", pivot_id)
+        # the run is no longer STARTED, i.e. it was aborted. A cancel can also
+        # be this case's Needs re-test mark: the run goes on, so the mark is
+        # kept, no teardown runs (not Failed) and the chain continues below.
+        logger.info("Pivot %d cancelled", pivot_id)
         if not _is_stale_execution(run_id, generation):
-            pivot.refresh_from_db()
-            if pivot.status != TestRunTestCaseStatus.CANCELLED:
-                _mark_pivot_cancelled(pivot)
+            _cancel_pivot_if_in_progress(pivot)
     except ControllerReconnectTimeoutError as exc:
         # The runner stayed away past the grace period: ask for help instead of
         # cancelling the run, so the remaining cases continue once it is back.
@@ -3230,7 +3302,9 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
                 pivot,
                 project,
                 generation=generation,
-                cancellation_check=cancellation_check,
+                # Run-level only: a re-test mark during the teardown of a
+                # Failed verdict must not leave its apps open.
+                cancellation_check=_build_cancellation_check(run_id, generation),
                 run_case_teardown=run_case_teardown,
             )
         if not _is_stale_execution(run_id, generation):
@@ -3276,7 +3350,7 @@ def _pause_case_after_fault(
     test_run.refresh_from_db(fields=["status"])
     if test_run.status == TestRunStatus.CANCELLED:
         logger.info("Test run cancelled for pivot %d (%r)", pivot.id, exc)
-        _mark_pivot_cancelled(pivot)
+        _cancel_pivot_if_in_progress(pivot)
         return False
 
     reason = classify_case_fault(exc)
@@ -3321,12 +3395,29 @@ def _fetch_pivot(pivot_id: int) -> TestRunTestCase:
     )
 
 
-def _mark_pivot_in_progress(pivot: TestRunTestCase) -> None:
-    pivot.status = TestRunTestCaseStatus.IN_PROGRESS
-    # Keeps the first start and the time of earlier segments (Continue, Resume).
-    open_case_segment(pivot, timezone.now())
-    pivot.save(update_fields=["status", *CASE_SEGMENT_OPEN_FIELDS, "updated_at"])
+def _mark_pivot_in_progress(pivot: TestRunTestCase) -> bool:
+    """Start the case; False (nothing written) when it is marked Needs re-test.
 
+    The case row is locked, so a mark that committed after the worker read the
+    case is still seen; a mark that comes later stops the case at its next
+    cancellation check.
+    """
+    with transaction.atomic():
+        locked_status = (
+            TestRunTestCase.objects.select_for_update()
+            .values_list("status", flat=True)
+            .get(pk=pivot.pk)
+        )
+        if locked_status == TestRunTestCaseStatus.NEEDS_RETEST:
+            pivot.status = TestRunTestCaseStatus.NEEDS_RETEST
+            return False
+        pivot.status = TestRunTestCaseStatus.IN_PROGRESS
+        # Keeps the first start and the time of earlier segments (Continue,
+        # Resume).
+        open_case_segment(pivot, timezone.now())
+        pivot.save(update_fields=["status", *CASE_SEGMENT_OPEN_FIELDS, "updated_at"])
+
+    # Outside the case lock: markers lock the run before the case.
     test_run = pivot.test_run
     status_changed = False
     if test_run.status == TestRunStatus.WAITING:
@@ -3339,6 +3430,7 @@ def _mark_pivot_in_progress(pivot: TestRunTestCase) -> None:
     _broadcast_pivot_status_to_case(pivot)
     if status_changed:
         broadcast_test_run_status(test_run)
+    return True
 
 
 def _build_log_callback(
@@ -3418,26 +3510,51 @@ def _persist_screenshot(
     _broadcast_screenshot(pivot, screenshot)
 
 
-def _finalize_pivot(pivot: TestRunTestCase, result: AgentResult) -> None:
-    if result.stop_reason == AgentStopReason.CANCELLED:
-        pivot.status = TestRunTestCaseStatus.CANCELLED
-    elif result.stop_reason == AgentStopReason.TASK_COMPLETE:
-        pivot.status = TestRunTestCaseStatus.SUCCESS
-    else:
-        pivot.status = TestRunTestCaseStatus.FAILED
-        pivot.failed_by = FailedBy.AGENT
+def _finalize_pivot(pivot: TestRunTestCase, result: AgentResult) -> bool:
+    """Write the agent's verdict; True when it did.
 
-    now = timezone.now()
-    pivot.result = _extract_agent_summary(result)
-    pivot.finished_at = now
-    pivot.save(
-        update_fields=["status", "result", "finished_at", "failed_by", "updated_at"]
-    )
-    # The segment ends at the verdict; the teardown that follows is not counted.
-    close_case_segment(pivot.pk, now)
+    Only while the locked case is still In progress: a person's Needs re-test
+    mark or the run's abort that landed first is kept.
+    """
+    with transaction.atomic():
+        locked_status = (
+            TestRunTestCase.objects.select_for_update()
+            .values_list("status", flat=True)
+            .get(pk=pivot.pk)
+        )
+        if locked_status != TestRunTestCaseStatus.IN_PROGRESS:
+            logger.info(
+                "Verdict for pivot %d dropped: it is %s", pivot.pk, locked_status
+            )
+            pivot.status = locked_status
+            return False
+        if result.stop_reason == AgentStopReason.CANCELLED:
+            pivot.status = TestRunTestCaseStatus.CANCELLED
+        elif result.stop_reason == AgentStopReason.TASK_COMPLETE:
+            pivot.status = TestRunTestCaseStatus.SUCCESS
+        else:
+            pivot.status = TestRunTestCaseStatus.FAILED
+            pivot.failed_by = FailedBy.AGENT
+
+        now = timezone.now()
+        pivot.result = _extract_agent_summary(result)
+        pivot.finished_at = now
+        pivot.save(
+            update_fields=[
+                "status",
+                "result",
+                "finished_at",
+                "failed_by",
+                "updated_at",
+            ]
+        )
+        # The segment ends at the verdict; the teardown that follows is not
+        # counted.
+        close_case_segment(pivot.pk, now)
     pivot.segment_started_at = None
     _broadcast_pivot_status_to_run(pivot)
     _broadcast_pivot_status_to_case(pivot)
+    return True
 
 
 _HELP_FALLBACK_ASK = "Check the test machine, then continue the case."
@@ -3752,6 +3869,27 @@ def _extract_agent_summary(result: AgentResult) -> str:
         if message.role == "assistant" and isinstance(message.content, str):
             return message.content
     return result.error or ""
+
+
+def _cancel_pivot_if_in_progress(pivot: TestRunTestCase) -> None:
+    """Cancel the worker's own case, only while it is still In progress.
+
+    One conditional UPDATE: a Needs re-test mark (or an abort, or a verdict)
+    that landed first is never overwritten. The segment close is idempotent,
+    so a marker that already closed it adds nothing.
+    """
+    now = timezone.now()
+    cancelled = TestRunTestCase.objects.filter(
+        pk=pivot.pk, status=TestRunTestCaseStatus.IN_PROGRESS
+    ).update(status=TestRunTestCaseStatus.CANCELLED, finished_at=now, updated_at=now)
+    if not cancelled:
+        return
+    close_case_segment(pivot.pk, now)
+    pivot.status = TestRunTestCaseStatus.CANCELLED
+    pivot.finished_at = now
+    pivot.segment_started_at = None
+    _broadcast_pivot_status_to_run(pivot)
+    _broadcast_pivot_status_to_case(pivot)
 
 
 def _mark_pivot_cancelled(pivot: TestRunTestCase) -> None:

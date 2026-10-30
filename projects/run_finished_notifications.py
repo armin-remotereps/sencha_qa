@@ -33,6 +33,7 @@ class _RunCaseCounts:
     passed: int
     failed: int
     blocked: int
+    needs_retest: int
     cancelled: int
 
 
@@ -41,12 +42,14 @@ def _case_counts(test_run_id: int) -> _RunCaseCounts:
         passed=Count("id", filter=Q(status=TestRunTestCaseStatus.SUCCESS)),
         failed=Count("id", filter=Q(status=TestRunTestCaseStatus.FAILED)),
         blocked=Count("id", filter=Q(status=TestRunTestCaseStatus.BLOCKED)),
+        needs_retest=Count("id", filter=Q(status=TestRunTestCaseStatus.NEEDS_RETEST)),
         cancelled=Count("id", filter=Q(status=TestRunTestCaseStatus.CANCELLED)),
     )
     return _RunCaseCounts(
         passed=int(row["passed"] or 0),
         failed=int(row["failed"] or 0),
         blocked=int(row["blocked"] or 0),
+        needs_retest=int(row["needs_retest"] or 0),
         cancelled=int(row["cancelled"] or 0),
     )
 
@@ -58,6 +61,10 @@ def _counts_label(counts: _RunCaseCounts) -> str:
             (counts.passed, "passed"),
             (counts.failed, "failed"),
             (counts.blocked, "blocked"),
+            (
+                counts.needs_retest,
+                "needs re-test" if counts.needs_retest == 1 else "need re-test",
+            ),
             (counts.cancelled, "cancelled"),
         )
         if value > 0

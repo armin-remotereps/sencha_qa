@@ -18,8 +18,10 @@ from django.db import transaction
 from django.utils import timezone
 
 from accounts.models import CustomUser
+from projects.case_retest_marking import clear_retest_mark
 from projects.exceptions import RunRerunError
 from projects.models import (
+    RETEST_CLEARED,
     CaseRestartKind,
     Project,
     TestRun,
@@ -158,6 +160,7 @@ def rerun_test_run_cases(
             testrail_source_attachment_count=0,
             testrail_source_skip_reason="",
             logs="",
+            **RETEST_CLEARED,
             # update() does not run auto_now.
             updated_at=now,
         )
@@ -208,6 +211,7 @@ def _reset_in_memory(pivot: TestRunTestCase, now: datetime) -> None:
     pivot.testrail_source_sent_at = None
     pivot.testrail_source_attachment_count = 0
     pivot.testrail_source_skip_reason = ""
+    clear_retest_mark(pivot)
     pivot.updated_at = now
 
 

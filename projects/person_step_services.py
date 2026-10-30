@@ -1,11 +1,13 @@
 """Use cases of a person step in a Human in the loop run: report, overrule,
-mark failed, mark blocked, and the hand-back when the run leaves the mode.
+mark failed, mark blocked, mark for re-test, and the hand-back when the run
+leaves the mode.
 
 Imports ``run_reopen_services`` and ``services``, never ``machine_setup.services``.
 
 Every action locks the project, then the run, then the person step, then the
 case (the order every help writer uses), requires the run to be PAUSED and the
-step to be open with the id the card was rendered for (stale-card guard). The
+step to be open with the id the card was rendered for (stale-card guard; Mark
+for re-test finds the case's open step itself). The
 remaining cases are then queued (the reported case first) through
 ``run_reopen_services.queue_pending_cases`` inside a savepoint: a gate refusal
 keeps the report and leaves the run paused with a "Continue run" fallback.
@@ -34,6 +36,7 @@ from agents.types import (
 from controller_client.protocol import ClientCapability
 from notifications.services.inbox_broadcast import broadcast_project_attention_changed
 from projects.case_result_text import person_label
+from projects.case_retest_marking import RETEST_MARK_FIELDS, apply_retest_mark
 from projects.case_step_refs import CaseStepText, stored_case_steps
 from projects.exceptions import PersonStepError, RunHelpError
 from projects.models import (
@@ -41,6 +44,7 @@ from projects.models import (
     HELP_NOTE_MAX_LENGTH,
     OPEN_PERSON_STEP_STATUSES,
     PERSON_STEP_OUTPUT_MAX_LENGTH,
+    RETEST_NOTE_MAX_LENGTH,
     BlockedReason,
     CasePersonStep,
     FailedBy,
@@ -75,6 +79,7 @@ _STEP_GONE = "This step was already answered or is no longer waiting."
 _NOT_CONFIRMED_ONLY = "Only a step the agent could not confirm can be overruled."
 _NOTE_REQUIRED = "Describe what was different."
 _UNKNOWN_OUTCOME = "Choose how the step went."
+_SIGNED_IN_ONLY = "Only a signed-in member can mark a case for re-test."
 
 # The person's turn: the statuses a person may act on.
 _ACTIONABLE_STATUSES: tuple[str, ...] = (
@@ -443,6 +448,54 @@ def mark_blocked_person_step(
         return _after_action(project, test_run, locked_pivot, actor)
 
 
+def mark_retest_person_step(
+    *, pivot: TestRunTestCase, actor: PersonStepActor, note: str
+) -> PersonStepActionResult:
+    """The person marks the waiting case Needs re-test; the run continues.
+
+    Web only (``actor.user`` is required). Marking is decisive, so the case's
+    actionable open step is found here, with no stale-card or round check;
+    it is closed (``cancelled``, ``marked_retest``) and the mark is written
+    (``apply_retest_mark``): the result, log, screenshots and checkpoint are
+    kept.
+    """
+    user = actor.user
+    if user is None:
+        raise PersonStepError(_SIGNED_IN_ONLY)
+    retest_note = note.strip()[:RETEST_NOTE_MAX_LENGTH]
+    with transaction.atomic():
+        project, test_run = _lock_paused_run(pivot.test_run_id)
+        person_step_id = (
+            CasePersonStep.objects.filter(
+                test_run_test_case_id=pivot.pk, status__in=_ACTIONABLE_STATUSES
+            )
+            .order_by("-id")
+            .values_list("id", flat=True)
+            .first()
+        )
+        if person_step_id is None:
+            raise PersonStepError(_STEP_GONE)
+        locked_pivot, step = _lock_step(
+            test_run, pivot.pk, person_step_id, _ACTIONABLE_STATUSES, None
+        )
+        now = timezone.now()
+        # Not performed: the case is re-run later.
+        _close_step(
+            step,
+            PersonStepStatus.CANCELLED,
+            PersonStepClose.MARKED_RETEST,
+            actor,
+            now,
+        )
+        # Verdict-discarding: recorded before the status write.
+        record_case_activity(
+            user=user, pivot_ids=[locked_pivot.pk], activity=CaseActivity.RETEST
+        )
+        apply_retest_mark(locked_pivot, user=user, note=retest_note, now=now)
+        locked_pivot.save(update_fields=list(RETEST_MARK_FIELDS))
+        return _after_action(project, test_run, locked_pivot, actor, activity=None)
+
+
 def hand_back_person_step(test_run: TestRun) -> PersonStepActionResult | None:
     """The run is not in Human in the loop: the agent runs the open step itself.
 
@@ -630,12 +683,14 @@ def _after_action(
     test_run: TestRun,
     pivot: TestRunTestCase,
     actor: PersonStepActor,
+    *,
+    activity: CaseActivity | None = CaseActivity.PERSON_STEP,
 ) -> PersonStepActionResult:
-    """Broadcast after commit, then queue the pending cases (savepoint)."""
+    """Record ``activity`` (None: the caller recorded its own), broadcast after
+    commit, then queue the pending cases (savepoint)."""
     # An anonymous Test Runner answer (no user) is not attributed.
-    record_case_activity(
-        user=actor.user, pivot_ids=[pivot.pk], activity=CaseActivity.PERSON_STEP
-    )
+    if activity is not None:
+        record_case_activity(user=actor.user, pivot_ids=[pivot.pk], activity=activity)
     project_id = project.pk
     # Registered before the queue's own callbacks, so a broker failure that
     # cancels the run is the last word on the page.

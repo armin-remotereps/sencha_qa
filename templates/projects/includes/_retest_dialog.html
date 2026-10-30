@@ -1,0 +1,54 @@
+{% comment %} "Needs re-test" confirm: marks the cases' results as untrustworthy, in
+   any run status except Draft. Follows the dialog convention in
+   templates/partials/README.md; opened by the `open-retest-cases` window
+   event. Not partials/confirm_dialog.html because it posts pivot_ids and a
+   note.
+
+   Two uses:
+   - Run page (no `pivot`): must sit inside the page's `runCaseChecks` scope;
+     posts the selected re-testable ids (`toRetest`, read when opened).
+   - Case page (`pivot` given): always marks that one case.
+
+   Context contract:
+     project     — current Project
+     test_run    — current TestRun
+     next        — where to come back to (validated same-host by the view)
+     next_query  — optional query string appended to `next` (the run page's
+                   page / per-page)
+     note_max    — int, the note's max length (RETEST_NOTE_MAX_LENGTH)
+     csrf_token  — the page's token (the include is rendered with `only`)
+     pivot       — optional TestRunTestCase (case page) {% endcomment %}
+<div
+  class="dialog-backdrop"
+  x-data="{ ...dialog(), retestNow: [{% if pivot %}{{ pivot.id }}{% endif %}] }"
+  x-show="open"
+  x-cloak
+  x-on:open-retest-cases.window="{% if not pivot %}retestNow = toRetest; {% endif %}show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="retest-cases-title" aria-describedby="retest-cases-desc">
+    {% if pivot %}
+    <h3 id="retest-cases-title">Mark this case for re-test?</h3>
+    {% else %}
+    <h3 id="retest-cases-title" x-text="'Mark ' + retestNow.length + (retestNow.length === 1 ? ' case' : ' cases') + ' for re-test?'">Mark the selected cases for re-test?</h3>
+    {% endif %}
+    <p id="retest-cases-desc">A running case stops now; a case waiting for help or for a person's step is closed and the run continues. Results, logs and screenshots are kept. Checked marks are cleared.</p>
+    <form method="post" action="{% url 'projects:test_run_cases_retest' project.id test_run.id %}">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ next }}{% if next_query %}?{{ next_query }}{% endif %}">
+      <template x-for="id in retestNow" :key="id">
+        <input type="hidden" name="pivot_ids" :value="id">
+      </template>
+      <div class="field">
+        <label class="label" for="retest-cases-note">Note <span class="muted">(optional)</span></label>
+        <textarea class="textarea" id="retest-cases-note" name="note" rows="3" maxlength="{{ note_max }}" placeholder="Why the result can't be trusted"></textarea>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary" :disabled="retestNow.length === 0" x-text="'Needs re-test (' + retestNow.length + ')'">Needs re-test</button>
+      </div>
+    </form>
+  </div>
+</div>

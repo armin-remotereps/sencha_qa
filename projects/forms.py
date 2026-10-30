@@ -17,6 +17,7 @@ from projects.models import (
     PERSON_STEP_OUTPUT_MAX_LENGTH,
     PERSON_STEP_QUESTION_MAX_LENGTH,
     PROJECT_PROMPT_MAX_LENGTH,
+    RETEST_NOTE_MAX_LENGTH,
     ApplicationPlatform,
     PersonStepOutcome,
     Project,
@@ -810,4 +811,16 @@ class RunnerUpdateForm(forms.Form):
 
     expected_version = forms.CharField(
         max_length=MAX_VERSION_LENGTH, strip=True, widget=forms.HiddenInput
+    )
+
+
+class RunCasesRetestForm(RunCaseSelectionForm):
+    """Selected run cases to mark Needs re-test, with an optional note."""
+
+    note = forms.CharField(
+        label="Note",
+        required=False,
+        strip=True,
+        max_length=RETEST_NOTE_MAX_LENGTH,
+        widget=forms.Textarea(attrs={"rows": 3}),
     )

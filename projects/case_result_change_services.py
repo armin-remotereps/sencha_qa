@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from django.db import transaction
@@ -306,6 +307,13 @@ def discard_result_change(
 def supersede_pending_result_change(pivot_id: int) -> None:
     """Retire the case's pending change (a newer one, or the case re-runs)."""
     _supersede_pending(pivot_id)
+
+
+def supersede_pending_result_changes(pivot_ids: Sequence[int]) -> None:
+    """Retire the pending changes of several cases in one UPDATE."""
+    CaseResultChange.objects.filter(
+        test_run_test_case_id__in=pivot_ids, status=ResultChangeStatus.PROPOSED
+    ).update(status=ResultChangeStatus.SUPERSEDED, decided_at=timezone.now())
 
 
 # ---------------------------------------------------------------------------

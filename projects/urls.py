@@ -7,6 +7,7 @@ from projects import (
     person_step_question_views,
     person_step_views,
     project_run_mode_views,
+    run_case_retest_views,
     runner_update_views,
     testrail_views,
     views,
@@ -263,6 +264,17 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-runs/<int:test_run_id>/cases/send-testrail/",
         testrail_views.test_run_cases_send_testrail,
         name="test_run_cases_send_testrail",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/retest/",
+        run_case_retest_views.test_run_cases_retest,
+        name="test_run_cases_retest",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/"
+        "retest/undo/",
+        run_case_retest_views.test_run_case_retest_undo,
+        name="test_run_case_retest_undo",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/cases/check/",

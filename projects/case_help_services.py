@@ -5,8 +5,8 @@ Imports ``run_reopen_services``, ``services`` and the leaf
 ``machine_setup.services`` (that package imports this one).
 
 Every action locks the project, then the run (the order Start and Resume use),
-then the help request, then (Continue / Mark failed / Mark blocked) the case's open
-person steps, then the case (the order every help writer uses; the person
+then the help request, then (Continue / Mark failed / Mark blocked / Mark for
+re-test) the case's open person steps, then the case (the order every help writer uses; the person
 step services also lock a step before its case),
 requires the run to be PAUSED, and resolves the case's open help request. The
 remaining cases are then queued (the helped case first), unless the auto-fix
@@ -54,10 +54,12 @@ from projects.case_plan_revision_services import (
     supersede_pending_revisions,
     with_decided_revisions,
 )
+from projects.case_retest_marking import RETEST_MARK_FIELDS, apply_retest_mark
 from projects.exceptions import RunHelpError
 from projects.models import (
     HELP_NOTE_MAX_LENGTH,
     OPEN_PERSON_STEP_STATUSES,
+    RETEST_NOTE_MAX_LENGTH,
     BlockedReason,
     CaseHelpRequest,
     CasePersonStep,
@@ -302,7 +304,7 @@ def get_run_case_for_help(
 
 
 def format_help_action_message(verb: str, result: HelpActionResult) -> str:
-    """The flash message after Continue / Mark failed / Mark blocked."""
+    """The flash message after a help action (Continue, Mark failed, ...)."""
     if result.outcome == HelpActionOutcome.WAITING_FOR_AUTO_FIX:
         return f"{verb}. The run continues as soon as the auto-fix agent stops."
     if result.outcome == HelpActionOutcome.WAITING_FOR_GATES:
@@ -482,6 +484,45 @@ def mark_blocked_after_help(
                 "updated_at",
             ]
         )
+        return _queue_or_wait(test_run, request, locked_pivot, auto_fix_live)
+
+
+def mark_retest_after_help(
+    *, pivot: TestRunTestCase, user: CustomUser, note: str
+) -> HelpActionResult:
+    """A person marks the waiting case Needs re-test; the rest of the run continues.
+
+    Closes the help request (``marked_retest``) and any person step left open
+    on the case, supersedes a pending redesign, and writes the mark
+    (``apply_retest_mark``): the case's result, log, screenshots and
+    checkpoint are kept. A live auto-fix is asked to stop and the run
+    continues when it ends; otherwise the run is woken or finished.
+    """
+    with transaction.atomic():
+        _, test_run = _lock_paused_run(pivot.test_run_id)
+        request = _lock_request(pivot.pk)
+        person_step_ids = _lock_open_person_step_ids(pivot.pk)
+        locked_pivot = _lock_help_case(test_run, pivot.pk)
+        now = timezone.now()
+        auto_fix_live = auto_fix_turn_live(request.pk)
+        retest_note = note.strip()[:RETEST_NOTE_MAX_LENGTH]
+        # Human in the loop: a step left open on the case closes with it.
+        _cancel_person_steps(person_step_ids, PersonStepClose.MARKED_RETEST, user, now)
+        # The case is re-run later from scratch: no redesign carries over.
+        supersede_pending_revisions(request)
+        # Records RETEST (verdict-discarding) before the status write below.
+        _resolve(
+            request,
+            HelpResolution.MARKED_RETEST,
+            user,
+            _cap_note(note),
+            now,
+            auto_fix_live,
+            project_id=test_run.project_id,
+            activity=CaseActivity.RETEST,
+        )
+        apply_retest_mark(locked_pivot, user=user, note=retest_note, now=now)
+        locked_pivot.save(update_fields=list(RETEST_MARK_FIELDS))
         return _queue_or_wait(test_run, request, locked_pivot, auto_fix_live)
 
 
@@ -805,7 +846,13 @@ def _resolve(
     auto_fix_live: bool,
     *,
     project_id: int,
+    activity: CaseActivity = CaseActivity.HELP,
 ) -> None:
+    """Close the locked request and record ``activity`` in the person's session.
+
+    Mark for re-test records ``RETEST`` instead of ``HELP`` (one activity per
+    action); it runs before the caller writes the case's new status.
+    """
     request.resolution = resolution
     request.resolved_by = user
     request.resolved_at = now
@@ -821,7 +868,7 @@ def _resolve(
     record_case_activity(
         user=user,
         pivot_ids=[request.test_run_test_case_id],
-        activity=CaseActivity.HELP,
+        activity=activity,
     )
     # The help request closed: the project members' attention lists change.
     transaction.on_commit(lambda: broadcast_project_attention_changed(project_id))

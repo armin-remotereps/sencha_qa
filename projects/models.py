@@ -113,6 +113,10 @@ class TestRunTestCaseStatus(models.TextChoices):
     # Human in the loop: a step was handed to a person (``CasePersonStep``);
     # the checkpoint and the machine state are kept. Not a finished status.
     AWAITING_PERSON = "awaiting_person", "Waiting for a person"
+    # A person flagged the result as untrustworthy (``retest_*`` fields say who
+    # and from which status). Settled: the run finishes with it; Re-run or
+    # Reset clears it, Undo restores ``retest_from_status``.
+    NEEDS_RETEST = "needs_retest", "Needs re-test"
 
 
 # Statuses after which a case's ``active_duration`` is final.
@@ -122,8 +126,31 @@ FINISHED_CASE_STATUSES = frozenset(
         TestRunTestCaseStatus.FAILED,
         TestRunTestCaseStatus.BLOCKED,
         TestRunTestCaseStatus.CANCELLED,
+        TestRunTestCaseStatus.NEEDS_RETEST,
     }
 )
+
+# Verdicts that Undo of a Needs re-test mark can restore.
+RETEST_VERDICT_STATUSES: tuple[str, ...] = (
+    TestRunTestCaseStatus.SUCCESS,
+    TestRunTestCaseStatus.FAILED,
+    TestRunTestCaseStatus.BLOCKED,
+)
+RETEST_NOTE_MAX_LENGTH = 2000
+# A case's Needs re-test mark fields (``TestRunTestCase.retest_*``) and the
+# `QuerySet.update` values that clear them (Re-run, Reset, Undo).
+RETEST_FIELDS: tuple[str, ...] = (
+    "retest_from_status",
+    "retest_marked_at",
+    "retest_marked_by",
+    "retest_note",
+)
+RETEST_CLEARED: dict[str, object] = {
+    "retest_from_status": "",
+    "retest_marked_at": None,
+    "retest_marked_by": None,
+    "retest_note": "",
+}
 
 
 class BlockedReason(models.TextChoices):
@@ -567,13 +594,30 @@ class TestRunTestCase(models.Model):
         db_index=True,
     )
     result = models.TextField(blank=True, default="")
-    # Set only when status is BLOCKED.
+    # Meaningful only while status is BLOCKED (kept under a Needs re-test mark
+    # so Undo restores it).
     blocked_reason = models.CharField(
         max_length=32, choices=BlockedReason.choices, blank=True, default=""
     )
-    # Set only while status is FAILED (see ``FailedBy``).
+    # Meaningful only while status is FAILED (see ``FailedBy``).
     failed_by = models.CharField(
         max_length=16, choices=FailedBy.choices, blank=True, default=""
+    )
+    # Meaningful only while status is NEEDS_RETEST: the status it was marked
+    # from, who marked it, when and why.
+    retest_from_status = models.CharField(
+        max_length=20, choices=TestRunTestCaseStatus.choices, blank=True, default=""
+    )
+    retest_marked_at = models.DateTimeField(null=True, blank=True)
+    retest_marked_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    retest_note = models.TextField(
+        max_length=RETEST_NOTE_MAX_LENGTH, blank=True, default=""
     )
     logs = models.TextField(blank=True, default="")
     # First pick-up by a worker since the case last started from scratch.
@@ -710,6 +754,7 @@ class HelpResolution(models.TextChoices):
     AUTO_FIXED = "auto_fixed", "Fixed by the setup agent"
     MARKED_FAILED = "marked_failed", "Marked failed"
     SKIPPED = "skipped", "Marked blocked"
+    MARKED_RETEST = "marked_retest", "Marked for re-test"
     CANCELLED = "cancelled", "Cancelled"
 
 
@@ -1068,6 +1113,7 @@ class PersonStepClose(models.TextChoices):
     REPORTED_DIFFERENT = "reported_different", "Reported a different result"
     MARKED_FAILED = "marked_failed", "Marked failed"
     MARKED_BLOCKED = "marked_blocked", "Marked blocked"
+    MARKED_RETEST = "marked_retest", "Marked for re-test"
 
 
 class PersonStepChannel(models.TextChoices):

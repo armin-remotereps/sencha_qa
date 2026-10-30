@@ -34,6 +34,16 @@
      "Refresh from TestRail" opens includes/_test_case_refresh_dialog.html,
      posting next to projects:test_case_refresh_testrail; the service refuses
      a case still being run.
+
+     Needs re-test: can_mark_retest (the run is not a Draft and the case is
+     not already marked; "Mark for re-test" opens
+     includes/_retest_dialog.html with this pivot id, posting it + note +
+     next to projects:test_run_cases_retest), retest_note_max (int),
+     retest_panel (projects.run_case_retest_services.RetestPanel or None
+     unless the case is Needs re-test: marked_by, marked_at_iso, from_label,
+     note, can_undo, undo_blocker; "Undo" posts to
+     projects:test_run_case_retest_undo). The page reloads when the case moves
+     into or out of "needs_retest".
      pivot.testrail_source_skip_reason is set when a send could not deliver
      the case (shown via includes/_checked_skip_reason.html).
 
@@ -143,7 +153,7 @@
           data-status="{{ pivot.status }}"
           :class="badgeClass(status)"
           x-text="badgeLabel(status)"
-        >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% elif pivot.status == "awaiting_person" %}Your turn{% endif %}</span>
+        >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% elif pivot.status == "awaiting_person" %}Your turn{% elif pivot.status == "needs_retest" %}Needs re-test{% endif %}</span>
       </h1>
       <p class="subtitle">
         Case {{ case_position }} of {{ case_total }} in {{ test_run.display_name }}
@@ -185,6 +195,9 @@
       {% elif project_can_write and testrail_send_no_source %}
       <span class="muted small">Can't send: imported without a TestRail run link</span>
       {% endif %}
+      {% if can_mark_retest and project_can_write %}
+      <button type="button" class="btn btn-secondary" @click="$dispatch('open-retest-cases')">Mark for re-test</button>
+      {% endif %}
       {% if can_edit and project_can_write %}
       <button type="button" class="btn btn-secondary" x-show="testRunStatus !== 'started' && testRunStatus !== 'paused'" x-cloak @click="$dispatch('open-edit-case')">Edit test case</button>
       {% endif %}
@@ -204,11 +217,11 @@
   <section
     aria-labelledby="result-h"
     class="card"
-    :class="status === 'failed' ? 'card-tone-danger' : (status === 'success' ? 'card-tone-success' : (status === 'blocked' ? 'card-tone-warning' : (status === 'need_help' ? 'card-tone-need-help' : (status === 'awaiting_person' ? 'card-tone-your-turn' : ''))))"
+    :class="status === 'failed' ? 'card-tone-danger' : (status === 'success' ? 'card-tone-success' : (status === 'blocked' ? 'card-tone-warning' : (status === 'need_help' ? 'card-tone-need-help' : (status === 'awaiting_person' ? 'card-tone-your-turn' : (status === 'needs_retest' ? 'card-tone-retest' : '')))))"
   >
     <div class="card-header">
       <h2 id="result-h">Result</h2>
-      <span class="badge" data-status="{{ pivot.status }}" :class="badgeClass(status)" x-text="badgeLabel(status)">{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% elif pivot.status == "awaiting_person" %}Your turn{% endif %}</span>
+      <span class="badge" data-status="{{ pivot.status }}" :class="badgeClass(status)" x-text="badgeLabel(status)">{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% elif pivot.status == "awaiting_person" %}Your turn{% elif pivot.status == "needs_retest" %}Needs re-test{% endif %}</span>
     </div>
     <template x-if="status === 'created' && testRunStatus === 'waiting'">
       <div class="alert alert-info">
@@ -252,6 +265,33 @@
     </div>
     {% endif %}
   </section>
+
+  {% if retest_panel %}
+  {# Section: Needs re-test — who marked it, the earlier result and Undo (server-rendered) #}
+  <section aria-labelledby="retest-h" class="card card-tone-retest">
+    <div class="card-header">
+      <h2 id="retest-h">Needs re-test</h2>
+      <span class="badge badge-retest">Needs re-test</span>
+    </div>
+    <p>
+      Marked by {{ retest_panel.marked_by|default:"a removed user" }}{% if retest_panel.marked_at_iso %} on <time datetime="{{ retest_panel.marked_at_iso }}">{{ pivot.retest_marked_at|date:"M j, Y H:i" }}</time>{% endif %}.
+      {% if retest_panel.from_label %}Earlier result: {{ retest_panel.from_label }}.{% else %}It had no result yet.{% endif %}
+    </p>
+    {% if retest_panel.note %}<p class="pre-wrap">{{ retest_panel.note }}</p>{% endif %}
+    <p class="hint">Re-run it from the run page when the run has finished.</p>
+    {% if project_can_write %}
+    {% if retest_panel.can_undo %}
+    <form method="post" action="{% url 'projects:test_run_case_retest_undo' project.id test_run.id pivot.id %}" class="actions card-actions">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-secondary">Undo</button>
+      <span class="hint">Restores the earlier result.</span>
+    </form>
+    {% elif retest_panel.undo_blocker %}
+    <p class="hint">Undo is unavailable: {{ retest_panel.undo_blocker }}</p>
+    {% endif %}
+    {% endif %}
+  </section>
+  {% endif %}
 
   {% if help_panel %}
   {# Section: Need help — the agent's ask and the human actions (server-rendered) #}
@@ -578,6 +618,10 @@
 
   {% if can_refresh_testrail and project_can_write %}
   {% include "projects/includes/_test_case_refresh_dialog.html" with project=project next_url=case_detail_url csrf_token=csrf_token only %}
+  {% endif %}
+
+  {% if can_mark_retest and project_can_write %}
+  {% include "projects/includes/_retest_dialog.html" with project=project test_run=test_run pivot=pivot next=case_detail_url note_max=retest_note_max csrf_token=csrf_token only %}
   {% endif %}
 
   {# Section: Remove-from-run confirm #}
@@ -912,6 +956,7 @@ document.addEventListener('alpine:init', () => {
         cancelled: 'badge-cancelled',
         need_help: 'badge-need-help',
         awaiting_person: 'badge-your-turn',
+        needs_retest: 'badge-retest',
       }[status] || 'badge-draft';
     },
 
@@ -925,6 +970,7 @@ document.addEventListener('alpine:init', () => {
         cancelled: 'Cancelled',
         need_help: 'Need help',
         awaiting_person: 'Your turn',
+        needs_retest: 'Needs re-test',
       }[status] || status;
     },
 
@@ -1044,9 +1090,10 @@ document.addEventListener('alpine:init', () => {
         }
 
         if (data.type === 'status') {
-          const reloadOn = ['need_help', 'awaiting_person'];
+          const reloadOn = ['need_help', 'awaiting_person', 'needs_retest'];
           if (reloadOn.includes(data.status) || reloadOn.includes(this.status)) {
-            // The help and Your turn cards are server-rendered: reload when
+            // The help, Your turn and Needs re-test cards are server-rendered
+            // (as are the header's re-test and send buttons): reload when
             // the case pauses, is resolved, its auto-fix ends (a need_help ->
             // need_help event), or the agent hands the next step to a person
             // (an awaiting_person -> awaiting_person event).

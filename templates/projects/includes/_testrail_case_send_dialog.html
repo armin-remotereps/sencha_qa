@@ -1,4 +1,4 @@
-{% comment %} "Send to TestRail" confirm for failed cases (case send): checks the cases
+{% comment %} "Send to TestRail" confirm for failed or Needs re-test cases (case send): checks the cases
    still unchecked and sends exactly these cases to their source TestRail run
    now, in any run status except Draft. Follows the dialog convention in
    templates/partials/README.md; opened by the `open-send-testrail-cases`
@@ -30,11 +30,11 @@
 >
   <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="send-testrail-cases-title" aria-describedby="send-testrail-cases-desc">
     {% if pivot %}
-    <h3 id="send-testrail-cases-title">Send this failed case to TestRail now?</h3>
-    <p id="send-testrail-cases-desc">Its result is added now to TestRail run R{{ pivot.testrail_source_run_id }}, the run it was imported from, with its failure screenshots attached.{% if not pivot.checked_at %} The case is marked checked by you.{% endif %} Other cases of this run are not sent.</p>
+    <h3 id="send-testrail-cases-title">Send this {% if pivot.status == "needs_retest" %}case{% else %}failed case{% endif %} to TestRail now?</h3>
+    <p id="send-testrail-cases-desc">Its result is added now to TestRail run R{{ pivot.testrail_source_run_id }}, the run it was imported from, {% if pivot.status == "needs_retest" %}as Retest{% else %}with its failure screenshots attached{% endif %}.{% if not pivot.checked_at %} The case is marked checked by you.{% endif %} Other cases of this run are not sent.</p>
     {% else %}
-    <h3 id="send-testrail-cases-title" x-text="'Send ' + sendNow.length + (sendNow.length === 1 ? ' failed case' : ' failed cases') + ' to TestRail now?'">Send the selected failed cases to TestRail now?</h3>
-    <p id="send-testrail-cases-desc"><span x-text="sendNow.length === 1 ? 'The failed case is' : 'The ' + sendNow.length + ' failed cases are'">The selected failed cases are</span> sent now to the TestRail run they were imported from, with their failure screenshots attached. Unchecked ones are marked checked by you. Other cases of this run are not sent.</p>
+    <h3 id="send-testrail-cases-title" x-text="'Send ' + sendNow.length + (sendNow.length === 1 ? ' case' : ' cases') + ' to TestRail now?'">Send the selected cases to TestRail now?</h3>
+    <p id="send-testrail-cases-desc"><span x-text="sendNow.length === 1 ? 'The case is' : 'The ' + sendNow.length + ' cases are'">The selected cases are</span> sent now to the TestRail run they were imported from: failed cases with their failure screenshots attached, Needs re-test cases as Retest. Unchecked ones are marked checked by you. Other cases of this run are not sent.</p>
     {% endif %}
     <form method="post" action="{% url 'projects:test_run_cases_send_testrail' project.id test_run.id %}">
       {% csrf_token %}

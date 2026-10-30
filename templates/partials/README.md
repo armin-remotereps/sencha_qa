@@ -117,7 +117,9 @@ turn a status into a badge on server-rendered pages; the live Alpine maps in
 `projects/test_run_case_detail.html` (`badgeClass` / `badgeLabel`) must list
 the same statuses. Case statuses: `created`, `in_progress`, `success`,
 `failed`, `blocked`, `cancelled`, `need_help`, `awaiting_person` (Human in
-the loop: label "Your turn", `.badge-your-turn`). Run statuses add `paused`
+the loop: label "Your turn", `.badge-your-turn`), `needs_retest` (a person
+marked the result untrustworthy: label "Needs re-test", `.badge-retest`).
+Run statuses add `paused`
 (label "Needs help"). Both use `.badge-need-help`; pass `auto_fixing` to show
 the "Auto-fixing" variant while a night auto-fix runs.
 
@@ -125,7 +127,11 @@ the "Auto-fixing" variant while a night auto-fix runs.
 stopped the case before a verdict. It is neither passed nor failed and never
 counts toward a pass rate (`success / (success + failed)`).
 
+**Needs re-test** (`.badge-retest`, violet `--retest` token) keeps the
+earlier verdict aside until the case is re-run or the mark is undone; like
+Blocked it never counts toward a pass rate.
+
 A finished run's badge resolves in a fixed order: `failed_count` > 0 reads
-Failed, else `blocked_count` > 0 reads Blocked, else Passed. Every include of
-`badge_run_status.html` passes both counts, so a run with blocked cases never
-reads Passed.
+Failed, else `blocked_count` > 0 reads Blocked, else `retest_count` > 0 reads
+Needs re-test, else Passed. Every include of `badge_run_status.html` passes
+all three counts, so a run with blocked or re-test cases never reads Passed.
