@@ -27,6 +27,30 @@ class TestRailRunImportInProgressError(TestRailRunImportError):
     """The same run is already being imported into this project."""
 
 
+class TestCaseRefreshError(Exception):
+    """Base for single-case TestRail refresh failures; ``message`` is user-safe."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class TestCaseNoTestRailIdError(TestCaseRefreshError):
+    """The case has no TestRail case id that can be parsed."""
+
+
+class TestRailCaseNotFoundError(TestCaseRefreshError):
+    """TestRail has no case with that id, or the account cannot see it."""
+
+
+class TestCaseRefreshBusyError(TestCaseRefreshError):
+    """The case is still being run, so its text must not change now."""
+
+
+class TestCaseRefreshThrottledError(TestCaseRefreshError):
+    """Too many refreshes for this project in the current window."""
+
+
 class ControllerNotConnectedError(Exception):
     """No Test Runner is connected and no active run is waiting for one."""
 

@@ -7,7 +7,9 @@
      test_cases — Page[TestCase], each row annotated last_run_pivot_id /
                   last_run_status / last_run_test_run_id / last_run_at
      can_write  — project_can_write; false drops the selection column and the
-                  row menu (Edit / Delete) {% endcomment %}
+                  row menu (Edit / Refresh from TestRail / Delete)
+     testrail_configured — project has TestRail settings; with a row's
+                  testrail_id it adds "Refresh from TestRail" to the menu {% endcomment %}
 <div class="table-wrap">
   <table class="data-table">
     <thead>
@@ -79,6 +81,15 @@
                   data-expected="{{ tc.expected }}"
                   @click="close(); $dispatch('open-edit-case', {...$el.dataset})"
                 >Edit</button>
+                {% if testrail_configured and tc.testrail_id %}
+                <button
+                  type="button"
+                  class="menu-item"
+                  role="menuitem"
+                  data-testrail-id="{{ tc.testrail_id }}"
+                  @click="close(); $dispatch('open-refresh-case', {id: {{ tc.id }}, label: $el.dataset.testrailId})"
+                >Refresh from TestRail</button>
+                {% endif %}
                 <button
                   type="button"
                   class="menu-item"

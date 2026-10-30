@@ -164,6 +164,11 @@ urlpatterns: list[URLPattern] = [
         name="testrail_import_suite",
     ),
     path(
+        "<int:project_id>/test-cases/<int:test_case_id>/refresh-testrail/",
+        testrail_views.test_case_refresh_testrail,
+        name="test_case_refresh_testrail",
+    ),
+    path(
         "<int:project_id>/test-cases/<int:test_case_id>/edit/",
         views.test_case_edit,
         name="test_case_edit",

@@ -83,6 +83,8 @@ class TestRailCase:
     steps_separated: tuple[TestRailStep, ...]
     section_id: int | None
     display_order: int | None
+    # Set by get_case/get_cases; tests from get_tests carry no suite.
+    suite_id: int | None
 
 
 @dataclass(frozen=True)
@@ -176,6 +178,7 @@ def _case_from_fields(
         steps_separated=_parse_steps_separated(raw.get("custom_steps_separated")),
         section_id=_order_int(raw.get("section_id")),
         display_order=_order_int(raw.get("display_order")),
+        suite_id=_order_int(raw.get("suite_id")),
     )
 
 
@@ -241,9 +244,11 @@ class TestRailClient:
         timeout: float = 30.0,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        max_rate_limit_retries: int = TESTRAIL_MAX_RATE_LIMIT_RETRIES,
     ) -> None:
         self._base_url = url.rstrip("/")
         self._sleep = sleep
+        self._max_rate_limit_retries = max_rate_limit_retries
         # No default Content-Type: it would override the multipart boundary of
         # attachment uploads. GETs set JSON explicitly; `json=` sets it on POST.
         self._http = httpx.Client(
@@ -318,6 +323,10 @@ class TestRailClient:
         for raw in self._paginate(method, "tests"):
             if raw.get("case_id") is not None:
                 yield _parse_test_as_case(raw)
+
+    def get_case(self, case_id: int) -> TestRailCase:
+        """Fetch one case with its current fields (400 when it does not exist)."""
+        return _parse_case(self._get_dict(f"get_case/{case_id}"))
 
     def get_case_types(self) -> list[TestRailCaseType]:
         return [
@@ -501,10 +510,7 @@ class TestRailClient:
                 response = self._send_request(url, json_body=json_body, files=files)
             except httpx.HTTPError as exc:
                 raise TestRailError(f"Could not reach TestRail: {exc}", 0) from exc
-            if (
-                response.status_code != 429
-                or attempts >= TESTRAIL_MAX_RATE_LIMIT_RETRIES
-            ):
+            if response.status_code != 429 or attempts >= self._max_rate_limit_retries:
                 return response
             attempts += 1
             self._sleep(self._retry_after_seconds(response))

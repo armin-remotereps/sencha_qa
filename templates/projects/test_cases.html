@@ -17,6 +17,8 @@
      waiting_test_runs   — draft TestRuns this project can add cases to
      other_projects      — other projects this user belongs to (Copy to project)
      per_page / allowed_per_page / elided_page_range / query_params — pagination
+     testrail_configured — project has TestRail settings (row Refresh item)
+     refresh_next        — this page's full path, the refresh dialog's next
      project_can_write (context processor) — false hides Create / Import, the
      bulk bar, the selection column, row menus and every dialog (read-only
      member; no Copy to project either) {% endcomment %}
@@ -83,7 +85,7 @@
   {% endif %}
 
   {% if test_cases %}
-    {% include "projects/includes/_test_case_table.html" with project=project test_cases=test_cases can_write=project_can_write only %}
+    {% include "projects/includes/_test_case_table.html" with project=project test_cases=test_cases can_write=project_can_write testrail_configured=testrail_configured only %}
   {% elif search or current_upload or current_status %}
     {% include "partials/empty_state.html" with icon="▣" title="No matching test cases" body="Try a different search term or clear the filters above." only %}
   {% elif project_can_write %}
@@ -99,6 +101,9 @@
   {% include "projects/includes/_test_case_edit_dialog.html" with project=project form=form %}
   {% include "projects/includes/_test_case_bulk_dialogs.html" with project=project waiting_test_runs=waiting_test_runs other_projects=other_projects %}
   {% include "projects/includes/_test_case_delete_dialog.html" with project=project %}
+  {% if testrail_configured %}
+  {% include "projects/includes/_test_case_refresh_dialog.html" with project=project next_url=refresh_next csrf_token=csrf_token only %}
+  {% endif %}
   {% endif %}
 </div>
 {% endblock %}
