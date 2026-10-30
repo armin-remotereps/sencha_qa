@@ -32,6 +32,7 @@ from projects.case_help_services import (
     mark_retest_after_help,
 )
 from projects.case_result_change_services import supersede_pending_result_changes
+from projects.case_result_text import result_status_label
 from projects.case_retest_marking import RETEST_MARK_FIELDS, apply_retest_mark
 from projects.case_review_redesign_store import supersede_cases_review_drafts
 from projects.exceptions import PersonStepError, RunCaseRetestError, RunHelpError
@@ -57,7 +58,7 @@ from projects.services import broadcast_run_and_pivots
 from test_sessions.case_activity import CaseActivity
 from test_sessions.services.record_case_activity import record_case_activity
 
-_DRAFT_RUN = "A draft run has nothing to re-test yet."
+DRAFT_RUN_MESSAGE = "A draft run has nothing to re-test yet."
 _NOTHING_SELECTED = "None of the selected cases can be marked for re-test."
 _NOT_MARKED = "This case is not marked for re-test."
 _NO_EARLIER_RESULT = (
@@ -147,7 +148,7 @@ def mark_cases_for_retest(
     with transaction.atomic():
         project, locked_run = lock_project_and_run(test_run.pk)
         if not is_retest_open(locked_run):
-            raise RunCaseRetestError(_DRAFT_RUN)
+            raise RunCaseRetestError(DRAFT_RUN_MESSAGE)
         statuses = dict(
             TestRunTestCase.objects.filter(test_run_id=locked_run.pk, pk__in=requested)
             .exclude(status=TestRunTestCaseStatus.NEEDS_RETEST)
@@ -178,12 +179,16 @@ def mark_cases_for_retest(
                 .select_related("test_run")
                 .get(pk=waiting_ids[0])
             )
-        wake_paused = (
+        # Only when the marks settled the paused run's last open cases: it is
+        # then finished, as "Continue run" would. Marking never restarts the
+        # remaining cases of a paused run.
+        finish_paused = (
             not waiting_ids
             and marked > 0
             and locked_run.status == TestRunStatus.PAUSED
             and not TestRunTestCase.objects.filter(
-                test_run_id=locked_run.pk, status__in=_WAITING_STATUSES
+                test_run_id=locked_run.pk,
+                status__in=(TestRunTestCaseStatus.CREATED, *_WAITING_STATUSES),
             ).exists()
         )
 
@@ -195,14 +200,13 @@ def mark_cases_for_retest(
             marked += 1
         except (RunHelpError, PersonStepError) as exc:
             problem = exc.message
-    elif wake_paused:
-        # The last pending cases of a paused run whose help is already
-        # resolved: go on (or finish) as "Continue run" does. A refusal keeps
-        # the marks and leaves "Continue run" on the page.
+    elif finish_paused:
+        # A refusal (a live auto-fix turn) keeps the marks and leaves
+        # "Continue run" on the page.
         try:
             continue_paused_run(test_run=locked_run, user=user)
-        except RunHelpError:
-            pass
+        except RunHelpError as exc:
+            run_notice = exc.message
     skipped = len(requested) - marked - (1 if problem else 0)
     return RetestOutcome(
         marked=marked,
@@ -218,14 +222,14 @@ def _mark_direct(
     """Phase 1 under the project and run locks; returns the number marked."""
     # A Human in the loop case being confirmed is IN_PROGRESS with a reported
     # step: lock its open step before the case (the order help actions use).
-    person_step_ids = list(
+    open_steps = list(
         CasePersonStep.objects.select_for_update()
         .filter(
             test_run_test_case_id__in=pivot_ids,
             status__in=OPEN_PERSON_STEP_STATUSES,
         )
         .order_by("pk")
-        .values_list("id", flat=True)
+        .values_list("id", "test_run_test_case_id")
     )
     pivots = list(
         TestRunTestCase.objects.select_for_update()
@@ -237,6 +241,10 @@ def _mark_direct(
     if not pivots:
         return 0
     marked_ids = [pivot.pk for pivot in pivots]
+    marked_set = set(marked_ids)
+    person_step_ids = [
+        step_id for step_id, case_id in open_steps if case_id in marked_set
+    ]
     # Before the write: other sessions keep the verdict they saw.
     record_case_activity(user=user, pivot_ids=marked_ids, activity=CaseActivity.RETEST)
     now = timezone.now()
@@ -354,6 +362,4 @@ def format_retest_message(outcome: RetestOutcome) -> str:
 
 
 def _status_label(status: str) -> str:
-    if not status:
-        return ""
-    return str(TestRunTestCaseStatus(status).label)
+    return result_status_label(status) if status else ""

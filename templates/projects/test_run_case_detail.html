@@ -620,7 +620,7 @@
   {% include "projects/includes/_test_case_refresh_dialog.html" with project=project next_url=case_detail_url csrf_token=csrf_token only %}
   {% endif %}
 
-  {% if can_mark_retest %}
+  {% if can_mark_retest and project_can_write %}
   {% include "projects/includes/_retest_dialog.html" with project=project test_run=test_run pivot=pivot next=case_detail_url note_max=retest_note_max csrf_token=csrf_token only %}
   {% endif %}
 

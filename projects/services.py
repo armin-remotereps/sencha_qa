@@ -3066,20 +3066,20 @@ def fetch_test_case_state(
 
 
 def _build_cancellation_check(
-    test_run_id: int, generation: int, pivot_id: int
+    test_run_id: int, generation: int, pivot_id: int | None = None
 ) -> Callable[[], bool]:
     """True once the run is cancelled, or resumed/restarted by a newer chain,
-    or a person marked this case Needs re-test (still one query per poll)."""
-    marked_for_retest = Exists(
-        TestRunTestCase.objects.filter(
-            pk=pivot_id, status=TestRunTestCaseStatus.NEEDS_RETEST
+    or (with ``pivot_id``) a person marked that case Needs re-test; still one
+    query per poll."""
+    stopped = Q(status=TestRunStatus.CANCELLED) | ~Q(execution_generation=generation)
+    if pivot_id is not None:
+        stopped |= Q(
+            Exists(
+                TestRunTestCase.objects.filter(
+                    pk=pivot_id, status=TestRunTestCaseStatus.NEEDS_RETEST
+                )
+            )
         )
-    )
-    stopped = (
-        Q(status=TestRunStatus.CANCELLED)
-        | ~Q(execution_generation=generation)
-        | marked_for_retest
-    )
 
     def _is_cancelled() -> bool:
         return TestRun.objects.filter(stopped, pk=test_run_id).exists()
@@ -3302,7 +3302,9 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
                 pivot,
                 project,
                 generation=generation,
-                cancellation_check=cancellation_check,
+                # Run-level only: a re-test mark during the teardown of a
+                # Failed verdict must not leave its apps open.
+                cancellation_check=_build_cancellation_check(run_id, generation),
                 run_case_teardown=run_case_teardown,
             )
         if not _is_stale_execution(run_id, generation):

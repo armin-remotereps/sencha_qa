@@ -20,7 +20,9 @@ from projects.exceptions import RunCaseRetestError
 from projects.forms import RunCasesRetestForm, form_error_text
 from projects.models import Project
 from projects.run_case_retest_services import (
+    DRAFT_RUN_MESSAGE,
     format_retest_message,
+    is_retest_open,
     list_retestable_pivot_ids,
     mark_cases_for_retest,
     undo_retest,
@@ -37,7 +39,9 @@ def test_run_cases_retest(
     if test_run is None:
         raise Http404
     form = RunCasesRetestForm(list_retestable_pivot_ids(test_run), request.POST)
-    if not form.is_valid():
+    if not is_retest_open(test_run):
+        messages.error(request, DRAFT_RUN_MESSAGE)
+    elif not form.is_valid():
         messages.error(request, form_error_text(form))
     else:
         try:

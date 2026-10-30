@@ -357,3 +357,6 @@ Then run `reviewer` and `verifier` in parallel, giving the verifier the original
 ## Changelog
 
 - 2026-10-30: created (Draft).
+- 2026-10-30: questions answered (all recommended: 1a–9a, optional note kept); implemented.
+- 2026-10-30: review round 1 fixes: marking never restarts a paused run's remaining cases (it only finishes a run the marks settled, and reports a refusal); the teardown of a Failed verdict uses a run-only cancellation check; person steps closed only for cases actually marked; earlier result label "Passed" (not "Success"); `machine_setup` run catalog reports "Done, Needs re-test" and the count; case page dialog only for writable members; Draft run message on the view. `_pause_case_after_fault` also uses the conditional cancel (protects a mark; accepted beyond the plan).
+- 2026-10-30: rejected review nits: extracting a shared safe-`next` helper and a neutral run-case getter (the views follow the existing per-module pattern in `testrail_views.py` / `person_step_views.py`; a cross-module refactor is out of scope); a shared `case_outcome_counts()` for the six count sites (separate refactor plan); a shared person-step close helper (`_cancel_person_steps` is private to the help module; the inline UPDATE now filters by the marked cases).
