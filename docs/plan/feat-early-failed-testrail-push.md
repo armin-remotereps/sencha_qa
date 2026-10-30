@@ -1,6 +1,6 @@
 # feat: Send failed cases to their TestRail run before the run finishes, also from the Failures page
 
-Status: In progress
+Status: Done
 Created: 2026-10-30
 Request: A Failed run case must be sendable to its source TestRail run as soon
 as it has its verdict, without waiting for the Punk Hazard run to finish, because
