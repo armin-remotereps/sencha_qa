@@ -75,6 +75,7 @@ from projects.case_checkpoint_services import (
     build_checkpoint_callback,
     load_resume_checkpoint,
 )
+from projects.case_credit import credit_cases
 from projects.case_duration_services import (
     AVERAGE_CASE_STATUSES,
     CASE_SEGMENT_OPEN_FIELDS,
@@ -2595,6 +2596,7 @@ def start_test_run(
         ]
     )
     record_case_activity(user=user, pivot_ids=pivot_ids, activity=CaseActivity.START)
+    credit_cases(user=user, pivot_ids=pivot_ids)
 
     def _enqueue() -> None:
         if queue_test_run_cases(test_run, pivot_ids):
