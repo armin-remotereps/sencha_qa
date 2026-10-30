@@ -35,6 +35,7 @@ from agents.types import (
 )
 from controller_client.protocol import ClientCapability
 from notifications.services.inbox_broadcast import broadcast_project_attention_changed
+from projects.case_credit import credit_cases
 from projects.case_result_text import person_label
 from projects.case_retest_marking import RETEST_MARK_FIELDS, apply_retest_mark
 from projects.case_step_refs import CaseStepText, stored_case_steps
@@ -691,6 +692,9 @@ def _after_action(
     # An anonymous Test Runner answer (no user) is not attributed.
     if activity is not None:
         record_case_activity(user=actor.user, pivot_ids=[pivot.pk], activity=activity)
+    # The person performed the step; credit_cases skips an anonymous answer.
+    if activity == CaseActivity.PERSON_STEP:
+        credit_cases(user=actor.user, pivot_ids=[pivot.pk])
     project_id = project.pk
     # Registered before the queue's own callbacks, so a broker failure that
     # cancels the run is the last word on the page.

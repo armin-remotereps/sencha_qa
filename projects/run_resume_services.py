@@ -28,6 +28,7 @@ from agents.checkpoint import (
     without_person_step,
 )
 from projects.case_checkpoint_services import load_resume_checkpoint
+from projects.case_credit import credit_cases
 from projects.exceptions import RunResumeError
 from projects.models import (
     Project,
@@ -192,6 +193,7 @@ def _resume_pivots(
             pivot_ids=[pivot.pk for pivot in pivots],
             activity=CaseActivity.RESUME,
         )
+        credit_cases(user=user, pivot_ids=[pivot.pk for pivot in pivots])
         now = timezone.now()
         resumes: list[TestRunCaseResume] = []
         # Logs, screenshots and the checkpoint are kept.

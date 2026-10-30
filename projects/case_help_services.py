@@ -45,6 +45,7 @@ from machine_setup.turn_state import (
     person_turn_live,
 )
 from notifications.services.inbox_broadcast import broadcast_project_attention_changed
+from projects.case_credit import CREDITED_HELP_RESOLUTIONS, credit_cases
 from projects.case_help_notifications import notify_case_needs_help
 from projects.case_help_proposal_services import clear_agent_proposal
 from projects.case_plan_revision_services import (
@@ -870,6 +871,9 @@ def _resolve(
         pivot_ids=[request.test_run_test_case_id],
         activity=activity,
     )
+    # The resolver drove the case out of Need help; a re-test mark does not.
+    if resolution in CREDITED_HELP_RESOLUTIONS:
+        credit_cases(user=user, pivot_ids=[request.test_run_test_case_id])
     # The help request closed: the project members' attention lists change.
     transaction.on_commit(lambda: broadcast_project_attention_changed(project_id))
 

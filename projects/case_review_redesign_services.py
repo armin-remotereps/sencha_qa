@@ -45,6 +45,7 @@ from agents.plan_revision import (
 )
 from agents.plan_revision_limits import validate_case_plan_revision
 from agents.types import OrchestratorCheckpoint
+from projects.case_credit import credit_cases
 from projects.case_result_change_services import (
     is_result_changeable,
     supersede_pending_result_change,
@@ -323,6 +324,7 @@ def rerun_with_redesigned_plan(
         record_case_activity(
             user=user, pivot_ids=[locked.pk], activity=CaseActivity.REDESIGN_RERUN
         )
+        credit_cases(user=user, pivot_ids=[locked.pk])
         reset_case_for_restart(locked, now)
         # Logs and screenshots are kept.
         locked.save(update_fields=[*RESTART_RESET_FIELDS, "execution_checkpoint"])

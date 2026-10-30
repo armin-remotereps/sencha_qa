@@ -1,0 +1,56 @@
+{% comment %} Leaderboard table: every listed user in rank order (score-0 users last,
+   dimmed with .is-idle), the viewer's row highlighted with .is-viewer. Mobile:
+   .data-table records via data-label. Streak only in the 7-day view.
+
+   Context contract:
+     board — dashboard.leaderboard_types.Leaderboard (rows, filters.period) {% endcomment %}
+<section class="card" aria-labelledby="lb-table-h">
+  <div class="card-header">
+    <h2 id="lb-table-h">Standings</h2>
+    <span class="muted small card-header-count">{{ board.rows|length }} tester{{ board.rows|length|pluralize }}</span>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table leaderboard-table">
+      <thead>
+        <tr>
+          <th scope="col">Rank</th>
+          <th scope="col">Name</th>
+          <th scope="col">Score</th>
+          <th scope="col">Move</th>
+          <th scope="col">Passed</th>
+          <th scope="col">Failed</th>
+          <th scope="col">Blocked</th>
+          <th scope="col">Needs re-test</th>
+          <th scope="col">Tests done</th>
+          <th scope="col">Steps</th>
+          <th scope="col">Help</th>
+          {% if board.filters.period == "7d" %}<th scope="col">Streak</th>{% endif %}
+          <th scope="col">Need help now</th>
+          <th scope="col">Remaining</th>
+          <th scope="col">Badges</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in board.rows %}
+          <tr class="{% if row.is_viewer %}is-viewer{% endif %}{% if not row.score %} is-idle{% endif %}"{% if row.is_viewer %} aria-current="true"{% endif %}>
+            <td data-label="Rank" class="lb-rank">{% include "dashboard/includes/_leaderboard_medal.html" with row=row only %}{% if row.score %}#{{ row.rank }}{% else %}–{% endif %}</td>
+            <td data-label="Name" class="cell-primary">{{ row.name }}{% if row.is_viewer %} <span class="chip lb-you">You</span>{% endif %}</td>
+            <td data-label="Score" class="lb-score">{{ row.score }}</td>
+            <td data-label="Move">{% include "dashboard/includes/_leaderboard_move.html" with row=row only %}</td>
+            <td data-label="Passed">{{ row.current.passed }}</td>
+            <td data-label="Failed">{{ row.current.failed }}</td>
+            <td data-label="Blocked">{{ row.current.blocked }}</td>
+            <td data-label="Needs re-test">{{ row.current.needs_retest }}</td>
+            <td data-label="Tests done">{{ row.current.tests_done }}</td>
+            <td data-label="Steps">{{ row.current.steps_performed }}</td>
+            <td data-label="Help">{{ row.current.help_resolved }}</td>
+            {% if board.filters.period == "7d" %}<td data-label="Streak">{% if row.streak %}🔥 {{ row.streak }} day{{ row.streak|pluralize }}{% else %}–{% endif %}</td>{% endif %}
+            <td data-label="Need help now">{% if row.need_help_now %}<span class="badge badge-need-help">{{ row.need_help_now }}</span>{% else %}0{% endif %}</td>
+            <td data-label="Remaining">{{ row.remaining }}</td>
+            <td data-label="Badges">{% for badge in row.badges %}<span class="lb-badge" title="{{ badge.title }}">{{ badge.label }}</span>{% empty %}<span class="muted">–</span>{% endfor %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>

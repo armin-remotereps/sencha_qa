@@ -1,0 +1,5 @@
+{% comment %} Medal emoji of one leaderboard row (nothing without a medal).
+
+   Context contract:
+     row — dashboard.leaderboard_types.LeaderboardRow (medal) {% endcomment %}
+{% if row.medal %}<span class="lb-medal lb-medal-{{ row.medal }}" aria-hidden="true">{% if row.medal == "gold" %}🥇{% elif row.medal == "silver" %}🥈{% else %}🥉{% endif %}</span>{% endif %}

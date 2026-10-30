@@ -18,6 +18,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from accounts.models import CustomUser
+from projects.case_credit import credit_cases
 from projects.case_retest_marking import clear_retest_mark
 from projects.exceptions import RunRerunError
 from projects.models import (
@@ -131,6 +132,7 @@ def rerun_test_run_cases(
         record_case_activity(
             user=user, pivot_ids=selected_ids, activity=CaseActivity.RERUN
         )
+        credit_cases(user=user, pivot_ids=selected_ids)
 
         TestRunCaseResume.objects.bulk_create(
             [_snapshot(pivot, user) for pivot in pivots]
