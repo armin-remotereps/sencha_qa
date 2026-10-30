@@ -1,6 +1,6 @@
 # feat: TestRail step references on person steps
 
-Status: In progress
+Status: Done
 Created: 2026-10-30
 Request: In a Human in the loop run, every Punk Hazard (PH) plan step handed to a
 person must say which TestRail step(s) of the case it covers. Usually one PH step
