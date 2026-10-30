@@ -49,6 +49,7 @@ from dashboard.forms import (
 from dashboard.services.export_throttle import check_export_throttle
 from dashboard.services.failed_case_bulk import (
     apply_failed_case_bulk,
+    failed_case_no_source_ids,
     failed_case_sendable_ids,
 )
 from dashboard.services.failed_case_export import stream_failed_case_csv
@@ -117,6 +118,7 @@ def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
     page_obj: Page[FailingCaseRow] | Page[TestRunTestCase]
     run_of_pivot: dict[int, int] = {}
     sendable_ids: list[int] = []
+    no_source_ids: list[int] = []
     if view == FailedCaseView.BY_CASE:
         page_obj = list_failing_test_cases(
             project_ids, filters, page=page, per_page=per_page
@@ -127,6 +129,7 @@ def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
         )
         run_of_pivot = {pivot.id: pivot.test_run_id for pivot in cases_page}
         sendable_ids = failed_case_sendable_ids(cases_page, writable_ids)
+        no_source_ids = failed_case_no_source_ids(cases_page)
         page_obj = cases_page
 
     filter_query = encode_filters(filters, view=view)
@@ -156,6 +159,7 @@ def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
         "selectable_ids": list(run_of_pivot),
         "run_of_pivot": run_of_pivot,
         "sendable_ids": sendable_ids,
+        "no_source_ids": no_source_ids,
         "active_nav": "failures",
     }
     return render(request, "dashboard/failed_cases.html", context)

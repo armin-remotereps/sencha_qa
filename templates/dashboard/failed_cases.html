@@ -19,7 +19,10 @@
      run_of_pivot      — {pivot id: run id} on this page (single-run Re-run gate)
      sendable_ids      — pivot ids on this page that Send to TestRail accepts now
                          (sendable, writable project, TestRail configured;
-                         cases view only, [] for by_case) {% endcomment %}
+                         cases view only, [] for by_case)
+     no_source_ids     — pivot ids on this page that can't be sent because they
+                         have no source TestRail run (project has TestRail
+                         settings; cases view only) {% endcomment %}
 
 {% block title %}Failures · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 

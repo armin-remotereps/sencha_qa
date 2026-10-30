@@ -26,6 +26,7 @@ from projects.run_case_check_services import check_run_cases, format_check_messa
 from projects.run_rerun_services import format_rerun_message, rerun_test_run_cases
 from projects.testrail_case_send_services import (
     format_case_send_message,
+    is_case_missing_source,
     is_case_sendable,
     start_case_send,
 )
@@ -80,6 +81,18 @@ def failed_case_sendable_ids(
         # Annotation of ``failed_case_list_queryset``, unknown to the stubs.
         and bool(getattr(pivot, "testrail_configured", False))
         and is_case_sendable(pivot)
+    ]
+
+
+def failed_case_no_source_ids(pivots: Iterable[TestRunTestCase]) -> list[int]:
+    """Ids of the listed rows that can't be sent only because they have no
+    source TestRail run (project has TestRail settings; no query)."""
+    return [
+        pivot.id
+        for pivot in pivots
+        # Annotation of ``failed_case_list_queryset``, unknown to the stubs.
+        if bool(getattr(pivot, "testrail_configured", False))
+        and is_case_missing_source(pivot)
     ]
 
 
