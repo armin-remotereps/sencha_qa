@@ -1,6 +1,6 @@
 # feat: TestRail step references on person steps
 
-Status: Draft
+Status: In progress
 Created: 2026-10-30
 Request: In a Human in the loop run, every Punk Hazard (PH) plan step handed to a
 person must say which TestRail step(s) of the case it covers. Usually one PH step
@@ -9,6 +9,28 @@ native person window. Also show it on the web "Your turn" card if that is cheap 
 consistent. Today the agent's plan carries no link back to the case's numbered
 steps, so the planner has to output one. It must be validated, optional, and work
 with existing checkpoints and redesigned plans. Older Test Runners must keep working.
+
+## Decisions (answers, 2026-10-30)
+
+- Q1: numbers **and** the TestRail step text (plus its expected result), to cut
+  back-and-forth between tester and PH. This replaces the "no protocol change"
+  design below for the window: `CasePersonStep` stores the covered steps' texts
+  (`case_steps` = `[{num, text, expected}]`, ≤ 15 items, ≤ 1000 chars each,
+  copied from the case when the step is handed out, in
+  `services._pause_run_for_person` via `projects.case_step_refs.case_step_rows`)
+  and their label (`case_steps_label`). Protocol 0.10.2 adds
+  `person_step_case_steps_v1` and the snapshot fields `case_steps_label` /
+  `case_steps`; the window shows a "Covers …" block with the texts. Runners
+  without the capability get the label appended to `step_label` (numbers
+  only). The web "Your turn" card shows the texts too.
+- Q2: free-text cases show nothing.
+- Q3: "Case step(s)" when the case has no `testrail_id`, "TestRail step(s)"
+  otherwise (`format_case_steps_label(refs, testrail=)`).
+- Q4: no other places in this change.
+- Q5: Steps card label included (own commit).
+- Step text parsing: `numbered_case_steps` splits `steps` on "<n>. " markers at
+  the start or after a blank line (as `flatten_steps` joins them), in sequence;
+  `expected` markers ascending and ≤ the step count.
 
 ## Context
 
@@ -404,3 +426,5 @@ After each wave, run `pre-commit run --all-files` (black, isort, mypy server +
 ## Changelog
 
 - 2026-10-30: created
+- 2026-10-30: answers recorded (Decisions); window gets a new wire field +
+  capability + 0.10.2 instead of only the `step_label` suffix.
