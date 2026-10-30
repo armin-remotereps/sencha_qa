@@ -122,6 +122,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     _person_steps_enabled: bool
     # The runner shows how-to lists and Ask AI (PERSON_STEP_ASSIST_V1).
     _assist_enabled: bool
+    # The runner shows the test case steps a step covers
+    # (PERSON_STEP_CASE_STEPS_V1).
+    _case_steps_enabled: bool
     # The active member the handshake's ``person_email`` named; re-checked
     # when an answer arrives. The email itself is never kept.
     _person_user_id: int | None
@@ -133,6 +136,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self._project = None
         self._person_steps_enabled = False
         self._assist_enabled = False
+        self._case_steps_enabled = False
         self._person_user_id = None
         self._person_steps_sent = None
         self._reply_tracker = ReplyTracker(self.channel_layer)
@@ -271,6 +275,11 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             self._person_steps_enabled
             and ClientCapability.PERSON_STEP_ASSIST_V1.value in capabilities
         )
+        # Advertised only together with PERSON_STEPS_V1 (the window).
+        self._case_steps_enabled = (
+            self._person_steps_enabled
+            and ClientCapability.PERSON_STEP_CASE_STEPS_V1.value in capabilities
+        )
         await self._establish_authenticated_connection(
             result.project,
             system_info,
@@ -364,7 +373,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             return
         try:
             views = await sync_to_async(get_runner_person_steps)(
-                self._project.id, assist=self._assist_enabled
+                self._project.id,
+                assist=self._assist_enabled,
+                case_steps=self._case_steps_enabled,
             )
         except Exception:
             logger.exception(
