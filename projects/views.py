@@ -180,6 +180,7 @@ from projects.services import (
     update_test_case,
 )
 from projects.tasks import refine_project_prompt_task
+from projects.testrail_case_refresh_services import can_refresh_from_testrail
 from projects.testrail_case_send_services import (
     is_case_missing_source,
     is_case_sendable,
@@ -625,6 +626,8 @@ def test_case_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
             "allowed_per_page": ALLOWED_PER_PAGE,
             "elided_page_range": elided_page_range(test_cases),
             "query_params": _build_query_params(request),
+            "testrail_configured": project.has_testrail_settings,
+            "refresh_next": request.get_full_path(),
             "active_tab": "test_cases",
             "active_nav": "projects",
         },
@@ -1079,6 +1082,7 @@ def test_run_case_detail(
                 testrail_configured and is_case_missing_source(pivot)
             ),
             "source_run_url": source_run_url,
+            "can_refresh_testrail": can_refresh_from_testrail(project, pivot.test_case),
             "testrail_case_url": build_testrail_case_url(
                 project, pivot.test_case.testrail_id
             ),

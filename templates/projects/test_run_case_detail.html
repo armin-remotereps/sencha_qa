@@ -29,6 +29,10 @@
      projects:test_run_cases_send_testrail, in any run status),
      testrail_send_no_source (TestRail configured and a failed case without a
      source TestRail run: a muted "Can't send" line instead).
+     can_refresh_testrail (TestRail configured and a parseable testrail_id):
+     "Refresh from TestRail" opens includes/_test_case_refresh_dialog.html,
+     posting next to projects:test_case_refresh_testrail; the service refuses
+     a case still being run.
      pivot.testrail_source_skip_reason is set when a send could not deliver
      the case (shown via includes/_checked_skip_reason.html).
 
@@ -182,6 +186,9 @@
       {% endif %}
       {% if can_edit and project_can_write %}
       <button type="button" class="btn btn-secondary" x-show="testRunStatus !== 'started' && testRunStatus !== 'paused'" x-cloak @click="$dispatch('open-edit-case')">Edit test case</button>
+      {% endif %}
+      {% if can_refresh_testrail and project_can_write %}
+      <button type="button" class="btn btn-secondary" data-testrail-id="{{ pivot.test_case.testrail_id }}" @click="$dispatch('open-refresh-case', {id: {{ pivot.test_case.id }}, label: $el.dataset.testrailId})">Refresh from TestRail</button>
       {% endif %}
       {% if test_run.status == "waiting" and project_can_write %}
       <button type="button" class="btn btn-danger" @click="$dispatch('open-remove-case')">Remove from run</button>
@@ -566,6 +573,10 @@
 
   {% if can_send_testrail %}
   {% include "projects/includes/_testrail_case_send_dialog.html" with project=project test_run=test_run pivot=pivot next=case_detail_url csrf_token=csrf_token only %}
+  {% endif %}
+
+  {% if can_refresh_testrail %}
+  {% include "projects/includes/_test_case_refresh_dialog.html" with project=project next_url=case_detail_url csrf_token=csrf_token only %}
   {% endif %}
 
   {# Section: Remove-from-run confirm #}
