@@ -21,6 +21,8 @@
      can_check (verdict reached and not checked), can_uncheck (checked and
      not yet sent to TestRail), source_run_url (TestRail URL of the source
      run the result was sent to; "" when not sent or TestRail unconfigured).
+     testrail_case_url (TestRail URL of the case itself; "" without a
+     project TestRail URL or a parseable testrail_id).
      can_send_testrail (TestRail configured and the case is failed, unsent and
      has a source TestRail run: "Send to TestRail" opens
      includes/_testrail_case_send_dialog.html, posting this pivot id + next to
@@ -464,6 +466,9 @@
   <section aria-labelledby="case-h" class="card">
     <div class="card-header">
       <h2 id="case-h">Test case</h2>
+      {% if testrail_case_url %}
+      <a class="btn btn-sm btn-ghost" href="{{ testrail_case_url }}" target="_blank" rel="noopener noreferrer">Open in TestRail</a>
+      {% endif %}
       <a class="btn btn-sm btn-ghost" href="{% url 'projects:test_case_list' project.id %}?search={{ pivot.test_case.testrail_id|default:pivot.test_case.title|urlencode }}">Open in Test Cases</a>
     </div>
     {% if not pivot.test_case.preconditions and not pivot.test_case.steps and not pivot.test_case.expected %}

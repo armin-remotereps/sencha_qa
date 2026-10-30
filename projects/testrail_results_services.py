@@ -224,6 +224,14 @@ def build_testrail_run_url(project: Project, run_id: int) -> str:
     return f"{project.testrail_url}/index.php?/runs/view/{run_id}"
 
 
+def build_testrail_case_url(project: Project, raw_testrail_id: str) -> str:
+    """Public TestRail URL for a case, or "" without a TestRail URL or case id."""
+    case_id = parse_testrail_case_id(raw_testrail_id)
+    if case_id is None or not project.testrail_url:
+        return ""
+    return f"{project.testrail_url}/index.php?/cases/view/{case_id}"
+
+
 def can_push_testrail_results(test_run: TestRun) -> bool:
     """True when the run is finished and not already mid-push."""
     return (

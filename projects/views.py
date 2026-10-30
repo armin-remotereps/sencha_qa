@@ -189,7 +189,10 @@ from projects.testrail_checked_push_services import (
     get_source_run_url,
 )
 from projects.testrail_mapping import format_push_confirm_body
-from projects.testrail_results_services import get_testrail_push_panel
+from projects.testrail_results_services import (
+    build_testrail_case_url,
+    get_testrail_push_panel,
+)
 from projects.testrail_services import get_testrail_picker_state
 from visual_engine.services.pool_status import get_visual_engine_status
 
@@ -1076,6 +1079,9 @@ def test_run_case_detail(
                 testrail_configured and is_case_missing_source(pivot)
             ),
             "source_run_url": source_run_url,
+            "testrail_case_url": build_testrail_case_url(
+                project, pivot.test_case.testrail_id
+            ),
             "can_resume": can_resume,
             "resume_steps": resume_steps,
             "resume_form": (
