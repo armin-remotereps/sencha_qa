@@ -16,13 +16,22 @@ from datetime import UTC, date, datetime, time, timedelta
 from urllib.parse import urlencode
 
 from django.db import models
-from django.db.models import Q, QuerySet
+from django.db.models import BooleanField, ExpressionWrapper, Q, QuerySet
 from django.db.models.functions import Substr
 
 from projects.models import FailedBy, TestRunTestCase, TestRunTestCaseStatus
 
 # Characters of the verdict loaded for the list (the full text can be large).
 VERDICT_PREVIEW_LENGTH = 200
+
+# ``Project.has_testrail_settings`` of the row's project, as an expression
+# (the three columns are NOT NULL, default "").
+_TESTRAIL_CONFIGURED = ExpressionWrapper(
+    ~Q(test_run__project__testrail_url="")
+    & ~Q(test_run__project__testrail_email="")
+    & ~Q(test_run__project__testrail_api_key_encrypted=""),
+    output_field=BooleanField(),
+)
 
 # "C123" or "123": a TestRail case id typed into the search box.
 _TESTRAIL_ID_RE = re.compile(r"^[Cc]?(\d{1,18})$")
@@ -136,6 +145,10 @@ def failed_case_list_queryset(
     case, run and project joined, only the shown columns, and the verdict
     truncated in the database (``verdict``). ``result``, ``logs`` and
     ``execution_checkpoint`` are never loaded.
+
+    ``testrail_configured`` mirrors ``Project.has_testrail_settings`` in SQL
+    (URL, email and encrypted key all non-empty), so the encrypted key is
+    never loaded into memory.
     """
     return (
         failed_case_queryset(project_ids, filters)
@@ -160,7 +173,10 @@ def failed_case_list_queryset(
             "test_run__project__id",
             "test_run__project__name",
         )
-        .annotate(verdict=Substr("result", 1, VERDICT_PREVIEW_LENGTH))
+        .annotate(
+            verdict=Substr("result", 1, VERDICT_PREVIEW_LENGTH),
+            testrail_configured=_TESTRAIL_CONFIGURED,
+        )
         .order_by("-finished_at", "-id")
     )
 

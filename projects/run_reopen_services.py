@@ -91,12 +91,34 @@ def lock_project_and_run(test_run_id: int) -> tuple[Project, TestRun]:
 def list_reopen_blockers(test_run: TestRun, project: Project) -> list[str]:
     """User-safe reasons the run cannot be put back to work (run status aside).
 
-    Each caller checks the run status itself, with its own message.
+    `list_wake_blockers` plus `list_testrail_push_blockers`: Resume, Re-run and
+    the review redesign re-run replace verdicts that a live send may be
+    writing. Each caller checks the run status itself, with its own message.
     """
+    return _list_blockers(test_run, project, include_push=True)
+
+
+def list_wake_blockers(test_run: TestRun, project: Project) -> list[str]:
+    """User-safe reasons a PAUSED run cannot be woken (run status aside).
+
+    The reopen gates without the TestRail send/push gates. Invariant: a wake
+    path (`queue_pending_cases`, the help and person step panels and their
+    actions) only touches NEED_HELP, AWAITING_PERSON and CREATED cases, never a
+    checked case or one a send selects, so a live early send cannot conflict
+    with it. A path that changes a finished verdict must use
+    `list_reopen_blockers` instead.
+    """
+    return _list_blockers(test_run, project, include_push=False)
+
+
+def _list_blockers(
+    test_run: TestRun, project: Project, *, include_push: bool
+) -> list[str]:
     blockers: list[str] = []
     if _has_other_started_run(project.pk, test_run.pk):
         blockers.append(_OTHER_RUN_ACTIVE)
-    blockers.extend(list_testrail_push_blockers(test_run))
+    if include_push:
+        blockers.extend(list_testrail_push_blockers(test_run))
     machine_blocker = _machine_blocker(project)
     if machine_blocker:
         blockers.append(machine_blocker)
@@ -198,7 +220,7 @@ def queue_pending_cases(test_run: TestRun) -> None:
 
     Raises ``RunHelpError`` (user-safe) when the run is not PAUSED, a case of
     it still needs help or waits for a person's step (Human in the loop), or a
-    reopen gate fails (`list_reopen_blockers`).
+    wake gate fails (`list_wake_blockers`).
     """
     if test_run.status != TestRunStatus.PAUSED:
         raise RunHelpError(_NOT_PAUSED)
@@ -225,7 +247,7 @@ def queue_pending_cases(test_run: TestRun) -> None:
         _finish_run(test_run)
         return
 
-    blockers = list_reopen_blockers(test_run, test_run.project)
+    blockers = list_wake_blockers(test_run, test_run.project)
     if blockers:
         raise RunHelpError(blockers[0])
     reopen_run(test_run, open_pivots)

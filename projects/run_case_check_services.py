@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 
 from django.db import transaction
 from django.utils import timezone
@@ -86,17 +87,29 @@ def check_run_cases(
     )
     if not pivots:
         raise RunCaseCheckError(_NOTHING_TO_CHECK_MESSAGE)
+    changed = check_locked_pivots(pivots, user=user, now=timezone.now())
+    return CheckOutcome(changed=changed, skipped=len(selected) - changed)
+
+
+def check_locked_pivots(
+    pivots: Sequence[TestRunTestCase], *, user: CustomUser, now: datetime
+) -> int:
+    """Check pivots the caller locked in its open transaction; returns the count.
+
+    ``pivots`` are unchecked cases with a verdict, loaded with at least ``id``
+    and ``status`` under ``select_for_update``. Freezes which of their
+    screenshots the next TestRail send attaches, then sets Checked by ``user``
+    and clears a previous send's skip reason (one UPDATE).
+    """
+    if not pivots:
+        return 0
     freeze_testrail_evidence(pivots)
-    now = timezone.now()
-    changed = TestRunTestCase.objects.filter(
-        id__in=[pivot.id for pivot in pivots]
-    ).update(
+    return TestRunTestCase.objects.filter(id__in=[pivot.id for pivot in pivots]).update(
         checked_at=now,
         checked_by=user,
         testrail_source_skip_reason="",
         updated_at=now,
     )
-    return CheckOutcome(changed=changed, skipped=len(selected) - changed)
 
 
 @transaction.atomic

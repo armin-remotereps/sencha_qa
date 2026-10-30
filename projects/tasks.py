@@ -460,15 +460,19 @@ def push_test_run_results(
     time_limit=CHECKED_PUSH_TIME_LIMIT,
 )
 def push_checked_results_to_testrail(
-    self: Task[[int, str, str], None],
+    self: Task[[int, str, str, list[int] | None], None],
     test_run_id: int,
     links_base_url: str,
     slot_token: str,
+    pivot_ids: list[int] | None = None,
 ) -> None:
     """Send a run's checked results, with screenshots, to their source runs.
 
-    `slot_token` is the PUSHING slot taken by `start_checked_push`; a
-    redelivered task whose slot was taken over or reset does nothing.
+    `slot_token` is the PUSHING slot taken by `start_checked_push` or
+    `start_case_send`; a redelivered task whose slot was taken over or reset
+    does nothing. `pivot_ids` limits the send to those cases (a case send);
+    None sends every checked case (also what messages queued before the
+    argument existed get).
     """
     logger.info(
         "push_checked_results_to_testrail started: task_id=%s test_run_id=%s",
@@ -488,7 +492,9 @@ def push_checked_results_to_testrail(
         return
 
     try:
-        outcome = push_checked_results(test_run, links_base_url=links_base_url)
+        outcome = push_checked_results(
+            test_run, links_base_url=links_base_url, pivot_ids=pivot_ids
+        )
         mark_checked_push_succeeded(test_run, outcome)
         logger.info(
             "push_checked_results_to_testrail completed: task_id=%s test_run_id=%s "

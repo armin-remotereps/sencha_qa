@@ -29,7 +29,7 @@
     <p class="muted">{{ testrail_checked_push.checked_count }} of {{ testrail_checked_push.total_count }} checked &middot; {{ testrail_checked_push.ready_count }} ready to send &middot; {{ testrail_checked_push.no_source_count }} without a source TestRail run{% if testrail_checked_push.skipped_count %} &middot; <span title="Marked &quot;Not sent&quot; in the Checked column: uncheck them, or fix them in TestRail and check them again.">{{ testrail_checked_push.skipped_count }} could not be sent</span>{% endif %}</p>
     <p x-show="testrailSourcePushStatus !== 'not_pushed'" x-cloak>
       <template x-if="testrailSourcePushStatus === 'pushing'">
-        <span class="badge badge-running">Sending checked results to TestRail&hellip;</span>
+        <span class="badge badge-running">Sending results to TestRail&hellip;</span>
       </template>
       <template x-if="testrailSourcePushStatus !== 'pushing'">
         <span>

@@ -62,7 +62,7 @@ from projects.person_step_question_services import (
 from projects.person_step_question_view import PersonStepQuestionView
 from projects.person_step_rows import stored_hand_off_kind, stored_how_to
 from projects.run_reopen_services import (
-    list_reopen_blockers,
+    list_wake_blockers,
     lock_project_and_run,
     queue_pending_cases,
 )
@@ -167,9 +167,9 @@ def get_person_step_panel(
 
     The run's open step (``waiting``, ``not_confirmed``, or ``reported`` while
     the agent confirms it, which also happens after the run was re-queued).
-    One query (with the reporter joined), plus the reopen gates while the run
+    One query (with the reporter joined), plus the wake gates while the run
     is PAUSED unless the caller passes them as ``blockers``
-    (``list_reopen_blockers``). With ``include_questions`` (the case card; the
+    (``list_wake_blockers``). With ``include_questions`` (the case card; the
     run banner never shows Ask AI) one more for the step's questions;
     without, ``questions`` is empty and ``can_ask`` False.
 
@@ -207,7 +207,7 @@ def get_person_step_panel(
     if not paused:
         blockers = ()
     elif blockers is None:
-        blockers = list_reopen_blockers(test_run, project)
+        blockers = list_wake_blockers(test_run, project)
     not_confirmed = step.status == PersonStepStatus.NOT_CONFIRMED
     how_to = stored_how_to(step.how_to)
     ask = (
