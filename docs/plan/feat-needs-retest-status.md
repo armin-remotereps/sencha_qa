@@ -1,6 +1,6 @@
 # feat: Needs re-test status
 
-Status: In progress
+Status: Done
 Created: 2026-10-30
 Request: "Add new `need to re-test` status, which can be marked to any test even in middle of a run." A writable project member can flag any case of a run as **Needs re-test**. This works in any run status and on any case status, including a case that is running now, one that waits for help, and one that waits for a person's step. The flag is a person's verdict: "this result cannot be trusted, test it again". It shows wherever case statuses appear. It maps to TestRail's built-in **Retest** status. Later work picks it up through Re-run.
 
@@ -70,7 +70,7 @@ Request: "Add new `need to re-test` status, which can be marked to any test even
 
 ### Data model
 
-`projects/models.py`, migration `projects.0044_needs_retest`, additive only:
+`projects/models.py`, migration `projects.0045_needs_retest`, additive only:
 
 - `TestRunTestCaseStatus.NEEDS_RETEST = "needs_retest", "Needs re-test"` (12 chars, fits `max_length=20`).
   - Generates choice-only `AlterField`s for `TestRunTestCase.status`, `TestRunCaseResume.previous_status` and `CaseResultChange.from_status` / `to_status`.
@@ -228,7 +228,7 @@ Unchanged by design:
 
 - No new setting.
 - Deploy:
-  - run `migrate` (`projects.0044`, `test_sessions.0002`);
+  - run `migrate` (`projects.0045`, `test_sessions.0002`);
   - restart Daphne/web and **every execution worker together**. An old worker has neither the per-case cancel nor the pick-up/finalize guards: it would run a marked CREATED case or overwrite a mark with its verdict.
 
 ### Data flow
@@ -269,13 +269,13 @@ Unchanged by design:
 Each step is one commit. **Parallel:** after step 1, steps 2, 3, 6 and 7 touch disjoint files and can run as parallel sub-agents. Step 4 needs step 3, step 5 needs steps 2 and 4, and step 8 comes last.
 
 1. **Shared model and contracts.**
-   - Enum values, `FINISHED_CASE_STATUSES`, `RETEST_VERDICT_STATUSES`, `RETEST_NOTE_MAX_LENGTH` and the four fields in `projects/models.py`, plus migration `0044`.
+   - Enum values, `FINISHED_CASE_STATUSES`, `RETEST_VERDICT_STATUSES`, `RETEST_NOTE_MAX_LENGTH` and the four fields in `projects/models.py`, plus migration `0045`.
    - `HelpResolution` / `PersonStepClose` values.
    - `CaseActivity.RETEST` + `VERDICT_DISCARDING`, plus `test_sessions` migration `0002`.
    - `RunCaseRetestError` in `projects/exceptions.py`.
    - New `projects/case_retest_marking.py`.
    - `RunCasesRetestForm` in `projects/forms.py`.
-   - Files: `projects/models.py`, `projects/migrations/0044_needs_retest.py`, `test_sessions/case_activity.py`, `test_sessions/migrations/0002_*.py`, `projects/exceptions.py`, `projects/case_retest_marking.py`, `projects/forms.py`.
+   - Files: `projects/models.py`, `projects/migrations/0045_needs_retest.py`, `test_sessions/case_activity.py`, `test_sessions/migrations/0002_*.py`, `projects/exceptions.py`, `projects/case_retest_marking.py`, `projects/forms.py`.
 2. **Worker guards and read side in `projects/services.py`.** Per-case cancellation check, pick-up guard, `_finalize_pivot` guard, the cancel branch, summary/annotation keys, ordering, narrative and titles, Reset clearing. (files: `projects/services.py`)
 3. **Waiting-case resolutions.** `mark_retest_after_help` and `mark_retest_person_step`. (files: `projects/case_help_services.py`, `projects/person_step_services.py`)
 4. **Use case.**
@@ -295,7 +295,7 @@ Each step is one commit. **Parallel:** after step 1, steps 2, 3, 6 and 7 touch d
 
 ## Verification
 
-No automated tests. Run `pre-commit run --all-files` (strict mypy, black, isort), `python manage.py check`, `makemigrations --check` and `sqlmigrate projects 0044`. Then do these manual smoke checks on a dev DB with daphne on a unique port:
+No automated tests. Run `pre-commit run --all-files` (strict mypy, black, isort), `python manage.py check`, `makemigrations --check` and `sqlmigrate projects 0045`. Then do these manual smoke checks on a dev DB with daphne on a unique port:
 
 1. A read-only member POSTing to both URLs gets 403. Foreign or unknown pivot ids give a form error.
 2. Done run: mark a Passed case. The badge, the stat card, the run badge ("Needs re-test" when there is no failure or block), the narrative and the runs list text all update. Undo restores Passed with the same `finished_at`.
@@ -360,3 +360,4 @@ Then run `reviewer` and `verifier` in parallel, giving the verifier the original
 - 2026-10-30: questions answered (all recommended: 1a–9a, optional note kept); implemented.
 - 2026-10-30: review round 1 fixes: marking never restarts a paused run's remaining cases (it only finishes a run the marks settled, and reports a refusal); the teardown of a Failed verdict uses a run-only cancellation check; person steps closed only for cases actually marked; earlier result label "Passed" (not "Success"); `machine_setup` run catalog reports "Done, Needs re-test" and the count; case page dialog only for writable members; Draft run message on the view. `_pause_case_after_fault` also uses the conditional cancel (protects a mark; accepted beyond the plan).
 - 2026-10-30: rejected review nits: extracting a shared safe-`next` helper and a neutral run-case getter (the views follow the existing per-module pattern in `testrail_views.py` / `person_step_views.py`; a cross-module refactor is out of scope); a shared `case_outcome_counts()` for the six count sites (separate refactor plan); a shared person-step close helper (`_cancel_person_steps` is private to the help module; the inline UPDATE now filters by the marked cases).
+- 2026-10-30: review round 2 clean (reviewer + verifier); Done.
