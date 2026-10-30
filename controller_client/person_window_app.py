@@ -14,6 +14,11 @@ answers. Closing it only hides it until the next step. Mark failed / Mark
 blocked confirm inline (the buttons turn into Confirm / Cancel): the window
 opens no other window or dialog, so hiding it hides everything it shows.
 
+Above them, a step shows the test case (TestRail) steps it covers: a "Covers
+TestRail steps 3–5" heading and a read-only, selectable box listing each
+step's text and expected result (it grows up to ``_CASE_STEPS_MAX_LINES``
+lines, then scrolls). Nothing shows when the server sends neither.
+
 A step's "How to do it" items show as numbered lines; an item's command is a
 read-only line with its own Copy button, labelled as an AI suggestion. When
 the server takes questions, a collapsible "Ask the AI" section (collapsed by
@@ -79,6 +84,7 @@ from controller_client.protocol import (
     PERSON_STEP_NOTE_MAX_CHARS,
     PERSON_STEP_OUTPUT_MAX_CHARS,
     PERSON_STEP_QUESTION_MAX_CHARS,
+    PersonCaseStepPayload,
     PersonHowToPayload,
     PersonStepActionKind,
     PersonStepActionPayload,
@@ -124,6 +130,10 @@ _OK_COLOR: Final[str] = "#15803d"
 _MUTED_COLOR: Final[str] = "#6b7280"
 _SUGGESTED_NOTE: Final[str] = "Suggested by the AI. Check it before you run it."
 _ASK_CLOSED: Final[str] = "▸ Ask the AI"
+# The case steps box grows with its text up to this many lines, then scrolls.
+_CASE_STEPS_MAX_LINES: Final[int] = 10
+# Characters per line of a 60-wide word-wrapped Text box (line estimate).
+_TEXT_CHARS_PER_LINE: Final[int] = 60
 _ASK_OPEN: Final[str] = "▾ Ask the AI"
 
 # Win32 ShowWindow / SetWindowPos arguments.
@@ -134,6 +144,8 @@ _SWP_NOMOVE: Final[int] = 0x0002
 _SWP_NOACTIVATE: Final[int] = 0x0010
 
 _StepKey = tuple[int, int]
+# A step's case steps label and items, as the case steps box shows them.
+_CaseStepsView = tuple[str, tuple[PersonCaseStepPayload, ...]]
 
 
 def _key(step: PersonStepStatePayload) -> _StepKey:
@@ -168,6 +180,7 @@ class _ViewState:
     asking: _StepKey | None = None
     # What the how-to area and the Q&A box show now (rebuilt only on change).
     rendered_how_to: tuple[PersonHowToPayload, ...] | None = None
+    rendered_case_steps: _CaseStepsView | None = None
     rendered_qa: str | None = None
 
 
@@ -236,6 +249,14 @@ def _wants_output(step: PersonStepStatePayload) -> bool:
     """A pasted output helps the agent check any step with a command to run."""
     return step.kind is PersonStepWireKind.COMMAND or any(
         item.command for item in step.how_to
+    )
+
+
+def _line_estimate(text: str) -> int:
+    """Roughly how many wrapped lines ``text`` takes in a 60-wide Text box."""
+    return sum(
+        max(1, -(-len(line) // _TEXT_CHARS_PER_LINE))
+        for line in (text.splitlines() or [""])
     )
 
 
@@ -329,15 +350,33 @@ class PersonWindowApp:
         ttk.Label(body, text="What to do").grid(row=0, column=0, sticky="w")
         self._instruction = self._text(body, row=1, height=6, readonly=True)
 
+        # The test case (TestRail) steps this step covers (_render_case_steps).
+        self._case_steps_frame = ttk.Frame(body)
+        self._case_steps_frame.columnconfigure(0, weight=1)
+        self._case_steps_heading = ttk.Label(
+            self._case_steps_frame, text="", wraplength=_WRAP
+        )
+        self._case_steps_heading.grid(row=0, column=0, sticky="w")
+        # Hidden when the server sends a label without step texts.
+        self._case_steps_box = ttk.Frame(self._case_steps_frame)
+        self._case_steps_box.columnconfigure(0, weight=1)
+        self._case_steps_box.grid(row=1, column=0, sticky="ew", pady=(2, 0))
+        self._case_steps = self._text(
+            self._case_steps_box, row=0, height=3, readonly=True
+        )
+        self._case_steps.tag_configure("expected", foreground=_MUTED_COLOR)
+        self._case_steps_frame.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        self._case_steps_frame.grid_remove()
+
         # Rebuilt from the step's how_to items (_render_how_to).
         self._how_to_frame = ttk.Frame(body)
         self._how_to_frame.columnconfigure(0, weight=1)
-        self._how_to_frame.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        self._how_to_frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
 
         ttk.Label(body, text="Expected result").grid(
-            row=3, column=0, sticky="w", pady=(6, 0)
+            row=4, column=0, sticky="w", pady=(6, 0)
         )
-        self._expected = self._text(body, row=4, height=3, readonly=True)
+        self._expected = self._text(body, row=5, height=3, readonly=True)
 
         self._objection_frame = ttk.Frame(body)
         self._objection_frame.columnconfigure(0, weight=1)
@@ -349,7 +388,7 @@ class PersonWindowApp:
         self._objection = self._text(
             self._objection_frame, row=1, height=3, readonly=True
         )
-        self._objection_frame.grid(row=5, column=0, sticky="ew", pady=(6, 0))
+        self._objection_frame.grid(row=6, column=0, sticky="ew", pady=(6, 0))
 
         self._command_frame = ttk.Frame(body)
         self._command_frame.columnconfigure(0, weight=1)
@@ -363,10 +402,10 @@ class PersonWindowApp:
         self._command = self._text(
             self._command_frame, row=1, height=3, readonly=True, mono=True
         )
-        self._command_frame.grid(row=6, column=0, sticky="ew", pady=(6, 0))
+        self._command_frame.grid(row=7, column=0, sticky="ew", pady=(6, 0))
 
         outcome_row = ttk.Frame(body)
-        outcome_row.grid(row=7, column=0, sticky="w", pady=(8, 0))
+        outcome_row.grid(row=8, column=0, sticky="w", pady=(8, 0))
         ttk.Label(outcome_row, text="How did it go?").pack(side="left")
         ttk.Radiobutton(
             outcome_row,
@@ -382,9 +421,9 @@ class PersonWindowApp:
         ).pack(side="left", padx=(8, 0))
 
         ttk.Label(body, text="Note for the agent").grid(
-            row=8, column=0, sticky="w", pady=(6, 0)
+            row=9, column=0, sticky="w", pady=(6, 0)
         )
-        self._note = self._text(body, row=9, height=3, readonly=False)
+        self._note = self._text(body, row=10, height=3, readonly=False)
 
         self._output_frame = ttk.Frame(body)
         self._output_frame.columnconfigure(0, weight=1)
@@ -394,10 +433,10 @@ class PersonWindowApp:
         self._output = self._text(
             self._output_frame, row=1, height=5, readonly=False, mono=True
         )
-        self._output_frame.grid(row=10, column=0, sticky="ew", pady=(6, 0))
+        self._output_frame.grid(row=11, column=0, sticky="ew", pady=(6, 0))
 
         buttons = ttk.Frame(body)
-        buttons.grid(row=11, column=0, sticky="w", pady=(10, 0))
+        buttons.grid(row=12, column=0, sticky="w", pady=(10, 0))
         self._buttons = buttons
         self._report_button = ttk.Button(buttons, text="Report", command=self._report)
         self._report_button.pack(side="left")
@@ -431,12 +470,12 @@ class PersonWindowApp:
         ttk.Button(confirm_buttons, text="Cancel", command=self._cancel_confirm).pack(
             side="left", padx=(6, 0)
         )
-        self._confirm_frame.grid(row=11, column=0, sticky="ew", pady=(10, 0))
+        self._confirm_frame.grid(row=12, column=0, sticky="ew", pady=(10, 0))
         self._confirm_frame.grid_remove()
         self._hint = ttk.Label(body, text="", wraplength=_WRAP)
-        self._hint.grid(row=12, column=0, sticky="w", pady=(4, 0))
+        self._hint.grid(row=13, column=0, sticky="w", pady=(4, 0))
 
-        self._build_ask(body, row=13)
+        self._build_ask(body, row=14)
 
         self._message = ttk.Label(frame, text="", wraplength=_WRAP)
         self._message.grid(row=5, column=0, sticky="w", pady=(8, 0))
@@ -758,6 +797,7 @@ class PersonWindowApp:
         self._status.configure(text="\n".join(line for line in status_lines if line))
         self._instruction.configure(height=4 if step.how_to else 6)
         _set_readonly_text(self._instruction, step.instruction)
+        self._render_case_steps(step)
         self._render_how_to(step)
         _set_readonly_text(self._expected, step.expected_result or "(none given)")
         not_confirmed = step.status is PersonStepWireStatus.NOT_CONFIRMED
@@ -784,6 +824,43 @@ class PersonWindowApp:
             self._url_frame.grid_remove()
         self._render_buttons(step, not_confirmed)
         self._render_ask(step)
+
+    def _render_case_steps(self, step: PersonStepStatePayload) -> None:
+        view = self._view
+        shown: _CaseStepsView = (step.case_steps_label, step.case_steps)
+        if shown == view.rendered_case_steps:
+            # Unchanged: keep the person's scroll position in the box.
+            return
+        view.rendered_case_steps = shown
+        frame = self._case_steps_frame
+        if not step.case_steps_label and not step.case_steps:
+            frame.grid_remove()
+            return
+        label = step.case_steps_label or "test case steps"
+        self._case_steps_heading.configure(text=f"Covers {label}")
+        if not step.case_steps:
+            # A label alone (the server had no step texts): the heading only.
+            self._case_steps_box.grid_remove()
+            frame.grid()
+            return
+        box = self._case_steps
+        box.configure(state="normal")
+        box.delete("1.0", "end")
+        lines = 0
+        for index, case_step in enumerate(step.case_steps):
+            prefix = "" if index == 0 else "\n"
+            text = f"{prefix}{case_step.num}. {case_step.text}"
+            box.insert("end", text)
+            lines += _line_estimate(case_step.text)
+            if case_step.expected:
+                box.insert("end", f"\nExpected: {case_step.expected}", "expected")
+                lines += _line_estimate(f"Expected: {case_step.expected}")
+        box.configure(
+            state="disabled", height=max(1, min(lines, _CASE_STEPS_MAX_LINES))
+        )
+        box.yview_moveto(0.0)
+        self._case_steps_box.grid()
+        frame.grid()
 
     def _render_how_to(self, step: PersonStepStatePayload) -> None:
         view = self._view
@@ -881,7 +958,10 @@ class PersonWindowApp:
 
     @staticmethod
     def _pick_label(step: PersonStepStatePayload) -> str:
-        return f"{step.run_name} · {step.case_title} · {step.step_label}"
+        label = f"{step.run_name} · {step.case_title} · {step.step_label}"
+        if step.case_steps_label:
+            label += f" · {step.case_steps_label}"
+        return label
 
     def _render_buttons(
         self, step: PersonStepStatePayload, not_confirmed: bool
