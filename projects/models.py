@@ -649,6 +649,17 @@ class TestRunTestCase(models.Model):
         blank=True,
         related_name="+",
     )
+    # Who the case's result belongs to on the leaderboard: the person who last
+    # drove it (Start, Resume, Re-run, help resolution, person step), set by
+    # ``projects.case_credit.credit_cases``. Null: nobody known.
+    credited_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        db_index=False,
+    )
     # Set once the result is added to the source run; the dedupe key.
     testrail_source_result_id = models.PositiveIntegerField(null=True, blank=True)
     # TestRail test in the source run; kept across re-sends (same run and case).
@@ -850,7 +861,9 @@ class CaseHelpRequest(models.Model):
             models.Index(
                 fields=["test_run_test_case", "step_num", "-requested_at"],
                 name="case_help_pivot_step_idx",
-            )
+            ),
+            # Leaderboard "Help resolved" window (built concurrently by 0048).
+            models.Index(fields=["resolved_at"], name="case_help_resolved_at_idx"),
         ]
 
     @property
@@ -1231,7 +1244,9 @@ class CasePersonStep(models.Model):
             models.Index(
                 fields=["test_run_test_case", "step_num", "-requested_at"],
                 name="person_step_pivot_step_idx",
-            )
+            ),
+            # Leaderboard "Steps performed" window (built concurrently by 0048).
+            models.Index(fields=["reported_at"], name="person_step_reported_at_idx"),
         ]
 
     @property
