@@ -17,10 +17,16 @@ class CaseActivity(models.TextChoices):
     HELP = "help", "Resolved help"
     PERSON_STEP = "person_step", "Performed a step"
     RESULT_CHANGE = "result_change", "Changed the result"
+    RETEST = "retest", "Marked for re-test"
 
 
 # Actions that throw away the case's current verdict: other sessions' rows for
 # the case are frozen first so they keep the outcome they saw.
 VERDICT_DISCARDING = frozenset(
-    {CaseActivity.RESUME, CaseActivity.RERUN, CaseActivity.REDESIGN_RERUN}
+    {
+        CaseActivity.RESUME,
+        CaseActivity.RERUN,
+        CaseActivity.REDESIGN_RERUN,
+        CaseActivity.RETEST,
+    }
 )
