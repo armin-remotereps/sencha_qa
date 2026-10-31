@@ -173,8 +173,13 @@ def _flash_result(
     if result.queued:
         messages.success(request, success)
         return
+    saved = (
+        f"The verdict was saved without evidence: {result.no_evidence} The run"
+        if result.no_evidence
+        else "Saved, but the run"
+    )
     messages.warning(
         request,
-        f"Saved, but the run cannot continue yet: {result.blocker} "
+        f"{saved} cannot continue yet: {result.blocker} "
         "Then use Continue run on the run page.",
     )

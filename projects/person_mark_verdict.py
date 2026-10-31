@@ -84,29 +84,25 @@ def close_marked_row(
     """
     if person_step_id is None:
         return 0
+    fields: dict[str, object] = {
+        "status": (
+            PersonStepStatus.FAILED
+            if verdict == "failed"
+            else PersonStepStatus.CANCELLED
+        ),
+        "closed_at": now,
+    }
+    # Without evidence the row keeps the summary it had.
+    if agent_summary.strip():
+        fields["agent_summary"] = cap_text(
+            agent_summary, PERSON_STEP_AGENT_TEXT_MAX_LENGTH
+        )
     return CasePersonStep.objects.filter(
         pk=person_step_id,
         test_run_test_case_id=pivot_id,
         status=PersonStepStatus.REPORTED,
         close_reason__in=MARK_CLOSE_REASONS,
-    ).update(
-        status=(
-            PersonStepStatus.FAILED
-            if verdict == "failed"
-            else PersonStepStatus.CANCELLED
-        ),
-        closed_at=now,
-        # Without evidence the row keeps the summary it had.
-        **(
-            {
-                "agent_summary": cap_text(
-                    agent_summary, PERSON_STEP_AGENT_TEXT_MAX_LENGTH
-                )
-            }
-            if agent_summary.strip()
-            else {}
-        ),
-    )
+    ).update(**fields)
 
 
 def apply_person_mark(

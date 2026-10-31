@@ -136,3 +136,4 @@ Not asked; kept as planned:
 - Second pass, accepted as is (documented):
   - A Needs re-test mark that lands during the evidence pass wins: the row closes as `marked_retest` and the person's earlier Failed/Blocked is not written. That is the later person decision.
   - A worker that dies hard during the evidence pass (no abort) leaves the case In progress with the `marked_*` key, like any crashed worker; a Resume then drops the key and the mark is lost.
+- Third pass, fixed: the warning flash shown when the run cannot continue now also says the verdict was saved without evidence; `close_marked_row` builds its update fields first instead of unpacking them inline.
