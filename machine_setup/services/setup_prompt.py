@@ -421,6 +421,16 @@ def _build_knowledge_base(knowledge_index: str | None) -> str:
         return tools + "The project's knowledge base has no readable items yet."
     return (
         tools + "Index:\n" + knowledge_index + "\nRules:\n"
+        "- Once per thread, before your first sub-task that changes the machine "
+        "(read_only checks may come first), check the knowledge base for what "
+        "the preconditions, the step or the brief name: open the archives whose "
+        "name or description suggests machine material (profiles, setup notes, "
+        f"configs, exports) with {LIST_KNOWLEDGE_TOOL}(archive_id), read the "
+        "folder instructions of their root and of the folders on your topic "
+        "(a long listing is cut: search hits name the folder instructions too), "
+        f"and {SEARCH_KNOWLEDGE_TOOL} once with the software, files and settings "
+        "joined by 'or'. Use its facts (versions, paths, settings, file "
+        "locations) when planning; prefer them over guesses and defaults.\n"
         "- Search the knowledge base before asking the user for install steps, "
         "configuration, credentials locations or exported files; ask only when "
         "it has nothing.\n"
@@ -493,7 +503,15 @@ def _build_setup_rules(*, max_iterations: int, main_chat: bool) -> str:
         f"get_test_cases in batches of up to {MAX_CASES_PER_BATCH} ids. Never read "
         "cases one by one, and do not read test steps just to plan S0. Use "
         "search_test_cases to find cases by text.\n"
-        "- Check what is already in place with a read_only sub-task before "
+        # The Night auto-fix keeps the shared rule (read_only checks first).
+        + (
+            "- Then, before the first sub-task (read_only checks included: the "
+            "knowledge base says what to check), check the knowledge base as its "
+            "rules above say (when it has items).\n"
+            if main_chat
+            else ""
+        )
+        + "- Check what is already in place with a read_only sub-task before "
         "changing anything.\n"
         "- One sub-task per coherent goal: install and verify one tool, create one "
         "directory tree, configure one app.\n"
