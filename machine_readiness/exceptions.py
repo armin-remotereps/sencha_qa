@@ -29,6 +29,21 @@ class ArtifactProfileInvalidError(MachineReadinessError):
         self.errors: tuple[str, ...] = tuple(errors)
 
 
+class ArtifactKnowledgeRefError(ArtifactProfileInvalidError):
+    """Items cite knowledge base ids that are not items of the project.
+
+    ``item_ids`` are the refused ids, so a form can mark the fields citing them.
+    """
+
+    def __init__(self, errors: Sequence[str], *, item_ids: Sequence[int]) -> None:
+        super().__init__(errors)
+        self.item_ids: tuple[int, ...] = tuple(item_ids)
+
+
+class ArtifactProfileVersionNotFoundError(MachineReadinessError):
+    """No such profile version in this project."""
+
+
 class ArtifactScanUnavailableError(MachineReadinessError):
     """No scan possible: runner offline or too old, or no base directory."""
 

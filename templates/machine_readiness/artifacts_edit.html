@@ -1,0 +1,132 @@
+{% extends "layouts/project.html" %}
+
+{% comment %} Edit the artifacts profile: base directories, notes and the artifacts
+   (a formset; blank extra rows are ignored, "Remove" drops a row).
+
+   Context contract (machine_readiness.views.artifacts_edit):
+     project    — current Project
+     active_tab — "machine_readiness"
+     form       — ArtifactProfileForm (hidden base_revision makes the save conditional)
+     formset    — ArtifactItemFormSet, prefix "items"
+     item_rows  — list of (ArtifactItemForm, kb label: "KB item #N «Name»",
+                  "KB item #N (deleted)" or "")
+     max_items  — the most artifacts a profile holds {% endcomment %}
+{% block title %}Edit artifacts · Machine readiness · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumb_extra %}
+  <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'machine_readiness:overview' project_id=project.id %}">Machine readiness</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Edit artifacts</span>
+{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>Edit artifacts</h1>
+    <p class="subtitle">Where the tests' builds, installers, configs, data and licences live, their versions and where they come from. The test planner and Machine setup read this; never put passwords, keys or other secrets here, only where they are kept.</p>
+  </div>
+</div>
+{% endblock %}
+
+{% block project_content %}
+<form method="post" action="{% url 'machine_readiness:artifacts_edit' project_id=project.id %}" novalidate class="stack">
+  {% csrf_token %}
+  {{ form.base_revision }}
+  {{ formset.management_form }}
+
+  {% if form.non_field_errors or formset.non_form_errors %}
+  <div class="alert alert-danger" role="alert">
+    {% for error in form.non_field_errors %}<p>{{ error }}</p>{% endfor %}
+    {% for error in formset.non_form_errors %}<p>{{ error }}</p>{% endfor %}
+  </div>
+  {% endif %}
+
+  <section class="card" aria-labelledby="mr-dirs-title">
+    <div class="card-header">
+      <h2 id="mr-dirs-title">Base directories</h2>
+    </div>
+    <p class="hint">One folder per test machine OS that holds all testing artifacts. Absolute paths only; not the Downloads folder, which the Test Runner empties before every case.</p>
+    <div class="grid grid-3">
+      {% for field in form %}{% if field.name == "base_dir_windows" or field.name == "base_dir_macos" or field.name == "base_dir_linux" %}
+      <div class="field{% if field.errors %} has-error{% endif %}">
+        <label for="{{ field.id_for_label }}">{% if field.name == "base_dir_windows" %}Windows{% elif field.name == "base_dir_macos" %}macOS{% else %}Linux{% endif %} <span class="optional">(optional)</span></label>
+        {{ field }}
+        {% for error in field.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+      </div>
+      {% endif %}{% endfor %}
+    </div>
+    <div class="field{% if form.notes.errors %} has-error{% endif %}">
+      <label for="{{ form.notes.id_for_label }}">Notes <span class="optional">(optional)</span></label>
+      {{ form.notes }}
+      <p class="hint">How artifacts are produced and delivered, where credentials are kept (never the values), and what must not be touched.</p>
+      {% for error in form.notes.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="mr-items-title">
+    <div class="card-header">
+      <h2 id="mr-items-title">Artifacts</h2>
+      <span class="muted small">At most {{ max_items }}</span>
+    </div>
+    <p class="hint">The path is a glob relative to the base directory (such as <code>installers/app-*.msi</code>) or an absolute path. The expected version is a version, <code>latest</code>, or blank. Blank rows are ignored; save to get more empty rows.</p>
+
+    {% for item_form, kb_label in item_rows %}
+    <fieldset class="mr-item">
+      <legend class="mr-item-legend">{% if item_form.initial.name %}{{ item_form.initial.name }}{% else %}New artifact{% endif %}</legend>
+      {% if item_form.non_field_errors %}
+        {% for error in item_form.non_field_errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+      {% endif %}
+      <div class="grid grid-3">
+        {% for field in item_form %}{% if field.name == "name" or field.name == "key" or field.name == "kind" %}
+        <div class="field{% if field.errors %} has-error{% endif %}">
+          <label for="{{ field.id_for_label }}">{% if field.name == "key" %}Key{% elif field.name == "name" %}Name{% else %}Kind{% endif %}</label>
+          {{ field }}
+          {% if field.name == "key" %}<p class="hint">Lower-case letters and digits, separated by "-" or "_".</p>{% endif %}
+          {% for error in field.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+        </div>
+        {% endif %}{% endfor %}
+      </div>
+      <div class="grid grid-3">
+        {% for field in item_form %}{% if field.name == "path_pattern" or field.name == "expected_version" or field.name == "source" %}
+        <div class="field{% if field.errors %} has-error{% endif %}">
+          <label for="{{ field.id_for_label }}">{% if field.name == "path_pattern" %}Path{% elif field.name == "expected_version" %}Expected version{% else %}Source{% endif %} <span class="optional">(optional)</span></label>
+          {{ field }}
+          {% for error in field.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+        </div>
+        {% endif %}{% endfor %}
+      </div>
+      <div class="grid grid-2">
+        <div class="field{% if item_form.install_hint.errors %} has-error{% endif %}">
+          <label for="{{ item_form.install_hint.id_for_label }}">How to install <span class="optional">(optional)</span></label>
+          {{ item_form.install_hint }}
+          {% for error in item_form.install_hint.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+        </div>
+        <div class="field{% if item_form.knowledge_item_id.errors %} has-error{% endif %}">
+          <label for="{{ item_form.knowledge_item_id.id_for_label }}">Knowledge base item id <span class="optional">(optional)</span></label>
+          {{ item_form.knowledge_item_id }}
+          {% if kb_label %}<p class="hint">{{ kb_label }}</p>{% else %}<p class="hint">The number in the item's address on the <a href="{% url 'knowledge_base:list' project_id=project.id %}">Knowledge base</a> tab, e.g. a CI export that describes this artifact.</p>{% endif %}
+          {% for error in item_form.knowledge_item_id.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+        </div>
+      </div>
+      {% if item_form.DELETE %}
+      <label class="checkbox mr-item-remove">{{ item_form.DELETE }} Remove this artifact</label>
+      {% endif %}
+    </fieldset>
+    {% endfor %}
+  </section>
+
+  <section class="card">
+    <div class="field{% if form.change_summary.errors %} has-error{% endif %}">
+      <label for="{{ form.change_summary.id_for_label }}">Change summary <span class="optional">(optional)</span></label>
+      {{ form.change_summary }}
+      {% for error in form.change_summary.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+    </div>
+    <div class="card-actions">
+      <a class="btn btn-ghost" href="{% url 'machine_readiness:overview' project_id=project.id %}">Cancel</a>
+      <button type="submit" class="btn btn-primary">Save profile</button>
+    </div>
+  </section>
+</form>
+{% endblock %}

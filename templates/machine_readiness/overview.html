@@ -1,0 +1,192 @@
+{% extends "layouts/project.html" %}
+
+{% comment %} Machine readiness tab: the artifacts profile (with provenance and version
+   history), then the inventory of the base directory and the gap report.
+
+   Context contract (machine_readiness.views.overview):
+     project        — current Project
+     active_tab     — "machine_readiness"
+     profile        — ProfileSnapshot (profile.data: ProfileData)
+     items          — Sequence[ProfileItemRow]: item (ProfileItemData), kind_label,
+                      kb_label ("" without a citation), kb_exists
+     provenance     — ProfileProvenance, or None while intake is pending
+     versions       — Sequence[ProfileVersionRow], newest first
+     intake_pending — no profile row yet: Machine setup asks about artifacts first
+     inventory      — None until the scan step (then: inventory summary without entries)
+     matches        — None until the scan step (Sequence[ArtifactMatch])
+     runner_os      — None until the scan step
+     scan_available — False until the scan step
+     gap_report     — None until the gap report step
+     project_can_write (context processor) — false hides Edit, Skip intake and Restore
+
+   Extension points: the scan and gap report step fills the
+   "readiness_inventory" and "readiness_gaps" blocks below. {% endcomment %}
+{% block title %}Machine readiness · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumb_extra %}
+  <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Machine readiness</span>
+{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>Machine readiness</h1>
+    <p class="subtitle">What the tests need on the test machine, where it comes from, and what is missing.</p>
+  </div>
+  {% if project_can_write %}
+  <div class="actions">
+    <a class="btn btn-primary" href="{% url 'machine_readiness:artifacts_edit' project_id=project.id %}">Edit artifacts</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block project_content %}
+<div class="stack">
+  {% if intake_pending %}
+  <div class="alert alert-info mr-intake">
+    <p><strong>Intake pending.</strong> Machine setup asks about the project's artifacts (builds, installers, configs, data, licences and where they come from) before it works on the machine. Fill in the profile here, answer the questions in the Machine setup chat, or skip the intake.</p>
+    {% if project_can_write %}
+    <div class="mr-intake-actions">
+      <a class="btn btn-secondary btn-sm" href="{% url 'machine_setup:chat' project_id=project.id %}">Open Machine setup</a>
+      <form method="post" action="{% url 'machine_readiness:intake_skip' project_id=project.id %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-ghost btn-sm">Skip intake</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <section class="card" aria-labelledby="mr-artifacts-title">
+    <div class="card-header">
+      <h2 id="mr-artifacts-title">Artifacts</h2>
+      {% if items %}<span class="card-header-count">{{ items|length }}</span>{% endif %}
+    </div>
+
+    {% if provenance %}
+      <p class="context-provenance">
+        {% if provenance.revision %}
+          Revision {{ provenance.revision }}, written by {{ provenance.source_label|default:"unknown" }}{% if provenance.author_name %} ({{ provenance.author_name }}){% endif %}{% if provenance.written_at %} on {{ provenance.written_at|date:"M j, Y, H:i" }}{% endif %}{% if provenance.change_summary %} — {{ provenance.change_summary }}{% endif %}
+        {% elif provenance.intake_skipped_at %}
+          Intake skipped{% if provenance.intake_skipped_by_name %} by {{ provenance.intake_skipped_by_name }}{% endif %} on {{ provenance.intake_skipped_at|date:"M j, Y, H:i" }}. Nothing recorded yet.
+        {% endif %}
+      </p>
+    {% endif %}
+
+    <dl class="kv">
+      <div><dt>Windows base directory</dt><dd class="mr-path">{{ profile.data.base_dir_windows|default:"Not set" }}</dd></div>
+      <div><dt>macOS base directory</dt><dd class="mr-path">{{ profile.data.base_dir_macos|default:"Not set" }}</dd></div>
+      <div><dt>Linux base directory</dt><dd class="mr-path">{{ profile.data.base_dir_linux|default:"Not set" }}</dd></div>
+    </dl>
+
+    {% if profile.data.notes %}
+      <h3 class="mr-subtitle">Notes</h3>
+      <p class="pre-wrap">{{ profile.data.notes }}</p>
+    {% endif %}
+
+    {% if items %}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Artifact</th>
+              <th scope="col">Kind</th>
+              <th scope="col">Path</th>
+              <th scope="col">Expected version</th>
+              <th scope="col">Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in items %}
+            <tr>
+              <td data-label="Artifact" class="cell-primary">
+                <strong>{{ row.item.name }}</strong>
+                <div class="muted small mr-path">{{ row.item.key }}</div>
+                {% if row.item.install_hint %}<div class="small pre-wrap mr-hint">{{ row.item.install_hint }}</div>{% endif %}
+              </td>
+              <td data-label="Kind"><span class="chip">{{ row.kind_label }}</span></td>
+              <td data-label="Path" class="mr-path">{{ row.item.path_pattern|default:"—" }}</td>
+              <td data-label="Expected version">{{ row.item.expected_version|default:"—" }}</td>
+              <td data-label="Source">
+                {% if row.item.source %}<div>{{ row.item.source }}</div>{% endif %}
+                {% if row.kb_label %}
+                  {% if row.kb_exists %}
+                    <a class="small" href="{% url 'knowledge_base:item' project_id=project.id item_id=row.item.knowledge_item_id %}">{{ row.kb_label }}</a>
+                  {% else %}
+                    <span class="small muted">{{ row.kb_label }}</span>
+                  {% endif %}
+                {% endif %}
+                {% if not row.item.source and not row.kb_label %}—{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">No artifacts recorded yet.{% if project_can_write %} <a href="{% url 'machine_readiness:artifacts_edit' project_id=project.id %}">Add them</a>, or let Machine setup ask about them.{% endif %}</p>
+    {% endif %}
+  </section>
+
+  {% if versions %}
+  <section class="card" aria-labelledby="mr-history-title">
+    <div class="card-header">
+      <h2 id="mr-history-title">Version history</h2>
+    </div>
+    <p class="hint">Earlier versions of the artifacts profile.{% if project_can_write %} Restoring one saves the current profile here first, so a restore can be undone.{% endif %}</p>
+    <ol class="version-list">
+      {% for version in versions %}
+      <li>
+        <div class="version-head">
+          <div>
+            <strong>Revision {{ version.revision }}</strong>
+            <span class="chip">{{ version.source_label|default:"Unknown" }}</span>
+            <p class="version-meta">
+              {% if version.author_name %}{{ version.author_name }} · {% endif %}
+              {% if version.written_at %}written {{ version.written_at|date:"M j, Y, H:i" }} · {% endif %}
+              replaced {{ version.replaced_at|date:"M j, Y, H:i" }}
+            </p>
+          </div>
+          {% if project_can_write %}<button type="button" class="btn btn-ghost btn-sm" @click="$dispatch('open-restore-artifacts-{{ version.id }}')">Restore</button>{% endif %}
+        </div>
+        {% if version.change_summary %}<p class="version-summary">{{ version.change_summary }}</p>{% endif %}
+
+        {% if project_can_write %}
+        {% url 'machine_readiness:artifacts_version_restore' project_id=project.id version_id=version.id as restore_url %}
+        {% with version_id=version.id|stringformat:"s" revision=version.revision|stringformat:"s" %}
+        {% with dialog_id="restore-artifacts-"|add:version_id title="Restore revision "|add:revision|add:"?" %}
+          {% include "partials/confirm_dialog.html" with dialog_id=dialog_id title=title body="Replaces the current artifacts profile with this version. The current profile is kept in the history." confirm_label="Restore" confirm_class="btn-primary" action_url=restore_url csrf_token=csrf_token only %}
+        {% endwith %}
+        {% endwith %}
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+  </section>
+  {% endif %}
+
+  {% block readiness_inventory %}
+  <section class="card" aria-labelledby="mr-inventory-title">
+    <div class="card-header">
+      <h2 id="mr-inventory-title">Inventory</h2>
+    </div>
+    <div class="empty">
+      <h3>Inventory and gaps are coming</h3>
+      <p>A listing of the base directory on the test machine, matched against the artifacts above, will show here.</p>
+    </div>
+  </section>
+  {% endblock %}
+
+  {% block readiness_gaps %}
+  <section class="card" aria-labelledby="mr-gaps-title">
+    <div class="card-header">
+      <h2 id="mr-gaps-title">Gaps</h2>
+    </div>
+    <p class="muted">Missing artifacts, apps to install and version mismatches will be listed here once the base directory has been scanned.</p>
+  </section>
+  {% endblock %}
+</div>
+{% endblock %}

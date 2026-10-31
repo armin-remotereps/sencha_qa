@@ -4802,3 +4802,51 @@ details.card[open] > summary,
   overflow-wrap: anywhere;
   min-width: 0;
 }
+
+/* --------------------------------------------------------------------------
+   Machine readiness tab (artifacts profile)
+   -------------------------------------------------------------------------- */
+
+.mr-intake-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.mr-path {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.mr-subtitle {
+  margin: 18px 0 6px;
+  font-size: 0.95rem;
+}
+
+.mr-hint {
+  margin-top: 4px;
+  color: var(--text-muted);
+}
+
+.mr-item {
+  margin: 0 0 16px;
+  padding: 14px 16px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.mr-item-legend {
+  padding: 0 6px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.mr-item .textarea {
+  min-height: 64px;
+}
+
+.mr-item-remove {
+  margin-bottom: 12px;
+}
