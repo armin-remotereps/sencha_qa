@@ -59,7 +59,6 @@ from projects.models import (
     TestRunTestCaseStatus,
 )
 from projects.person_mark_verdict import (
-    MARK_CLOSE_REASONS,
     close_marked_row,
     log_no_evidence,
     write_person_mark_verdict,
@@ -108,9 +107,9 @@ class PersonStepPanel:
     is_open: bool
     # The agent is confirming the person's report (``reported``).
     confirming: bool
-    # The person marked the case failed or blocked and the agent records
-    # evidence before the verdict is written (``reported`` with a mark).
-    recording_evidence: bool
+    # "failed" / "blocked" while the agent records evidence of the person's
+    # mark before that verdict is written (``reported`` with a mark); "" else.
+    marked_verdict: str
     # The agent's reason while ``not_confirmed``; empty otherwise.
     objection: str
     # Where to run a command step, e.g. "Terminal (bash)"; empty otherwise.
@@ -236,8 +235,7 @@ def get_person_step_panel(
         step_label=step_label,
         is_open=is_open,
         confirming=step.status == PersonStepStatus.REPORTED,
-        recording_evidence=step.status == PersonStepStatus.REPORTED
-        and step.close_reason in MARK_CLOSE_REASONS,
+        marked_verdict=_marked_verdict(step),
         objection=step.agent_objection if not_confirmed else "",
         shell_label=step.shell_label,
         can_report=paused and is_open and not blockers,
@@ -501,12 +499,15 @@ def _mark_person_step(
             ]
         )
         result = _after_action(project, test_run, locked_pivot, actor)
-        if not result.queued:
-            # The run stays paused: the person's verdict stands now.
-            locked_pivot.execution_checkpoint = checkpoint_before
-            _write_mark_now(locked_pivot, step, verdict, result_text, now)
-            log_no_evidence(locked_pivot.pk, result.blocker)
-        return result
+        if result.queued:
+            return result
+        # The run cannot continue: the person's verdict stands now.
+        locked_pivot.execution_checkpoint = checkpoint_before
+        _write_mark_now(locked_pivot, step, verdict, result_text, now)
+        log_no_evidence(locked_pivot.pk, result.blocker)
+        # Queued again: with no open case left the run finishes (no gates).
+        blocker = _try_queue(test_run)
+        return PersonStepActionResult(queued=not blocker, blocker=blocker)
 
 
 def _write_mark_now(
@@ -828,6 +829,16 @@ def _open_objection(step: CasePersonStep) -> str:
     """The agent's objection while the step is ``not_confirmed``; "" otherwise."""
     if step.status == PersonStepStatus.NOT_CONFIRMED:
         return step.agent_objection
+    return ""
+
+
+def _marked_verdict(step: CasePersonStep) -> str:
+    if step.status != PersonStepStatus.REPORTED:
+        return ""
+    if step.close_reason == PersonStepClose.MARKED_FAILED:
+        return "failed"
+    if step.close_reason == PersonStepClose.MARKED_BLOCKED:
+        return "blocked"
     return ""
 
 

@@ -121,3 +121,14 @@ Not asked; kept as planned:
 ## Changelog
 - 2026-10-31: created (Draft), split from `feat-tester-console.md` at the user's request.
 - 2026-10-31: the user answered Q1 (worker pass), Q2 (keep the verdict) and Q4 (AI on with a switch); Q3 stays "no". Status Ready.
+- 2026-10-31: implemented (In progress). First review pass, fixed:
+  - Reviewer: an abort (or a runner drop, which aborts the run) while a mark waits for its evidence pass cancelled the case and lost the person's verdict. `abort_test_run` now calls `person_mark_verdict.settle_person_marks_on_abort` first: the verdict is written, the row closed, "no evidence: the run was stopped".
+  - Reviewer: `apply_person_mark` locked the case before the person step; it now locks the person step first.
+  - Reviewer: the evidence block made every verdict prompt bigger. `format_attempt_lines` now shows a person attempt's `error` head and tail only, capped at `EVIDENCE_PROMPT_MAX_CHARS` (1500). The log and TestRail keep the whole block.
+  - Reviewer/verifier: the mark label matched the phrase anywhere in the summary; it now matches the headline only. The card gets `PersonStepPanel.marked_verdict` instead of comparing `close_reason` in the template. `ControllerNotConnectedError` gets its own "no evidence" text.
+  - Verifier: a gate refusal on the last case left the run Paused with nothing to do. After the direct verdict, the service queues once more, and with no open case left the run finishes.
+  - Verifier: an unusable checkpoint left the row open and the `marked_*` key stored. The row id now comes from the `person` key itself, the key is dropped, and "no evidence" is logged. The evidence pass also waits for the runner first (`wait_for_controller`, the usual reconnect grace).
+- Not changed, with reasons:
+  - Verifier: the evidence keeps the check commands' output but not the command text. The command is already in the case log's tool-call lines next to it, and the TestRail step text names the step's command.
+  - Verifier: pasted output is not redacted before it reaches the case log and TestRail. This was accepted in Risks; the card hint now warns against pasting secrets.
+  - Verifier: a mark on a restore hand-off records a `resume` attempt. For Failed, the TestRail selection then falls back to the last shots, which are that attempt's evidence shots anyway.

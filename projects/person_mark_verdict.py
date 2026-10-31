@@ -18,7 +18,7 @@ from django.db.models import F, Value
 from django.db.models.functions import Concat
 from django.utils import timezone
 
-from agents.checkpoint import checkpoint_to_json
+from agents.checkpoint import checkpoint_to_json, without_person_step
 from agents.types import OrchestratorCheckpoint, PersonMarkVerdict
 from projects.case_duration_services import close_case_segment
 from projects.models import (
@@ -111,11 +111,17 @@ def apply_person_mark(
     """The worker writes the person's verdict after the evidence pass.
 
     ``checkpoint`` (the evidence attempt appended and the ``person`` key
-    cleared; None keeps the stored one) is written with it. Only while the
+    cleared) is written with it; None keeps the stored one without its
+    ``person`` key. Only while the
     locked case is still In progress in ``generation``: a Needs re-test mark,
     an abort or a newer chain that landed first is kept. True when written.
     """
     with transaction.atomic():
+        # The person step before the case: every person step writer's order.
+        if person_step_id is not None:
+            CasePersonStep.objects.select_for_update().filter(
+                pk=person_step_id, test_run_test_case_id=pivot.pk
+            ).first()
         locked = (
             TestRunTestCase.objects.select_for_update(of=("self",))
             .defer("logs")
@@ -126,9 +132,12 @@ def apply_person_mark(
             return False
         now = timezone.now()
         fields = write_person_mark_verdict(locked, verdict, now)
-        if checkpoint is not None:
-            locked.execution_checkpoint = checkpoint_to_json(checkpoint)
-            fields.append("execution_checkpoint")
+        locked.execution_checkpoint = (
+            checkpoint_to_json(checkpoint)
+            if checkpoint is not None
+            else without_person_step(locked.execution_checkpoint)
+        )
+        fields.append("execution_checkpoint")
         locked.save(update_fields=fields)
         close_case_segment(locked.pk, now)
         summary = ""
@@ -144,6 +153,49 @@ def apply_person_mark(
     pivot.finished_at = locked.finished_at
     pivot.segment_started_at = None
     return True
+
+
+def settle_person_marks_on_abort(test_run_id: int, now: datetime) -> None:
+    """The run is aborted while a person's mark waits for its evidence pass:
+    the person's verdict stands, without evidence.
+
+    Called by the abort under the run lock, before it cancels the open person
+    steps and cases (person step, then case). A run has at most one such case.
+    """
+    rows = list(
+        CasePersonStep.objects.select_for_update()
+        .filter(
+            test_run_test_case__test_run_id=test_run_id,
+            status=PersonStepStatus.REPORTED,
+            close_reason__in=MARK_CLOSE_REASONS,
+        )
+        .values_list("pk", "test_run_test_case_id", "close_reason")
+    )
+    for person_step_id, pivot_id, close_reason in rows:
+        pivot = (
+            TestRunTestCase.objects.select_for_update()
+            .defer("logs")
+            .filter(
+                pk=pivot_id,
+                status__in=(
+                    TestRunTestCaseStatus.CREATED,
+                    TestRunTestCaseStatus.IN_PROGRESS,
+                ),
+            )
+            .first()
+        )
+        if pivot is None:
+            continue
+        verdict: PersonMarkVerdict = (
+            "failed" if close_reason == PersonStepClose.MARKED_FAILED else "blocked"
+        )
+        fields = write_person_mark_verdict(pivot, verdict, now)
+        pivot.execution_checkpoint = without_person_step(pivot.execution_checkpoint)
+        pivot.save(update_fields=[*fields, "execution_checkpoint"])
+        # A Created case has no open segment; the close is idempotent.
+        close_case_segment(pivot.pk, now)
+        close_marked_row(pivot.pk, person_step_id, verdict, now)
+        log_no_evidence(pivot.pk, "the run was stopped")
 
 
 def log_no_evidence(pivot_id: int, reason: str) -> None:

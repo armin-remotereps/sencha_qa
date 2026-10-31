@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Final, Literal
 
 from agents.checkpoint import final_step_indices
 from agents.services.person_step_prompts import (
+    EVIDENCE_PROMPT_MAX_CHARS,
+    head_and_tail,
     person_attempt_label,
     person_verdict_note,
 )
@@ -683,7 +686,13 @@ def format_attempt_lines(
             label = f"{label} — {_short_description(plan, attempt.step_num)}"
             if attempt.performed_by == "person":
                 label = f"{label} ({person_attempt_label(attempt)})"
-        lines.append(_format_result_line(label, attempt.result))
+        result = attempt.result
+        if attempt.performed_by == "person" and result.error:
+            # A person attempt's evidence block: bounded in every prompt.
+            result = replace(
+                result, error=head_and_tail(result.error, EVIDENCE_PROMPT_MAX_CHARS)
+            )
+        lines.append(_format_result_line(label, result))
 
     # Steps run in order from step 1, so the unrun ones are the tail of the plan.
     ran_steps = len(final_index)

@@ -162,7 +162,10 @@ from projects.models import (
     TestRunTestCaseStatus,
     UploadStatus,
 )
-from projects.person_mark_verdict import apply_person_mark
+from projects.person_mark_verdict import (
+    apply_person_mark,
+    settle_person_marks_on_abort,
+)
 from projects.person_step_notifications import notify_person_step
 from projects.person_step_rows import (
     build_person_step_settler,
@@ -3349,17 +3352,20 @@ def _finish_person_mark(
 
     on_log = _build_log_callback(pivot, generation)
     checkpoint = load_resume_checkpoint(pivot)
-    person_step_id = (
-        checkpoint.person.request_id
-        if checkpoint is not None and checkpoint.person is not None
-        else None
-    )
+    # Read from the key itself: it also names the row when the rest of the
+    # checkpoint cannot be used.
+    person = read_checkpoint_person_step(pivot.execution_checkpoint)
+    person_step_id = person.request_id if person is not None else None
     recorded: OrchestratorCheckpoint | None = None
-    if checkpoint is not None:
+    if checkpoint is None:
+        on_log("[Evidence] no evidence: the case has no usable saved progress")
+    else:
         project.refresh_from_db(
             fields=["project_prompt", "application_url", "application_platform"]
         )
         try:
+            # A runner that is reconnecting gets the usual grace period.
+            wait_for_controller(project.id)
             recorded = record_person_mark(
                 checkpoint,
                 project.id,
@@ -3369,8 +3375,10 @@ def _finish_person_mark(
                 project_prompt=build_agent_project_context(project),
                 cancellation_check=cancellation_check,
             )
-        except (AgentCancelledError, ControllerNotConnectedError):
+        except AgentCancelledError:
             on_log("[Evidence] no evidence: the case was stopped")
+        except ControllerNotConnectedError:
+            on_log("[Evidence] no evidence: the Test Runner is not connected")
         except Exception as exc:
             reason = classify_case_fault(exc)
             logger.warning(
@@ -4011,6 +4019,9 @@ def abort_test_run(
     # Help requests and person steps before cases: the lock order of every
     # help and person step writer.
     _cancel_run_help_requests(test_run, now)
+    # A person's Mark failed / blocked still waiting for its evidence pass
+    # keeps the person's verdict.
+    settle_person_marks_on_abort(test_run.pk, now)
     _cancel_run_person_steps(test_run, now)
 
     # A Need help (or person step) case is Cancelled like a running one:

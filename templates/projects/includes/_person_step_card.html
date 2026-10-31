@@ -8,8 +8,8 @@
                   kind, instruction, expected_result, command, round,
                   requested_at, outcome, note, output), step_label
                   ("Step N of M"), is_open (waiting / not_confirmed),
-                  confirming (reported), recording_evidence (reported
-                  after Mark failed / Mark blocked), objection (the agent's reason while
+                  confirming (reported), marked_verdict ("failed" /
+                  "blocked" while the agent records evidence of a mark), objection (the agent's reason while
                   not_confirmed), shell_label (command steps), can_report,
                   blockers, runner_can_answer (the connected Test Runner
                   shows the step in its window), reported_at_runner (the
@@ -200,9 +200,9 @@
       <div class="alert alert-info">
         <span class="alert-icon" aria-hidden="true">⚙</span>
         <div>
-          {% if person_step_panel.recording_evidence %}
+          {% if person_step_panel.marked_verdict %}
           <strong>Recording evidence…</strong>
-          <p>The case was marked {% if step.close_reason == "marked_blocked" %}blocked{% else %}failed{% endif %}. The agent takes a screenshot of the test machine and keeps the command output, then records that verdict. This page updates when it is done.</p>
+          <p>The case was marked {{ person_step_panel.marked_verdict }}. The agent takes a screenshot of the test machine and keeps the command output, then records that verdict. This page updates when it is done.</p>
           {% else %}
           <strong>The agent is checking {% if person_step_panel.reported_at_runner %}the report{% else %}your report{% endif %}…</strong>
           <p>It looks at the test machine to confirm the step. This page updates when it is done.</p>

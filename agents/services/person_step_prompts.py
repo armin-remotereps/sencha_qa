@@ -59,6 +59,9 @@ _MARKERS: Final = (
 # In the summary of a person's Mark failed / Mark blocked evidence attempt, so
 # the attempt line can label it without another field.
 _MARK_PHRASE: Final = " marked the case {verdict} at this step"
+# A person attempt's evidence as the verdict prompts show it (head and
+# tail); the case log and TestRail keep the whole block.
+EVIDENCE_PROMPT_MAX_CHARS: Final = 1500
 # The agent's observation in an evidence block.
 _EVIDENCE_OBSERVATION_MAX_CHARS: Final = 1000
 
@@ -99,7 +102,7 @@ def cap_text(text: str, limit: int) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
-def _head_and_tail(text: str, limit: int) -> str:
+def head_and_tail(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     half = (limit - 40) // 2
@@ -401,7 +404,7 @@ def _fenced_step_and_report(
         else ""
     )
     output = (
-        f"\nPasted output:\n{_head_and_tail(_fence(person.output), _REPORT_OUTPUT_MAX_CHARS)}"
+        f"\nPasted output:\n{head_and_tail(_fence(person.output), _REPORT_OUTPUT_MAX_CHARS)}"
         if person.output.strip()
         else ""
     )
@@ -437,13 +440,13 @@ def format_person_evidence(
     if pasted_output.strip():
         parts.append(
             "Output the person pasted:\n"
-            f"{_OUTPUT_OPEN}\n{_head_and_tail(_fence(pasted_output.strip()), limit)}\n"
+            f"{_OUTPUT_OPEN}\n{head_and_tail(_fence(pasted_output.strip()), limit)}\n"
             f"{_OUTPUT_CLOSE}"
         )
     if check_output.strip():
         parts.append(
             "Output of the agent's read-only checks:\n"
-            f"{_OUTPUT_OPEN}\n{_head_and_tail(_fence(check_output.strip()), limit)}\n"
+            f"{_OUTPUT_OPEN}\n{head_and_tail(_fence(check_output.strip()), limit)}\n"
             f"{_OUTPUT_CLOSE}"
         )
     if observation.strip():
@@ -533,8 +536,10 @@ def is_overruled(attempt: SubTaskAttempt) -> bool:
 def person_attempt_label(attempt: SubTaskAttempt) -> str:
     """Who performed a person attempt and how the agent judged it."""
     if attempt.result.status != "pass":
+        # The headline only: the quoted note and the observation follow it.
+        headline = attempt.result.summary.split(";", 1)[0]
         for verdict in ("failed", "blocked"):
-            if _MARK_PHRASE.format(verdict=verdict) in attempt.result.summary:
+            if headline.endswith(_MARK_PHRASE.format(verdict=verdict)):
                 return f"performed by a person, who marked the case {verdict}"
         return "performed by a person, who reported a different result"
     if is_overruled(attempt):
