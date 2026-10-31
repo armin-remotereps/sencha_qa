@@ -755,3 +755,10 @@ All resolved on 2026-10-31.
   change note wording fixed. Accepted: a live viewer learns of a refused
   (no thread) or dropped discussion only after the one fallback reload.
 - 2026-10-31: review pass 5 clean (reviewer + verifier). Status Done.
+- 2026-10-31: integration with fix-hitl-failure-evidence (merge on main):
+  Pause is refused (`PAUSE_MARK_RECORDING`) while a person's Mark failed /
+  blocked records its evidence, and `apply_person_mark` clears an empty pause
+  request. Accepted: the run page and a live case page may still show Pause on
+  that In progress case; pressing it gets the refusal, nothing is lost. A mark
+  row left open when the checkpoint `person` key is unreadable (pre-existing)
+  also refuses Pause until another path closes it.

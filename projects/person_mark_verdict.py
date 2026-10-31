@@ -5,8 +5,9 @@ evidence first (``agents.services.person_mark``) and then writes the verdict
 here (``apply_person_mark``); when the run cannot continue, the service
 writes it at once without evidence (``write_person_mark_verdict`` +
 ``log_no_evidence``). The verdict text was written into ``result`` when the
-person marked the case. Leaf module: models, ``agents`` and
-``case_duration_services`` only (``projects.services`` imports it).
+person marked the case. Leaf module: models, ``agents``,
+``case_duration_services``, ``case_pause_rows`` and ``person_step_rows`` only
+(``projects.services`` imports it).
 """
 
 from __future__ import annotations

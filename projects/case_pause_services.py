@@ -130,8 +130,9 @@ def request_case_pause(
       the run stays paused (``PAUSED``); the discussion opens on commit.
 
     Raises ``CasePauseError`` (user-safe) when the run is not active, the
-    case already needs help, a reported step is being confirmed, or the
-    case neither runs nor waits for a person.
+    case already needs help, a person's mark is recording its evidence, a
+    reported step is being confirmed, or the case neither runs nor waits for
+    a person.
     """
     message = message.strip()[:PAUSE_MESSAGE_MAX_LENGTH]
     with transaction.atomic():
