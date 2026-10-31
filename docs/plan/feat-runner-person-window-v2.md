@@ -1,6 +1,6 @@
 # feat: Test Runner person window v2 (readable, full case, log, Pause, discussion)
 
-Status: In progress
+Status: Done
 Created: 2026-10-31
 Supersedes: `docs/plan/feat-tester-console.md` (web console, dropped by the user)
 Depends on: `docs/plan/feat-pause-and-discuss.md` (Ready). It supplies the pause service, the runner pause seam, the first-message auto-send and the continue modes. This plan owns the runner protocol for pause and supersedes that plan's proposed protocol names (see "Pause from the runner").
@@ -251,6 +251,6 @@ These are minor and do not block Ready. The Q1 decision follows the window's pur
   - Discussion sends use `open_help_chat` in every case (it reuses an existing thread), so a runner send also clears a refused / dropped pause message, as a web send does.
   - Discussion sends have their own 10/min runner throttle; help actions share the 20/min runner answer bucket.
 - 2026-10-31: review round 1.
-  - Fixed: help-thread nudges skip sub-agent rows; cases ordered step → help → running in SQL before the cap; one shared side-effect-free send gate (`send_gates.thread_send_refusal`) and throttle helper (`hit_runner_throttle`); project and send blocker loaded once per snapshot; pushes serialised with a lock and the trailing push logs its own errors; the write side moved to `projects/runner_help_action_services.py`; the window always sends the shown draft's id (Continue without the redesign was refused as "newer plan"); a log tail at the cap drops its cut first line; discussion authors never fall back to an email.
+  - Fixed: help-thread nudges skip sub-agent rows; cases ordered step → help → running in SQL before the cap; one shared side-effect-free send gate (`send_gates.thread_send_refusal`) and throttle helper (`hit_runner_throttle`); project and send blocker loaded once per snapshot; pushes serialised with a lock and the trailing push logs its own errors; the write side moved to `projects/runner_help_action_services.py`; the window always sends the shown draft's id (Continue without the redesign was refused as "newer plan"); a log tail at the cap drops its cut first line; a web sender's name in the discussion never falls back to an email.
   - Kept: `_cancel_person_steps` now writes `closed_via` (web or runner) for help resolutions, which the actor refactor implies. Pause and person-step labels may still be an email, as before this plan (accepted trust model of the Connection key).
-
+- 2026-10-31: review round 2 clean. Kept (accepted Connection-key trust model): a Test Runner sender's stored `author_label` is `PersonStepActor.label()`, which shows a member's email when they have no full name, like pause and person-step labels.
