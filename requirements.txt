@@ -7,6 +7,7 @@ django-celery-beat~=2.8.1
 django-celery-results~=2.6.0
 channels~=4.3.2
 daphne~=4.2.1
+autobahn~=26.10.2
 channels-redis~=4.3.0
 mypy~=1.19.1
 django-stubs~=5.2.9
