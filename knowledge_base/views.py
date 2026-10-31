@@ -56,10 +56,9 @@ from projects.decorators import project_membership_required
 from projects.models import Project
 
 SEARCH_RESULT_LIMIT = 20
-# Rows on the tab; older items stay searchable (and listed to agents).
+# Rows on the tab and files in one archive folder; the rest stay searchable
+# (and listed to agents).
 LIST_ROW_LIMIT = 500
-# nginx's client_max_body_size: the whole upload request, stated on the page.
-UPLOAD_REQUEST_MAX_BYTES = 200 * 1024 * 1024
 
 
 def _ws_path(project_id: int) -> str:
@@ -99,7 +98,10 @@ def _browse(
         raise Http404("No such archive folder.")
     try:
         browse = browse_knowledge_archive(
-            project_id, archive_id, folder=normalise_folder_query(folder_param)
+            project_id,
+            archive_id,
+            folder=normalise_folder_query(folder_param),
+            file_limit=LIST_ROW_LIMIT,
         )
     except (KnowledgeItemNotFoundError, KnowledgeFolderNotFoundError) as exc:
         raise Http404(exc.message) from exc
@@ -175,7 +177,7 @@ def knowledge_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
             "limits": {
                 "max_file_bytes": settings.KNOWLEDGE_BASE_MAX_FILE_BYTES,
                 "max_files": settings.KNOWLEDGE_BASE_MAX_FILES_PER_UPLOAD,
-                "max_request_bytes": UPLOAD_REQUEST_MAX_BYTES,
+                "max_request_bytes": (settings.KNOWLEDGE_BASE_MAX_UPLOAD_REQUEST_BYTES),
                 "max_archive_bytes": settings.KNOWLEDGE_BASE_MAX_ARCHIVE_BYTES,
                 "max_archive_files": settings.KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS,
                 "accept": accept_attribute(accept_7z=accept_7z),
@@ -245,7 +247,13 @@ def knowledge_item(
     browse: KnowledgeArchiveBrowse | None = None
     if summary.kind == KnowledgeKind.ARCHIVE:
         try:
-            browse = browse_knowledge_archive(project.id, item_id, folder="")
+            browse = browse_knowledge_archive(
+                project.id,
+                item_id,
+                folder="",
+                file_limit=LIST_ROW_LIMIT,
+                archive=detail,
+            )
         except (KnowledgeItemNotFoundError, KnowledgeFolderNotFoundError) as exc:
             raise Http404(exc.message) from exc
     else:

@@ -14,7 +14,7 @@ path whose subfolders are included).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from agents.types import (
     ToolCall,
@@ -25,10 +25,13 @@ from agents.types import (
 )
 from knowledge_base.exceptions import KnowledgeBaseError, KnowledgeToolError
 from knowledge_base.models import KnowledgeKind
-from knowledge_base.services.browse_knowledge_archive import archive_folder_counts
 from knowledge_base.services.find_knowledge_items import find_knowledge_items
 from knowledge_base.services.folder_instructions import instructions_for_items
-from knowledge_base.services.list_knowledge_items import list_knowledge_items
+from knowledge_base.services.list_knowledge_items import (
+    archive_folder_counts,
+    count_knowledge_items,
+    list_knowledge_items,
+)
 from knowledge_base.services.read_knowledge_item import read_knowledge_item
 from knowledge_base.services.search_knowledge import (
     SEARCH_LIMIT_MAX,
@@ -42,7 +45,7 @@ from knowledge_base.tool_text import (
     render_item_list,
     render_page,
 )
-from knowledge_base.types import KnowledgeFolderRef
+from knowledge_base.types import KnowledgeFolderRef, KnowledgeItemSummary
 
 LIST_KNOWLEDGE_TOOL = "list_knowledge"
 SEARCH_KNOWLEDGE_TOOL = "search_knowledge"
@@ -186,6 +189,20 @@ def knowledge_tool_definitions(
     return (listing, search, read)
 
 
+def _listed_total(
+    project_id: int,
+    items: Sequence[KnowledgeItemSummary],
+    *,
+    parent_id: int | None,
+    tag: str | None,
+) -> int:
+    """Every item the listing matches: ``len(items)`` unless it was cut at
+    ``LIST_MAX_ITEMS`` (then one count query)."""
+    if len(items) <= LIST_MAX_ITEMS:
+        return len(items)
+    return count_knowledge_items(project_id, parent_id=parent_id, tag=tag)
+
+
 def build_knowledge_handlers(project_id: int) -> dict[str, KnowledgeToolHandler]:
     """Handlers by tool name; each raises ``KnowledgeToolError`` on a refused call."""
 
@@ -193,8 +210,12 @@ def build_knowledge_handlers(project_id: int) -> dict[str, KnowledgeToolHandler]
         archive_id = _optional_int(arguments, "archive_id")
         tag = _optional_tag(arguments)
         if archive_id is None:
+            items = list_knowledge_items(project_id, tag=tag, limit=LIST_MAX_ITEMS + 1)
             return render_item_list(
-                list_knowledge_items(project_id, tag=tag), archive=None, tag=tag
+                items,
+                archive=None,
+                tag=tag,
+                total=_listed_total(project_id, items, parent_id=None, tag=tag),
             )
         archive = find_knowledge_items(project_id, [archive_id]).get(archive_id)
         if archive is None:
@@ -206,15 +227,20 @@ def build_knowledge_handlers(project_id: int) -> dict[str, KnowledgeToolHandler]
                 f"Item {archive_id} is not an archive; read it with "
                 f"read_knowledge(item_id={archive_id})."
             )
-        members = list_knowledge_items(project_id, parent_id=archive_id, tag=tag)
-        # The folder overview costs one query; only a cut listing needs it.
-        folder_counts = (
-            archive_folder_counts(project_id, archive_id)
-            if len(members) > LIST_MAX_ITEMS
-            else None
+        members = list_knowledge_items(
+            project_id, parent_id=archive_id, tag=tag, limit=LIST_MAX_ITEMS + 1
         )
+        # The count and the folder overview cost one query each; only a cut
+        # listing needs them.
+        cut = len(members) > LIST_MAX_ITEMS
         return render_item_list(
-            members, archive=archive, tag=tag, folder_counts=folder_counts
+            members,
+            archive=archive,
+            tag=tag,
+            folder_counts=(
+                archive_folder_counts(project_id, archive_id) if cut else None
+            ),
+            total=_listed_total(project_id, members, parent_id=archive_id, tag=tag),
         )
 
     def _search(arguments: dict[str, object]) -> str:

@@ -192,3 +192,5 @@ class KnowledgeArchiveBrowse:
     files: tuple[KnowledgeListEntry, ...]
     # Nearest first; the nearest carries an excerpt.
     instructions: tuple[KnowledgeInstructionRef, ...]
+    # More files are directly in the folder than ``files`` shows.
+    files_capped: bool = False

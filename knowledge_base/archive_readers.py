@@ -33,9 +33,8 @@ from knowledge_base.archive_guard import (
     ArchiveAllowance,
     ArchiveBudget,
     ArchiveLimits,
+    SkippedEntries,
     archive_limits,
-    check_entry_count,
-    check_zip_entry_count,
     damaged,
     display_label,
     encrypted,
@@ -77,7 +76,7 @@ class _Level:
         self,
         limits: ArchiveLimits,
         allowance: ArchiveAllowance,
-        skipped: list[str],
+        skipped: SkippedEntries,
         *,
         prefix: str,
     ) -> None:
@@ -92,7 +91,7 @@ class _Level:
         return f"{self.prefix}/{path}" if self.prefix else path
 
     def skip(self, path: str, reason: str) -> None:
-        self.skipped.append(f"{display_label(self.full_path(path))} ({reason})")
+        self.skipped.add(f"{display_label(self.full_path(path))} ({reason})")
 
     def reason_not_read(self, path: str, size_bytes: int) -> str | None:
         return skip_reason(
@@ -101,7 +100,7 @@ class _Level:
 
     def admit(self, files: int, declared_bytes: int, archive_bytes: int) -> None:
         """Count the accepted members of this level before any is read."""
-        self.allowance.add_files(files, NOUN)
+        self.allowance.add_files(files, NOUN, complete=True)
         self.allowance.add_declared(declared_bytes, NOUN)
         if ratio_exceeded(declared_bytes, archive_bytes):
             raise ratio_too_high(NOUN)
@@ -113,12 +112,12 @@ class _Level:
 
 
 def iter_archive_members(
-    fmt: str, data: bytes, skipped: list[str]
+    fmt: str, data: bytes, skipped: SkippedEntries
 ) -> Iterator[ArchiveMemberRef]:
     """Yield the readable files of an archive of ``fmt`` ("zip", "tar", "7z").
 
-    Files of archives nested one level deep are included; the limits apply
-    to both levels together.
+    Files of archives nested one level deep are included; the limits (raw
+    entries too) apply to both levels together.
     """
     check_archive_content(fmt, data)
     limits = archive_limits()
@@ -151,15 +150,15 @@ def _iter_nested(nested: ArchiveMemberRef, outer: _Level) -> Iterator[ArchiveMem
     label = display_label(nested.path)
     fmt = archive_format(posixpath.basename(nested.path))
     if fmt is None:
-        outer.skipped.append(f"{label} (unsupported type)")
+        outer.skipped.add(f"{label} (unsupported type)")
         return
     if fmt == "7z" and not settings.KNOWLEDGE_BASE_ACCEPT_7Z:
-        outer.skipped.append(f"{label} ({SEVEN_ZIP_DISABLED_MESSAGE})")
+        outer.skipped.add(f"{label} ({SEVEN_ZIP_DISABLED_MESSAGE})")
         return
     try:
         check_archive_content(fmt, nested.data)
     except ContentMismatch:
-        outer.skipped.append(f"{label} (not a readable archive)")
+        outer.skipped.add(f"{label} (not a readable archive)")
         return
     inner = _Level(outer.limits, outer.allowance, outer.skipped, prefix=nested.path)
     read = 0
@@ -168,10 +167,10 @@ def _iter_nested(nested: ArchiveMemberRef, outer: _Level) -> Iterator[ArchiveMem
             read += 1
             yield member
     except EncryptedDocument:
-        outer.skipped.append(f"{label} ({ENCRYPTED_MEMBER_REASON})")
+        outer.skipped.add(f"{label} ({ENCRYPTED_MEMBER_REASON})")
     except ArchiveDamaged:
         partly = ", read partly" if read else ""
-        outer.skipped.append(f"{label} (damaged archive{partly})")
+        outer.skipped.add(f"{label} (damaged archive{partly})")
 
 
 # --- zip --------------------------------------------------------------------
@@ -179,14 +178,14 @@ def _iter_nested(nested: ArchiveMemberRef, outer: _Level) -> Iterator[ArchiveMem
 
 def _iter_zip(data: bytes, level: _Level) -> Iterator[ArchiveMemberRef]:
     limits = level.limits
-    check_zip_entry_count(data, NOUN, limits)
+    level.allowance.check_zip_entries(data, NOUN)
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
     except (zipfile.BadZipFile, OSError, ValueError, EOFError) as exc:
         raise damaged(NOUN) from exc
     with archive:
         infos = [info for info in archive.infolist() if not info.is_dir()]
-        check_entry_count(len(infos), NOUN, limits)
+        level.allowance.add_entries(len(infos), NOUN, complete=True)
         accepted: list[tuple[str, zipfile.ZipInfo, bool]] = []
         for info in infos:
             path = normalise_member_path(info.filename)
@@ -308,7 +307,6 @@ def _iter_tar(data: bytes, level: _Level) -> Iterator[ArchiveMemberRef]:
         archive = tarfile.open(fileobj=source, mode="r|")
     except (tarfile.TarError, zlib.error, EOFError, OSError) as exc:
         raise damaged(NOUN) from exc
-    entries = 0
     with archive:
         while True:
             try:
@@ -319,8 +317,7 @@ def _iter_tar(data: bytes, level: _Level) -> Iterator[ArchiveMemberRef]:
                 return
             if member.isdir():
                 continue
-            entries += 1
-            check_entry_count(entries, NOUN, limits)
+            allowance.add_entries(1, NOUN)
             # The member's bytes are read (or skipped) through the budget
             # anyway; refusing on its declared size only fails sooner.
             if allowance.read_bytes + member.size > limits.max_total_bytes:
@@ -430,7 +427,7 @@ def _iter_7z(data: bytes, level: _Level) -> Iterator[ArchiveMemberRef]:
         if _seven_zip_is_encrypted(archive):
             raise encrypted(NOUN)
         files = [entry for entry in archive.files if not entry.is_directory]
-        check_entry_count(len(files), NOUN, limits)
+        level.allowance.add_entries(len(files), NOUN, complete=True)
         # py7zr's file name -> (normalised path, is a nested archive).
         targets: dict[str, tuple[str, bool]] = {}
         declared = 0

@@ -135,12 +135,15 @@ def render_item_list(
     archive: KnowledgeItemSummary | None,
     tag: str | None = None,
     folder_counts: Mapping[str, int] | None = None,
+    total: int | None = None,
 ) -> str:
     """The list_knowledge result: top-level items, or one archive's files.
 
-    ``tag`` is the filter the caller applied (shown in the title);
-    ``folder_counts`` (files directly in each folder) adds a ``Folders:``
-    block to an archive listing that is cut at ``LIST_MAX_ITEMS``.
+    ``items`` come in display order (an archive's files by folder, then
+    name); at most ``LIST_MAX_ITEMS`` are shown. ``total`` is how many items
+    match in all (``len(items)`` when omitted). ``tag`` is the filter the
+    caller applied (shown in the title); ``folder_counts`` (files directly in
+    each folder) adds a ``Folders:`` block to an archive listing that is cut.
     """
     tagged = f" tagged {quoted_name(tag)}" if tag else ""
     if archive is None:
@@ -150,7 +153,6 @@ def render_item_list(
             if tag
             else "The knowledge base is empty."
         )
-        ordered = list(items)
     else:
         title = f"Files of archive id={archive.id} {quoted_name(archive.name)}{tagged}:"
         empty = (
@@ -158,20 +160,17 @@ def render_item_list(
             if tag
             else "This archive has no files."
         )
-        ordered = sorted(
-            items,
-            key=lambda item: (item_path(item.folder, item.name).casefold(), item.id),
-        )
-    shown = ordered[:LIST_MAX_ITEMS]
+    shown = list(items[:LIST_MAX_ITEMS])
+    matched = max(len(items) if total is None else total, len(shown))
     lines = (
         ([title] + [_item_line(item, show_archive=archive is None) for item in shown])
-        if ordered
+        if shown
         else [empty]
     )
-    cut = len(ordered) > len(shown)
+    cut = matched > len(shown)
     if cut:
         lines.append(
-            f"{len(ordered) - len(shown)} more not shown: use search_knowledge to "
+            f"{matched - len(shown)} more not shown: use search_knowledge to "
             "find them."
         )
     with_folders = cut and archive is not None and bool(folder_counts)
@@ -183,7 +182,7 @@ def render_item_list(
             f"\nNarrow with list_knowledge(archive_id={archive.id}, tag=<folder path>) "
             "or search_knowledge(query, tag=<folder path>)."
         )
-    if ordered:
+    if shown:
         text += (
             "\nRead an item with read_knowledge(item_id=<id>, page=<n>) or search "
             "with search_knowledge(query, item_id=<id>)."

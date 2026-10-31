@@ -6,7 +6,7 @@
 
    Context contract:
      project — current Project
-     browse  — KnowledgeArchiveBrowse {% endcomment %}
+     browse  — KnowledgeArchiveBrowse (files_capped: more files than shown) {% endcomment %}
 {% url 'knowledge_base:list' project_id=project.id as list_url %}
 {% with archive=browse.archive.entry.summary %}
 <section class="card kb-browser" aria-labelledby="kb-browser-title">
@@ -71,5 +71,11 @@
 
 {% if browse.files %}
   {% include "knowledge_base/includes/_item_table.html" with project=project items=browse.files in_browser=True only %}
+  {% if browse.files_capped %}
+    <p class="muted small">
+      Showing the first {{ browse.files|length }} files of this folder.
+      {% if browse.folder %}<a href="{{ list_url }}?tag={{ browse.folder|urlencode }}">Filter by this folder</a> or search to find the others.{% else %}Search to find the others.{% endif %}
+    </p>
+  {% endif %}
 {% endif %}
 {% endwith %}

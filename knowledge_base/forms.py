@@ -26,16 +26,14 @@ KNOWLEDGE_TAGS_INPUT_MAX_LENGTH = 2000
 class KnowledgeTagsField(forms.CharField):
     """Comma- or newline-separated manual tags; cleans to a normalised tuple."""
 
-    def __init__(self, **kwargs: Any) -> None:
-        kwargs.setdefault("required", False)
-        kwargs.setdefault("max_length", KNOWLEDGE_TAGS_INPUT_MAX_LENGTH)
-        kwargs.setdefault(
-            "widget",
-            forms.TextInput(
+    def __init__(self) -> None:
+        super().__init__(
+            required=False,
+            max_length=KNOWLEDGE_TAGS_INPUT_MAX_LENGTH,
+            widget=forms.TextInput(
                 attrs={"class": "input", "placeholder": "release-2.3, windows"}
             ),
         )
-        super().__init__(**kwargs)
 
     def clean(self, value: object) -> tuple[str, ...]:
         text: str = super().clean(value)

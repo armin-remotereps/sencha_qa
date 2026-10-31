@@ -8,7 +8,8 @@ expanded in total), ``KNOWLEDGE_BASE_MAX_FILE_BYTES`` (one member) and a
 compression ratio of at most ``MAX_COMPRESSION_RATIO``, per member where the
 format declares sizes and for the whole archive (bytes read against
 compressed bytes) for every format. Over any limit the whole archive is
-refused; nothing is expanded partly.
+refused; nothing is expanded partly. A .docx / .xlsx container has its own,
+smaller part limit (``OOXML_MAX_PARTS``).
 
 Ratios are enforced only once more than ``RATIO_FLOOR_BYTES`` were read (or
 are declared), so a small, very repetitive text file is not refused while a
@@ -43,6 +44,12 @@ MAX_COMPRESSION_RATIO = 100
 RATIO_FLOOR_BYTES = 1024 * 1024
 READ_BLOCK_BYTES = 64 * 1024
 ENCRYPTED_MEMBER_REASON = "password protected"
+# Parts of a .docx / .xlsx container (directories included); real documents
+# hold a few dozen.
+OOXML_MAX_PARTS = 500
+# Skip reasons kept for the warning; past it only a count is kept, so an
+# archive of many skipped entries never becomes as many strings.
+SKIPPED_KEEP_MAX = 200
 # zip general purpose flag bit 0: the member is encrypted.
 _ZIP_FLAG_ENCRYPTED = 0x1
 _ZIP_UNIX_SYSTEM = 3
@@ -53,6 +60,7 @@ _SPLIT_HINT = " Split it into smaller archives."
 _EOCD = struct.Struct("<4s4H2LH")
 _EOCD_SIGNATURE = b"PK\x05\x06"
 _EOCD_MAX_COMMENT = 0xFFFF
+_EOCD_NO_COMMENT = b"\x00\x00"
 _ZIP64_LOCATOR = struct.Struct("<4sLQL")
 _ZIP64_LOCATOR_SIGNATURE = b"PK\x06\x07"
 _ZIP64_EOCD = struct.Struct("<4sQ2H2L4Q")
@@ -94,18 +102,30 @@ def _hint(noun: str) -> str:
     return _SPLIT_HINT if noun == _ARCHIVE_NOUN else ""
 
 
-def too_many_members(found: int, noun: str, limits: ArchiveLimits) -> ArchiveRejected:
+def _too_many(found: int | None, what: str, limit: int, noun: str) -> ArchiveRejected:
+    """``found`` is the true total, or None when counting stopped past the
+    limit (streamed, a running count across nested archives, or a walk that
+    stops early): then the message says "more than"."""
+    held = f"more than {limit}" if found is None else str(found)
     return ArchiveRejected(
-        f"This {noun} holds {found} readable files; the limit is "
-        f"{limits.max_members}.{_hint(noun)}"
+        f"This {noun} holds {held} {what}; the limit is {limit}.{_hint(noun)}"
     )
 
 
-def too_many_entries(found: int, noun: str, limits: ArchiveLimits) -> ArchiveRejected:
-    return ArchiveRejected(
-        f"This {noun} holds {found} entries; the limit is "
-        f"{limits.max_entries}.{_hint(noun)}"
-    )
+def too_many_members(
+    found: int | None, noun: str, limits: ArchiveLimits
+) -> ArchiveRejected:
+    return _too_many(found, "readable files", limits.max_members, noun)
+
+
+def too_many_entries(
+    found: int | None, noun: str, limits: ArchiveLimits
+) -> ArchiveRejected:
+    return _too_many(found, "entries", limits.max_entries, noun)
+
+
+def too_many_parts(found: int | None, noun: str) -> ArchiveRejected:
+    return _too_many(found, "parts", OOXML_MAX_PARTS, noun)
 
 
 def too_big_declared(found: int, noun: str, limits: ArchiveLimits) -> ArchiveRejected:
@@ -147,18 +167,6 @@ def ratio_exceeded(uncompressed: int, compressed: int) -> bool:
     return uncompressed > MAX_COMPRESSION_RATIO * max(compressed, 1)
 
 
-def check_entry_count(count: int, noun: str, limits: ArchiveLimits) -> None:
-    """Refuse on the raw entry count (directories excluded)."""
-    if count > limits.max_entries:
-        raise too_many_entries(count, noun, limits)
-
-
-def check_member_count(count: int, noun: str, limits: ArchiveLimits) -> None:
-    """Refuse on the readable file count (entries that will become items)."""
-    if count > limits.max_members:
-        raise too_many_members(count, noun, limits)
-
-
 def check_declared_total(
     declared_bytes: int, archive_bytes: int, noun: str, limits: ArchiveLimits
 ) -> None:
@@ -169,24 +177,69 @@ def check_declared_total(
         raise ratio_too_high(noun)
 
 
+class SkippedEntries:
+    """Why members were not read: at most ``SKIPPED_KEEP_MAX`` reasons are
+    kept, the rest only counted (``overflow``)."""
+
+    def __init__(self) -> None:
+        self.entries: list[str] = []
+        self.overflow = 0
+
+    def add(self, entry: str) -> None:
+        if len(self.entries) < SKIPPED_KEEP_MAX:
+            self.entries.append(entry)
+        else:
+            self.overflow += 1
+
+    @property
+    def total(self) -> int:
+        return len(self.entries) + self.overflow
+
+
 class ArchiveAllowance:
     """What one upload may expand to, shared by an archive and its nested ones.
 
-    ``files`` counts readable files and ``declared_bytes`` their declared
-    sizes (plus the nested archives' own bytes, which are read too) across
-    both levels; ``read_bytes`` counts every byte actually read. Over a limit
-    the whole outer archive is refused.
+    ``entries`` counts raw entries (directories excluded), ``files`` readable
+    files and ``declared_bytes`` their declared sizes (plus the nested
+    archives' own bytes, which are read too) across both levels;
+    ``read_bytes`` counts every byte actually read. Over a limit the whole
+    outer archive is refused.
+
+    ``complete`` tells that ``count`` is a level's whole count: a refusal on
+    the first such count names it, any other says "more than" the limit.
     """
 
     def __init__(self, limits: ArchiveLimits) -> None:
         self.limits = limits
+        self.entries = 0
         self.files = 0
         self.declared_bytes = 0
         self.read_bytes = 0
 
-    def add_files(self, count: int, noun: str) -> None:
+    def add_entries(self, count: int, noun: str, *, complete: bool = False) -> None:
+        first = self.entries == 0
+        self.entries += count
+        if self.entries > self.limits.max_entries:
+            found = self.entries if complete and first else None
+            raise too_many_entries(found, noun, self.limits)
+
+    def add_files(self, count: int, noun: str, *, complete: bool = False) -> None:
+        first = self.files == 0
         self.files += count
-        check_member_count(self.files, noun, self.limits)
+        if self.files > self.limits.max_members:
+            found = self.files if complete and first else None
+            raise too_many_members(found, noun, self.limits)
+
+    def check_zip_entries(self, data: bytes, noun: str) -> None:
+        """Refuse a zip that would pass the entry limit before ``zipfile``
+        parses it; the entries already counted (outer or earlier nested
+        archives) count too."""
+        left = max(self.limits.max_entries - self.entries, 0)
+        count = zip_entry_count(data, left)
+        if count is None:
+            raise damaged(noun)
+        if count > left:
+            raise too_many_entries(None, noun, self.limits)
 
     def add_declared(self, size_bytes: int, noun: str) -> None:
         self.declared_bytes += size_bytes
@@ -316,61 +369,125 @@ def zip_member_is_encrypted(info: zipfile.ZipInfo) -> bool:
     return bool(info.flag_bits & _ZIP_FLAG_ENCRYPTED)
 
 
-def zip_entry_count(data: bytes) -> int | None:
+def zip_entry_count(data: bytes, max_entries: int) -> int | None:
     """Non-directory entries in a zip's central directory, without ``ZipFile``.
 
     ``zipfile`` builds a ``ZipInfo`` for every entry when it opens, so a
     header bomb (a central directory of millions of tiny entries) costs
-    memory before any count applies. This walks the headers in place and
-    keeps nothing. None when the layout is unusual (no end record, a
-    multi-disk archive, a header out of place); the caller then lets
-    ``zipfile`` decide.
+    memory before any count applies. This finds the directory the way
+    ``zipfile`` does (``_EndRecData`` / ``_EndRecData64`` /
+    ``_RealGetContents``) and walks its headers in place, keeping nothing.
+    The walk stops as soon as more than ``max_entries`` files, or more than
+    ``max_entries`` directories, were seen and then returns
+    ``max_entries + 1``; every step consumes at least one header, so it is
+    bounded by ``max_entries`` and the data length whatever the records
+    claim.
+
+    None only where ``zipfile`` refuses the archive too (no end record, a
+    directory out of place or cut short).
     """
-    start = max(len(data) - _EOCD.size - _EOCD_MAX_COMMENT, 0)
-    eocd_at = data.rfind(_EOCD_SIGNATURE, start)
-    if eocd_at < 0 or eocd_at + _EOCD.size > len(data):
+    end_record = _zip_end_record(data)
+    if end_record is None:
         return None
-    _sig, disk, cd_disk, _, _, cd_size, _, _ = _EOCD.unpack_from(data, eocd_at)
-    if disk != 0 or cd_disk != 0:
+    regions = _zip_directory_regions(data, *end_record)
+    if regions is None:
         return None
-    end_of_cd = eocd_at
-    locator_at = eocd_at - _ZIP64_LOCATOR.size
+    best: int | None = None
+    for start, size in regions:
+        count = _walk_zip_directory(data, start, size, max_entries)
+        if count is not None and count > max_entries:
+            return count
+        if count is not None and (best is None or count > best):
+            best = count
+    return best
+
+
+def _zip_end_record(data: bytes) -> tuple[int, int] | None:
+    """(offset, central directory size) of the end record zipfile uses."""
+    # No comment: the record is the last 22 bytes (checked first, as zipfile
+    # does, so a signature planted inside the record is never picked).
+    last = len(data) - _EOCD.size
     if (
-        locator_at >= 0
-        and data[locator_at : locator_at + 4] == _ZIP64_LOCATOR_SIGNATURE
+        last >= 0
+        and data[last : last + 4] == _EOCD_SIGNATURE
+        and data[-2:] == _EOCD_NO_COMMENT
     ):
-        # ZIP64: the 64-bit record sits right before the locator.
-        record_at = locator_at - _ZIP64_EOCD.size
-        if record_at < 0 or data[record_at : record_at + 4] != _ZIP64_EOCD_SIGNATURE:
-            return None
-        cd_size = _ZIP64_EOCD.unpack_from(data, record_at)[8]
-        end_of_cd = record_at
-    # Measured back from the end record, like zipfile, so data prepended to
-    # the archive (a self-extractor stub) does not shift the directory.
-    position = end_of_cd - cd_size
-    if position < 0:
+        return last, _EOCD.unpack_from(data, last)[5]
+    window = max(len(data) - _EOCD_MAX_COMMENT - _EOCD.size, 0)
+    found = data.rfind(_EOCD_SIGNATURE, window)
+    if found < 0 or found + _EOCD.size > len(data):
         return None
-    count = 0
-    while position < end_of_cd:
-        if position + _CENTRAL_HEADER.size > end_of_cd:
+    return found, _EOCD.unpack_from(data, found)[5]
+
+
+def _zip_directory_regions(
+    data: bytes, eocd_at: int, cd_size: int
+) -> list[tuple[int, int]] | None:
+    """Every (start, size) zipfile may read the central directory from.
+
+    The disk numbers of the plain end record are ignored, like zipfile does.
+    For ZIP64 both the Python 3.13 lookup (record at the locator's offset,
+    else right before the locator) and the older one (right before the
+    locator, else the plain record) are listed; the caller keeps the largest
+    count, so the walk never undercounts what this interpreter parses.
+    """
+    plain = (eocd_at - cd_size, cd_size)
+    offset = eocd_at - _ZIP64_LOCATOR.size
+    if offset < 0 or data[offset : offset + 4] != _ZIP64_LOCATOR_SIGNATURE:
+        return [plain]
+    _sig, disk, record_offset, disks = _ZIP64_LOCATOR.unpack_from(data, offset)
+    if disk != 0 or disks > 1:
+        return None
+    offset -= _ZIP64_EOCD.size
+    regions: list[tuple[int, int]] = []
+    if 0 <= offset and record_offset <= offset:
+        record_at: int | None = None
+        if data[record_offset : record_offset + 4] == _ZIP64_EOCD_SIGNATURE:
+            record_at = record_offset
+        elif data[offset : offset + 4] == _ZIP64_EOCD_SIGNATURE:
+            record_at = offset
+        if record_at is not None:
+            size = _ZIP64_EOCD.unpack_from(data, record_at)[8]
+            regions.append((record_at - size, size))
+    if 0 <= offset and data[offset : offset + 4] == _ZIP64_EOCD_SIGNATURE:
+        size = _ZIP64_EOCD.unpack_from(data, offset)[8]
+        regions.append((offset - size, size))
+    else:
+        regions.append(plain)
+    return list(dict.fromkeys(regions))
+
+
+def _walk_zip_directory(
+    data: bytes, start: int, size: int, max_entries: int
+) -> int | None:
+    """Files in the directory at ``start``, as zipfile walks it; None where
+    zipfile fails, ``max_entries + 1`` once past the limit."""
+    if start < 0:
+        return None
+    # zipfile reads at most ``size`` bytes from ``start``.
+    end = min(start + size, len(data))
+    position = start
+    files = 0
+    directories = 0
+    while position - start < size:
+        if position + _CENTRAL_HEADER.size > end:
             return None
         header = _CENTRAL_HEADER.unpack_from(data, position)
         if header[0] != _CENTRAL_HEADER_SIGNATURE:
             return None
         name_length, extra_length, comment_length = header[12], header[13], header[14]
-        name_end = position + _CENTRAL_HEADER.size + name_length
-        # zipfile's ZipInfo.is_dir(): the name ends with "/".
-        if data[name_end - 1 : name_end] != b"/" or name_length == 0:
-            count += 1
-        position = name_end + extra_length + comment_length
-    return count
-
-
-def check_zip_entry_count(data: bytes, noun: str, limits: ArchiveLimits) -> None:
-    """Refuse a zip over the entry limit before ``zipfile`` parses it."""
-    count = zip_entry_count(data)
-    if count is not None:
-        check_entry_count(count, noun, limits)
+        name_at = position + _CENTRAL_HEADER.size
+        name = data[name_at : min(name_at + name_length, end)]
+        # zipfile cuts a name at its first NUL; is_dir() is a trailing "/".
+        name = name.split(b"\x00", 1)[0]
+        if name.endswith(b"/"):
+            directories += 1
+        else:
+            files += 1
+        if files > max_entries or directories > max_entries:
+            return max_entries + 1
+        position = name_at + name_length + extra_length + comment_length
+    return files
 
 
 def check_ooxml_container(data: bytes) -> None:
@@ -379,18 +496,23 @@ def check_ooxml_container(data: bytes) -> None:
     ``zipfile`` (which python-docx and openpyxl use) never returns more than a
     member's declared size, so checking the declared sizes bounds what the
     libraries can read. Every part counts here (a document has no "readable
-    file" notion), so the raw entry limit applies.
+    file" notion), against the container's own ``OOXML_MAX_PARTS``.
     """
     noun = "document"
     limits = archive_limits()
-    check_zip_entry_count(data, noun, limits)
+    count = zip_entry_count(data, OOXML_MAX_PARTS)
+    if count is None:
+        raise damaged(noun)
+    if count > OOXML_MAX_PARTS:
+        raise too_many_parts(None, noun)
     try:
         archive = zipfile.ZipFile(io.BytesIO(data))
     except (zipfile.BadZipFile, OSError, ValueError, EOFError) as exc:
         raise damaged(noun) from exc
     with archive:
         infos = archive.infolist()
-        check_entry_count(len(infos), noun, limits)
+        if len(infos) > OOXML_MAX_PARTS:
+            raise too_many_parts(len(infos), noun)
         if any(zip_member_is_encrypted(info) for info in infos):
             raise encrypted(noun)
         declared = 0

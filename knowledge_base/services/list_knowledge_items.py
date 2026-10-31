@@ -194,14 +194,40 @@ def _ordered(
 
 
 def list_knowledge_items(
-    project_id: int, *, parent_id: int | None = None, tag: str | None = None
+    project_id: int,
+    *,
+    parent_id: int | None = None,
+    tag: str | None = None,
+    limit: int | None = None,
 ) -> list[KnowledgeItemSummary]:
     """Top-level items, or one archive's members (``parent_id``); all statuses.
 
     With ``tag`` (a manual tag or a folder path, subfolders included) and no
     ``parent_id`` every level is searched; with ``parent_id`` only that archive.
+    At most ``limit`` when given (pass limit + 1 to detect more).
     """
-    return summaries_of(_ordered(project_items(project_id), parent_id, tag))
+    queryset = _ordered(project_items(project_id), parent_id, tag)
+    return summaries_of(queryset if limit is None else queryset[:limit])
+
+
+def count_knowledge_items(
+    project_id: int, *, parent_id: int | None = None, tag: str | None = None
+) -> int:
+    """How many items ``list_knowledge_items`` lists without a limit (one query)."""
+    queryset = KnowledgeItem.objects.filter(project_id=project_id)
+    return _ordered(queryset, parent_id, tag).order_by().count()
+
+
+def archive_folder_counts(project_id: int, archive_id: int) -> dict[str, int]:
+    """Files directly in each stored folder of the archive (one query)."""
+    rows = (
+        KnowledgeItem.objects.filter(project_id=project_id, parent_id=archive_id)
+        .values("folder")
+        .annotate(count=Count("id"))
+        .order_by()
+        .values_list("folder", "count")
+    )
+    return {folder: count for folder, count in rows}
 
 
 def list_knowledge_entries(
