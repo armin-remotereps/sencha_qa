@@ -70,6 +70,14 @@ class SetupDocumentNotAllowedError(MachineSetupError):
     default_message = "Documents can be attached in the main chat only."
 
 
+class SetupKnowledgeRefError(MachineSetupError):
+    """A referenced knowledge base item is not in the project (or was deleted)."""
+
+    default_message = (
+        "A picked knowledge base item no longer exists. Pick the items again."
+    )
+
+
 class SetupDocumentReadError(MachineSetupError):
     """Tool-facing: unknown document id or page out of range."""
 

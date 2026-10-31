@@ -6,14 +6,16 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('knowledge_base', '0001_initial'),
-        ('machine_setup', '0006_case_result_thread'),
+        ("knowledge_base", "0001_initial"),
+        ("machine_setup", "0006_case_result_thread"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='setupmessage',
-            name='knowledge_items',
-            field=models.ManyToManyField(blank=True, related_name='+', to='knowledge_base.knowledgeitem'),
+            model_name="setupmessage",
+            name="knowledge_items",
+            field=models.ManyToManyField(
+                blank=True, related_name="+", to="knowledge_base.knowledgeitem"
+            ),
         ),
     ]

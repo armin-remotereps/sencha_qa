@@ -19,6 +19,7 @@ from django.db.models import (
 from django.db.models.functions import RowNumber
 from django.utils import timezone
 
+from knowledge_base.services.list_knowledge_items import list_knowledge_choices
 from machine_setup.exceptions import (
     SetupMachineNotReadyError,
     SetupRunActiveError,
@@ -38,8 +39,11 @@ from machine_setup.models import (
 from machine_setup.payloads import (
     CARD_DEFER,
     CARD_SELECT_RELATED,
+    KnowledgeChoicePayload,
     SetupMessagePayload,
     SetupTurnPayload,
+    knowledge_choice_payload,
+    knowledge_refs_prefetch,
     message_payload,
     turn_payload,
 )
@@ -71,6 +75,10 @@ HELP_THREAD_KINDS = (SetupConversationKind.AUTO_FIX, SetupConversationKind.CASE_
 CASE_THREAD_KINDS = (*HELP_THREAD_KINDS, SetupConversationKind.CASE_RESULT)
 # Characters of the result text shown in a result chat's header.
 RESULT_EXCERPT_CHARS = 300
+
+# Knowledge base items the composer picker lists; more are found on the
+# Knowledge base tab.
+KNOWLEDGE_PICKER_LIMIT = 300
 
 # Send blocker while a turn is live in a thread other than the one shown.
 OTHER_THREAD_TURN_MESSAGE = (
@@ -150,6 +158,27 @@ class SetupPage:
     finishing_conversation_id: int | None
     # A turn is live in another (not archived) thread of the project.
     other_thread_turn_live: bool
+
+
+@dataclass(frozen=True)
+class KnowledgePicker:
+    """The composer's knowledge base picker: what it lists."""
+
+    choices: list[KnowledgeChoicePayload]
+    # More items exist than ``choices`` holds.
+    capped: bool
+
+
+def get_knowledge_picker(project_id: int) -> KnowledgePicker:
+    """Top-level items first, then archive members, newest first; one query."""
+    choices = list_knowledge_choices(project_id, limit=KNOWLEDGE_PICKER_LIMIT + 1)
+    return KnowledgePicker(
+        choices=[
+            knowledge_choice_payload(summary)
+            for summary in choices[:KNOWLEDGE_PICKER_LIMIT]
+        ],
+        capped=len(choices) > KNOWLEDGE_PICKER_LIMIT,
+    )
 
 
 def find_thread(project: Project, conversation_id: int) -> SetupConversation | None:
@@ -447,15 +476,15 @@ def _recent_messages(
 
     Each ``run_setup_task`` row in that window brings its newest
     ``SUBTASK_PAGE_CHILD_LIMIT`` children; the rest are counted on the row as
-    ``hidden_child_count``. One flat list in id order, in five or six queries.
+    ``hidden_child_count``. One flat list in id order, in six or seven queries.
     """
     if conversation_id is None:
         return [], 0
     screenshots = Prefetch(
         "screenshots", queryset=SetupScreenshot.objects.order_by("id")
     )
-    # The payload reads documents of USER rows and the proposal or result
-    # card of card rows; case_ids and the case log can be large and are never
+    # The payload reads documents and knowledge references of USER rows and
+    # the proposal or result card of card rows; case_ids and the case log can be large and are never
     # shown.
     documents = Prefetch(
         "documents",
@@ -469,7 +498,7 @@ def _recent_messages(
         )
         .select_related("author", "run_proposal", *CARD_SELECT_RELATED)
         .defer("run_proposal__case_ids", *CARD_DEFER)
-        .prefetch_related(screenshots, documents)
+        .prefetch_related(screenshots, documents, knowledge_refs_prefetch())
         .order_by("-id")[:SETUP_PAGE_MESSAGE_LIMIT]
     )
     rows.reverse()

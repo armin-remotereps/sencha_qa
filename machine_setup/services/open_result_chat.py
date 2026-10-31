@@ -129,7 +129,7 @@ def _broadcast_brief(row: SetupMessage) -> None:
     try:
         broadcast_message(
             row.conversation.project_id,
-            message_payload(row, screenshots=[], attachments=[]),
+            message_payload(row, screenshots=[], attachments=[], knowledge_refs=[]),
         )
     except Exception:
         logger.exception("Result chat %s: brief broadcast failed", row.conversation_id)

@@ -16,6 +16,7 @@ from django.utils import timezone
 
 from accounts.models import CustomUser
 from auto_tester.celery import app as celery_app
+from knowledge_base.types import KnowledgeItemSummary
 from machine_setup.document_text import UploadedDocument
 from machine_setup.events import broadcast_message, broadcast_turn
 from machine_setup.models import (
@@ -27,7 +28,12 @@ from machine_setup.models import (
     SetupTurnEndReason,
     SetupTurnStatus,
 )
-from machine_setup.payloads import message_payload, turn_payload
+from machine_setup.payloads import (
+    KnowledgeRefPayload,
+    knowledge_ref_payload,
+    message_payload,
+    turn_payload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +83,46 @@ def create_user_turn(
     )
     if document is None:
         return turn, message, []
-    stored = SetupDocument.objects.create(
+    return (
+        turn,
+        message,
+        [_store_document(conversation, message, requested_by, document)],
+    )
+
+
+def link_knowledge_refs(
+    message: SetupMessage, items: Sequence[KnowledgeItemSummary]
+) -> list[KnowledgeRefPayload]:
+    """Link validated knowledge base items to a new USER row; one INSERT.
+
+    Returns their chip payloads so the broadcast needs no query. Call in the
+    transaction that created ``message``.
+    """
+    if not items:
+        return []
+    through = SetupMessage.knowledge_items.through
+    through.objects.bulk_create(
+        [
+            through(setupmessage_id=message.pk, knowledgeitem_id=item.id)
+            for item in items
+        ]
+    )
+    project_id = message.conversation.project_id
+    return [
+        knowledge_ref_payload(
+            project_id=project_id, item_id=item.id, name=item.name, status=item.status
+        )
+        for item in items
+    ]
+
+
+def _store_document(
+    conversation: SetupConversation,
+    message: SetupMessage,
+    requested_by: CustomUser,
+    document: UploadedDocument,
+) -> SetupDocument:
+    return SetupDocument.objects.create(
         conversation=conversation,
         message=message,
         uploaded_by=requested_by,
@@ -86,17 +131,18 @@ def create_user_turn(
         size_bytes=document.size_bytes,
         char_count=len(document.text),
     )
-    return turn, message, [stored]
 
 
 def broadcast_and_enqueue(
     turn: SetupTurn,
     message: SetupMessage,
     documents: Sequence[SetupDocument] = (),
+    knowledge_refs: Sequence[KnowledgeRefPayload] = (),
 ) -> bool:
     """Run on commit. Returns False when the task could not be queued.
 
-    ``documents`` are the ones attached to ``message`` (already loaded).
+    ``documents`` are the ones attached to ``message`` (already loaded), and
+    ``knowledge_refs`` the chips of the items it references.
 
     The turn is then closed as ``failed/internal_error`` with a notice row.
     A failed broadcast is logged and never stops the enqueue: the page only
@@ -104,7 +150,7 @@ def broadcast_and_enqueue(
     """
     # Broadcast the queued turn before enqueueing, so a fast worker's
     # "running" broadcast cannot be overtaken by a stale "queued" one.
-    _broadcast(turn, message, documents)
+    _broadcast(turn, message, documents, knowledge_refs)
     try:
         result = celery_app.send_task(RUN_SETUP_TURN_TASK, args=[turn.pk])
     except Exception:
@@ -123,13 +169,19 @@ def _broadcast(
     turn: SetupTurn,
     message: SetupMessage | None,
     documents: Sequence[SetupDocument] = (),
+    knowledge_refs: Sequence[KnowledgeRefPayload] = (),
 ) -> None:
     """Send the turn (and its message) to the chat page; never raises."""
     try:
         if message is not None:
             broadcast_message(
                 turn.project_id,
-                message_payload(message, screenshots=[], attachments=list(documents)),
+                message_payload(
+                    message,
+                    screenshots=[],
+                    attachments=list(documents),
+                    knowledge_refs=list(knowledge_refs),
+                ),
             )
         broadcast_turn(turn.project_id, turn_payload(turn))
     except Exception:

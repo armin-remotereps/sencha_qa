@@ -29,6 +29,10 @@ from agents.types import (
     ToolContext,
     ToolResult,
 )
+from knowledge_base.reference_note import knowledge_reference_note
+from knowledge_base.services.find_knowledge_items import find_knowledge_items
+from knowledge_base.services.knowledge_index import knowledge_index_text
+from knowledge_base.types import KnowledgeItemSummary
 from machine_setup.document_text import AttachedDocumentNote, user_turn_content
 from machine_setup.events import broadcast_message, broadcast_turn
 from machine_setup.models import (
@@ -74,6 +78,9 @@ logger = logging.getLogger(__name__)
 _INTERRUPTED_CALL_NOTE = (
     "Interrupted: the turn ended before this call returned. It may have partly "
     "run; check the machine before relying on it."
+)
+_NO_TEXT_KNOWLEDGE_PLACEHOLDER = (
+    "(No message text; see the referenced knowledge base items.)"
 )
 _ONE_SUBTASK_AT_A_TIME = (
     "Not run: delegate one sub-task at a time. Read the first report, then call "
@@ -164,8 +171,10 @@ class _TurnRunner:
         history = close_dangling_tool_calls(history, _INTERRUPTED_CALL_NOTE) + (
             ChatMessage(
                 role="user",
-                content=user_turn_content(
-                    user_row["text"], _attached_documents(user_row["id"])
+                content=build_user_turn_content(
+                    project_id=self.project_id,
+                    message_id=user_row["id"],
+                    text=user_row["text"],
                 ),
             ),
         )
@@ -189,6 +198,7 @@ class _TurnRunner:
             max_iterations=settings.MACHINE_SETUP_MAX_ITERATIONS,
             role=role,
             help_status=_role_status(role, help_request_id, result_case_id),
+            knowledge_index=knowledge_index_text(self.project_id),
         )
         llm_config = build_llm_config()
         self.subtask_runtime = SetupTaskRuntime(
@@ -436,6 +446,38 @@ def _role_status(
     if role == ThreadRole.CASE_RESULT and result_case_id is not None:
         return describe_result_status(result_case_id)
     return ""
+
+
+def build_user_turn_content(*, project_id: int, message_id: int, text: str) -> str:
+    """The user message the agent sees: the text, one note per attached
+    document, then one per referenced knowledge base item.
+
+    References resolve now: an item deleted since the send is left out.
+    Three queries (documents, links, items).
+    """
+    documents = _attached_documents(message_id)
+    notes = [
+        knowledge_reference_note(summary)
+        for summary in _referenced_knowledge(project_id, message_id)
+    ]
+    if notes and not documents and not text.strip():
+        text = _NO_TEXT_KNOWLEDGE_PLACEHOLDER
+    return "\n\n".join([user_turn_content(text, documents), *notes])
+
+
+def _referenced_knowledge(
+    project_id: int, message_id: int
+) -> list[KnowledgeItemSummary]:
+    """The message's still existing knowledge base items, in link order."""
+    item_ids = list(
+        SetupMessage.knowledge_items.through.objects.filter(setupmessage_id=message_id)
+        .order_by("id")
+        .values_list("knowledgeitem_id", flat=True)
+    )
+    if not item_ids:
+        return []
+    found = find_knowledge_items(project_id, item_ids)
+    return [found[item_id] for item_id in item_ids if item_id in found]
 
 
 def _attached_documents(message_id: int) -> list[AttachedDocumentNote]:

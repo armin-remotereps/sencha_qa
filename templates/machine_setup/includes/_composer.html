@@ -11,8 +11,15 @@
   button; Alpine's x-model does not support file inputs, so @change keeps
   `attachment` ({name, size}) in step. The client size check against
   document_max_bytes is a hint only; the server form validates the file.
-  The text is optional when a file is attached. Thread composers are text
-  only (text required).
+  The text is optional when a file is attached. Thread composers take no
+  documents.
+
+  Any thread: up to knowledge_max_refs knowledge base items, picked in the
+  "Knowledge base" dialog (knowledgeChoices from json_script
+  setup-knowledge-choices, filtered by knowledgeFilter) and kept in
+  knowledgeSelected; each is posted as a repeated hidden
+  `knowledge_item_ids` and shown as a removable chip. The text is optional
+  when an item is picked. Item names are member text: x-text only.
 
   The textarea stays editable during a turn so the next message can be
   drafted; sending stays blocked (canSend) on the client and the server. The
@@ -24,6 +31,9 @@
     conversation — the shown thread (SetupConversation) on a thread page, None
                  on the main chat; posted as conversation_id so the message
                  goes to that thread and both forms return to it
+    knowledge_choices_capped — the picker lists only the newest items
+    knowledge_max_refs — items per message
+    knowledge_base_url — the Knowledge base tab (search for the rest)
 {% endcomment %}
 <div class="chat-composer">
   <p class="chat-status small" x-show="statusText" x-cloak x-text="statusText"></p>
@@ -39,14 +49,24 @@
         name="text"
         rows="2"
         maxlength="8000"
-        {% if conversation %}required{% endif %}
+        {% if conversation %}required :required="knowledgeSelected.length === 0"{% endif %}
         :placeholder="turnLive ? 'The agent is working. You can send when it finishes.' : 'Describe what the test machine needs… (Enter to send, Shift+Enter for a new line)'"
         placeholder="Describe what the test machine needs… (Enter to send, Shift+Enter for a new line)"
         x-model="draft"
         @keydown.enter="onEnter($event)"
       ></textarea>
-      {% if not conversation %}
+      <template x-for="id in knowledgeSelected" :key="id">
+        <input type="hidden" name="knowledge_item_ids" :value="id">
+      </template>
       <div class="chat-composer-tools">
+        <button type="button" class="btn btn-secondary btn-sm chat-composer-attach" title="Point the agent at knowledge base items" @click="$dispatch('open-knowledge-picker')">Knowledge base</button>
+        <template x-for="id in knowledgeSelected" :key="'kb-' + id">
+          <span class="chat-attachment chat-attachment-pending">
+            <span class="chat-attachment-name" x-text="knowledgeName(id)" :title="knowledgeName(id)"></span>
+            <button type="button" class="chat-attachment-remove" :aria-label="'Remove ' + knowledgeName(id)" title="Remove" @click="toggleKnowledge(id)">&times;</button>
+          </span>
+        </template>
+      {% if not conversation %}
         <input type="file" id="setup-message-document" name="document" class="visually-hidden" tabindex="-1" aria-label="Attach a Markdown or text file" accept=".md,.markdown,.txt,text/markdown,text/plain" @change="onAttach($event)">
         <button type="button" class="btn btn-secondary btn-sm chat-composer-attach" title="Attach one Markdown or text file the agent can read" @click="$el.form.elements.document.click()" x-text="attachment ? 'Replace file' : 'Attach .md'">Attach .md</button>
         <span class="chat-attachment chat-attachment-pending" x-show="attachment" x-cloak>
@@ -55,8 +75,8 @@
           <button type="button" class="chat-attachment-remove" aria-label="Remove the attached file" title="Remove" @click="clearAttachment($el.form.elements.document)">&times;</button>
         </span>
         <span class="chat-attachment-error small" role="alert" x-show="attachmentError" x-cloak x-text="attachmentError"></span>
-      </div>
       {% endif %}
+      </div>
       </div>
       <button type="submit" class="btn btn-primary" x-show="!turnLive" :disabled="!canSend || submitting || !hasContent">Send</button>
     </form>
@@ -71,5 +91,51 @@
         x-text="turn && turn.stop_requested ? 'Stopping…' : 'Stop'"
       >Stop</button>
     </form>
+  </div>
+
+  {# Section: knowledge base picker (opened by the composer's Knowledge base button) #}
+  <div
+    class="dialog-backdrop"
+    x-data="dialog()"
+    x-show="open"
+    x-cloak
+    x-on:open-knowledge-picker.window="show()"
+    x-on:keydown.escape.window="close()"
+    x-trap.noscroll="open"
+    @click.self="close()"
+  >
+    <div class="dialog dialog-lg" role="dialog" aria-modal="true" aria-labelledby="knowledge-picker-title">
+      <div class="card-header">
+        <h3 id="knowledge-picker-title">Knowledge base</h3>
+        <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+      </div>
+      <p>Pick up to {{ knowledge_max_refs }} items the agent should read for this message.</p>
+      <template x-if="knowledgeChoices.length > 0">
+        <div class="field">
+          <label for="knowledge-picker-filter" class="visually-hidden">Filter items</label>
+          <input id="knowledge-picker-filter" type="search" class="input" placeholder="Filter by name…" x-model="knowledgeFilter" autocomplete="off">
+        </div>
+      </template>
+      <p class="hint" x-show="knowledgeChoices.length === 0">The knowledge base is empty. <a href="{{ knowledge_base_url }}">Upload files on the Knowledge base tab.</a></p>
+      <div class="chat-attachments" role="group" aria-label="Knowledge base items">
+        <template x-for="choice in filteredKnowledge" :key="choice.id">
+          <label class="checkbox">
+            <input type="checkbox" :value="choice.id" :checked="knowledgeSelected.includes(choice.id)" :disabled="!knowledgeSelected.includes(choice.id) && knowledgeSelected.length >= knowledgeMaxRefs" @change="toggleKnowledge(choice.id)">
+            <span>
+              <span x-text="choice.name"></span>
+              <span class="muted small" x-text="knowledgeMeta(choice)"></span>
+            </span>
+          </label>
+        </template>
+      </div>
+      <p class="hint" x-show="knowledgeChoices.length > 0 && filteredKnowledge.length === 0">No item matches the filter.</p>
+      {% if knowledge_choices_capped %}
+      <p class="hint">Only the newest items are listed. <a href="{{ knowledge_base_url }}">Search the Knowledge base tab</a> for the rest.</p>
+      {% endif %}
+      <div class="dialog-actions">
+        <span class="muted small" x-text="knowledgeSelected.length + ' of ' + knowledgeMaxRefs + ' picked'"></span>
+        <button type="button" class="btn btn-primary" @click="close()">Done</button>
+      </div>
+    </div>
   </div>
 </div>

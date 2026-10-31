@@ -39,6 +39,10 @@
     blocker_texts — {machine_not_ready, turn_active, other_thread}: the
                  blocker messages the client recomputes from live state
     document_max_bytes — int, the attachment size cap (client hint only)
+    knowledge_choices — list[KnowledgeChoicePayload] for the composer's
+                 knowledge base picker (empty for read-only members);
+                 knowledge_choices_capped, knowledge_max_refs and
+                 knowledge_base_url — see includes/_composer.html
     document_url_template — machine_setup:document reversed with id 0
                  (ends /documents/0/)
     run_proposal_create_url_template, run_proposal_discard_url_template —
@@ -63,6 +67,7 @@
     setup-document-url     — document_url_template
     run-proposal-create-url, run-proposal-discard-url — the proposal URL
                              templates
+    setup-knowledge-choices — knowledge_choices (writable members only)
 
   WebSocket /ws/projects/<id>/machine-setup/, or on the thread page
   /ws/projects/<id>/machine-setup/threads/<conversation_id>/ (same group, so
@@ -118,6 +123,7 @@
 {{ document_url_template|json_script:"setup-document-url" }}
 {{ run_proposal_create_url_template|json_script:"run-proposal-create-url" }}
 {{ run_proposal_discard_url_template|json_script:"run-proposal-discard-url" }}
+{% if project_can_write %}{{ knowledge_choices|json_script:"setup-knowledge-choices" }}{% endif %}
 <div x-data="machineSetupChat">
   <div class="page-header">
     <div>
@@ -318,6 +324,16 @@ document.addEventListener('alpine:init', () => {
   const DOCUMENT_URL_TEMPLATE = readJson('setup-document-url') || '';
   const PROPOSAL_CREATE_URL_TEMPLATE = readJson('run-proposal-create-url') || '';
   const PROPOSAL_DISCARD_URL_TEMPLATE = readJson('run-proposal-discard-url') || '';
+  // Knowledge base picker (any thread; writable members only). Item names
+  // are member text: rendered with x-text only.
+  const knowledgeChoicesElement = document.getElementById('setup-knowledge-choices');
+  const KNOWLEDGE_CHOICES = knowledgeChoicesElement ? JSON.parse(knowledgeChoicesElement.textContent) : [];
+  const KNOWLEDGE_MAX_REFS = {{ knowledge_max_refs|default:0 }};
+  const KNOWLEDGE_STATUS_LABELS = {
+    pending: 'waiting to be read',
+    extracting: 'being read',
+    failed: 'could not be read',
+  };
   const withId = (template, pattern, id) => template.replace(pattern, (match) => match.replace('/0/', '/' + Number(id) + '/'));
   // Badge class per run proposal status: a fixed map keyed by the enum.
   const PROPOSAL_BADGES = {
@@ -374,6 +390,12 @@ document.addEventListener('alpine:init', () => {
     if (args.document_id === undefined || args.document_id === null) return '';
     const page = args.page !== undefined && args.page !== null ? ' · page ' + oneLine(args.page, 12) : '';
     return 'document #' + oneLine(args.document_id, 12) + page;
+  };
+  // read_knowledge: 'item #4 · page 2' (numbers the model chose).
+  const knowledgeRef = (args) => {
+    if (args.item_id === undefined || args.item_id === null) return '';
+    const page = args.page !== undefined && args.page !== null ? ' · page ' + oneLine(args.page, 12) : '';
+    return 'item #' + oneLine(args.item_id, 12) + page;
   };
   // propose_test_runs: the number of runs; 0 when the arguments did not parse.
   const runCount = (args) => (Array.isArray(args.runs) ? args.runs.length : 0);
@@ -475,6 +497,13 @@ document.addEventListener('alpine:init', () => {
     ask_case_screenshot: plain('Looked at a stored screenshot', (args) => withDetail('Looking at screenshot', args.screenshot_id !== undefined && args.screenshot_id !== null ? '#' + oneLine(args.screenshot_id, 12) : '') + '…', (args) => oneLine(args.question)),
     propose_result_change: plain('Proposed a result change', () => 'Proposing a result change…', (args) => oneLine(args.status, 12)),
     propose_plan_change: plain('Proposed a redesigned test plan', () => 'Redesigning the test plan…', (args) => (Array.isArray(args.steps) ? plural(args.steps.length, 'step', 'steps') : '')),
+    list_knowledge: plain('Listed the knowledge base', () => 'Listing the knowledge base…', (args) => (args.archive_id !== undefined && args.archive_id !== null ? 'archive #' + oneLine(args.archive_id, 12) : '')),
+    search_knowledge: plain('Searched the knowledge base', (args) => withDetail('Searching the knowledge base for', quoted(args.query)) + '…', (args) => quoted(args.query)),
+    read_knowledge: {
+      summary: (count) => 'Read ' + plural(count, 'knowledge base page', 'knowledge base pages'),
+      live: (args) => withDetail('Reading', knowledgeRef(args)) + '…',
+      detail: (args) => knowledgeRef(args),
+    },
     run_setup_task: {
       summary: (count) => times('Ran a sub-task', count),
       live: (args) => withDetail('Working on:', oneLine(args.goal, 60)) + '…',
@@ -796,6 +825,12 @@ document.addEventListener('alpine:init', () => {
     // The chosen document ({name, size}) or null; main chat only.
     attachment: null,
     attachmentError: '',
+    // Knowledge base picker: the listed items, the picked ids (posted as
+    // knowledge_item_ids) and the dialog's filter text.
+    knowledgeChoices: KNOWLEDGE_CHOICES,
+    knowledgeSelected: [],
+    knowledgeFilter: '',
+    knowledgeMaxRefs: KNOWLEDGE_MAX_REFS,
     proposalSubmitting: false,
     // Result chat cards: one submit at a time, and the card each page-level
     // confirm dialog acts on.
@@ -1095,9 +1130,41 @@ document.addEventListener('alpine:init', () => {
       return labelsFor(row.tool_name).detail(row.args || {});
     },
 
-    // Text or an attached document: either is enough to send.
+    // Text, an attached document or a knowledge base item: any is enough to send.
     get hasContent() {
-      return this.draft.trim() !== '' || this.attachment !== null;
+      return this.draft.trim() !== '' || this.attachment !== null || this.knowledgeSelected.length > 0;
+    },
+
+    get filteredKnowledge() {
+      const needle = this.knowledgeFilter.trim().toLowerCase();
+      if (!needle) return this.knowledgeChoices;
+      return this.knowledgeChoices.filter((choice) => choice.name.toLowerCase().includes(needle));
+    },
+
+    toggleKnowledge(id) {
+      if (this.knowledgeSelected.includes(id)) {
+        this.knowledgeSelected = this.knowledgeSelected.filter((selected) => selected !== id);
+      } else if (this.knowledgeSelected.length < this.knowledgeMaxRefs) {
+        this.knowledgeSelected = [...this.knowledgeSelected, id];
+      }
+    },
+
+    knowledgeName(id) {
+      const choice = this.knowledgeChoices.find((item) => item.id === id);
+      return choice ? choice.name : 'Item ' + Number(id);
+    },
+
+    knowledgeMeta(choice) {
+      const parts = [choice.kind_label];
+      if (choice.in_archive) parts.push('in an archive');
+      if (choice.member_count > 0) parts.push(choice.member_count + ' files');
+      const status = this.knowledgeStatusLabel(choice.status);
+      if (status) parts.push(status);
+      return parts.join(' · ');
+    },
+
+    knowledgeStatusLabel(status) {
+      return (Object.hasOwn(KNOWLEDGE_STATUS_LABELS, status) && KNOWLEDGE_STATUS_LABELS[status]) || '';
     },
 
     submit(form) {

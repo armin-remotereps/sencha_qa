@@ -7,12 +7,15 @@ Pure builders over already-loaded rows: callers fetch ``author`` and
 from __future__ import annotations
 
 import json
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from django.conf import settings
+from django.db.models import Prefetch, QuerySet
 from django.urls import reverse
 
 from agents.plan_revision import PlanDraftView
+from knowledge_base.models import KnowledgeItem
+from knowledge_base.types import KnowledgeItemSummary
 from machine_setup.models import (
     SetupDocument,
     SetupMessage,
@@ -68,6 +71,20 @@ CARD_DEFER: tuple[str, ...] = (
 )
 
 
+# The KnowledgeItem columns a reference chip reads; never the description.
+KNOWLEDGE_REF_FIELDS: tuple[str, ...] = ("id", "project_id", "name", "status")
+
+
+def knowledge_refs_prefetch() -> (
+    Prefetch[Literal["knowledge_items"], QuerySet[KnowledgeItem], str]
+):
+    """Prefetch of ``SetupMessage.knowledge_items`` for ``message_payload``."""
+    return Prefetch(
+        "knowledge_items",
+        queryset=KnowledgeItem.objects.only(*KNOWLEDGE_REF_FIELDS).order_by("id"),
+    )
+
+
 class SetupScreenshotPayload(TypedDict):
     id: int
     url: str
@@ -79,6 +96,30 @@ class SetupAttachmentPayload(TypedDict):
     file_name: str
     size_bytes: int
     char_count: int
+
+
+class KnowledgeRefPayload(TypedDict):
+    """A knowledge base item a USER message referenced (composer picker)."""
+
+    id: int
+    name: str
+    # pending | extracting | ready | failed
+    status: str
+    # The item's knowledge base page.
+    url: str
+
+
+class KnowledgeChoicePayload(TypedDict):
+    """One entry of the composer's knowledge base picker."""
+
+    id: int
+    name: str
+    kind_label: str
+    status: str
+    # An archive's member file.
+    in_archive: bool
+    # Archives: how many member files.
+    member_count: int
 
 
 class ProposedRunPayload(TypedDict):
@@ -160,6 +201,8 @@ class SetupMessagePayload(TypedDict):
     hidden_child_count: int
     # USER rows only: documents attached to the message.
     attachments: list[SetupAttachmentPayload]
+    # USER rows only: knowledge base items the message referenced.
+    knowledge_refs: list[KnowledgeRefPayload]
     # NOTICE rows that show a run proposal card.
     run_proposal: RunProposalPayload | None
     # NOTICE rows of a result chat that show a result change / redesign card.
@@ -180,6 +223,38 @@ class SetupTurnPayload(TypedDict):
     max_iterations: int
 
 
+def knowledge_ref_payload(
+    *, project_id: int, item_id: int, name: str, status: str
+) -> KnowledgeRefPayload:
+    return {
+        "id": item_id,
+        "name": name,
+        "status": status,
+        "url": reverse(
+            "knowledge_base:item",
+            kwargs={"project_id": project_id, "item_id": item_id},
+        ),
+    }
+
+
+def knowledge_choice_payload(summary: KnowledgeItemSummary) -> KnowledgeChoicePayload:
+    return {
+        "id": summary.id,
+        "name": summary.name,
+        "kind_label": summary.kind_label,
+        "status": summary.status,
+        "in_archive": summary.parent_id is not None,
+        "member_count": summary.member_count,
+    }
+
+
+def knowledge_item_ref_payload(item: KnowledgeItem) -> KnowledgeRefPayload:
+    """From a row loaded with ``KNOWLEDGE_REF_FIELDS``."""
+    return knowledge_ref_payload(
+        project_id=item.project_id, item_id=item.pk, name=item.name, status=item.status
+    )
+
+
 def screenshot_payload(screenshot: SetupScreenshot) -> SetupScreenshotPayload:
     return {
         "id": screenshot.pk,
@@ -195,11 +270,14 @@ def message_payload(
     hidden_child_count: int = 0,
     attachments: list[SetupDocument] | None = None,
     project_id: int | None = None,
+    knowledge_refs: list[KnowledgeRefPayload] | None = None,
 ) -> SetupMessagePayload:
     """``screenshots`` defaults to the prefetched ``message.screenshots``.
 
     ``attachments`` defaults to the prefetched ``message.documents``, read for
-    USER rows only; the proposal is read only when ``run_proposal_id`` is set
+    USER rows only, and ``knowledge_refs`` to the prefetched
+    ``message.knowledge_items`` (``knowledge_refs_prefetch()``), USER rows only;
+    the proposal is read only when ``run_proposal_id`` is set
     (load it with ``select_related`` and ``case_ids`` deferred), and the
     result-chat cards only when ``result_change_id`` / ``plan_revision_id``
     is set (load them with ``CARD_SELECT_RELATED`` / ``CARD_DEFER`` and pass
@@ -210,6 +288,12 @@ def message_payload(
     if attachments is None:
         attachments = (
             list(message.documents.all())
+            if message.kind == SetupMessageKind.USER
+            else []
+        )
+    if knowledge_refs is None:
+        knowledge_refs = (
+            [knowledge_item_ref_payload(item) for item in message.knowledge_items.all()]
             if message.kind == SetupMessageKind.USER
             else []
         )
@@ -238,6 +322,7 @@ def message_payload(
         ),
         "hidden_child_count": hidden_child_count,
         "attachments": [attachment_payload(row) for row in attachments],
+        "knowledge_refs": knowledge_refs,
         "run_proposal": (
             run_proposal_payload(message.run_proposal)
             if message.run_proposal_id is not None and message.run_proposal
