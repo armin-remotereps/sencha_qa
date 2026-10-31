@@ -7,6 +7,12 @@ machine tools.
 
 Sub-agents get the tester's machine tools, reached through
 ``dispatch_tool_call`` after a cheap "is the runner connected" check.
+
+Main chat gates (plan docs/plan/feat-machine-setup-intake.md, Q1 and Q3):
+while the intake is pending, ``run_setup_task`` and ``scan_artifacts`` return
+``INTAKE_GATE_MESSAGE``; with the machine not ready they return
+``MACHINE_GATE_MESSAGE`` instead of ending the turn (the main chat may run
+with the Test Runner offline).
 """
 
 from __future__ import annotations
@@ -57,6 +63,15 @@ from machine_setup.services.main_chat_tools import (
     main_chat_tool_definitions,
 )
 from machine_setup.services.plan_step_args import PlanStepArgumentError
+from machine_setup.services.readiness_tools import (
+    SAVE_ARTIFACT_PROFILE_TOOL,
+    SCAN_ARTIFACTS_TOOL,
+    ActionProposedCallback,
+    ProfileSavedCallback,
+    ReadinessToolError,
+    build_readiness_handlers,
+    readiness_tool_definitions,
+)
 from machine_setup.services.result_chat_tools import (
     CardProposedCallback,
     ResultToolError,
@@ -64,6 +79,7 @@ from machine_setup.services.result_chat_tools import (
     result_chat_tool_definitions,
 )
 from machine_setup.subtask_types import (
+    APPROVAL_ID_ARGUMENT,
     DONE_WHEN_MAX_CHARS,
     GOAL_MAX_CHARS,
     KNOWN_STATE_MAX_CHARS,
@@ -89,12 +105,28 @@ from projects.models import (
     ContextWriteSource,
     Project,
 )
+from projects.services import MachineState, connected_machine_state
+from visual_engine.services.pool_status import get_visual_engine_status
 
 # Called after a successful context write with the new revision and summary.
 ContextUpdatedCallback = Callable[[int, str], None]
 
 # Auto-fix turns only: the structured "fixed / not fixed" report.
 REPORT_CASE_FIX_TOOL = "report_case_fix"
+
+INTAKE_GATE_MESSAGE = (
+    "Finish the intake first: ask the user about the project's artifacts "
+    "(including the artifacts base directory on the test machine) and save "
+    f"the answers with {SAVE_ARTIFACT_PROFILE_TOOL}, or the user can press "
+    "Skip intake."
+)
+MACHINE_GATE_MESSAGE = (
+    "The Test Runner is not connected or the visual engine is not ready; ask "
+    "the user to connect the test machine, then try again. Tools that run on "
+    "the server still work."
+)
+# Main chat tools that need the intake done and the machine ready.
+_MACHINE_GATED_TOOLS = frozenset({RUN_SETUP_TASK_TOOL, SCAN_ARTIFACTS_TOOL})
 
 
 class _InvalidArgumentError(Exception):
@@ -108,11 +140,14 @@ def main_tool_definitions(role: ThreadRole) -> tuple[ToolDefinition, ...]:
     gets ``report_case_fix``; a person's turn in a help thread gets the
     help-chat tools, and one in a result chat the result-chat tools.
     """
-    tools = _project_data_tool_definitions() + (_run_setup_task_definition(),)
+    main_chat = role == ThreadRole.MAIN
+    tools = _project_data_tool_definitions() + (
+        _run_setup_task_definition(main_chat=main_chat),
+    )
     # Every role reads the project's knowledge base.
     tools += knowledge_tool_definitions()
-    if role == ThreadRole.MAIN:
-        tools += main_chat_tool_definitions()
+    if main_chat:
+        tools += main_chat_tool_definitions() + readiness_tool_definitions()
     elif role == ThreadRole.AUTO_FIX:
         tools += (_report_case_fix_definition(),)
     elif role == ThreadRole.CASE_HELP:
@@ -127,7 +162,23 @@ def machine_tool_definitions() -> tuple[ToolDefinition, ...]:
     return get_all_tool_definitions()
 
 
-def _run_setup_task_definition() -> ToolDefinition:
+def _run_setup_task_definition(*, main_chat: bool) -> ToolDefinition:
+    approval: tuple[ToolParameter, ...] = ()
+    if main_chat:
+        approval = (
+            ToolParameter(
+                name=APPROVAL_ID_ARGUMENT,
+                type="integer",
+                description=(
+                    "Optional. The id N of an action a person approved on its "
+                    "card ('#N'). The helper may then carry out that one "
+                    "install, upgrade, uninstall or base-directory data "
+                    "removal, and nothing else of that kind. Without it the "
+                    "helper refuses any such change."
+                ),
+                required=False,
+            ),
+        )
     return ToolDefinition(
         name=RUN_SETUP_TASK_TOOL,
         description=(
@@ -188,6 +239,7 @@ def _run_setup_task_definition() -> ToolDefinition:
                 ),
                 required=False,
             ),
+            *approval,
         ),
     )
 
@@ -393,6 +445,9 @@ def build_setup_dispatcher(
     result_case_id: int | None,
     on_result_change_proposed: CardProposedCallback,
     on_plan_revision_proposed: CardProposedCallback,
+    on_profile_saved: ProfileSavedCallback,
+    on_action_proposed: ActionProposedCallback,
+    intake_pending: bool,
 ) -> ToolDispatcher:
     """The main agent's per-turn dispatcher.
 
@@ -404,8 +459,20 @@ def build_setup_dispatcher(
     ``conversation_id``; in a help chat turn the help tools act on
     ``help_request_id``; in a result chat turn the result tools act on
     ``result_case_id`` and post their cards through the two callbacks.
+
+    Main chat only: ``intake_pending`` (read once by the turn runner) gates
+    ``run_setup_task`` and ``scan_artifacts`` until the profile is saved in
+    this turn (``on_profile_saved`` runs after a save); both also check the
+    machine at call time.
     """
     project_id = project.pk
+    main_chat = role == ThreadRole.MAIN
+    # Cached for the turn: one exists() per turn, released by a save here.
+    intake_gate = {"pending": main_chat and intake_pending}
+
+    def _profile_saved(revision: int, change_summary: str) -> None:
+        intake_gate["pending"] = False
+        on_profile_saved(revision, change_summary)
 
     def _handle_report_case_fix(arguments: dict[str, object]) -> str:
         fixed = arguments.get("fixed")
@@ -526,13 +593,23 @@ def build_setup_dispatcher(
     }
     # Knowledge base tools: every role.
     project_data_handlers.update(build_knowledge_handlers(project_id))
-    if role == ThreadRole.MAIN:
+    if main_chat:
         project_data_handlers.update(
             build_main_chat_handlers(
                 project=project,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 on_runs_proposed=on_runs_proposed,
+            )
+        )
+        project_data_handlers.update(
+            build_readiness_handlers(
+                project=project,
+                author=author,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                on_profile_saved=_profile_saved,
+                on_action_proposed=on_action_proposed,
             )
         )
     elif role == ThreadRole.AUTO_FIX:
@@ -555,10 +632,23 @@ def build_setup_dispatcher(
             )
         )
 
+    def _main_chat_gate() -> str | None:
+        if intake_gate["pending"]:
+            return INTAKE_GATE_MESSAGE
+        if not _machine_ready(project_id):
+            return MACHINE_GATE_MESSAGE
+        return None
+
     def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
+        if main_chat and tool_call.tool_name in _MACHINE_GATED_TOOLS:
+            refusal = _main_chat_gate()
+            if refusal is not None:
+                return _tool_error(tool_call, refusal)
         if tool_call.tool_name == RUN_SETUP_TASK_TOOL:
             try:
-                request = _parse_setup_task_request(tool_call.arguments)
+                request = _parse_setup_task_request(
+                    tool_call.arguments, main_chat=main_chat
+                )
             except _InvalidArgumentError as exc:
                 return _tool_error(tool_call, str(exc))
             return run_subtask(tool_call, request, context)
@@ -580,6 +670,7 @@ def build_setup_dispatcher(
             KnowledgeToolError,
             MainChatToolError,
             PlanStepArgumentError,
+            ReadinessToolError,
             ResultToolError,
         ) as exc:
             return _tool_error(tool_call, str(exc))
@@ -623,7 +714,17 @@ def _tool_error(tool_call: ToolCall, content: str) -> ToolResult:
     )
 
 
-def _parse_setup_task_request(arguments: dict[str, object]) -> SetupTaskRequest:
+def _machine_ready(project_id: int) -> bool:
+    """The runner connected (owner known) and the visual engine ready; two
+    queries, read at call time (the main chat may start offline)."""
+    if connected_owner(project_id) is None:
+        return False
+    return connected_machine_state(get_visual_engine_status()) == MachineState.READY
+
+
+def _parse_setup_task_request(
+    arguments: dict[str, object], *, main_chat: bool
+) -> SetupTaskRequest:
     goal = _required_str(arguments, "goal").strip()
     done_when = _required_str(arguments, "done_when").strip()
     known_state = _optional_str(arguments, "known_state").strip()
@@ -638,6 +739,13 @@ def _parse_setup_task_request(arguments: dict[str, object]) -> SetupTaskRequest:
     _check_length("goal", goal, GOAL_MAX_CHARS)
     _check_length("done_when", done_when, DONE_WHEN_MAX_CHARS)
     _check_length("known_state", known_state, KNOWN_STATE_MAX_CHARS)
+    read_only = arguments.get("read_only") is True
+    approval_id = _optional_approval_id(arguments, main_chat=main_chat)
+    if approval_id is not None and read_only:
+        raise _InvalidArgumentError(
+            f"{APPROVAL_ID_ARGUMENT} carries out an approved change; it cannot "
+            "be combined with read_only=true."
+        )
     return SetupTaskRequest(
         goal=goal,
         done_when=done_when,
@@ -647,8 +755,27 @@ def _parse_setup_task_request(arguments: dict[str, object]) -> SetupTaskRequest:
         requested_timeout=arguments.get("timeout_seconds"),
         # Strict bool: only a real JSON true counts, so a string such as
         # "false" never turns a change into an inspection or the reverse.
-        read_only=arguments.get("read_only") is True,
+        read_only=read_only,
+        approval_id=approval_id,
     )
+
+
+def _optional_approval_id(
+    arguments: dict[str, object], *, main_chat: bool
+) -> int | None:
+    value = arguments.get(APPROVAL_ID_ARGUMENT)
+    if value is None:
+        return None
+    if not main_chat:
+        raise _InvalidArgumentError(
+            f"{APPROVAL_ID_ARGUMENT} is used only in the main Machine setup chat."
+        )
+    # bool is an int subclass; a JSON true is not a number.
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise _InvalidArgumentError(
+            f"{APPROVAL_ID_ARGUMENT} must be the number N of an approved card #N."
+        )
+    return value
 
 
 def _check_length(name: str, value: str, limit: int) -> None:

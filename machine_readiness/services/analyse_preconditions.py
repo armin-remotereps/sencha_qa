@@ -26,6 +26,7 @@ from agents.exceptions import AIServiceError
 from agents.services.llm_client import send_chat_completion
 from agents.services.llm_config import build_llm_config
 from agents.types import ChatMessage, LLMConfig
+from machine_readiness.events import broadcast_readiness
 from machine_readiness.exceptions import Stage0AnalysisBusyError
 from machine_readiness.models import (
     ANALYSIS_UNCLEAR_MAX_LENGTH,
@@ -173,6 +174,9 @@ def _analyse(*, project_id: int, max_calls: int) -> AnalysisOutcome:
             created += batch_created
             analysed += batch_analysed
             none_needed += batch_none
+            _broadcast_progress(
+                project_id, analysed=analysed, remaining=len(pending) - analysed
+            )
 
     if problems:
         logger.info(
@@ -181,14 +185,30 @@ def _analyse(*, project_id: int, max_calls: int) -> AnalysisOutcome:
             len(problems),
             problems[0],
         )
+    remaining = max(len(pending) - analysed, 0)
+    _broadcast_progress(project_id, analysed=analysed, remaining=remaining, done=True)
     return AnalysisOutcome(
         calls=calls,
         analysed=analysed,
         none_needed=none_needed,
         requirements_created=created,
-        remaining=max(len(pending) - analysed, 0),
+        remaining=remaining,
         problems=tuple(problems[:_MAX_OUTCOME_PROBLEMS]),
         error=error,
+    )
+
+
+def _broadcast_progress(
+    project_id: int, *, analysed: int, remaining: int, done: bool = False
+) -> None:
+    broadcast_readiness(
+        project_id,
+        {
+            "event": "analysis",
+            "analysed": analysed,
+            "remaining": max(remaining, 0),
+            "done": done,
+        },
     )
 
 

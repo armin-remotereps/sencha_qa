@@ -21,7 +21,6 @@ from machine_setup.exceptions import (
     ActionApprovalClosedError,
     ActionApprovalUnusableError,
     MachineSetupError,
-    SetupRunActiveError,
 )
 from machine_setup.models import (
     APPROVAL_MAX_ATTEMPTS,
@@ -37,11 +36,8 @@ from machine_setup.services.action_approval_events import (
 )
 from machine_setup.services.live_turn import resolve_live_turn
 from machine_setup.services.queue_turn import broadcast_and_enqueue, create_user_turn
-from projects.models import Project, TestRun, TestRunStatus
-from projects.runner_update_state import (
-    RUNNER_UPDATE_RUNNING_MESSAGE,
-    runner_update_in_progress,
-)
+from machine_setup.services.send_gates import run_and_update_refusal
+from projects.models import Project
 
 # Approved, unused actions listed in one turn's user note.
 _NOTE_MAX_ROWS = 20
@@ -107,7 +103,7 @@ def _approve_locked(
     now = timezone.now()
     live = resolve_live_turn(project_id=locked.pk, now=now)
     if live is None:
-        refusal = approval_send_refusal(locked, now)
+        refusal = run_and_update_refusal(locked, now)
         if refusal is not None:
             # Returned, not raised: a stale turn closed above must still commit.
             return refusal
@@ -152,20 +148,6 @@ def discard_action(
     _mark_decided(approval, ApprovalStatus.DISCARDED, user, timezone.now())
     transaction.on_commit(partial(broadcast_approval_card, approval_id=approval.pk))
     return ApprovalDecision(conversation_id=approval.conversation_id, turn_queued=False)
-
-
-def approval_send_refusal(project: Project, now: datetime) -> MachineSetupError | None:
-    """``send_message._refusal`` without its live-turn and READY gates.
-
-    The caller has already resolved the live turn (under the project row
-    lock). Kept here so the approval path does not reach into a private
-    function of ``send_message``.
-    """
-    if TestRun.objects.filter(project=project, status=TestRunStatus.STARTED).exists():
-        return SetupRunActiveError()
-    if runner_update_in_progress(project.pk, now):
-        return MachineSetupError(RUNNER_UPDATE_RUNNING_MESSAGE)
-    return None
 
 
 @transaction.atomic

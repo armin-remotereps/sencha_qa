@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from agents.types import ToolCall, ToolContext, ToolResult
 
 RUN_SETUP_TASK_TOOL = "run_setup_task"
+APPROVAL_ID_ARGUMENT = "approval_id"
 
 GOAL_MAX_CHARS = 2000
 DONE_WHEN_MAX_CHARS = 1000
@@ -25,6 +26,10 @@ class SetupTaskRequest:
     # Raw model value; clamped by subtask_budget.resolve_subtask_budget.
     requested_timeout: object
     read_only: bool
+    # Main chat only: the approved action (SetupActionApproval id) this
+    # sub-task may carry out; None means no install, upgrade, uninstall or
+    # base-directory removal is allowed.
+    approval_id: int | None = None
 
 
 # Runs one delegated sub-task for the main agent's run_setup_task call.

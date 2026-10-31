@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from django.db.models import Q
 
+from machine_readiness.services.stage0_groups import list_stage0_groups
 from machine_setup.run_proposal_types import (
     MAX_CASES_PER_PROPOSED_RUN,
     MAX_IDS_PER_LIST,
@@ -18,7 +19,7 @@ from projects.run_case_order import PICKER_CASE_ORDERING
 def resolve_selection(*, project_id: int, spec: RunSpec) -> ResolvedSelection:
     """The cases ``spec`` selects in this project, in picker order.
 
-    One ``values("id", "title")`` query. Semantics are those of ``RunSpec``:
+    One ``values("id", "title")`` query (two more with ``stage0_group``). Semantics are those of ``RunSpec``:
     the filters are ANDed (``all_cases`` alone selects every case), the
     explicit ``case_ids`` and ``testrail_case_ids`` are unioned with that set,
     and ``exclude_case_ids`` is removed last. Explicit ids outside the project
@@ -29,7 +30,7 @@ def resolve_selection(*, project_id: int, spec: RunSpec) -> ResolvedSelection:
     exact count.
     """
     cases = TestCase.objects.filter(project_id=project_id)
-    filtered = _filters_q(spec)
+    filtered = _filters_q(project_id, spec)
     if not (spec.all_cases and filtered is None):
         # Not "every case": the filters and the explicit ids, unioned.
         explicit = _explicit_q(spec)
@@ -51,9 +52,15 @@ def resolve_selection(*, project_id: int, spec: RunSpec) -> ResolvedSelection:
     )
 
 
-def _filters_q(spec: RunSpec) -> Q | None:
-    """The ANDed filters, or None when the spec has none."""
+def _filters_q(project_id: int, spec: RunSpec) -> Q | None:
+    """The ANDed filters, or None when the spec has none.
+
+    A ``stage0_group`` costs two more queries (``list_stage0_groups``); an
+    unknown key matches no case.
+    """
     parts: list[Q] = []
+    if spec.stage0_group:
+        parts.append(Q(id__in=_stage0_group_case_ids(project_id, spec.stage0_group)))
     title = spec.title_contains.strip()
     if title:
         parts.append(Q(title__icontains=title))
@@ -71,6 +78,13 @@ def _filters_q(spec: RunSpec) -> Q | None:
     for part in parts[1:]:
         combined &= part
     return combined
+
+
+def _stage0_group_case_ids(project_id: int, key: str) -> list[int]:
+    for group in list_stage0_groups(project_id):
+        if group.key == key:
+            return list(group.case_ids)
+    return []
 
 
 def _explicit_q(spec: RunSpec) -> Q | None:

@@ -7,6 +7,8 @@
 - ``propose_test_runs``: store a proposal of test runs; only a person's Create
   runs creates them, as Drafts.
 
+The machine readiness tools of the main chat live in ``readiness_tools``.
+
 A handler raises ``MainChatToolError`` for a tool error.
 """
 
@@ -28,6 +30,7 @@ from machine_setup.run_proposal_types import (
     PROPOSE_TEST_RUNS_TOOL,
     READ_DOCUMENT_TOOL,
     RUN_NAME_MAX,
+    STAGE0_GROUP_KEY_MAX,
     RunSpec,
 )
 from machine_setup.services.case_catalog import list_case_groups_text
@@ -149,8 +152,8 @@ def main_chat_tool_definitions() -> tuple[ToolDefinition, ...]:
                 f"the pending proposal. At most {MAX_PROPOSED_RUNS} runs, each "
                 f"with 1 to {MAX_CASES_PER_PROPOSED_RUN} cases and a unique "
                 "name. Each run picks its cases like this: the filters "
-                "title_contains, testrail_suite_id, testrail_run_id, priorities "
-                "and types are ANDed; all_cases selects every case; case_ids and "
+                "title_contains, testrail_suite_id, testrail_run_id, priorities, "
+                "types and stage0_group (a list_stage0_groups key) are ANDed; all_cases selects every case; case_ids and "
                 "testrail_case_ids are added to that set (union); "
                 "exclude_case_ids is removed last. Set at least one selector. "
                 "Returns each run's case count and warnings; an invalid proposal "
@@ -239,6 +242,13 @@ _RUN_ITEM_SCHEMA: dict[str, object] = {
         "exclude_case_ids": _id_list_schema(
             "integer", "Case ids removed from the run last"
         ),
+        "stage0_group": {
+            "type": "string",
+            "description": (
+                "Optional filter: a group key from list_stage0_groups (cases "
+                "that need the same stage 0)."
+            ),
+        },
     },
     "required": ["name"],
 }
@@ -320,6 +330,7 @@ _RUN_FIELDS = frozenset(
         "priorities",
         "types",
         "exclude_case_ids",
+        "stage0_group",
     }
 )
 
@@ -366,11 +377,18 @@ def _parse_run_specs(value: object) -> list[RunSpec]:
                     priorities=_optional_strs(raw, "priorities"),
                     types=_optional_strs(raw, "types"),
                     exclude_case_ids=_optional_ids(raw, "exclude_case_ids"),
+                    stage0_group=_stage0_group(raw),
                 )
             )
         except MainChatToolError as exc:
             raise MainChatToolError(prefix + str(exc)) from exc
     return specs
+
+
+def _stage0_group(arguments: dict[str, object]) -> str:
+    key = _optional_str(arguments, "stage0_group").strip().lower()
+    _check_length("stage0_group", key, STAGE0_GROUP_KEY_MAX)
+    return key
 
 
 def _optional_list(arguments: dict[str, object], name: str) -> list[object]:

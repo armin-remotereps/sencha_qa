@@ -7,6 +7,12 @@ rows are recorded nested under the delegation row.
 
 Exceptions (Stop, a lost runner, provider faults, the Celery soft limit)
 propagate unchanged and end the turn.
+
+Main chat only (plan D6): with ``approval_id`` one attempt of that approved
+action is claimed under a row lock, linked as the row's ``approval_used``,
+and its server-built text is the executor's APPROVED ACTION; a DONE report
+marks it used. Without it APPROVED ACTION reads "none". Help, result and
+auto-fix threads keep the prompt rules they had.
 """
 
 from __future__ import annotations
@@ -28,8 +34,13 @@ from agents.types import (
     ToolContext,
     ToolResult,
 )
-from machine_setup.exceptions import SetupRunnerLostError
+from machine_setup.exceptions import ActionApprovalUnusableError, SetupRunnerLostError
 from machine_setup.models import SetupMessage
+from machine_setup.services.action_approval_decision import (
+    ApprovedActionText,
+    claim_approval_for_subtask,
+    settle_approval_after_subtask,
+)
 from machine_setup.services.activity_recorder import ActivityRecorder
 from machine_setup.services.setup_task_prompt import build_setup_task_system_prompt
 from machine_setup.services.setup_tools import (
@@ -59,6 +70,8 @@ class SetupTaskRuntime:
     cancellation_check: CancellationCheck
     # False once the turn row is no longer running (force stop, worker_lost).
     turn_live: Callable[[], bool]
+    # The main chat: the executor gets the APPROVED ACTION rule.
+    main_chat: bool = False
 
 
 def run_setup_task(
@@ -97,6 +110,21 @@ def run_setup_task(
     if connected_owner(runtime.project_id) is None:
         raise SetupRunnerLostError("The Test Runner is not connected.")
 
+    approved: ApprovedActionText | None = None
+    if request.approval_id is not None:
+        if not runtime.main_chat:
+            return _error(tool_call, "Approvals are used in the main chat only.")
+        try:
+            approved = claim_approval_for_subtask(
+                conversation_id=runtime.conversation_id,
+                approval_id=request.approval_id,
+            )
+        except ActionApprovalUnusableError as exc:
+            return _error(tool_call, exc.message)
+        parent_row.approval_used_id = approved.approval_id
+        if runtime.turn_live():
+            parent_row.save(update_fields=["approval_used", "updated_at"])
+
     max_iterations = settings.MACHINE_SETUP_SUBTASK_MAX_ITERATIONS
     system_prompt = build_setup_task_system_prompt(
         system_info=runtime.system_info,
@@ -105,6 +133,8 @@ def run_setup_task(
         timeout_seconds=budget,
         max_iterations=max_iterations,
         read_only=request.read_only,
+        main_chat=runtime.main_chat,
+        approved_action=approved.text if approved is not None else None,
     )
     recorder = ActivityRecorder(
         project_id=runtime.project_id,
@@ -132,11 +162,13 @@ def run_setup_task(
         cancellation_check=runtime.cancellation_check,
     )
     logger.info(
-        "Setup turn %s: sub-task %s started (budget %s s, read_only=%s)",
+        "Setup turn %s: sub-task %s started (budget %s s, read_only=%s, "
+        "approval=%s)",
         runtime.turn_id,
         parent_row.pk,
         budget,
         request.read_only,
+        approved.approval_id if approved is not None else None,
     )
 
     def on_transcript(
@@ -162,6 +194,11 @@ def run_setup_task(
     elapsed = int(agent_monotonic() - started)
 
     report = parse_subtask_report(result)
+    if approved is not None:
+        # Not gated on the turn: a DONE install must never be re-runnable.
+        settle_approval_after_subtask(
+            approval_id=approved.approval_id, outcome=report.result
+        )
     # Same instance the main recorder holds: its result update broadcasts this.
     parent_row.subtask_result = report.result
     # Not onto the interrupted row of a turn closed meanwhile.

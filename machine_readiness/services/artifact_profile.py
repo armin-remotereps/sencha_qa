@@ -7,6 +7,7 @@ through ``write_profile``, so each replaced profile lands in the history.
 from __future__ import annotations
 
 from collections.abc import Collection, Sequence
+from functools import partial
 
 from django.db import transaction
 from django.utils import timezone
@@ -15,6 +16,7 @@ from accounts.models import CustomUser
 from knowledge_base.exceptions import KnowledgeItemNotFoundError
 from knowledge_base.services.find_knowledge_items import find_knowledge_items
 from knowledge_base.services.resolve_knowledge_refs import resolve_knowledge_refs
+from machine_readiness.events import broadcast_readiness
 from machine_readiness.exceptions import (
     ArtifactKnowledgeRefError,
     ArtifactProfileConflictError,
@@ -121,6 +123,17 @@ def write_profile(
             for position, item in enumerate(data.items, start=1)
         )
         _prune_history(profile)
+        transaction.on_commit(
+            partial(
+                broadcast_readiness,
+                project_id,
+                {
+                    "event": "profile",
+                    "revision": profile.revision,
+                    "intake_pending": False,
+                },
+            )
+        )
         return profile.revision
 
 

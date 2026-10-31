@@ -23,6 +23,7 @@ from agents.exceptions import InfrastructureError
 from controller_client.protocol import ClientCapability
 from knowledge_base.tool_text import neutralize
 from machine_readiness.artifact_matching import format_version, match_inventory
+from machine_readiness.events import broadcast_readiness
 from machine_readiness.exceptions import ArtifactScanUnavailableError
 from machine_readiness.models import (
     HOST_MAX_LENGTH,
@@ -282,6 +283,15 @@ def scan_artifacts(*, project_id: int, actor_id: int | None) -> ScanOutcome:
             "permission_errors": scan.permission_errors,
             "error": error,
             "entries": [entry.to_json() for entry in entries],
+        },
+    )
+    broadcast_readiness(
+        project_id,
+        {
+            "event": "scan",
+            "os": os_name.value,
+            "entry_count": len(entries),
+            "failed": bool(error),
         },
     )
     matches = (

@@ -33,7 +33,12 @@
     page       — machine_setup.services.chat_page.SetupPage (conversation_id,
                  kind, thread, messages, hidden_message_count, turn,
                  send_blockers, can_send, finishing_previous_turn,
-                 finishing_turn, other_thread_turn_live, …)
+                 finishing_turn, other_thread_turn_live, intake_pending, …).
+                 page.intake_pending (main chat only) shows the intake banner:
+                 machine work waits for the artifacts intake; writable members
+                 get Skip intake (POST machine_readiness:intake_skip with
+                 next = this chat). The main chat has no machine READY send
+                 blocker (it may run offline); other threads keep it.
     form       — SetupMessageForm (field `text`, max_length 8000); only its
                  errors arrive via messages after PRG, so it is not rendered
     blocker_texts — {machine_not_ready, turn_active, other_thread}: the
@@ -76,8 +81,11 @@
   /ws/projects/<id>/machine-setup/threads/<conversation_id>/ (same group, so
   rows of every thread arrive; only the shown conversation's rows are kept;
   machine_setup.consumers):
-  current_state (with `help` on a help thread), message, screenshot, turn,
-  reset, help, agent_status, visual_engine. `help` (and current_state's
+  current_state (with `help` on a help thread, and `intake_pending`), message,
+  screenshot, turn, reset, help, agent_status, visual_engine,
+  machine_readiness ({event: profile|intake_skipped|scan|analysis, …} from
+  machine_readiness.events: a saved profile hides the intake banner; each
+  event sets the one-line readiness note shown under it). `help` (and current_state's
   `help`) is re-dispatched as the `help-state` window event for the nested
   helpPanel. All dynamic text is rendered with x-text, except agent reply and
   narration rows: Markdown rendered by renderMarkdown (marked, then DOMPurify
@@ -178,6 +186,26 @@
   {% include "partials/project_tabs.html" with project=project active_tab=active_tab only %}
 
   {% include "machine_setup/includes/_threads.html" with project=project threads=threads conversation=conversation only %}
+
+  {% if thread_kind == "chat" %}
+  {# Section: artifacts intake banner and Machine readiness link (main chat) #}
+  <div class="alert alert-info mr-intake" x-show="intakePending" {% if not page.intake_pending %}x-cloak{% endif %}>
+    <p><strong>Intake first.</strong> Before it works on the test machine, the setup agent asks about the project's artifacts: the application, the artifacts base directory on the test machine, builds, installers, configs, data and licences, and where they come from. Send a message to start, or skip the intake.</p>
+    <div class="mr-intake-actions">
+      <a class="btn btn-secondary btn-sm" href="{% url 'machine_readiness:overview' project_id=project.id %}">Machine readiness</a>
+      {% if project_can_write %}
+      <form method="post" action="{% url 'machine_readiness:intake_skip' project_id=project.id %}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{% url 'machine_setup:chat' project_id=project.id %}">
+        <button type="submit" class="btn btn-ghost btn-sm">Skip intake</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  <p class="muted small" x-show="!intakePending" {% if page.intake_pending %}x-cloak{% endif %}>
+    Artifacts, inventory and stage-0 requirements: <a href="{% url 'machine_readiness:overview' project_id=project.id %}">Machine readiness</a><span x-show="readinessNote" x-cloak> · <span x-text="readinessNote"></span></span>
+  </p>
+  {% endif %}
 
   {% if help_panel %}
   {% include "machine_setup/includes/_help_panel.html" %}
@@ -871,6 +899,10 @@ document.addEventListener('alpine:init', () => {
     forceStopTurnId: null,
     clock: Date.now(),
     serverBlockers: readJson('setup-blockers'),
+    // Main chat: the artifacts intake is pending (banner), and the last
+    // machine_readiness event as one line of text.
+    intakePending: {{ page.intake_pending|yesno:'true,false' }},
+    readinessNote: '',
     finishingPreviousTurn: {{ page.finishing_previous_turn|yesno:'true,false' }},
     agentConnected: {{ project.agent_connected|yesno:'true,false' }},
     visualEngine: readJson('setup-visual-engine') || {},
@@ -964,6 +996,9 @@ document.addEventListener('alpine:init', () => {
         this.agentConnected = !!data.agent_connected;
         if (data.visual_engine) this.visualEngine = data.visual_engine;
         if (data.help) this.$dispatch('help-state', data.help);
+        this.intakePending = !!data.intake_pending;
+      } else if (data.type === 'machine_readiness') {
+        this.applyReadiness(data.readiness || {});
       } else if (data.type === 'help') {
         if (data.help && data.help.conversation_id === this.conversationId) {
           this.$dispatch('help-state', data.help);
@@ -996,6 +1031,27 @@ document.addEventListener('alpine:init', () => {
         this.visualEngine = data.visual_engine || {};
       }
       if (stick) this.$nextTick(() => this.scrollToBottom());
+    },
+
+    // machine_readiness events: only the main chat shows them.
+    applyReadiness(readiness) {
+      if (THREAD_KIND !== 'chat') return;
+      if (readiness.event === 'profile') {
+        if (readiness.intake_pending === false) this.intakePending = false;
+        this.readinessNote = 'Artifacts profile saved (revision ' + Number(readiness.revision || 0) + ').';
+      } else if (readiness.event === 'intake_skipped') {
+        this.intakePending = false;
+        this.readinessNote = 'Intake skipped.';
+      } else if (readiness.event === 'scan') {
+        this.readinessNote = readiness.failed
+          ? 'The base directory scan failed; see Machine readiness.'
+          : 'Base directory scanned: ' + Number(readiness.entry_count || 0) + ' entries.';
+      } else if (readiness.event === 'analysis') {
+        const remaining = Number(readiness.remaining || 0);
+        this.readinessNote = 'Preconditions analysed: ' + Number(readiness.analysed || 0)
+          + (remaining ? ', ' + remaining + ' remaining' : '')
+          + (readiness.done ? '.' : '…');
+      }
     },
 
     // A row belongs to the shown conversation. On the main chat with none
@@ -1182,7 +1238,8 @@ document.addEventListener('alpine:init', () => {
 
     get blockers() {
       const blockers = this.serverBlockers.filter((b) => b !== MACHINE_NOT_READY && b !== TURN_ACTIVE && b !== FINISHING && b !== OTHER_THREAD);
-      if (this.machineState !== 'ready') blockers.unshift(MACHINE_NOT_READY);
+      // The main chat may run offline (its machine tools say so).
+      if (THREAD_KIND !== 'chat' && this.machineState !== 'ready') blockers.unshift(MACHINE_NOT_READY);
       if (this.turnLive) blockers.unshift(TURN_ACTIVE);
       else if (this.finishingPreviousTurn) blockers.unshift(FINISHING);
       else if (this.otherThreadTurnLive) blockers.unshift(OTHER_THREAD);

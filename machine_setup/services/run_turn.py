@@ -35,6 +35,7 @@ from knowledge_base.reference_note import knowledge_reference_note
 from knowledge_base.services.find_knowledge_items import find_knowledge_items
 from knowledge_base.services.knowledge_index import knowledge_index_text
 from knowledge_base.types import KnowledgeItemSummary
+from machine_readiness.profile_text import artifacts_profile_text, intake_pending
 from machine_setup.document_text import AttachedDocumentNote, user_turn_content
 from machine_setup.events import broadcast_message, broadcast_turn
 from machine_setup.models import (
@@ -47,6 +48,7 @@ from machine_setup.models import (
     SetupTurnStatus,
 )
 from machine_setup.payloads import message_payload, turn_payload
+from machine_setup.services.action_approval_decision import approved_unused_note
 from machine_setup.services.activity_recorder import (
     TOOL_INTERRUPTED_TEXT,
     ActivityRecorder,
@@ -169,16 +171,26 @@ class _TurnRunner:
         if user_row is None:
             raise LookupError(f"Setup turn {turn.pk} has no user message")
 
+        help_request_id = turn.conversation.help_request_id
+        result_case_id = turn.conversation.result_case_id
+        role = thread_role(
+            auto_fix_turn=turn.auto_fix,
+            help_request_id=help_request_id,
+            result_case_id=result_case_id,
+        )
+        content = build_user_turn_content(
+            project_id=self.project_id,
+            message_id=user_row["id"],
+            text=user_row["text"],
+        )
+        if role == ThreadRole.MAIN:
+            # One query: the actions a person approved that no sub-task used.
+            approved_note = approved_unused_note(self.conversation_id)
+            if approved_note:
+                content = f"{content}\n\n{approved_note}"
         # The note names each document's id, so later turns can still read it.
         history = close_dangling_tool_calls(history, _INTERRUPTED_CALL_NOTE) + (
-            ChatMessage(
-                role="user",
-                content=build_user_turn_content(
-                    project_id=self.project_id,
-                    message_id=user_row["id"],
-                    text=user_row["text"],
-                ),
-            ),
+            ChatMessage(role="user", content=content),
         )
         # Persisted up front so the message stays in the history even when the
         # turn fails before the model answers.
@@ -187,12 +199,13 @@ class _TurnRunner:
         project = turn.project
         system_info = project.agent_system_info or None
         project_prompt = build_agent_project_context(project)
-        help_request_id = turn.conversation.help_request_id
-        result_case_id = turn.conversation.result_case_id
-        role = thread_role(
-            auto_fix_turn=turn.auto_fix,
-            help_request_id=help_request_id,
-            result_case_id=result_case_id,
+        # Read once per turn (setup_prompt stays ORM-free): the intake gate
+        # of the main chat, the profile of the plan-redesigning chats.
+        pending = role == ThreadRole.MAIN and intake_pending(self.project_id)
+        profile_text = (
+            artifacts_profile_text(self.project_id)
+            if role in (ThreadRole.CASE_HELP, ThreadRole.CASE_RESULT)
+            else None
         )
         system_prompt = build_setup_system_prompt(
             system_info=system_info,
@@ -201,6 +214,8 @@ class _TurnRunner:
             role=role,
             help_status=_role_status(role, help_request_id, result_case_id),
             knowledge_index=knowledge_index_text(self.project_id),
+            intake_pending=pending,
+            artifacts_profile=profile_text,
         )
         llm_config = build_llm_config()
         self.subtask_runtime = SetupTaskRuntime(
@@ -212,6 +227,7 @@ class _TurnRunner:
             llm_config=llm_config,
             cancellation_check=self._should_stop,
             turn_live=self._turn_live,
+            main_chat=role == ThreadRole.MAIN,
         )
         config = AgentConfig(
             llm=llm_config,
@@ -243,6 +259,9 @@ class _TurnRunner:
             result_case_id=result_case_id,
             on_result_change_proposed=self._on_result_change_proposed,
             on_plan_revision_proposed=self._on_plan_revision_proposed,
+            on_profile_saved=self._on_profile_saved,
+            on_action_proposed=self._on_action_proposed,
+            intake_pending=pending,
         )
         result = run_tool_loop(
             [ChatMessage(role="system", content=system_prompt), *history],
@@ -341,6 +360,25 @@ class _TurnRunner:
             text=f"Proposed {run_count} test run{'s' if run_count != 1 else ''}",
             run_proposal_id=proposal_id,
         )
+
+    def _on_profile_saved(self, revision: int, change_summary: str) -> None:
+        logger.info(
+            "Setup turn %s wrote artifacts profile revision %s",
+            self.turn.pk,
+            revision,
+        )
+        self.recorder.create_row(
+            kind=SetupMessageKind.NOTICE,
+            text=f"Artifacts profile updated: {change_summary}",
+            link_url=reverse(
+                "machine_readiness:overview",
+                kwargs={"project_id": self.project_id},
+            ),
+        )
+
+    def _on_action_proposed(self, approval_id: int) -> None:
+        # propose_action already wrote and broadcast the card row.
+        logger.info("Setup turn %s proposed action %s", self.turn.pk, approval_id)
 
     def _on_result_change_proposed(self, change_id: int) -> None:
         logger.info("Setup turn %s proposed result change %s", self.turn.pk, change_id)

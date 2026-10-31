@@ -20,6 +20,7 @@ from django.db.models.functions import RowNumber
 from django.utils import timezone
 
 from knowledge_base.services.list_knowledge_items import list_knowledge_choices
+from machine_readiness.profile_text import intake_pending
 from machine_setup.exceptions import (
     SetupMachineNotReadyError,
     SetupRunActiveError,
@@ -161,6 +162,9 @@ class SetupPage:
     finishing_turn: SetupTurnPayload | None
     # A turn is live in another (not archived) thread of the project.
     other_thread_turn_live: bool
+    # Main chat only: the project has no artifacts profile yet, so machine
+    # work waits for the intake (banner with Skip intake). False elsewhere.
+    intake_pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -367,7 +371,8 @@ def get_setup_page(
 ) -> SetupPage:
     """The main chat, or ``conversation`` (a thread from ``find_thread``).
 
-    About five queries; never loads ``llm_transcript``. The HTML page passes
+    About five queries (one more on the main chat: the intake state); never
+    loads ``llm_transcript``. The HTML page passes
     ``include_messages=False``: the socket's ``current_state`` delivers the
     rows, so they are built once per load.
     """
@@ -442,8 +447,10 @@ def get_setup_page(
         project=project, status=TestRunStatus.STARTED
     ).exists()
 
+    main_chat = kind == SetupConversationKind.CHAT
     blockers: list[str] = []
-    if machine_state != MachineState.READY:
+    # Q3: the main chat may run offline; its machine tools say so.
+    if not main_chat and machine_state != MachineState.READY:
         blockers.append(SetupMachineNotReadyError().message)
     if run_active:
         blockers.append(SetupRunActiveError().message)
@@ -474,6 +481,7 @@ def get_setup_page(
             else None
         ),
         other_thread_turn_live=other_thread_turn_live,
+        intake_pending=main_chat and intake_pending(project.pk),
     )
 
 

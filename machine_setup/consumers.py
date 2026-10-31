@@ -94,6 +94,7 @@ class MachineSetupConsumer(AuthenticatedConsumer):
                     "agent_connected": project.agent_connected,
                     "visual_engine": page.visual_engine,
                     "help": help_state,
+                    "intake_pending": page.intake_pending,
                 }
             )
         )
@@ -166,6 +167,15 @@ class MachineSetupConsumer(AuthenticatedConsumer):
     async def machine_setup_help(self, event: dict[str, Any]) -> None:
         # Project-wide group: the client keeps only its own thread's panel.
         await self.send(text_data=json.dumps({"type": "help", "help": event["help"]}))
+
+    async def machine_setup_readiness(self, event: dict[str, Any]) -> None:
+        # From machine_readiness.events (profile revision, scan done,
+        # analysis progress); the main chat refreshes its intake banner.
+        await self.send(
+            text_data=json.dumps(
+                {"type": "machine_readiness", "readiness": event["readiness"]}
+            )
+        )
 
     async def machine_setup_reset(self, event: dict[str, Any]) -> None:
         await self.send(
