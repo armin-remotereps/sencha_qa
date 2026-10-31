@@ -182,11 +182,11 @@
         <p class="help-quote pre-wrap">{{ auto_fix_summary }}</p>
       {% endif %}
       {% if help_panel.choose_continue_mode %}
-      <fieldset class="radio-card-stack" x-data="{ mode: '{{ help_request.continue_mode|escapejs }}' }">
+      <fieldset class="radio-card-stack" x-data="{ mode: '{{ help_panel.default_continue_mode|escapejs }}' }">
         <legend class="label">{{ help_form.continue_mode.label }}</legend>
         {% for mode in help_panel.continue_mode_choices %}
         <label class="radio-card" :class="{ selected: mode === '{{ mode.value }}' }">
-          <input type="radio" name="continue_mode" value="{{ mode.value }}" x-model="mode"{% if mode.value == help_request.continue_mode %} checked{% endif %}>
+          <input type="radio" name="continue_mode" value="{{ mode.value }}" x-model="mode"{% if mode.value == help_panel.default_continue_mode %} checked{% endif %}>
           <div>
             <div class="radio-title">{{ mode.label }}{% if mode.value == help_panel.agent_continue_mode %} <span class="muted small">(the agent suggests this)</span>{% endif %}</div>
             <div class="muted small">

@@ -1110,7 +1110,19 @@ document.addEventListener('alpine:init', () => {
         .join('\n');
     },
 
+    // Reload once (still following the discussion) if its URL event is missed.
+    armDiscussionFallback() {
+      if (this.discussionFallback) return;
+      this.discussionFallback = setTimeout(() => {
+        window.location.replace(window.location.pathname + '?discussion=1');
+      }, 15000);
+    },
+
     init() {
+      // Read once: later reloads of this page must not wait for a discussion.
+      if (new URLSearchParams(window.location.search).has('discussion')) {
+        window.history.replaceState(null, '', window.location.pathname);
+      }
       // The discussion opened before this page (re)loaded: follow it now.
       if (this.awaitingDiscussion && this.openedDiscussionUrl) {
         // replace(): Back from the discussion must not bounce here again.
@@ -1123,6 +1135,10 @@ document.addEventListener('alpine:init', () => {
         const data = JSON.parse(event.data);
 
         if (data.type === 'current_state') {
+          if (this.awaitingDiscussion && data.status === 'need_help') {
+            // The discussion may have opened before this socket subscribed.
+            this.armDiscussionFallback();
+          }
           this.status = data.status;
           this.result = data.result;
           this.blockedReason = data.blocked_reason || '';
@@ -1172,11 +1188,7 @@ document.addEventListener('alpine:init', () => {
             // missed.
             this.status = data.status;
             this.pausePending = false;
-            if (!this.discussionFallback) {
-              this.discussionFallback = setTimeout(() => {
-                window.location.replace(window.location.pathname + '?discussion=1');
-              }, 15000);
-            }
+            this.armDiscussionFallback();
             return;
           }
           // A pending pause lost to the verdict: the "Too late to pause"

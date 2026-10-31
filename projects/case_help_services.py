@@ -165,6 +165,14 @@ class HelpPanel:
         return len(choices) > 1 or (bool(choices) and choices[0] != self.continue_mode)
 
     @property
+    def default_continue_mode(self) -> str:
+        """The mode pre-selected on Continue: the stored one when allowed
+        (choices list it first), else the first allowed one."""
+        if self.continue_mode_choices:
+            return str(self.continue_mode_choices[0].value)
+        return str(self.continue_mode.value)
+
+    @property
     def can_continue(self) -> bool:
         """Continue needs the machine: refused while a gate fails."""
         return self.request.is_open and not self.blockers

@@ -739,3 +739,7 @@ All resolved on 2026-10-31.
   - `dismiss_dropped_pause` lost its unused `user` parameter.
   - Accepted residual: a Needs re-test mark on a finished case does not clear
     a dropped record; Re-run, Reset, Dismiss or the next pick-up do.
+- 2026-10-31: review pass 2 fixes: Continue pre-selects the first allowed mode
+  when the stored one is not allowed (`HelpPanel.default_continue_mode`); a
+  case page that loads while the discussion is opening arms the same fallback
+  reload; the `?discussion=1` flag is dropped from the URL once read.

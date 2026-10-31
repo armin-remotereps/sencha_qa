@@ -144,11 +144,12 @@
       <p class="hint" role="status" x-show="draftChanged">The agent proposed a new draft. Review it before continuing.</p>
     </div>
     {% if help_panel.choose_continue_mode %}
-    <fieldset class="radio-card-stack">
+    {# Pre-selects the stored mode, or the first allowed one when it is not allowed. #}
+    <fieldset class="radio-card-stack" x-init="continueMode = '{{ help_panel.default_continue_mode|escapejs }}'">
       <legend class="label">How the case goes on</legend>
       {% for mode in help_panel.continue_mode_choices %}
       <label class="radio-card" :class="{ selected: continueMode === '{{ mode.value }}' }">
-        <input type="radio" name="continue_mode" value="{{ mode.value }}" x-model="continueMode"{% if mode.value == help_request.continue_mode %} checked{% endif %}>
+        <input type="radio" name="continue_mode" value="{{ mode.value }}" x-model="continueMode"{% if mode.value == help_panel.default_continue_mode %} checked{% endif %}>
         <div class="radio-title">{{ mode.label }}</div>
       </label>
       {% endfor %}
