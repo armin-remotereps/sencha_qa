@@ -74,7 +74,7 @@
   {% if browse.files_capped %}
     <p class="muted small">
       Showing the first {{ browse.files|length }} files of this folder.
-      {% if browse.folder %}<a href="{{ list_url }}?tag={{ browse.folder|urlencode }}">Filter by this folder</a> or search to find the others.{% else %}Search to find the others.{% endif %}
+      Search the knowledge base to find the others.
     </p>
   {% endif %}
 {% endif %}

@@ -235,7 +235,8 @@ class ArchiveAllowance:
         parses it; the entries already counted (outer or earlier nested
         archives) count too."""
         left = max(self.limits.max_entries - self.entries, 0)
-        count = zip_entry_count(data, left)
+        # Directories are not entries: they keep the full limit as their cap.
+        count = zip_entry_count(data, left, max_directories=self.limits.max_entries)
         if count is None:
             raise damaged(noun)
         if count > left:
@@ -369,7 +370,9 @@ def zip_member_is_encrypted(info: zipfile.ZipInfo) -> bool:
     return bool(info.flag_bits & _ZIP_FLAG_ENCRYPTED)
 
 
-def zip_entry_count(data: bytes, max_entries: int) -> int | None:
+def zip_entry_count(
+    data: bytes, max_entries: int, *, max_directories: int | None = None
+) -> int | None:
     """Non-directory entries in a zip's central directory, without ``ZipFile``.
 
     ``zipfile`` builds a ``ZipInfo`` for every entry when it opens, so a
@@ -378,8 +381,8 @@ def zip_entry_count(data: bytes, max_entries: int) -> int | None:
     ``zipfile`` does (``_EndRecData`` / ``_EndRecData64`` /
     ``_RealGetContents``) and walks its headers in place, keeping nothing.
     The walk stops as soon as more than ``max_entries`` files, or more than
-    ``max_entries`` directories, were seen and then returns
-    ``max_entries + 1``; every step consumes at least one header, so it is
+    ``max_directories`` (default ``max_entries``) directories, were seen and
+    then returns ``max_entries + 1``; every step consumes at least one header, so it is
     bounded by ``max_entries`` and the data length whatever the records
     claim.
 
@@ -394,7 +397,13 @@ def zip_entry_count(data: bytes, max_entries: int) -> int | None:
         return None
     best: int | None = None
     for start, size in regions:
-        count = _walk_zip_directory(data, start, size, max_entries)
+        count = _walk_zip_directory(
+            data,
+            start,
+            size,
+            max_entries,
+            max_entries if max_directories is None else max_directories,
+        )
         if count is not None and count > max_entries:
             return count
         if count is not None and (best is None or count > best):
@@ -458,7 +467,7 @@ def _zip_directory_regions(
 
 
 def _walk_zip_directory(
-    data: bytes, start: int, size: int, max_entries: int
+    data: bytes, start: int, size: int, max_entries: int, max_directories: int
 ) -> int | None:
     """Files in the directory at ``start``, as zipfile walks it; None where
     zipfile fails, ``max_entries + 1`` once past the limit."""
@@ -484,7 +493,7 @@ def _walk_zip_directory(
             directories += 1
         else:
             files += 1
-        if files > max_entries or directories > max_entries:
+        if files > max_entries or directories > max_directories:
             return max_entries + 1
         position = name_at + name_length + extra_length + comment_length
     return files

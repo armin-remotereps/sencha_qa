@@ -44,6 +44,7 @@ from knowledge_base.archive_guard import (
     read_capped,
     skip_reason,
     too_big,
+    too_many_entries,
     zip_member_is_encrypted,
     zip_member_is_special,
 )
@@ -307,6 +308,7 @@ def _iter_tar(data: bytes, level: _Level) -> Iterator[ArchiveMemberRef]:
         archive = tarfile.open(fileobj=source, mode="r|")
     except (tarfile.TarError, zlib.error, EOFError, OSError) as exc:
         raise damaged(NOUN) from exc
+    directories = 0
     with archive:
         while True:
             try:
@@ -316,6 +318,11 @@ def _iter_tar(data: bytes, level: _Level) -> Iterator[ArchiveMemberRef]:
             if member is None:
                 return
             if member.isdir():
+                # Stream mode still keeps every TarInfo: directories are not
+                # entries, but are capped like zip directories.
+                directories += 1
+                if directories > limits.max_entries:
+                    raise too_many_entries(None, NOUN, limits)
                 continue
             allowance.add_entries(1, NOUN)
             # The member's bytes are read (or skipped) through the budget

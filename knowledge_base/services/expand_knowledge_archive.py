@@ -92,8 +92,10 @@ def expand_knowledge_archive(item_id: int) -> None:
     if claimed_at is None:  # always set by the claim; narrows the type
         return
     skipped = SkippedEntries()
-    # Filled as members are stored, so a failure can release their budget.
+    # Filled as members are stored; whatever does not become a child (a
+    # failure, a dropped result, a locked quota skip) gives its budget back.
     stored: list[_StoredMember] = []
+    kept = 0
     try:
         fmt = archive_format(item.original_name) or archive_format(item.name)
         if fmt is None:
@@ -103,20 +105,19 @@ def expand_knowledge_archive(item_id: int) -> None:
         data = read_blob_bytes(item.blob)
         _store_members(item.project_id, fmt, data, skipped, stored)
         del data
-        _create_children(item_id, claimed_at, stored, skipped)
+        kept = _create_children(item_id, claimed_at, stored, skipped)
     except SoftTimeLimitExceeded:
         # Fail first: the hard time limit may follow soon after.
         fail_claimed_item(item_id, claimed_at, TIMED_OUT_MESSAGE)
-        _release_reserved(item.project_id, stored)
         raise
     except KnowledgeExtractionError as exc:
         fail_claimed_item(item_id, claimed_at, exc.message)
-        _release_reserved(item.project_id, stored)
     except Exception:
         # Never log member contents: only the item id and the traceback.
         logger.exception("Knowledge archive %s could not be expanded", item_id)
         fail_claimed_item(item_id, claimed_at, UNREADABLE_ARCHIVE_MESSAGE)
-        _release_reserved(item.project_id, stored)
+    finally:
+        _release_reserved(item.project_id, stored, kept=kept)
 
 
 def _store_members(
@@ -162,14 +163,18 @@ def _store_members(
         )
 
 
-def _release_reserved(project_id: int, stored: Sequence[_StoredMember]) -> None:
-    """Give back the upload budget of members stored for a refused archive.
+def _release_reserved(
+    project_id: int, stored: Sequence[_StoredMember], *, kept: int
+) -> None:
+    """Give back the upload budget of stored members that became no child.
+
+    ``kept`` is the budget of the members that did (it stays charged).
 
     Their blobs stay for the storage sweep. A cache error is logged, never
     raised, so it cannot hide the archive's own failure.
     """
-    reserved = sum(member.reserved for member in stored)
-    if reserved == 0:
+    reserved = sum(member.reserved for member in stored) - kept
+    if reserved <= 0:
         return
     try:
         release_upload_bytes(project_id, reserved)
@@ -185,25 +190,28 @@ def _create_children(
     claimed_at: datetime,
     members: Sequence[_StoredMember],
     skipped: SkippedEntries,
-) -> None:
+) -> int:
+    """Create the children; return the upload budget they keep charged."""
     with transaction.atomic():
         archive = lock_claimed_item(item_id, claimed_at)
         if archive is None:
             # Retried, re-claimed or deleted meanwhile: drop this result.
-            return
+            return 0
         used = lock_project_usage(archive.project_id)
         if used is None:
-            return
+            return 0
         # Read under the claim lock: the archive's tags as they are now.
         tags = merge_tags(archive.tags)
         children: list[KnowledgeItem] = []
         locations: list[tuple[str, str]] = []
+        kept = 0
         for member in members:
             size = member.blob.size_bytes
             if not fits_quota(used, size):
                 skipped.add(f"{member.label} ({_OVER_QUOTA_REASON})")
                 continue
             used += size
+            kept += member.reserved
             folder, file_name = split_member_path(member.path)
             locations.append((folder, file_name))
             children.append(
@@ -247,6 +255,7 @@ def _create_children(
         broadcast_item_state(archive)
         for child in created:
             enqueue_item_processing(child.pk, child.kind)
+    return kept
 
 
 def skipped_warning(skipped: SkippedEntries) -> str:
