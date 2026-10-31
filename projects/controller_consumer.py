@@ -58,9 +58,11 @@ from projects.controller_protocol import (
     DoubleClickActionEvent,
     DragActionEvent,
     HoverActionEvent,
+    InspectPathsActionEvent,
     KeyPressActionEvent,
     LaunchAppActionEvent,
     RunCommandActionEvent,
+    ScanDirectoryActionEvent,
     ScreenshotActionEvent,
     ScrollActionEvent,
     SendInputActionEvent,
@@ -208,6 +210,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             "command_result": self._reply_tracker.send_command_result,
             "browser_content_result": self._reply_tracker.send_browser_content_result,
             "interactive_output": self._reply_tracker.send_interactive_output,
+            MessageType.ARTIFACT_SCAN_RESULT: (
+                self._reply_tracker.send_artifact_scan_result
+            ),
             "error": self._reply_tracker.send_error,
         }
 
@@ -608,6 +613,12 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     async def controller_cleanup_environment(
         self, event: CleanupEnvironmentActionEvent
     ) -> None:
+        await self._forward_action(event)
+
+    async def controller_scan_directory(self, event: ScanDirectoryActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_inspect_paths(self, event: InspectPathsActionEvent) -> None:
         await self._forward_action(event)
 
     async def controller_update_runner(self, event: UpdateRunnerEvent) -> None:

@@ -158,6 +158,30 @@ class ReplyTracker:
         )
         return True
 
+    async def send_artifact_scan_result(
+        self, request_id: str, data: dict[str, Any]
+    ) -> bool:
+        reply_channel = self.pop_reply_channel(request_id)
+        if not reply_channel:
+            logger.warning(
+                "Received artifact_scan_result with unknown request_id: %s",
+                request_id,
+            )
+            return False
+
+        # ``result`` is runner data; the waiting service validates it.
+        await self._channel_layer.send(
+            reply_channel,
+            {
+                "type": "artifact_scan.result",
+                "request_id": request_id,
+                "success": data.get("success", False),
+                "result": data.get("result"),
+                "duration_ms": data.get("duration_ms", 0.0),
+            },
+        )
+        return True
+
     async def send_error(self, request_id: str, data: dict[str, Any]) -> bool:
         reply_channel = self.pop_reply_channel(request_id)
         if not reply_channel:

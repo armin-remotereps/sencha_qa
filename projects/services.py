@@ -61,16 +61,24 @@ from agents.types import (
     PixelParseResult,
 )
 from auto_tester.celery import app as celery_app
+from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
+    ARTIFACT_PATH_MAX_CHARS,
     CLIENT_VERSION,
+    INSPECT_PATHS_MAX,
     REQUIRED_CLIENT_CAPABILITIES,
+    SCAN_DIRECTORY_MAX_DEPTH,
+    SCAN_DIRECTORY_MAX_ENTRIES,
     BrowserName,
     ClientCapability,
     ErrorCode,
     ScrollDirection,
+    parse_inspect_paths_result,
+    parse_scan_directory_result,
 )
 from knowledge_base.services.item_processing import COPY_PROJECT_KNOWLEDGE_TASK
 from knowledge_base.services.knowledge_index import knowledge_index_text
+from machine_readiness.types import InventoryEntry
 from machine_setup.auto_fix_stop import request_auto_fix_stop
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from notifications.services.inbox_broadcast import broadcast_project_attention_changed
@@ -2043,6 +2051,122 @@ def controller_check_app_installed(
         runner_local=True,
     )
     return _build_action_result(reply)
+
+
+@dataclass(frozen=True)
+class DirectoryScan:
+    """A ``scan_directory`` answer, validated (ARTIFACT_SCAN_V1)."""
+
+    # The expanded, normalized absolute path the runner scanned.
+    root: str
+    # Relative to ``root``, breadth first.
+    entries: tuple[InventoryEntry, ...]
+    # Cut short by ``max_entries`` or the runner's 10 s budget.
+    truncated: bool
+    permission_errors: int
+    # Why nothing was scanned (relative, missing, not a directory, a link,
+    # unreadable); "" on success. Runner text: may name local paths.
+    error: str
+
+
+@dataclass(frozen=True)
+class PathInfo:
+    """One ``inspect_paths`` answer (stat only; ``path`` as requested)."""
+
+    path: str
+    exists: bool
+    is_dir: bool
+    size: int
+    mtime: float
+
+
+def _check_artifact_path(path: str) -> None:
+    if not path.strip() or len(path) > ARTIFACT_PATH_MAX_CHARS or "\x00" in path:
+        raise ValueError("Expected a non-empty path without NUL characters")
+
+
+def controller_scan_directory(
+    project_id: int,
+    path: str,
+    *,
+    max_depth: int,
+    max_entries: int,
+    timeout: float = 30.0,
+) -> DirectoryScan:
+    """List a directory tree on the test machine (needs ARTIFACT_SCAN_V1).
+
+    The caller checks ``runner_supports``; an older runner answers
+    UNKNOWN_COMMAND (ControllerActionError). A refused root comes back as
+    ``error``, not as an exception. Raises ValueError for out-of-range limits.
+    """
+    _check_artifact_path(path)
+    if not 1 <= max_depth <= SCAN_DIRECTORY_MAX_DEPTH:
+        raise ValueError(f"max_depth must be 1..{SCAN_DIRECTORY_MAX_DEPTH}")
+    if not 1 <= max_entries <= SCAN_DIRECTORY_MAX_ENTRIES:
+        raise ValueError(f"max_entries must be 1..{SCAN_DIRECTORY_MAX_ENTRIES}")
+    # The 30 s timeout is well above the runner's 10 s scan budget.
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.scan_directory",
+        timeout,
+        path=path,
+        max_depth=max_depth,
+        max_entries=max_entries,
+        runner_local=True,
+    )
+    try:
+        scan = parse_scan_directory_result(reply.get("result"), max_entries=max_entries)
+    except ProtocolError as exc:
+        raise ControllerActionError(f"Invalid scan_directory reply: {exc}") from exc
+    return DirectoryScan(
+        root=scan.root,
+        entries=tuple(
+            InventoryEntry(p=entry.p, d=entry.d, s=entry.s, m=entry.m)
+            for entry in scan.entries
+        ),
+        truncated=scan.truncated,
+        permission_errors=scan.permission_errors,
+        error=scan.error,
+    )
+
+
+def controller_inspect_paths(
+    project_id: int,
+    paths: Sequence[str],
+    *,
+    timeout: float = 30.0,
+) -> list[PathInfo]:
+    """Stat up to INSPECT_PATHS_MAX absolute paths (needs ARTIFACT_SCAN_V1).
+
+    Missing, relative or unreadable paths come back with ``exists=False``.
+    Raises ValueError for an empty or oversized list.
+    """
+    if not 1 <= len(paths) <= INSPECT_PATHS_MAX:
+        raise ValueError(f"paths must hold 1..{INSPECT_PATHS_MAX} items")
+    for path in paths:
+        _check_artifact_path(path)
+    requested = list(paths)
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.inspect_paths",
+        timeout,
+        paths=requested,
+        runner_local=True,
+    )
+    try:
+        infos = parse_inspect_paths_result(reply.get("result"), paths=requested)
+    except ProtocolError as exc:
+        raise ControllerActionError(f"Invalid inspect_paths reply: {exc}") from exc
+    return [
+        PathInfo(
+            path=info.path,
+            exists=info.exists,
+            is_dir=info.is_dir,
+            size=info.size,
+            mtime=info.mtime,
+        )
+        for info in infos
+    ]
 
 
 def controller_cleanup_environment(
