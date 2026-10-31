@@ -8,7 +8,8 @@
                   help-chat thread; "Help chat" link), auto_fix_live,
                   blockers, is_open, can_continue_run, waiting_for_auto_fix_stop;
                   request.fault / get_fault_display: the infrastructure fault,
-                  "" when the agent asked)
+                  "" when the agent asked; request.is_person_pause /
+                  paused_by_label: a person paused the case to discuss it)
      person_step_panel — projects.person_step_services.PersonStepPanel or
                   None (Human in the loop: step with
                   test_run_test_case__test_case loaded, step_label, is_open,
@@ -22,6 +23,10 @@
                   refused the queueing); renders a plain "Continue run" banner
      can_write — project_can_write; false hides every "Continue run" form
                   (read-only members only see the state and the links)
+   A writable member can pause a waiting person step (status "waiting") from here ("Pause and
+   discuss" opens includes/_case_pause_dialog.html, back to the run page).
+   A running case is paused from its case page (the banner shows only while
+   the run is paused).
    The agent's reason / ask is model text: autoescaped, never |safe. {% endcomment %}
 {% if help_state == "person_step" and person_step_panel %}
 {% with step=person_step_panel.step %}
@@ -35,7 +40,14 @@
       <p>{% if person_step_panel.objection %}The agent could not confirm the last report. {% endif %}Waiting {{ step.requested_at|timesince }}. Perform the step on the test machine and report it on the case page; the agent then confirms it. Nothing else in this run executes until then.</p>
       <div class="help-actions">
         <a class="btn btn-sm btn-primary" href="{% url 'projects:test_run_case_detail' project.id test_run.id case.id %}">Open the case</a>
+        {% if can_write and step.status == "waiting" %}
+        <button type="button" class="btn btn-sm btn-secondary" @click="$dispatch('open-pause-case-{{ case.id }}')">Pause and discuss</button>
+        {% endif %}
       </div>
+      {% if can_write and step.status == "waiting" %}
+      {% url 'projects:test_run_detail' project.id test_run.id as run_detail_url %}
+      {% include "projects/includes/_case_pause_dialog.html" with project=project test_run=test_run pivot=case next=run_detail_url csrf_token=csrf_token only %}
+      {% endif %}
     {% else %}
       <strong>Run paused: the report on {{ case.test_case.title }} step {{ step.step_num }} is saved, but the run could not continue</strong>
       {% if person_step_panel.blockers %}
@@ -66,9 +78,13 @@
   <span class="alert-icon" aria-hidden="true">✋</span>
   <div>
     {% if help_panel.is_open %}
-      <strong>Run paused: {{ case.test_case.title }} {% if help_request.auto_fix_state == "running" %}is being auto-fixed{% else %}needs help{% endif %}</strong>
+      <strong>Run paused: {{ case.test_case.title }} {% if help_request.auto_fix_state == "running" %}is being auto-fixed{% elif help_request.is_person_pause %}was paused by {{ help_request.paused_by_label }} to discuss it{% else %}needs help{% endif %}</strong>
       {% if help_request.fault %}<p><span class="badge badge-warning">{{ help_request.get_fault_display }}</span></p>{% endif %}
+      {% if help_request.is_person_pause %}
+      <p>Paused by {{ help_request.paused_by_label }} at step {{ help_request.step_num }}.</p>
+      {% else %}
       <p>Step {{ help_request.step_num }}{% if help_request.ask %}: {{ help_request.ask|truncatechars:240 }}{% elif help_request.reason %}: {{ help_request.reason|truncatechars:240 }}{% endif %}</p>
+      {% endif %}
       {% if help_request.auto_fix_state == "running" %}
         <p>The Machine setup agent is trying to fix the machine. Nothing else in this run executes until the case is resolved.</p>
       {% elif help_request.auto_fix_state == "not_fixed" %}

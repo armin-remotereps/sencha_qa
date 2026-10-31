@@ -201,6 +201,8 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "projects.tasks.answer_person_step_question": {"queue": "assist"},
     "machine_setup.tasks.run_setup_turn": {"queue": "execution"},
     "machine_setup.tasks.start_case_auto_fix": {"queue": "execution"},
+    # Sent by name from projects (pause and discuss): needs a route entry.
+    "machine_setup.tasks.open_paused_help_chat": {"queue": "execution"},
     # Not "execution": it must run when that pool is busy or failing.
     "machine_setup.tasks.sweep_stale_auto_fixes": {"queue": "notify"},
     # Its own small worker, so a notification is never stuck behind TestRail imports.

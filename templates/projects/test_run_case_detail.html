@@ -122,6 +122,19 @@
      when the case moves between two finished statuses (a person applied a
      result change), since these parts are server-rendered.
 
+     Pause and discuss: pause_panel (projects.case_pause_services.CasePausePanel:
+     can_pause, pause_pending, pause_requested_by_label, pause_message_state,
+     dropped_message, ...), pause_form (unbound CasePauseForm). "Pause and
+     discuss" opens includes/_case_pause_dialog.html (posts message + next to
+     projects:test_run_case_pause). The case WS `status` event carries
+     pause_pending / pause_requested_by (the "Pausing…" badge) and
+     discussion_url: once the page showed a pending pause (or loaded while the
+     discussion was opening) and the case is need_help with a non-empty
+     discussion_url, the page navigates there. dropped_message (the verdict
+     came first) shows the "Too late to pause" card: "Discuss the result"
+     posts the editable `text` to machine_setup:result_chat_open, Dismiss
+     posts to projects:test_run_case_pause_dismiss.
+
      Access: project_can_write (context processor) gates every write control —
      Check / Uncheck, Edit, Remove, Resume, Discuss result, Abort, the help and
      person-step cards' forms (passed in as can_write) and every dialog. A
@@ -197,6 +210,10 @@
       {% elif project_can_write and testrail_send_no_source %}
       <span class="muted small">Can't send: imported without a TestRail run link</span>
       {% endif %}
+      <span class="badge badge-warning" x-show="pausePending && status === 'in_progress'" x-cloak x-text="pauseRequestedBy ? 'Pausing… requested by ' + pauseRequestedBy : 'Pausing…'">{% if pause_panel.pause_pending %}Pausing… requested by {{ pause_panel.pause_requested_by_label }}{% endif %}</span>
+      {% if project_can_write and pause_panel.can_pause %}
+      <button type="button" class="btn btn-secondary" x-show="!pausePending && (status === 'in_progress' || status === 'awaiting_person')" @click="$dispatch('open-pause-case-{{ pivot.id }}')">Pause and discuss</button>
+      {% endif %}
       {% if can_mark_retest and project_can_write %}
       <button type="button" class="btn btn-secondary" @click="$dispatch('open-retest-cases')">Mark for re-test</button>
       {% endif %}
@@ -267,6 +284,30 @@
     </div>
     {% endif %}
   </section>
+
+  {% if pause_panel.dropped_message %}
+  {# Section: Too late to pause — the verdict came first; the pause message is offered for the result chat (never sent automatically) #}
+  <section aria-labelledby="pause-dropped-h" class="card card-tone-warning">
+    <div class="card-header">
+      <h2 id="pause-dropped-h">Too late to pause: the case finished first</h2>
+    </div>
+    <p>The case reached its result before the agent stopped, so it was not paused. Your message was not sent.</p>
+    {% if project_can_write %}
+    <form method="post" action="{% url 'machine_setup:result_chat_open' project.id pivot.id %}" class="field">
+      {% csrf_token %}
+      <label class="label" for="pause-dropped-text">Your message</label>
+      <textarea class="textarea" id="pause-dropped-text" name="text" rows="4" maxlength="8000">{{ pause_panel.dropped_message }}</textarea>
+      {% if result_chat_blocker %}<p class="hint" id="pause-dropped-blocker">{{ result_chat_blocker }}</p>{% endif %}
+      <div class="help-actions">
+        <button type="submit" class="btn btn-sm btn-primary"{% if not can_discuss_result or result_chat_blocker %} disabled aria-disabled="true"{% if result_chat_blocker %} aria-describedby="pause-dropped-blocker"{% endif %}{% endif %}>Discuss the result</button>
+        <button type="submit" class="btn btn-sm btn-ghost" formaction="{% url 'projects:test_run_case_pause_dismiss' project.id test_run.id pivot.id %}">Dismiss</button>
+      </div>
+    </form>
+    {% else %}
+    <p class="help-quote">{{ pause_panel.dropped_message }}</p>
+    {% endif %}
+  </section>
+  {% endif %}
 
   {% if retest_panel %}
   {# Section: Needs re-test — who marked it, the earlier result and Undo (server-rendered) #}
@@ -622,6 +663,10 @@
   {% include "projects/includes/_test_case_refresh_dialog.html" with project=project next_url=case_detail_url csrf_token=csrf_token only %}
   {% endif %}
 
+  {% if pause_panel.can_pause and project_can_write %}
+  {% include "projects/includes/_case_pause_dialog.html" with project=project test_run=test_run pivot=pivot next=case_detail_url csrf_token=csrf_token only %}
+  {% endif %}
+
   {% if can_mark_retest and project_can_write %}
   {% include "projects/includes/_retest_dialog.html" with project=project test_run=test_run pivot=pivot next=case_detail_url note_max=retest_note_max csrf_token=csrf_token only %}
   {% endif %}
@@ -947,6 +992,22 @@ document.addEventListener('alpine:init', () => {
     ],
     showLightbox: false,
     lightboxIndex: 0,
+    // Pause and discuss: a pause is pending (the agent stops at its next
+    // action), and who asked. awaitingDiscussion: this page waits for the
+    // server to open the discussion, then follows `discussion_url`.
+    pausePending: {{ pause_panel.pause_pending|yesno:"true,false" }},
+    pauseRequestedBy: '{{ pause_panel.pause_requested_by_label|escapejs }}',
+    // Only while the server says the discussion is still opening (or this
+    // page sees the pause live); never from the URL, so a reload cannot loop.
+    awaitingDiscussion: {% if pause_panel.pause_pending or pause_panel.pause_message_state == "pending" %}true{% else %}false{% endif %},
+    // The discussion page once the server opened it ("" before).
+    openedDiscussionUrl: '{% if pause_panel.discussion_thread_id and pause_panel.pause_message_state == "sent" or pause_panel.discussion_thread_id and pause_panel.pause_message_state == "refused" %}{% url 'machine_setup:thread' project.id pause_panel.discussion_thread_id %}{% endif %}',
+    // `?discussion=1` (the pause view's redirect) or `?discussion=retry` (the
+    // one fallback reload): follow an opened discussion on load. A retry
+    // never arms another fallback.
+    followDiscussionOnLoad: false,
+    discussionRetried: false,
+    discussionFallback: null,
 
     badgeClass(status) {
       return {
@@ -1054,13 +1115,38 @@ document.addEventListener('alpine:init', () => {
         .join('\n');
     },
 
+    // Reload once (still following the discussion) if its URL event is missed.
+    armDiscussionFallback() {
+      if (this.discussionFallback || this.discussionRetried) return;
+      this.discussionFallback = setTimeout(() => {
+        window.location.replace(window.location.pathname + '?discussion=retry');
+      }, 15000);
+    },
+
     init() {
+      // Read once: later reloads of this page must not wait for a discussion.
+      const discussionParam = new URLSearchParams(window.location.search).get('discussion');
+      if (discussionParam !== null) {
+        this.followDiscussionOnLoad = true;
+        this.discussionRetried = discussionParam === 'retry';
+        window.history.replaceState(null, '', window.location.pathname);
+      }
+      // The discussion opened before this page (re)loaded: follow it now.
+      if (this.followDiscussionOnLoad && this.openedDiscussionUrl) {
+        // replace(): Back from the discussion must not bounce here again.
+        window.location.replace(this.openedDiscussionUrl);
+        return;
+      }
       const ws = new WebSocket(punkHazard.wsUrl('/ws/projects/{{ project.id }}/test-runs/cases/{{ pivot.id }}/'));
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
 
         if (data.type === 'current_state') {
+          if (this.awaitingDiscussion && data.status === 'need_help') {
+            // The discussion may have opened before this socket subscribed.
+            this.armDiscussionFallback();
+          }
           this.status = data.status;
           this.result = data.result;
           this.blockedReason = data.blocked_reason || '';
@@ -1092,8 +1178,32 @@ document.addEventListener('alpine:init', () => {
         }
 
         if (data.type === 'status') {
+          if (data.pause_pending) {
+            this.pausePending = true;
+            this.pauseRequestedBy = data.pause_requested_by || '';
+            this.awaitingDiscussion = true;
+          }
+          // The server opened the discussion of the pause this page showed:
+          // go there (a GET of the thread page; nothing is posted from here).
+          const url = data.discussion_url || '';
+          if (this.awaitingDiscussion && data.status === 'need_help' && url.startsWith('/') && !url.startsWith('//')) {
+            window.location.assign(url);
+            return;
+          }
+          if (this.awaitingDiscussion && data.status === 'need_help') {
+            // Paused: the discussion URL follows once the server opened it.
+            // Fall back to a reload that still follows it if that event is
+            // missed.
+            this.status = data.status;
+            this.pausePending = false;
+            this.armDiscussionFallback();
+            return;
+          }
+          // A pending pause lost to the verdict: the "Too late to pause"
+          // notice is server-rendered.
+          const finishedWhilePausing = this.pausePending && ['success', 'failed', 'blocked', 'cancelled'].includes(data.status);
           const reloadOn = ['need_help', 'awaiting_person', 'needs_retest'];
-          if (reloadOn.includes(data.status) || reloadOn.includes(this.status)) {
+          if (finishedWhilePausing || reloadOn.includes(data.status) || reloadOn.includes(this.status)) {
             // The help, Your turn and Needs re-test cards are server-rendered
             // (as are the header's re-test and send buttons): reload when
             // the case pauses, is resolved, its auto-fix ends (a need_help ->

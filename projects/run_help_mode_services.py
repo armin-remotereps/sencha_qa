@@ -130,8 +130,10 @@ def _request_waiting_for_person(
     """The paused run's open request a Night switch hands to the auto-fix.
 
     Only one that never had an auto-fix (``auto_fix_state`` none), has no
-    thread (a person's help chat is never taken over) and whose step is still
-    eligible (Q10); a not-fixed or running auto-fix is left as it is.
+    thread (a person's help chat is never taken over), no pending person (a
+    person paused the case, or asked to: they discuss it themselves) and whose
+    step is still eligible (Q10); a not-fixed or running auto-fix is left as
+    it is.
     """
     if help_mode != RunHelpMode.NIGHT or test_run.status != TestRunStatus.PAUSED:
         return None
@@ -143,6 +145,8 @@ def _request_waiting_for_person(
             test_run_test_case__test_run_id=test_run.pk,
             resolution=HelpResolution.OPEN,
             auto_fix_state=HelpAutoFixState.NONE,
+            # No pending person (``has_pending_person``).
+            paused_by_label="",
         )
         .exclude(
             Exists(SetupConversation.objects.filter(help_request_id=OuterRef("pk")))

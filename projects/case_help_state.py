@@ -14,13 +14,14 @@ from enum import StrEnum
 from django.utils import timezone
 
 from auto_tester.celery import app as celery_app
-from machine_setup.task_names import START_CASE_AUTO_FIX
+from machine_setup.task_names import OPEN_PAUSED_HELP_CHAT, START_CASE_AUTO_FIX
 from projects.case_help_notifications import notify_case_needs_help
 from projects.models import (
     OPEN_PERSON_STEP_STATUSES,
     CaseHelpRequest,
     CasePersonStep,
     HelpAutoFixState,
+    PauseMessageState,
     TestRun,
     TestRunStatus,
     TestRunTestCaseStatus,
@@ -110,3 +111,27 @@ def enqueue_case_auto_fix(help_request_id: int) -> None:
             pk=help_request_id, auto_fix_state=HelpAutoFixState.RUNNING
         ).update(auto_fix_state=HelpAutoFixState.NOT_FIXED)
         notify_case_needs_help(help_request_id, after_auto_fix=True)
+
+
+_OPEN_DISCUSSION_YOURSELF = "Open the discussion yourself."
+
+
+def enqueue_open_paused_help_chat(help_request_id: int) -> None:
+    """Open the paused case's discussion and send the pauser's message.
+
+    Sent by name (``machine_setup.tasks`` imports this package). On a broker
+    error the message is marked not sent, so the page offers a manual open;
+    nothing raises.
+    """
+    try:
+        celery_app.send_task(OPEN_PAUSED_HELP_CHAT, args=[help_request_id])
+    except Exception:
+        logger.exception(
+            "Could not enqueue the discussion of paused help %d", help_request_id
+        )
+        CaseHelpRequest.objects.filter(
+            pk=help_request_id, pause_message_state=PauseMessageState.PENDING
+        ).update(
+            pause_message_state=PauseMessageState.REFUSED,
+            pause_message_note=_OPEN_DISCUSSION_YOURSELF,
+        )

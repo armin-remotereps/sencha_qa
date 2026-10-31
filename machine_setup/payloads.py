@@ -526,6 +526,9 @@ class HelpProposalPayload(TypedDict):
     action: str
     action_label: str
     note: str
+    # The recommended ``HelpContinueMode`` value and its label; "" when none.
+    continue_mode: str
+    continue_mode_label: str
 
 
 class PlanDraftOldRowPayload(TypedDict):
@@ -582,6 +585,8 @@ def help_thread_payload(
     draft: PlanDraftView | None,
     fault_label: str,
     continue_mode: str,
+    proposal_continue_mode: str = "",
+    proposal_continue_mode_label: str = "",
 ) -> HelpThreadPayload:
     return {
         "conversation_id": conversation_id,
@@ -594,6 +599,8 @@ def help_thread_payload(
                 "action": proposal_action,
                 "action_label": proposal_action_label,
                 "note": proposal_note[:_HELP_NOTE_LIMIT],
+                "continue_mode": proposal_continue_mode,
+                "continue_mode_label": proposal_continue_mode_label,
             }
             if proposal_action
             else None

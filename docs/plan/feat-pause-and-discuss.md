@@ -1,6 +1,6 @@
 # feat: Pause a running case and discuss it with the agent
 
-Status: Ready
+Status: Done
 Created: 2026-10-31
 Request: While a test case is running, a person must be able to pause it and go
 straight to a discussion with the agent about that case. In the discussion they
@@ -718,3 +718,40 @@ All resolved on 2026-10-31.
   - `CaseHelpRequest` gains `stopped_by_pause`, so a pending pauser can be
     recorded on a request that the agent's need_help or a fault stopped first.
 - 2026-10-31: the runner protocol for pause (`case_pause_action` / `case_pause_action_result`, capability `CASE_PAUSE_V1`) is owned by `docs/plan/feat-runner-person-window-v2.md`; that plan calls `pause_from_runner` unchanged and keeps the shared 20/min runner throttle.
+- 2026-10-31: implemented. Review pass 1 (reviewer + verifier) findings:
+  - Fixed: live navigation race (the case page no longer reloads on the
+    paused `need_help` event; it waits for `discussion_url`, falls back to a
+    reload with `?discussion=1`, and a page loaded with that flag or a pending
+    pause follows an already opened discussion); pauser labels capped at 255;
+    the mode choice also shows when the stored mode is not allowed
+    (`HelpPanel.choose_continue_mode`); the case page reloads when a pending
+    pause loses to the verdict; a manual send also clears a `dropped` message;
+    the pause dialog is gated on write access; the run page hides Pause once
+    `pause_pending`; the help brief broadcast runs on commit; the paused
+    discussion task no longer defers the checkpoint it then reads.
+  - Partly applied (reviewer, shared "pause -> Need help" tail): the two
+    pause-only writers use `case_pause_rows.mark_case_paused_for_help` /
+    `PAUSED_CASE_FIELDS`; `_pause_run_for_help` keeps its own write because it
+    serves the agent and fault paths too.
+  - Not applied as suggested (reviewer, view reads the requester label):
+    `request_case_pause` keeps returning `CasePauseOutcome` (the Test Runner
+    window plan consumes it); the view asks `get_pause_requester_label`.
+  - `dismiss_dropped_pause` lost its unused `user` parameter.
+  - Accepted residual: a Needs re-test mark on a finished case does not clear
+    a dropped record; Re-run, Reset, Dismiss or the next pick-up do.
+- 2026-10-31: review pass 2 fixes: Continue pre-selects the first allowed mode
+  when the stored one is not allowed (`HelpPanel.default_continue_mode`); a
+  case page that loads while the discussion is opening arms the same fallback
+  reload; the `?discussion=1` flag is dropped from the URL once read.
+- 2026-10-31: review pass 3 fix: the case page's fallback reload could loop
+  every 15 s when the discussion ended refused or dropped without a thread.
+  `awaitingDiscussion` now comes only from the server (pause pending or
+  message state pending); the URL flag only follows an already opened
+  discussion, and the one fallback reload (`?discussion=retry`) never arms
+  another. A runner-update switch to a stored mode the thread page does not
+  offer keeps the person's current radio.
+- 2026-10-31: review pass 4: `machine_setup.tasks.open_paused_help_chat` added
+  to `CELERY_TASK_ROUTES` (a by-name send ignores the task's own `queue`);
+  change note wording fixed. Accepted: a live viewer learns of a refused
+  (no thread) or dropped discussion only after the one fallback reload.
+- 2026-10-31: review pass 5 clean (reviewer + verifier). Status Done.

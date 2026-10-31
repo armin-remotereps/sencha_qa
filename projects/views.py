@@ -48,6 +48,7 @@ from projects.case_help_services import (
     resolve_return_thread,
     stop_auto_fix,
 )
+from projects.case_pause_services import get_case_pause_panel
 from projects.case_plan_revision_services import (
     discard_plan_revision,
     plan_revision_belongs_to,
@@ -1080,6 +1081,14 @@ def test_run_case_detail(
     resume_steps = list_resume_steps(pivot) if can_resume else []
     step_progress, earlier_plans = case_step_view(pivot)
     result_panel = get_case_result_panel(pivot)
+    person_step_panel = get_person_step_panel(
+        pivot.test_run, project, pivot=pivot, include_questions=True
+    )
+    # Continue keeps the request's stored mode unless the person picks another;
+    # the agent's suggestion is shown, never pre-selected.
+    help_form_initial: dict[str, object] = {"use_plan_revision": False}
+    if help_panel is not None:
+        help_form_initial["continue_mode"] = help_panel.request.continue_mode
     return render(
         request,
         "projects/test_run_case_detail.html",
@@ -1117,15 +1126,23 @@ def test_run_case_detail(
             "help_panel": help_panel,
             "help_requests": list_case_help_requests(pivot),
             # Human in the loop: the step this case waits on a person for.
-            "person_step_panel": get_person_step_panel(
-                pivot.test_run, project, pivot=pivot, include_questions=True
-            ),
+            "person_step_panel": person_step_panel,
             "person_step_form": PersonStepReportForm(),
             "person_step_question_form": PersonStepQuestionForm(),
             # The agent's suggested note is shown, never pre-filled: the
             # Continue note reaches the tester as the person's own words.
             # The draft is only summarised here, so it is not applied by default.
-            "help_form": CaseHelpResolutionForm(initial={"use_plan_revision": False}),
+            "help_form": CaseHelpResolutionForm(initial=help_form_initial),
+            # Pause and discuss: the Pause button and dialog, "Pausing…", the
+            # "Paused by" line and the "Too late to pause" notice.
+            "pause_panel": get_case_pause_panel(
+                pivot.test_run,
+                pivot,
+                help_panel=help_panel,
+                person_step_status=(
+                    person_step_panel.step.status if person_step_panel else None
+                ),
+            ),
             "resumes": list_case_resumes(pivot),
             "step_progress": step_progress,
             "earlier_plans": earlier_plans,
@@ -1390,6 +1407,7 @@ def test_run_case_help_continue(
             note=form.cleaned_data["note"],
             plan_revision_id=form.cleaned_data["plan_revision_id"],
             use_plan_revision=form.cleaned_data["use_plan_revision"],
+            continue_mode=form.cleaned_data["continue_mode"],
         )
     except RunHelpError as exc:
         messages.error(request, exc.message)

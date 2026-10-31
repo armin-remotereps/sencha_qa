@@ -408,7 +408,7 @@ def resolve_runner_person(project_id: int, email: str | None) -> int | None:
     return None
 
 
-def _current_member(project_id: int, user_id: int | None) -> CustomUser | None:
+def current_member(project_id: int, user_id: int | None) -> CustomUser | None:
     """The user if still an active writable project member; None otherwise."""
     if user_id is None:
         return None
@@ -440,17 +440,17 @@ def answer_from_runner(
     runner answered too often, the step is not one of the project's, or
     ``person_step_services`` refuses (stale id or round, run not paused, ...).
     """
-    if not _owns_project(project_id, channel_name):
+    if not owns_project(project_id, channel_name):
         raise PersonStepError(_NOT_OWNER)
-    _check_answer_throttle(project_id)
+    check_answer_throttle(project_id)
     pivot = _step_pivot(project_id, action.person_step_id)
     if pivot is None:
         raise PersonStepError(_STEP_NOT_FOUND)
-    actor = PersonStepActor.runner(_current_member(project_id, person_user_id))
+    actor = PersonStepActor.runner(current_member(project_id, person_user_id))
     return _ACTIONS[action.action](pivot, actor, action)
 
 
-def _owns_project(project_id: int, channel_name: str) -> bool:
+def owns_project(project_id: int, channel_name: str) -> bool:
     """The connection is still the project's Test Runner (one query)."""
     return bool(channel_name) and (
         Project.objects.filter(pk=project_id, agent_channel_name=channel_name).exists()
@@ -533,7 +533,7 @@ _ACTIONS: dict[
 }
 
 
-def _check_answer_throttle(project_id: int) -> None:
+def check_answer_throttle(project_id: int) -> None:
     key = f"projects:runner-person-answer:{project_id}"
     cache.add(key, 0, timeout=RUNNER_ANSWER_WINDOW_SECONDS)
     try:
@@ -567,12 +567,12 @@ def ask_from_runner(
     inside ``ask_person_step_question``), not the answer throttle. Raises
     ``PersonStepQuestionError`` (user-safe).
     """
-    if not _owns_project(project_id, channel_name):
+    if not owns_project(project_id, channel_name):
         raise PersonStepQuestionError(_NOT_OWNER_ASK)
     pivot = _step_pivot(project_id, question.person_step_id)
     if pivot is None:
         raise PersonStepQuestionError(_STEP_NOT_FOUND)
-    actor = PersonStepActor.runner(_current_member(project_id, person_id))
+    actor = PersonStepActor.runner(current_member(project_id, person_id))
     return ask_person_step_question(
         pivot=pivot,
         project_id=project_id,

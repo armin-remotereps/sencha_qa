@@ -14,6 +14,11 @@ changes while the chat runs (status, plan statuses, carriable steps, pending
 draft, help history, earlier redesigns), not the case text the first message
 already holds, so each call adds little to the thread's transcript.
 
+A person's pause (``stopped_by_pause``) gets pause wording instead of the
+failure wording; the pause message is not in the brief (it is sent as the
+person's own turn). The person brief and the case update list the continue
+modes the request allows.
+
 Pure: the caller (``services/case_help_context``) loads the rows and the
 checkpoint. Every field is model, TestRail or agent text; it is framed as data,
 and each part is capped so one long case cannot crowd out the rest.
@@ -110,6 +115,12 @@ class CaseHelpBriefData:
     fault_label: str = ""
     # How the case goes on after a fix.
     continue_mode: HelpContinueMode = HelpContinueMode.CURRENT_SCREEN
+    # Who paused the case (a member name or a fixed runner label, server
+    # text) when a person's pause stopped it; empty otherwise.
+    paused_by_label: str = ""
+    # Person brief and case update: the modes Continue may use, stored first
+    # (``projects.case_pause_policy.allowed_continue_modes``).
+    allowed_continue_modes: tuple[HelpContinueMode, ...] = ()
     # Person brief only.
     request_open: bool = True
     status_text: str = ""
@@ -162,24 +173,34 @@ def _auto_fix_brief(data: CaseHelpBriefData) -> str:
 
 def _person_brief(data: CaseHelpBriefData) -> str:
     step = data.step_num
-    cause = (
-        f" An infrastructure fault interrupted it ({data.fault_label}); the "
-        "tester did not stop it."
-        if data.fault_label
-        else ""
-    )
+    if data.paused_by_label:
+        situation = (
+            f"A test run is paused: a person ({data.paused_by_label}) paused one "
+            f"test case at step {step} to discuss it; nothing failed."
+        )
+    else:
+        cause = (
+            f" An infrastructure fault interrupted it ({data.fault_label}); the "
+            "tester did not stop it."
+            if data.fault_label
+            else ""
+        )
+        situation = (
+            f"A test run is paused: one test case needs help at step {step}.{cause}"
+        )
     sections = [
         (
-            "A test run is paused: one test case needs help at step "
-            f"{step}.{cause} A person opened this help chat to work it out with "
+            f"{situation} A person opened this help chat to work it out with "
             "you. You can look at and change the test machine through helpers, "
             "redesign the test plan with propose_plan_change, and suggest an "
             "action with propose_resolution. Only the person resolves the case "
             "(Continue, Mark failed or Mark blocked). Without a redesign, "
-            f"Continue {_continue_text(data.continue_mode, step)}."
+            f"Continue by default {_continue_text(data.continue_mode, step)}; "
+            "the person may choose another way listed under WAYS TO CONTINUE."
         ),
         _DATA_FRAMING,
         _block("STATUS", data.status_text or _default_status(data)),
+        _continue_modes_block(data),
         _block("TEST RUN", data.run_name or "(unnamed)"),
         _block("TEST CASE", data.case_title),
         _block("PRECONDITIONS", _cap(data.preconditions, _PERSON_CASE_FIELD_MAX)),
@@ -216,6 +237,7 @@ def build_case_help_update(data: CaseHelpBriefData) -> str:
         ),
         _DATA_FRAMING,
         _block("STATUS", data.status_text or _default_status(data)),
+        _continue_modes_block(data),
     ]
     if data.plan:
         sections.append(
@@ -250,6 +272,19 @@ def _continue_text(continue_mode: HelpContinueMode, step: int) -> str:
     return f"re-runs step {step} from the current screen"
 
 
+def _continue_modes_block(data: CaseHelpBriefData) -> str:
+    """The ways Continue may go on; the person chooses (stored mode first)."""
+    lines = []
+    for index, mode in enumerate(data.allowed_continue_modes):
+        default = " (the default)" if index == 0 else ""
+        lines.append(f"- {mode.value}: {mode.label}{default}")
+    return _block(
+        "WAYS TO CONTINUE (the person chooses; you may recommend one with "
+        "propose_resolution)",
+        "\n".join(lines) or f"- {data.continue_mode.value}: {data.continue_mode.label}",
+    )
+
+
 def _fit(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
@@ -265,6 +300,11 @@ _DATA_FRAMING = (
 
 def _default_status(data: CaseHelpBriefData) -> str:
     if data.request_open:
+        if data.paused_by_label:
+            return (
+                f"Paused by {data.paused_by_label} at step {data.step_num}; "
+                "waiting for the discussion."
+            )
         return f"Waiting for help at step {data.step_num}."
     return "No longer waiting for help: the case was resolved or the run moved on."
 
@@ -274,14 +314,28 @@ def _current_step_sections(data: CaseHelpBriefData, *, digest_max: int) -> list[
     sections: list[str] = []
     current = data.plan[step - 1] if 1 <= step <= len(data.plan) else None
     if current is not None:
+        role = (
+            "the one running when the case was paused"
+            if data.paused_by_label
+            else "the one that needs help"
+        )
         sections.append(
             _block(
-                f"STEP {step} (the one that needs help)",
+                f"STEP {step} ({role})",
                 f"{_cap(current.description, _PLAN_STEP_MAX)}\n"
                 f"Expected: {_cap(current.expected_result, _PLAN_STEP_MAX)}",
             )
         )
-    if data.fault_label:
+    if data.paused_by_label:
+        sections.append(
+            _block(
+                f"WHY THE CASE STOPPED (a person, {data.paused_by_label}, paused "
+                "it to discuss it; nothing failed)",
+                _cap(data.reason, _HELP_TEXT_MAX),
+            )
+        )
+        sections.append(_block("WHAT TO DO", _cap(data.ask, _HELP_TEXT_MAX)))
+    elif data.fault_label:
         sections.append(
             _block(
                 "WHY THE CASE STOPPED (an infrastructure fault, not the tester)",
@@ -297,9 +351,14 @@ def _current_step_sections(data: CaseHelpBriefData, *, digest_max: int) -> list[
             _block("WHAT THE TESTER ASKS TO FIX", _cap(data.ask, _HELP_TEXT_MAX))
         )
     if data.actions_digest.strip():
+        attempt = (
+            "AN EARLIER FAILED ATTEMPT"
+            if data.paused_by_label
+            else "THE FAILED ATTEMPT"
+        )
         sections.append(
             _block(
-                f"WHAT THE FAILED ATTEMPT AT STEP {step} DID",
+                f"WHAT {attempt} AT STEP {step} DID",
                 _cap(data.actions_digest, digest_max),
             )
         )

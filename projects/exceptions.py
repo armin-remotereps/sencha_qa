@@ -157,6 +157,14 @@ class RunHelpError(Exception):
         self.message = message
 
 
+class CasePauseError(Exception):
+    """A case cannot be paused; ``message`` is user-safe."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 class ApplicationContextError(Exception):
     """Base for application context writes; ``message`` is safe to show."""
 

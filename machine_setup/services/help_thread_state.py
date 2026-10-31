@@ -15,7 +15,7 @@ from machine_setup.payloads import HelpThreadPayload, help_thread_payload
 from machine_setup.services.case_help_context import help_request_is_waiting
 from projects.case_help_services import HelpPanel
 from projects.case_plan_revision_services import get_pending_plan_draft
-from projects.models import CaseHelpRequest, HelpProposalAction
+from projects.models import CaseHelpRequest, HelpContinueMode, HelpProposalAction
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +45,7 @@ def load_help_thread_payload(
             "resolution",
             "agent_proposal_action",
             "agent_proposal_note",
+            "agent_proposal_continue_mode",
             "fault",
             "continue_mode",
             "test_run_test_case__id",
@@ -87,6 +88,7 @@ def _payload(
 ) -> HelpThreadPayload:
     # The suggestion is shown only while the request waits for a person.
     action = request.agent_proposal_action if waiting else ""
+    mode = request.agent_proposal_continue_mode if action else ""
     return help_thread_payload(
         conversation_id=conversation_id,
         request_open=waiting,
@@ -97,4 +99,6 @@ def _payload(
         draft=draft,
         fault_label=request.get_fault_display() if request.fault else "",
         continue_mode=request.continue_mode,
+        proposal_continue_mode=mode,
+        proposal_continue_mode_label=HelpContinueMode(mode).label if mode else "",
     )

@@ -19,6 +19,15 @@
                  Discard the draft and the Continue / Mark failed / Mark
                  blocked form (read-only member: the panel is shown only)
 
+  Continue mode: radios for help_panel.continue_mode_choices (stored mode
+  first and checked; only when more than one, else the form sends none and
+  the stored mode applies), x-model'd to helpPanel.continueMode so the hint
+  follows the choice. The agent's recommended mode (proposal
+  .continue_mode_label, initial from help_panel.agent_continue_mode) is shown
+  as text, never pre-selected. A person's pause shows "Paused by X at step
+  N"; a pause message that was not sent (pause_message_state "refused") is
+  offered again, editable, in a form posting machine_setup:help_chat_open.
+
   The draft and the agent's suggestion live in the Alpine `helpPanel`
   component (chat.html): initial state from the `help-initial` json_script,
   then `help` socket messages (machineSetupChat re-dispatches them as the
@@ -43,11 +52,33 @@
     {% if help_case_url %} · <a href="{{ help_case_url }}">Open the test case</a>{% endif %}
     {% if help_panel.latest_screenshot_url %} · <a href="{{ help_panel.latest_screenshot_url }}" target="_blank" rel="noopener">Latest screenshot</a>{% endif %}
   </p>
+  {% if help_request.is_person_pause %}
+    <p><span class="badge badge-warning">Paused by {{ help_request.paused_by_label }} at step {{ help_request.step_num }}</span></p>
+  {% endif %}
   <p x-show="faultLabel" x-cloak><span class="badge badge-warning" x-text="faultLabel">{{ help_request.get_fault_display }}</span></p>
   {% if help_request.ask %}
     <div>
-      <div class="label">{% if help_request.fault %}What to fix{% else %}What the tester asks{% endif %}</div>
+      <div class="label">{% if help_request.is_person_pause %}What to do{% elif help_request.fault %}What to fix{% else %}What the tester asks{% endif %}</div>
       <p class="help-quote">{{ help_request.ask }}</p>
+    </div>
+  {% endif %}
+
+  {% if help_panel.is_open and help_request.pause_message_state == "refused" %}
+    <div class="help-suggestion">
+      <strong>The pause message was not sent</strong>
+      {% if help_request.pause_message_note %}<p class="small">{{ help_request.pause_message_note }}</p>{% endif %}
+      {% if project_can_write %}
+      <form method="post" action="{% url 'machine_setup:help_chat_open' project.id pivot.pk %}">
+        {% csrf_token %}
+        <div class="field">
+          <label class="label" for="help-panel-pause-message">Message for the agent</label>
+          <textarea id="help-panel-pause-message" class="textarea" name="text" rows="3" maxlength="8000" required>{{ help_request.pause_message }}</textarea>
+        </div>
+        <button type="submit" class="btn btn-sm btn-secondary">Send it</button>
+      </form>
+      {% elif help_request.pause_message %}
+      <p class="pre-wrap small">{{ help_request.pause_message }}</p>
+      {% endif %}
     </div>
   {% endif %}
 
@@ -90,7 +121,7 @@
 
   <template x-if="proposal">
     <div class="help-suggestion">
-      <strong x-text="'The agent suggests: ' + proposal.action_label"></strong>
+      <strong x-text="'The agent suggests: ' + proposal.action_label + (proposal.continue_mode_label ? ' (' + proposal.continue_mode_label + ')' : '')"></strong>
       <p class="pre-wrap small" x-show="proposal.note" x-text="proposal.note"></p>
       {% if project_can_write %}<p class="hint">Only you resolve the case. The agent's note is not sent to the tester; write your own note below if it should know something.</p>{% endif %}
     </div>
@@ -112,6 +143,19 @@
       </label>
       <p class="hint" role="status" x-show="draftChanged">The agent proposed a new draft. Review it before continuing.</p>
     </div>
+    {% if help_panel.choose_continue_mode %}
+    {# Pre-selects the stored mode, or the first allowed one when it is not allowed. #}
+    <fieldset class="radio-card-stack" x-init="continueMode = '{{ help_panel.default_continue_mode|escapejs }}'">
+      <legend class="label">How the case goes on</legend>
+      {% for mode in help_panel.continue_mode_choices %}
+      <label class="radio-card" :class="{ selected: continueMode === '{{ mode.value }}' }">
+        <input type="radio" name="continue_mode" value="{{ mode.value }}" x-model="continueMode"{% if mode.value == help_panel.default_continue_mode %} checked{% endif %}>
+        <div class="radio-title">{{ mode.label }}</div>
+      </label>
+      {% endfor %}
+      <p class="hint" x-show="proposal && proposal.continue_mode_label" x-cloak x-text="'The agent suggests: ' + (proposal ? proposal.continue_mode_label : '')">{% for mode in help_panel.continue_mode_choices %}{% if mode.value == help_panel.agent_continue_mode %}The agent suggests: {{ mode.label }}{% endif %}{% endfor %}</p>
+    </fieldset>
+    {% endif %}
     <p class="hint" x-text="continueHint"></p>
     <p class="hint" id="help-panel-blockers" x-show="continueBlockers.length" x-text="'Continue is unavailable: ' + continueBlockers.join(' ')"></p>
     <div class="help-actions">

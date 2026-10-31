@@ -48,6 +48,12 @@ from notifications.services.inbox_broadcast import broadcast_project_attention_c
 from projects.case_credit import CREDITED_HELP_RESOLUTIONS, credit_cases
 from projects.case_help_notifications import notify_case_needs_help
 from projects.case_help_proposal_services import clear_agent_proposal
+from projects.case_pause_policy import (
+    MODE_NOT_ALLOWED,
+    REDESIGN_NEEDS_CURRENT_SCREEN,
+    REDESIGN_RESTORE_FIRST,
+    allowed_continue_modes,
+)
 from projects.case_plan_revision_services import (
     apply_plan_revision_locked,
     get_pending_plan_draft,
@@ -140,10 +146,31 @@ class HelpPanel:
     pending_draft: PlanDraftView | None = None
     # The case's newest screenshot ("" when none).
     latest_screenshot_url: str = ""
+    # The modes Continue may use, the stored one first (open request only;
+    # ``case_pause_policy.allowed_continue_modes``).
+    continue_mode_choices: tuple[HelpContinueMode, ...] = ()
+    # The help-chat agent's recommended mode ("" when none); shown, never
+    # pre-selected.
+    agent_continue_mode: str = ""
 
     @property
     def is_open(self) -> bool:
         return self.request.is_open
+
+    @property
+    def choose_continue_mode(self) -> bool:
+        """Continue shows the mode choice: several modes, or the stored one
+        is not allowed (a checkpoint that no longer parses)."""
+        choices = self.continue_mode_choices
+        return len(choices) > 1 or (bool(choices) and choices[0] != self.continue_mode)
+
+    @property
+    def default_continue_mode(self) -> str:
+        """The mode pre-selected on Continue: the stored one when allowed
+        (choices list it first), else the first allowed one."""
+        if self.continue_mode_choices:
+            return str(self.continue_mode_choices[0].value)
+        return str(self.continue_mode.value)
 
     @property
     def can_continue(self) -> bool:
@@ -237,6 +264,17 @@ def get_help_panel(
         continue_mode=_continue_mode(request),
         pending_draft=get_pending_plan_draft(request.pk) if request.is_open else None,
         latest_screenshot_url=_latest_screenshot_url(request.test_run_test_case_id),
+        continue_mode_choices=(
+            allowed_continue_modes(
+                request.continue_mode,
+                request.fault,
+                # Loaded with the request (only ``logs`` is deferred).
+                request.test_run_test_case.execution_checkpoint,
+            )
+            if request.is_open
+            else ()
+        ),
+        agent_continue_mode=request.agent_proposal_continue_mode,
     )
 
 
@@ -328,19 +366,25 @@ def continue_after_help(
     note: str,
     plan_revision_id: int | None = None,
     use_plan_revision: bool = True,
+    continue_mode: HelpContinueMode | None = None,
 ) -> HelpActionResult:
-    """The machine is fixed: the case continues per its ``HelpContinueMode``.
+    """The machine is fixed: the case continues per the chosen ``HelpContinueMode``.
 
     It re-runs its failing step from the current screen, restores the earlier
     steps' state first (the runner was lost), or plans from scratch (no
-    usable checkpoint).
+    usable checkpoint). ``continue_mode`` is the person's choice (None: the
+    request's stored mode); it must be one ``allowed_continue_modes`` allows
+    for the request and the case's checkpoint as it was, and is written to
+    the request before the checkpoint is prepared.
 
     ``plan_revision_id`` is the help-chat redesign the person saw (None when
     none was shown). With ``use_plan_revision`` that draft is applied first and
     the case resumes at its first step that is not carried; otherwise a
     pending draft is superseded and the case re-runs its failing step. A
     pending draft other than the one shown refuses (the agent proposed a newer
-    plan).
+    plan). A redesign continues from the current screen: it is refused when
+    the stored mode is restore (the screen cannot be trusted) and with any
+    other chosen mode.
 
     A person step a fault left open (Human in the loop) is cancelled unless
     the checkpoint keeps its key (``_write_help_key``): the step is handed out
@@ -360,6 +404,20 @@ def continue_after_help(
             blockers = [b for b in blockers if b != MACHINE_SETUP_RUNNING_MESSAGE]
         if blockers:
             raise RunHelpError(blockers[0])
+
+        stored_mode = HelpContinueMode(request.continue_mode)
+        mode = stored_mode if continue_mode is None else continue_mode
+        applies_revision = use_plan_revision and plan_revision_id is not None
+        # Checked on the checkpoint as it was, before a redesign changes it.
+        if applies_revision:
+            if stored_mode == HelpContinueMode.RESTORE:
+                raise RunHelpError(REDESIGN_RESTORE_FIRST)
+            if mode != HelpContinueMode.CURRENT_SCREEN:
+                raise RunHelpError(REDESIGN_NEEDS_CURRENT_SCREEN)
+        if mode not in allowed_continue_modes(
+            stored_mode, request.fault, locked_pivot.execution_checkpoint
+        ):
+            raise RunHelpError(MODE_NOT_ALLOWED)
 
         if use_plan_revision and plan_revision_id is not None:
             apply_plan_revision_locked(
@@ -384,6 +442,10 @@ def continue_after_help(
             auto_fix_live,
             project_id=test_run.project_id,
         )
+        if mode != stored_mode:
+            # History and ``_write_help_key`` read the mode from the request.
+            request.continue_mode = mode
+            request.save(update_fields=["continue_mode"])
         _set_continue_pending(locked_pivot, request, "human")
         if read_checkpoint_person_step(locked_pivot.execution_checkpoint) is None:
             _cancel_person_steps(person_step_ids, PersonStepClose.OPEN, user, now)
@@ -419,7 +481,7 @@ def mark_failed_after_help(
         locked_pivot.blocked_reason = ""
         locked_pivot.result = _verdict_text(
             f"Marked failed by {_user_label(user)} at step {request.step_num} "
-            "while it was waiting for help.",
+            f"{_waiting_clause(request)}.",
             request,
             note,
         )
@@ -471,7 +533,7 @@ def mark_blocked_after_help(
         fault = f" ({_fault_label(request)})" if request.fault else ""
         locked_pivot.result = _verdict_text(
             f"Marked blocked by {_user_label(user)} at step {request.step_num} "
-            f"while it was waiting for help{fault}.",
+            f"{_waiting_clause(request)}{fault}.",
             request,
             note,
         )
@@ -912,7 +974,8 @@ def _write_help_key(
     The help key carries the ask, the person's note (empty when the setup
     agent continued), the setup agent's summary (empty when no auto-fix
     reported), whether that auto-fix reported the machine fixed, and the
-    fault's label (empty when the agent asked for help).
+    fault's label (empty when the agent asked for help), and who paused the
+    case (empty unless a person's pause stopped it).
 
     A person step key (Human in the loop) survives only a current-screen
     Continue, the retry of a confirmation a fault interrupted: after a restore
@@ -938,6 +1001,7 @@ def _write_help_key(
             auto_fix_summary=request.auto_fix_summary,
             auto_fix_fixed=request.auto_fix_state == HelpAutoFixState.FIXED,
             fault=_fault_label(request),
+            paused_by=request.paused_by_label if request.stopped_by_pause else "",
         ),
     )
 
@@ -1014,6 +1078,13 @@ def _cap_note(note: str) -> str:
 
 def _user_label(user: CustomUser) -> str:
     return user.get_full_name() or user.email
+
+
+def _waiting_clause(request: CaseHelpRequest) -> str:
+    """Why the case stood still when a person marked it (result text)."""
+    if request.is_person_pause:
+        return f"while it was paused by {request.paused_by_label}"
+    return "while it was waiting for help"
 
 
 def _verdict_text(headline: str, request: CaseHelpRequest, note: str) -> str:

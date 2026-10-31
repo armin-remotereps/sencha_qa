@@ -380,8 +380,9 @@ def _help_details(help: CheckpointHelp, reason: str) -> str:
     parts: list[str] = []
     ask = _sentence(help.ask) or _sentence(reason)
     if ask:
-        # A fault's ask is the server's fixed text, not the agent's.
-        asker = "The help request" if help.fault.strip() else "The agent"
+        # A fault's or a pause's ask is the server's fixed text, not the agent's.
+        server_ask = help.fault.strip() or help.paused_by.strip()
+        asker = "The help request" if server_ask else "The agent"
         parts.append(f"{asker} had asked: {ask}.")
     summary = _sentence(help.auto_fix_summary)
     if summary:
@@ -406,6 +407,15 @@ def format_help_state_line(
     label = step_label or f"Step {step_num}"
     details = _help_details(help, reason)
     fault = _sentence(help.fault)
+    paused_by = help.paused_by.strip()
+    if paused_by:
+        # A person's pause stops the step wherever it is, possibly halfway.
+        also = f" (also interrupted: {fault})" if fault else ""
+        return (
+            f"{label} was paused by {paused_by}{also} and discussed; the step "
+            f"may be partly done.{' ' + details if details else ''} Check the "
+            "screen."
+        )
     if fault:
         return (
             f"{label} was interrupted ({fault}); the test machine was fixed by "
@@ -434,6 +444,14 @@ def help_verdict_note(
     else:
         where, after = f"step {help.step_num}", "before the step was retried"
     fault = _sentence(help.fault)
+    paused_by = help.paused_by.strip()
+    if paused_by:
+        also = f" (also interrupted: {fault})" if fault else ""
+        return (
+            f"The case was paused at {where} by {paused_by}{also} and "
+            f"discussed {after}; the step may have been partly done when it "
+            f"paused.{' ' + details if details else ''}"
+        )
     paused = (
         f"The case was interrupted at {where} ({fault}) and paused for help"
         if fault

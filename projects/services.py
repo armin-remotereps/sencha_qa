@@ -96,8 +96,23 @@ from projects.case_help_policy import auto_fix_eligible
 from projects.case_help_state import (
     RunHelpState,
     enqueue_case_auto_fix,
+    enqueue_open_paused_help_chat,
     get_run_help_state,
     mark_auto_fix_running,
+)
+from projects.case_pause_policy import (
+    pause_ask,
+    pause_continue_mode,
+    pause_log_line,
+)
+from projects.case_pause_rows import (
+    PAUSED_CASE_FIELDS,
+    PauseRequestSnapshot,
+    clear_pause_request,
+    mark_case_paused_for_help,
+    open_pause_help_request,
+    pause_pending_for,
+    read_pause_request,
 )
 from projects.case_review_redesign_store import supersede_run_review_drafts
 from projects.case_step_progress import (
@@ -130,6 +145,8 @@ from projects.models import (
     ACTIVE_RUN_STATUSES,
     HELP_REQUEST_TEXT_MAX_LENGTH,
     OPEN_PERSON_STEP_STATUSES,
+    PAUSE_REQUEST_CLEARED,
+    PAUSE_REQUEST_FIELDS,
     RETEST_CLEARED,
     WRITABLE_ROLES,
     ApplicationPlatform,
@@ -144,6 +161,7 @@ from projects.models import (
     HelpContinueMode,
     HelpProposalAction,
     HelpResolution,
+    PersonStepClose,
     PersonStepStatus,
     PlanRevisionStatus,
     Project,
@@ -2491,9 +2509,12 @@ def reset_test_run(test_run: TestRun) -> None:
         pivot.execution_checkpoint = {}
         for field, value in RETEST_CLEARED.items():
             setattr(pivot, field, value)
+        # A pending pause or a dropped one's message ("Too late to pause").
+        clear_pause_request(pivot)
         pivot.save(
             update_fields=[
                 *RETEST_CLEARED,
+                *PAUSE_REQUEST_FIELDS,
                 "status",
                 "blocked_reason",
                 "result",
@@ -2880,6 +2901,8 @@ class PivotStatusEvent(TypedDict):
     pivot_id: int
     status: str
     summary: dict[str, int]
+    # A person asked to pause the running case (``pause_pending_for``).
+    pause_pending: bool
 
 
 class CaseStatusEvent(TypedDict):
@@ -2889,6 +2912,12 @@ class CaseStatusEvent(TypedDict):
     blocked_reason: str
     blocked_reason_label: str
     steps: StepProgressPayload
+    pause_pending: bool
+    # Who asked to pause; blank unless ``pause_pending``.
+    pause_requested_by: str
+    # The paused case's discussion page once it opened; blank otherwise (only
+    # ``broadcast_case_status`` callers that know it fill it).
+    discussion_url: str
 
 
 class CaseStepsEvent(TypedDict):
@@ -2934,6 +2963,7 @@ def _send_pivot_status_to_run(
         "pivot_id": pivot.id,
         "status": pivot.status,
         "summary": summary,
+        "pause_pending": pause_pending_for(pivot),
     }
     async_to_sync(layer.group_send)(_test_run_group(pivot.test_run_id), event)
 
@@ -2963,12 +2993,26 @@ def broadcast_run_and_pivots(
     _nudge_runner_after_commit(test_run.project_id)
 
 
-def _broadcast_pivot_status_to_case(pivot: TestRunTestCase) -> None:
+def broadcast_case_status(pivot: TestRunTestCase, *, discussion_url: str = "") -> None:
+    """Push the case's status to the run page (pivot event) and the case page.
+
+    ``discussion_url``: the paused case's discussion page, so an open case page
+    that showed the pause pending navigates there (``open_paused_help_chat``).
+    The pivot needs its pause fields loaded (no query for them here).
+    """
+    _broadcast_pivot_status_to_run(pivot)
+    _broadcast_pivot_status_to_case(pivot, discussion_url=discussion_url)
+
+
+def _broadcast_pivot_status_to_case(
+    pivot: TestRunTestCase, *, discussion_url: str = ""
+) -> None:
     layer: Any = get_channel_layer()
     if layer is None:
         return
 
     blocked_reason, blocked_reason_label = get_blocked_reason_fields(pivot)
+    pause_pending = pause_pending_for(pivot)
     event: CaseStatusEvent = {
         "type": "test_run_case.status",
         "status": pivot.status,
@@ -2976,6 +3020,9 @@ def _broadcast_pivot_status_to_case(pivot: TestRunTestCase) -> None:
         "blocked_reason": blocked_reason,
         "blocked_reason_label": blocked_reason_label,
         "steps": pivot_step_payload(pivot),
+        "pause_pending": pause_pending,
+        "pause_requested_by": pivot.pause_requested_label if pause_pending else "",
+        "discussion_url": discussion_url,
     }
     async_to_sync(layer.group_send)(_test_run_case_group(pivot.id), event)
 
@@ -3093,14 +3140,16 @@ def _build_cancellation_check(
     test_run_id: int, generation: int, pivot_id: int | None = None
 ) -> Callable[[], bool]:
     """True once the run is cancelled, or resumed/restarted by a newer chain,
-    or (with ``pivot_id``) a person marked that case Needs re-test; still one
-    query per poll."""
+    or (with ``pivot_id``) a person marked that case Needs re-test or asked to
+    pause it in this generation; still one query per poll."""
     stopped = Q(status=TestRunStatus.CANCELLED) | ~Q(execution_generation=generation)
     if pivot_id is not None:
         stopped |= Q(
             Exists(
                 TestRunTestCase.objects.filter(
-                    pk=pivot_id, status=TestRunTestCaseStatus.NEEDS_RETEST
+                    Q(status=TestRunTestCaseStatus.NEEDS_RETEST)
+                    | Q(pause_requested_generation=generation),
+                    pk=pivot_id,
                 )
             )
         )
@@ -3196,12 +3245,16 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         and 1 < resume.next_step <= len(resume.plan)
         else None
     )
-    if not _mark_pivot_in_progress(pivot):
+    if not _mark_pivot_in_progress(pivot, generation):
         # Marked Needs re-test before it was picked up: skip it, but a
         # skipped last case still finishes the run.
         logger.info("Skipping pivot %d marked for re-test", pivot_id)
         _update_test_run_status_if_needed(pivot.test_run, generation=generation)
         return
+    # A pause requested in this generation before the pick-up: a redelivered
+    # task after the worker died while pausing. It pauses at the first check;
+    # the machine is kept as it is.
+    pause_redelivered = pivot.pause_requested_generation == generation
 
     try:
         wait_for_controller(project.id)
@@ -3211,7 +3264,7 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
             cancellation_check=cancellation_check,
         )
 
-        if not continue_after_help:
+        if not continue_after_help and not pause_redelivered:
             _safe_cleanup(project.id, wait_for_runner=True)
 
         on_log = _build_log_callback(pivot, generation)
@@ -3292,9 +3345,20 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         # the run is no longer STARTED, i.e. it was aborted. A cancel can also
         # be this case's Needs re-test mark: the run goes on, so the mark is
         # kept, no teardown runs (not Failed) and the chain continues below.
+        # Or a person's pause: the case asks for help (no teardown, no
+        # cleanup) and the discussion opens.
         logger.info("Pivot %d cancelled", pivot_id)
         if not _is_stale_execution(run_id, generation):
-            _cancel_pivot_if_in_progress(pivot)
+            pivot.refresh_from_db(fields=["status", "pause_requested_generation"])
+            if pivot.pause_requested_generation == generation:
+                if pivot.status == TestRunTestCaseStatus.IN_PROGRESS:
+                    paused_for_help = _pause_case_for_person(
+                        pivot, generation, restore_baseline
+                    )
+                else:
+                    _discard_pause_after_retest(pivot)
+            if not paused_for_help:
+                _cancel_pivot_if_in_progress(pivot)
     except ControllerReconnectTimeoutError as exc:
         # The runner stayed away past the grace period: ask for help instead of
         # cancelling the run, so the remaining cases continue once it is back.
@@ -3418,23 +3482,72 @@ def _pause_case_after_fault(
     )
 
 
+def _pause_case_for_person(
+    pivot: TestRunTestCase, generation: int, restore_baseline: int | None
+) -> bool:
+    """Ask for help after a person's pause stopped the case; True when it did.
+
+    Shaped like ``_pause_case_after_fault``: the step is the checkpoint's
+    cursor step (clamped to the plan), and the stored continue mode is from
+    scratch without a checkpoint, restore while a due restore has not
+    finished, otherwise the current screen. ``_pause_run_for_help`` writes
+    the pause texts from the request it reads under the run lock.
+    """
+    checkpoint = load_resume_checkpoint(pivot)
+    step_num = (
+        min(checkpoint.next_step, max(len(checkpoint.plan), 1))
+        if checkpoint is not None
+        else 1
+    )
+    return _pause_run_for_help(
+        pivot,
+        # Reason and ask are replaced by the pause texts.
+        HelpRequestInfo(step_num=step_num, reason="", ask=pause_ask()),
+        generation,
+        continue_mode=pause_continue_mode(
+            checkpoint,
+            restore_pending=(
+                restore_baseline is not None
+                and checkpoint is not None
+                and _restore_attempt_count(checkpoint) == restore_baseline
+            ),
+        ),
+        stopped_by_pause=True,
+    )
+
+
+def _discard_pause_after_retest(pivot: TestRunTestCase) -> None:
+    """A Needs re-test mark beat a pending pause: drop the request.
+
+    One conditional UPDATE (the mark keeps the case; only its pause fields
+    change). The message is lost: the person asked to re-test the case.
+    """
+    TestRunTestCase.objects.filter(
+        pk=pivot.pk, status=TestRunTestCaseStatus.NEEDS_RETEST
+    ).update(**PAUSE_REQUEST_CLEARED)
+    clear_pause_request(pivot)
+
+
 def _fetch_pivot(pivot_id: int) -> TestRunTestCase:
     return TestRunTestCase.objects.select_related("test_run__project", "test_case").get(
         pk=pivot_id
     )
 
 
-def _mark_pivot_in_progress(pivot: TestRunTestCase) -> bool:
+def _mark_pivot_in_progress(pivot: TestRunTestCase, generation: int) -> bool:
     """Start the case; False (nothing written) when it is marked Needs re-test.
 
     The case row is locked, so a mark that committed after the worker read the
     case is still seen; a mark that comes later stops the case at its next
-    cancellation check.
+    cancellation check. A pause request (or a dropped one's record) of
+    another generation is cleared; one of ``generation`` is kept, so a
+    redelivered task still pauses. ``pivot.pause_requested_generation`` is
+    the locked value afterwards.
     """
     with transaction.atomic():
-        locked_status = (
+        locked_status, locked_pause_generation = (
             TestRunTestCase.objects.select_for_update()
-            .values_list("status", flat=True)
+            .values_list("status", "pause_requested_generation")
             .get(pk=pivot.pk)
         )
         if locked_status == TestRunTestCaseStatus.NEEDS_RETEST:
@@ -3444,7 +3557,18 @@ def _mark_pivot_in_progress(pivot: TestRunTestCase) -> bool:
         # Keeps the first start and the time of earlier segments (Continue,
         # Resume).
         open_case_segment(pivot, timezone.now())
-        pivot.save(update_fields=["status", *CASE_SEGMENT_OPEN_FIELDS, "updated_at"])
+        update_fields = ["status", *CASE_SEGMENT_OPEN_FIELDS, "updated_at"]
+        if (
+            locked_pause_generation is not None
+            and locked_pause_generation != generation
+        ):
+            clear_pause_request(pivot)
+            update_fields.extend(PAUSE_REQUEST_FIELDS)
+        elif locked_pause_generation != pivot.pause_requested_generation:
+            # Changed since the worker read the case (rare): the broadcast
+            # below shows the pauser.
+            pivot.refresh_from_db(fields=list(PAUSE_REQUEST_FIELDS))
+        pivot.save(update_fields=update_fields)
 
     # Outside the case lock: markers lock the run before the case.
     test_run = pivot.test_run
@@ -3543,12 +3667,15 @@ def _finalize_pivot(pivot: TestRunTestCase, result: AgentResult) -> bool:
     """Write the agent's verdict; True when it did.
 
     Only while the locked case is still In progress: a person's Needs re-test
-    mark or the run's abort that landed first is kept.
+    mark or the run's abort that landed first is kept. A pending pause is
+    dropped in the same save (the verdict won): one with a first message is
+    kept as the "Too late to pause" record (no longer pending, since the case
+    left In progress), any other is cleared.
     """
     with transaction.atomic():
-        locked_status = (
+        locked_status, locked_pause_generation, locked_pause_message = (
             TestRunTestCase.objects.select_for_update()
-            .values_list("status", flat=True)
+            .values_list("status", "pause_requested_generation", "pause_message")
             .get(pk=pivot.pk)
         )
         if locked_status != TestRunTestCaseStatus.IN_PROGRESS:
@@ -3568,15 +3695,11 @@ def _finalize_pivot(pivot: TestRunTestCase, result: AgentResult) -> bool:
         now = timezone.now()
         pivot.result = _extract_agent_summary(result)
         pivot.finished_at = now
-        pivot.save(
-            update_fields=[
-                "status",
-                "result",
-                "finished_at",
-                "failed_by",
-                "updated_at",
-            ]
-        )
+        update_fields = ["status", "result", "finished_at", "failed_by", "updated_at"]
+        if locked_pause_generation is not None and not locked_pause_message:
+            clear_pause_request(pivot)
+            update_fields.extend(PAUSE_REQUEST_FIELDS)
+        pivot.save(update_fields=update_fields)
         # The segment ends at the verdict; the teardown that follows is not
         # counted.
         close_case_segment(pivot.pk, now)
@@ -3617,12 +3740,15 @@ def _pause_run_for_help(
     *,
     fault: BlockedReason | None = None,
     continue_mode: HelpContinueMode = HelpContinueMode.CURRENT_SCREEN,
+    stopped_by_pause: bool = False,
 ) -> bool:
     """Put the case in Need help and the run to sleep; True when it did.
 
     ``fault`` is set when an infrastructure fault (not the orchestrator)
     stopped the case; the Night auto-fix decision is the same either way.
     ``continue_mode`` is stored on the request and drives Continue.
+    ``stopped_by_pause``: a person's pause stopped the case
+    (``_pause_case_for_person``).
 
     One transaction under the run lock: a stale generation does nothing, and
     a run aborted meanwhile cancels the case instead. The case keeps its
@@ -3630,6 +3756,14 @@ def _pause_run_for_help(
     told, then either the Night auto-fix is enqueued (by task name: importing
     ``machine_setup.tasks`` here would be an import cycle) or the project
     members are notified.
+
+    A pause request of this generation on the case (read under the run lock,
+    which ``request_case_pause`` takes too) means a person is there: the
+    request records the pauser and the first message
+    (``open_pause_help_request``), with the pause texts for a pure pause and
+    this call's own texts, fault and mode when the agent or a fault stopped
+    the case first. No auto-fix and no ntfy; after commit the discussion is
+    opened (``enqueue_open_paused_help_chat``).
     """
     reason = _truncate_help_text(help.reason)
     ask = _truncate_help_text(help.ask) or _HELP_FALLBACK_ASK
@@ -3638,54 +3772,80 @@ def _pause_run_for_help(
         test_run = TestRun.objects.select_for_update().get(pk=pivot.test_run_id)
         if test_run.execution_generation != generation:
             return False
-        pivot.refresh_from_db(fields=["status"])
+        pivot.refresh_from_db(fields=["status", *PAUSE_REQUEST_FIELDS])
         if test_run.status != TestRunStatus.STARTED:
             if pivot.status == TestRunTestCaseStatus.IN_PROGRESS:
                 _mark_pivot_cancelled(pivot)
             return False
         if pivot.status != TestRunTestCaseStatus.IN_PROGRESS:
             return False
+        pause = read_pause_request(pivot, generation)
+        if stopped_by_pause and pause is None:
+            # Unreachable in practice: only this generation's pick-up, its
+            # verdict and a cancel clear a request while the case runs. With
+            # no pauser to name, the caller cancels the case as for any
+            # other stop.
+            logger.warning("Pivot %d paused without a pause request", pivot.pk)
+            return False
 
-        auto_fix = test_run.help_mode == RunHelpMode.NIGHT and auto_fix_eligible(
-            pivot.pk, step_num
+        auto_fix = (
+            pause is None
+            and test_run.help_mode == RunHelpMode.NIGHT
+            and auto_fix_eligible(pivot.pk, step_num)
         )
         now = timezone.now()
         # The worker stops owning the case: waiting for help is not counted.
         close_case_segment(pivot.pk, now)
         pivot.segment_started_at = None
-        # At most one open request per case: close a leftover before opening.
-        CaseHelpRequest.objects.filter(
-            test_run_test_case_id=pivot.pk, resolution=HelpResolution.OPEN
-        ).update(resolution=HelpResolution.CANCELLED, resolved_at=now)
-        help_request = CaseHelpRequest(
-            test_run_test_case=pivot,
-            step_num=step_num,
-            reason=reason,
-            ask=ask,
-            fault=fault or "",
-            continue_mode=continue_mode,
-        )
-        if auto_fix:
-            mark_auto_fix_running(help_request)
-        help_request.save()
+        update_fields = [
+            "status",
+            "blocked_reason",
+            "result",
+            "finished_at",
+            "updated_at",
+        ]
+        if pause is not None:
+            help_request = open_pause_help_request(
+                pivot,
+                step_num=step_num,
+                continue_mode=continue_mode,
+                requested=pause,
+                stopped_by_pause=stopped_by_pause,
+                base=HelpRequestInfo(step_num=step_num, reason=reason, ask=ask),
+                now=now,
+                fault=fault or "",
+            )
+            ask = help_request.ask
+            update_fields.extend(PAUSE_REQUEST_FIELDS)
+        else:
+            # At most one open request per case: close a leftover before
+            # opening.
+            CaseHelpRequest.objects.filter(
+                test_run_test_case_id=pivot.pk, resolution=HelpResolution.OPEN
+            ).update(resolution=HelpResolution.CANCELLED, resolved_at=now)
+            help_request = CaseHelpRequest(
+                test_run_test_case=pivot,
+                step_num=step_num,
+                reason=reason,
+                ask=ask,
+                fault=fault or "",
+                continue_mode=continue_mode,
+            )
+            if auto_fix:
+                mark_auto_fix_running(help_request)
+            help_request.save()
 
         pivot.status = TestRunTestCaseStatus.NEED_HELP
         pivot.blocked_reason = ""
         pivot.result = ask
         pivot.finished_at = None
-        pivot.save(
-            update_fields=[
-                "status",
-                "blocked_reason",
-                "result",
-                "finished_at",
-                "updated_at",
-            ]
-        )
+        pivot.save(update_fields=update_fields)
         test_run.status = TestRunStatus.PAUSED
         test_run.save(update_fields=["status", "updated_at"])
 
-        if fault is None:
+        if stopped_by_pause and pause is not None:
+            log_line = pause_log_line(pause.label, step_num)
+        elif fault is None:
             log_line = f"[Need help at step {step_num}] {ask}"
         else:
             log_line = f"[Need help: {fault.label} at step {step_num}] {ask}"
@@ -3694,13 +3854,16 @@ def _pause_run_for_help(
         logged = _append_pivot_log(pivot.pk, log_line, generation)
         help_request_id = help_request.pk
         project_id = test_run.project_id
+        paused_by_person = pause is not None
 
         def _after_commit() -> None:
             if logged:
                 _broadcast_log(pivot, log_line)
             broadcast_run_and_pivots(test_run, [pivot])
             broadcast_project_attention_changed(project_id)
-            if auto_fix:
+            if paused_by_person:
+                enqueue_open_paused_help_chat(help_request_id)
+            elif auto_fix:
                 enqueue_case_auto_fix(help_request_id)
             else:
                 notify_case_needs_help(help_request_id)
@@ -3762,6 +3925,9 @@ def _pause_run_for_person(
     Night, so the step is handed back here instead (``_hand_back_unpaused``)
     and the caller re-runs the orchestrator in the same execution. Re-queueing
     the case is not an option: ``run_reopen_services`` imports this module.
+
+    A person's pause of this generation that raced the hand-off wins: the
+    case asks for help instead (``_pause_hand_off_for_person``).
     """
     step_num = max(hand_off.step_num, 1)
     shell_label = command_shell_label(
@@ -3771,7 +3937,9 @@ def _pause_run_for_person(
         test_run = TestRun.objects.select_for_update().get(pk=pivot.test_run_id)
         if test_run.execution_generation != generation:
             return _PersonPause.SKIPPED
-        pivot.refresh_from_db(fields=["status", "execution_checkpoint"])
+        pivot.refresh_from_db(
+            fields=["status", "execution_checkpoint", *PAUSE_REQUEST_FIELDS]
+        )
         if test_run.status != TestRunStatus.STARTED:
             if pivot.status == TestRunTestCaseStatus.IN_PROGRESS:
                 _mark_pivot_cancelled(pivot)
@@ -3789,6 +3957,12 @@ def _pause_run_for_person(
         pivot.segment_started_at = None
         checkpoint = load_resume_checkpoint(pivot)
         settle_person_steps(pivot.pk, checkpoint)
+        pause = read_pause_request(pivot, generation)
+        if pause is not None:
+            _pause_hand_off_for_person(
+                test_run, pivot, hand_off, pause, generation=generation, now=now
+            )
+            return _PersonPause.PAUSED
         person_step, push = open_person_step_row(
             pivot.pk,
             hand_off,
@@ -3851,6 +4025,78 @@ def _pause_run_for_person(
     return _PersonPause.PAUSED
 
 
+def _pause_hand_off_for_person(
+    test_run: TestRun,
+    pivot: TestRunTestCase,
+    hand_off: PersonStepHandOff,
+    pause: PauseRequestSnapshot,
+    *,
+    generation: int,
+    now: datetime,
+) -> None:
+    """Open a person's pause instead of handing the step to a person.
+
+    The caller holds the run lock, the run is Started in Human in the loop
+    and the case In progress, its segment closed. An open person step row
+    (a report the agent could not confirm) is cancelled as paused by the
+    pauser. The checkpoint keeps the prepared hand-off as a ``waiting``
+    ``person`` key with no row, so a current-screen Continue hands the same
+    step out again. The case needs help (current screen) and the run is
+    PAUSED; after commit the pages are told and the discussion is opened.
+    """
+    step_num = max(hand_off.step_num, 1)
+    CasePersonStep.objects.filter(
+        test_run_test_case_id=pivot.pk, status__in=OPEN_PERSON_STEP_STATUSES
+    ).update(
+        status=PersonStepStatus.CANCELLED,
+        close_reason=PersonStepClose.PAUSED,
+        closed_by_id=pause.user_id,
+        closed_via=pause.via,
+        closed_at=now,
+    )
+    person = read_checkpoint_person_step(pivot.execution_checkpoint)
+    pivot.execution_checkpoint = with_person_step(
+        pivot.execution_checkpoint,
+        CheckpointPersonStep(
+            hand_off=hand_off,
+            request_id=None,
+            state="waiting",
+            requested_at=(
+                person.requested_at
+                if person is not None and person.hand_off.step_num == step_num
+                else now
+            ),
+        ),
+    )
+    help_request = open_pause_help_request(
+        pivot,
+        step_num=step_num,
+        continue_mode=HelpContinueMode.CURRENT_SCREEN,
+        requested=pause,
+        stopped_by_pause=True,
+        base=None,
+        now=now,
+    )
+    mark_case_paused_for_help(pivot, help_request)
+    pivot.save(update_fields=["execution_checkpoint", *PAUSED_CASE_FIELDS])
+    test_run.status = TestRunStatus.PAUSED
+    test_run.save(update_fields=["status", "updated_at"])
+
+    log_line = pause_log_line(pause.label, step_num)
+    logged = _append_pivot_log(pivot.pk, log_line, generation)
+    help_request_id = help_request.pk
+    project_id = test_run.project_id
+
+    def _after_commit() -> None:
+        if logged:
+            _broadcast_log(pivot, log_line)
+        broadcast_run_and_pivots(test_run, [pivot])
+        broadcast_project_attention_changed(project_id)
+        enqueue_open_paused_help_chat(help_request_id)
+
+    transaction.on_commit(_after_commit)
+
+
 def _hand_back_unpaused(
     pivot: TestRunTestCase, hand_off: PersonStepHandOff, generation: int
 ) -> None:
@@ -3908,11 +4154,18 @@ def _cancel_pivot_if_in_progress(pivot: TestRunTestCase) -> None:
     so a marker that already closed it adds nothing.
     """
     now = timezone.now()
+    # A pending pause is discarded with it (the run's abort won).
     cancelled = TestRunTestCase.objects.filter(
         pk=pivot.pk, status=TestRunTestCaseStatus.IN_PROGRESS
-    ).update(status=TestRunTestCaseStatus.CANCELLED, finished_at=now, updated_at=now)
+    ).update(
+        status=TestRunTestCaseStatus.CANCELLED,
+        finished_at=now,
+        updated_at=now,
+        **PAUSE_REQUEST_CLEARED,
+    )
     if not cancelled:
         return
+    clear_pause_request(pivot)
     close_case_segment(pivot.pk, now)
     pivot.status = TestRunTestCaseStatus.CANCELLED
     pivot.finished_at = now
@@ -3925,7 +4178,11 @@ def _mark_pivot_cancelled(pivot: TestRunTestCase) -> None:
     now = timezone.now()
     pivot.status = TestRunTestCaseStatus.CANCELLED
     pivot.finished_at = now
-    pivot.save(update_fields=["status", "finished_at", "updated_at"])
+    # A pending pause is discarded with the case (abort won).
+    clear_pause_request(pivot)
+    pivot.save(
+        update_fields=["status", "finished_at", *PAUSE_REQUEST_FIELDS, "updated_at"]
+    )
     # Need help, Waiting for a person and Created cases have no open segment:
     # skip the query (abort cancels many). The close itself is idempotent when
     # an abort races the worker's own cancel; that worker's pivot still shows

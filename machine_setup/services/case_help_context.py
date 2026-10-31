@@ -22,6 +22,7 @@ from machine_setup.case_help_brief import (
     build_case_help_brief,
     build_case_help_update,
 )
+from projects.case_pause_policy import allowed_continue_modes
 from projects.case_plan_revision_services import get_pending_plan_draft
 from projects.case_step_refs import case_steps_label
 from projects.models import (
@@ -112,6 +113,7 @@ def case_help_brief_data(
         actions_digest=failed_attempt_digest(checkpoint, request.step_num),
         fault_label=request.get_fault_display() if request.fault else "",
         continue_mode=HelpContinueMode(request.continue_mode),
+        paused_by_label=request.paused_by_label if request.stopped_by_pause else "",
     )
     if audience == "auto_fix":
         return base
@@ -124,6 +126,9 @@ def case_help_brief_data(
         help_history=_help_history(request),
         revisions=_revisions(checkpoint),
         pending_draft=get_pending_plan_draft(request.pk) if waiting else None,
+        allowed_continue_modes=allowed_continue_modes(
+            request.continue_mode, request.fault, pivot.execution_checkpoint
+        ),
     )
 
 

@@ -1,0 +1,47 @@
+{% comment %} "Pause and discuss" dialog: stops a running case (or a waiting person
+   step) at the agent's next action and opens a discussion with the agent.
+   Follows the dialog convention in templates/partials/README.md; opened by
+   the `open-pause-case-{{ pivot.id }}` window event. Render it only for a
+   writable member who can pause (case page: pause_panel.can_pause; run
+   banner: an open person step).
+
+   Context contract:
+     project, test_run, pivot — the case to pause
+     (the message field mirrors projects.forms.CasePauseForm: at most 8000
+     characters, PAUSE_MESSAGE_MAX_LENGTH; hard-coded so the run page banner
+     can include this without a form in its context)
+     next       — where to come back to (validated same-host by the view)
+     csrf_token — the page's token (the include is rendered with `only`)
+   Posts `message` (optional first message for the agent) and `next` to
+   projects:test_run_case_pause. {% endcomment %}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-pause-case-{{ pivot.id }}.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="pause-case-{{ pivot.id }}-title" aria-describedby="pause-case-{{ pivot.id }}-desc">
+    <div class="card-header">
+      <h3 id="pause-case-{{ pivot.id }}-title">Pause this case and discuss it?</h3>
+      <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+    </div>
+    <p id="pause-case-{{ pivot.id }}-desc">The agent stops at its next action and the test machine is left exactly as it is. The case then waits for help, and a discussion with the agent opens with your message. When you are done, choose how the case goes on.</p>
+    <form method="post" action="{% url 'projects:test_run_case_pause' project.id test_run.id pivot.id %}">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ next }}">
+      <div class="field">
+        <label class="label" for="pause-case-{{ pivot.id }}-message">Message for the agent <span class="muted">(optional)</span></label>
+        <textarea class="textarea" id="pause-case-{{ pivot.id }}-message" name="message" rows="4" maxlength="8000" placeholder="Optional: what you want to discuss once it stops"></textarea>
+        <p class="hint">Empty asks the agent to look at the test machine and suggest what to do.</p>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Pause</button>
+      </div>
+    </form>
+  </div>
+</div>
