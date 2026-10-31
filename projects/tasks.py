@@ -11,6 +11,8 @@ from channels.layers import get_channel_layer
 from django.conf import settings
 from django.db import transaction
 
+from auto_tester.celery import app as celery_app
+from machine_readiness.task_names import ANALYSE_PRECONDITIONS
 from projects.checked_push_limits import (
     CHECKED_PUSH_SOFT_TIME_LIMIT,
     CHECKED_PUSH_TIME_LIMIT,
@@ -116,6 +118,18 @@ def _handle_failure(
     _send_upload_progress(upload)
 
 
+def _enqueue_stage0_analysis(project_id: int) -> None:
+    """Queue the stage-0 analysis of the imported preconditions (cached per
+    distinct text, capped by STAGE0_ANALYSIS_MAX_CALLS). Never fails the import."""
+    try:
+        celery_app.send_task(
+            ANALYSE_PRECONDITIONS,
+            args=[project_id, settings.STAGE0_ANALYSIS_MAX_CALLS],
+        )
+    except Exception:
+        logger.exception("Could not queue the stage-0 analysis: project=%s", project_id)
+
+
 def _run_testrail_import(upload: TestCaseUpload) -> None:
     if upload.testrail_project_id is None or upload.testrail_suite_id is None:
         raise TestRailError(
@@ -188,6 +202,7 @@ def import_testrail_cases(self: Task[[int], None], upload_id: int) -> None:
     try:
         _run_testrail_import(upload)
         _mark_completed(upload)
+        _enqueue_stage0_analysis(upload.project_id)
         logger.info(
             "import_testrail_cases completed: task_id=%s upload_id=%s total=%s updated=%s",
             self.request.id,
@@ -246,6 +261,7 @@ def import_testrail_run_cases(self: Task[[int], None], upload_id: int) -> None:
     try:
         run_import_service(upload, notify_progress=notify)
         _mark_completed(upload)
+        _enqueue_stage0_analysis(upload.project_id)
         logger.info(
             "import_testrail_run_cases completed: task_id=%s upload_id=%s total=%s updated=%s",
             self.request.id,
