@@ -185,6 +185,7 @@ class RunnerPersonStepView:
             questions=self.questions,
             case_steps_label=self.case_steps_label,
             case_steps=self.case_steps,
+            pivot_id=self.pivot_id,
         )
 
 
