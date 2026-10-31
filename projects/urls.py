@@ -242,6 +242,16 @@ urlpatterns: list[URLPattern] = [
         name="test_run_help_mode",
     ),
     path(
+        "<int:project_id>/test-runs/<int:test_run_id>/machine-check/",
+        views.test_run_machine_check,
+        name="test_run_machine_check",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/prepare-machine/",
+        views.test_run_prepare_machine,
+        name="test_run_prepare_machine",
+    ),
+    path(
         "<int:project_id>/test-runs/<int:test_run_id>/resume/",
         views.test_run_resume,
         name="test_run_resume",

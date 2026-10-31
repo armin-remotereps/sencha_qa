@@ -25,6 +25,15 @@ from auto_tester.pagination import (
     parse_page,
     parse_per_page,
 )
+from machine_readiness.exceptions import QuickCheckRefusedError
+from machine_readiness.run_stage0_state import runner_host
+from machine_readiness.services.quick_check import request_quick_check
+from machine_readiness.services.run_stage0 import (
+    get_run_stage0,
+    prepare_machine_text,
+)
+from machine_setup.exceptions import MachineSetupError
+from machine_setup.services.send_message import send_setup_message
 from projects.application_context_services import (
     get_context_provenance,
     list_context_versions,
@@ -128,6 +137,7 @@ from projects.run_resume_services import (
 )
 from projects.runner_update_offer import get_runner_update_offer
 from projects.services import (
+    RUN_STAGE0_ANCHOR,
     STATUS_FILTER_CHOICES,
     RerunScope,
     RunReadiness,
@@ -1044,6 +1054,14 @@ def _build_test_run_detail_context(
         "active_tab": "runs",
         "active_nav": "projects",
     }
+    # "Machine for this run": what the cases need on the machine (Draft and
+    # Paused runs only; 2 queries).
+    if test_run.status in (TestRunStatus.WAITING, TestRunStatus.PAUSED):
+        context["run_stage0"] = get_run_stage0(
+            project_id=project.id,
+            run_id=test_run.id,
+            runner_host=runner_host(project.agent_system_info),
+        ).to_payload()
     if test_run.status == TestRunStatus.WAITING:
         context["readiness"] = get_run_readiness(project, test_run=test_run)
         context["start_form"] = TestRunStartForm(
@@ -1061,6 +1079,58 @@ def test_run_detail(
         raise Http404
     context = _build_test_run_detail_context(request, project, test_run)
     return render(request, "projects/test_run_detail.html", context)
+
+
+@project_membership_required
+@require_POST
+def test_run_machine_check(
+    request: AuthenticatedRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    """Queue a zero-LLM "Check machine" for the run's stage-0 requirements."""
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    try:
+        request_quick_check(
+            project_id=project.id, run_id=test_run.id, actor_id=request.user.id
+        )
+    except QuickCheckRefusedError as exc:
+        messages.error(request, exc.message)
+    else:
+        messages.success(
+            request,
+            "Checking the machine. The card updates when the check finishes.",
+        )
+    return redirect(
+        reverse("projects:test_run_detail", args=[project.id, test_run.id])
+        + f"#{RUN_STAGE0_ANCHOR}"
+    )
+
+
+@project_membership_required
+@require_POST
+def test_run_prepare_machine(
+    request: AuthenticatedRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    """Ask the Machine setup agent to prepare the machine for this run."""
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    try:
+        send_setup_message(
+            project=project,
+            user=request.user,
+            text=prepare_machine_text(
+                run_name=test_run.display_name, run_id=test_run.id
+            ),
+        )
+    except MachineSetupError as exc:
+        messages.error(request, exc.message)
+        return redirect(
+            reverse("projects:test_run_detail", args=[project.id, test_run.id])
+            + f"#{RUN_STAGE0_ANCHOR}"
+        )
+    return redirect("machine_setup:chat", project_id=project.id)
 
 
 @project_membership_required

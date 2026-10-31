@@ -1,0 +1,96 @@
+{% comment %} "Machine for this run": the run's stage-0 checklist (Draft and Paused runs).
+
+   Context contract (included `only`):
+     project, test_run, csrf_token,
+     can_write (bool: project_can_write; gates Check machine / Prepare machine).
+   Alpine: rendered inside the run page's `testRunLive` scope, whose `stage0`
+     holds machine_readiness.services.run_stage0.RunStage0Checklist.to_payload()
+     ({run_id, case_count, unanalysed_case_count, none_needed_case_count,
+     present_count, missing_count, mismatch_count, unknown_count,
+     last_checked_at (ISO or ""), last_checked_host, runner_host,
+     items: [{key, title, kind, kind_label, check_target, install_hint, status,
+     status_label, status_detail, checked_at, checked_host, host_mismatch,
+     case_count}]}), seeded from the `run-stage0-data` json_script and replaced
+     by the run socket's `stage0` event after a Check machine.
+   Every requirement, path and detail is member-, agent- or runner-written
+   text: x-text only. {% endcomment %}
+<section class="card" id="run-stage0" aria-labelledby="run-stage0-title">
+  <div class="card-header">
+    <h2 id="run-stage0-title">Machine for this run</h2>
+  </div>
+
+  <template x-if="stage0.items.length === 0 && stage0.unanalysed_case_count === 0">
+    <p class="hint">
+      <span x-show="stage0.case_count === 0">This run has no cases yet.</span>
+      <span x-show="stage0.case_count > 0">The preconditions of this run's cases need nothing installed on the test machine.</span>
+    </p>
+  </template>
+
+  <template x-if="stage0.items.length > 0">
+    <div>
+      <p class="muted small">
+        <span x-text="stage0.present_count + ' present'"></span>
+        &middot; <span x-text="stage0.missing_count + ' missing'"></span>
+        &middot; <span x-text="stage0.mismatch_count + ' version mismatch'"></span>
+        &middot; <span x-text="stage0.unknown_count + ' not checked'"></span>
+      </p>
+      <ul class="checklist">
+        <template x-for="item in stage0.items" :key="item.key">
+          <li :data-requirement="item.key">
+            <span class="check-icon" :class="stage0IconClass(item.status)" aria-hidden="true" x-text="stage0Icon(item.status)"></span>
+            <div>
+              <div class="check-title">
+                <span x-text="item.title"></span>
+                <span class="badge" :class="stage0BadgeClass(item.status)" x-text="item.status_label"></span>
+              </div>
+              <p class="check-help">
+                <span x-text="item.kind_label"></span><template x-if="item.check_target"><span> &middot; <code x-text="item.check_target"></code></span></template>
+                &middot; <span x-text="item.case_count + (item.case_count === 1 ? ' case' : ' cases')"></span>
+              </p>
+              <template x-if="item.status_detail">
+                <p class="check-help" x-text="item.status_detail"></p>
+              </template>
+              <template x-if="item.install_hint && item.status !== 'present'">
+                <p class="check-help">How to install: <span x-text="item.install_hint"></span></p>
+              </template>
+            </div>
+          </li>
+        </template>
+      </ul>
+    </div>
+  </template>
+
+  <template x-if="stage0.unanalysed_case_count > 0">
+    <p class="hint">
+      <span x-text="stage0.unanalysed_case_count + (stage0.unanalysed_case_count === 1 ? ' case not analysed' : ' cases not analysed')"></span>:
+      their preconditions have not been read for what they need on the machine yet.
+      <a href="{% url 'machine_readiness:requirements' project.id %}">Stage 0 requirements</a>
+    </p>
+  </template>
+
+  <p class="muted small">
+    <template x-if="stage0.last_checked_at">
+      <span>Last checked <span x-text="stage0FormatTime(stage0.last_checked_at)"></span><template x-if="stage0.last_checked_host"><span> on <span x-text="stage0.last_checked_host"></span></span></template>.</span>
+    </template>
+    <template x-if="!stage0.last_checked_at">
+      <span>Not checked on a machine yet.</span>
+    </template>
+    <template x-if="stage0.runner_host">
+      <span>Connected Test Runner: <span x-text="stage0.runner_host"></span>.</span>
+    </template>
+  </p>
+
+  {% if can_write %}
+  <div class="actions card-actions">
+    <form method="post" action="{% url 'projects:test_run_machine_check' project.id test_run.id %}">
+      <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
+      <button type="submit" class="btn btn-secondary btn-sm">Check machine</button>
+    </form>
+    <form method="post" action="{% url 'projects:test_run_prepare_machine' project.id test_run.id %}">
+      <input type="hidden" name="csrfmiddlewaretoken" value="{{ csrf_token }}">
+      <button type="submit" class="btn btn-ghost btn-sm">Prepare machine</button>
+    </form>
+  </div>
+  <p class="hint">Check machine looks for the applications and paths without AI. Prepare machine asks the Machine setup agent to handle this run's gaps; it asks before installing anything.</p>
+  {% endif %}
+</section>

@@ -78,6 +78,8 @@ from controller_client.protocol import (
 )
 from knowledge_base.services.item_processing import COPY_PROJECT_KNOWLEDGE_TASK
 from knowledge_base.services.knowledge_index import knowledge_index_text
+from machine_readiness.profile_text import artifacts_profile_text
+from machine_readiness.run_stage0_state import run_stage0_summary
 from machine_readiness.types import InventoryEntry
 from machine_setup.auto_fix_stop import request_auto_fix_stop
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
@@ -873,6 +875,53 @@ def _no_runner_update_check(project: Project) -> ReadinessCheck:
     )
 
 
+# The run page's "Machine for this run" card (machine_readiness run stage 0).
+RUN_STAGE0_ANCHOR: Final = "run-stage0"
+
+
+def _machine_prepared_check(project: Project, test_run: TestRun) -> ReadinessCheck:
+    """Warning only (plan Q6): the run's stage-0 requirements (2 queries)."""
+    summary = run_stage0_summary(project, test_run.id)
+    passed = summary.prepared
+    gaps: list[str] = []
+    if summary.missing:
+        gaps.append(f"{summary.missing} missing")
+    if summary.mismatch:
+        gaps.append(
+            f"{summary.mismatch} version mismatch"
+            f"{'es' if summary.mismatch != 1 else ''}"
+        )
+    if summary.unknown:
+        gaps.append(f"{summary.unknown} not checked")
+    if summary.unanalysed_case_count:
+        count = summary.unanalysed_case_count
+        gaps.append(f"{count} case{'s' if count != 1 else ''} not analysed")
+    if passed:
+        title = (
+            "Machine has what this run needs"
+            if summary.requirement_count
+            else "This run's cases need nothing installed"
+        )
+        help_text = ""
+    else:
+        title = "Machine may not be prepared for this run"
+        help_text = (
+            f"{', '.join(gaps).capitalize()}. Use Check machine or Prepare "
+            "machine on this run's card; this does not block the run."
+        )
+    return ReadinessCheck(
+        key="machine_prepared",
+        passed=passed,
+        blocking=False,
+        title=title,
+        help=help_text,
+        link_url=(
+            reverse("projects:test_run_detail", args=[project.id, test_run.id])
+            + f"#{RUN_STAGE0_ANCHOR}"
+        ),
+    )
+
+
 def get_run_readiness(
     project: Project,
     *,
@@ -882,7 +931,7 @@ def get_run_readiness(
     """Compute the "Ready to run?" checklist shown before starting a run."""
     visual_engine = get_visual_engine_status()
     machine_state = get_machine_state(project, visual_engine)
-    checks = (
+    checks: tuple[ReadinessCheck, ...] = (
         _cases_selected_check(test_run, selected_count),
         _machine_connected_check(project, machine_state),
         _visual_engine_ready_check(visual_engine),
@@ -891,6 +940,8 @@ def get_run_readiness(
         _no_runner_update_check(project),
         _application_context_check(project),
     )
+    if test_run is not None:
+        checks += (_machine_prepared_check(project, test_run),)
     return RunReadiness(checks=checks)
 
 
@@ -3422,6 +3473,11 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
             on_log(f"=== Resumed from step {resume.next_step} ===")
         # Built once per execution: it reads the case's open person step.
         checkpoint_saved_hook = _build_checkpoint_saved_hook(pivot)
+        # Only a fresh plan reads the artifacts profile (2-3 queries, once per
+        # execution); a resume continues the saved plan.
+        artifacts_profile = (
+            artifacts_profile_text(project.id) if resume is None else None
+        )
         while True:
             result = run_orchestrator(
                 task_description,
@@ -3445,6 +3501,7 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
                 knowledge_index=(
                     knowledge_index_text(project.id) if resume is None else None
                 ),
+                artifacts_profile=artifacts_profile,
             )
             # Once a Resume or Start took the run over, the pivot belongs to
             # the newer chain: this worker records nothing (here and below).

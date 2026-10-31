@@ -131,6 +131,7 @@ def run_orchestrator(
     case_step_count: int = 0,
     case_steps_testrail: bool = True,
     knowledge_index: str | None = None,
+    artifacts_profile: str | None = None,
 ) -> AgentResult:
     """Plan and run one test case.
 
@@ -146,6 +147,9 @@ def run_orchestrator(
     ``knowledge_index`` is the project's knowledge base index (None when it
     has no ready item): the planner sees it and may look items up in a
     bounded tool loop; None keeps the single planning call.
+
+    ``artifacts_profile`` is the project's artifacts profile text (None when
+    it has none): a fresh plan sees it as a fenced reference block.
     """
     # One model serves every role. The distinct names keep the call sites below
     # readable and make a future per-role split a one-line change.
@@ -179,6 +183,7 @@ def run_orchestrator(
             case_step_count=case_step_count,
             project_id=project_id,
             knowledge_index=knowledge_index,
+            artifacts_profile=artifacts_profile,
             cancellation_check=cancellation_check,
         )
     else:
@@ -1089,6 +1094,7 @@ def _plan_sub_tasks(
     case_step_count: int = 0,
     project_id: int,
     knowledge_index: str | None = None,
+    artifacts_profile: str | None = None,
     cancellation_check: CancellationCheck | None = None,
 ) -> tuple[SubTask, ...]:
     knowledge_tools = (
@@ -1101,6 +1107,7 @@ def _plan_sub_tasks(
         case_step_count=case_step_count,
         knowledge_index=knowledge_index,
         knowledge_tools=knowledge_tools,
+        artifacts_profile=artifacts_profile,
     )
     messages = (
         ChatMessage(role="system", content=system_prompt),
