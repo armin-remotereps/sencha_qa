@@ -556,7 +556,7 @@
               <a class="btn btn-sm btn-ghost" href="{% url 'projects:test_run_case_detail' project.id test_run.id pivot.id %}">Logs &amp; screenshots</a>
               {% if project_can_write and pivot.status == "in_progress" and pivot.pause_requested_generation is None %}
               {# Pause and discuss the running case; hidden once it stops running. #}
-              <button type="button" class="btn btn-sm btn-secondary" x-show="(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}') === 'in_progress'" @click="$dispatch('open-pause-case-{{ pivot.id }}')">Pause</button>
+              <button type="button" class="btn btn-sm btn-secondary" x-show="(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}') === 'in_progress' && !pivotPausePending[{{ pivot.id }}]" @click="$dispatch('open-pause-case-{{ pivot.id }}')">Pause</button>
               {% include "projects/includes/_case_pause_dialog.html" with project=project test_run=test_run pivot=pivot next=test_run_detail_url csrf_token=csrf_token only %}
               {% endif %}
             </td>
@@ -824,6 +824,8 @@ document.addEventListener('alpine:init', () => {
       awaiting_person: {{ summary.awaiting_person|default:0 }},
       needs_retest: {{ summary.needs_retest|default:0 }}
     },
+    // Pause requested for a running case (hides its Pause button).
+    pivotPausePending: {},
     pivotStatuses: {
       {% for pivot in cases %}
       {{ pivot.id }}: '{{ pivot.status }}'{% if not forloop.last %},{% endif %}
@@ -934,6 +936,7 @@ document.addEventListener('alpine:init', () => {
 
         if (data.type === 'pivot_status') {
           this.pivotStatuses[data.pivot_id] = data.status;
+          this.pivotPausePending[data.pivot_id] = !!data.pause_pending;
           this.summary = data.summary;
           return;
         }

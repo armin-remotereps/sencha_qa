@@ -22,13 +22,13 @@ from dataclasses import dataclass
 from django.db import transaction
 from django.utils import timezone
 
-from accounts.models import CustomUser
 from agents.checkpoint import checkpoint_from_json, without_person_step
 from notifications.services.inbox_broadcast import broadcast_project_attention_changed
 from projects.case_help_services import HelpPanel
 from projects.case_help_state import enqueue_open_paused_help_chat
 from projects.case_pause_policy import (
     PAUSE_ALREADY_NEEDS_HELP,
+    PAUSE_LABEL_MAX_LENGTH,
     PAUSE_NOT_RUNNING,
     PAUSE_NOTHING_TO_DISMISS,
     PAUSE_RUN_NOT_ACTIVE,
@@ -37,8 +37,10 @@ from projects.case_pause_policy import (
     pause_continue_mode,
 )
 from projects.case_pause_rows import (
+    PAUSED_CASE_FIELDS,
     PauseRequestSnapshot,
     clear_pause_request,
+    mark_case_paused_for_help,
     open_pause_help_request,
     pause_pending_for,
 )
@@ -66,6 +68,7 @@ __all__ = [
     "CasePausePanel",
     "dismiss_dropped_pause",
     "get_case_pause_panel",
+    "get_pause_requester_label",
     "pause_pending_for",
     "request_case_pause",
 ]
@@ -240,11 +243,20 @@ def get_case_pause_panel(
     )
 
 
-def dismiss_dropped_pause(*, pivot: TestRunTestCase, user: CustomUser) -> None:
+def get_pause_requester_label(pivot: TestRunTestCase) -> str:
+    """Who asked to pause the case, as stored now ("" when nobody)."""
+    return (
+        TestRunTestCase.objects.filter(pk=pivot.pk)
+        .values_list("pause_requested_label", flat=True)
+        .first()
+        or ""
+    )
+
+
+def dismiss_dropped_pause(*, pivot: TestRunTestCase) -> None:
     """Forget the "Too late to pause" record of a case (Dismiss on the notice).
 
-    ``user``: the writable member dismissing it (authorized by the view).
-    Raises ``CasePauseError(PAUSE_NOTHING_TO_DISMISS)`` while the case runs
+    The view authorizes the writable member. Raises ``CasePauseError(PAUSE_NOTHING_TO_DISMISS)`` while the case runs
     (its request is live) or when there is no record.
     """
     with transaction.atomic():
@@ -281,7 +293,7 @@ def _request_running_pause(
         return CasePauseOutcome.ALREADY_REQUESTED
     pivot.pause_requested_generation = generation
     pivot.pause_requested_by = actor.user
-    pivot.pause_requested_label = actor.label()
+    pivot.pause_requested_label = actor.label()[:PAUSE_LABEL_MAX_LENGTH]
     pivot.pause_requested_via = actor.via
     pivot.pause_requested_at = timezone.now()
     pivot.pause_message = message
@@ -330,20 +342,8 @@ def _pause_waiting_person_step(
         base=None,
         now=now,
     )
-    pivot.status = TestRunTestCaseStatus.NEED_HELP
-    pivot.blocked_reason = ""
-    pivot.result = help_request.ask
-    pivot.finished_at = None
-    pivot.save(
-        update_fields=[
-            "execution_checkpoint",
-            "status",
-            "blocked_reason",
-            "result",
-            "finished_at",
-            *_PIVOT_SAVE_FIELDS,
-        ]
-    )
+    mark_case_paused_for_help(pivot, help_request)
+    pivot.save(update_fields=["execution_checkpoint", *PAUSED_CASE_FIELDS])
     help_request_id = help_request.pk
 
     def _after_commit() -> None:

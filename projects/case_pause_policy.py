@@ -51,6 +51,12 @@ REDESIGN_RESTORE_FIRST = (
     "Restore first: the screen cannot be trusted, so a redesigned plan cannot "
     "continue from it."
 )
+# Query parameter of a case page that follows the paused case's discussion
+# as soon as it is open (set by the pause view and the page's own reload).
+AWAIT_DISCUSSION_PARAM = "discussion"
+# Cap of the server-written pauser labels (``pause_requested_label``,
+# ``paused_by_label``).
+PAUSE_LABEL_MAX_LENGTH = 255
 MODE_NOT_ALLOWED = "That way of continuing is not allowed for this case."
 
 

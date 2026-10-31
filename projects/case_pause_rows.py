@@ -12,9 +12,14 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from agents.types import HelpRequestInfo
-from projects.case_pause_policy import pause_ask, pause_reason
+from projects.case_pause_policy import (
+    PAUSE_LABEL_MAX_LENGTH,
+    pause_ask,
+    pause_reason,
+)
 from projects.models import (
     PAUSE_REQUEST_CLEARED,
+    PAUSE_REQUEST_FIELDS,
     CaseHelpRequest,
     HelpContinueMode,
     HelpResolution,
@@ -93,7 +98,7 @@ def open_pause_help_request(
         continue_mode=continue_mode,
         stopped_by_pause=stopped_by_pause,
         paused_by_id=requested.user_id,
-        paused_by_label=requested.label,
+        paused_by_label=requested.label[:PAUSE_LABEL_MAX_LENGTH],
         paused_via=requested.via,
         pause_message=requested.message,
         pause_message_state=PauseMessageState.PENDING,
@@ -112,3 +117,28 @@ def pause_pending_for(pivot: TestRunTestCase) -> bool:
         pivot.status == TestRunTestCaseStatus.IN_PROGRESS
         and pivot.pause_requested_generation is not None
     )
+
+
+# The case fields ``mark_case_paused_for_help`` writes (plus the cleared pause
+# request); the caller adds what else it changed.
+PAUSED_CASE_FIELDS: tuple[str, ...] = (
+    "status",
+    "blocked_reason",
+    "result",
+    "finished_at",
+    *PAUSE_REQUEST_FIELDS,
+    "updated_at",
+)
+
+
+def mark_case_paused_for_help(
+    pivot: TestRunTestCase, help_request: CaseHelpRequest
+) -> None:
+    """Put the case in Need help for a person's pause (in memory).
+
+    Save with ``PAUSED_CASE_FIELDS``. The run is put to sleep by the caller.
+    """
+    pivot.status = TestRunTestCaseStatus.NEED_HELP
+    pivot.blocked_reason = ""
+    pivot.result = help_request.ask
+    pivot.finished_at = None

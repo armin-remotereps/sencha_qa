@@ -15,8 +15,16 @@ from django.views.decorators.http import require_POST
 
 from accounts.types import AuthenticatedRequest
 from projects.case_help_services import get_run_case_for_help
-from projects.case_pause_policy import PAUSE_SECOND_MESSAGE, CasePauseOutcome
-from projects.case_pause_services import dismiss_dropped_pause, request_case_pause
+from projects.case_pause_policy import (
+    AWAIT_DISCUSSION_PARAM,
+    PAUSE_SECOND_MESSAGE,
+    CasePauseOutcome,
+)
+from projects.case_pause_services import (
+    dismiss_dropped_pause,
+    get_pause_requester_label,
+    request_case_pause,
+)
 from projects.decorators import project_membership_required
 from projects.exceptions import CasePauseError
 from projects.forms import CasePauseForm, form_error_text
@@ -70,6 +78,7 @@ def test_run_case_pause(
         messages.error(request, form_error_text(form))
         return redirect(case_url)
     message: str = form.cleaned_data["message"]
+    target = _safe_next(request, form.cleaned_data["next"], case_url)
     try:
         outcome = request_case_pause(
             pivot=pivot, actor=PersonStepActor.web(request.user), message=message
@@ -80,9 +89,7 @@ def test_run_case_pause(
         if outcome == CasePauseOutcome.REQUESTED:
             messages.success(request, _REQUESTED_MESSAGE)
         elif outcome == CasePauseOutcome.ALREADY_REQUESTED:
-            # The lookup defers this field, so reading it loads the first
-            # requester's label as stored now (one small query).
-            label = pivot.pause_requested_label
+            label = get_pause_requester_label(pivot)
             text = (
                 f"Already pausing (requested by {label})."
                 if label
@@ -93,7 +100,10 @@ def test_run_case_pause(
             messages.info(request, text)
         else:
             messages.success(request, _PAUSED_MESSAGE)
-    return redirect(_safe_next(request, form.cleaned_data["next"], case_url))
+            if target == case_url:
+                # The case page follows the discussion once it is open.
+                target = f"{case_url}?{AWAIT_DISCUSSION_PARAM}=1"
+    return redirect(target)
 
 
 @project_membership_required
@@ -103,7 +113,7 @@ def test_run_case_pause_dismiss(
 ) -> HttpResponse:
     pivot = _pivot_or_404(project, test_run_id, pivot_id)
     try:
-        dismiss_dropped_pause(pivot=pivot, user=request.user)
+        dismiss_dropped_pause(pivot=pivot)
     except CasePauseError as exc:
         messages.error(request, exc.message)
     else:

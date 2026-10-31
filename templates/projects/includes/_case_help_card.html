@@ -181,7 +181,7 @@
         <div class="label">What the Machine setup agent tried</div>
         <p class="help-quote pre-wrap">{{ auto_fix_summary }}</p>
       {% endif %}
-      {% if help_panel.continue_mode_choices|length > 1 %}
+      {% if help_panel.choose_continue_mode %}
       <fieldset class="radio-card-stack" x-data="{ mode: '{{ help_request.continue_mode|escapejs }}' }">
         <legend class="label">{{ help_form.continue_mode.label }}</legend>
         {% for mode in help_panel.continue_mode_choices %}
@@ -206,7 +206,7 @@
       <div class="field">
         <label class="label" for="{{ help_form.note.id_for_label }}">{{ help_form.note.label }}</label>
         {{ help_form.note }}
-        {% if help_panel.continue_mode_choices|length > 1 %}
+        {% if help_panel.choose_continue_mode %}
         <p class="hint">Continue goes on as chosen above{% if auto_fix_summary and help_request.auto_fix_state != "running" %}, with the Machine setup agent's report{% endif %}. Mark failed records a Failed verdict. Mark blocked leaves the case Blocked so it can be resumed later. In every case the rest of the run then continues.</p>
         {% else %}
         <p class="hint">Continue {% if help_panel.continue_mode == "from_scratch" %}starts the case again from the beginning (no step had been saved, so your note is not passed on){% else %}{% if help_panel.continue_mode == "restore" %}restores the earlier steps' state first, then runs step {{ help_request.step_num }}{% else %}re-runs step {{ help_request.step_num }} from the current screen{% endif %}, with your note{% if auto_fix_summary and help_request.auto_fix_state != "running" %} and the Machine setup agent's report{% endif %}{% endif %}. Mark failed records a Failed verdict. Mark blocked leaves the case Blocked so it can be resumed later. In every case the rest of the run then continues.</p>
@@ -219,7 +219,7 @@
             {{ help_form.use_plan_revision }}
             <span>{{ help_form.use_plan_revision.label }}</span>
           </label>
-          <p class="hint">Review the draft side by side in the help chat before ticking this. Ticked, Continue resumes at step {{ help_panel.pending_draft.resume_step }} of the redesigned plan on the machine as it is now (no cleanup){% if help_panel.continue_mode_choices|length > 1 %}, so choose "Re-run the step from the current screen" above{% endif %}.{% if help_request.continue_mode == "restore" %} This case must restore first (the screen cannot be trusted), so the redesign is refused until then.{% endif %} Unticked, the draft is dropped and step {{ help_request.step_num }} re-runs. Mark failed and Mark blocked drop it too.</p>
+          <p class="hint">Review the draft side by side in the help chat before ticking this. Ticked, Continue resumes at step {{ help_panel.pending_draft.resume_step }} of the redesigned plan on the machine as it is now (no cleanup){% if help_panel.choose_continue_mode %}, so choose "Re-run the step from the current screen" above{% endif %}.{% if help_request.continue_mode == "restore" %} This case must restore first (the screen cannot be trusted), so the redesign is refused until then.{% endif %} Unticked, the draft is dropped and step {{ help_request.step_num }} re-runs. Mark failed and Mark blocked drop it too.</p>
         </div>
       {% endif %}
       {% if help_panel.blockers %}

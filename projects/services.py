@@ -104,8 +104,10 @@ from projects.case_pause_policy import (
     pause_log_line,
 )
 from projects.case_pause_rows import (
+    PAUSED_CASE_FIELDS,
     PauseRequestSnapshot,
     clear_pause_request,
+    mark_case_paused_for_help,
     open_pause_help_request,
     pause_pending_for,
     read_pause_request,
@@ -4053,21 +4055,8 @@ def _pause_hand_off_for_person(
         base=None,
         now=now,
     )
-    pivot.status = TestRunTestCaseStatus.NEED_HELP
-    pivot.blocked_reason = ""
-    pivot.result = help_request.ask
-    pivot.finished_at = None
-    pivot.save(
-        update_fields=[
-            "status",
-            "blocked_reason",
-            "result",
-            "finished_at",
-            "execution_checkpoint",
-            *PAUSE_REQUEST_FIELDS,
-            "updated_at",
-        ]
-    )
+    mark_case_paused_for_help(pivot, help_request)
+    pivot.save(update_fields=["execution_checkpoint", *PAUSED_CASE_FIELDS])
     test_run.status = TestRunStatus.PAUSED
     test_run.save(update_fields=["status", "updated_at"])
 

@@ -76,7 +76,8 @@ def _open_locked(help_request_id: int) -> _Outcome | None:
         CaseHelpRequest.objects.select_related(
             "test_run_test_case__test_run", "paused_by"
         )
-        .defer("test_run_test_case__logs", "test_run_test_case__execution_checkpoint")
+        # The checkpoint stays: the case status broadcast reads its steps.
+        .defer("test_run_test_case__logs")
         .filter(pk=help_request_id)
         .first()
     )

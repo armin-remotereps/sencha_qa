@@ -663,7 +663,7 @@
   {% include "projects/includes/_test_case_refresh_dialog.html" with project=project next_url=case_detail_url csrf_token=csrf_token only %}
   {% endif %}
 
-  {% if pause_panel.can_pause %}
+  {% if pause_panel.can_pause and project_can_write %}
   {% include "projects/includes/_case_pause_dialog.html" with project=project test_run=test_run pivot=pivot next=case_detail_url csrf_token=csrf_token only %}
   {% endif %}
 
@@ -997,7 +997,12 @@ document.addEventListener('alpine:init', () => {
     // server to open the discussion, then follows `discussion_url`.
     pausePending: {{ pause_panel.pause_pending|yesno:"true,false" }},
     pauseRequestedBy: '{{ pause_panel.pause_requested_by_label|escapejs }}',
-    awaitingDiscussion: {% if pause_panel.pause_pending or pause_panel.pause_message_state == "pending" %}true{% else %}false{% endif %},
+    // Also set by `?discussion=1` (the pause view's redirect after a waiting
+    // person step paused at once, and this page's own fallback reload).
+    awaitingDiscussion: {% if pause_panel.pause_pending or pause_panel.pause_message_state == "pending" %}true{% else %}new URLSearchParams(window.location.search).has('discussion'){% endif %},
+    // The discussion page once the server opened it ("" before).
+    openedDiscussionUrl: '{% if pause_panel.discussion_thread_id and pause_panel.pause_message_state == "sent" or pause_panel.discussion_thread_id and pause_panel.pause_message_state == "refused" %}{% url 'machine_setup:thread' project.id pause_panel.discussion_thread_id %}{% endif %}',
+    discussionFallback: null,
 
     badgeClass(status) {
       return {
@@ -1106,6 +1111,12 @@ document.addEventListener('alpine:init', () => {
     },
 
     init() {
+      // The discussion opened before this page (re)loaded: follow it now.
+      if (this.awaitingDiscussion && this.openedDiscussionUrl) {
+        // replace(): Back from the discussion must not bounce here again.
+        window.location.replace(this.openedDiscussionUrl);
+        return;
+      }
       const ws = new WebSocket(punkHazard.wsUrl('/ws/projects/{{ project.id }}/test-runs/cases/{{ pivot.id }}/'));
 
       ws.onmessage = (event) => {
@@ -1155,8 +1166,24 @@ document.addEventListener('alpine:init', () => {
             window.location.assign(url);
             return;
           }
+          if (this.awaitingDiscussion && data.status === 'need_help') {
+            // Paused: the discussion URL follows once the server opened it.
+            // Fall back to a reload that still follows it if that event is
+            // missed.
+            this.status = data.status;
+            this.pausePending = false;
+            if (!this.discussionFallback) {
+              this.discussionFallback = setTimeout(() => {
+                window.location.replace(window.location.pathname + '?discussion=1');
+              }, 15000);
+            }
+            return;
+          }
+          // A pending pause lost to the verdict: the "Too late to pause"
+          // notice is server-rendered.
+          const finishedWhilePausing = this.pausePending && ['success', 'failed', 'blocked', 'cancelled'].includes(data.status);
           const reloadOn = ['need_help', 'awaiting_person', 'needs_retest'];
-          if (reloadOn.includes(data.status) || reloadOn.includes(this.status)) {
+          if (finishedWhilePausing || reloadOn.includes(data.status) || reloadOn.includes(this.status)) {
             // The help, Your turn and Needs re-test cards are server-rendered
             // (as are the header's re-test and send buttons): reload when
             // the case pauses, is resolved, its auto-fix ends (a need_help ->

@@ -158,6 +158,13 @@ class HelpPanel:
         return self.request.is_open
 
     @property
+    def choose_continue_mode(self) -> bool:
+        """Continue shows the mode choice: several modes, or the stored one
+        is not allowed (a checkpoint that no longer parses)."""
+        choices = self.continue_mode_choices
+        return len(choices) > 1 or (bool(choices) and choices[0] != self.continue_mode)
+
+    @property
     def can_continue(self) -> bool:
         """Continue needs the machine: refused while a gate fails."""
         return self.request.is_open and not self.blockers

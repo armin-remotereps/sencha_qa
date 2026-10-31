@@ -61,7 +61,9 @@ def open_help_chat(
     thread, brief_row = _open_thread(project=project, pivot_id=pivot.pk, user=user)
     created = brief_row is not None
     if brief_row is not None:
-        _broadcast_brief(brief_row)
+        # After commit: a caller's outer transaction may still roll it back.
+        row: SetupMessage = brief_row
+        transaction.on_commit(lambda: _broadcast_brief(row))
     first = text.strip()
     if not first:
         if not created and thread.kind == SetupConversationKind.CASE_HELP:
@@ -75,7 +77,11 @@ def open_help_chat(
         # A person sent a message by hand: a pause message the server could
         # not send is no longer offered for a re-send.
         CaseHelpRequest.objects.filter(
-            pk=thread.help_request_id, pause_message_state=PauseMessageState.REFUSED
+            pk=thread.help_request_id,
+            pause_message_state__in=(
+                PauseMessageState.REFUSED,
+                PauseMessageState.DROPPED,
+            ),
         ).update(pause_message_state=PauseMessageState.SENT, pause_message_note="")
     return thread
 
