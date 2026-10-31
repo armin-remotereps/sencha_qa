@@ -13,6 +13,7 @@ from machine_setup.payloads import (
     SetupScreenshotPayload,
     SetupTurnPayload,
 )
+from projects.runner_person_step_push import nudge_runner_person_steps
 
 
 def setup_group(project_id: int) -> str:
@@ -30,6 +31,8 @@ def _send(project_id: int, event: dict[str, object]) -> None:
 
 def broadcast_message(project_id: int, payload: SetupMessagePayload) -> None:
     _send(project_id, {"type": "machine_setup.message", "message": payload})
+    # The Test Runner window shows help discussions (coalesced by its consumer).
+    nudge_runner_person_steps(project_id)
 
 
 def broadcast_screenshot(
@@ -47,6 +50,7 @@ def broadcast_screenshot(
 
 def broadcast_turn(project_id: int, payload: SetupTurnPayload) -> None:
     _send(project_id, {"type": "machine_setup.turn", "turn": payload})
+    nudge_runner_person_steps(project_id)
 
 
 def broadcast_reset(project_id: int) -> None:
@@ -56,3 +60,4 @@ def broadcast_reset(project_id: int) -> None:
 def broadcast_help(project_id: int, payload: HelpThreadPayload) -> None:
     """The help panel of a help thread changed (draft or the agent's suggestion)."""
     _send(project_id, {"type": "machine_setup.help", "help": payload})
+    nudge_runner_person_steps(project_id)

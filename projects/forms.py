@@ -10,7 +10,12 @@ from django.forms import BaseForm
 from django.http import QueryDict
 from django.utils.text import Truncator
 
-from controller_client.protocol import MAX_VERSION_LENGTH, PersonStepActionKind
+from controller_client.protocol import (
+    MAX_VERSION_LENGTH,
+    PERSON_CHAT_TEXT_MAX_CHARS,
+    PersonHelpActionKind,
+    PersonStepActionKind,
+)
 from projects.case_checkpoint_services import ResumeStepOption
 from projects.models import (
     HELP_NOTE_MAX_LENGTH,
@@ -615,6 +620,69 @@ class RunnerPersonStepQuestionForm(forms.Form):
     # The round the window showed; ``CasePersonStep.round`` is a small int.
     round = forms.IntegerField(min_value=1, max_value=_MAX_SMALLINT)
     question = _WireTextField(max_length=PERSON_STEP_QUESTION_MAX_LENGTH, strip=True)
+
+
+class RunnerCasePauseForm(forms.Form):
+    """A person's pause of a case sent from the Test Runner window.
+
+    Fed from the ``case_pause_action`` message (not a rendered form). The same
+    message rule as the web pause dialog; an over-long message is refused.
+    """
+
+    pivot_id = forms.IntegerField(min_value=1, max_value=_MAX_BIGINT)
+    message = _WireTextField(
+        required=False, max_length=PAUSE_MESSAGE_MAX_LENGTH, strip=True
+    )
+
+
+class RunnerChatSendForm(forms.Form):
+    """A person's discussion turn sent from the Test Runner window.
+
+    Fed from the ``person_chat_send`` message (not a rendered form); the same
+    limit as a web help-chat message (``SETUP_MESSAGE_MAX_LENGTH``, restated
+    by the protocol).
+    """
+
+    pivot_id = forms.IntegerField(min_value=1, max_value=_MAX_BIGINT)
+    # The open request the window showed; a stale card is refused.
+    help_request_id = forms.IntegerField(min_value=1, max_value=_MAX_BIGINT)
+    text = _WireTextField(max_length=PERSON_CHAT_TEXT_MAX_CHARS, strip=True)
+
+
+class RunnerHelpActionForm(forms.Form):
+    """A person's help resolution sent from the Test Runner window.
+
+    Fed from the ``person_help_action`` message (not a rendered form). The
+    same fields as ``CaseHelpResolutionForm``; ``continue_mode``,
+    ``plan_revision_id`` and ``use_plan_revision`` apply to Continue only.
+    """
+
+    pivot_id = forms.IntegerField(min_value=1, max_value=_MAX_BIGINT)
+    help_request_id = forms.IntegerField(min_value=1, max_value=_MAX_BIGINT)
+    action = forms.ChoiceField(
+        choices=[(kind.value, kind.value) for kind in PersonHelpActionKind]
+    )
+    note = _WireTextField(required=False, max_length=HELP_NOTE_MAX_LENGTH, strip=True)
+    continue_mode = forms.ChoiceField(
+        required=False,
+        choices=HelpContinueMode.choices,
+        error_messages={"invalid_choice": "Choose how the case continues."},
+    )
+    # 0 (or absent): no redesign was shown.
+    plan_revision_id = forms.IntegerField(
+        required=False, min_value=0, max_value=_MAX_BIGINT
+    )
+    use_plan_revision = forms.BooleanField(required=False)
+
+    def clean(self) -> dict[str, Any]:
+        cleaned_data = super().clean() or {}
+        if cleaned_data.get("action") != PersonHelpActionKind.CONTINUE:
+            cleaned_data["continue_mode"] = ""
+            cleaned_data["plan_revision_id"] = None
+            cleaned_data["use_plan_revision"] = False
+        elif not cleaned_data.get("plan_revision_id"):
+            cleaned_data["plan_revision_id"] = None
+        return cleaned_data
 
 
 class HelpReturnForm(forms.Form):
