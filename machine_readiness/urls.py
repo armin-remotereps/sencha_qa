@@ -16,4 +16,16 @@ urlpatterns: list[URLPattern] = [
         name="artifacts_version_restore",
     ),
     path("intake/skip/", views.intake_skip, name="intake_skip"),
+    path("scan/", views.scan, name="scan"),
+    path("requirements/", views.requirements, name="requirements"),
+    path(
+        "requirements/analyse/",
+        views.requirements_analyse,
+        name="requirements_analyse",
+    ),
+    path(
+        "requirements/<int:requirement_id>/",
+        views.requirement_update,
+        name="requirement_update",
+    ),
 ]

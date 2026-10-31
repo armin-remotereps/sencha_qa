@@ -1,4 +1,4 @@
-"""Forms of the Machine readiness tab (artifacts profile edit)."""
+"""Forms of the Machine readiness tab (artifacts profile, requirements)."""
 
 from __future__ import annotations
 
@@ -19,8 +19,13 @@ from machine_readiness.models import (
     PROFILE_CHANGE_SUMMARY_MAX_LENGTH,
     PROFILE_MAX_ITEMS,
     PROFILE_NOTES_MAX_LENGTH,
+    REQUIREMENT_CHECK_TARGET_MAX_LENGTH,
+    REQUIREMENT_STATUS_DETAIL_MAX_LENGTH,
+    REQUIREMENT_TITLE_MAX_LENGTH,
     ArtifactKind,
     ArtifactOs,
+    RequirementKind,
+    RequirementStatus,
 )
 from machine_readiness.profile_rules import glob_error, validate_base_dir
 from machine_readiness.types import ProfileData, ProfileItemData
@@ -246,4 +251,55 @@ def profile_data_from_forms(
         base_dir_linux=form.cleaned_data["base_dir_linux"],
         notes=form.cleaned_data["notes"],
         items=formset.items(),
+    )
+
+
+# The hidden ``action`` of a requirement row's POST: which form it carries.
+REQUIREMENT_ACTION_EDIT = "edit"
+REQUIREMENT_ACTION_STATUS = "status"
+
+
+class Stage0RequirementForm(forms.Form):
+    """A person's edit of a requirement's definition (key and conflicts kept)."""
+
+    title = forms.CharField(
+        max_length=REQUIREMENT_TITLE_MAX_LENGTH,
+        widget=forms.TextInput(attrs={"class": "input"}),
+    )
+    kind = forms.ChoiceField(
+        choices=RequirementKind.choices,
+        widget=forms.Select(attrs={"class": "select"}),
+    )
+    check_target = forms.CharField(
+        required=False,
+        max_length=REQUIREMENT_CHECK_TARGET_MAX_LENGTH,
+        widget=forms.TextInput(
+            attrs={
+                "class": "input",
+                "placeholder": "App name, path or artifact key",
+                "spellcheck": "false",
+            }
+        ),
+    )
+    install_hint = forms.CharField(
+        required=False,
+        max_length=INSTALL_HINT_MAX_LENGTH,
+        widget=forms.Textarea(attrs={"class": "textarea", "rows": 2}),
+    )
+    ignored = forms.BooleanField(required=False)
+
+
+class RequirementStatusForm(forms.Form):
+    """A person's status for one requirement, with optional evidence."""
+
+    status = forms.ChoiceField(
+        choices=RequirementStatus.choices,
+        widget=forms.Select(attrs={"class": "select"}),
+    )
+    detail = forms.CharField(
+        required=False,
+        max_length=REQUIREMENT_STATUS_DETAIL_MAX_LENGTH,
+        widget=forms.TextInput(
+            attrs={"class": "input", "placeholder": "How you know (optional)"}
+        ),
     )

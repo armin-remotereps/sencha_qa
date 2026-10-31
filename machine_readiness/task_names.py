@@ -8,3 +8,5 @@ A leaf module (no imports): ``projects`` enqueues these with
 from __future__ import annotations
 
 ANALYSE_PRECONDITIONS = "machine_readiness.tasks.analyse_preconditions_task"
+SCAN_ARTIFACTS = "machine_readiness.tasks.scan_artifacts_task"
+QUICK_CHECK = "machine_readiness.tasks.quick_check_task"

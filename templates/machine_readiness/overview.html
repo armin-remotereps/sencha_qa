@@ -12,15 +12,16 @@
      provenance     — ProfileProvenance, or None while intake is pending
      versions       — Sequence[ProfileVersionRow], newest first
      intake_pending — no profile row yet: Machine setup asks about artifacts first
-     inventory      — None until the scan step (then: inventory summary without entries)
-     matches        — None until the scan step (Sequence[ArtifactMatch])
-     runner_os      — None until the scan step
-     scan_available — False until the scan step
-     gap_report     — None until the gap report step
+     inventory      — InventorySummary of the runner OS's last scan (no entries), or None
+     matches        — Sequence[MatchRow] (profile items against that inventory)
+     runner_os      — the runner's OS label ("Windows", ...), "" when unknown
+     scan_available — a scan can be queued now
+     scan_reason    — why not ("" when available)
+     gap_report     — GapReport of the whole project (machine_readiness.services.gap_report)
      project_can_write (context processor) — false hides Edit, Skip intake and Restore
 
-   Extension points: the scan and gap report step fills the
-   "readiness_inventory" and "readiness_gaps" blocks below. {% endcomment %}
+   Blocks "readiness_inventory" and "readiness_gaps" hold the scan and the
+   gap report. {% endcomment %}
 {% block title %}Machine readiness · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
 {% block breadcrumb_extra %}
@@ -44,6 +45,10 @@
 {% endblock %}
 
 {% block project_content %}
+<nav class="mr-subnav" aria-label="Machine readiness sections">
+  <a href="{% url 'machine_readiness:overview' project_id=project.id %}" aria-current="page">Artifacts and gaps</a>
+  <a href="{% url 'machine_readiness:requirements' project_id=project.id %}">Requirements</a>
+</nav>
 <div class="stack">
   {% if intake_pending %}
   <div class="alert alert-info mr-intake">
@@ -172,11 +177,67 @@
   <section class="card" aria-labelledby="mr-inventory-title">
     <div class="card-header">
       <h2 id="mr-inventory-title">Inventory</h2>
+      {% if project_can_write %}
+      <form method="post" action="{% url 'machine_readiness:scan' project_id=project.id %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-secondary btn-sm"{% if not scan_available %} disabled aria-describedby="mr-scan-reason"{% endif %}>Scan base directory</button>
+      </form>
+      {% endif %}
     </div>
-    <div class="empty">
-      <h3>Inventory and gaps are coming</h3>
-      <p>A listing of the base directory on the test machine, matched against the artifacts above, will show here.</p>
-    </div>
+    {% if not scan_available and scan_reason %}<p class="hint" id="mr-scan-reason">{{ scan_reason }}</p>{% endif %}
+
+    {% if inventory %}
+      <dl class="kv">
+        <div><dt>Test machine OS</dt><dd>{{ inventory.os_label }}</dd></div>
+        <div><dt>Base directory</dt><dd class="mr-path">{{ inventory.base_dir }}</dd></div>
+        <div><dt>Scanned</dt><dd>{{ inventory.scanned_at|date:"M j, Y, H:i" }}{% if inventory.host %} on <span class="mr-path">{{ inventory.host }}</span>{% endif %}{% if inventory.scanned_by_name %} · {{ inventory.scanned_by_name }}{% endif %}{% if inventory.source_label %} · {{ inventory.source_label }}{% endif %}</dd></div>
+        <div><dt>Entries</dt><dd>{{ inventory.entry_count }}{% if inventory.truncated %} <span class="badge badge-warning">Cut short</span>{% endif %}{% if inventory.permission_errors %} · {{ inventory.permission_errors }} folder{{ inventory.permission_errors|pluralize }} could not be read{% endif %}</dd></div>
+      </dl>
+      {% if inventory.error %}
+        <div class="alert alert-warning"><p><strong>The scan failed.</strong> <span class="mr-path">{{ inventory.error }}</span></p></div>
+      {% endif %}
+
+      {% if matches %}
+        <h3 class="mr-subtitle">Artifacts on the test machine</h3>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Artifact</th>
+                <th scope="col">Status</th>
+                <th scope="col">Version</th>
+                <th scope="col">Found at</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in matches %}
+              <tr>
+                <td data-label="Artifact" class="cell-primary"><strong>{{ row.name }}</strong><div class="muted small mr-path">{{ row.key }}</div></td>
+                <td data-label="Status">
+                  <span class="badge {% if row.status == 'found' %}badge-passed{% elif row.status == 'missing' %}badge-failed{% elif row.status == 'version_mismatch' %}badge-warning{% else %}badge-draft{% endif %}">{{ row.status_label }}</span>
+                  {% if row.detail %}<div class="small muted mr-hint">{{ row.detail }}</div>{% endif %}
+                </td>
+                <td data-label="Version">
+                  {% if row.found_version %}{{ row.found_version }}{% elif row.candidates %}<span class="muted">{{ row.candidates }}</span>{% else %}—{% endif %}
+                  {% if row.expected_version %}<div class="small muted">expected {{ row.expected_version }}</div>{% endif %}
+                </td>
+                <td data-label="Found at">
+                  {% for path in row.paths %}<div class="small mr-path">{{ path }}</div>{% empty %}—{% endfor %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% elif not inventory.error %}
+        <p class="muted">No artifacts with a path in the profile to match against.</p>
+      {% endif %}
+    {% else %}
+      <div class="empty">
+        <h3>Not scanned yet</h3>
+        <p>{% if runner_os %}No inventory of the {{ runner_os }} base directory yet.{% else %}The Test Runner has not reported its OS yet.{% endif %} A scan lists the base directory on the test machine (no AI involved) and matches it against the artifacts above.</p>
+      </div>
+    {% endif %}
   </section>
   {% endblock %}
 
@@ -184,8 +245,76 @@
   <section class="card" aria-labelledby="mr-gaps-title">
     <div class="card-header">
       <h2 id="mr-gaps-title">Gaps</h2>
+      {% if gap_report.gap_count %}<span class="card-header-count">{{ gap_report.gap_count }}</span>{% endif %}
     </div>
-    <p class="muted">Missing artifacts, apps to install and version mismatches will be listed here once the base directory has been scanned.</p>
+    <p class="hint">
+      {{ gap_report.present_count }} of {{ gap_report.requirement_count }} stage-0 requirement{{ gap_report.requirement_count|pluralize }} present{% if gap_report.runner_host %} on <span class="mr-path">{{ gap_report.runner_host }}</span>{% endif %}.
+      {% if gap_report.unanalysed_cases %}{{ gap_report.unanalysed_cases }} case{{ gap_report.unanalysed_cases|pluralize }} not analysed yet — see <a href="{% url 'machine_readiness:requirements' project_id=project.id %}">Requirements</a>.{% endif %}
+    </p>
+
+    {% if not gap_report.gap_count and not gap_report.unknown_count %}
+      <p class="muted">No gaps recorded.</p>
+    {% else %}
+      {% if gap_report.missing_artifacts %}
+      <h3 class="mr-subtitle">Missing artifacts</h3>
+      <ul class="mr-gap-list">
+        {% for gap in gap_report.missing_artifacts %}
+        <li><strong>{{ gap.name }}</strong> <span class="muted small mr-path">{{ gap.key }}</span>{% if gap.path_pattern %} · <span class="mr-path small">{{ gap.path_pattern }}</span>{% endif %}{% if gap.expected_version %} · expected {{ gap.expected_version }}{% endif %}{% if gap.source %}<div class="small muted">From {{ gap.source }}</div>{% endif %}{% if gap.install_hint %}<div class="small pre-wrap mr-hint">{{ gap.install_hint }}</div>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if gap_report.apps_to_install %}
+      <h3 class="mr-subtitle">Apps to install</h3>
+      <ul class="mr-gap-list">
+        {% for gap in gap_report.apps_to_install %}
+        <li><strong>{{ gap.title }}</strong>{% if gap.check_target %} · <span class="mr-path small">{{ gap.check_target }}</span>{% endif %}{% if gap.status_detail %}<div class="small muted">{{ gap.status_detail }}</div>{% endif %}{% if gap.install_hint %}<div class="small pre-wrap mr-hint">{{ gap.install_hint }}</div>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if gap_report.missing_requirements %}
+      <h3 class="mr-subtitle">Other missing requirements</h3>
+      <ul class="mr-gap-list">
+        {% for gap in gap_report.missing_requirements %}
+        <li><strong>{{ gap.title }}</strong> <span class="chip">{{ gap.kind_label }}</span>{% if gap.check_target %} · <span class="mr-path small">{{ gap.check_target }}</span>{% endif %}{% if gap.status_detail %}<div class="small muted">{{ gap.status_detail }}</div>{% endif %}{% if gap.install_hint %}<div class="small pre-wrap mr-hint">{{ gap.install_hint }}</div>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if gap_report.artifact_mismatches or gap_report.requirement_mismatches %}
+      <h3 class="mr-subtitle">Version mismatches</h3>
+      <ul class="mr-gap-list">
+        {% for gap in gap_report.artifact_mismatches %}
+        <li><strong>{{ gap.name }}</strong> <span class="muted small mr-path">{{ gap.key }}</span> · expected {{ gap.expected_version }}{% if gap.candidates %}, found {{ gap.candidates }}{% endif %}{% if gap.install_hint %}<div class="small pre-wrap mr-hint">{{ gap.install_hint }}</div>{% endif %}</li>
+        {% endfor %}
+        {% for gap in gap_report.requirement_mismatches %}
+        <li><strong>{{ gap.title }}</strong>{% if gap.check_target %} · <span class="mr-path small">{{ gap.check_target }}</span>{% endif %}{% if gap.status_detail %}<div class="small muted">{{ gap.status_detail }}</div>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if gap_report.conflicts %}
+      <h3 class="mr-subtitle">Conflicting requirements</h3>
+      <ul class="mr-gap-list">
+        {% for conflict in gap_report.conflicts %}
+        <li><strong>{{ conflict.first_title }}</strong> cannot be in place together with <strong>{{ conflict.second_title }}</strong></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if gap_report.unknown_artifacts or gap_report.unknown_requirements %}
+      <h3 class="mr-subtitle">Unknown</h3>
+      <ul class="mr-gap-list">
+        {% for gap in gap_report.unknown_artifacts %}
+        <li><strong>{{ gap.name }}</strong> <span class="muted small mr-path">{{ gap.key }}</span>{% if gap.detail %}<div class="small muted">{{ gap.detail }}</div>{% endif %}</li>
+        {% endfor %}
+        {% for gap in gap_report.unknown_requirements %}
+        <li><strong>{{ gap.title }}</strong> <span class="chip">{{ gap.kind_label }}</span>{% if gap.how_to_check %}<div class="small muted">{{ gap.how_to_check }}</div>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    {% endif %}
   </section>
   {% endblock %}
 </div>

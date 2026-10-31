@@ -1,0 +1,164 @@
+{% extends "layouts/project.html" %}
+
+{% comment %} Machine readiness › Requirements: the stage 0 the cases' preconditions need,
+   grouped by case, and the requirements with their recorded statuses.
+
+   Context contract (machine_readiness.views.requirements):
+     project           — current Project
+     active_tab        — "machine_readiness"
+     groups            — Sequence[Stage0Group] (largest first, unanalysed last)
+     requirements      — Page[Stage0Requirement] (50 per page)
+     requirement_rows  — list of (requirement, Stage0RequirementForm, RequirementStatusForm)
+     page_obj, elided_page_range — the page links
+     unanalysed_count  — cases whose preconditions have no analysis yet
+     analysis_running  — an analysis holds the project's lock
+     action_edit, action_status — values of the hidden "action" field
+     project_can_write (context processor) — false hides Analyse and the edit forms {% endcomment %}
+{% block title %}Requirements · Machine readiness · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumb_extra %}
+  <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'machine_readiness:overview' project_id=project.id %}">Machine readiness</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Requirements</span>
+{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>Stage-0 requirements</h1>
+    <p class="subtitle">What the test cases' preconditions assume is on the test machine, and what is known about it.</p>
+  </div>
+  {% if project_can_write %}
+  <div class="actions">
+    <form method="post" action="{% url 'machine_readiness:requirements_analyse' project_id=project.id %}">
+      {% csrf_token %}
+      <button type="submit" class="btn btn-primary"{% if analysis_running %} disabled{% endif %}>{% if analysis_running %}Analysing…{% else %}Analyse preconditions{% endif %}</button>
+    </form>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block project_content %}
+<nav class="mr-subnav" aria-label="Machine readiness sections">
+  <a href="{% url 'machine_readiness:overview' project_id=project.id %}">Artifacts and gaps</a>
+  <a href="{% url 'machine_readiness:requirements' project_id=project.id %}" aria-current="page">Requirements</a>
+</nav>
+<div class="stack">
+  {% if analysis_running %}
+  <div class="alert alert-info"><p>The preconditions are being analysed. Reload this page in a few minutes.</p></div>
+  {% elif unanalysed_count %}
+  <div class="alert alert-warning"><p><strong>{{ unanalysed_count }} case{{ unanalysed_count|pluralize }} not analysed yet.</strong> Their preconditions have not been turned into requirements.{% if project_can_write %} Press Analyse preconditions (one AI call per batch of distinct texts; texts already analysed are never sent again).{% endif %}</p></div>
+  {% endif %}
+
+  <section class="card" aria-labelledby="mr-groups-title">
+    <div class="card-header">
+      <h2 id="mr-groups-title">Case groups</h2>
+      {% if groups %}<span class="card-header-count">{{ groups|length }}</span>{% endif %}
+    </div>
+    <p class="hint">Cases whose preconditions need the same stage 0 share a group.</p>
+    {% if groups %}
+      <ul class="mr-gap-list">
+        {% for group in groups %}
+        <li>
+          <strong>{{ group.case_count }} case{{ group.case_count|pluralize }}</strong>
+          {% if not group.analysed %}
+            <span class="badge badge-draft">Not analysed</span>
+          {% elif not group.requirement_keys %}
+            <span class="muted">— nothing needed on the machine</span>
+          {% else %}
+            <div class="mr-chips">{% for title in group.requirement_titles %}<span class="chip">{{ title }}</span>{% endfor %}</div>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">No test cases yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="card" aria-labelledby="mr-requirements-title">
+    <div class="card-header">
+      <h2 id="mr-requirements-title">Requirements</h2>
+      {% if requirements.paginator.count %}<span class="card-header-count">{{ requirements.paginator.count }}</span>{% endif %}
+    </div>
+    {% if requirement_rows %}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Requirement</th>
+              <th scope="col">Kind</th>
+              <th scope="col">Check target</th>
+              <th scope="col">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for requirement, edit_form, status_form in requirement_rows %}
+            <tr id="req-{{ requirement.id }}"{% if requirement.ignored %} class="mr-ignored"{% endif %}>
+              <td data-label="Requirement" class="cell-primary">
+                <strong>{{ requirement.title }}</strong>{% if requirement.ignored %} <span class="badge badge-draft">Ignored</span>{% endif %}
+                <div class="muted small mr-path">{{ requirement.key }}</div>
+                {% if requirement.install_hint %}<div class="small pre-wrap mr-hint">{{ requirement.install_hint }}</div>{% endif %}
+                {% if project_can_write %}
+                <details class="mr-req-edit">
+                  <summary>Edit</summary>
+                  <form method="post" action="{% url 'machine_readiness:requirement_update' project_id=project.id requirement_id=requirement.id %}" class="mr-req-form">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="{{ action_edit }}">
+                    <input type="hidden" name="page" value="{{ requirements.number }}">
+                    {% include "partials/form_field.html" with field=edit_form.title %}
+                    {% include "partials/form_field.html" with field=edit_form.kind %}
+                    {% include "partials/form_field.html" with field=edit_form.check_target %}
+                    {% include "partials/form_field.html" with field=edit_form.install_hint %}
+                    <label class="checkbox" for="{{ edit_form.ignored.id_for_label }}">{{ edit_form.ignored }} Ignore (not needed on this machine)</label>
+                    <button type="submit" class="btn btn-secondary btn-sm">Save requirement</button>
+                  </form>
+                  <form method="post" action="{% url 'machine_readiness:requirement_update' project_id=project.id requirement_id=requirement.id %}" class="mr-req-form">
+                    {% csrf_token %}
+                    <input type="hidden" name="action" value="{{ action_status }}">
+                    <input type="hidden" name="page" value="{{ requirements.number }}">
+                    {% include "partials/form_field.html" with field=status_form.status %}
+                    {% include "partials/form_field.html" with field=status_form.detail %}
+                    <button type="submit" class="btn btn-secondary btn-sm">Record status</button>
+                  </form>
+                </details>
+                {% endif %}
+              </td>
+              <td data-label="Kind"><span class="chip">{{ requirement.get_kind_display }}</span></td>
+              <td data-label="Check target" class="mr-path">{{ requirement.check_target|default:"—" }}</td>
+              <td data-label="Status">
+                <span class="badge {% if requirement.status == 'present' %}badge-passed{% elif requirement.status == 'missing' %}badge-failed{% elif requirement.status == 'mismatch' %}badge-warning{% else %}badge-draft{% endif %}">{{ requirement.get_status_display }}</span>
+                {% if requirement.status_detail %}<div class="small mr-hint">{{ requirement.status_detail }}</div>{% endif %}
+                {% if requirement.checked_at %}
+                  <div class="small muted">{{ requirement.get_status_source_display|default:"Recorded" }}, {{ requirement.checked_at|date:"M j, Y, H:i" }}{% if requirement.checked_host %} on <span class="mr-path">{{ requirement.checked_host }}</span>{% endif %}{% if requirement.checked_by %} · {{ requirement.checked_by.get_full_name|default:requirement.checked_by.email }}{% endif %}</div>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% if page_obj.has_other_pages %}
+      <div class="pagination-bar">
+        <p class="muted small">Showing {{ page_obj.start_index }}&ndash;{{ page_obj.end_index }} of {{ page_obj.paginator.count }}</p>
+        <nav class="pagination" aria-label="Pagination">
+          {% if page_obj.has_previous %}<a class="page-link" href="?page={{ page_obj.previous_page_number }}">Prev</a>{% else %}<span class="page-link" aria-disabled="true">Prev</span>{% endif %}
+          {% for pg in elided_page_range %}
+            {% if pg == page_obj.number %}<span class="page-link" aria-current="page">{{ pg }}</span>{% elif pg == "…" %}<span class="muted small">&hellip;</span>{% else %}<a class="page-link" href="?page={{ pg }}">{{ pg }}</a>{% endif %}
+          {% endfor %}
+          {% if page_obj.has_next %}<a class="page-link" href="?page={{ page_obj.next_page_number }}">Next</a>{% else %}<span class="page-link" aria-disabled="true">Next</span>{% endif %}
+        </nav>
+      </div>
+      {% endif %}
+    {% else %}
+      <div class="empty">
+        <h3>No requirements yet</h3>
+        <p>Requirements come from analysing the cases' preconditions, from Machine setup, or from project members.</p>
+      </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}
