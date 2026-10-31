@@ -244,6 +244,10 @@ class SetupMessage(models.Model):
         blank=True,
         related_name="+",
     )
+    # Server-written name of a Test Runner sender ("<member> via Test Runner"
+    # or "a person at the Test Runner"); blank for web sends, which show
+    # ``author``.
+    author_label = models.CharField(max_length=255, blank=True, default="")
     text = models.TextField(blank=True, default="")
     # Server-built from reverse(), never from model text.
     link_url = models.CharField(max_length=500, blank=True, default="")

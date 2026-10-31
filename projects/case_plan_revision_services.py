@@ -260,7 +260,7 @@ def apply_plan_revision_locked(
     pivot: TestRunTestCase,
     request: CaseHelpRequest,
     revision_id: int,
-    user: CustomUser,
+    user: CustomUser | None,
 ) -> None:
     """Apply the pending draft the person saw to the locked case's checkpoint.
 

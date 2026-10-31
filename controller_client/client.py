@@ -64,7 +64,8 @@ from controller_client.executor import (
     execute_wait_for_command,
 )
 from controller_client.interactive_session import InteractiveSessionManager
-from controller_client.person_window import PersonWindow
+from controller_client.person_window import PersonCaseRequest, PersonWindow
+from controller_client.person_window_ipc import CaseRequestKind
 from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import (
     CLIENT_VERSION,
@@ -73,11 +74,14 @@ from controller_client.protocol import (
     UPDATE_STATUS_DETAIL_MAX_LENGTH,
     ActionResultPayload,
     BrowserContentResultPayload,
+    CasePauseActionPayload,
     CloseCode,
     CommandResultPayload,
     ErrorCode,
     InteractiveOutputPayload,
     MessageType,
+    PersonChatSendPayload,
+    PersonHelpActionPayload,
     PersonStepActionPayload,
     PersonStepActionResultPayload,
     PersonStepQuestionAskPayload,
@@ -94,6 +98,7 @@ from controller_client.protocol import (
     parse_browser_navigate_payload,
     parse_browser_target_payload,
     parse_browser_type_payload,
+    parse_case_pause_action_result_payload,
     parse_check_app_installed_payload,
     parse_click_payload,
     parse_close_app_payload,
@@ -105,6 +110,7 @@ from controller_client.protocol import (
     parse_inspect_paths_payload,
     parse_key_press_payload,
     parse_launch_app_payload,
+    parse_person_case_action_result_payload,
     parse_person_step_action_result_payload,
     parse_person_step_question_result_payload,
     parse_person_step_state_payload,
@@ -119,7 +125,10 @@ from controller_client.protocol import (
     peek_request_id,
     peek_update_id,
     scan_directory_result_to_json,
+    serialize_case_pause_action,
     serialize_message,
+    serialize_person_chat_send,
+    serialize_person_help_action,
     serialize_person_step_action,
     serialize_person_step_question,
 )
@@ -153,6 +162,9 @@ PERSON_STEP_ANSWER_TIMEOUT_SECONDS: Final[float] = 30.0
 # comes later in a snapshot). Its own slot: questions and answers never wait
 # for each other.
 PERSON_STEP_QUESTION_TIMEOUT_SECONDS: Final[float] = 30.0
+# The same for a pause, a discussion message or a help resolution from the
+# window (one slot per kind).
+PERSON_CASE_REQUEST_TIMEOUT_SECONDS: Final[float] = 30.0
 # Messages that never touch or capture the screen, so the person step window
 # stays up while they are handled. Every other message is an agent action and
 # runs with the window hidden (it must never be in a screenshot, the vision
@@ -163,6 +175,8 @@ _WINDOW_SAFE_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
         MessageType.PERSON_STEP_STATE,
         MessageType.PERSON_STEP_ACTION_RESULT,
         MessageType.PERSON_STEP_QUESTION_RESULT,
+        MessageType.CASE_PAUSE_ACTION_RESULT,
+        MessageType.PERSON_CASE_ACTION_RESULT,
         MessageType.UPDATE_RUNNER,
         # Read-only file system inventory; nothing on screen changes.
         MessageType.SCAN_DIRECTORY,
@@ -195,6 +209,12 @@ _QUESTION_BUSY: Final[str] = "Your previous question is still being sent; wait f
 _QUESTION_UNAVAILABLE: Final[str] = (
     "Asking the AI is not available on this server; ask on Punk Hazard."
 )
+# What each case request is called in the window's messages.
+_CASE_REQUEST_NOUNS: Final[dict[CaseRequestKind, str]] = {
+    CaseRequestKind.PAUSE: "pause",
+    CaseRequestKind.CHAT: "message",
+    CaseRequestKind.HELP: "decision",
+}
 
 MessageHandler: TypeAlias = Callable[
     [str, dict[str, object]], Coroutine[Any, Any, None]
@@ -210,6 +230,26 @@ def _answer_failed(message: str) -> PersonStepActionResultPayload:
 
 def _question_failed(message: str) -> PersonStepQuestionResultPayload:
     return PersonStepQuestionResultPayload(ok=False, message=message)
+
+
+def _case_request_kind(request: PersonCaseRequest) -> CaseRequestKind:
+    match request:
+        case CasePauseActionPayload():
+            return CaseRequestKind.PAUSE
+        case PersonChatSendPayload():
+            return CaseRequestKind.CHAT
+        case PersonHelpActionPayload():
+            return CaseRequestKind.HELP
+
+
+def _serialize_case_request(request: PersonCaseRequest, request_id: str) -> str:
+    match request:
+        case CasePauseActionPayload():
+            return serialize_case_pause_action(request, request_id)
+        case PersonChatSendPayload():
+            return serialize_person_chat_send(request, request_id)
+        case PersonHelpActionPayload():
+            return serialize_person_help_action(request, request_id)
 
 
 def _browser_error_code(exc: Exception, fallback: ErrorCode) -> ErrorCode:
@@ -302,6 +342,12 @@ class ControllerClient:
         self._handlers[MessageType.PERSON_STEP_QUESTION_RESULT] = (
             self._handle_person_step_question_result
         )
+        self._handlers[MessageType.CASE_PAUSE_ACTION_RESULT] = (
+            self._handle_case_pause_action_result
+        )
+        self._handlers[MessageType.PERSON_CASE_ACTION_RESULT] = (
+            self._handle_person_case_action_result
+        )
         # Forwards the window's answers to the server (started by run()).
         self._answer_task: asyncio.Task[None] | None = None
         # The one answer waiting for its result: (request_id, its timeout).
@@ -311,6 +357,10 @@ class ControllerClient:
         self._question_task: asyncio.Task[None] | None = None
         self._pending_question: tuple[str, asyncio.Task[None]] | None = None
         self._questions_enabled = False
+        # Window v2: forwards pauses, discussion messages and help
+        # resolutions; one waits for its result per kind.
+        self._case_request_task: asyncio.Task[None] | None = None
+        self._pending_case: dict[CaseRequestKind, tuple[str, asyncio.Task[None]]] = {}
         self._window_pid_source: Callable[[], int | None] | None = None
         if person_window is not None:
             self._window_pid_source = lambda: person_window.pid
@@ -326,6 +376,10 @@ class ControllerClient:
             self._answer_task = asyncio.create_task(self._forward_answers(window))
         if window is not None and self._question_task is None:
             self._question_task = asyncio.create_task(self._forward_questions(window))
+        if window is not None and self._case_request_task is None:
+            self._case_request_task = asyncio.create_task(
+                self._forward_case_requests(window)
+            )
 
         while self._running:
             self._session_authenticated = False
@@ -1358,7 +1412,9 @@ class ControllerClient:
             logger.debug("Ignoring person_step_state: the window is off")
             return
         self._questions_enabled = state.questions_enabled
-        self._window.apply_state(state.steps, questions_enabled=state.questions_enabled)
+        self._window.apply_state(
+            state.steps, questions_enabled=state.questions_enabled, cases=state.cases
+        )
 
     async def _handle_person_step_action_result(
         self, request_id: str, data: dict[str, object]
@@ -1504,6 +1560,140 @@ class ControllerClient:
         if self._window is not None:
             self._window.show_question_result(result)
 
+    # Window v2: a pause (case_pause_action), a discussion message
+    # (person_chat_send) or a help resolution (person_help_action), each
+    # matched to its result by request_id; one of each kind at a time.
+
+    async def _handle_case_pause_action_result(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        if not self._case_request_waits(CaseRequestKind.PAUSE, request_id):
+            return
+        try:
+            result = parse_case_pause_action_result_payload(data)
+        except ProtocolError as e:
+            logger.warning("Invalid case_pause_action_result: %s", e)
+            self._settle_case_request(
+                CaseRequestKind.PAUSE, request_id, False, _ANSWER_UNREADABLE
+            )
+            return
+        self._settle_case_request(
+            CaseRequestKind.PAUSE, request_id, result.ok, result.message
+        )
+
+    async def _handle_person_case_action_result(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        # Shared by discussion messages and help resolutions.
+        kind = next(
+            (
+                kind
+                for kind in (CaseRequestKind.CHAT, CaseRequestKind.HELP)
+                if self._case_request_waits(kind, request_id)
+            ),
+            None,
+        )
+        if kind is None:
+            return
+        try:
+            result = parse_person_case_action_result_payload(data)
+        except ProtocolError as e:
+            logger.warning("Invalid person_case_action_result: %s", e)
+            self._settle_case_request(kind, request_id, False, _ANSWER_UNREADABLE)
+            return
+        self._settle_case_request(kind, request_id, result.ok, result.message)
+
+    def _case_request_waits(self, kind: CaseRequestKind, request_id: str) -> bool:
+        pending = self._pending_case.get(kind)
+        if pending is None or pending[0] != request_id:
+            logger.info(
+                "Ignoring a %s result nothing waits for (request_id=%s)",
+                kind.value,
+                request_id,
+            )
+            return False
+        return True
+
+    async def _forward_case_requests(self, window: PersonWindow) -> None:
+        async for request in window.case_requests():
+            kind = _case_request_kind(request)
+            try:
+                await self._send_case_request(window, kind, request)
+            except Exception:
+                logger.exception("Could not send the person's %s", kind.value)
+                window.show_case_result(
+                    kind,
+                    False,
+                    f"Not connected to Punk Hazard; your "
+                    f"{_CASE_REQUEST_NOUNS[kind]} was not sent.",
+                )
+
+    async def _send_case_request(
+        self, window: PersonWindow, kind: CaseRequestKind, request: PersonCaseRequest
+    ) -> None:
+        noun = _CASE_REQUEST_NOUNS[kind]
+        if kind in self._pending_case:
+            window.show_case_result(
+                kind, False, f"Your previous {noun} is still being sent; wait for it."
+            )
+            return
+        connection = self._connection
+        if connection is None or not self._session_authenticated:
+            window.show_case_result(
+                kind,
+                False,
+                f"Not connected to Punk Hazard; send your {noun} again once the "
+                "Test Runner reconnects.",
+            )
+            return
+        request_id = str(uuid.uuid4())
+        expiry = asyncio.create_task(self._expire_case_request(kind, request_id))
+        self._pending_case[kind] = (request_id, expiry)
+        logger.info(
+            "Sending the person's %s for run case %d", kind.value, request.pivot_id
+        )
+        try:
+            await connection.send(_serialize_case_request(request, request_id))
+        except ConnectionClosed:
+            self._settle_case_request(
+                kind, request_id, False, self._case_connection_lost(kind)
+            )
+
+    async def _expire_case_request(
+        self, kind: CaseRequestKind, request_id: str
+    ) -> None:
+        await asyncio.sleep(PERSON_CASE_REQUEST_TIMEOUT_SECONDS)
+        logger.warning(
+            "No result for the person's %s (request_id=%s)", kind.value, request_id
+        )
+        self._settle_case_request(
+            kind,
+            request_id,
+            False,
+            f"No answer from the server; check Punk Hazard whether your "
+            f"{_CASE_REQUEST_NOUNS[kind]} arrived.",
+        )
+
+    @staticmethod
+    def _case_connection_lost(kind: CaseRequestKind) -> str:
+        return (
+            "The connection to Punk Hazard was lost before it answered; check "
+            f"Punk Hazard whether your {_CASE_REQUEST_NOUNS[kind]} arrived."
+        )
+
+    def _settle_case_request(
+        self, kind: CaseRequestKind, request_id: str, ok: bool, message: str
+    ) -> None:
+        pending = self._pending_case.get(kind)
+        if pending is None or pending[0] != request_id:
+            return
+        del self._pending_case[kind]
+        expiry = pending[1]
+        if expiry is not asyncio.current_task():
+            expiry.cancel()
+        if self._window is not None:
+            self._window.show_case_result(kind, ok, message)
+
     def _on_session_ended(self) -> None:
         """The socket is gone: the window shows it, waiting requests are released."""
         pending = self._pending_answer
@@ -1513,6 +1703,10 @@ class ControllerClient:
         if pending_question is not None:
             self._settle_question(
                 pending_question[0], _question_failed(_QUESTION_CONNECTION_LOST)
+            )
+        for kind, (request_id, _expiry) in list(self._pending_case.items()):
+            self._settle_case_request(
+                kind, request_id, False, self._case_connection_lost(kind)
             )
         # The next session's first snapshot says again whether it takes them.
         self._questions_enabled = False
@@ -1524,7 +1718,7 @@ class ControllerClient:
         window = self._window
         if window is None:
             return
-        for task in (self._answer_task, self._question_task):
+        for task in (self._answer_task, self._question_task, self._case_request_task):
             if task is not None and not task.done():
                 task.cancel()
                 await asyncio.wait({task})
@@ -1536,6 +1730,9 @@ class ControllerClient:
         if pending_question is not None:
             self._pending_question = None
             pending_question[1].cancel()
+        for _request_id, expiry in self._pending_case.values():
+            expiry.cancel()
+        self._pending_case.clear()
         try:
             await window.stop()
         except Exception:

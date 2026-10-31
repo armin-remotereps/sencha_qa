@@ -102,6 +102,7 @@ from projects.models import (
     TestRunStatus,
     TestRunTestCase,
 )
+from projects.person_step_actor import PersonStepActor
 from projects.person_step_services import get_person_step_panel
 from projects.project_access import get_request_project_access
 from projects.project_access_services import get_project_access
@@ -1129,7 +1130,7 @@ def test_run_prepare_machine(
     try:
         send_setup_message(
             project=project,
-            user=request.user,
+            actor=PersonStepActor.web(request.user),
             text=prepare_machine_text(
                 run_name=test_run.display_name, run_id=test_run.id
             ),
@@ -1486,7 +1487,7 @@ def test_run_case_help_continue(
     try:
         result = continue_after_help(
             pivot=pivot,
-            user=request.user,
+            actor=PersonStepActor.web(request.user),
             note=form.cleaned_data["note"],
             plan_revision_id=form.cleaned_data["plan_revision_id"],
             use_plan_revision=form.cleaned_data["use_plan_revision"],
@@ -1511,7 +1512,9 @@ def test_run_case_help_fail(
         return _case_detail_redirect(project, pivot)
     try:
         result = mark_failed_after_help(
-            pivot=pivot, user=request.user, note=form.cleaned_data["note"]
+            pivot=pivot,
+            actor=PersonStepActor.web(request.user),
+            note=form.cleaned_data["note"],
         )
     except RunHelpError as exc:
         messages.error(request, exc.message)
@@ -1534,7 +1537,9 @@ def test_run_case_help_block(
         return _case_detail_redirect(project, pivot)
     try:
         result = mark_blocked_after_help(
-            pivot=pivot, user=request.user, note=form.cleaned_data["note"]
+            pivot=pivot,
+            actor=PersonStepActor.web(request.user),
+            note=form.cleaned_data["note"],
         )
     except RunHelpError as exc:
         messages.error(request, exc.message)

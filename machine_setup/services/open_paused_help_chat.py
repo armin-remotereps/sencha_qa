@@ -29,9 +29,11 @@ from projects.models import (
     CaseHelpRequest,
     HelpResolution,
     PauseMessageState,
+    PersonStepChannel,
     Project,
     TestRunTestCase,
 )
+from projects.person_step_actor import PersonStepActor
 from projects.project_access_services import get_project_access
 from projects.services import broadcast_case_status
 
@@ -101,14 +103,17 @@ def _open_locked(help_request_id: int) -> _Outcome | None:
         _set_state(help_request_id, PauseMessageState.DROPPED)
         return _Outcome(pivot, PauseMessageState.DROPPED, None)
 
-    user = _writable_member(project.pk, request.paused_by)
-    if user is None:
+    actor = _pauser(project.pk, request)
+    if actor is None:
         _set_state(help_request_id, PauseMessageState.REFUSED, note=NO_MEMBER_NOTE)
         return _Outcome(pivot, PauseMessageState.REFUSED, _thread_id(help_request_id))
 
     try:
         thread = open_help_chat(
-            project=project, pivot=pivot, user=user, text=request.pause_message
+            project=project,
+            pivot=pivot,
+            actor=actor,
+            text=request.pause_message,
         )
     except HelpChatSendRefusedError as exc:
         _set_state(help_request_id, PauseMessageState.REFUSED, note=exc.message)
@@ -118,6 +123,22 @@ def _open_locked(help_request_id: int) -> _Outcome | None:
         return _Outcome(pivot, PauseMessageState.DROPPED, None)
     _set_state(help_request_id, PauseMessageState.SENT)
     return _Outcome(pivot, PauseMessageState.SENT, thread.pk)
+
+
+def _pauser(project_id: int, request: CaseHelpRequest) -> PersonStepActor | None:
+    """Who the message is sent as; None when nobody can send it.
+
+    A web pause needs the pauser to be still a writable member. A Test Runner
+    pause is sent as "<member> via Test Runner" while the member still is
+    one, else as the anonymous "a person at the Test Runner", like a
+    discussion turn sent from the runner window.
+    """
+    member = _writable_member(project_id, request.paused_by)
+    if request.paused_via == PersonStepChannel.RUNNER:
+        return PersonStepActor.runner(member)
+    if member is None:
+        return None
+    return PersonStepActor.web(member)
 
 
 def _writable_member(project_id: int, user: CustomUser | None) -> CustomUser | None:

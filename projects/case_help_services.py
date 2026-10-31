@@ -83,6 +83,7 @@ from projects.models import (
     TestRunTestCase,
     TestRunTestCaseStatus,
 )
+from projects.person_step_actor import PersonStepActor
 from projects.run_reopen_services import (
     list_wake_blockers,
     lock_project_and_run,
@@ -362,7 +363,7 @@ def format_help_action_message(verb: str, result: HelpActionResult) -> str:
 def continue_after_help(
     *,
     pivot: TestRunTestCase,
-    user: CustomUser,
+    actor: PersonStepActor,
     note: str,
     plan_revision_id: int | None = None,
     use_plan_revision: bool = True,
@@ -389,6 +390,9 @@ def continue_after_help(
     A person step a fault left open (Human in the loop) is cancelled unless
     the checkpoint keeps its key (``_write_help_key``): the step is handed out
     afresh, not as a rejected report.
+
+    ``actor``: the person on the web, or at the project's Test Runner (a
+    member, or anonymous: then nothing is credited or recorded).
     """
     with transaction.atomic():
         project, test_run = _lock_paused_run(pivot.test_run_id)
@@ -424,7 +428,7 @@ def continue_after_help(
                 pivot=locked_pivot,
                 request=request,
                 revision_id=plan_revision_id,
-                user=user,
+                user=actor.user,
             )
         else:
             pending_id = pending_revision_id_locked(request)
@@ -436,7 +440,7 @@ def continue_after_help(
         _resolve(
             request,
             HelpResolution.CONTINUED,
-            user,
+            actor,
             note,
             now,
             auto_fix_live,
@@ -448,12 +452,12 @@ def continue_after_help(
             request.save(update_fields=["continue_mode"])
         _set_continue_pending(locked_pivot, request, "human")
         if read_checkpoint_person_step(locked_pivot.execution_checkpoint) is None:
-            _cancel_person_steps(person_step_ids, PersonStepClose.OPEN, user, now)
+            _cancel_person_steps(person_step_ids, PersonStepClose.OPEN, actor, now)
         return _queue_or_wait(test_run, request, locked_pivot, auto_fix_live)
 
 
 def mark_failed_after_help(
-    *, pivot: TestRunTestCase, user: CustomUser, note: str
+    *, pivot: TestRunTestCase, actor: PersonStepActor, note: str
 ) -> HelpActionResult:
     """A person judges the case Failed; the rest of the run continues."""
     with transaction.atomic():
@@ -465,12 +469,12 @@ def mark_failed_after_help(
         auto_fix_live = auto_fix_turn_live(request.pk)
         note = _cap_note(note)
         # Human in the loop: a step left open on the case closes with it.
-        _cancel_person_steps(person_step_ids, PersonStepClose.MARKED_FAILED, user, now)
+        _cancel_person_steps(person_step_ids, PersonStepClose.MARKED_FAILED, actor, now)
         supersede_pending_revisions(request)
         _resolve(
             request,
             HelpResolution.MARKED_FAILED,
-            user,
+            actor,
             note,
             now,
             auto_fix_live,
@@ -480,7 +484,7 @@ def mark_failed_after_help(
         locked_pivot.failed_by = FailedBy.HELP
         locked_pivot.blocked_reason = ""
         locked_pivot.result = _verdict_text(
-            f"Marked failed by {_user_label(user)} at step {request.step_num} "
+            f"Marked failed by {actor.label()} at step {request.step_num} "
             f"{_waiting_clause(request)}.",
             request,
             note,
@@ -500,7 +504,7 @@ def mark_failed_after_help(
 
 
 def mark_blocked_after_help(
-    *, pivot: TestRunTestCase, user: CustomUser, note: str
+    *, pivot: TestRunTestCase, actor: PersonStepActor, note: str
 ) -> HelpActionResult:
     """A person marks the case Blocked (resumable later); the run continues.
 
@@ -516,13 +520,15 @@ def mark_blocked_after_help(
         auto_fix_live = auto_fix_turn_live(request.pk)
         note = _cap_note(note)
         # Human in the loop: a step left open on the case closes with it.
-        _cancel_person_steps(person_step_ids, PersonStepClose.MARKED_BLOCKED, user, now)
+        _cancel_person_steps(
+            person_step_ids, PersonStepClose.MARKED_BLOCKED, actor, now
+        )
         # The blocked case resumes later on its current (old) plan.
         supersede_pending_revisions(request)
         _resolve(
             request,
             HelpResolution.SKIPPED,
-            user,
+            actor,
             note,
             now,
             auto_fix_live,
@@ -532,7 +538,7 @@ def mark_blocked_after_help(
         locked_pivot.blocked_reason = BlockedReason.HELP_SKIPPED
         fault = f" ({_fault_label(request)})" if request.fault else ""
         locked_pivot.result = _verdict_text(
-            f"Marked blocked by {_user_label(user)} at step {request.step_num} "
+            f"Marked blocked by {actor.label()} at step {request.step_num} "
             f"{_waiting_clause(request)}{fault}.",
             request,
             note,
@@ -569,15 +575,21 @@ def mark_retest_after_help(
         now = timezone.now()
         auto_fix_live = auto_fix_turn_live(request.pk)
         retest_note = note.strip()[:RETEST_NOTE_MAX_LENGTH]
+        actor = PersonStepActor.web(user)
         # Human in the loop: a step left open on the case closes with it.
-        _cancel_person_steps(person_step_ids, PersonStepClose.MARKED_RETEST, user, now)
+        _cancel_person_steps(
+            person_step_ids,
+            PersonStepClose.MARKED_RETEST,
+            actor,
+            now,
+        )
         # The case is re-run later from scratch: no redesign carries over.
         supersede_pending_revisions(request)
         # Records RETEST (verdict-discarding) before the status write below.
         _resolve(
             request,
             HelpResolution.MARKED_RETEST,
-            user,
+            actor,
             _cap_note(note),
             now,
             auto_fix_live,
@@ -886,7 +898,7 @@ def _lock_open_person_step_ids(pivot_id: int) -> list[int]:
 def _cancel_person_steps(
     person_step_ids: list[int],
     close_reason: PersonStepClose,
-    user: CustomUser,
+    actor: PersonStepActor,
     now: datetime,
 ) -> None:
     """Close the locked open person steps: the case finished without them."""
@@ -895,7 +907,8 @@ def _cancel_person_steps(
     CasePersonStep.objects.filter(pk__in=person_step_ids).update(
         status=PersonStepStatus.CANCELLED,
         close_reason=close_reason,
-        closed_by=user,
+        closed_by=actor.user,
+        closed_via=actor.via,
         closed_at=now,
     )
 
@@ -903,7 +916,7 @@ def _cancel_person_steps(
 def _resolve(
     request: CaseHelpRequest,
     resolution: HelpResolution,
-    user: CustomUser,
+    actor: PersonStepActor,
     note: str,
     now: datetime,
     auto_fix_live: bool,
@@ -914,13 +927,23 @@ def _resolve(
     """Close the locked request and record ``activity`` in the person's session.
 
     Mark for re-test records ``RETEST`` instead of ``HELP`` (one activity per
-    action); it runs before the caller writes the case's new status.
+    action); it runs before the caller writes the case's new status. An
+    anonymous Test Runner actor is neither recorded nor credited.
     """
     request.resolution = resolution
-    request.resolved_by = user
+    request.resolved_by = actor.user
+    request.resolved_via = actor.via
+    request.resolved_by_label = actor.label()[:255]
     request.resolved_at = now
     request.note = note
-    update_fields = ["resolution", "resolved_by", "resolved_at", "note"]
+    update_fields = [
+        "resolution",
+        "resolved_by",
+        "resolved_via",
+        "resolved_by_label",
+        "resolved_at",
+        "note",
+    ]
     if request.auto_fix_state == HelpAutoFixState.RUNNING and not auto_fix_live:
         # The auto-fix never got a live turn, or its worker died: it did not
         # fix the machine. A live turn reports its own result when it ends.
@@ -929,13 +952,13 @@ def _resolve(
     request.save(update_fields=update_fields)
     clear_agent_proposal(request)
     record_case_activity(
-        user=user,
+        user=actor.user,
         pivot_ids=[request.test_run_test_case_id],
         activity=activity,
     )
     # The resolver drove the case out of Need help; a re-test mark does not.
     if resolution in CREDITED_HELP_RESOLUTIONS:
-        credit_cases(user=user, pivot_ids=[request.test_run_test_case_id])
+        credit_cases(user=actor.user, pivot_ids=[request.test_run_test_case_id])
     # The help request closed: the project members' attention lists change.
     transaction.on_commit(lambda: broadcast_project_attention_changed(project_id))
 
@@ -1074,10 +1097,6 @@ def _reload_after_rollback(test_run: TestRun, pivot: TestRunTestCase) -> None:
 
 def _cap_note(note: str) -> str:
     return note.strip()[:HELP_NOTE_MAX_LENGTH]
-
-
-def _user_label(user: CustomUser) -> str:
-    return user.get_full_name() or user.email
 
 
 def _waiting_clause(request: CaseHelpRequest) -> str:

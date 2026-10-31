@@ -32,6 +32,7 @@ from machine_setup.services.case_result_context import (
 from machine_setup.services.send_message import send_setup_message
 from projects.case_result_change_services import is_result_changeable
 from projects.models import Project, TestRunTestCase
+from projects.person_step_actor import PersonStepActor
 from projects.run_reopen_services import lock_project_and_run
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,12 @@ def open_result_chat(
             return thread
         first = DEFAULT_FIRST_MESSAGE
     try:
-        send_setup_message(project=project, user=user, text=first, conversation=thread)
+        send_setup_message(
+            project=project,
+            actor=PersonStepActor.web(user),
+            text=first,
+            conversation=thread,
+        )
     except MachineSetupError as exc:
         raise ResultChatSendRefusedError(
             exc.message, conversation_id=thread.pk

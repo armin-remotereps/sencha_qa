@@ -16,6 +16,7 @@ from websockets.exceptions import InvalidProxy
 from websockets.uri import parse_proxy
 
 from controller_client.exceptions import ProtocolError
+from controller_client.person_window_ipc import TEXT_SIZE_DEFAULT, clamp_text_size
 from controller_client.protocol import normalize_person_email
 
 # Folder the server's cleanup_environment action empties between test cases.
@@ -26,6 +27,9 @@ API_KEY_ENV_NAME: Final[str] = "CONTROLLER_API_KEY"
 # The person at this machine (their Punk Hazard email), sent in the handshake
 # so steps answered in the Test Runner window are recorded as theirs.
 PERSON_EMAIL_ENV_NAME: Final[str] = "CONTROLLER_PERSON_EMAIL"
+# The person window's base text size in points (10-28); A-/A+ in the window
+# change it for the session only.
+PERSON_WINDOW_TEXT_SIZE_ENV_NAME: Final[str] = "CONTROLLER_PERSON_WINDOW_TEXT_SIZE"
 # Proxy for the connection to the server (socks5h/socks5/socks4a/socks4/http/
 # https URL, optional user:pass@). Empty = the system proxy settings, as before.
 # .env only: a command line is visible to every local user.
@@ -83,6 +87,8 @@ class ClientConfig:
     # Whether person_email came from --person-email (a self-update then writes
     # it into the new install's .env).
     person_email_from_cli: bool = False
+    # CONTROLLER_PERSON_WINDOW_TEXT_SIZE, clamped to the window's range.
+    person_window_text_size: int = TEXT_SIZE_DEFAULT
     # The CLI overrides this process got, re-passed to the runner a self-update
     # starts (update flags excluded).
     cli_overrides: tuple[str, ...] = ()
@@ -263,6 +269,9 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
         person_email=person_email,
         person_email_problem=person_email_problem,
         person_email_from_cli=args.person_email is not None,
+        person_window_text_size=clamp_text_size(
+            _env_int(PERSON_WINDOW_TEXT_SIZE_ENV_NAME, TEXT_SIZE_DEFAULT)
+        ),
         cli_overrides=_carried_overrides(args),
         api_key_from_cli=bool(args.api_key),
         update_id=args.update_id,

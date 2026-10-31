@@ -185,6 +185,7 @@ class RunnerPersonStepView:
             questions=self.questions,
             case_steps_label=self.case_steps_label,
             case_steps=self.case_steps,
+            pivot_id=self.pivot_id,
         )
 
 
@@ -536,16 +537,24 @@ _ACTIONS: dict[
 
 
 def check_answer_throttle(project_id: int) -> None:
-    key = f"projects:runner-person-answer:{project_id}"
-    cache.add(key, 0, timeout=RUNNER_ANSWER_WINDOW_SECONDS)
+    if not hit_runner_throttle(
+        f"projects:runner-person-answer:{project_id}",
+        limit=RUNNER_ANSWER_LIMIT,
+        window_seconds=RUNNER_ANSWER_WINDOW_SECONDS,
+    ):
+        raise PersonStepError(_THROTTLED)
+
+
+def hit_runner_throttle(key: str, *, limit: int, window_seconds: int) -> bool:
+    """Count one attempt under ``key``; False once ``limit`` is exceeded."""
+    cache.add(key, 0, timeout=window_seconds)
     try:
         attempts = cache.incr(key)
     except ValueError:
-        # The key expired between add and incr: this is the window's first answer.
-        cache.add(key, 1, timeout=RUNNER_ANSWER_WINDOW_SECONDS)
+        # The key expired between add and incr: this is the window's first one.
+        cache.add(key, 1, timeout=window_seconds)
         attempts = 1
-    if attempts > RUNNER_ANSWER_LIMIT:
-        raise PersonStepError(_THROTTLED)
+    return attempts <= limit
 
 
 # ---------------------------------------------------------------------------

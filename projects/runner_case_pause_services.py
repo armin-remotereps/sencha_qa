@@ -7,8 +7,8 @@ The runner window sends a pause (protocol owned by
 owns the project, the same shared per-project runner answer throttle
 (20/min, a pause counts as an answer), a case of that project that runs or
 waits for a person, and the pauser named only while the runner's email is
-an active writable member (else anonymous: the pause lands, but its first
-message is not auto-sent, since a help-chat turn needs a member).
+an active writable member (else anonymous: the pause lands and its first
+message is sent as "a person at the Test Runner").
 """
 
 from __future__ import annotations

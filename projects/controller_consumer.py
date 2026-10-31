@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -11,12 +12,17 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 
 from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
+    PERSON_CASE_ACTION_MAX_BYTES,
     PERSON_STEP_ACTION_MAX_BYTES,
     PERSON_STEP_QUESTION_MAX_BYTES,
+    CasePauseActionResultPayload,
     ClientCapability,
     CloseCode,
     ErrorCode,
     MessageType,
+    PersonCaseActionResultPayload,
+    PersonCaseStatePayload,
+    PersonHelpActionKind,
     PersonStepActionKind,
     PersonStepActionResultPayload,
     PersonStepQuestionAskPayload,
@@ -26,10 +32,16 @@ from controller_client.protocol import (
     parse_person_email,
     parse_update_in_flight_id,
     parse_update_status_payload,
+    serialize_case_pause_action_result,
+    serialize_person_case_action_result,
     serialize_person_step_action_result,
     serialize_person_step_question_result,
     serialize_person_step_state,
 )
+from machine_setup.exceptions import MachineSetupError
+from machine_setup.services.runner_discussion import send_from_runner
+from projects.case_help_services import format_help_action_message
+from projects.case_pause_policy import PAUSE_SECOND_MESSAGE, CasePauseOutcome
 from projects.controller_authenticator import (
     ControllerAuthenticator,
     HandshakeMessageBuilder,
@@ -73,24 +85,40 @@ from projects.controller_protocol import (
     WaitForCommandActionEvent,
 )
 from projects.controller_reply_tracker import ReplyTracker
-from projects.exceptions import PersonStepError, PersonStepQuestionError
+from projects.exceptions import (
+    CasePauseError,
+    PersonStepError,
+    PersonStepQuestionError,
+    RunHelpError,
+)
 from projects.forms import (
+    RunnerCasePauseForm,
+    RunnerChatSendForm,
+    RunnerHelpActionForm,
     RunnerPersonStepActionForm,
     RunnerPersonStepQuestionForm,
     form_error_text,
 )
-from projects.models import Project
+from projects.models import HelpContinueMode, Project
 from projects.person_step_services import PersonStepActionResult
+from projects.runner_case_pause_services import pause_from_runner
+from projects.runner_help_action_services import (
+    RunnerHelpAction,
+    resolve_help_from_runner,
+)
 from projects.runner_person_step_services import (
     RunnerPersonStepAnswer,
     answer_from_runner,
     ask_from_runner,
-    get_runner_person_steps,
     resolve_runner_person,
 )
 from projects.runner_update_progress import (
     record_runner_update_status,
     settle_runner_update_on_handshake,
+)
+from projects.runner_window_state import (
+    RunnerWindowFeatures,
+    get_runner_window_state,
 )
 from projects.services import broadcast_agent_status, release_agent_connection
 
@@ -110,6 +138,25 @@ _PERSON_STEP_FAILED = "The answer could not be saved. Answer on Punk Hazard."
 _PERSON_STEP_QUESTION_UNSUPPORTED = "This Test Runner did not offer Ask AI."
 _PERSON_STEP_QUESTION_TOO_LARGE = "The question is too long."
 _PERSON_STEP_QUESTION_FAILED = "The question could not be sent. Ask on Punk Hazard."
+_CASE_ACTION_UNSUPPORTED = "This Test Runner did not offer this action."
+_CASE_ACTION_TOO_LARGE = "The message is too long."
+_CASE_ACTION_FAILED = "That did not work. Try it on Punk Hazard."
+_PAUSE_DONE: dict[CasePauseOutcome, str] = {
+    CasePauseOutcome.REQUESTED: (
+        "Pausing: the agent stops at its next action; the discussion opens "
+        "when it has stopped."
+    ),
+    CasePauseOutcome.ALREADY_REQUESTED: "Already pausing.",
+    CasePauseOutcome.PAUSED: "Paused; opening the discussion.",
+}
+_HELP_ACTION_VERB: dict[PersonHelpActionKind, str] = {
+    PersonHelpActionKind.CONTINUE: "Continuing",
+    PersonHelpActionKind.MARK_FAILED: "Marked the case failed",
+    PersonHelpActionKind.MARK_BLOCKED: "Marked the case blocked",
+}
+_CHAT_SENT = "Sent. The agent is answering."
+# Nudges within this many seconds of a push wait for one trailing push.
+_PUSH_COALESCE_SECONDS = 1.0
 # Longest ``request_id`` echoed back; a longer one gets a fresh id.
 _MAX_REQUEST_ID_LENGTH = 128
 
@@ -130,8 +177,26 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     # The active member the handshake's ``person_email`` named; re-checked
     # when an answer arrives. The email itself is never kept.
     _person_user_id: int | None
-    # The last ``person_step_state`` sent; None before the first one.
-    _person_steps_sent: tuple[PersonStepStatePayload, ...] | None
+    # The window's v2 features (PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1,
+    # CASE_PAUSE_V1), each only together with PERSON_STEPS_V1.
+    _case_context_enabled: bool
+    _discussion_enabled: bool
+    _pause_enabled: bool
+    # The last ``person_step_state`` sent (steps, cases); None before the
+    # first one.
+    _person_steps_sent: (
+        tuple[
+            tuple[PersonStepStatePayload, ...],
+            tuple[PersonCaseStatePayload, ...] | None,
+        ]
+        | None
+    )
+    # Loop time of the last snapshot read, and the one trailing push nudges
+    # wait for (coalescing bursts of chat and tool rows).
+    _last_push_at: float
+    _trailing_push: asyncio.Task[None] | None
+    # Serialises snapshot pushes, so an older snapshot is never sent last.
+    _push_lock: asyncio.Lock
 
     async def connect(self) -> None:
         self._authenticated = False
@@ -139,8 +204,14 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self._person_steps_enabled = False
         self._assist_enabled = False
         self._case_steps_enabled = False
+        self._case_context_enabled = False
+        self._discussion_enabled = False
+        self._pause_enabled = False
         self._person_user_id = None
         self._person_steps_sent = None
+        self._last_push_at = 0.0
+        self._trailing_push = None
+        self._push_lock = asyncio.Lock()
         self._reply_tracker = ReplyTracker(self.channel_layer)
         self._authenticator = ControllerAuthenticator()
         self._message_builder = ControllerMessageBuilder(ActionTypeRegistry())
@@ -165,6 +236,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await self._route_authenticated_message(data, len(text_data))
 
     async def disconnect(self, close_code: int) -> None:
+        if self._trailing_push is not None:
+            self._trailing_push.cancel()
+            self._trailing_push = None
         if self._authenticated and self._project is not None:
             await self._cleanup_connection()
 
@@ -201,6 +275,14 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
         if msg_type == MessageType.PERSON_STEP_QUESTION:
             await self._handle_person_step_question(data, raw_length)
+            return
+
+        if msg_type == MessageType.CASE_PAUSE_ACTION:
+            await self._handle_case_pause_action(data, raw_length)
+            return
+
+        if msg_type in (MessageType.PERSON_CHAT_SEND, MessageType.PERSON_HELP_ACTION):
+            await self._handle_person_case_action(msg_type, data, raw_length)
             return
 
         handlers = {
@@ -285,6 +367,19 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             self._person_steps_enabled
             and ClientCapability.PERSON_STEP_CASE_STEPS_V1.value in capabilities
         )
+        # Window v2, each advertised only together with PERSON_STEPS_V1.
+        self._case_context_enabled = (
+            self._person_steps_enabled
+            and ClientCapability.PERSON_CASE_CONTEXT_V1.value in capabilities
+        )
+        self._discussion_enabled = (
+            self._case_context_enabled
+            and ClientCapability.PERSON_DISCUSSION_V1.value in capabilities
+        )
+        self._pause_enabled = (
+            self._case_context_enabled
+            and ClientCapability.CASE_PAUSE_V1.value in capabilities
+        )
         await self._establish_authenticated_connection(
             result.project,
             system_info,
@@ -366,37 +461,190 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await self.close(code=int(CloseCode.FORCE_DISCONNECTED))
 
     async def controller_person_steps_changed(self, event: dict[str, Any]) -> None:
-        await self._push_person_steps()
+        """A nudge: push now, or once a second at most (one trailing push)."""
+        if not self._person_steps_enabled or self._trailing_push is not None:
+            return
+        wait = (
+            self._last_push_at
+            + _PUSH_COALESCE_SECONDS
+            - asyncio.get_running_loop().time()
+        )
+        if wait <= 0:
+            await self._push_person_steps()
+            return
+        self._trailing_push = asyncio.ensure_future(self._trailing_push_after(wait))
+
+    async def _trailing_push_after(self, wait: float) -> None:
+        try:
+            await asyncio.sleep(wait)
+        finally:
+            self._trailing_push = None
+        try:
+            await self._push_person_steps()
+        except Exception:
+            # Nobody awaits this task: log here (e.g. the socket closed).
+            logger.exception("Trailing person step push failed")
 
     async def _push_person_steps(self, *, force: bool = False) -> None:
-        """Send the open person steps when they changed since the last send.
+        """Send the window's snapshot when it changed since the last send.
 
-        Only to a runner that advertised PERSON_STEPS_V1. ``force`` resends an
-        unchanged snapshot (after a refused answer the window must re-sync).
+        Only to a runner that advertised PERSON_STEPS_V1; ``cases`` only to one
+        with PERSON_CASE_CONTEXT_V1. ``force`` resends an unchanged snapshot
+        (after a refused answer the window must re-sync).
         """
         if not self._person_steps_enabled or self._project is None:
             return
+        async with self._push_lock:
+            await self._push_snapshot(self._project.id, force=force)
+
+    async def _push_snapshot(self, project_id: int, *, force: bool) -> None:
+        self._last_push_at = asyncio.get_running_loop().time()
         try:
-            views = await sync_to_async(get_runner_person_steps)(
-                self._project.id,
-                assist=self._assist_enabled,
-                case_steps=self._case_steps_enabled,
+            state = await sync_to_async(get_runner_window_state)(
+                project_id,
+                RunnerWindowFeatures(
+                    assist=self._assist_enabled,
+                    case_steps=self._case_steps_enabled,
+                    case_context=self._case_context_enabled,
+                    discussion=self._discussion_enabled,
+                    pause=self._pause_enabled,
+                ),
             )
         except Exception:
-            logger.exception(
-                "Reading person steps failed for project %s", self._project.id
-            )
+            logger.exception("Reading person steps failed for project %s", project_id)
             return
-        steps = tuple(view.to_payload() for view in views)
+        snapshot = (state.steps, state.cases)
         # The first push of a connection always goes out (even empty), so a
         # reconnected runner drops a step answered meanwhile.
-        if not force and steps == self._person_steps_sent:
+        if not force and snapshot == self._person_steps_sent:
             return
-        self._person_steps_sent = steps
+        self._person_steps_sent = snapshot
         await self.send(
             text_data=serialize_person_step_state(
-                steps, questions_enabled=self._assist_enabled
+                state.steps,
+                questions_enabled=self._assist_enabled,
+                cases=state.cases,
             )
+        )
+
+    async def _handle_case_pause_action(
+        self, data: dict[str, Any], raw_length: int
+    ) -> None:
+        request_id = _echoed_request_id(data)
+        result = await self._pause_case(data, raw_length)
+        await self.send(
+            text_data=serialize_case_pause_action_result(result, request_id)
+        )
+        await self._push_person_steps(force=True)
+
+    async def _pause_case(
+        self, data: dict[str, Any], raw_length: int
+    ) -> CasePauseActionResultPayload:
+        if not self._pause_enabled or self._project is None:
+            return _pause_refused(_CASE_ACTION_UNSUPPORTED)
+        if raw_length > PERSON_CASE_ACTION_MAX_BYTES:
+            return _pause_refused(_CASE_ACTION_TOO_LARGE)
+        form = RunnerCasePauseForm(
+            {field: data.get(field) for field in RunnerCasePauseForm.base_fields}
+        )
+        if not form.is_valid():
+            return _pause_refused(form_error_text(form))
+        message: str = form.cleaned_data["message"]
+        try:
+            outcome = await sync_to_async(pause_from_runner)(
+                project_id=self._project.id,
+                channel_name=self.channel_name,
+                person_user_id=self._person_user_id,
+                pivot_id=form.cleaned_data["pivot_id"],
+                message=message,
+            )
+        except CasePauseError as exc:
+            return _pause_refused(exc.message)
+        except Exception:
+            logger.exception("Case pause failed for project %s", self._project.id)
+            return _pause_refused(_CASE_ACTION_FAILED)
+        text = _PAUSE_DONE[outcome]
+        if outcome == CasePauseOutcome.ALREADY_REQUESTED and message:
+            text = f"{text} {PAUSE_SECOND_MESSAGE}"
+        return CasePauseActionResultPayload(
+            ok=True, outcome=outcome.value, message=text
+        )
+
+    async def _handle_person_case_action(
+        self, msg_type: str, data: dict[str, Any], raw_length: int
+    ) -> None:
+        request_id = _echoed_request_id(data)
+        if not self._discussion_enabled or self._project is None:
+            result = _case_refused(_CASE_ACTION_UNSUPPORTED)
+        elif raw_length > PERSON_CASE_ACTION_MAX_BYTES:
+            result = _case_refused(_CASE_ACTION_TOO_LARGE)
+        elif msg_type == MessageType.PERSON_CHAT_SEND:
+            result = await self._send_chat(self._project.id, data)
+        else:
+            result = await self._resolve_help(self._project.id, data)
+        await self.send(
+            text_data=serialize_person_case_action_result(result, request_id)
+        )
+        await self._push_person_steps(force=True)
+
+    async def _send_chat(
+        self, project_id: int, data: dict[str, Any]
+    ) -> PersonCaseActionResultPayload:
+        form = RunnerChatSendForm(
+            {field: data.get(field) for field in RunnerChatSendForm.base_fields}
+        )
+        if not form.is_valid():
+            return _case_refused(form_error_text(form))
+        try:
+            await sync_to_async(send_from_runner)(
+                project_id=project_id,
+                channel_name=self.channel_name,
+                person_user_id=self._person_user_id,
+                pivot_id=form.cleaned_data["pivot_id"],
+                help_request_id=form.cleaned_data["help_request_id"],
+                text=form.cleaned_data["text"],
+            )
+        except MachineSetupError as exc:
+            return _case_refused(exc.message)
+        except Exception:
+            logger.exception("Runner chat send failed for project %s", project_id)
+            return _case_refused(_CASE_ACTION_FAILED)
+        return PersonCaseActionResultPayload(ok=True, message=_CHAT_SENT)
+
+    async def _resolve_help(
+        self, project_id: int, data: dict[str, Any]
+    ) -> PersonCaseActionResultPayload:
+        form = RunnerHelpActionForm(
+            {field: data.get(field) for field in RunnerHelpActionForm.base_fields}
+        )
+        if not form.is_valid():
+            return _case_refused(form_error_text(form))
+        kind = PersonHelpActionKind(form.cleaned_data["action"])
+        raw_mode: str = form.cleaned_data["continue_mode"]
+        action = RunnerHelpAction(
+            pivot_id=form.cleaned_data["pivot_id"],
+            help_request_id=form.cleaned_data["help_request_id"],
+            action=kind,
+            note=form.cleaned_data["note"],
+            continue_mode=HelpContinueMode(raw_mode) if raw_mode else None,
+            plan_revision_id=form.cleaned_data["plan_revision_id"],
+            use_plan_revision=form.cleaned_data["use_plan_revision"],
+        )
+        try:
+            result = await sync_to_async(resolve_help_from_runner)(
+                project_id=project_id,
+                channel_name=self.channel_name,
+                person_user_id=self._person_user_id,
+                action=action,
+            )
+        except RunHelpError as exc:
+            return _case_refused(exc.message)
+        except Exception:
+            logger.exception("Runner help action failed for project %s", project_id)
+            return _case_refused(_CASE_ACTION_FAILED)
+        return PersonCaseActionResultPayload(
+            ok=True,
+            message=format_help_action_message(_HELP_ACTION_VERB[kind], result),
         )
 
     async def _handle_person_step_action(
@@ -658,6 +906,14 @@ def _echoed_request_id(data: dict[str, Any]) -> str:
     ):
         return raw_request_id
     return ""
+
+
+def _pause_refused(message: str) -> CasePauseActionResultPayload:
+    return CasePauseActionResultPayload(ok=False, outcome="", message=message)
+
+
+def _case_refused(message: str) -> PersonCaseActionResultPayload:
+    return PersonCaseActionResultPayload(ok=False, message=message)
 
 
 def _question_refused(message: str) -> PersonStepQuestionResultPayload:

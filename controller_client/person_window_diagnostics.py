@@ -2,11 +2,13 @@
 
 The Test Runner window (where a person answers Human in the loop steps on the
 test machine) is a Tk program in its own process. The automatic checks say
-whether this Python has tkinter, which Tk it has, which display Tk would use
-and whether a Tk window opens in a separate process the way the runner starts
-it. The interactive check then shows a sample step (with "How to do it"
-items and a sample Ask the AI exchange) in the real window, asks
-whether it is visible, hides it the way the runner does before every agent
+whether this Python has tkinter, which Tk it has, which display Tk would use,
+whether a Tk window opens in a separate process the way the runner starts
+it, and whether the window renders a sample step, test case, log and
+discussion without errors (in a window that is never shown). The interactive
+check then shows that sample (a step with "How to do it" items and a sample
+Ask the AI exchange, its test case and log, and a paused case's discussion)
+in the real window, asks whether it is visible, hides it the way the runner does before every agent
 action, takes one screenshot with the desktop backend and asks the person to
 confirm the window is not in it.
 
@@ -28,8 +30,25 @@ from typing import Final
 from controller_client.desktop import get_desktop_backend
 from controller_client.diagnostics import DiagnosticStep
 from controller_client.person_window import PersonWindow, probe_person_window
+from controller_client.person_window_ipc import (
+    CaseRequestKind,
+    StateCommand,
+    encode_command,
+)
 from controller_client.protocol import (
+    CasePauseActionPayload,
+    ContinueModeWire,
+    DiscussionMessageKind,
+    PersonCasePausePayload,
+    PersonCaseRole,
+    PersonCaseStatePayload,
+    PersonCaseStepPayload,
+    PersonChatSendPayload,
+    PersonDiscussionMessagePayload,
+    PersonHelpPayload,
     PersonHowToPayload,
+    PersonPlanDraftPayload,
+    PersonPlanDraftRowPayload,
     PersonStepActionResultPayload,
     PersonStepQuestionPayload,
     PersonStepQuestionResultPayload,
@@ -40,6 +59,10 @@ from controller_client.protocol import (
 )
 
 _PROBE_TIMEOUT_S: Final[float] = 10.0
+_RENDER_TIMEOUT_S: Final[float] = 30.0
+_APP_MODULE: Final[str] = "controller_client.person_window_app"
+# ``-m controller_client...`` resolves from the directory holding the package.
+_PACKAGE_PARENT: Final[Path] = Path(__file__).resolve().parent.parent
 _SCREENSHOT_NAME: Final[str] = "punk-hazard-window-check.png"
 
 # Needs no display: whether tkinter imports, and its Tk and Tcl versions.
@@ -138,12 +161,45 @@ def _check_window_opens() -> str:
     return f"opens in a separate process ({result.detail})"
 
 
+def _check_window_renders() -> str:
+    # The real window code in a separate process, never shown: renders the
+    # sample twice (the second adds a chat row, as a snapshot would) and
+    # visits every tab and both text sizes.
+    lines = b"".join(
+        encode_command(StateCommand(steps=steps, questions_enabled=True, cases=cases))
+        for steps, cases in (_sample_state(), _sample_state(extra_message=True))
+    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-m", _APP_MODULE, "--self-check"],
+            input=lines,
+            capture_output=True,
+            timeout=_RENDER_TIMEOUT_S,
+            check=False,
+            cwd=str(_PACKAGE_PARENT),
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(
+            f"rendering did not finish within {_RENDER_TIMEOUT_S:.0f} s"
+        ) from e
+    out = completed.stdout.decode("utf-8", errors="replace").strip()
+    if completed.returncode != 0:
+        err = completed.stderr.decode("utf-8", errors="replace").strip()
+        detail = out or (err.splitlines()[-1] if err else "")
+        raise RuntimeError(
+            f"the window failed to render the sample (exit code "
+            f"{completed.returncode}): {detail}"
+        )
+    return out
+
+
 def build_window_steps() -> tuple[DiagnosticStep, ...]:
     """The automatic checks, in order; each later one needs the earlier ones."""
     return (
         DiagnosticStep("tkinter and Tk version", _check_tkinter),
         DiagnosticStep("display", _check_display),
         DiagnosticStep("Tk window", _check_window_opens),
+        DiagnosticStep("window renders a sample case", _check_window_renders),
     )
 
 
@@ -157,9 +213,15 @@ else:
     _SAMPLE_COMMAND = "echo $HOME"
 
 
+_SAMPLE_STEP_PIVOT: Final[int] = 1
+_SAMPLE_HELP_PIVOT: Final[int] = 2
+_SAMPLE_LOG_LINES: Final[int] = 120
+
+
 def _sample_step() -> PersonStepStatePayload:
     return PersonStepStatePayload(
         person_step_id=1,
+        pivot_id=_SAMPLE_STEP_PIVOT,
         round=1,
         status=PersonStepWireStatus.WAITING,
         run_name="diagnose --window",
@@ -194,7 +256,171 @@ def _sample_step() -> PersonStepStatePayload:
                 asked_by="diagnose --window",
             ),
         ),
+        case_steps_label="Case steps 2–3",
+        case_steps=_SAMPLE_CASE_STEPS[1:3],
     )
+
+
+_SAMPLE_CASE_STEPS: Final[tuple[PersonCaseStepPayload, ...]] = (
+    PersonCaseStepPayload(num=1, text="Log in to the sample app."),
+    PersonCaseStepPayload(
+        num=2, text="Open a terminal.", expected="A terminal window opens."
+    ),
+    PersonCaseStepPayload(
+        num=3,
+        text="Print the home folder.",
+        expected="The output is a folder path.",
+    ),
+    PersonCaseStepPayload(num=4, text="Close the terminal."),
+)
+
+
+def _sample_log() -> str:
+    return "\n".join(
+        f"[diagnose] sample log line {number}: nothing is sent to Punk Hazard"
+        for number in range(1, _SAMPLE_LOG_LINES + 1)
+    )
+
+
+def _sample_messages(extra: bool) -> tuple[PersonDiscussionMessagePayload, ...]:
+    messages = [
+        PersonDiscussionMessagePayload(
+            message_id=1,
+            kind=DiscussionMessageKind.USER,
+            author="diagnose --window",
+            text="The dialog looks wrong; let's talk about it.",
+            created_at="2026-01-01T10:00:00+00:00",
+        ),
+        PersonDiscussionMessagePayload(
+            message_id=2,
+            kind=DiscussionMessageKind.NOTICE,
+            author="",
+            text="The agent ran: Take a screenshot",
+            created_at="2026-01-01T10:00:20+00:00",
+        ),
+        PersonDiscussionMessagePayload(
+            message_id=3,
+            kind=DiscussionMessageKind.ASSISTANT,
+            author="",
+            text="The dialog is a sample. I suggest continuing on the current "
+            "screen with the redesigned plan below.",
+            created_at="2026-01-01T10:01:00+00:00",
+        ),
+    ]
+    if extra:
+        messages.append(
+            PersonDiscussionMessagePayload(
+                message_id=4,
+                kind=DiscussionMessageKind.USER,
+                author="diagnose --window",
+                text="Thanks, that is all.",
+                created_at="2026-01-01T10:02:00+00:00",
+            )
+        )
+    return tuple(messages)
+
+
+def _sample_cases(extra_message: bool) -> tuple[PersonCaseStatePayload, ...]:
+    pause = PersonCasePausePayload(
+        can_pause=True,
+        pause_blocker="",
+        pause_pending=False,
+        pause_requested_by="",
+        paused=False,
+        paused_by="",
+        pause_message_state="",
+        pause_message_note="",
+    )
+    step_case = PersonCaseStatePayload(
+        pivot_id=_SAMPLE_STEP_PIVOT,
+        role=PersonCaseRole.STEP,
+        run_name="diagnose --window",
+        case_title="Sample step (nothing is sent to Punk Hazard)",
+        status_label="Your turn",
+        case_url="",
+        preconditions="A terminal is available on this machine.",
+        steps_text="",
+        expected_text="The home folder is printed.",
+        numbered_steps=_SAMPLE_CASE_STEPS,
+        log_tail=_sample_log(),
+        pause=pause,
+    )
+    help_case = PersonCaseStatePayload(
+        pivot_id=_SAMPLE_HELP_PIVOT,
+        role=PersonCaseRole.HELP,
+        run_name="diagnose --window",
+        case_title="Sample paused case (nothing is sent to Punk Hazard)",
+        status_label="Need help",
+        case_url="",
+        preconditions="",
+        steps_text="1. Open the sample dialog.\n2. Check its title.",
+        expected_text="",
+        numbered_steps=(),
+        log_tail="[diagnose] the case was paused",
+        pause=PersonCasePausePayload(
+            can_pause=False,
+            pause_blocker="The case is already paused.",
+            pause_pending=False,
+            pause_requested_by="",
+            paused=True,
+            paused_by="diagnose --window",
+            pause_message_state="sent",
+            pause_message_note="",
+        ),
+        help=PersonHelpPayload(
+            help_request_id=1,
+            step_num=2,
+            reason="A person paused the case.",
+            ask="",
+            fault_label="",
+            paused_by="diagnose --window",
+            continue_mode=ContinueModeWire.CURRENT_SCREEN,
+            continue_mode_choices=(
+                ContinueModeWire.CURRENT_SCREEN,
+                ContinueModeWire.RESTORE,
+                ContinueModeWire.FROM_SCRATCH,
+            ),
+            agent_continue_mode=ContinueModeWire.CURRENT_SCREEN,
+            can_continue=True,
+            blockers=(),
+            proposal_label="Continue",
+            proposal_note="Continue on the current screen.",
+            plan_draft=PersonPlanDraftPayload(
+                revision_id=1,
+                reason="Check the title before closing the dialog.",
+                resume_step=2,
+                carried_count=1,
+                rows=(
+                    PersonPlanDraftRowPayload(
+                        num=1,
+                        description="Open the sample dialog.",
+                        expected_result="The dialog shows.",
+                        carried_from=1,
+                        state_label="Carried from step 1",
+                    ),
+                    PersonPlanDraftRowPayload(
+                        num=2,
+                        description="Check its title.",
+                        expected_result="The title is 'Sample'.",
+                        carried_from=0,
+                        state_label="Runs",
+                    ),
+                ),
+            ),
+            thread_url="",
+            turn_live=False,
+            can_send=True,
+            send_blocker="",
+            messages=_sample_messages(extra_message),
+        ),
+    )
+    return (step_case, help_case)
+
+
+def _sample_state(
+    extra_message: bool = False,
+) -> tuple[tuple[PersonStepStatePayload, ...], tuple[PersonCaseStatePayload, ...]]:
+    return (_sample_step(),), _sample_cases(extra_message)
 
 
 def _is_yes(answer: str) -> bool:
@@ -223,16 +449,33 @@ async def _answer_no_questions(window: PersonWindow) -> None:
         )
 
 
+async def _answer_no_case_requests(window: PersonWindow) -> None:
+    # Pause, Send and the help buttons get a reply too, so they come back.
+    async for request in window.case_requests():
+        if isinstance(request, CasePauseActionPayload):
+            kind = CaseRequestKind.PAUSE
+        elif isinstance(request, PersonChatSendPayload):
+            kind = CaseRequestKind.CHAT
+        else:
+            kind = CaseRequestKind.HELP
+        window.show_case_result(kind, False, "Diagnose only: nothing was sent.")
+
+
 async def _run_window_check(
     ask: Callable[[str], str], report: Callable[[str], None]
 ) -> bool:
     window = PersonWindow()
     drain = asyncio.create_task(_answer_nothing(window))
     drain_questions = asyncio.create_task(_answer_no_questions(window))
+    drain_cases = asyncio.create_task(_answer_no_case_requests(window))
     try:
         window.set_connected(True)
-        window.apply_state((_sample_step(),), questions_enabled=True)
-        report("A sample step should now be shown in the Test Runner window.")
+        steps, cases = _sample_state()
+        window.apply_state(steps, questions_enabled=True, cases=cases)
+        report(
+            "A sample step should now be shown in the Test Runner window, with "
+            "the Test case, Log and Discussion tabs."
+        )
         seen = await asyncio.to_thread(
             ask, "Do you see the Test Runner window with the sample step? [y/n] "
         )
@@ -271,6 +514,7 @@ async def _run_window_check(
     finally:
         drain.cancel()
         drain_questions.cancel()
+        drain_cases.cancel()
         await window.stop()
 
 

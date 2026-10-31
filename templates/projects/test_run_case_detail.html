@@ -500,7 +500,7 @@
             Asked {{ help_request.requested_at|date:"M j, H:i" }}
             {% if help_request.auto_fix_state %} · auto-fix: {{ help_request.get_auto_fix_state_display|lower }}{% endif %}
             {% if help_request.resolved_at %}
-              · resolved {{ help_request.resolved_at|date:"M j, H:i" }}{% if help_request.resolved_by %} by {{ help_request.resolved_by.get_full_name|default:help_request.resolved_by.email }}{% elif help_request.resolution == "auto_fixed" %} by the Machine setup agent{% endif %}
+              · resolved {{ help_request.resolved_at|date:"M j, H:i" }}{% if help_request.resolved_by_label %} by {{ help_request.resolved_by_label }}{% elif help_request.resolved_by %} by {{ help_request.resolved_by.get_full_name|default:help_request.resolved_by.email }}{% elif help_request.resolution == "auto_fixed" %} by the Machine setup agent{% endif %}
             {% endif %}
             {% with thread=help_request.help_threads.0 %}{% if thread %} · <a href="{% url 'machine_setup:thread' project.id thread.id %}">{% if thread.kind == "case_help" %}help chat{% else %}auto-fix thread{% endif %}</a>{% endif %}{% endwith %}
           </div>

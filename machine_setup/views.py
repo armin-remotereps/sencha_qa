@@ -78,6 +78,7 @@ from projects.exceptions import (
 )
 from projects.forms import CaseHelpResolutionForm, RunHelpModeForm, form_error_text
 from projects.models import Project
+from projects.person_step_actor import PersonStepActor
 from projects.project_access import get_request_project_access
 
 
@@ -227,7 +228,7 @@ def help_chat_open(
         thread = open_help_chat(
             project=project,
             pivot=pivot,
-            user=request.user,
+            actor=PersonStepActor.web(request.user),
             text=form.cleaned_data["text"],
         )
     except HelpChatSendRefusedError as exc:
@@ -356,7 +357,7 @@ def setup_send(request: AuthenticatedRequest, project: Project) -> HttpResponse:
     try:
         send_setup_message(
             project=project,
-            user=request.user,
+            actor=PersonStepActor.web(request.user),
             text=form.cleaned_data["text"],
             conversation=thread,
             document=form.uploaded_document(),

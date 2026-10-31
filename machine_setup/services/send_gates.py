@@ -36,6 +36,21 @@ def run_and_update_refusal(project: Project, now: datetime) -> MachineSetupError
     return None
 
 
+def thread_send_refusal(
+    project: Project, now: datetime, *, main_chat: bool
+) -> MachineSetupError | None:
+    """Every send gate but the live-turn one, in ``send_setup_message``'s order.
+
+    Help, result and auto-fix threads add the READY gate; the main chat does
+    not (Q3: its machine tools say "not connected"). Also read, without
+    sending, by the Test Runner window's discussion (``runner_discussion``).
+    """
+    refusal = run_and_update_refusal(project, now)
+    if refusal is not None or main_chat:
+        return refusal
+    return machine_not_ready_refusal(project)
+
+
 def machine_not_ready_refusal(project: Project) -> MachineSetupError | None:
     """Help, result and auto-fix threads: the runner connected and the visual
     engine ready (``project.agent_connected`` must be fresh; one query)."""

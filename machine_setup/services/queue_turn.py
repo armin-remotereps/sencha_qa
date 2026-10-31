@@ -50,8 +50,12 @@ def create_turn(
     requested_by: CustomUser | None,
     text: str,
     auto_fix: bool = False,
+    author_label: str = "",
 ) -> tuple[SetupTurn, SetupMessage]:
-    """A queued turn plus its USER row; call under the project row lock."""
+    """A queued turn plus its USER row; call under the project row lock.
+
+    ``author_label``: the stored sender name of a Test Runner send.
+    """
     turn = SetupTurn.objects.create(
         conversation=conversation,
         project_id=conversation.project_id,
@@ -63,6 +67,7 @@ def create_turn(
         turn=turn,
         kind=SetupMessageKind.USER,
         author=requested_by,
+        author_label=author_label[:255],
         text=text,
     )
     return turn, message
@@ -71,17 +76,22 @@ def create_turn(
 def create_user_turn(
     *,
     conversation: SetupConversation,
-    requested_by: CustomUser,
+    requested_by: CustomUser | None,
     text: str,
     document: UploadedDocument | None = None,
+    author_label: str = "",
 ) -> tuple[SetupTurn, SetupMessage, list[SetupDocument]]:
     """``create_turn`` for a person's send, storing an attached document with
     the USER row. Returns the stored documents so the broadcast needs no query.
+    ``requested_by`` is None for an anonymous Test Runner send (no document).
     Call under the project row lock."""
     turn, message = create_turn(
-        conversation=conversation, requested_by=requested_by, text=text
+        conversation=conversation,
+        requested_by=requested_by,
+        text=text,
+        author_label=author_label,
     )
-    if document is None:
+    if document is None or requested_by is None:
         return turn, message, []
     return (
         turn,
