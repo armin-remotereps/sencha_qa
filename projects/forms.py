@@ -14,11 +14,13 @@ from controller_client.protocol import MAX_VERSION_LENGTH, PersonStepActionKind
 from projects.case_checkpoint_services import ResumeStepOption
 from projects.models import (
     HELP_NOTE_MAX_LENGTH,
+    PAUSE_MESSAGE_MAX_LENGTH,
     PERSON_STEP_OUTPUT_MAX_LENGTH,
     PERSON_STEP_QUESTION_MAX_LENGTH,
     PROJECT_PROMPT_MAX_LENGTH,
     RETEST_NOTE_MAX_LENGTH,
     ApplicationPlatform,
+    HelpContinueMode,
     PersonStepOutcome,
     Project,
     ProjectRole,
@@ -413,6 +415,40 @@ class CaseHelpResolutionForm(forms.Form):
     return_thread_id = forms.IntegerField(
         required=False, min_value=1, widget=forms.HiddenInput
     )
+    # How Continue goes on; blank keeps the request's stored mode. The
+    # service checks it against the modes the request allows.
+    continue_mode = forms.ChoiceField(
+        label="How to continue",
+        required=False,
+        choices=HelpContinueMode.choices,
+        widget=forms.RadioSelect,
+    )
+
+    def clean_continue_mode(self) -> HelpContinueMode | None:
+        value = self.cleaned_data.get("continue_mode")
+        if not value:
+            return None
+        return HelpContinueMode(value)
+
+
+class CasePauseForm(forms.Form):
+    """Pause a running case (or a waiting person step), with a first message."""
+
+    message = forms.CharField(
+        label="Message for the agent",
+        required=False,
+        max_length=PAUSE_MESSAGE_MAX_LENGTH,
+        strip=True,
+        widget=forms.Textarea(
+            attrs={
+                "class": "textarea",
+                "rows": 4,
+                "placeholder": "Optional: what you want to discuss once it stops",
+            }
+        ),
+    )
+    # Where to go back to; the view keeps it only when it stays on this host.
+    next = forms.CharField(required=False, max_length=2000, widget=forms.HiddenInput)
 
 
 class PersonStepReportForm(forms.Form):

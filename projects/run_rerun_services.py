@@ -22,6 +22,7 @@ from projects.case_credit import credit_cases
 from projects.case_retest_marking import clear_retest_mark
 from projects.exceptions import RunRerunError
 from projects.models import (
+    PAUSE_REQUEST_CLEARED,
     RETEST_CLEARED,
     CaseRestartKind,
     Project,
@@ -163,6 +164,7 @@ def rerun_test_run_cases(
             testrail_source_skip_reason="",
             logs="",
             **RETEST_CLEARED,
+            **PAUSE_REQUEST_CLEARED,
             # update() does not run auto_now.
             updated_at=now,
         )

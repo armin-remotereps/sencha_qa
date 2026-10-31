@@ -552,7 +552,14 @@
               </div>
             </td>
             {% endif %}
-            <td data-label="Details"><a class="btn btn-sm btn-ghost" href="{% url 'projects:test_run_case_detail' project.id test_run.id pivot.id %}">Logs &amp; screenshots</a></td>
+            <td data-label="Details">
+              <a class="btn btn-sm btn-ghost" href="{% url 'projects:test_run_case_detail' project.id test_run.id pivot.id %}">Logs &amp; screenshots</a>
+              {% if project_can_write and pivot.status == "in_progress" and pivot.pause_requested_generation is None %}
+              {# Pause and discuss the running case; hidden once it stops running. #}
+              <button type="button" class="btn btn-sm btn-secondary" x-show="(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}') === 'in_progress'" @click="$dispatch('open-pause-case-{{ pivot.id }}')">Pause</button>
+              {% include "projects/includes/_case_pause_dialog.html" with project=project test_run=test_run pivot=pivot next=test_run_detail_url csrf_token=csrf_token only %}
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
         </tbody>

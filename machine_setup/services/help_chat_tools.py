@@ -39,6 +39,7 @@ from projects.exceptions import PlanRevisionError, RunHelpError
 from projects.models import (
     HELP_NOTE_MAX_LENGTH,
     PLAN_REVISION_REASON_MAX_LENGTH,
+    HelpContinueMode,
     HelpProposalAction,
 )
 
@@ -59,6 +60,9 @@ _PROPOSAL_ACTIONS: tuple[str, ...] = (
     HelpProposalAction.MARK_FAILED.value,
     HelpProposalAction.SKIP.value,
 )
+
+# The continue modes the agent may recommend with ``continue``.
+_CONTINUE_MODES: tuple[str, ...] = tuple(mode.value for mode in HelpContinueMode)
 
 HelpToolHandler = Callable[[dict[str, object]], str]
 
@@ -133,7 +137,9 @@ def help_chat_tool_definitions() -> tuple[ToolDefinition, ...]:
                 "continue: resume the test (with the draft if there is one); "
                 "mark_failed: the application under test is at fault; skip: "
                 "mark the case Blocked (a person decides; it can be resumed "
-                "later)."
+                "later). With continue you may recommend how the case goes on "
+                "(continue_mode); the person chooses among the modes this case "
+                "allows (get_help_case lists them)."
             ),
             category=ToolCategory.UTILITY,
             parameters=(
@@ -153,6 +159,21 @@ def help_chat_tool_definitions() -> tuple[ToolDefinition, ...]:
                         f"most {HELP_NOTE_MAX_LENGTH} characters)."
                     ),
                     required=True,
+                ),
+                ToolParameter(
+                    name="continue_mode",
+                    type="string",
+                    description=(
+                        "Optional, only with action continue: how you recommend "
+                        "the case goes on; the person chooses. current_screen: "
+                        "re-run the step from the screen as it is now. restore: "
+                        "clean up and restore the earlier steps' state first, "
+                        "then run the step (use it when the screen cannot be "
+                        "trusted). from_scratch: start the case again from the "
+                        "beginning."
+                    ),
+                    required=False,
+                    enum=_CONTINUE_MODES,
                 ),
             ),
         ),
@@ -203,17 +224,23 @@ def build_help_chat_handlers(
                 + "."
             )
         note = required_text(arguments, "note", HELP_NOTE_MAX_LENGTH)
+        continue_mode = _continue_mode_argument(arguments, action)
         try:
             record_agent_proposal(
                 help_request_id=help_request_id,
                 action=HelpProposalAction(action),
                 note=note,
+                continue_mode=continue_mode,
             )
         except RunHelpError as exc:
             raise HelpToolError(exc.message) from exc
         _broadcast_after_commit()
+        mode_text = (
+            f" ({continue_mode.label.lower()})" if continue_mode is not None else ""
+        )
         return (
-            f"Suggested: {HelpProposalAction(action).label}. The person sees it "
+            f"Suggested: {HelpProposalAction(action).label}{mode_text}. The "
+            "person sees it "
             "and your note next to the chat; only they resolve the case and "
             "write the note the tester gets."
         )
@@ -223,6 +250,24 @@ def build_help_chat_handlers(
         PROPOSE_PLAN_CHANGE_TOOL: _handle_propose_plan_change,
         PROPOSE_RESOLUTION_TOOL: _handle_propose_resolution,
     }
+
+
+def _continue_mode_argument(
+    arguments: dict[str, object], action: str
+) -> HelpContinueMode | None:
+    """The optional ``continue_mode``; only meaningful with ``continue``."""
+    value = arguments.get("continue_mode")
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or value not in _CONTINUE_MODES:
+        raise HelpToolError(
+            "continue_mode must be one of: " + ", ".join(_CONTINUE_MODES) + "."
+        )
+    if action != HelpProposalAction.CONTINUE:
+        raise HelpToolError(
+            "continue_mode is only for action continue; leave it out for " f"{action}."
+        )
+    return HelpContinueMode(value)
 
 
 def _draft_saved_text(draft: PlanDraftView) -> str:

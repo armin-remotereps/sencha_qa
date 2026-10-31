@@ -161,6 +161,7 @@ class TestRunConsumer(AuthenticatedConsumer):
                     "pivot_id": event["pivot_id"],
                     "status": event["status"],
                     "summary": event["summary"],
+                    "pause_pending": event.get("pause_pending", False),
                 }
             )
         )
@@ -279,6 +280,9 @@ class TestRunCaseConsumer(AuthenticatedConsumer):
                     "blocked_reason": event["blocked_reason"],
                     "blocked_reason_label": event["blocked_reason_label"],
                     "steps": event["steps"],
+                    "pause_pending": event.get("pause_pending", False),
+                    "pause_requested_by": event.get("pause_requested_by", ""),
+                    "discussion_url": event.get("discussion_url", ""),
                 }
             )
         )

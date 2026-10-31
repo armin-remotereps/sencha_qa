@@ -31,7 +31,12 @@ from machine_setup.services.case_help_context import (
 )
 from machine_setup.services.send_message import send_setup_message
 from projects.case_help_services import lock_help_request_for_chat
-from projects.models import Project, TestRunTestCase
+from projects.models import (
+    CaseHelpRequest,
+    PauseMessageState,
+    Project,
+    TestRunTestCase,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +71,12 @@ def open_help_chat(
         send_setup_message(project=project, user=user, text=first, conversation=thread)
     except MachineSetupError as exc:
         raise HelpChatSendRefusedError(exc.message, conversation_id=thread.pk) from exc
+    if text.strip() and thread.help_request_id is not None:
+        # A person sent a message by hand: a pause message the server could
+        # not send is no longer offered for a re-send.
+        CaseHelpRequest.objects.filter(
+            pk=thread.help_request_id, pause_message_state=PauseMessageState.REFUSED
+        ).update(pause_message_state=PauseMessageState.SENT, pause_message_note="")
     return thread
 
 

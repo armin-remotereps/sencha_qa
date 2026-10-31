@@ -505,9 +505,12 @@ def _interrupted_by_fault(help: CheckpointHelp, next_step: int) -> bool:
 
     A help the agent asked for always has its failed attempt; one without it
     (a resume from an earlier step dropped it) is not repeated. A fault's
-    step is past the cursor only when a resume went back before it.
+    step is past the cursor only when a resume went back before it. A
+    person's pause (``help.paused_by``) counts as a fault: it may have
+    stopped the step before any attempt failed.
     """
-    return bool(help.fault.strip()) and help.step_num <= next_step
+    interrupted = bool(help.fault.strip() or help.paused_by.strip())
+    return interrupted and help.step_num <= next_step
 
 
 def _interrupted_help_line(
@@ -655,8 +658,13 @@ def _applied_help(
             attempt.kind == "step"
             and attempt.step_num == help.step_num
             # A fault may have stopped the step before any attempt failed; its
-            # retry after the help is then the step's only attempt.
-            and (attempt.result.status != "pass" or help.fault.strip())
+            # retry after the help is then the step's only attempt. So may a
+            # person's pause.
+            and (
+                attempt.result.status != "pass"
+                or help.fault.strip()
+                or help.paused_by.strip()
+            )
         ):
             if help.ask.strip():
                 return help
@@ -1443,6 +1451,9 @@ def _execute_sub_tasks(
         progress.next_step = total + 1
         break
 
+    # A pause, abort or re-test asked for during the last step stops here,
+    # before the verdict.
+    _check_cancelled(cancellation_check, on_log)
     progress.set_phase("verdict")
     return _build_verdict(
         orchestrator_llm,

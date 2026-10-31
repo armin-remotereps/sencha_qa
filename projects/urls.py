@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.urls import URLPattern, path
 
 from projects import (
+    case_pause_views,
     member_views,
     person_step_question_views,
     person_step_views,
@@ -305,6 +306,16 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/",
         views.test_run_case_detail,
         name="test_run_case_detail",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/pause/",
+        case_pause_views.test_run_case_pause,
+        name="test_run_case_pause",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/pause/dismiss/",
+        case_pause_views.test_run_case_pause_dismiss,
+        name="test_run_case_pause_dismiss",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/resume/",
