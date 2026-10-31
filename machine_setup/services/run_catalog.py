@@ -52,14 +52,14 @@ def _run_line(run: TestRun) -> str:
     retest: int = getattr(run, "retest_count", 0)
     name = repr(run.name[:_NAME_LIMIT]) if run.name else "(no name)"
     return (
-        f"- Run id {run.pk}: name {name}; status {_status_label(run, failed, blocked, retest)}; "
+        f"- Run id {run.pk}: name {name}; status {run_status_label(run, failed=failed, blocked=blocked, retest=retest)}; "
         f"{case_count} cases (passed {passed}, failed {failed}, blocked {blocked}, "
         f"needs re-test {retest}); "
         f"created {run.created_at.date().isoformat()}"
     )
 
 
-def _status_label(run: TestRun, failed: int, blocked: int, retest: int) -> str:
+def run_status_label(run: TestRun, *, failed: int, blocked: int, retest: int) -> str:
     """The label the run list shows (``partials/badge_run_status.html``)."""
     if run.status == TestRunStatus.WAITING:
         return "Draft"

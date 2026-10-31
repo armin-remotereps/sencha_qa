@@ -13,6 +13,7 @@ SAMPLE_TITLES = 5
 
 READ_DOCUMENT_TOOL = "read_document"
 LIST_TEST_RUNS_TOOL = "list_test_runs"
+GET_TEST_RUN_STATE_TOOL = "get_test_run_state"
 LIST_CASE_GROUPS_TOOL = "list_test_case_groups"
 PROPOSE_TEST_RUNS_TOOL = "propose_test_runs"
 
