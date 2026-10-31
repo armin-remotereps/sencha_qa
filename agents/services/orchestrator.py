@@ -21,6 +21,7 @@ from agents.exceptions import (
     OrchestratorPlanError,
     ResumeStateLostError,
 )
+from agents.services.agent_loop import run_tool_loop
 from agents.services.llm_client import send_chat_completion
 from agents.services.llm_config import (
     build_llm_config,
@@ -91,6 +92,16 @@ from agents.types import (
     SubTask,
     SubTaskAttempt,
     SubTaskResult,
+    ToolCall,
+    ToolContext,
+    ToolDispatcher,
+    ToolResult,
+)
+from knowledge_base.services.agent_tools import (
+    READ_KNOWLEDGE_TOOL,
+    SEARCH_KNOWLEDGE_TOOL,
+    dispatch_knowledge_tool,
+    knowledge_tool_definitions,
 )
 
 logger = logging.getLogger(__name__)
@@ -119,6 +130,7 @@ def run_orchestrator(
     person_mode: Callable[[], bool] | None = None,
     case_step_count: int = 0,
     case_steps_testrail: bool = True,
+    knowledge_index: str | None = None,
 ) -> AgentResult:
     """Plan and run one test case.
 
@@ -130,6 +142,10 @@ def run_orchestrator(
     when it has none); the planner then tags each sub-task with the case
     steps it covers; ``case_steps_testrail`` says whether the case came
     from TestRail (stored for the step labels).
+
+    ``knowledge_index`` is the project's knowledge base index (None when it
+    has no ready item): the planner sees it and may look items up in a
+    bounded tool loop; None keeps the single planning call.
     """
     # One model serves every role. The distinct names keep the call sites below
     # readable and make a future per-role split a one-line change.
@@ -161,6 +177,9 @@ def run_orchestrator(
             project_prompt=project_prompt,
             on_log=on_log,
             case_step_count=case_step_count,
+            project_id=project_id,
+            knowledge_index=knowledge_index,
+            cancellation_check=cancellation_check,
         )
     else:
         sub_tasks = resume.plan
@@ -1054,20 +1073,37 @@ def _plan_sub_tasks(
     project_prompt: str | None = None,
     on_log: LogCallback | None = None,
     case_step_count: int = 0,
+    project_id: int,
+    knowledge_index: str | None = None,
+    cancellation_check: CancellationCheck | None = None,
 ) -> tuple[SubTask, ...]:
+    knowledge_tools = (
+        knowledge_index is not None and settings.ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS > 0
+    )
     system_prompt = build_plan_system_prompt(
         project_prompt=project_prompt,
         min_timeout_seconds=bounds.minimum,
         max_timeout_seconds=bounds.maximum,
         case_step_count=case_step_count,
+        knowledge_index=knowledge_index,
+        knowledge_tools=knowledge_tools,
     )
     messages = (
         ChatMessage(role="system", content=system_prompt),
         ChatMessage(role="user", content=task_description),
     )
 
-    response = send_chat_completion(orchestrator_llm, messages)
-    raw_text = _extract_text(response.message)
+    if knowledge_tools:
+        raw_text = _plan_with_knowledge_tools(
+            orchestrator_llm,
+            messages,
+            project_id=project_id,
+            on_log=on_log,
+            cancellation_check=cancellation_check,
+        )
+    else:
+        response = send_chat_completion(orchestrator_llm, messages)
+        raw_text = _extract_text(response.message)
 
     parsed = _parse_json_response(raw_text)
     raw_sub_tasks = parsed.get("sub_tasks", [])
@@ -1093,6 +1129,97 @@ def _plan_sub_tasks(
         )
 
     return sub_tasks
+
+
+def _plan_with_knowledge_tools(
+    orchestrator_llm: LLMConfig,
+    messages: tuple[ChatMessage, ...],
+    *,
+    project_id: int,
+    on_log: LogCallback | None,
+    cancellation_check: CancellationCheck | None,
+) -> str:
+    """The planner's answer after at most ``ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS``
+    rounds of knowledge base look-ups within ``ORCHESTRATOR_PLAN_TIMEOUT_SECONDS``.
+
+    Each round is one LLM call whose tool calls all run. When the model answers
+    without tools, that text is the plan. When the rounds or the time run out
+    first, one more call without tools (``tool_choice="none"``) asks for the
+    plan JSON. ``AIServiceError`` and ``AgentCancelledError`` propagate as from
+    the single planning call.
+    """
+    tools = knowledge_tool_definitions(include_list=False)
+    config = AgentConfig(
+        llm=orchestrator_llm,
+        # One round is one call: the last round's results are answered by the
+        # final call below, so at most ROUNDS + 1 calls in all.
+        max_iterations=settings.ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS,
+        timeout_seconds=settings.ORCHESTRATOR_PLAN_TIMEOUT_SECONDS,
+        # The loop's own debug lines (thinking, full tool results) stay out of
+        # the case log; the dispatcher logs one line per look-up instead.
+        on_log=None,
+        cancellation_check=cancellation_check,
+    )
+    result = run_tool_loop(
+        list(messages),
+        ToolContext(project_id=project_id, browser_selection=BrowserSelection()),
+        config=config,
+        tool_definitions=tools,
+        dispatch=_knowledge_dispatcher(project_id, on_log),
+    )
+    if result.stop_reason == AgentStopReason.TASK_COMPLETE:
+        return _extract_text(result.messages[-1])
+
+    _log(
+        on_log,
+        "[Orchestrator] Knowledge base look-ups ended "
+        f"({result.stop_reason.value}); asking for the plan.",
+    )
+    response = send_chat_completion(
+        orchestrator_llm,
+        (*result.messages, ChatMessage(role="user", content=_PLAN_NOW_PROMPT)),
+        tools,
+        tool_choice="none",
+    )
+    return _extract_text(response.message)
+
+
+_PLAN_NOW_PROMPT = (
+    "No more knowledge base look-ups are possible. Answer now with ONLY the plan "
+    "JSON in the OUTPUT FORMAT, using what you have found so far."
+)
+
+
+def _knowledge_dispatcher(
+    project_id: int, on_log: LogCallback | None
+) -> ToolDispatcher:
+    """Runs only search_knowledge / read_knowledge, logging each call."""
+
+    def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
+        if tool_call.tool_name not in _PLANNER_KNOWLEDGE_TOOLS:
+            return ToolResult(
+                tool_call_id=tool_call.tool_call_id,
+                content=f"Tool not available while planning: {tool_call.tool_name}",
+                is_error=True,
+            )
+        _log(on_log, f"[Orchestrator] KB: {_describe_knowledge_call(tool_call)}")
+        return dispatch_knowledge_tool(tool_call, project_id)
+
+    return _dispatch
+
+
+_PLANNER_KNOWLEDGE_TOOLS = frozenset({SEARCH_KNOWLEDGE_TOOL, READ_KNOWLEDGE_TOOL})
+_KB_LOG_QUERY_MAX_CHARS = 200
+
+
+def _describe_knowledge_call(tool_call: ToolCall) -> str:
+    arguments = tool_call.arguments
+    if tool_call.tool_name == SEARCH_KNOWLEDGE_TOOL:
+        query = str(arguments.get("query", ""))[:_KB_LOG_QUERY_MAX_CHARS]
+        return f"{tool_call.tool_name} {json.dumps(query, ensure_ascii=False)}"
+    page = arguments.get("page")
+    page_part = "" if page is None else f" page {page}"
+    return f"{tool_call.tool_name} id={arguments.get('item_id')}{page_part}"
 
 
 def _build_sub_task(

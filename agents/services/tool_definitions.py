@@ -7,6 +7,7 @@ from controller_client.protocol import (
     BrowserName,
     ScrollDirection,
 )
+from knowledge_base.services.agent_tools import knowledge_tool_definitions
 
 
 def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
@@ -644,4 +645,14 @@ def get_all_tool_definitions() -> tuple[ToolDefinition, ...]:
         + get_browser_tool_definitions()
         + get_search_tool_definitions()
         + get_utility_tool_definitions()
+        + get_knowledge_tool_definitions()
     )
+
+
+def get_knowledge_tool_definitions() -> tuple[ToolDefinition, ...]:
+    """``search_knowledge`` and ``read_knowledge`` (category ``PROJECT_DATA``):
+    read-only project data, here the members' knowledge base, so a tester or
+    setup sub-agent can look up how to do a step. No ``list_knowledge``: the
+    planner names the items a step needs. Allowlisted sub-agents (person-step
+    confirm, teardown) pick tools by name and never get these."""
+    return knowledge_tool_definitions(include_list=False)

@@ -393,7 +393,14 @@ def project_duplicate(request: AuthenticatedRequest, project_id: int) -> HttpRes
     project = get_writable_project(project_id, user)
 
     name = request.POST.get("name", "").strip() or f"Copy of {project.name}"
-    duplicate_project(source_project=project, user=user, name=name)
+    # An unticked checkbox is absent from the POST; the dialog ticks it.
+    copy_knowledge_base = request.POST.get("copy_knowledge_base") == "on"
+    duplicate_project(
+        source_project=project,
+        user=user,
+        name=name,
+        copy_knowledge_base=copy_knowledge_base,
+    )
     messages.success(request, f'Project duplicated as "{name}".')
     return redirect("projects:list")
 

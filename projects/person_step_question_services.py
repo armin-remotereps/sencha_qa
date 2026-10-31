@@ -26,6 +26,9 @@ from agents.services.person_step_advisor import answer_person_step_question
 from agents.types import PersonStepAdviceContext, PersonStepHandOff
 from auto_tester.celery import app as celery_app
 from controller_client.protocol import PERSON_STEP_STATE_MAX_QUESTIONS
+from knowledge_base.exceptions import KnowledgeBaseError
+from knowledge_base.services.related_knowledge import related_knowledge
+from knowledge_base.tool_text import render_excerpts
 from projects.case_step_refs import stored_case_steps
 from projects.case_task_text import build_task_description
 from projects.exceptions import PersonStepQuestionError
@@ -65,6 +68,9 @@ QUESTION_FAILED_ANSWER = "The AI could not answer right now. Ask again."
 # Earlier Q&A of the step the advisor sees, and the application context cap.
 _HISTORY_MAX_ITEMS = 6
 _PROJECT_CONTEXT_MAX_LENGTH = 4000
+# Knowledge base excerpts given to the advisor (one query).
+_KNOWLEDGE_EXCERPT_LIMIT = 4
+_KNOWLEDGE_EXCERPT_MAX_CHARS = 6000
 # A pending question older than the LLM timeout plus this is a lost task.
 _STALE_GRACE_SECONDS = 60
 
@@ -271,7 +277,7 @@ def answer_person_step_question_now(question_id: int) -> None:
     pivot = step.test_run_test_case
     project = pivot.test_run.project
     history = _history(step.pk, before_id=row.pk)
-    context = _advice_context(step, pivot, history)
+    context = _advice_context(step, pivot, history, row.question)
     status = PersonStepQuestionStatus.ANSWERED
     try:
         answer = answer_person_step_question(
@@ -401,6 +407,7 @@ def _advice_context(
     step: CasePersonStep,
     pivot: TestRunTestCase,
     history: tuple[tuple[str, str], ...],
+    question: str,
 ) -> PersonStepAdviceContext:
     project = pivot.test_run.project
     system_info = project.agent_system_info
@@ -424,7 +431,29 @@ def _advice_context(
             case_steps=tuple(item.num for item in stored_case_steps(step.case_steps)),
         ),
         history=history,
+        knowledge_excerpts=_knowledge_excerpts(
+            project.pk,
+            f"{question}\n{step.instruction}\n{step.expected_result}",
+        ),
     )
+
+
+def _knowledge_excerpts(project_id: int, text: str) -> str:
+    """The rendered knowledge base excerpts related to ``text``; "" for none.
+
+    A knowledge base problem never keeps the question from being answered.
+    """
+    try:
+        excerpts = related_knowledge(
+            project_id,
+            text,
+            limit=_KNOWLEDGE_EXCERPT_LIMIT,
+            max_chars=_KNOWLEDGE_EXCERPT_MAX_CHARS,
+        )
+    except KnowledgeBaseError as exc:
+        logger.warning("Ask AI knowledge excerpts skipped: %s", exc.message)
+        return ""
+    return render_excerpts(excerpts)
 
 
 def _advice_step_label(step: CasePersonStep) -> str:

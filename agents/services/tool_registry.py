@@ -21,6 +21,11 @@ from controller_client.protocol import (
     BrowserName,
     ScrollDirection,
 )
+from knowledge_base.services.agent_tools import (
+    READ_KNOWLEDGE_TOOL,
+    SEARCH_KNOWLEDGE_TOOL,
+    dispatch_knowledge_tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -480,6 +485,22 @@ def _handle_wait(context: ToolContext, arguments: dict[str, object]) -> ToolResu
     )
 
 
+def _handle_knowledge_tool(tool_name: str) -> _HandlerFunc:
+    """A handler for one knowledge base tool of the project in ``context``.
+
+    ``dispatch_knowledge_tool`` never raises for bad arguments or a missing
+    item; it answers with an error result the model can act on.
+    """
+
+    def _handle(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+        return dispatch_knowledge_tool(
+            ToolCall(tool_call_id="", tool_name=tool_name, arguments=arguments),
+            context.project_id,
+        )
+
+    return _handle
+
+
 _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "execute_command": _handle_execute_command,
     "send_command_input": _handle_send_command_input,
@@ -509,4 +530,6 @@ _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "browser_list_downloads": _handle_browser_list_downloads,
     "web_search": _handle_web_search,
     "wait": _handle_wait,
+    SEARCH_KNOWLEDGE_TOOL: _handle_knowledge_tool(SEARCH_KNOWLEDGE_TOOL),
+    READ_KNOWLEDGE_TOOL: _handle_knowledge_tool(READ_KNOWLEDGE_TOOL),
 }
