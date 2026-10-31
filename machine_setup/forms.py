@@ -6,18 +6,52 @@ from django import forms
 from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
 
+from auto_tester.file_names import sanitize_file_name
+from knowledge_base.reference_note import MAX_KNOWLEDGE_REFS_PER_MESSAGE
 from machine_setup.document_text import (
     UploadedDocument,
     decode_document,
     has_document_extension,
-    sanitize_file_name,
 )
 from machine_setup.exceptions import SetupDocumentInvalidError
 
 SETUP_MESSAGE_MAX_LENGTH = 8000
 DOCUMENT_TYPE_MESSAGE = "Attach a Markdown or plain text file (.md, .markdown, .txt)."
 DOCUMENT_THREAD_MESSAGE = "Documents can be attached in the main chat only."
-EMPTY_MESSAGE = "Write a message or attach a document."
+EMPTY_MESSAGE = "Write a message, attach a document or pick a knowledge base item."
+KNOWLEDGE_REFS_INVALID_MESSAGE = "Pick knowledge base items from the list."
+KNOWLEDGE_REFS_TOO_MANY_MESSAGE = (
+    f"Pick at most {MAX_KNOWLEDGE_REFS_PER_MESSAGE} knowledge base items."
+)
+
+
+class KnowledgeItemIdsField(forms.Field):
+    """Repeated ``knowledge_item_ids`` values: positive ints, deduplicated in
+    order, at most ``MAX_KNOWLEDGE_REFS_PER_MESSAGE``. Whether each id is an
+    item of the project is checked by the send service."""
+
+    widget = forms.MultipleHiddenInput
+
+    def __init__(self) -> None:
+        super().__init__(required=False)
+
+    def to_python(self, value: object) -> list[int]:
+        if not value:
+            return []
+        if not isinstance(value, (list, tuple)):
+            raise forms.ValidationError(KNOWLEDGE_REFS_INVALID_MESSAGE)
+        ids: list[int] = []
+        for raw in value:
+            if not isinstance(raw, str) or not raw.isascii() or not raw.isdigit():
+                raise forms.ValidationError(KNOWLEDGE_REFS_INVALID_MESSAGE)
+            item_id = int(raw)
+            if item_id < 1:
+                raise forms.ValidationError(KNOWLEDGE_REFS_INVALID_MESSAGE)
+            ids.append(item_id)
+        unique = list(dict.fromkeys(ids))
+        if len(unique) > MAX_KNOWLEDGE_REFS_PER_MESSAGE:
+            raise forms.ValidationError(KNOWLEDGE_REFS_TOO_MANY_MESSAGE)
+        return unique
 
 
 class SetupMessageForm(forms.Form):
@@ -35,6 +69,8 @@ class SetupMessageForm(forms.Form):
     )
     # Main chat only: one Markdown/text file.
     document = forms.FileField(required=False)
+    # Any thread: knowledge base items the message points the agent at.
+    knowledge_item_ids = KnowledgeItemIdsField()
 
     def clean_document(self) -> UploadedDocument | None:
         upload: UploadedFile | None = self.cleaned_data.get("document")
@@ -68,7 +104,13 @@ class SetupMessageForm(forms.Form):
         document = cleaned.get("document")
         if document is not None and cleaned.get("conversation_id") is not None:
             raise forms.ValidationError(DOCUMENT_THREAD_MESSAGE)
-        if document is None and not (cleaned.get("text") or "").strip():
+        if "knowledge_item_ids" in self.errors:
+            return cleaned
+        if (
+            document is None
+            and not cleaned.get("knowledge_item_ids")
+            and not (cleaned.get("text") or "").strip()
+        ):
             raise forms.ValidationError(EMPTY_MESSAGE)
         return cleaned
 
@@ -76,6 +118,11 @@ class SetupMessageForm(forms.Form):
         """The validated document; call after ``is_valid()``."""
         document = self.cleaned_data.get("document")
         return document if isinstance(document, UploadedDocument) else None
+
+    def referenced_item_ids(self) -> list[int]:
+        """The validated, deduplicated item ids; call after ``is_valid()``."""
+        ids: list[int] = self.cleaned_data.get("knowledge_item_ids") or []
+        return ids
 
 
 class SetupThreadForm(forms.Form):

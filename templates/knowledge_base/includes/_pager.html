@@ -1,0 +1,24 @@
+{% comment %} Previous / next pages of an item's extracted text, plus a page jump.
+
+   Context contract:
+     page — KnowledgePage (page, page_count, has_next) {% endcomment %}
+<div class="pagination-bar">
+  <form class="kb-page-jump" method="get">
+    <label class="muted small" for="kb-page-input">Page</label>
+    <input class="input" type="number" id="kb-page-input" name="page" min="1" max="{{ page.page_count }}" value="{{ page.page }}">
+    <span class="muted small">of {{ page.page_count }}</span>
+    <button type="submit" class="btn btn-sm btn-ghost">Go</button>
+  </form>
+  <nav class="pagination" aria-label="Text pages">
+    {% if page.page > 1 %}
+      <a class="page-link" href="?page={{ page.page|add:-1 }}">Prev</a>
+    {% else %}
+      <span class="page-link" aria-disabled="true">Prev</span>
+    {% endif %}
+    {% if page.has_next %}
+      <a class="page-link" href="?page={{ page.page|add:1 }}">Next</a>
+    {% else %}
+      <span class="page-link" aria-disabled="true">Next</span>
+    {% endif %}
+  </nav>
+</div>

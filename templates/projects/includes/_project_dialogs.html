@@ -46,10 +46,10 @@
 {% url 'projects:duplicate' 0 as duplicate_project_url_template %}
 <div
   class="dialog-backdrop"
-  x-data="{ ...dialog(), dup: { id: null, name: '', caseCount: 0 } }"
+  x-data="{ ...dialog(), dup: { id: null, name: '', caseCount: 0, copyKnowledge: true } }"
   x-show="open"
   x-cloak
-  x-on:open-duplicate-project.window="dup = { id: $event.detail.id, name: 'Copy of ' + $event.detail.name, caseCount: $event.detail.caseCount }; show()"
+  x-on:open-duplicate-project.window="dup = { id: $event.detail.id, name: 'Copy of ' + $event.detail.name, caseCount: $event.detail.caseCount, copyKnowledge: true }; show()"
   x-on:keydown.escape.window="close()"
   x-trap.noscroll="open"
   @click.self="close()"
@@ -68,6 +68,12 @@
       <div class="field">
         <label for="duplicate-project-name">New project name</label>
         <input class="input" id="duplicate-project-name" name="name" type="text" x-model="dup.name" required>
+      </div>
+      <div class="field">
+        <label class="checkbox" for="duplicate-project-copy-knowledge">
+          <input type="checkbox" id="duplicate-project-copy-knowledge" name="copy_knowledge_base" value="on" x-model="dup.copyKnowledge" checked>
+          <span>Copy the knowledge base (its ready items are copied in the background)</span>
+        </label>
       </div>
       <div class="dialog-actions">
         <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>

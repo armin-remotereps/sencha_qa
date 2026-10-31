@@ -1,0 +1,7 @@
+{% comment %} An item's extraction status badge. knowledgeStatus (static/js/punk-hazard.js)
+   finds it by [data-kb-status] inside the item's [data-kb-item] element and
+   swaps class and text live, using the same status → class map.
+
+   Context contract:
+     status — "pending" | "extracting" | "ready" | "failed" {% endcomment %}
+{% if status == "ready" %}<span class="badge badge-passed" data-kb-status>Ready</span>{% elif status == "failed" %}<span class="badge badge-failed" data-kb-status>Failed</span>{% elif status == "extracting" %}<span class="badge badge-running" data-kb-status>Reading</span>{% else %}<span class="badge badge-draft" data-kb-status>Waiting</span>{% endif %}

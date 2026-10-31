@@ -1,0 +1,135 @@
+{% extends "layouts/project.html" %}
+
+{% comment %} One Knowledge base item: details, live status, edit / retry / delete /
+   download, and a page-by-page preview of the extracted text (what the agents
+   read), or an archive's members.
+
+   Context contract (knowledge_base.views.knowledge_item):
+     project    — current Project
+     active_tab — "knowledge_base"
+     item       — KnowledgeItemDetail (item.entry: KnowledgeListEntry)
+     page       — KnowledgePage, or None (archive, or no text yet)
+     members    — Sequence[KnowledgeListEntry] (an archive's members; empty otherwise)
+     edit_form  — KnowledgeItemEditForm with the current name and description
+     ws_path    — the knowledgeStatus socket path
+     project_can_write (context processor) — false hides edit, retry and delete {% endcomment %}
+{% block title %}{{ item.entry.summary.name }} · Knowledge base · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumb_extra %}
+  <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'knowledge_base:list' project_id=project.id %}">Knowledge base</a>
+  {% if item.entry.summary.parent_id %}
+    <span class="sep" aria-hidden="true">›</span>
+    <a href="{% url 'knowledge_base:list' project_id=project.id %}?archive={{ item.entry.summary.parent_id }}">Archive</a>
+  {% endif %}
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">{{ item.entry.summary.name }}</span>
+{% endblock %}
+
+{% block page_header %}
+{% with summary=item.entry.summary %}
+<div class="page-header">
+  <div>
+    <h1 class="kb-item-title">{{ summary.name }}</h1>
+    {% if summary.description %}<p class="subtitle pre-wrap">{{ summary.description }}</p>{% endif %}
+  </div>
+  <div class="actions">
+    <a class="btn btn-secondary" href="{% url 'knowledge_base:item_download' project_id=project.id item_id=summary.id %}">Download</a>
+    {% if project_can_write %}
+      {% if item.entry.can_retry %}
+        <form method="post" action="{% url 'knowledge_base:item_retry' project_id=project.id item_id=summary.id %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-secondary">Retry</button>
+        </form>
+      {% endif %}
+      <button type="button" class="btn btn-danger" @click="$dispatch('open-kb-delete-item')">Delete</button>
+    {% endif %}
+  </div>
+</div>
+{% endwith %}
+{% endblock %}
+
+{% block project_content %}
+{% with summary=item.entry.summary %}
+<div class="stack" x-data="knowledgeStatus('{{ ws_path|escapejs }}')">
+  <div class="grid grid-2 kb-item-grid" data-kb-item="{{ summary.id }}">
+    <section class="card" aria-labelledby="kb-details-title">
+      <div class="card-header">
+        <h2 id="kb-details-title">Details</h2>
+        {% include "knowledge_base/includes/_status_badge.html" with status=summary.status only %}
+      </div>
+      <div class="alert alert-danger" data-kb-error{% if not item.entry.error %} hidden{% endif %}>{{ item.entry.error }}</div>
+      <div class="alert alert-warning" data-kb-warning{% if not item.entry.warning %} hidden{% endif %}>{{ item.entry.warning }}</div>
+      <dl class="kv">
+        <div><dt>Kind</dt><dd>{{ summary.kind_label }}</dd></div>
+        <div><dt>File</dt><dd class="kb-break">{{ item.original_name }}</dd></div>
+        <div><dt>Size</dt><dd>{{ summary.size_bytes|filesizeformat }}</dd></div>
+        {% if summary.kind == "archive" %}
+          <div><dt>Files inside</dt><dd>{{ summary.member_count }}</dd></div>
+        {% else %}
+          <div><dt>Pages</dt><dd data-kb-pages>{% if summary.page_count %}{{ summary.page_count }}{% else %}&mdash;{% endif %}</dd></div>
+          <div><dt>Characters</dt><dd>{{ item.char_count }}</dd></div>
+        {% endif %}
+        <div><dt>Uploaded</dt><dd>{{ item.entry.created_at|date:"M j, Y H:i" }}{% if item.entry.uploaded_by %} by {{ item.entry.uploaded_by }}{% endif %}</dd></div>
+      </dl>
+    </section>
+
+    {% if project_can_write %}
+    <section class="card" aria-labelledby="kb-edit-title">
+      <div class="card-header">
+        <h2 id="kb-edit-title">Name and description</h2>
+      </div>
+      <form method="post" action="{% url 'knowledge_base:item_edit' project_id=project.id item_id=summary.id %}">
+        {% csrf_token %}
+        <div class="field">
+          <label for="{{ edit_form.name.id_for_label }}">Name</label>
+          {{ edit_form.name }}
+        </div>
+        <div class="field">
+          <label for="{{ edit_form.description.id_for_label }}">Description <span class="optional">(optional; helps the agents find it)</span></label>
+          {{ edit_form.description }}
+        </div>
+        <div class="card-actions">
+          <button type="submit" class="btn btn-primary">Save</button>
+        </div>
+      </form>
+    </section>
+    {% endif %}
+  </div>
+
+  {% if summary.kind == "archive" %}
+    {% if members %}
+      {% include "knowledge_base/includes/_item_table.html" with project=project items=members only %}
+    {% else %}
+      {% include "partials/empty_state.html" with icon="▤" title="No files read from this archive" body="The archive is still being read, or it held no supported files." only %}
+    {% endif %}
+  {% else %}
+    <section class="card" aria-labelledby="kb-preview-title">
+      <div class="card-header">
+        <h2 id="kb-preview-title">What the agents read</h2>
+        {% if page %}<span class="muted small">Page {{ page.page }} of {{ page.page_count }}{% if page.location %} · {{ page.location }}{% endif %}</span>{% endif %}
+      </div>
+      {% if page %}
+        <pre class="kb-preview">{{ page.text }}</pre>
+        {% if page.page_count > 1 %}
+          {% include "knowledge_base/includes/_pager.html" with page=page only %}
+        {% endif %}
+      {% else %}
+        <p class="muted">The text preview appears here once the file has been read.</p>
+        <p class="hint" data-kb-ready-hint="{{ summary.id }}" hidden>The file is ready. <a href="">Reload</a> to see its text.</p>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  {% if project_can_write %}
+    {% url 'knowledge_base:item_delete' project_id=project.id item_id=summary.id as delete_url %}
+    {% if summary.kind == "archive" %}
+      {% include "partials/confirm_dialog.html" with dialog_id="kb-delete-item" title="Delete this archive?" body="The archive and every file read from it are removed from the knowledge base. Agents can no longer read them." confirm_label="Delete" action_url=delete_url only %}
+    {% else %}
+      {% include "partials/confirm_dialog.html" with dialog_id="kb-delete-item" title="Delete this file?" body="The file is removed from the knowledge base. Agents can no longer read it." confirm_label="Delete" action_url=delete_url only %}
+    {% endif %}
+  {% endif %}
+</div>
+{% endwith %}
+{% endblock %}

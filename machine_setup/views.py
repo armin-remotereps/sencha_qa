@@ -9,6 +9,7 @@ from django.utils.http import content_disposition_header
 from django.views.decorators.http import require_GET, require_POST
 
 from accounts.types import AuthenticatedRequest
+from knowledge_base.reference_note import MAX_KNOWLEDGE_REFS_PER_MESSAGE
 from machine_setup.exceptions import (
     HelpChatSendRefusedError,
     MachineSetupError,
@@ -28,8 +29,10 @@ from machine_setup.payloads import HelpThreadPayload
 from machine_setup.services.case_auto_fix import settle_stale_auto_fix_turn
 from machine_setup.services.chat_page import (
     OTHER_THREAD_TURN_MESSAGE,
+    KnowledgePicker,
     SetupPage,
     find_thread,
+    get_knowledge_picker,
     get_setup_page,
     get_thread_help_panel,
     list_help_threads,
@@ -69,6 +72,7 @@ from projects.exceptions import (
 )
 from projects.forms import CaseHelpResolutionForm, RunHelpModeForm, form_error_text
 from projects.models import Project
+from projects.project_access import get_request_project_access
 
 
 @project_membership_required
@@ -131,6 +135,13 @@ def _render_chat(
             }
         )
     threads = list_help_threads(project)
+    # Only the composer lists them, and read-only members get none.
+    access = get_request_project_access(request)
+    knowledge_picker = (
+        get_knowledge_picker(project.pk)
+        if access is not None and access.can_write
+        else KnowledgePicker(choices=[], capped=False)
+    )
     return render(
         request,
         "machine_setup/chat.html",
@@ -156,6 +167,12 @@ def _render_chat(
             },
             "form": SetupMessageForm(),
             "document_max_bytes": settings.MACHINE_SETUP_DOCUMENT_MAX_BYTES,
+            "knowledge_choices": knowledge_picker.choices,
+            "knowledge_choices_capped": knowledge_picker.capped,
+            "knowledge_max_refs": MAX_KNOWLEDGE_REFS_PER_MESSAGE,
+            "knowledge_base_url": reverse(
+                "knowledge_base:list", kwargs={"project_id": project.id}
+            ),
             "document_url_template": reverse(
                 "machine_setup:document",
                 kwargs={"project_id": project.id, "document_id": 0},
@@ -337,6 +354,7 @@ def setup_send(request: AuthenticatedRequest, project: Project) -> HttpResponse:
             text=form.cleaned_data["text"],
             conversation=thread,
             document=form.uploaded_document(),
+            knowledge_item_ids=form.referenced_item_ids(),
         )
     except MachineSetupError as exc:
         messages.error(request, exc.message)

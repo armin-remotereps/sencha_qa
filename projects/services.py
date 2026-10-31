@@ -67,6 +67,8 @@ from controller_client.protocol import (
     ErrorCode,
     ScrollDirection,
 )
+from knowledge_base.services.item_processing import COPY_PROJECT_KNOWLEDGE_TASK
+from knowledge_base.services.knowledge_index import knowledge_index_text
 from machine_setup.auto_fix_stop import request_auto_fix_stop
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from notifications.services.inbox_broadcast import broadcast_project_attention_changed
@@ -263,9 +265,17 @@ def _clone_test_case(*, source: TestCase, target_project: Project) -> TestCase:
 
 @transaction.atomic
 def duplicate_project(
-    *, source_project: Project, user: CustomUser, name: str
+    *,
+    source_project: Project,
+    user: CustomUser,
+    name: str,
+    copy_knowledge_base: bool = True,
 ) -> Project:
-    """Copies tags and test cases (without upload association) from the source."""
+    """Copies tags and test cases (without upload association) from the source.
+
+    ``copy_knowledge_base``: the source's ready knowledge base items are copied
+    by a task queued after commit (the new project must exist for it).
+    """
     new_project = Project.objects.create(
         name=name, default_help_mode=source_project.default_help_mode
     )
@@ -276,6 +286,13 @@ def duplicate_project(
         _clone_test_case(source=tc, target_project=new_project) for tc in source_cases
     ]
     TestCase.objects.bulk_create(copies)
+    if copy_knowledge_base:
+        source_id, new_id = source_project.id, new_project.id
+        transaction.on_commit(
+            lambda: celery_app.send_task(
+                COPY_PROJECT_KNOWLEDGE_TASK, args=[source_id, new_id]
+            )
+        )
     return new_project
 
 
@@ -3229,6 +3246,11 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
                 person_mode=_build_person_mode_check(run_id),
                 case_step_count=case_step_count,
                 case_steps_testrail=case_steps_testrail,
+                # Only a fresh plan reads the index (one query); a resume
+                # continues the saved plan.
+                knowledge_index=(
+                    knowledge_index_text(project.id) if resume is None else None
+                ),
             )
             # Once a Resume or Start took the run over, the pivot belongs to
             # the newer chain: this worker records nothing (here and below).

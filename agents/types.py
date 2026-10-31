@@ -102,6 +102,9 @@ class PersonStepAdviceContext:
     hand_off: PersonStepHandOff
     # Earlier (question, answer) pairs of this step, oldest first (≤ 6).
     history: tuple[tuple[str, str], ...] = ()
+    # Knowledge base excerpts related to the question, rendered by the caller
+    # (knowledge_base.tool_text.render_excerpts); "" when none.
+    knowledge_excerpts: str = ""
 
 
 @dataclass(frozen=True)

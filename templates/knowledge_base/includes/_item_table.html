@@ -1,0 +1,53 @@
+{% comment %} Knowledge base items as a table (stacked records on mobile via data-label).
+   Each row is a [data-kb-item] element that knowledgeStatus updates live
+   (status badge, warning, error, page count).
+
+   Context contract:
+     project — current Project
+     items   — Sequence[KnowledgeListEntry] {% endcomment %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th scope="col">Name</th>
+        <th scope="col">Kind</th>
+        <th scope="col">Size</th>
+        <th scope="col">Pages</th>
+        <th scope="col">Status</th>
+        <th scope="col">Uploaded</th>
+        <th scope="col"><span class="visually-hidden">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in items %}
+        {% with item=entry.summary %}
+        <tr data-kb-item="{{ item.id }}">
+          <td data-label="Name" class="cell-primary kb-name-cell">
+            <div class="kb-name-block">
+              <a href="{% url 'knowledge_base:item' project_id=project.id item_id=item.id %}">{{ item.name }}</a>
+              {% if item.description %}<div class="muted small kb-description">{{ item.description }}</div>{% endif %}
+              {% if item.kind == "archive" %}<div class="small"><a href="{% url 'knowledge_base:list' project_id=project.id %}?archive={{ item.id }}">{{ item.member_count }} file{{ item.member_count|pluralize }} inside</a></div>{% endif %}
+            </div>
+          </td>
+          <td data-label="Kind"><span class="chip">{{ item.kind_label }}</span></td>
+          <td data-label="Size" class="muted">{{ item.size_bytes|filesizeformat }}</td>
+          <td data-label="Pages" class="muted" data-kb-pages>{% if item.page_count %}{{ item.page_count }}{% else %}&mdash;{% endif %}</td>
+          <td data-label="Status">
+            <div class="kb-status-cell">
+              {% include "knowledge_base/includes/_status_badge.html" with status=item.status only %}
+              <span class="kb-note kb-note-error" data-kb-error{% if not entry.error %} hidden{% endif %}>{{ entry.error }}</span>
+              <span class="kb-note kb-note-warning" data-kb-warning{% if not entry.warning %} hidden{% endif %}>{{ entry.warning }}</span>
+            </div>
+          </td>
+          <td data-label="Uploaded" class="muted small">
+            {{ entry.created_at|date:"M j, Y" }}{% if entry.uploaded_by %}<div>{{ entry.uploaded_by }}</div>{% endif %}
+          </td>
+          <td data-label="" class="cell-actions">
+            <a class="btn btn-sm btn-ghost" href="{% url 'knowledge_base:item_download' project_id=project.id item_id=item.id %}">Download</a>
+          </td>
+        </tr>
+        {% endwith %}
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

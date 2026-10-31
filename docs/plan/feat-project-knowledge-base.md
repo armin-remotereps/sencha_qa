@@ -1,6 +1,6 @@
 # feat: Project knowledge base
 
-Status: Ready
+Status: Done
 Created: 2026-10-31
 Request: Each project gets a **knowledge base** (KB). Members upload many files at once: PDF, Word (`.docx` and legacy `.doc`), Excel (`.xlsx` and legacy `.xls`), XML, CSV, Markdown, JSON, YAML, logs, source code, and archives (`.zip`, `.tar`, `.tar.gz` / `.tgz`, `.7z`) of such files. The server extracts the text in the background, and the agents can list, search and read it. Today machine setup and test execution struggle because the agents do not know the project's own material: a TeamCity export, install guides, configs.
 
@@ -477,7 +477,7 @@ class KnowledgeExcerpt:    # **added**: server-side retrieval
 - **Tasks** (`knowledge_base/tasks.py`, all on `knowledge`):
   - `extract_knowledge_item(item_id)` and `expand_knowledge_archive(item_id)` run with `soft_time_limit=KNOWLEDGE_BASE_EXTRACT_TIME_LIMIT_SECONDS` and a hard limit 30 s later. When the soft limit hits, the item becomes `failed` ("took too long").
   - `copy_project_knowledge(source_project_id, target_project_id)`.
-  - `sweep_knowledge_storage()` runs from a daily beat entry.
+  - `sweep_knowledge_storage()` runs from an hourly beat entry (changed in review; see Changelog).
 - **Consumer**: `KnowledgeBaseConsumer(AuthenticatedConsumer)` at `ws/projects/<project_id>/knowledge-base/`, group `knowledge_base_{project_id}`.
   - Any member may listen; there is no initial state.
   - It sends one event, `knowledge_base.item`, with `{id, parent_id, status, status_label, warning, error, page_count}`. `knowledge_base/events.broadcast_item` sends it after commit.
@@ -531,7 +531,7 @@ Infrastructure:
    3. The sub-agent calls `read_knowledge` or `search_knowledge` when it needs to.
 5. **Ask AI.** `_advice_context` calls `related_knowledge` (one query), then the one advisor call runs with the `<<<KNOWLEDGE>>>` block.
 6. **Duplicate.** With the checkbox on (the default), the copy task runs after commit: item rows are copied with shared blobs, and chunks are copied through `INSERT … SELECT`.
-7. **Delete.** Rows cascade, unreferenced blobs are deleted and their files removed after commit. The daily sweep catches leftovers.
+7. **Delete.** Rows cascade; unreferenced blobs older than the 1 h grace are deleted and their files removed while the rows are locked. The hourly sweep catches leftovers (see Changelog).
 
 ## Alternatives considered
 - **Planner: bounded tool loop vs. server-side excerpts.** The loop was chosen, which also aligns with the intake plan, so there is one design.
@@ -597,7 +597,7 @@ Infrastructure:
   - Advisor: 6k characters.
   - Setup lead: the 3k index.
   - Tester sub-agents: two extra tool definitions (about 300 tokens) in every project.
-- **Stuck items and orphan files.** Stuck items are re-claimed after the time limit, and Retry is offered. The daily sweep has a 1 h grace.
+- **Stuck items and orphan files.** Stuck items are re-claimed after the time limit, and Retry is offered. The hourly sweep has a 1 h grace.
 - **Migrations.** All additive (the new app plus an M2M table in machine_setup). No data migration.
 
 ## Related: public media
@@ -733,3 +733,25 @@ Answered on 2026-10-31: Q1–Q10 (see Decisions). One remains. It does not block
   - The planner now uses **one** bounded tool loop: at most `ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS` (4) rounds, only when ready KB items exist (`knowledge_index is not None`), and otherwise the single call. It replaces the server-side planner excerpts. This plan owns the loop, the tool mount, the KB prompt block and the settings; the intake plan adds only `artifacts_profile`.
   - Dropped `PlanContext` and `projects/plan_context_services.py`.
   - Recorded the file overlap (setup_tools, setup_prompt, run_turn, forms, orchestrator, orchestrator_prompts, projects/services): this plan lands first.
+- 2026-10-31: implementation (Status In progress). Deviations from the plan, all intentional:
+  - Planner loop: `max_iterations = ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS` (not + 1; `run_tool_loop` runs one LLM call per iteration), then one explicit `tool_choice="none"` call, since `FinalAnswerPolicy` fires only on timeout. Dispatch goes through `tool_registry.allowlisted_dispatcher` with `get_knowledge_tool_definitions()`; `orchestrator.py` does not import `knowledge_base`. `build_plan_system_prompt` also takes `knowledge_tools` (index shown without tools when the rounds setting is 0).
+  - A fully scanned PDF (no text at all) fails with "no text layer"; a partly scanned one is ready with a warning. Text over `KNOWLEDGE_BASE_MAX_ITEM_CHARS`, cells over the cell cap and pages over the page cap are truncated with a warning instead of failing (`TooLarge` stays for future use).
+  - The upload form field is `uploads` (`files` would shadow `BaseForm.files`). A renamed item downloads with its original extension added back.
+  - `KnowledgeBlob.stored_at` (not `created_at`) is refreshed whenever an upload stores the same bytes; delete and the sweep leave blobs stored within the last hour (an upload or expansion stores blobs before its items exist and before it takes the project lock).
+  - A `pending` item waiting longer than the extraction time limit (lost task message) is retryable too.
+  - The tab lists the newest 500 top-level items with a "search to find older ones" hint.
+  - Q11: 7z ships enabled (`KNOWLEDGE_BASE_ACCEPT_7Z=True`). Every 7z bomb (1 GiB LZMA2 of zeros, multi-folder, solid, 50 000 entries) was refused before extraction in ≤ 0.2 s and ≤ 160 MiB RSS; py7zr runs single-threaded on a file object, and a raising writer stopped it in < 0.6 s. Residual py7zr-internal header costs are bounded by the worker's memory limits.
+- 2026-10-31: review round 1. Fixed: upload no longer holds the project row lock while writing files; planner dispatcher reuse; tab row cap; blob grace on delete; timed-out failure respects newer claims; sweep walks only its own directories and the root may not contain the project or MEDIA_ROOT; broadcast errors after commit are logged, not raised; setup task prompt gained the KB rule and the lead no longer says helpers cannot read the KB; `.doc` and xlsx/xls amplification bounded; `knowledge-celery` gets `mem_limit: 3g`. Rejected, with reasons:
+  - pg_trgm index for exact search: needs `CREATE EXTENSION`; the plan keeps exact mode unindexed per project until it measures slow (Alternatives › pg_trgm).
+  - Streaming 7z members instead of holding them: bounded by `KNOWLEDGE_BASE_ARCHIVE_MAX_UNCOMPRESSED_BYTES` (256 MiB) per child, under `--max-memory-per-child` and the container limit; extracting to disk was rejected by the plan.
+  - Copy skipped when the target already has items: a duplicated project is new, and the same check keeps a redelivered task (acks_late) from copying twice; the skip is logged.
+  - Reading `copy_knowledge_base` from `request.POST` in `project_duplicate`: the existing view reads its other fields the same way; a form for one checkbox is out of scope.
+- 2026-10-31: review round 2. Fixed: an unlocked quota pre-check before any file is written (a project at its quota stores nothing; the locked check stays authoritative); delete and the sweep unlink blob files while the rows are locked (an upload of the same bytes waits, then rewrites the file); a soft time limit fails the item under the worker's own claim (`fail_timed_out_item` and its time-window guess removed); the sweep only removes `tmp/upload-<hex>` and `<xx>/<sha256>` names; blob-storage comments describe the grace window; the `.doc` field filter caps nesting at 64 levels.
+- 2026-10-31: review round 3. Fixed:
+  - Disk fill by an upload/delete cycle or parallel uploads: a per-project upload byte budget per hour (`KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR`, default 2 GiB, atomic Redis counter in `services/upload_budget.py`, reserved before any file is written and released when a write fails), and the storage sweep now runs hourly.
+  - A soft time limit while saving chunks fails the item under its claim.
+  - The orphan-file sweep re-checks a file's mtime right before unlinking it.
+  - The `project_usage` docstring.
+  - Accepted trade-off: delete and the sweep unlink files before their transaction commits. A commit that then fails leaves unused rows without files, which a re-upload rewrites; an item whose delete failed to commit would read as "Could not read this file" and can be deleted again.
+- 2026-10-31: review round 4. Fixed: archive members are charged to the hourly upload budget and pre-checked against the quota before they are written (a small, highly compressed archive could write up to 256 MiB past both); the budget counter retries when its window expires between add and incr; reservations are released when a later reservation or write fails; a file the sweep removes between `is_file()` and `utime` is placed again instead of failing the upload; an already-removed file is not logged as a failed delete. Rejected: a per-user disk ceiling across projects. Quota and budget are per project by design, and creating projects is an existing capability of every user; a per-user limit is a separate decision.
+- 2026-10-31: review round 5 clean (reviewer and verifier). Docstring of `expand_knowledge_archive` names the budget skip. Accepted notes: a re-claimed archive charges its members to the budget again (strict side only); a soft time limit inside one member's write can mis-count that one member. Status Done; change note `docs/changed/2026-10-31-project-knowledge-base.md`.

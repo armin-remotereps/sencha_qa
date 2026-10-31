@@ -1,8 +1,9 @@
 """Tool sets of the machine setup agents.
 
 The main setup agent (the lead) gets the project data tools (test cases, the
-application context), which run on the server, plus ``run_setup_task``, which
-delegates machine work to a sub-agent. It has no machine tools.
+application context, the knowledge base), which run on the server, plus
+``run_setup_task``, which delegates machine work to a sub-agent. It has no
+machine tools.
 
 Sub-agents get the tester's machine tools, reached through
 ``dispatch_tool_call`` after a cheap "is the runner connected" check.
@@ -22,6 +23,11 @@ from agents.types import (
     ToolDispatcher,
     ToolParameter,
     ToolResult,
+)
+from knowledge_base.exceptions import KnowledgeToolError
+from knowledge_base.services.agent_tools import (
+    build_knowledge_handlers,
+    knowledge_tool_definitions,
 )
 from machine_setup.exceptions import SetupRunnerLostError
 from machine_setup.models import (
@@ -103,6 +109,8 @@ def main_tool_definitions(role: ThreadRole) -> tuple[ToolDefinition, ...]:
     help-chat tools, and one in a result chat the result-chat tools.
     """
     tools = _project_data_tool_definitions() + (_run_setup_task_definition(),)
+    # Every role reads the project's knowledge base.
+    tools += knowledge_tool_definitions()
     if role == ThreadRole.MAIN:
         tools += main_chat_tool_definitions()
     elif role == ThreadRole.AUTO_FIX:
@@ -516,6 +524,8 @@ def build_setup_dispatcher(
         "get_application_context": _handle_get_context,
         "update_application_context": _handle_update_context,
     }
+    # Knowledge base tools: every role.
+    project_data_handlers.update(build_knowledge_handlers(project_id))
     if role == ThreadRole.MAIN:
         project_data_handlers.update(
             build_main_chat_handlers(
@@ -567,6 +577,7 @@ def build_setup_dispatcher(
         except (
             _InvalidArgumentError,
             HelpToolError,
+            KnowledgeToolError,
             MainChatToolError,
             PlanStepArgumentError,
             ResultToolError,

@@ -11,11 +11,13 @@
   rows: Markdown, rendered to sanitized HTML by renderMarkdown (marked +
   DOMPurify allowlist, nothing that loads a resource) set by showMarkdown. :href is bound only to the
   server-built link_url, a run's server-built url, a card's server-built
-  form URLs, or documentUrl(id) (the
+  form URLs, a knowledge reference's server-built url, or documentUrl(id) (the
   reversed document_url_template with the id swapped in).
 
   A user row lists its attached documents (attachments) under the text:
-  file name, size, character count and a download link (plain text).
+  file name, size, character count and a download link (plain text), then
+  the knowledge base items it referenced (knowledge_refs): name, a status
+  note unless ready, and an Open link to the server-built item url.
 
   The log itself is not a live region (tool row updates are not announced).
   The working indicator is role="status", and the visually hidden span below
@@ -44,6 +46,15 @@
                 <span class="chat-attachment-name" x-text="doc.file_name" :title="doc.file_name"></span>
                 <span class="chat-attachment-meta" x-text="formatBytes(doc.size_bytes) + ' · ' + doc.char_count.toLocaleString() + ' characters'"></span>
                 <a class="chat-attachment-link" :href="documentUrl(doc.id)" :aria-label="'Download ' + doc.file_name">Download</a>
+              </li>
+            </template>
+          </ul>
+          <ul class="chat-attachments" x-show="(block.message.knowledge_refs || []).length > 0" aria-label="Referenced knowledge base items">
+            <template x-for="ref in (block.message.knowledge_refs || [])" :key="ref.id">
+              <li class="chat-attachment">
+                <span class="chat-attachment-name" x-text="ref.name" :title="ref.name"></span>
+                <span class="chat-attachment-meta" x-text="knowledgeStatusLabel(ref.status) || 'Knowledge base'"></span>
+                <a class="chat-attachment-link" :href="ref.url" :aria-label="'Open ' + ref.name + ' in the knowledge base'">Open</a>
               </li>
             </template>
           </ul>

@@ -2,23 +2,31 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 
 from django.db import transaction
 from django.utils import timezone
 
 from accounts.models import CustomUser
+from knowledge_base.exceptions import KnowledgeItemNotFoundError
+from knowledge_base.services.resolve_knowledge_refs import resolve_knowledge_refs
 from machine_setup.document_text import UploadedDocument
 from machine_setup.exceptions import (
     MachineSetupError,
     SetupDocumentNotAllowedError,
+    SetupKnowledgeRefError,
     SetupMachineNotReadyError,
     SetupRunActiveError,
     SetupTurnActiveError,
 )
 from machine_setup.models import SetupConversation, SetupConversationKind, SetupTurn
 from machine_setup.services.live_turn import resolve_live_turn
-from machine_setup.services.queue_turn import broadcast_and_enqueue, create_user_turn
+from machine_setup.services.queue_turn import (
+    broadcast_and_enqueue,
+    create_user_turn,
+    link_knowledge_refs,
+)
 from projects.models import Project, TestRun, TestRunStatus
 from projects.runner_update_state import (
     RUNNER_UPDATE_RUNNING_MESSAGE,
@@ -39,8 +47,13 @@ def send_setup_message(
     text: str,
     conversation: SetupConversation | None = None,
     document: UploadedDocument | None = None,
+    knowledge_item_ids: Sequence[int] = (),
 ) -> SetupTurn:
     """Record the user's message and queue a turn for it.
+
+    ``knowledge_item_ids`` (any thread, already capped by the form) are linked
+    to the USER row; ``SetupKnowledgeRefError`` when one is not an item of
+    the project.
 
     ``conversation`` is a thread of this project to reply in (the main chat or
     an auto-fix thread); ``None`` means the main chat, created when missing.
@@ -57,6 +70,7 @@ def send_setup_message(
         text=text,
         conversation=conversation,
         document=document,
+        knowledge_item_ids=knowledge_item_ids,
     )
     if isinstance(outcome, MachineSetupError):
         raise outcome
@@ -71,6 +85,7 @@ def _send_locked(
     text: str,
     conversation: SetupConversation | None,
     document: UploadedDocument | None,
+    knowledge_item_ids: Sequence[int],
 ) -> SetupTurn | MachineSetupError:
     # Same lock as start_test_run and resume (project row first), so a send
     # and a run start cannot both pass their "nothing else is live" checks.
@@ -88,10 +103,21 @@ def _send_locked(
         return MachineSetupError(THREAD_CLOSED_MESSAGE)
     if document is not None and target.kind != SetupConversationKind.CHAT:
         return SetupDocumentNotAllowedError()
+    try:
+        knowledge_items = (
+            resolve_knowledge_refs(locked.pk, knowledge_item_ids)
+            if knowledge_item_ids
+            else []
+        )
+    except KnowledgeItemNotFoundError:
+        return SetupKnowledgeRefError()
     turn, message, documents = create_user_turn(
         conversation=target, requested_by=user, text=text, document=document
     )
-    transaction.on_commit(lambda: broadcast_and_enqueue(turn, message, documents))
+    knowledge_refs = link_knowledge_refs(message, knowledge_items)
+    transaction.on_commit(
+        lambda: broadcast_and_enqueue(turn, message, documents, knowledge_refs)
+    )
     return turn
 
 
