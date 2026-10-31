@@ -431,9 +431,6 @@ KNOWLEDGE_BASE_MAX_PROJECT_BYTES: int = config(
 KNOWLEDGE_BASE_MAX_ITEM_CHARS: int = config(
     "KNOWLEDGE_BASE_MAX_ITEM_CHARS", default=5000000, cast=int
 )
-KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS: int = config(
-    "KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS", default=500, cast=int
-)
 # Also caps what is read out of .docx / .xlsx containers.
 KNOWLEDGE_BASE_ARCHIVE_MAX_UNCOMPRESSED_BYTES: int = config(
     "KNOWLEDGE_BASE_ARCHIVE_MAX_UNCOMPRESSED_BYTES", default=268435456, cast=int
@@ -460,6 +457,36 @@ if KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR < KNOWLEDGE_BASE_MAX_FILE_BYTES:
         "KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR must be at least "
         "KNOWLEDGE_BASE_MAX_FILE_BYTES"
     )
+# Upload cap of one archive (.zip, .tar(.gz), .7z); other files use
+# KNOWLEDGE_BASE_MAX_FILE_BYTES. Keep it under nginx's client_max_body_size
+# (200M in nginx/server.conf).
+KNOWLEDGE_BASE_MAX_ARCHIVE_BYTES: int = config(
+    "KNOWLEDGE_BASE_MAX_ARCHIVE_BYTES", default=104857600, cast=int
+)
+if not (
+    KNOWLEDGE_BASE_MAX_FILE_BYTES
+    <= KNOWLEDGE_BASE_MAX_ARCHIVE_BYTES
+    <= KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR
+):
+    raise ImproperlyConfigured(
+        "KNOWLEDGE_BASE_MAX_ARCHIVE_BYTES must be between "
+        "KNOWLEDGE_BASE_MAX_FILE_BYTES and KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR"
+    )
+# Readable files per archive (nested archives' files included); metadata,
+# hidden files and unsupported types do not count. Over it, the archive is
+# refused.
+KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS: int = config(
+    "KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS", default=2000, cast=int
+)
+# Raw entries per archive, every file counted (a header-bomb guard).
+KNOWLEDGE_BASE_ARCHIVE_MAX_ENTRIES: int = config(
+    "KNOWLEDGE_BASE_ARCHIVE_MAX_ENTRIES", default=20000, cast=int
+)
+if KNOWLEDGE_BASE_ARCHIVE_MAX_ENTRIES < KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS:
+    raise ImproperlyConfigured(
+        "KNOWLEDGE_BASE_ARCHIVE_MAX_ENTRIES must be at least "
+        "KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS"
+    )
 KNOWLEDGE_BASE_ACCEPT_7Z: bool = config(
     "KNOWLEDGE_BASE_ACCEPT_7Z", default=True, cast=bool
 )
@@ -468,6 +495,7 @@ for _kb_name, _kb_value in (
     ("KNOWLEDGE_BASE_MAX_PROJECT_BYTES", KNOWLEDGE_BASE_MAX_PROJECT_BYTES),
     ("KNOWLEDGE_BASE_MAX_ITEM_CHARS", KNOWLEDGE_BASE_MAX_ITEM_CHARS),
     ("KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS", KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS),
+    ("KNOWLEDGE_BASE_ARCHIVE_MAX_ENTRIES", KNOWLEDGE_BASE_ARCHIVE_MAX_ENTRIES),
     (
         "KNOWLEDGE_BASE_ARCHIVE_MAX_UNCOMPRESSED_BYTES",
         KNOWLEDGE_BASE_ARCHIVE_MAX_UNCOMPRESSED_BYTES,
