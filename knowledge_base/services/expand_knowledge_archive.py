@@ -39,13 +39,22 @@ from knowledge_base.services.item_processing import (
     broadcast_item_state,
     enqueue_item_processing,
 )
-from knowledge_base.services.project_quota import fits_quota, lock_project_usage
+from knowledge_base.services.project_quota import (
+    fits_quota,
+    lock_project_usage,
+    project_usage,
+)
+from knowledge_base.services.upload_budget import (
+    release_upload_bytes,
+    reserve_upload_bytes,
+)
 
 logger = logging.getLogger(__name__)
 
 UNREADABLE_ARCHIVE_MESSAGE = "Could not read this archive"
 UNSUPPORTED_ARCHIVE_MESSAGE = "This archive format is not supported"
 _OVER_QUOTA_REASON = "storage limit reached"
+_OVER_BUDGET_REASON = "hourly upload limit reached"
 
 
 @dataclass(frozen=True)
@@ -77,7 +86,7 @@ def expand_knowledge_archive(item_id: int) -> None:
         if fmt == "7z" and not settings.KNOWLEDGE_BASE_ACCEPT_7Z:
             raise UnsupportedContent(SEVEN_ZIP_DISABLED_MESSAGE)
         data = read_blob_bytes(item.blob)
-        members = _store_members(fmt, data, skipped)
+        members = _store_members(item.project_id, fmt, data, skipped)
         del data
         _create_children(item_id, claimed_at, members, skipped)
     except SoftTimeLimitExceeded:
@@ -91,20 +100,38 @@ def expand_knowledge_archive(item_id: int) -> None:
         fail_claimed_item(item_id, claimed_at, UNREADABLE_ARCHIVE_MESSAGE)
 
 
-def _store_members(fmt: str, data: bytes, skipped: list[str]) -> list[_StoredMember]:
-    """Store every accepted member's bytes (outside the project lock)."""
+def _store_members(
+    project_id: int, fmt: str, data: bytes, skipped: list[str]
+) -> list[_StoredMember]:
+    """Store the accepted members' bytes (outside the project lock).
+
+    Like an upload, each member must fit the quota (unlocked pre-check; the
+    locked check in ``_create_children`` is authoritative) and the project's
+    hourly upload budget before it is written, so a small, highly compressed
+    archive cannot write past either.
+    """
     stored: list[_StoredMember] = []
+    planned = project_usage(project_id)
     for member in iter_archive_members(fmt, data, skipped):
         kind = kind_for_name(member.label)
         if kind is None or kind == KnowledgeKind.ARCHIVE:
             # The readers already skip these; kept as a guard.
             skipped.append(f"{member.label} (unsupported type)")
             continue
-        stored.append(
-            _StoredMember(
-                label=member.label, kind=kind, blob=store_blob_bytes(member.data)
-            )
-        )
+        size = len(member.data)
+        if not fits_quota(planned, size):
+            skipped.append(f"{member.label} ({_OVER_QUOTA_REASON})")
+            continue
+        if not reserve_upload_bytes(project_id, size):
+            skipped.append(f"{member.label} ({_OVER_BUDGET_REASON})")
+            continue
+        try:
+            blob = store_blob_bytes(member.data)
+        except BaseException:
+            release_upload_bytes(project_id, size)
+            raise
+        planned += size
+        stored.append(_StoredMember(label=member.label, kind=kind, blob=blob))
     return stored
 
 

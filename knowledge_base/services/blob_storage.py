@@ -73,11 +73,15 @@ def _write_temp(chunks: Iterable[bytes], root: Path) -> tuple[Path, str, int]:
 def _place_file(temp_path: Path, final_path: Path) -> None:
     """Move the temp file into place, or drop it when the blob file exists."""
     if final_path.is_file():
-        temp_path.unlink(missing_ok=True)
-        # Refresh the mtime so the sweep (1 h grace) never takes a file that
-        # an uncommitted upload is about to reference again.
-        os.utime(final_path)
-        return
+        try:
+            # Refresh the mtime so the sweep (1 h grace) never takes a file
+            # that an uncommitted upload is about to reference again.
+            os.utime(final_path)
+        except FileNotFoundError:
+            pass  # The sweep removed it just now: place ours below.
+        else:
+            temp_path.unlink(missing_ok=True)
+            return
     final_path.parent.mkdir(parents=True, exist_ok=True)
     # Same file system (both under the storage root): an atomic rename.
     os.replace(temp_path, final_path)
@@ -166,6 +170,8 @@ def delete_blob_files(
                     continue
             storage.delete(name)
             removed += 1
+        except FileNotFoundError:
+            continue  # Already gone.
         except OSError:
             logger.warning("Could not delete knowledge base file %s", name)
     return removed

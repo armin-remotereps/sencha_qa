@@ -23,17 +23,23 @@ def reserve_upload_bytes(project_id: int, size: int) -> bool:
     nothing counted) when they would exceed it."""
     limit: int = settings.KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR
     key = _key(project_id)
-    cache.add(key, 0, timeout=UPLOAD_BUDGET_WINDOW_SECONDS)
-    try:
-        used = cache.incr(key, size)
-    except ValueError:
-        # The key expired between add and incr: a new window starts here.
-        cache.add(key, size, timeout=UPLOAD_BUDGET_WINDOW_SECONDS)
-        used = size
+    used = _add_bytes(key, size)
     if used > limit:
         release_upload_bytes(project_id, size)
         return False
     return True
+
+
+def _add_bytes(key: str, size: int) -> int:
+    """Atomically add ``size`` to the window's counter (opening a window)."""
+    while True:
+        cache.add(key, 0, timeout=UPLOAD_BUDGET_WINDOW_SECONDS)
+        try:
+            used: int = cache.incr(key, size)
+            return used
+        except ValueError:
+            # The window expired between add and incr: open the next one.
+            continue
 
 
 def release_upload_bytes(project_id: int, size: int) -> None:

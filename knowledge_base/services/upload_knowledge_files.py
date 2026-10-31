@@ -95,34 +95,36 @@ def upload_knowledge_files(
     clean_description = description.strip()[:KNOWLEDGE_DESCRIPTION_MAX]
     refused: list[RefusedFile] = []
     accepted: list[tuple[UploadedFile, KnowledgeKind]] = []
-    # Unlocked pre-check, so a project at its quota writes nothing to disk;
-    # the check under the project lock below is the authoritative one.
-    planned = project_usage(project_id)
-    for upload in files:
-        upload_name = upload.name or ""
-        size = upload.size or 0
-        reason = _refusal_reason(upload_name, size)
-        if reason is None and not fits_quota(planned, size):
-            reason = _QUOTA_MESSAGE
-        kind = kind_for_name(upload_name)
-        if reason is None and kind is not None:
-            if not reserve_upload_bytes(project_id, size):
-                reason = _BUDGET_MESSAGE
-        if reason is not None or kind is None:
-            refused.append(_refused(upload_name, reason))
-            continue
-        planned += size
-        accepted.append((upload, kind))
-    # Written to disk before the project row is locked, so a large upload
-    # never holds up run starts or setup messages. A blob left unused by a
-    # quota refusal below (a concurrent upload won the room) is removed by
-    # the hourly sweep.
+    # Each accepted file has its bytes reserved in the hourly budget; the
+    # finally gives back those of files that were never written (also when a
+    # later reservation or write fails).
     stored: list[tuple[UploadedFile, KnowledgeKind, KnowledgeBlob]] = []
     try:
+        # Unlocked pre-check, so a project at its quota writes nothing to
+        # disk; the check under the project lock below is authoritative.
+        planned = project_usage(project_id)
+        for upload in files:
+            upload_name = upload.name or ""
+            size = upload.size or 0
+            reason = _refusal_reason(upload_name, size)
+            if reason is None and not fits_quota(planned, size):
+                reason = _QUOTA_MESSAGE
+            kind = kind_for_name(upload_name)
+            if reason is None and kind is not None:
+                if not reserve_upload_bytes(project_id, size):
+                    reason = _BUDGET_MESSAGE
+            if reason is not None or kind is None:
+                refused.append(_refused(upload_name, reason))
+                continue
+            planned += size
+            accepted.append((upload, kind))
+        # Written to disk before the project row is locked, so a large upload
+        # never holds up run starts or setup messages. A blob left unused by a
+        # quota refusal below (a concurrent upload won the room) is removed by
+        # the hourly sweep.
         for upload, accepted_kind in accepted:
             stored.append((upload, accepted_kind, store_blob(upload.chunks())))
     finally:
-        # Reserved bytes of files that were never written go back.
         for upload, _kind in accepted[len(stored) :]:
             release_upload_bytes(project_id, upload.size or 0)
     items: list[KnowledgeItem] = []

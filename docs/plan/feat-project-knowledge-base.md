@@ -477,7 +477,7 @@ class KnowledgeExcerpt:    # **added**: server-side retrieval
 - **Tasks** (`knowledge_base/tasks.py`, all on `knowledge`):
   - `extract_knowledge_item(item_id)` and `expand_knowledge_archive(item_id)` run with `soft_time_limit=KNOWLEDGE_BASE_EXTRACT_TIME_LIMIT_SECONDS` and a hard limit 30 s later. When the soft limit hits, the item becomes `failed` ("took too long").
   - `copy_project_knowledge(source_project_id, target_project_id)`.
-  - `sweep_knowledge_storage()` runs from a daily beat entry.
+  - `sweep_knowledge_storage()` runs from an hourly beat entry (changed in review; see Changelog).
 - **Consumer**: `KnowledgeBaseConsumer(AuthenticatedConsumer)` at `ws/projects/<project_id>/knowledge-base/`, group `knowledge_base_{project_id}`.
   - Any member may listen; there is no initial state.
   - It sends one event, `knowledge_base.item`, with `{id, parent_id, status, status_label, warning, error, page_count}`. `knowledge_base/events.broadcast_item` sends it after commit.
@@ -531,7 +531,7 @@ Infrastructure:
    3. The sub-agent calls `read_knowledge` or `search_knowledge` when it needs to.
 5. **Ask AI.** `_advice_context` calls `related_knowledge` (one query), then the one advisor call runs with the `<<<KNOWLEDGE>>>` block.
 6. **Duplicate.** With the checkbox on (the default), the copy task runs after commit: item rows are copied with shared blobs, and chunks are copied through `INSERT … SELECT`.
-7. **Delete.** Rows cascade, unreferenced blobs are deleted and their files removed after commit. The daily sweep catches leftovers.
+7. **Delete.** Rows cascade; unreferenced blobs older than the 1 h grace are deleted and their files removed while the rows are locked. The hourly sweep catches leftovers (see Changelog).
 
 ## Alternatives considered
 - **Planner: bounded tool loop vs. server-side excerpts.** The loop was chosen, which also aligns with the intake plan, so there is one design.
@@ -597,7 +597,7 @@ Infrastructure:
   - Advisor: 6k characters.
   - Setup lead: the 3k index.
   - Tester sub-agents: two extra tool definitions (about 300 tokens) in every project.
-- **Stuck items and orphan files.** Stuck items are re-claimed after the time limit, and Retry is offered. The daily sweep has a 1 h grace.
+- **Stuck items and orphan files.** Stuck items are re-claimed after the time limit, and Retry is offered. The hourly sweep has a 1 h grace.
 - **Migrations.** All additive (the new app plus an M2M table in machine_setup). No data migration.
 
 ## Related: public media
@@ -753,3 +753,4 @@ Answered on 2026-10-31: Q1–Q10 (see Decisions). One remains. It does not block
   - The orphan-file sweep re-checks a file's mtime right before unlinking it.
   - The `project_usage` docstring.
   - Accepted trade-off: delete and the sweep unlink files before their transaction commits. A commit that then fails leaves unused rows without files, which a re-upload rewrites; an item whose delete failed to commit would read as "Could not read this file" and can be deleted again.
+- 2026-10-31: review round 4. Fixed: archive members are charged to the hourly upload budget and pre-checked against the quota before they are written (a small, highly compressed archive could write up to 256 MiB past both); the budget counter retries when its window expires between add and incr; reservations are released when a later reservation or write fails; a file the sweep removes between `is_file()` and `utime` is placed again instead of failing the upload; an already-removed file is not logged as a failed delete. Rejected: a per-user disk ceiling across projects. Quota and budget are per project by design, and creating projects is an existing capability of every user; a per-user limit is a separate decision.
