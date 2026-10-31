@@ -10,7 +10,8 @@ from __future__ import annotations
 import logging
 
 from django.conf import settings
-from django.db.models import Q
+from django.db import transaction
+from django.db.models import Exists, OuterRef, Q
 from django.urls import reverse
 from django.utils import timezone
 
@@ -22,6 +23,7 @@ from agents.transcript import (
     transcript_to_json,
 )
 from agents.types import (
+    AgentCancelledError,
     AgentConfig,
     BrowserSelection,
     ChatMessage,
@@ -209,6 +211,7 @@ class _TurnRunner:
             project_prompt=project_prompt,
             llm_config=llm_config,
             cancellation_check=self._should_stop,
+            turn_live=self._turn_live,
         )
         config = AgentConfig(
             llm=llm_config,
@@ -259,6 +262,10 @@ class _TurnRunner:
     def _on_transcript(
         self, message: ChatMessage, transcript: tuple[ChatMessage, ...]
     ) -> None:
+        # A model call that returns after the turn was closed (force stop,
+        # worker_lost) records nothing; the turn ends through _finish.
+        if not self._turn_live():
+            raise AgentCancelledError("The setup turn is no longer running")
         self.transcript = tuple(m for m in transcript if m.role != "system")
         if message.role == "assistant":
             self.subtask_ran_this_round = False
@@ -273,8 +280,16 @@ class _TurnRunner:
 
     def _count_iteration(self) -> None:
         self.iterations += 1
-        SetupTurn.objects.filter(pk=self.turn.pk).update(iterations=self.iterations)
+        updated = SetupTurn.objects.filter(
+            pk=self.turn.pk, status=SetupTurnStatus.RUNNING
+        ).update(iterations=self.iterations)
         self.turn.iterations = self.iterations
+        if not updated:
+            # Closed meanwhile: whoever closed it broadcast the end state.
+            return
+        # Stop may have been pressed since the turn was loaded: keep the
+        # page's Stopping… state and Force stop countdown.
+        self.turn.refresh_from_db(fields=["stop_requested", "stop_requested_at"])
         broadcast_turn(self.project_id, turn_payload(self.turn))
 
     def _run_subtask(
@@ -346,47 +361,88 @@ class _TurnRunner:
         )
 
     def _should_stop(self) -> bool:
+        # Not running any more: another process closed it (force stop,
+        # worker_lost), so every loop and wait exits.
         return SetupTurn.objects.filter(
-            Q(stop_requested=True) | Q(conversation__archived_at__isnull=False),
+            Q(stop_requested=True)
+            | Q(conversation__archived_at__isnull=False)
+            | ~Q(status=SetupTurnStatus.RUNNING),
             pk=self.turn.pk,
+        ).exists()
+
+    def _turn_live(self) -> bool:
+        return SetupTurn.objects.filter(
+            pk=self.turn.pk, status=SetupTurnStatus.RUNNING
         ).exists()
 
     # Ending
 
     def _finish(self, outcome: TurnOutcome) -> None:
-        """Bring the turn to its end state; each step is best effort on its own."""
-        try:
-            self._close_transcript()
-        except Exception:
-            logger.exception(
-                "Setup turn %s: closing the transcript failed", self.turn.pk
+        """Bring the turn to its end state; each step is best effort on its own.
+
+        Under the turn row lock: when another process already closed the turn
+        (force stop, worker_lost), it did the closing, settling and notifying,
+        so this writes nothing. Exactly one of them writes the end state.
+        """
+        failed_rows: list[SetupMessage] = []
+        notice: SetupMessage | None = None
+        finished_at = timezone.now()
+        with transaction.atomic():
+            status = (
+                SetupTurn.objects.select_for_update()
+                .filter(pk=self.turn.pk)
+                .values_list("status", flat=True)
+                .first()
             )
-        try:
-            self._fail_running_tool_rows()
-        except Exception:
-            logger.exception("Setup turn %s: closing tool rows failed", self.turn.pk)
-        if outcome.notice:
-            try:
-                self.recorder.create_row(
-                    kind=SetupMessageKind.NOTICE, text=outcome.notice
+            if status != SetupTurnStatus.RUNNING:
+                logger.info(
+                    "Setup turn %s was already closed (%s); not ending it as %s/%s",
+                    self.turn.pk,
+                    status,
+                    outcome.status,
+                    outcome.ended_reason,
                 )
+                return
+            # Savepoints: a failed step must not abort the transaction.
+            # The transcript is closed before the status change, so a new
+            # turn never starts on an open transcript.
+            try:
+                with transaction.atomic():
+                    self._close_transcript()
             except Exception:
                 logger.exception(
-                    "Setup turn %s: writing the notice failed", self.turn.pk
+                    "Setup turn %s: closing the transcript failed", self.turn.pk
                 )
-
-        finished_at = timezone.now()
-        # Conditional: a stale turn may already have been closed as worker_lost
-        # (and then settled there).
-        ended = SetupTurn.objects.filter(
-            pk=self.turn.pk, status=SetupTurnStatus.RUNNING
-        ).update(
-            status=outcome.status,
-            ended_reason=outcome.ended_reason,
-            error_message=outcome.error_message,
-            iterations=self.iterations,
-            finished_at=finished_at,
-        )
+            try:
+                with transaction.atomic():
+                    # Nested rows too; a delegation row becomes interrupted.
+                    failed_rows = fail_running_rows(
+                        turn_id=self.turn.pk, text=TOOL_INTERRUPTED_TEXT
+                    )
+            except Exception:
+                logger.exception(
+                    "Setup turn %s: closing tool rows failed", self.turn.pk
+                )
+            if outcome.notice:
+                try:
+                    with transaction.atomic():
+                        notice = SetupMessage.objects.create(
+                            conversation_id=self.conversation_id,
+                            turn_id=self.turn.pk,
+                            kind=SetupMessageKind.NOTICE,
+                            text=outcome.notice,
+                        )
+                except Exception:
+                    logger.exception(
+                        "Setup turn %s: writing the notice failed", self.turn.pk
+                    )
+            SetupTurn.objects.filter(pk=self.turn.pk).update(
+                status=outcome.status,
+                ended_reason=outcome.ended_reason,
+                error_message=outcome.error_message,
+                iterations=self.iterations,
+                finished_at=finished_at,
+            )
         self.turn.status = outcome.status
         self.turn.ended_reason = outcome.ended_reason
         self.turn.error_message = outcome.error_message
@@ -400,15 +456,22 @@ class _TurnRunner:
             self.iterations,
         )
         try:
+            # Nested rows belong to sub-task recorders: each row is broadcast
+            # with its prefetched screenshots, not the main recorder's.
+            for row in failed_rows:
+                broadcast_message(self.project_id, message_payload(row))
+            if notice is not None:
+                broadcast_message(
+                    self.project_id, message_payload(notice, project_id=self.project_id)
+                )
             broadcast_turn(self.project_id, turn_payload(self.turn))
         except Exception:
             logger.exception("Setup turn %s: final broadcast failed", self.turn.pk)
-        if ended:
-            # Last: the turn is no longer live, so the run's gates pass.
-            # Never raises.
-            settle_case_auto_fix(self.turn)
-            # Never raises.
-            notify_turn_reply(self.turn, notice=outcome.notice)
+        # Last: the turn is no longer live, so the run's gates pass.
+        # Never raises.
+        settle_case_auto_fix(self.turn)
+        # Never raises.
+        notify_turn_reply(self.turn, notice=outcome.notice)
 
     def _close_transcript(self) -> None:
         if self.transcript is None:
@@ -418,16 +481,19 @@ class _TurnRunner:
             self.transcript = closed
             self._persist_transcript(closed)
 
-    def _fail_running_tool_rows(self) -> None:
-        # Nested rows belong to sub-task recorders: broadcast each row with
-        # its prefetched screenshots, not the main recorder's.
-        for row in fail_running_rows(turn_id=self.turn.pk, text=TOOL_INTERRUPTED_TEXT):
-            broadcast_message(self.project_id, message_payload(row))
-
     # Persistence helpers
 
     def _persist_transcript(self, transcript: tuple[ChatMessage, ...]) -> None:
-        SetupConversation.objects.filter(pk=self.conversation_id).update(
+        # Only while this turn runs: a late writer must not overwrite the
+        # transcript a newer turn has started.
+        this_turn_running = SetupTurn.objects.filter(
+            pk=self.turn.pk,
+            conversation_id=OuterRef("pk"),
+            status=SetupTurnStatus.RUNNING,
+        )
+        SetupConversation.objects.filter(
+            Exists(this_turn_running), pk=self.conversation_id
+        ).update(
             llm_transcript=transcript_to_json(transcript), updated_at=timezone.now()
         )
 

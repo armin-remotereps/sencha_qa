@@ -12,6 +12,7 @@ urlpatterns: list[URLPattern] = [
     path("threads/<int:conversation_id>/", views.setup_thread, name="thread"),
     path("messages/", views.setup_send, name="send"),
     path("stop/", views.setup_stop, name="stop"),
+    path("force-stop/", views.setup_force_stop, name="force_stop"),
     path("reset/", views.setup_reset, name="reset"),
     path("help/<int:pivot_id>/", views.help_chat_open, name="help_chat_open"),
     path("result/<int:pivot_id>/", views.result_chat_open, name="result_chat_open"),

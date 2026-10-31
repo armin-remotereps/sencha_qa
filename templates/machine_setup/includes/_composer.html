@@ -26,6 +26,15 @@
   status line shows only blockers other than the running turn, which the
   working indicator in the transcript already shows with its step count.
 
+  Force stop (writable members only, like the whole composer): once Stop was
+  pressed and the server's grace period is over (forceStopReady, from the
+  payload's force_stop_in), a Force stop button joins the disabled
+  "Stopping…" one; on the main chat after a Reset the finishing line offers
+  the same for finishingTurn (finishingForceStopReady). Both call
+  openForceStop(turn id), which opens the force-stop confirm dialog below;
+  its form posts turn_id (forceStopTurnId) and conversation_id to
+  machine_setup:force_stop.
+
   Context contract:
     project — the current Project
     conversation — the shown thread (SetupConversation) on a thread page, None
@@ -37,6 +46,10 @@
 {% endcomment %}
 <div class="chat-composer">
   <p class="chat-status small" x-show="statusText" x-cloak x-text="statusText"></p>
+  <p class="chat-status small" x-show="finishingForceStopReady" x-cloak>
+    <span>The previous turn is not responding to Stop.</span>
+    <button type="button" class="btn btn-danger-solid btn-sm" @click="openForceStop(finishingTurn.id)">Force stop</button>
+  </p>
   <div class="chat-composer-row">
     <form class="chat-composer-form" method="post" action="{% url 'machine_setup:send' project_id=project.id %}"{% if not conversation %} enctype="multipart/form-data"{% endif %} @submit="onSubmit($event)">
       {% csrf_token %}
@@ -91,6 +104,40 @@
         x-text="turn && turn.stop_requested ? 'Stopping…' : 'Stop'"
       >Stop</button>
     </form>
+    <button
+      type="button"
+      class="btn btn-danger-solid"
+      title="Ends the turn now without waiting for the agent."
+      x-show="forceStopReady"
+      x-cloak
+      @click="openForceStop(turn.id)"
+    >Force stop</button>
+  </div>
+
+  {# Section: Force stop confirm (opened by either Force stop button) #}
+  <div
+    class="dialog-backdrop"
+    x-data="dialog()"
+    x-show="open"
+    x-cloak
+    x-on:open-force-stop-turn.window="show()"
+    x-on:keydown.escape.window="close()"
+    x-trap.noscroll="open"
+    @click.self="close()"
+  >
+    <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="force-stop-turn-title" aria-describedby="force-stop-turn-desc">
+      <h3 id="force-stop-turn-title">Force stop the turn?</h3>
+      <p id="force-stop-turn-desc">Ends the turn now without waiting for the agent. The action in progress may still finish on the test machine.</p>
+      <form method="post" action="{% url 'machine_setup:force_stop' project_id=project.id %}">
+        {% csrf_token %}
+        <input type="hidden" name="turn_id" :value="forceStopTurnId">
+        {% if conversation %}<input type="hidden" name="conversation_id" value="{{ conversation.pk }}">{% endif %}
+        <div class="dialog-actions">
+          <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+          <button type="submit" class="btn btn-danger-solid" :disabled="forceStopTurnId === null">Force stop</button>
+        </div>
+      </form>
+    </div>
   </div>
 
   {# Section: knowledge base picker (opened by the composer's Knowledge base button) #}

@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from django.db import transaction
+from django.db.models import Value
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from accounts.models import CustomUser
@@ -56,25 +58,51 @@ def resolve_live_turn(*, project_id: int, now: datetime) -> SetupTurn | None:
 
 
 def _close_lost_turn(turn: SetupTurn, now: datetime) -> None:
-    closed = SetupTurn.objects.filter(pk=turn.pk, status__in=LIVE_TURN_STATUSES).update(
+    close_live_turn(
+        turn,
+        now,
         status=SetupTurnStatus.FAILED,
         ended_reason=SetupTurnEndReason.WORKER_LOST,
         error_message=WORKER_LOST_MESSAGE,
+        notice_text=WORKER_LOST_MESSAGE,
+    )
+
+
+def close_live_turn(
+    turn: SetupTurn,
+    now: datetime,
+    *,
+    status: SetupTurnStatus,
+    ended_reason: SetupTurnEndReason,
+    error_message: str,
+    notice_text: str,
+    require_status: tuple[SetupTurnStatus, ...] = LIVE_TURN_STATUSES,
+) -> bool:
+    """End a turn no worker will end (lost, or force stopped); broadcast on commit.
+
+    Conditional on the turn still having one of ``require_status``. Fails its
+    running tool rows (nested sub-task rows too; a delegation row becomes
+    interrupted), adds a notice and settles an auto-fix turn, since its worker
+    never will. Returns whether it closed the turn.
+    """
+    closed = SetupTurn.objects.filter(pk=turn.pk, status__in=require_status).update(
+        status=status,
+        ended_reason=ended_reason,
+        error_message=error_message,
         finished_at=now,
     )
     if not closed:
-        return
-    turn.status = SetupTurnStatus.FAILED
-    turn.ended_reason = SetupTurnEndReason.WORKER_LOST
-    turn.error_message = WORKER_LOST_MESSAGE
+        return False
+    turn.status = status
+    turn.ended_reason = ended_reason
+    turn.error_message = error_message
     turn.finished_at = now
-    # Nested sub-task rows too; a lost delegation row becomes interrupted.
     failed_rows = fail_running_rows(turn_id=turn.pk, text=TOOL_INTERRUPTED_TEXT)
     notice = SetupMessage.objects.create(
         conversation_id=turn.conversation_id,
         turn=turn,
         kind=SetupMessageKind.NOTICE,
-        text=WORKER_LOST_MESSAGE,
+        text=notice_text,
     )
 
     def _broadcast() -> None:
@@ -84,8 +112,8 @@ def _close_lost_turn(turn: SetupTurn, now: datetime) -> None:
         broadcast_turn(turn.project_id, turn_payload(turn))
 
     transaction.on_commit(_broadcast)
-    # A killed auto-fix worker falls back to a person.
     settle_case_auto_fix(turn)
+    return True
 
 
 def mark_stop_requested(
@@ -99,9 +127,14 @@ def mark_stop_requested(
     """
     if _close_queued_turn(turn, user, reset=reset):
         return True
+    # A second Stop keeps the first press time, so it never delays Force stop.
     updated = SetupTurn.objects.filter(
         pk=turn.pk, status__in=LIVE_TURN_STATUSES
-    ).update(stop_requested=True, stop_requested_by=user)
+    ).update(
+        stop_requested=True,
+        stop_requested_by=user,
+        stop_requested_at=Coalesce("stop_requested_at", Value(timezone.now())),
+    )
     if not updated:
         return False
     # The worker may have claimed (or even finished) it since it was read;
@@ -119,6 +152,7 @@ def _close_queued_turn(turn: SetupTurn, user: CustomUser, *, reset: bool) -> boo
         ended_reason=outcome.ended_reason,
         stop_requested=True,
         stop_requested_by=user,
+        stop_requested_at=now,
         finished_at=now,
     )
     if not closed:
@@ -127,6 +161,7 @@ def _close_queued_turn(turn: SetupTurn, user: CustomUser, *, reset: bool) -> boo
     turn.ended_reason = outcome.ended_reason
     turn.stop_requested = True
     turn.stop_requested_by = user
+    turn.stop_requested_at = now
     turn.finished_at = now
     notice = SetupMessage.objects.create(
         conversation_id=turn.conversation_id,

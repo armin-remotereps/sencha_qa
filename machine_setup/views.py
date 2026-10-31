@@ -21,6 +21,7 @@ from machine_setup.exceptions import (
 from machine_setup.forms import (
     OpenHelpChatForm,
     OpenResultChatForm,
+    SetupForceStopForm,
     SetupMessageForm,
     SetupThreadForm,
 )
@@ -38,6 +39,7 @@ from machine_setup.services.chat_page import (
     list_help_threads,
 )
 from machine_setup.services.document_download import find_document
+from machine_setup.services.force_stop_turn import force_stop_turn
 from machine_setup.services.help_thread_state import help_panel_payload
 from machine_setup.services.open_help_chat import find_help_case, open_help_chat
 from machine_setup.services.open_result_chat import (
@@ -423,6 +425,26 @@ def setup_stop(request: AuthenticatedRequest, project: Project) -> HttpResponse:
     except MachineSetupError as exc:
         messages.error(request, exc.message)
     return _back_to_chat(project, _posted_thread_id(request))
+
+
+@project_membership_required
+@require_POST
+def setup_force_stop(request: AuthenticatedRequest, project: Project) -> HttpResponse:
+    form = SetupForceStopForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "The turn to force stop could not be read.")
+        return _back_to_chat(project, _posted_thread_id(request))
+    conversation_id: int | None = form.cleaned_data["conversation_id"]
+    try:
+        force_stop_turn(
+            project=project, user=request.user, turn_id=form.cleaned_data["turn_id"]
+        )
+    except SetupNoActiveTurnError as exc:
+        messages.info(request, exc.message)
+    except MachineSetupError as exc:
+        messages.error(request, exc.message)
+    # Success needs no message: the transcript shows the force stop notice.
+    return _back_to_chat(project, conversation_id)
 
 
 @project_membership_required
