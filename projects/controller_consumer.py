@@ -360,10 +360,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             await sync_to_async(broadcast_agent_status)(released)
 
     async def controller_superseded(self, event: dict[str, Any]) -> None:
-        await self.close(code=CloseCode.SUPERSEDED)
+        await self.close(code=int(CloseCode.SUPERSEDED))
 
     async def controller_force_disconnect(self, event: dict[str, Any]) -> None:
-        await self.close(code=CloseCode.FORCE_DISCONNECTED)
+        await self.close(code=int(CloseCode.FORCE_DISCONNECTED))
 
     async def controller_person_steps_changed(self, event: dict[str, Any]) -> None:
         await self._push_person_steps()

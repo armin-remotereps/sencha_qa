@@ -133,7 +133,7 @@ class VisionWorkerConsumer(AsyncWebsocketConsumer):
         )
 
     async def vision_worker_superseded(self, event: dict[str, Any]) -> None:
-        await self.close(code=CloseCode.SUPERSEDED)
+        await self.close(code=int(CloseCode.SUPERSEDED))
 
     async def _handle_handshake(
         self, message_type: MessageType, request_id: str, data: dict[str, object]
