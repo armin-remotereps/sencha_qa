@@ -54,6 +54,7 @@ from machine_readiness.models import (
 )
 from machine_readiness.network_paths import (
     NETWORK_PATH_NOT_CHECKED,
+    is_network_app_target,
     is_network_path,
     network_inspection_allowed,
 )
@@ -537,7 +538,7 @@ def _run_app_checks(
     for target in targets:
         if target.kind != RequirementKind.APPLICATION or not target.check_target:
             continue
-        if is_network_path(target.check_target):
+        if is_network_app_target(target.check_target):
             if target.stored_status == RequirementStatus.UNKNOWN:
                 decided[target.key] = RequirementStatusUpdate(
                     key=target.key,

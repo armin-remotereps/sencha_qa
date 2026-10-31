@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from dataclasses import dataclass
 from functools import partial
 
@@ -42,13 +43,22 @@ from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 _LINE_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # The approach may span lines; every other control character is refused.
 _TEXT_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
-# Bidi controls and zero-width or invisible format characters (soft hyphen,
-# Arabic letter mark, Mongolian vowel separator, word joiner, invisible
-# operators) are refused in every field: they can make the text a person
-# approves read differently from what it does.
-_INVISIBLE = re.compile(
-    "[\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]"
+# Format characters (Unicode category Cf: bidi controls, zero-width, word
+# joiner, tags, BOM, ...) plus invisible marks and fillers outside Cf
+# (combining grapheme joiner, variation selectors, Hangul fillers) are refused
+# in every field: they can make the text a person approves read differently
+# from what it does.
+_INVISIBLE_EXTRA = frozenset(
+    "\u034f\u115f\u1160\u3164\uffa0" + "".join(map(chr, range(0xFE00, 0xFE10)))
 )
+
+
+def _has_invisible(value: str) -> bool:
+    return any(
+        char in _INVISIBLE_EXTRA or unicodedata.category(char) == "Cf" for char in value
+    )
+
+
 _SPACES = re.compile(r"\s+")
 
 
@@ -175,7 +185,7 @@ def _line(name: str, value: str, limit: int, *, required: bool) -> str:
         raise ActionApprovalInvalidError(
             f"{name} must be one line without control characters."
         )
-    if _INVISIBLE.search(value):
+    if _has_invisible(value):
         raise ActionApprovalInvalidError(
             f"{name} must not contain bidirectional or zero-width characters."
         )
@@ -198,7 +208,7 @@ def _approach(value: str) -> str:
         raise ActionApprovalInvalidError(
             "approach must not contain control characters."
         )
-    if _INVISIBLE.search(value):
+    if _has_invisible(value):
         raise ActionApprovalInvalidError(
             "approach must not contain bidirectional or zero-width characters."
         )

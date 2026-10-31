@@ -1639,6 +1639,25 @@ class InspectPathsPayload:
 _PATH_SEPARATORS = "\\/"
 
 
+def app_check_variants(query: str) -> list[str]:
+    """The names ``check_app_installed`` looks up for ``query``, in order: as
+    given, lower-cased with spaces as ``-``, then without ``-``."""
+    base = query.lower().replace(" ", "-")
+    variants: list[str] = [query]
+    if base != query:
+        variants.append(base)
+    no_separator = base.replace("-", "")
+    if no_separator not in variants:
+        variants.append(no_separator)
+    return variants
+
+
+def is_network_app_target(query: str) -> bool:
+    """Whether any lookup variant of an app check target is a network path
+    (``\\-\\host\\s`` turns into ``\\\\host\\s`` once ``-`` is removed)."""
+    return any(is_network_path(variant) for variant in app_check_variants(query))
+
+
 def is_network_path(path: str) -> bool:
     """Whether ``path`` may name another machine: ``\\\\host\\share``, ``//host``.
 

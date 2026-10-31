@@ -36,7 +36,7 @@ from machine_readiness.models import (
     REQUIREMENT_TITLE_MAX_LENGTH,
     RequirementKind,
 )
-from machine_readiness.network_paths import is_network_path
+from machine_readiness.network_paths import is_network_app_target, is_network_path
 from machine_readiness.types import (
     Stage0BatchResult,
     Stage0RequirementData,
@@ -115,10 +115,14 @@ def requirement_errors(requirement: Stage0RequirementData) -> list[str]:
     ):
         if any(char in value for char in ("\x00", "\n", "\r")):
             errors.append(f"«{requirement.key}»: the {label} must be on one line.")
-    if is_network_path(requirement.check_target):
+    if requirement.kind == RequirementKind.APPLICATION and is_network_app_target(
+        requirement.check_target
+    ):
+        # The runner's app check stats a target with separators, so a network
+        # target would open SMB; path targets are gated by the quick check.
         errors.append(
-            f"«{requirement.key}»: the check target must not be a network path "
-            "(\\\\server or //server)."
+            f"«{requirement.key}»: an application check target must not be a "
+            "network path (\\\\server or //server)."
         )
     if "\x00" in requirement.install_hint:
         errors.append(
@@ -154,7 +158,7 @@ def _requirements(
             problems.append(f"Requirement {index} was not an object.")
             continue
         check_target = _text(entry.get("check_target")).strip()
-        if is_network_path(check_target):
+        if is_network_path(check_target) or is_network_app_target(check_target):
             problems.append(
                 f"Requirement {index}: its check target is a network path; "
                 "the target was dropped."
