@@ -54,7 +54,11 @@ from agents.services.person_step_prompts import (
     format_person_state_line,
     is_overruled,
 )
-from agents.services.person_steps import confirm_person_step, prepare_person_step
+from agents.services.person_steps import (
+    confirm_person_step,
+    person_failure_result,
+    prepare_person_step,
+)
 from agents.services.sub_agent import run_sub_agent
 from agents.services.sub_agent_prompts import build_final_answer_prompt
 from agents.services.sub_task_budget import (
@@ -941,7 +945,7 @@ def _settle_person_report(
             on_log, f"[Orchestrator]   Confirming a person's report of step {step_num}"
         )
         attempt_id = uuid.uuid4().hex
-        confirmed = confirm_person_step(
+        check = confirm_person_step(
             person,
             project_id,
             config=replace(
@@ -955,6 +959,7 @@ def _settle_person_report(
             project_prompt=project_prompt,
             state_description=state_description,
         )
+        confirmed = check.result
         progress.total_iterations += confirmed.iterations
         _log(
             on_log,
@@ -962,12 +967,17 @@ def _settle_person_report(
             f"{confirmed.summary}",
         )
         if person.outcome == "different":
-            result = SubTaskResult(
-                status="fail",
-                summary=format_different_summary(
-                    person.reporter, person.note, confirmed.summary
+            result = person_failure_result(
+                format_different_summary(
+                    person.reporter,
+                    person.note,
+                    confirmed.summary,
+                    output_attached=bool(person.output.strip()),
                 ),
-                iterations=confirmed.iterations,
+                person,
+                check,
+                step_num=step_num,
+                on_log=on_log,
             )
         elif confirmed.status == "pass":
             result = replace(confirmed, actions_digest="")

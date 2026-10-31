@@ -396,6 +396,15 @@ CASE_TEARDOWN_TIMEOUT_SECONDS: int = config(
 PERSON_STEP_CONFIRM_TIMEOUT_SECONDS: int = config(
     "PERSON_STEP_CONFIRM_TIMEOUT_SECONDS", default=120, cast=int
 )
+# Human in the loop evidence: the person's pasted output and the agent's check
+# output kept on a failed person attempt, in the case log and in TestRail
+# (head and tail; each part capped at this many characters).
+PERSON_EVIDENCE_OUTPUT_MAX_CHARS: int = config(
+    "PERSON_EVIDENCE_OUTPUT_MAX_CHARS", default=4000, cast=int
+)
+# Mark failed / Mark blocked on a person step: the agent records evidence with
+# one read-only check (True) or only takes a screenshot (False).
+PERSON_EVIDENCE_LLM: bool = config("PERSON_EVIDENCE_LLM", default=True, cast=bool)
 # Human in the loop, Ask AI: timeout of the LLM call answering a person's
 # question; a question still pending 60 s past it is failed at the next ask.
 PERSON_STEP_QUESTION_TIMEOUT_SECONDS: int = config(

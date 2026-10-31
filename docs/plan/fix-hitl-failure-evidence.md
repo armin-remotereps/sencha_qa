@@ -1,6 +1,6 @@
 # fix: Human in the loop failures always carry AI-recorded evidence
 
-Status: Ready
+Status: In progress
 Created: 2026-10-31
 Request: The user says that in Human in the loop the AI is responsible for recording the result. So even when a command-based step fails, the AI should take a screenshot and record the failure logs. Today a person step can end Failed with no screenshot, and the command output the person pasted never reaches the attempt or the case log. Required at minimum:
 - every confirm attempt takes a screenshot;

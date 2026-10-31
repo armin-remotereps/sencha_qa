@@ -12,8 +12,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import replace
-from typing import Final
+from dataclasses import dataclass, replace
+from typing import Final, Literal
 
 from django.conf import settings
 
@@ -27,22 +27,27 @@ from agents.services.person_step_prompts import (
     HOW_TO_TEXT_MAX_CHARS,
     INSTRUCTION_MAX_CHARS,
     build_confirm_sub_task,
+    build_mark_evidence_sub_task,
     build_prepare_system_prompt,
     build_prepare_user_prompt,
     build_restore_user_prompt,
     cap_text,
     fallback_hand_off,
+    format_person_evidence,
     strip_executor_vocabulary,
 )
 from agents.services.sub_agent import run_sub_agent
+from agents.services.tools_controller import COMMAND_LOG_PREFIX, capture_screenshot
 from agents.types import (
     AgentConfig,
     BrowserSelection,
     ChatMessage,
     CheckpointPersonStep,
     LLMConfig,
+    LogCallback,
     PersonHowToItem,
     PersonStepHandOff,
+    ScreenshotCallback,
     SubTask,
     SubTaskResult,
 )
@@ -264,6 +269,15 @@ def _json_object(raw: str) -> dict[str, object] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+@dataclass(frozen=True)
+class PersonCheck:
+    """The agent's check of a person step, with what it recorded as evidence."""
+
+    result: SubTaskResult
+    # Output of the read-only commands the agent ran (cleaned, uncapped).
+    check_output: str
+
+
 def confirm_person_step(
     person: CheckpointPersonStep,
     project_id: int,
@@ -273,24 +287,158 @@ def confirm_person_step(
     system_info: dict[str, object] | None,
     project_prompt: str | None,
     state_description: str,
-) -> SubTaskResult:
+) -> PersonCheck:
     """Check a person's report of ``person.hand_off`` read-only.
 
     ``config`` is the step's config (screenshots tagged with the attempt); the
     budget becomes ``PERSON_STEP_CONFIRM_TIMEOUT_SECONDS`` with no final-answer
-    turn. Faults (runner lost, AI service, ...) raise as for any sub-agent.
+    turn. The attempt always has a screenshot: one is taken without the model
+    when it took none. Faults (runner lost, AI service, ...) raise as for any
+    sub-agent.
     """
     timeout_seconds: int = settings.PERSON_STEP_CONFIRM_TIMEOUT_SECONDS
     sub_task = build_confirm_sub_task(
         person, os_name=get_os_name(system_info), timeout_seconds=timeout_seconds
     )
-    return run_sub_agent(
+    return _run_check(
         sub_task,
-        state_description,
         project_id,
         config=replace(config, timeout_seconds=timeout_seconds, final_answer=None),
         browser_selection=browser_selection,
         system_info=system_info,
         project_prompt=project_prompt,
+        state_description=state_description,
+    )
+
+
+def record_mark_evidence(
+    person: CheckpointPersonStep,
+    project_id: int,
+    *,
+    verdict: Literal["failed", "blocked"],
+    config: AgentConfig,
+    browser_selection: BrowserSelection,
+    system_info: dict[str, object] | None,
+    project_prompt: str | None,
+    state_description: str,
+) -> PersonCheck:
+    """Evidence of a step a person marked failed or blocked; never a judgement.
+
+    With ``PERSON_EVIDENCE_LLM`` the restricted sub-agent takes a screenshot
+    and at most one read-only check; without, only a screenshot is taken (no
+    model). Faults raise; the caller keeps the person's verdict.
+    """
+    if not settings.PERSON_EVIDENCE_LLM:
+        if config.on_screenshot is not None:
+            capture_screenshot(project_id, on_screenshot=config.on_screenshot)
+        return PersonCheck(
+            result=SubTaskResult(
+                status="fail",
+                summary="a screenshot was recorded (no check by the AI).",
+                iterations=0,
+            ),
+            check_output="",
+        )
+    timeout_seconds: int = settings.PERSON_STEP_CONFIRM_TIMEOUT_SECONDS
+    sub_task = build_mark_evidence_sub_task(
+        person,
+        verdict=verdict,
+        os_name=get_os_name(system_info),
+        timeout_seconds=timeout_seconds,
+    )
+    return _run_check(
+        sub_task,
+        project_id,
+        config=replace(config, timeout_seconds=timeout_seconds, final_answer=None),
+        browser_selection=browser_selection,
+        system_info=system_info,
+        project_prompt=project_prompt,
+        state_description=state_description,
+    )
+
+
+def _run_check(
+    sub_task: SubTask,
+    project_id: int,
+    *,
+    config: AgentConfig,
+    browser_selection: BrowserSelection,
+    system_info: dict[str, object] | None,
+    project_prompt: str | None,
+    state_description: str,
+) -> PersonCheck:
+    """Run the restricted sub-agent; count its screenshots and keep the output
+    of its commands (the ``$ `` log lines), then take a screenshot if it took
+    none."""
+    screenshots = 0
+    outputs: list[str] = []
+    on_screenshot = config.on_screenshot
+    on_log = config.on_log
+
+    def counted_screenshot(base64_data: str, tool_name: str) -> None:
+        nonlocal screenshots
+        screenshots += 1
+        if on_screenshot is not None:
+            on_screenshot(base64_data, tool_name)
+
+    def kept_log(message: str) -> None:
+        if message.startswith(COMMAND_LOG_PREFIX):
+            outputs.append(message[len(COMMAND_LOG_PREFIX) :])
+        if on_log is not None:
+            on_log(message)
+
+    result = run_sub_agent(
+        sub_task,
+        state_description,
+        project_id,
+        config=replace(
+            config,
+            on_screenshot=_counted(on_screenshot, counted_screenshot),
+            on_log=kept_log,
+        ),
+        browser_selection=browser_selection,
+        system_info=system_info,
+        project_prompt=project_prompt,
         tool_names=CONFIRM_TOOL_NAMES,
+    )
+    if screenshots == 0 and on_screenshot is not None:
+        logger.info("Person step check took no screenshot: taking one")
+        if on_log is not None:
+            on_log("[Evidence] The agent took no screenshot: taking one for the record")
+        capture_screenshot(project_id, on_screenshot=on_screenshot)
+    return PersonCheck(result=result, check_output="\n".join(outputs))
+
+
+def _counted(
+    on_screenshot: ScreenshotCallback | None, counted: ScreenshotCallback
+) -> ScreenshotCallback | None:
+    # No sink, no screenshots to count or to guarantee.
+    return counted if on_screenshot is not None else None
+
+
+def person_failure_result(
+    summary: str,
+    person: CheckpointPersonStep,
+    check: PersonCheck,
+    *,
+    step_num: int,
+    on_log: LogCallback | None,
+) -> SubTaskResult:
+    """A failed person attempt with its evidence as ``error`` (the pasted and
+    check outputs, head and tail, fenced as data), logged once as
+    ``[Evidence]``."""
+    evidence = format_person_evidence(
+        pasted_output=person.output,
+        check_output=check.check_output,
+        observation=check.result.summary,
+        max_chars=settings.PERSON_EVIDENCE_OUTPUT_MAX_CHARS,
+    )
+    logger.info("Person step %d: evidence recorded", step_num)
+    if on_log is not None:
+        on_log(f"[Evidence] step {step_num}:\n{evidence}")
+    return SubTaskResult(
+        status="fail",
+        summary=summary,
+        iterations=check.result.iterations,
+        error=evidence,
     )

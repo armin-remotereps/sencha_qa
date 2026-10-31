@@ -99,11 +99,17 @@ def test_run_case_person_fail(
             actor=PersonStepActor.web(request.user),
             person_step_id=form.cleaned_data["person_step_id"],
             note=form.cleaned_data["note"],
+            output=form.cleaned_data["output"],
         )
     except PersonStepError as exc:
         messages.error(request, exc.message)
     else:
-        _flash_result(request, "Marked the case failed. The run continues.", result)
+        _flash_result(
+            request,
+            "Marked the case failed. The agent records evidence, then the run "
+            "continues.",
+            result,
+        )
     return _case_redirect(project, pivot)
 
 
@@ -123,11 +129,17 @@ def test_run_case_person_block(
             actor=PersonStepActor.web(request.user),
             person_step_id=form.cleaned_data["person_step_id"],
             note=form.cleaned_data["note"],
+            output=form.cleaned_data["output"],
         )
     except PersonStepError as exc:
         messages.error(request, exc.message)
     else:
-        _flash_result(request, "Marked the case blocked. The run continues.", result)
+        _flash_result(
+            request,
+            "Marked the case blocked. The agent records evidence, then the run "
+            "continues.",
+            result,
+        )
     return _case_redirect(project, pivot)
 
 

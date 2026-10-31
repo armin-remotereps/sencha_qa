@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
-from projects.case_step_progress import CaseStepProgress, CaseStepRow
+from projects.case_step_progress import CaseStepProgress, CaseStepRow, StepStatus
 from projects.models import (
     TestCaseData,
     TestCasePriority,
@@ -237,7 +237,23 @@ def _step_lines(row: CaseStepRow) -> str:
         label = _DECISION_LABELS.get(row.decision.action, "Decision")
         if reason:
             line += f"\n   {label}: {reason}"
+    evidence = _person_evidence(row)
+    if evidence:
+        line += f"\n{evidence}"
     return line
+
+
+def _person_evidence(row: CaseStepRow) -> str:
+    """A failed person step's evidence (the bounded outputs the agent recorded),
+    indented so it keeps its lines; "" for any other step. A Blocked case shows
+    its marked step as interrupted."""
+    if (
+        row.performed_by != "person"
+        or row.status not in (StepStatus.FAILED, StepStatus.INTERRUPTED)
+        or not row.error.strip()
+    ):
+        return ""
+    return "\n".join(f"    {text}" for text in row.error.strip().splitlines())
 
 
 def format_step_breakdown(progress: CaseStepProgress) -> str:
