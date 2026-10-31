@@ -389,13 +389,14 @@ DATA_UPLOAD_MAX_NUMBER_FILES = 100
 # Project knowledge base (knowledge_base app). Files live in a private storage
 # outside MEDIA_ROOT (nginx serves /media/ without auth); only the members-only
 # download view reads them.
-KNOWLEDGE_BASE_ROOT: Path = Path(
+_KNOWLEDGE_BASE_ROOT = Path(
     config(
         "KNOWLEDGE_BASE_ROOT",
         default=str(BASE_DIR / "private_media" / "knowledge_base"),
         cast=str,
     )
-).resolve()
+)
+KNOWLEDGE_BASE_ROOT: Path = (BASE_DIR / _KNOWLEDGE_BASE_ROOT).resolve()
 if KNOWLEDGE_BASE_ROOT.is_relative_to(Path(MEDIA_ROOT).resolve()):
     raise ImproperlyConfigured("KNOWLEDGE_BASE_ROOT must not be inside MEDIA_ROOT")
 KNOWLEDGE_BASE_MAX_FILE_BYTES: int = config(

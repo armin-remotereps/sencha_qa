@@ -58,6 +58,9 @@ services:
         volumes:
             - "STATIC:/src/staticfiles"
             - "MEDIA:/src/media"
+            # Private knowledge base files: api and knowledge-celery only,
+            # never nginx (downloads go through the members-only view).
+            - "KNOWLEDGE_BASE:/src/private_media"
         # Daphne rejects incoming WebSocket messages above 1 MiB by default
         # (close code 1009). Controller screenshots and vision worker parse
         # results (annotated PNG as base64 + element list) are routinely
@@ -133,6 +136,22 @@ services:
             - "host.docker.internal:host-gateway"
         entrypoint: "python -m celery -A auto_tester worker -l INFO -Q assist --concurrency=2"
 
+    knowledge-celery:
+        hostname: knowledge
+        image: local/auto_tester:latest
+        build: .
+        env_file:
+            - "./.env"
+        restart: always
+        depends_on:
+            - "db"
+            - "redis"
+        volumes:
+            - "KNOWLEDGE_BASE:/src/private_media"
+        # Reads uploaded PDFs, Office files and archives: a recycled child
+        # past 1 GiB RSS bounds a pathological file's memory.
+        entrypoint: "python -m celery -A auto_tester worker -l INFO -Q knowledge --concurrency=2 --max-memory-per-child=1048576"
+
     beat-celery:
         hostname: execute
         image: local/auto_tester:latest
@@ -158,6 +177,7 @@ services:
             - "execution-celery"
             - "notify-celery"
             - "assist-celery"
+            - "knowledge-celery"
             - "beat-celery"
         ports:
             - "127.0.0.1:5555:5555"
@@ -211,5 +231,6 @@ volumes:
     DB_DATA:
     STATIC:
     MEDIA:
+    KNOWLEDGE_BASE:
     CERTBOT:
     LETSENCRYPT:

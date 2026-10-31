@@ -65,11 +65,12 @@ until clean -> document in `docs/changed/`.
 python -m daphne -b 0.0.0.0 -p 8000 --websocket-max-message-size 33554432 --websocket-max-frame-size 33554432 auto_tester.asgi:application
 python manage.py runserver              # no controller traffic only (1 MiB WebSocket cap)
 
-# Celery workers (four separate queues)
+# Celery workers (five separate queues)
 celery -A auto_tester worker -Q upload -l info -n upload@%h
 celery -A auto_tester worker -Q execution -l info -n execution@%h
 celery -A auto_tester worker -Q notify -l info -n notify@%h
 celery -A auto_tester worker -Q assist -l info -n assist@%h      # Human in the loop "Ask AI" answers
+celery -A auto_tester worker -Q knowledge -l info -n knowledge@%h --concurrency=2 --max-memory-per-child=1048576   # knowledge base extraction
 celery -A auto_tester beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
 
 # Type checking (strict mode)
@@ -127,6 +128,12 @@ pip install -r requirements.txt
 - **TestRail step references** (`docs/changed/2026-10-30-testrail-step-refs.md`): for "Test Case (Steps)" cases the planner tags each plan step with the case steps it covers (`SubTask.case_steps`, `agents/case_step_refs.py`; bound and TestRail/Case source stored in the checkpoint as `case_step_count` / `case_steps_testrail`). Person steps copy them to the hand-off (not restores) and `CasePersonStep.case_steps` / `case_steps_label` store the covered texts (`projects/case_step_refs.py`; label "TestRail steps 3–5", "Case steps …" without `testrail_id`, from `projects/case_step_labels.py`). Shown in the runner window (`PERSON_STEP_CASE_STEPS_V1`, CLIENT_VERSION 0.10.2; older runners get the label in `step_label`), on the "Your turn" card, the Steps card and in the Ask AI step label. Redesigns may set `case_steps`; carried steps keep theirs.
 - **Needs re-test** (`TestRunTestCaseStatus.NEEDS_RETEST`; `docs/changed/2026-10-30-needs-retest-status.md`): a writable member marks any case of a non-draft run (run page bulk bar, case page) through `projects/run_case_retest_services.mark_cases_for_retest`; the mark (`projects/case_retest_marking.apply_retest_mark`, `retest_*` fields) keeps the earlier verdict and evidence. A running case stops at its next cancellation check (`_build_cancellation_check(pivot_id=)`) with no verdict; worker writes (`_mark_pivot_in_progress`, `_finalize_pivot`, `_cancel_pivot_if_in_progress`) lock the case and never overwrite the mark. A Need help / Your turn case is closed as "Marked for re-test" (`mark_retest_after_help`, `mark_retest_person_step`) and the run goes on. Settled status: the run finishes Done; Re-run or Reset clears it, Undo restores a Passed/Failed/Blocked verdict, Resume ignores it. TestRail: Retest (status 4) in Push, Send checked and the early case send.
 - **notifications** app: ntfy. Each user has one `NotificationPreference` (server-generated random topic, on/off, kinds Need help / Failed) managed on `/notifications/`. `send_notification` (on the `notify` queue) publishes JSON to `NTFY_SERVER_URL` with `httpx`, with an optional `NTFY_ACCESS_TOKEN`; an empty server URL disables it. Click links need `SITE_URL`. Topics act like passwords: never log them or put them in task args. Entry points: `projects.case_help_notifications.notify_case_needs_help` and `projects.case_failed_notifications.notify_case_failed` (agent verdict Failed only).
+
+### Knowledge base
+
+- **knowledge_base** app (`docs/changed/2026-10-31-project-knowledge-base.md`): a project tab where members upload PDF, Word (`.docx`, best-effort `.doc`), Excel (`.xlsx`, `.xls`), XML, CSV, Markdown, JSON, YAML, logs, scripts, source code and archives (`.zip`, `.tar(.gz)`, `.7z` behind `KNOWLEDGE_BASE_ACCEPT_7Z`). Read-only members view and download; writable members upload, edit, retry and delete. Files live in a private content-addressed storage (`KNOWLEDGE_BASE_ROOT`, never under MEDIA, `KnowledgeBlob` shared by duplicated projects) and are read on the `knowledge` queue (`knowledge-celery`) into `KnowledgeChunk` rows with a weighted Postgres FTS vector (`search_config.KNOWLEDGE_SEARCH_CONFIG`). Archives become member items behind one guard (`archive_guard.py`: count, size, ratio, regular files only, encrypted refused, nothing written to disk). XML is never parsed.
+- Agents: `knowledge_base/services/agent_tools.py` (`list_knowledge`, `search_knowledge`, `read_knowledge`) is mounted in every setup role (lead), for setup/tester sub-agents (search + read, "how, not what"; not for allowlisted sub-agents) and in the orchestrator planner's bounded tool loop (`run_orchestrator(knowledge_index=)`, only when ready items exist; `ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS`, `ORCHESTRATOR_PLAN_TIMEOUT_SECONDS`). The Ask AI advisor gets `related_knowledge` excerpts (no tool loop). KB text is always fenced as data, never inside `project_prompt`. Setup chat messages reference up to 5 items (`SetupMessage.knowledge_items`). The contract for other plans is in `docs/plan/feat-project-knowledge-base.md` › Contract for other plans.
+- Import rule: `knowledge_base` imports only `projects.models` (views/consumer also `projects.decorators`, `projects.consumers`, `projects.project_access_services`), `agents.types` and `auto_tester.file_names`; it never imports `projects.services`, `machine_setup.*` or `agents.services.*`.
 
 ### Test sessions
 
