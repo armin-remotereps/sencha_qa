@@ -61,3 +61,7 @@ class TooLarge(KnowledgeExtractionError):
 
 class LegacyFormatUnreadable(KnowledgeExtractionError):
     """A Word 97-2003 or Excel 97-2003 file could not be read."""
+
+
+class KnowledgeToolError(KnowledgeBaseError):
+    """An agent's knowledge base tool call was refused; ``message`` goes back to it."""
