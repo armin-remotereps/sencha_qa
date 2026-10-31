@@ -16,6 +16,10 @@ urlpatterns: list[URLResolver | URLPattern] = [
         "projects/<int:project_id>/machine-setup/",
         include("machine_setup.urls"),
     ),
+    path(
+        "projects/<int:project_id>/knowledge-base/",
+        include("knowledge_base.urls"),
+    ),
     path("admin/", admin.site.urls),
 ]
 

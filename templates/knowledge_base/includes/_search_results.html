@@ -1,0 +1,28 @@
+{% comment %} Search results of the Knowledge base tab: the same search the agents run.
+
+   Context contract:
+     project — current Project
+     hits    — Sequence[KnowledgeHit] (snippet: plain text, matches between « and ») {% endcomment %}
+{% load knowledge_tags %}
+<section class="card" aria-labelledby="kb-hits-title">
+  <div class="card-header">
+    <h2 id="kb-hits-title">Search results</h2>
+    <span class="card-header-count">{{ hits|length }}</span>
+  </div>
+  {% if hits %}
+    <ol class="kb-hits">
+      {% for hit in hits %}
+        <li class="kb-hit">
+          <div class="kb-hit-title">
+            <a href="{% url 'knowledge_base:item' project_id=project.id item_id=hit.item_id %}?page={{ hit.page }}">{{ hit.item_name }}</a>
+            {% if hit.location %}<span class="muted small">{{ hit.location }}</span>{% endif %}
+            <span class="muted small">page {{ hit.page }}</span>
+          </div>
+          <p class="kb-snippet">{{ hit.snippet|highlight_snippet }}</p>
+        </li>
+      {% endfor %}
+    </ol>
+  {% else %}
+    <p class="muted">Nothing matched. Only files that have been read are searched.</p>
+  {% endif %}
+</section>

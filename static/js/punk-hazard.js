@@ -334,6 +334,101 @@ document.addEventListener("alpine:init", () => {
     },
   }));
 
+  /**
+   * Live extraction status on the Knowledge base pages
+   * (templates/knowledge_base/list.html and item.html). Opens `wsPath`
+   * (ws/projects/<id>/knowledge-base/), reconnects with backoff, and on every
+   * `{"type": "item", "item": {id, status, status_label, warning, error,
+   * page_count, …}}` updates each `[data-kb-item="<id>"]` element below the
+   * component: its `[data-kb-status]` badge, `[data-kb-warning]` /
+   * `[data-kb-error]` notes (hidden when empty), `[data-kb-pages]` count, and
+   * shows `[data-kb-ready-hint="<id>"]` once the item is ready. Text only
+   * (textContent), never HTML. Must match _status_badge.html's class map.
+   */
+  const KB_STATUS_CLASSES = {
+    pending: "badge-draft",
+    extracting: "badge-running",
+    ready: "badge-passed",
+    failed: "badge-failed",
+  };
+
+  Alpine.data("knowledgeStatus", (wsPath) => ({
+    socket: null,
+    retryDelay: 1000,
+    stopped: false,
+    root: null,
+
+    init() {
+      this.root = this.$el;
+      this.connect();
+    },
+
+    destroy() {
+      this.stopped = true;
+      if (this.socket) {
+        this.socket.close();
+      }
+    },
+
+    connect() {
+      if (this.stopped) {
+        return;
+      }
+      const socket = new WebSocket(window.punkHazard.wsUrl(wsPath));
+      this.socket = socket;
+      socket.onopen = () => {
+        this.retryDelay = 1000;
+      };
+      socket.onmessage = (event) => {
+        let data;
+        try {
+          data = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (data.type === "item" && data.item && Number.isInteger(data.item.id)) {
+          this.apply(data.item);
+        }
+      };
+      socket.onclose = () => {
+        if (this.stopped) {
+          return;
+        }
+        setTimeout(() => this.connect(), this.retryDelay);
+        this.retryDelay = Math.min(this.retryDelay * 2, 30000);
+      };
+    },
+
+    apply(item) {
+      const status = String(item.status || "");
+      this.root.querySelectorAll(`[data-kb-item="${item.id}"]`).forEach((row) => {
+        const badge = row.querySelector("[data-kb-status]");
+        if (badge && KB_STATUS_CLASSES[status]) {
+          Object.values(KB_STATUS_CLASSES).forEach((cls) => badge.classList.remove(cls));
+          badge.classList.add(KB_STATUS_CLASSES[status]);
+          badge.textContent = String(item.status_label || status);
+        }
+        for (const key of ["warning", "error"]) {
+          const note = row.querySelector(`[data-kb-${key}]`);
+          if (note) {
+            const text = String(item[key] || "");
+            note.textContent = text;
+            note.hidden = text === "";
+          }
+        }
+        const pages = row.querySelector("[data-kb-pages]");
+        if (pages && Number.isInteger(item.page_count)) {
+          pages.textContent = item.page_count > 0 ? String(item.page_count) : "—";
+        }
+      });
+      if (status === "ready") {
+        this.root.querySelectorAll(`[data-kb-ready-hint="${item.id}"]`).forEach((hint) => {
+          hint.hidden = false;
+        });
+      }
+    },
+  }));
+
   /** The ⋯ row-action dropdown (templates/partials's `.row-menu` markup). */
   Alpine.data("rowMenu", () => ({
     open: false,

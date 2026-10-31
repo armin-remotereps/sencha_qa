@@ -6,7 +6,8 @@ from typing import Any, TypeVar
 
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
-from django.http import Http404, HttpResponse
+from django.http import Http404
+from django.http.response import HttpResponseBase
 
 from accounts.models import CustomUser
 from accounts.types import AuthenticatedRequest
@@ -14,7 +15,7 @@ from projects.models import Project
 from projects.project_access import set_request_project_access
 from projects.project_access_services import get_project_access
 
-F = TypeVar("F", bound=Callable[..., HttpResponse])
+F = TypeVar("F", bound=Callable[..., HttpResponseBase])
 
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
@@ -23,7 +24,7 @@ def _membership_view(view_func: F, *, gate_writes: bool) -> F:
     @wraps(view_func)
     def _wrapped(
         request: AuthenticatedRequest, project_id: int, **kwargs: Any
-    ) -> HttpResponse:
+    ) -> HttpResponseBase:
         access = get_project_access(project_id, request.user)
         if access is None:
             raise Http404

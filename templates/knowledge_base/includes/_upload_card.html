@@ -1,0 +1,37 @@
+{% comment %} Upload card of the Knowledge base tab (writable members only).
+
+   Context contract:
+     project     — current Project
+     upload_form — KnowledgeUploadForm (the files input carries accept=)
+     limits      — {max_file_bytes, max_files, max_request_bytes, accept}
+     usage_bytes / quota_bytes — the project's storage use and quota
+     accept_7z   — False adds the "repack as .zip" note
+     seven_zip_disabled_message — formats.SEVEN_ZIP_DISABLED_MESSAGE {% endcomment %}
+<section class="card" aria-labelledby="kb-upload-title">
+  <div class="card-header">
+    <h2 id="kb-upload-title">Add files</h2>
+  </div>
+  <form method="post" action="{% url 'knowledge_base:upload' project_id=project.id %}" enctype="multipart/form-data" x-data="{ count: 0 }">
+    {% csrf_token %}
+    <div class="field">
+      <label for="{{ upload_form.uploads.id_for_label }}">Files</label>
+      {{ upload_form.uploads }}
+      <p class="hint" x-show="count > 0" x-cloak x-text="count + (count === 1 ? ' file chosen' : ' files chosen')"></p>
+      <p class="hint">
+        Up to {{ limits.max_files }} files and {{ limits.max_request_bytes|filesizeformat }} per upload, {{ limits.max_file_bytes|filesizeformat }} per file.
+        Text, Markdown, CSV, XML, JSON, YAML, config, scripts, source code, HTML, PDF, Word, Excel and archives (.zip, .tar, .tar.gz, .tgz{% if accept_7z %}, .7z{% endif %}).
+      </p>
+      {% if not accept_7z %}
+        <p class="hint">{{ seven_zip_disabled_message }}: repack a .7z archive as .zip before uploading it.</p>
+      {% endif %}
+    </div>
+    <div class="field">
+      <label for="{{ upload_form.description.id_for_label }}">Description <span class="optional">(optional, applied to every file)</span></label>
+      {{ upload_form.description }}
+    </div>
+    <div class="kb-upload-footer">
+      <p class="muted small">{{ usage_bytes|filesizeformat }} of {{ quota_bytes|filesizeformat }} used</p>
+      <button type="submit" class="btn btn-primary">Upload</button>
+    </div>
+  </form>
+</section>

@@ -1,0 +1,92 @@
+{% extends "layouts/project.html" %}
+
+{% comment %} Knowledge base tab: upload, search (the agents' search) and the item list,
+   or one archive's members with ?archive=<id>.
+
+   Context contract (knowledge_base.views.knowledge_list):
+     project      — current Project
+     active_tab   — "knowledge_base"
+     items        — Sequence[KnowledgeListEntry]: top-level items, or the archive's members
+     archive      — KnowledgeItemDetail of ?archive, or None
+     hits         — Sequence[KnowledgeHit] for ?q, or None when no search ran
+     search_form  — KnowledgeSearchForm (GET: q, exact)
+     upload_form  — KnowledgeUploadForm
+     usage_bytes / quota_bytes — the project's storage use and quota
+     limits       — {max_file_bytes, max_files, max_request_bytes, accept}
+     accept_7z    — settings.KNOWLEDGE_BASE_ACCEPT_7Z
+     seven_zip_disabled_message — the refusal text when 7z is off
+     ws_path      — the knowledgeStatus socket path
+     project_can_write (context processor) — false hides the upload card {% endcomment %}
+{% block title %}{% if archive %}{{ archive.entry.summary.name }} · {% endif %}Knowledge base · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumb_extra %}
+  {% if archive %}
+    <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+    <span class="sep" aria-hidden="true">›</span>
+    <a href="{% url 'knowledge_base:list' project_id=project.id %}">Knowledge base</a>
+    <span class="sep" aria-hidden="true">›</span>
+    <span aria-current="page">{{ archive.entry.summary.name }}</span>
+  {% else %}
+    {{ block.super }}
+  {% endif %}
+{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    {% if archive %}
+      <h1>{{ archive.entry.summary.name }}</h1>
+      <p class="subtitle">{{ items|length }} file{{ items|length|pluralize }} read from this archive</p>
+    {% else %}
+      <h1>Knowledge base</h1>
+      <p class="subtitle">Documents, logs, configs and code the agents can search and read while they set up machines and run tests.</p>
+    {% endif %}
+  </div>
+  {% if archive %}
+  <div class="actions">
+    <a class="btn btn-secondary" href="{% url 'knowledge_base:item' project_id=project.id item_id=archive.entry.summary.id %}">Archive details</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block project_content %}
+<div class="stack" x-data="knowledgeStatus('{{ ws_path|escapejs }}')">
+  <div class="alert alert-warning" role="note">
+    <span class="alert-icon" aria-hidden="true">!</span>
+    <p>Agents read everything here; do not upload secrets you would not paste into the chat.</p>
+  </div>
+
+  {% if project_can_write and not archive %}
+    {% include "knowledge_base/includes/_upload_card.html" %}
+  {% endif %}
+
+  <form class="toolbar" action="{% url 'knowledge_base:list' project_id=project.id %}" method="get" role="search">
+    <div class="search">
+      <label class="visually-hidden" for="{{ search_form.q.id_for_label }}">Search the knowledge base</label>
+      {{ search_form.q }}
+    </div>
+    <label class="checkbox" for="{{ search_form.exact.id_for_label }}">
+      {{ search_form.exact }}
+      <span>Exact text</span>
+    </label>
+    <button type="submit" class="btn btn-secondary">Search</button>
+    {% if hits is not None %}<a class="btn btn-ghost" href="{% url 'knowledge_base:list' project_id=project.id %}">Clear</a>{% endif %}
+  </form>
+  {% for error in search_form.q.errors %}<p class="error-text">{{ error }}</p>{% endfor %}
+
+  {% if hits is not None %}
+    {% include "knowledge_base/includes/_search_results.html" with project=project hits=hits only %}
+  {% endif %}
+
+  {% if items %}
+    {% include "knowledge_base/includes/_item_table.html" with project=project items=items only %}
+  {% elif archive %}
+    {% include "partials/empty_state.html" with icon="▤" title="No files read from this archive" body="The archive is still being read, or it held no supported files. Its details page lists what was skipped." only %}
+  {% elif project_can_write %}
+    {% include "partials/empty_state.html" with icon="▤" title="No files yet" body="Upload manuals, release notes, logs or configs above. The agents search and read them while they work." only %}
+  {% else %}
+    {% include "partials/empty_state.html" with icon="▤" title="No files yet" body="Files of this project's knowledge base show up here." only %}
+  {% endif %}
+</div>
+{% endblock %}

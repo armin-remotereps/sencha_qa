@@ -127,7 +127,7 @@ def kind_for_name(name: str) -> KnowledgeKind | None:
 
 
 def archive_format(name: str) -> str | None:
-    """"zip", "tar" or "7z" for an archive name; None otherwise."""
+    """ "zip", "tar" or "7z" for an archive name; None otherwise."""
     extension = matched_extension(name)
     if extension == ".zip":
         return "zip"

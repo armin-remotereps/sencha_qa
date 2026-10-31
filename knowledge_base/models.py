@@ -118,7 +118,9 @@ class KnowledgeItem(models.Model):
             models.Index(
                 fields=["project", "parent", "status"], name="kb_item_proj_parent"
             ),
-            models.Index(fields=["project", "-created_at"], name="kb_item_proj_created"),
+            models.Index(
+                fields=["project", "-created_at"], name="kb_item_proj_created"
+            ),
         ]
 
     def __str__(self) -> str:

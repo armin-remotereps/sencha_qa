@@ -4550,3 +4550,147 @@ details.card[open] > summary,
   padding: 4px 0;
   border-bottom: 1px solid var(--border);
 }
+
+/* --------------------------------------------------------------------------
+   Knowledge base tab (templates/knowledge_base/)
+   -------------------------------------------------------------------------- */
+
+/* Status notes and alerts that knowledgeStatus hides when empty: `hidden`
+   must win over the display set by .alert / .kb-note. */
+.kb-note[hidden],
+.kb-item-grid [data-kb-error][hidden],
+.kb-item-grid [data-kb-warning][hidden],
+[data-kb-ready-hint][hidden] {
+  display: none;
+}
+
+/* "anywhere" alone lets the table shrink the name to one letter per line. */
+.kb-name-cell {
+  min-width: 16ch;
+  overflow-wrap: anywhere;
+}
+
+.kb-description {
+  font-weight: 400;
+  max-width: 48ch;
+}
+
+@media (max-width: 767px) {
+  /* Stacked record: the label keeps its width, the name block wraps. */
+  .kb-name-cell {
+    min-width: 0;
+  }
+
+  .kb-name-cell::before {
+    flex: none;
+  }
+
+  .kb-name-block {
+    min-width: 0;
+  }
+}
+
+.kb-status-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.kb-note {
+  display: block;
+  font-size: 0.8rem;
+  max-width: 28ch;
+  overflow-wrap: anywhere;
+}
+
+.kb-note-error {
+  color: var(--danger);
+}
+
+.kb-note-warning {
+  color: var(--warning);
+}
+
+.kb-upload-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.kb-upload-footer p {
+  margin: 0;
+}
+
+.kb-hits {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.kb-hit {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.kb-hit:last-child {
+  border-bottom: 0;
+}
+
+.kb-hit-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.kb-snippet {
+  margin: 6px 0 0;
+  font-family: var(--mono);
+  font-size: 0.84rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+}
+
+.kb-snippet mark {
+  color: var(--text);
+  background: var(--warning-soft);
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.kb-item-title,
+.kb-break {
+  overflow-wrap: anywhere;
+}
+
+.kb-preview {
+  max-height: 70vh;
+  overflow: auto;
+  margin: 0 0 14px;
+  padding: 13px 16px;
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--mono);
+  font-size: 0.84rem;
+  line-height: 1.6;
+  color: var(--code-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.kb-page-jump {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kb-page-jump .input {
+  width: 6em;
+}
