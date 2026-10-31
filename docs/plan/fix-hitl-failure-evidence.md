@@ -1,6 +1,6 @@
 # fix: Human in the loop failures always carry AI-recorded evidence
 
-Status: In progress
+Status: Done
 Created: 2026-10-31
 Request: The user says that in Human in the loop the AI is responsible for recording the result. So even when a command-based step fails, the AI should take a screenshot and record the failure logs. Today a person step can end Failed with no screenshot, and the command output the person pasted never reaches the attempt or the case log. Required at minimum:
 - every confirm attempt takes a screenshot;
@@ -137,3 +137,5 @@ Not asked; kept as planned:
   - A Needs re-test mark that lands during the evidence pass wins: the row closes as `marked_retest` and the person's earlier Failed/Blocked is not written. That is the later person decision.
   - A worker that dies hard during the evidence pass (no abort) leaves the case In progress with the `marked_*` key, like any crashed worker; a Resume then drops the key and the mark is lost.
 - Third pass, fixed: the warning flash shown when the run cannot continue now also says the verdict was saved without evidence; `close_marked_row` builds its update fields first instead of unpacking them inline.
+- Fourth pass: reviewer and verifier clean. Accepted as is: when the run stays gated after a no-evidence mark, the warning flash may repeat the same gate sentence (once as the no-evidence reason, once as the blocker). The message is still correct, and both agents marked it optional.
+- 2026-10-31: Done. Change note: docs/changed/2026-10-31-hitl-failure-evidence.md.
