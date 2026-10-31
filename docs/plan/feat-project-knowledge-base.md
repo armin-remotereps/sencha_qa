@@ -1,6 +1,6 @@
 # feat: Project knowledge base
 
-Status: Ready
+Status: In progress
 Created: 2026-10-31
 Request: Each project gets a **knowledge base** (KB). Members upload many files at once: PDF, Word (`.docx` and legacy `.doc`), Excel (`.xlsx` and legacy `.xls`), XML, CSV, Markdown, JSON, YAML, logs, source code, and archives (`.zip`, `.tar`, `.tar.gz` / `.tgz`, `.7z`) of such files. The server extracts the text in the background, and the agents can list, search and read it. Today machine setup and test execution struggle because the agents do not know the project's own material: a TeamCity export, install guides, configs.
 

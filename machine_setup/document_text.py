@@ -12,12 +12,8 @@ from machine_setup.exceptions import SetupDocumentInvalidError
 # Characters the agent gets per read_document page.
 DOCUMENT_PAGE_CHARS = 12000
 DOCUMENT_EXTENSIONS = (".md", ".markdown", ".txt")
-_FILE_NAME_MAX = 120
-_FALLBACK_FILE_NAME = "document.md"
 # C0 controls other than tab, LF, form feed and CR (CR is normalised away).
 _FORBIDDEN_CONTROLS = re.compile(r"[\x00-\x08\x0b\x0e-\x1f\x7f]")
-_NAME_CONTROLS = re.compile(r"[\x00-\x1f\x7f]")
-_WHITESPACE = re.compile(r"\s+")
 NO_TEXT_PLACEHOLDER = "(No message text; see the attached document.)"
 
 
@@ -37,20 +33,6 @@ class AttachedDocumentNote:
     document_id: int
     file_name: str
     char_count: int
-
-
-def sanitize_file_name(name: str) -> str:
-    """Base name only, no control characters, collapsed whitespace, capped."""
-    base = name.replace("\\", "/").rsplit("/", 1)[-1]
-    base = _NAME_CONTROLS.sub("", base)
-    base = _WHITESPACE.sub(" ", base).strip().lstrip(".")
-    if len(base) > _FILE_NAME_MAX:
-        stem, dot, extension = base.rpartition(".")
-        if dot and 0 < len(extension) < 12:
-            base = stem[: _FILE_NAME_MAX - len(extension) - 1] + "." + extension
-        else:
-            base = base[:_FILE_NAME_MAX]
-    return base or _FALLBACK_FILE_NAME
 
 
 def has_document_extension(name: str) -> bool:

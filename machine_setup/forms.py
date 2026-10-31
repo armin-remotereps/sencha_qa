@@ -6,11 +6,11 @@ from django import forms
 from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
 
+from auto_tester.file_names import sanitize_file_name
 from machine_setup.document_text import (
     UploadedDocument,
     decode_document,
     has_document_extension,
-    sanitize_file_name,
 )
 from machine_setup.exceptions import SetupDocumentInvalidError
 

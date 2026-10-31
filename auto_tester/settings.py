@@ -59,6 +59,7 @@ INSTALLED_APPS: list[str] = [
     "visual_engine",
     "notifications",
     "test_sessions",
+    "knowledge_base",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -206,6 +207,12 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "notifications.tasks.send_notification": {"queue": "notify"},
     "notifications.tasks.send_night_digest": {"queue": "notify"},
     "test_sessions.tasks.close_stale_test_sessions": {"queue": "notify"},
+    # Own worker (knowledge-celery): extraction is CPU and memory heavy and
+    # must never hold up TestRail imports or notifications.
+    "knowledge_base.tasks.extract_knowledge_item": {"queue": "knowledge"},
+    "knowledge_base.tasks.expand_knowledge_archive": {"queue": "knowledge"},
+    "knowledge_base.tasks.copy_project_knowledge": {"queue": "knowledge"},
+    "knowledge_base.tasks.sweep_knowledge_storage": {"queue": "knowledge"},
 }
 # Installed into django-celery-beat's tables by its DatabaseScheduler when
 # beat starts (machine_setup.task_names.SWEEP_STALE_AUTO_FIXES).
@@ -229,6 +236,12 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "task": "test_sessions.tasks.close_stale_test_sessions",
         "schedule": 900.0,
         "options": {"expire_seconds": 840},
+    },
+    # Removes knowledge base blobs and files no item uses any more.
+    "knowledge-base-sweep-storage": {
+        "task": "knowledge_base.tasks.sweep_knowledge_storage",
+        "schedule": crontab(hour=3, minute=30),
+        "options": {"expire_seconds": 3600},
     },
 }
 
@@ -371,6 +384,79 @@ SEARCH_PAGE_FETCH_TIMEOUT: int = config(
 # Upload size limits
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
+DATA_UPLOAD_MAX_NUMBER_FILES = 100
+
+# Project knowledge base (knowledge_base app). Files live in a private storage
+# outside MEDIA_ROOT (nginx serves /media/ without auth); only the members-only
+# download view reads them.
+KNOWLEDGE_BASE_ROOT: Path = Path(
+    config(
+        "KNOWLEDGE_BASE_ROOT",
+        default=str(BASE_DIR / "private_media" / "knowledge_base"),
+        cast=str,
+    )
+).resolve()
+if KNOWLEDGE_BASE_ROOT.is_relative_to(Path(MEDIA_ROOT).resolve()):
+    raise ImproperlyConfigured("KNOWLEDGE_BASE_ROOT must not be inside MEDIA_ROOT")
+KNOWLEDGE_BASE_MAX_FILE_BYTES: int = config(
+    "KNOWLEDGE_BASE_MAX_FILE_BYTES", default=26214400, cast=int
+)
+KNOWLEDGE_BASE_MAX_FILES_PER_UPLOAD: int = config(
+    "KNOWLEDGE_BASE_MAX_FILES_PER_UPLOAD", default=20, cast=int
+)
+if not 1 <= KNOWLEDGE_BASE_MAX_FILES_PER_UPLOAD <= DATA_UPLOAD_MAX_NUMBER_FILES:
+    raise ImproperlyConfigured(
+        "KNOWLEDGE_BASE_MAX_FILES_PER_UPLOAD must be between 1 and "
+        f"{DATA_UPLOAD_MAX_NUMBER_FILES} (DATA_UPLOAD_MAX_NUMBER_FILES)"
+    )
+# Total size of a project's items, archives and their members included.
+KNOWLEDGE_BASE_MAX_PROJECT_BYTES: int = config(
+    "KNOWLEDGE_BASE_MAX_PROJECT_BYTES", default=1073741824, cast=int
+)
+# Extracted characters kept per item.
+KNOWLEDGE_BASE_MAX_ITEM_CHARS: int = config(
+    "KNOWLEDGE_BASE_MAX_ITEM_CHARS", default=5000000, cast=int
+)
+KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS: int = config(
+    "KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS", default=500, cast=int
+)
+# Also caps what is read out of .docx / .xlsx containers.
+KNOWLEDGE_BASE_ARCHIVE_MAX_UNCOMPRESSED_BYTES: int = config(
+    "KNOWLEDGE_BASE_ARCHIVE_MAX_UNCOMPRESSED_BYTES", default=268435456, cast=int
+)
+KNOWLEDGE_BASE_PDF_MAX_PAGES: int = config(
+    "KNOWLEDGE_BASE_PDF_MAX_PAGES", default=2000, cast=int
+)
+# Cells read per workbook (.xlsx and .xls).
+KNOWLEDGE_BASE_SHEET_MAX_CELLS: int = config(
+    "KNOWLEDGE_BASE_SHEET_MAX_CELLS", default=2000000, cast=int
+)
+# Soft time limit of one extraction task (the hard limit is 30 s later); an
+# item stuck "Reading" this long may be retried.
+KNOWLEDGE_BASE_EXTRACT_TIME_LIMIT_SECONDS: int = config(
+    "KNOWLEDGE_BASE_EXTRACT_TIME_LIMIT_SECONDS", default=600, cast=int
+)
+KNOWLEDGE_BASE_ACCEPT_7Z: bool = config(
+    "KNOWLEDGE_BASE_ACCEPT_7Z", default=True, cast=bool
+)
+for _kb_name, _kb_value in (
+    ("KNOWLEDGE_BASE_MAX_FILE_BYTES", KNOWLEDGE_BASE_MAX_FILE_BYTES),
+    ("KNOWLEDGE_BASE_MAX_PROJECT_BYTES", KNOWLEDGE_BASE_MAX_PROJECT_BYTES),
+    ("KNOWLEDGE_BASE_MAX_ITEM_CHARS", KNOWLEDGE_BASE_MAX_ITEM_CHARS),
+    ("KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS", KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS),
+    (
+        "KNOWLEDGE_BASE_ARCHIVE_MAX_UNCOMPRESSED_BYTES",
+        KNOWLEDGE_BASE_ARCHIVE_MAX_UNCOMPRESSED_BYTES,
+    ),
+    ("KNOWLEDGE_BASE_PDF_MAX_PAGES", KNOWLEDGE_BASE_PDF_MAX_PAGES),
+    ("KNOWLEDGE_BASE_SHEET_MAX_CELLS", KNOWLEDGE_BASE_SHEET_MAX_CELLS),
+    (
+        "KNOWLEDGE_BASE_EXTRACT_TIME_LIMIT_SECONDS",
+        KNOWLEDGE_BASE_EXTRACT_TIME_LIMIT_SECONDS,
+    ),
+):
+    if _kb_value < 1:
+        raise ImproperlyConfigured(f"{_kb_name} must be 1 or more")
 
 # Controller
 CONTROLLER_SERVER_HOST: str = config(
@@ -470,6 +556,19 @@ ORCHESTRATOR_MAX_SUBTASKS: int = config(
 ORCHESTRATOR_MAX_RECOVERY_ATTEMPTS: int = config(
     "ORCHESTRATOR_MAX_RECOVERY_ATTEMPTS", default=1, cast=int
 )
+# Knowledge base tool rounds the planner may take before answering with the
+# plan (only when the project has ready knowledge base items); 0 turns it off.
+ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS: int = config(
+    "ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS", default=4, cast=int
+)
+if ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS < 0:
+    raise ImproperlyConfigured("ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS must be 0 or more")
+# Wall-clock cap of that planner tool loop.
+ORCHESTRATOR_PLAN_TIMEOUT_SECONDS: int = config(
+    "ORCHESTRATOR_PLAN_TIMEOUT_SECONDS", default=180, cast=int
+)
+if ORCHESTRATOR_PLAN_TIMEOUT_SECONDS < 1:
+    raise ImproperlyConfigured("ORCHESTRATOR_PLAN_TIMEOUT_SECONDS must be 1 or more")
 
 # Sub-Agent
 SUB_AGENT_MAX_ITERATIONS: int = config(

@@ -287,6 +287,12 @@ class SetupMessage(models.Model):
         blank=True,
         related_name="+",
     )
+    # USER rows: knowledge base items the person referenced (composer picker,
+    # at most knowledge_base.reference_note.MAX_KNOWLEDGE_REFS_PER_MESSAGE).
+    # Deleting an item drops the link; the note in the transcript stays.
+    knowledge_items = models.ManyToManyField(
+        "knowledge_base.KnowledgeItem", blank=True, related_name="+"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -345,7 +351,7 @@ class SetupDocument(models.Model):
         blank=True,
         related_name="+",
     )
-    # Sanitised display name (machine_setup.document_text.sanitize_file_name).
+    # Sanitised display name (auto_tester.file_names.sanitize_file_name).
     file_name = models.CharField(max_length=255)
     # Decoded UTF-8, LF line endings.
     text = models.TextField()

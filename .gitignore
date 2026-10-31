@@ -73,3 +73,6 @@ vision_worker/.mypy_cache/
 # Generated test reports
 *_TEST_REPORT.md
 .claude/settings.local.json
+
+# Project knowledge base files (private storage, outside media/)
+private_media/
