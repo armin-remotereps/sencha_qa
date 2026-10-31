@@ -1,6 +1,6 @@
 # feat: Project knowledge base
 
-Status: In progress
+Status: Done
 Created: 2026-10-31
 Request: Each project gets a **knowledge base** (KB). Members upload many files at once: PDF, Word (`.docx` and legacy `.doc`), Excel (`.xlsx` and legacy `.xls`), XML, CSV, Markdown, JSON, YAML, logs, source code, and archives (`.zip`, `.tar`, `.tar.gz` / `.tgz`, `.7z`) of such files. The server extracts the text in the background, and the agents can list, search and read it. Today machine setup and test execution struggle because the agents do not know the project's own material: a TeamCity export, install guides, configs.
 
@@ -754,3 +754,4 @@ Answered on 2026-10-31: Q1–Q10 (see Decisions). One remains. It does not block
   - The `project_usage` docstring.
   - Accepted trade-off: delete and the sweep unlink files before their transaction commits. A commit that then fails leaves unused rows without files, which a re-upload rewrites; an item whose delete failed to commit would read as "Could not read this file" and can be deleted again.
 - 2026-10-31: review round 4. Fixed: archive members are charged to the hourly upload budget and pre-checked against the quota before they are written (a small, highly compressed archive could write up to 256 MiB past both); the budget counter retries when its window expires between add and incr; reservations are released when a later reservation or write fails; a file the sweep removes between `is_file()` and `utime` is placed again instead of failing the upload; an already-removed file is not logged as a failed delete. Rejected: a per-user disk ceiling across projects. Quota and budget are per project by design, and creating projects is an existing capability of every user; a per-user limit is a separate decision.
+- 2026-10-31: review round 5 clean (reviewer and verifier). Docstring of `expand_knowledge_archive` names the budget skip. Accepted notes: a re-claimed archive charges its members to the budget again (strict side only); a soft time limit inside one member's write can mis-count that one member. Status Done; change note `docs/changed/2026-10-31-project-knowledge-base.md`.

@@ -70,7 +70,7 @@ celery -A auto_tester worker -Q upload -l info -n upload@%h
 celery -A auto_tester worker -Q execution -l info -n execution@%h
 celery -A auto_tester worker -Q notify -l info -n notify@%h
 celery -A auto_tester worker -Q assist -l info -n assist@%h      # Human in the loop "Ask AI" answers
-celery -A auto_tester worker -Q knowledge -l info -n knowledge@%h --concurrency=2 --max-memory-per-child=1048576   # knowledge base extraction
+celery -A auto_tester worker -Q knowledge -l info -n knowledge@%h --concurrency=2 --max-memory-per-child=1048576   # knowledge base extraction (macOS dev: --pool=solo)
 celery -A auto_tester beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
 
 # Type checking (strict mode)

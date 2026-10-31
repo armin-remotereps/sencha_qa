@@ -68,8 +68,8 @@ def expand_knowledge_archive(item_id: int) -> None:
     """Claim the archive, store its members as pending children, mark it ready.
 
     Whole-archive problems (limits, encryption) fail the archive and leave no
-    children. Members over the project quota are skipped and listed in the
-    archive's warning. Blobs stored for members that end up unused are left
+    children. Members over the project quota or the hourly upload budget are
+    skipped and listed in the archive's warning. Blobs stored for members that end up unused are left
     to the storage sweep.
     """
     item = claim_item(item_id, archive=True)
