@@ -10,14 +10,16 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import re
 import uuid
 from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from django.core.files import File
 from django.db import IntegrityError, transaction
+from django.utils import timezone as django_timezone
 
 from knowledge_base.models import KnowledgeBlob
 from knowledge_base.storage import knowledge_storage
@@ -25,6 +27,11 @@ from knowledge_base.storage import knowledge_storage
 logger = logging.getLogger(__name__)
 
 _TEMP_DIR = "tmp"
+# Delete and the sweep leave blobs and files stored more recently than this:
+# an upload or archive expansion may be about to reference them.
+BLOB_GRACE = timedelta(hours=1)
+# Blob directories are the first two hex digits of the sha256.
+_BLOB_DIR = re.compile(r"[0-9a-f]{2}")
 # get_or_create races with a concurrent insert of the same hash at most once.
 _CREATE_ATTEMPTS = 2
 
@@ -83,10 +90,13 @@ def _get_or_create_row(sha256: str, size: int) -> KnowledgeBlob:
     attempt = 1
     while True:
         try:
-            blob, _created = KnowledgeBlob.objects.select_for_update().get_or_create(
+            blob, created = KnowledgeBlob.objects.select_for_update().get_or_create(
                 sha256=sha256,
                 defaults={"size_bytes": size, "storage_name": _storage_name(sha256)},
             )
+            if not created:
+                blob.stored_at = django_timezone.now()
+                blob.save(update_fields=["stored_at"])
             return blob
         except IntegrityError:
             # A concurrent insert of the same hash won: read its row.
@@ -144,7 +154,9 @@ def iter_stored_files() -> Iterator[StoredFile]:
     if not root.is_dir():
         return
     for directory in root.iterdir():
-        if not directory.is_dir():
+        # Only the storage's own directories, whatever else shares the root.
+        is_own = directory.name == _TEMP_DIR or _BLOB_DIR.fullmatch(directory.name)
+        if not is_own or directory.is_symlink() or not directory.is_dir():
             continue
         with os.scandir(directory) as entries:
             for entry in entries:

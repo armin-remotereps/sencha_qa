@@ -148,8 +148,10 @@ services:
             - "redis"
         volumes:
             - "KNOWLEDGE_BASE:/src/private_media"
-        # Reads uploaded PDFs, Office files and archives: a recycled child
-        # past 1 GiB RSS bounds a pathological file's memory.
+        # Reads uploaded PDFs, Office files and archives: a child past 1 GiB
+        # RSS is recycled after its task, and the container cap stops one
+        # pathological file (lxml or pypdf internals) from starving the host.
+        mem_limit: 3g
         entrypoint: "python -m celery -A auto_tester worker -l INFO -Q knowledge --concurrency=2 --max-memory-per-child=1048576"
 
     beat-celery:

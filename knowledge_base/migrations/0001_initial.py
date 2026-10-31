@@ -3,6 +3,7 @@
 import django.contrib.postgres.indexes
 import django.contrib.postgres.search
 import django.db.models.deletion
+import django.utils.timezone
 from django.conf import settings
 from django.db import migrations, models
 
@@ -32,7 +33,10 @@ class Migration(migrations.Migration):
                 ("sha256", models.CharField(max_length=64, unique=True)),
                 ("size_bytes", models.BigIntegerField()),
                 ("storage_name", models.CharField(max_length=200)),
-                ("created_at", models.DateTimeField(auto_now_add=True)),
+                (
+                    "stored_at",
+                    models.DateTimeField(default=django.utils.timezone.now),
+                ),
             ],
         ),
         migrations.CreateModel(

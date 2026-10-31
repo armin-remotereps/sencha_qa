@@ -63,6 +63,8 @@ from agents.services.sub_task_budget import (
     build_timeout_bounds,
     resolve_timeout_seconds,
 )
+from agents.services.tool_definitions import get_knowledge_tool_definitions
+from agents.services.tool_registry import allowlisted_dispatcher
 from agents.types import (
     AgentCancelledError,
     AgentConfig,
@@ -96,12 +98,6 @@ from agents.types import (
     ToolContext,
     ToolDispatcher,
     ToolResult,
-)
-from knowledge_base.services.agent_tools import (
-    READ_KNOWLEDGE_TOOL,
-    SEARCH_KNOWLEDGE_TOOL,
-    dispatch_knowledge_tool,
-    knowledge_tool_definitions,
 )
 
 logger = logging.getLogger(__name__)
@@ -1148,7 +1144,8 @@ def _plan_with_knowledge_tools(
     plan JSON. ``AIServiceError`` and ``AgentCancelledError`` propagate as from
     the single planning call.
     """
-    tools = knowledge_tool_definitions(include_list=False)
+    tools = get_knowledge_tool_definitions()
+    names = frozenset(tool.name for tool in tools)
     config = AgentConfig(
         llm=orchestrator_llm,
         # One round is one call: the last round's results are answered by the
@@ -1165,7 +1162,9 @@ def _plan_with_knowledge_tools(
         ToolContext(project_id=project_id, browser_selection=BrowserSelection()),
         config=config,
         tool_definitions=tools,
-        dispatch=_knowledge_dispatcher(project_id, on_log),
+        dispatch=_logged_dispatcher(
+            allowlisted_dispatcher(names), names=names, on_log=on_log
+        ),
     )
     if result.stop_reason == AgentStopReason.TASK_COMPLETE:
         return _extract_text(result.messages[-1])
@@ -1190,32 +1189,26 @@ _PLAN_NOW_PROMPT = (
 )
 
 
-def _knowledge_dispatcher(
-    project_id: int, on_log: LogCallback | None
+def _logged_dispatcher(
+    dispatch: ToolDispatcher, *, names: frozenset[str], on_log: LogCallback | None
 ) -> ToolDispatcher:
-    """Runs only search_knowledge / read_knowledge, logging each call."""
+    """``dispatch`` with one case-log line per knowledge base look-up."""
 
     def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
-        if tool_call.tool_name not in _PLANNER_KNOWLEDGE_TOOLS:
-            return ToolResult(
-                tool_call_id=tool_call.tool_call_id,
-                content=f"Tool not available while planning: {tool_call.tool_name}",
-                is_error=True,
-            )
-        _log(on_log, f"[Orchestrator] KB: {_describe_knowledge_call(tool_call)}")
-        return dispatch_knowledge_tool(tool_call, project_id)
+        if tool_call.tool_name in names:
+            _log(on_log, f"[Orchestrator] KB: {_describe_knowledge_call(tool_call)}")
+        return dispatch(tool_call, context)
 
     return _dispatch
 
 
-_PLANNER_KNOWLEDGE_TOOLS = frozenset({SEARCH_KNOWLEDGE_TOOL, READ_KNOWLEDGE_TOOL})
 _KB_LOG_QUERY_MAX_CHARS = 200
 
 
 def _describe_knowledge_call(tool_call: ToolCall) -> str:
     arguments = tool_call.arguments
-    if tool_call.tool_name == SEARCH_KNOWLEDGE_TOOL:
-        query = str(arguments.get("query", ""))[:_KB_LOG_QUERY_MAX_CHARS]
+    if "query" in arguments:
+        query = str(arguments["query"])[:_KB_LOG_QUERY_MAX_CHARS]
         return f"{tool_call.tool_name} {json.dumps(query, ensure_ascii=False)}"
     page = arguments.get("page")
     page_part = "" if page is None else f" page {page}"

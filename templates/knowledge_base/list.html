@@ -7,6 +7,7 @@
      project      — current Project
      active_tab   — "knowledge_base"
      items        — Sequence[KnowledgeListEntry]: top-level items, or the archive's members
+     items_capped — bool: more top-level items exist than list_row_limit
      archive      — KnowledgeItemDetail of ?archive, or None
      hits         — Sequence[KnowledgeHit] for ?q, or None when no search ran
      search_form  — KnowledgeSearchForm (GET: q, exact)
@@ -81,6 +82,7 @@
 
   {% if items %}
     {% include "knowledge_base/includes/_item_table.html" with project=project items=items only %}
+    {% if items_capped %}<p class="muted small">Showing the newest {{ list_row_limit }} files. Search to find older ones.</p>{% endif %}
   {% elif archive %}
     {% include "partials/empty_state.html" with icon="▤" title="No files read from this archive" body="The archive is still being read, or it held no supported files. Its details page lists what was skipped." only %}
   {% elif project_can_write %}

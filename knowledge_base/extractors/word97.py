@@ -9,13 +9,17 @@
 5. Field codes and control characters are dropped.
 
 Every offset is bounds-checked and every loop is bounded by the stream
-sizes; anything unexpected raises ``LegacyFormatUnreadable``. Sections are
+sizes; anything unexpected raises ``LegacyFormatUnreadable``. ``ccpText``
+and the summed piece sizes may not exceed the ``WordDocument`` stream (no
+huge or overlapping pieces), and the text is decoded in blocks and stops a
+little past the item's character budget. Sections are
 cut at paragraph marks with character-offset locations ("Word text
 12 001–13 500"); the format has no page numbers without layout.
 """
 
 from __future__ import annotations
 
+import codecs
 import io
 import struct
 
@@ -54,6 +58,10 @@ _PARAGRAPH_MARKS = frozenset("\r\x07")  # paragraph end, table cell / row end
 _LINE_BREAKS = frozenset("\x0b\x0c\x0e")  # line, page and column breaks
 _NON_BREAKING_HYPHEN = "\x1e"
 _OLE_ERRORS = (OSError, ValueError, IndexError, KeyError, struct.error)
+# A piece is decoded this many characters at a time.
+_DECODE_BLOCK_CHARS = 65536
+# Text read past the item budget, so stripped paragraphs still fill it.
+_TEXT_MARGIN_CHARS = 4096
 
 
 def extract_word97(data: bytes, collector: SectionCollector) -> None:
@@ -67,8 +75,11 @@ def extract_word97(data: bytes, collector: SectionCollector) -> None:
     except _OLE_ERRORS as exc:
         raise LegacyFormatUnreadable(UNREADABLE_MESSAGE) from exc
     pieces = _read_piece_table(table, fc_clx, lcb_clx)
-    text = _main_text(word, pieces, ccp_text)
-    _add_paragraphs(_drop_fields(text), collector)
+    _check_text_size(len(word), pieces, ccp_text)
+    text, cut = _main_text(word, pieces, ccp_text, collector.room + _TEXT_MARGIN_CHARS)
+    if cut:
+        collector.truncated = True
+    _add_paragraphs(text, collector)
 
 
 def _read_stream(ole: olefile.OleFileIO[str], name: str) -> bytes:
@@ -136,48 +147,92 @@ def _read_piece_table(
     return pieces
 
 
-def _main_text(
-    word: bytes, pieces: list[tuple[int, int, int, bool]], ccp_text: int
-) -> str:
-    parts: list[str] = []
+def _check_text_size(
+    word_size: int, pieces: list[tuple[int, int, int, bool]], ccp_text: int
+) -> None:
+    """Refuse text the stream cannot hold: at least one byte per character."""
+    if ccp_text > word_size:
+        raise LegacyFormatUnreadable(UNREADABLE_MESSAGE)
+    total = 0
     for cp_start, cp_end, offset, compressed in pieces:
         if cp_start >= ccp_text:
             break
         chars = min(cp_end, ccp_text) - cp_start
         size = chars if compressed else chars * 2
-        if offset + size > len(word):
+        total += size
+        # Pieces of a real file never overlap, so together they fit too.
+        if offset + size > word_size or total > word_size:
             raise LegacyFormatUnreadable(UNREADABLE_MESSAGE)
-        raw = word[offset : offset + size]
-        encoding = "cp1252" if compressed else "utf-16-le"
-        parts.append(raw.decode(encoding, errors="replace"))
-    return "".join(parts)
 
 
-def _drop_fields(text: str) -> str:
-    """Keep field results, drop field codes and control characters."""
-    output: list[str] = []
-    # Per open field: True while its code part (before the separator) runs.
-    fields: list[bool] = []
-    for char in text:
-        if char == _FIELD_BEGIN:
-            fields.append(True)
-        elif char == _FIELD_SEPARATOR:
-            if fields:
-                fields[-1] = False
-        elif char == _FIELD_END:
-            if fields:
-                fields.pop()
-        elif any(fields):
-            continue
-        elif char in _PARAGRAPH_MARKS:
-            output.append("\n")
-        elif char in _LINE_BREAKS:
-            output.append("\n")
-        elif char == _NON_BREAKING_HYPHEN:
-            output.append("-")
-        elif char == "\t" or ord(char) >= 32:
-            output.append(char)
-    return "".join(output)
+def _main_text(
+    word: bytes,
+    pieces: list[tuple[int, int, int, bool]],
+    ccp_text: int,
+    limit: int,
+) -> tuple[str, bool]:
+    """The main text without field codes, at most ``limit`` characters.
+
+    The flag is True when the text was cut at ``limit``.
+    """
+    fields = _FieldFilter()
+    for cp_start, cp_end, offset, compressed in pieces:
+        if cp_start >= ccp_text:
+            break
+        width = 1 if compressed else 2
+        end = offset + (min(cp_end, ccp_text) - cp_start) * width
+        step = _DECODE_BLOCK_CHARS * width
+        decoder = codecs.getincrementaldecoder("cp1252" if compressed else "utf-16-le")(
+            errors="replace"
+        )
+        for block in range(offset, end, step):
+            block_end = min(block + step, end)
+            fields.feed(decoder.decode(word[block:block_end], block_end == end))
+            if fields.length >= limit:
+                return fields.text()[:limit], True
+    return fields.text(), False
+
+
+class _FieldFilter:
+    """Keeps field results, drops field codes and control characters."""
+
+    def __init__(self) -> None:
+        self._parts: list[str] = []
+        self.length = 0
+        # Per open field: True while its code part (before the separator) runs.
+        self._fields: list[bool] = []
+        # How many open fields are in their code part.
+        self._open_codes = 0
+
+    def feed(self, text: str) -> None:
+        output: list[str] = []
+        for char in text:
+            if char == _FIELD_BEGIN:
+                self._fields.append(True)
+                self._open_codes += 1
+            elif char == _FIELD_SEPARATOR:
+                if self._fields and self._fields[-1]:
+                    self._fields[-1] = False
+                    self._open_codes -= 1
+            elif char == _FIELD_END:
+                if self._fields and self._fields.pop():
+                    self._open_codes -= 1
+            elif self._open_codes:
+                continue
+            elif char in _PARAGRAPH_MARKS:
+                output.append("\n")
+            elif char in _LINE_BREAKS:
+                output.append("\n")
+            elif char == _NON_BREAKING_HYPHEN:
+                output.append("-")
+            elif char == "\t" or ord(char) >= 32:
+                output.append(char)
+        block = "".join(output)
+        self._parts.append(block)
+        self.length += len(block)
+
+    def text(self) -> str:
+        return "".join(self._parts)
 
 
 def _add_paragraphs(text: str, collector: SectionCollector) -> None:

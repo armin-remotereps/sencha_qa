@@ -22,6 +22,7 @@ from knowledge_base.models import (
     KNOWLEDGE_NAME_MAX_LENGTH,
     KnowledgeItem,
     KnowledgeItemStatus,
+    KnowledgeKind,
 )
 from knowledge_base.services.blob_storage import store_blob
 from knowledge_base.services.item_processing import enqueue_item_processing
@@ -52,6 +53,13 @@ def _refusal_reason(upload_name: str, size: int) -> str | None:
     return None
 
 
+def _refused(upload_name: str, reason: str | None) -> RefusedFile:
+    return RefusedFile(
+        name=sanitize_file_name(upload_name, fallback="file"),
+        reason=reason or "this file type is not supported",
+    )
+
+
 def upload_knowledge_files(
     *,
     project_id: int,
@@ -62,7 +70,7 @@ def upload_knowledge_files(
     """Store each acceptable file and create a pending item for it.
 
     A refused file (type, size, disabled 7z, quota) is listed in ``refused``
-    and nothing of it is stored. Extraction is queued after commit.
+    and gets no item. Extraction is queued after commit.
     """
     if not files:
         raise KnowledgeUploadInvalidError("Choose at least one file to upload.")
@@ -73,36 +81,46 @@ def upload_knowledge_files(
         )
     clean_description = description.strip()[:KNOWLEDGE_DESCRIPTION_MAX]
     refused: list[RefusedFile] = []
+    accepted: list[tuple[UploadedFile, KnowledgeKind]] = []
+    for upload in files:
+        upload_name = upload.name or ""
+        reason = _refusal_reason(upload_name, upload.size or 0)
+        kind = kind_for_name(upload_name)
+        if reason is not None or kind is None:
+            refused.append(_refused(upload_name, reason))
+            continue
+        accepted.append((upload, kind))
+    # Written to disk before the project row is locked, so a large upload
+    # never holds up run starts or setup messages. A blob left unused by a
+    # quota refusal below is removed by the daily sweep.
+    stored = [
+        (upload, accepted_kind, store_blob(upload.chunks()))
+        for upload, accepted_kind in accepted
+    ]
     items: list[KnowledgeItem] = []
     with transaction.atomic():
         used = lock_project_usage(project_id)
         if used is None:
             raise KnowledgeUploadInvalidError("This project no longer exists.")
-        for upload in files:
+        for upload, item_kind, blob in stored:
             upload_name = upload.name or ""
-            size = upload.size or 0
-            reason = _refusal_reason(upload_name, size)
-            if reason is None and not fits_quota(used, size):
-                reason = "the project's knowledge base storage limit would be exceeded"
-            kind = kind_for_name(upload_name)
-            if reason is not None or kind is None:
+            if not fits_quota(used, blob.size_bytes):
                 refused.append(
-                    RefusedFile(
-                        name=sanitize_file_name(upload_name, fallback="file"),
-                        reason=reason or "this file type is not supported",
+                    _refused(
+                        upload_name,
+                        "the project's knowledge base storage limit would be exceeded",
                     )
                 )
                 continue
-            blob = store_blob(upload.chunks())
             used += blob.size_bytes
             items.append(
                 KnowledgeItem(
                     project_id=project_id,
                     blob=blob,
                     uploaded_by=user,
-                    name=sanitize_file_name(upload_name, fallback=f"file.{kind}"),
+                    name=sanitize_file_name(upload_name, fallback=f"file.{item_kind}"),
                     original_name=upload_name[:KNOWLEDGE_NAME_MAX_LENGTH],
-                    kind=kind,
+                    kind=item_kind,
                     description=clean_description,
                     status=KnowledgeItemStatus.PENDING,
                     size_bytes=blob.size_bytes,

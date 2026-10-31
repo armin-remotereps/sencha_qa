@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from django.db import transaction
 from django.db.models import Q
+from django.utils import timezone
 
 from knowledge_base.exceptions import KnowledgeItemNotFoundError
 from knowledge_base.models import KnowledgeBlob, KnowledgeItem
-from knowledge_base.services.blob_storage import delete_blob_files
+from knowledge_base.services.blob_storage import BLOB_GRACE, delete_blob_files
 from knowledge_base.services.item_processing import ITEM_NOT_FOUND_MESSAGE
 
 
@@ -16,7 +17,8 @@ def delete_knowledge_item(*, project_id: int, item_id: int) -> int | None:
 
     Blob rows no other item references are deleted with the item, and their
     files after commit. Blobs shared with other items (a duplicated project,
-    the same file uploaded twice) stay.
+    the same file uploaded twice) stay, and so do blobs stored within the
+    last hour (left to the sweep).
     """
     with transaction.atomic():
         found = (
@@ -36,9 +38,12 @@ def delete_knowledge_item(*, project_id: int, item_id: int) -> int | None:
         KnowledgeItem.objects.filter(pk=item_id).delete()
         # Locked so a concurrent upload cannot attach a new item to a blob
         # that is being removed (its insert waits, then fails on the FK).
+        # Blobs stored within the grace may be about to be referenced by an
+        # upload in progress (stored before its items exist): the sweep
+        # removes them later if they stay unused.
         locked = dict(
             KnowledgeBlob.objects.select_for_update()
-            .filter(pk__in=blob_ids)
+            .filter(pk__in=blob_ids, stored_at__lt=timezone.now() - BLOB_GRACE)
             .values_list("pk", "storage_name")
         )
         still_used = set(

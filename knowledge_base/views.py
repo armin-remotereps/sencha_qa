@@ -43,6 +43,8 @@ from projects.decorators import project_membership_required
 from projects.models import Project
 
 SEARCH_RESULT_LIMIT = 20
+# Rows on the tab; older items stay searchable (and listed to agents).
+LIST_ROW_LIMIT = 500
 # nginx's client_max_body_size: the whole upload request, stated on the page.
 UPLOAD_REQUEST_MAX_BYTES = 200 * 1024 * 1024
 
@@ -88,8 +90,11 @@ def knowledge_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
         if archive.entry.summary.kind != KnowledgeKind.ARCHIVE:
             raise Http404("No such archive.")
         items = list(archive.members)
+        items_capped = False
     else:
-        items = list_knowledge_entries(project.id)
+        items = list_knowledge_entries(project.id, limit=LIST_ROW_LIMIT + 1)
+        items_capped = len(items) > LIST_ROW_LIMIT
+        items = items[:LIST_ROW_LIMIT]
 
     search_form = KnowledgeSearchForm(request.GET if "q" in request.GET else None)
     hits: list[KnowledgeHit] | None = None
@@ -114,6 +119,8 @@ def knowledge_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
             "project": project,
             "active_tab": "knowledge_base",
             "items": items,
+            "items_capped": items_capped,
+            "list_row_limit": LIST_ROW_LIMIT,
             "archive": archive,
             "hits": hits,
             "search_form": search_form,

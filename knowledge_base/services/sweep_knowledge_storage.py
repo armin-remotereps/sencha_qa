@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import partial
 
 from django.db import transaction
@@ -11,10 +11,12 @@ from django.db.models import Exists, OuterRef
 from django.utils import timezone
 
 from knowledge_base.models import KnowledgeBlob, KnowledgeItem
-from knowledge_base.services.blob_storage import delete_blob_files, iter_stored_files
+from knowledge_base.services.blob_storage import (
+    BLOB_GRACE,
+    delete_blob_files,
+    iter_stored_files,
+)
 
-# A blob or file younger than this may belong to an upload still in progress.
-SWEEP_GRACE = timedelta(hours=1)
 _BLOB_BATCH = 500
 
 
@@ -23,7 +25,7 @@ def sweep_knowledge_storage() -> tuple[int, int]:
 
     Returns (blob rows removed, files removed).
     """
-    cutoff = timezone.now() - SWEEP_GRACE
+    cutoff = timezone.now() - BLOB_GRACE
     blobs_removed, files_removed = _sweep_blob_rows(cutoff)
     return blobs_removed, files_removed + _sweep_orphan_files(cutoff)
 
@@ -36,7 +38,7 @@ def _sweep_blob_rows(cutoff: datetime) -> tuple[int, int]:
         with transaction.atomic():
             batch = dict(
                 KnowledgeBlob.objects.select_for_update(skip_locked=True)
-                .filter(pk__gt=last_pk, created_at__lt=cutoff)
+                .filter(pk__gt=last_pk, stored_at__lt=cutoff)
                 .filter(~Exists(KnowledgeItem.objects.filter(blob_id=OuterRef("pk"))))
                 .order_by("pk")
                 .values_list("pk", "storage_name")[:_BLOB_BATCH]

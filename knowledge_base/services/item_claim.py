@@ -26,6 +26,10 @@ from knowledge_base.services.item_processing import broadcast_item_state
 TIMED_OUT_MESSAGE = "This file took too long to read."
 
 
+# Clock slack between the claim and the task start (queue wait only adds age).
+_TIMED_OUT_CLAIM_SLACK_SECONDS = 5
+
+
 def claim_item(item_id: int, *, archive: bool) -> KnowledgeItem | None:
     """Mark a pending (or stuck) item as extracting; None when not claimable.
 
@@ -85,11 +89,24 @@ def fail_claimed_item(item_id: int, claimed_at: datetime, message: str) -> None:
 
 
 def fail_timed_out_item(item_id: int) -> None:
-    """The soft time limit hit while extracting: fail the item."""
+    """The soft time limit hit while extracting: fail the item.
+
+    The timed-out worker has run for the whole limit, so its claim is at
+    least that old; a younger claim (a Retry re-claimed the item meanwhile)
+    belongs to another worker and is left alone.
+    """
+    claimed_before = timezone.now() - timedelta(
+        seconds=settings.KNOWLEDGE_BASE_EXTRACT_TIME_LIMIT_SECONDS
+        - _TIMED_OUT_CLAIM_SLACK_SECONDS
+    )
     with transaction.atomic():
         item = (
             KnowledgeItem.objects.select_for_update()
-            .filter(pk=item_id, status=KnowledgeItemStatus.EXTRACTING)
+            .filter(
+                pk=item_id,
+                status=KnowledgeItemStatus.EXTRACTING,
+                extract_started_at__lte=claimed_before,
+            )
             .first()
         )
         if item is None:

@@ -4,6 +4,7 @@ from django.conf import settings
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.db import models
+from django.utils import timezone
 
 from projects.models import Project
 
@@ -53,7 +54,10 @@ class KnowledgeBlob(models.Model):
     size_bytes = models.BigIntegerField()
     # Name inside the KB storage ("ab/abcdef..."), never under MEDIA_ROOT.
     storage_name = models.CharField(max_length=200)
-    created_at = models.DateTimeField(auto_now_add=True)
+    # Set when stored and refreshed whenever an upload stores the same bytes
+    # again: delete and the sweep leave blobs stored within the last hour,
+    # which an upload in progress may be about to reference.
+    stored_at = models.DateTimeField(default=timezone.now)
 
     def __str__(self) -> str:
         return self.sha256

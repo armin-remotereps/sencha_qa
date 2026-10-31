@@ -142,11 +142,14 @@ def list_knowledge_items(
 
 
 def list_knowledge_entries(
-    project_id: int, *, parent_id: int | None = None
+    project_id: int, *, parent_id: int | None = None, limit: int | None = None
 ) -> list[KnowledgeListEntry]:
-    """The Knowledge base tab's rows (summary plus page-only fields)."""
+    """The Knowledge base tab's rows (summary plus page-only fields), newest
+    first; at most ``limit`` when given (pass limit + 1 to detect more)."""
     now = timezone.now()
     rows = _ordered(project_items(project_id), parent_id).values_list(*_ENTRY_FIELDS)
+    if limit is not None:
+        rows = rows[:limit]
     return [_entry(tuple(row), now) for row in rows]
 
 

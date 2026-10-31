@@ -17,7 +17,12 @@ from xlrd.xldate import XLDateError, xldate_as_datetime
 
 from knowledge_base.chunking import SectionCollector
 from knowledge_base.exceptions import EncryptedDocument, LegacyFormatUnreadable
-from knowledge_base.extractors.xlsx import CellBudget, add_sheet_rows, format_cell
+from knowledge_base.extractors.xlsx import (
+    CellBudget,
+    SheetRow,
+    add_sheet_rows,
+    format_cell,
+)
 
 UNREADABLE_MESSAGE = (
     "This Excel 97–2003 file could not be read; save it as .xlsx or CSV."
@@ -60,9 +65,10 @@ def extract_xls(data: bytes, collector: SectionCollector) -> None:
         book.release_resources()
 
 
-def _rows(book: Book, sheet: Sheet) -> Iterable[tuple[int, list[str]]]:
+def _rows(book: Book, sheet: Sheet) -> Iterable[SheetRow]:
     for index in range(sheet.nrows):
-        yield index + 1, [_cell_text(book, cell) for cell in sheet.row(index)]
+        row = sheet.row(index)
+        yield index + 1, len(row), (_cell_text(book, cell) for cell in row)
 
 
 def _cell_text(book: Book, cell: Cell) -> str:

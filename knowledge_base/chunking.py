@@ -53,6 +53,11 @@ class SectionCollector:
     def full(self) -> bool:
         return self.char_count >= self._max_chars
 
+    @property
+    def room(self) -> int:
+        """Characters still accepted before the budget is used up."""
+        return max(self._max_chars - self.char_count, 0)
+
     def add(self, location: str, heading: str, text: str) -> bool:
         """Add a section; False once the budget is used up (stop extracting)."""
         text = text.strip("\n")

@@ -67,6 +67,7 @@ from controller_client.protocol import (
     ErrorCode,
     ScrollDirection,
 )
+from knowledge_base.services.item_processing import COPY_PROJECT_KNOWLEDGE_TASK
 from knowledge_base.services.knowledge_index import knowledge_index_text
 from machine_setup.auto_fix_stop import request_auto_fix_stop
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
@@ -260,10 +261,6 @@ def _clone_test_case(*, source: TestCase, target_project: Project) -> TestCase:
         testrail_suite_id=source.testrail_suite_id,
         testrail_position=source.testrail_position,
     )
-
-
-# By name: ``projects`` never imports ``knowledge_base.tasks``.
-COPY_PROJECT_KNOWLEDGE_TASK: Final = "knowledge_base.tasks.copy_project_knowledge"
 
 
 @transaction.atomic

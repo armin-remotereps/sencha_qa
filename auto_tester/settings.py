@@ -399,6 +399,16 @@ _KNOWLEDGE_BASE_ROOT = Path(
 KNOWLEDGE_BASE_ROOT: Path = (BASE_DIR / _KNOWLEDGE_BASE_ROOT).resolve()
 if KNOWLEDGE_BASE_ROOT.is_relative_to(Path(MEDIA_ROOT).resolve()):
     raise ImproperlyConfigured("KNOWLEDGE_BASE_ROOT must not be inside MEDIA_ROOT")
+# The storage sweep deletes old files it has no row for: never let the root
+# contain the code or MEDIA_ROOT.
+if any(
+    path.is_relative_to(KNOWLEDGE_BASE_ROOT)
+    for path in (BASE_DIR.resolve(), Path(MEDIA_ROOT).resolve())
+):
+    raise ImproperlyConfigured(
+        "KNOWLEDGE_BASE_ROOT must be its own directory, not one that contains "
+        "the project or MEDIA_ROOT"
+    )
 KNOWLEDGE_BASE_MAX_FILE_BYTES: int = config(
     "KNOWLEDGE_BASE_MAX_FILE_BYTES", default=26214400, cast=int
 )
