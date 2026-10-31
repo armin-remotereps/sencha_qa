@@ -743,3 +743,10 @@ All resolved on 2026-10-31.
   when the stored one is not allowed (`HelpPanel.default_continue_mode`); a
   case page that loads while the discussion is opening arms the same fallback
   reload; the `?discussion=1` flag is dropped from the URL once read.
+- 2026-10-31: review pass 3 fix: the case page's fallback reload could loop
+  every 15 s when the discussion ended refused or dropped without a thread.
+  `awaitingDiscussion` now comes only from the server (pause pending or
+  message state pending); the URL flag only follows an already opened
+  discussion, and the one fallback reload (`?discussion=retry`) never arms
+  another. A runner-update switch to a stored mode the thread page does not
+  offer keeps the person's current radio.

@@ -997,11 +997,16 @@ document.addEventListener('alpine:init', () => {
     // server to open the discussion, then follows `discussion_url`.
     pausePending: {{ pause_panel.pause_pending|yesno:"true,false" }},
     pauseRequestedBy: '{{ pause_panel.pause_requested_by_label|escapejs }}',
-    // Also set by `?discussion=1` (the pause view's redirect after a waiting
-    // person step paused at once, and this page's own fallback reload).
-    awaitingDiscussion: {% if pause_panel.pause_pending or pause_panel.pause_message_state == "pending" %}true{% else %}new URLSearchParams(window.location.search).has('discussion'){% endif %},
+    // Only while the server says the discussion is still opening (or this
+    // page sees the pause live); never from the URL, so a reload cannot loop.
+    awaitingDiscussion: {% if pause_panel.pause_pending or pause_panel.pause_message_state == "pending" %}true{% else %}false{% endif %},
     // The discussion page once the server opened it ("" before).
     openedDiscussionUrl: '{% if pause_panel.discussion_thread_id and pause_panel.pause_message_state == "sent" or pause_panel.discussion_thread_id and pause_panel.pause_message_state == "refused" %}{% url 'machine_setup:thread' project.id pause_panel.discussion_thread_id %}{% endif %}',
+    // `?discussion=1` (the pause view's redirect) or `?discussion=retry` (the
+    // one fallback reload): follow an opened discussion on load. A retry
+    // never arms another fallback.
+    followDiscussionOnLoad: false,
+    discussionRetried: false,
     discussionFallback: null,
 
     badgeClass(status) {
@@ -1112,19 +1117,22 @@ document.addEventListener('alpine:init', () => {
 
     // Reload once (still following the discussion) if its URL event is missed.
     armDiscussionFallback() {
-      if (this.discussionFallback) return;
+      if (this.discussionFallback || this.discussionRetried) return;
       this.discussionFallback = setTimeout(() => {
-        window.location.replace(window.location.pathname + '?discussion=1');
+        window.location.replace(window.location.pathname + '?discussion=retry');
       }, 15000);
     },
 
     init() {
       // Read once: later reloads of this page must not wait for a discussion.
-      if (new URLSearchParams(window.location.search).has('discussion')) {
+      const discussionParam = new URLSearchParams(window.location.search).get('discussion');
+      if (discussionParam !== null) {
+        this.followDiscussionOnLoad = true;
+        this.discussionRetried = discussionParam === 'retry';
         window.history.replaceState(null, '', window.location.pathname);
       }
       // The discussion opened before this page (re)loaded: follow it now.
-      if (this.awaitingDiscussion && this.openedDiscussionUrl) {
+      if (this.followDiscussionOnLoad && this.openedDiscussionUrl) {
         // replace(): Back from the discussion must not bounce here again.
         window.location.replace(this.openedDiscussionUrl);
         return;

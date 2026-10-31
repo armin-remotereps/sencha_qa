@@ -717,7 +717,11 @@ document.addEventListener('alpine:init', () => {
         const storedMode = help.continue_mode || 'current_screen';
         if (storedMode !== this.storedMode) {
           this.storedMode = storedMode;
-          this.continueMode = storedMode;
+          // Only a mode the page offers: with radios shown, a stored mode
+          // that is not among them (not allowed) keeps the current choice.
+          const radios = document.querySelectorAll('input[name="continue_mode"]');
+          const offered = Array.from(radios).some((radio) => radio.value === storedMode);
+          if (offered || radios.length === 0) this.continueMode = storedMode;
         }
         const previousDraftId = this.draft ? this.draft.revision_id : null;
         this.draft = help.plan_draft || null;
