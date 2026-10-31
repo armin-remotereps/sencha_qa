@@ -30,8 +30,11 @@ _TEMP_DIR = "tmp"
 # Delete and the sweep leave blobs and files stored more recently than this:
 # an upload or archive expansion may be about to reference them.
 BLOB_GRACE = timedelta(hours=1)
-# Blob directories are the first two hex digits of the sha256.
+# Blob directories are the first two hex digits of the sha256, and hold
+# files named by the full sha256; temp files are "upload-<uuid hex>".
 _BLOB_DIR = re.compile(r"[0-9a-f]{2}")
+_BLOB_FILE = re.compile(r"[0-9a-f]{64}")
+_TEMP_FILE = re.compile(r"upload-[0-9a-f]{32}")
 # get_or_create races with a concurrent insert of the same hash at most once.
 _CREATE_ATTEMPTS = 2
 
@@ -83,8 +86,10 @@ def _place_file(temp_path: Path, final_path: Path) -> None:
 def _get_or_create_row(sha256: str, size: int) -> KnowledgeBlob:
     """Get or create the row, locked (must run inside a transaction).
 
-    The lock keeps a concurrent delete from dropping the row (and its file)
-    between here and the caller's item insert. ``get_or_create`` inserts in a
+    A delete waits on (or holds) this lock, so the row and file found here
+    are the live ones. Between here and the caller's item insert the row is
+    protected by ``stored_at`` (refreshed here): delete and the sweep leave
+    blobs stored within ``BLOB_GRACE``. ``get_or_create`` inserts in a
     savepoint, so a lost insert race leaves the transaction usable to retry.
     """
     attempt = 1
@@ -114,7 +119,9 @@ def store_blob(chunks: Iterable[bytes]) -> KnowledgeBlob:
     root = Path(storage.location)
     temp_path, sha256, size = _write_temp(chunks, root)
     try:
-        # No savepoint when nested: the caller's transaction holds the lock.
+        # Commits on its own when called outside a transaction (uploads and
+        # archive expansion); BLOB_GRACE then protects the row until the
+        # caller's items reference it.
         with transaction.atomic(savepoint=False):
             blob = _get_or_create_row(sha256, size)
             _place_file(temp_path, Path(storage.path(blob.storage_name)))
@@ -149,7 +156,7 @@ def delete_blob_files(storage_names: Sequence[str]) -> None:
 
 
 def iter_stored_files() -> Iterator[StoredFile]:
-    """Every file in the storage (blob files and temp files), with its mtime."""
+    """The storage's own files (blob and temp files, by name), with mtimes."""
     root = Path(knowledge_storage().location)
     if not root.is_dir():
         return
@@ -158,9 +165,18 @@ def iter_stored_files() -> Iterator[StoredFile]:
         is_own = directory.name == _TEMP_DIR or _BLOB_DIR.fullmatch(directory.name)
         if not is_own or directory.is_symlink() or not directory.is_dir():
             continue
+        is_temp = directory.name == _TEMP_DIR
         with os.scandir(directory) as entries:
             for entry in entries:
                 if not entry.is_file(follow_symlinks=False):
+                    continue
+                if is_temp:
+                    if not _TEMP_FILE.fullmatch(entry.name):
+                        continue
+                elif not (
+                    _BLOB_FILE.fullmatch(entry.name)
+                    and entry.name.startswith(directory.name)
+                ):
                     continue
                 modified_at = datetime.fromtimestamp(
                     entry.stat(follow_symlinks=False).st_mtime, tz=timezone.utc

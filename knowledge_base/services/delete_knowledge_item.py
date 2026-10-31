@@ -16,7 +16,7 @@ def delete_knowledge_item(*, project_id: int, item_id: int) -> int | None:
     """Delete the item (members and chunks cascade); return its parent id.
 
     Blob rows no other item references are deleted with the item, and their
-    files after commit. Blobs shared with other items (a duplicated project,
+    files while those rows are locked. Blobs shared with other items (a duplicated project,
     the same file uploaded twice) stay, and so do blobs stored within the
     last hour (left to the sweep).
     """
@@ -54,6 +54,8 @@ def delete_knowledge_item(*, project_id: int, item_id: int) -> int | None:
         unused = {pk: name for pk, name in locked.items() if pk not in still_used}
         if unused:
             KnowledgeBlob.objects.filter(pk__in=unused).delete()
-            names = list(unused.values())
-            transaction.on_commit(lambda: delete_blob_files(names))
+            # Unlinked while the rows are locked, not after commit: an upload
+            # of the same bytes waits on the lock, then finds no file and
+            # writes it again (store_blob rewrites a missing file).
+            delete_blob_files(list(unused.values()))
     return parent_id

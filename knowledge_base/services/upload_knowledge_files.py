@@ -26,10 +26,15 @@ from knowledge_base.models import (
 )
 from knowledge_base.services.blob_storage import store_blob
 from knowledge_base.services.item_processing import enqueue_item_processing
-from knowledge_base.services.project_quota import fits_quota, lock_project_usage
+from knowledge_base.services.project_quota import (
+    fits_quota,
+    lock_project_usage,
+    project_usage,
+)
 from knowledge_base.types import RefusedFile, UploadOutcome
 
 _MIB = 1024 * 1024
+_QUOTA_MESSAGE = "the project's knowledge base storage limit would be exceeded"
 
 
 def _size_label(size_bytes: int) -> str:
@@ -82,17 +87,25 @@ def upload_knowledge_files(
     clean_description = description.strip()[:KNOWLEDGE_DESCRIPTION_MAX]
     refused: list[RefusedFile] = []
     accepted: list[tuple[UploadedFile, KnowledgeKind]] = []
+    # Unlocked pre-check, so a project at its quota writes nothing to disk;
+    # the check under the project lock below is the authoritative one.
+    planned = project_usage(project_id)
     for upload in files:
         upload_name = upload.name or ""
-        reason = _refusal_reason(upload_name, upload.size or 0)
+        size = upload.size or 0
+        reason = _refusal_reason(upload_name, size)
+        if reason is None and not fits_quota(planned, size):
+            reason = _QUOTA_MESSAGE
         kind = kind_for_name(upload_name)
         if reason is not None or kind is None:
             refused.append(_refused(upload_name, reason))
             continue
+        planned += size
         accepted.append((upload, kind))
     # Written to disk before the project row is locked, so a large upload
     # never holds up run starts or setup messages. A blob left unused by a
-    # quota refusal below is removed by the daily sweep.
+    # quota refusal below (a concurrent upload won the room) is removed by
+    # the daily sweep.
     stored = [
         (upload, accepted_kind, store_blob(upload.chunks()))
         for upload, accepted_kind in accepted
@@ -105,12 +118,7 @@ def upload_knowledge_files(
         for upload, item_kind, blob in stored:
             upload_name = upload.name or ""
             if not fits_quota(used, blob.size_bytes):
-                refused.append(
-                    _refused(
-                        upload_name,
-                        "the project's knowledge base storage limit would be exceeded",
-                    )
-                )
+                refused.append(_refused(upload_name, _QUOTA_MESSAGE))
                 continue
             used += blob.size_bytes
             items.append(

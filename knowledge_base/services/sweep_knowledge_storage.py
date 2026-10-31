@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
-from functools import partial
 
 from django.db import transaction
 from django.db.models import Exists, OuterRef
@@ -48,7 +47,8 @@ def _sweep_blob_rows(cutoff: datetime) -> tuple[int, int]:
             last_pk = max(batch)
             KnowledgeBlob.objects.filter(pk__in=batch).delete()
             names = list(batch.values())
-            transaction.on_commit(partial(delete_blob_files, names))
+            # Under the row lock, as in delete_knowledge_item.
+            delete_blob_files(names)
             removed += len(batch)
             files += len(names)
     return removed, files

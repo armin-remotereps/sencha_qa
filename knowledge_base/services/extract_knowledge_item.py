@@ -20,9 +20,9 @@ from knowledge_base.models import (
 )
 from knowledge_base.services.blob_storage import read_blob_bytes
 from knowledge_base.services.item_claim import (
+    TIMED_OUT_MESSAGE,
     claim_item,
     fail_claimed_item,
-    fail_timed_out_item,
     lock_claimed_item,
 )
 from knowledge_base.services.item_processing import broadcast_item_state
@@ -33,15 +33,13 @@ logger = logging.getLogger(__name__)
 CHUNK_BATCH_SIZE = 500
 UNREADABLE_MESSAGE = "Could not read this file"
 
-__all__ = ["extract_knowledge_item", "fail_timed_out_item"]
-
 
 def extract_knowledge_item(item_id: int) -> None:
     """Claim the item, extract and chunk its file, index it, mark it ready.
 
     Expected failures fail the item with their safe message; anything else
-    fails it with a generic message and is logged. A soft time limit is left
-    to the task (``fail_timed_out_item``).
+    fails it with a generic message and is logged. A soft time limit fails
+    it under this worker's claim and is re-raised to the task.
     """
     item = claim_item(item_id, archive=False)
     if item is None:
@@ -55,6 +53,7 @@ def extract_knowledge_item(item_id: int) -> None:
         del data
         drafts = chunk_sections(output.sections)
     except SoftTimeLimitExceeded:
+        fail_claimed_item(item_id, claimed_at, TIMED_OUT_MESSAGE)
         raise
     except KnowledgeExtractionError as exc:
         fail_claimed_item(item_id, claimed_at, exc.message)

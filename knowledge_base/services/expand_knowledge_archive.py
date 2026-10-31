@@ -30,6 +30,7 @@ from knowledge_base.models import (
 )
 from knowledge_base.services.blob_storage import read_blob_bytes, store_blob_bytes
 from knowledge_base.services.item_claim import (
+    TIMED_OUT_MESSAGE,
     claim_item,
     fail_claimed_item,
     lock_claimed_item,
@@ -80,6 +81,7 @@ def expand_knowledge_archive(item_id: int) -> None:
         del data
         _create_children(item_id, claimed_at, members, skipped)
     except SoftTimeLimitExceeded:
+        fail_claimed_item(item_id, claimed_at, TIMED_OUT_MESSAGE)
         raise
     except KnowledgeExtractionError as exc:
         fail_claimed_item(item_id, claimed_at, exc.message)

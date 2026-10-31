@@ -193,6 +193,10 @@ def _main_text(
     return fields.text(), False
 
 
+# Real documents nest fields a few levels deep.
+_MAX_FIELD_DEPTH = 64
+
+
 class _FieldFilter:
     """Keeps field results, drops field codes and control characters."""
 
@@ -200,7 +204,11 @@ class _FieldFilter:
         self._parts: list[str] = []
         self.length = 0
         # Per open field: True while its code part (before the separator) runs.
+        # At most _MAX_FIELD_DEPTH entries; deeper fields are counted in
+        # _deep_codes and stay in their code part (a crafted file cannot grow
+        # this list by one entry per byte).
         self._fields: list[bool] = []
+        self._deep_codes = 0
         # How many open fields are in their code part.
         self._open_codes = 0
 
@@ -208,14 +216,22 @@ class _FieldFilter:
         output: list[str] = []
         for char in text:
             if char == _FIELD_BEGIN:
-                self._fields.append(True)
+                if len(self._fields) < _MAX_FIELD_DEPTH:
+                    self._fields.append(True)
+                else:
+                    self._deep_codes += 1
                 self._open_codes += 1
             elif char == _FIELD_SEPARATOR:
+                if self._deep_codes:
+                    continue
                 if self._fields and self._fields[-1]:
                     self._fields[-1] = False
                     self._open_codes -= 1
             elif char == _FIELD_END:
-                if self._fields and self._fields.pop():
+                if self._deep_codes:
+                    self._deep_codes -= 1
+                    self._open_codes -= 1
+                elif self._fields and self._fields.pop():
                     self._open_codes -= 1
             elif self._open_codes:
                 continue
