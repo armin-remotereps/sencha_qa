@@ -1160,10 +1160,14 @@ class PersonStepStatePayload:
     # case has no numbered steps. "TestRail steps 3–5" / "Case step 2".
     case_steps_label: str = ""
     case_steps: tuple[PersonCaseStepPayload, ...] = ()
+    # The step's run case (``PersonCaseStatePayload.pivot_id``); 0 from a
+    # server older than 0.12.0. Older runners ignore the key.
+    pivot_id: int = 0
 
     def to_wire(self) -> dict[str, object]:
         return {
             "person_step_id": self.person_step_id,
+            "pivot_id": self.pivot_id,
             "round": self.round,
             "status": self.status.value,
             "run_name": self.run_name,
@@ -1337,6 +1341,7 @@ def _parse_person_step(raw: object) -> PersonStepStatePayload:
             item, "case_steps_label", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
         ),
         case_steps=_parse_case_steps(item.get("case_steps", [])),
+        pivot_id=_extract_non_negative_int(item, "pivot_id"),
     )
 
 
