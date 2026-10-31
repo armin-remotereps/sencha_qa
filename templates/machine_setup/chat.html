@@ -106,7 +106,8 @@
   `proposal`, see _run_proposal.html; one with result_change is role
   result_change and carries `change`, see _result_change.html; one with
   plan_redesign is role plan_redesign and carries `redesign`, see
-  _plan_redesign.html. Apply and Re-run open one page-level confirm dialog
+  _plan_redesign.html; one with action_approval is role action_approval and
+  carries `approval`, see _action_approval.html. Apply and Re-run open one page-level confirm dialog
   each (result chats only), whose form action is the card's server-built
   URL) and {kind:'activity', key:'act-<first row id>',
   turnId, rows, running, liveText, failedCount, screenshotCount, summaryText,
@@ -356,6 +357,21 @@ document.addEventListener('alpine:init', () => {
     created: 'badge-passed',
     superseded: 'badge-cancelled',
     discarded: 'badge-cancelled',
+  };
+  // Action approval cards: badge class per ApprovalStatus and per
+  // ApprovalActionKind (fixed maps keyed by the enums).
+  const APPROVAL_BADGES = {
+    pending: 'badge-warning',
+    approved: 'badge-running',
+    used: 'badge-passed',
+    discarded: 'badge-cancelled',
+    superseded: 'badge-cancelled',
+  };
+  const APPROVAL_KIND_BADGES = {
+    install: 'badge-ready',
+    upgrade: 'badge-ready',
+    uninstall: 'badge-failed',
+    remove_data: 'badge-failed',
   };
   // Result chat cards: badge class per card status, and per result label
   // (fixed maps; labels are server text, never class names).
@@ -628,6 +644,10 @@ document.addEventListener('alpine:init', () => {
       }
       if (message.kind === 'notice' && message.plan_redesign) {
         blocks.push({ kind: 'row', key: 'msg-' + message.id, role: 'plan_redesign', message, redesign: message.plan_redesign });
+        continue;
+      }
+      if (message.kind === 'notice' && message.action_approval) {
+        blocks.push({ kind: 'row', key: 'msg-' + message.id, role: 'action_approval', message, approval: message.action_approval });
         continue;
       }
       blocks.push({ kind: 'row', key: 'msg-' + message.id, role, message });
@@ -1354,6 +1374,14 @@ document.addEventListener('alpine:init', () => {
     openRedesignRerun(redesign) {
       this.rerunCard = redesign;
       this.$dispatch('open-redesign-rerun');
+    },
+
+    approvalBadgeClass(status) {
+      return (Object.hasOwn(APPROVAL_BADGES, status) && APPROVAL_BADGES[status]) || 'badge-draft';
+    },
+
+    approvalKindBadgeClass(kind) {
+      return (Object.hasOwn(APPROVAL_KIND_BADGES, kind) && APPROVAL_KIND_BADGES[kind]) || 'badge-draft';
     },
 
     proposalBadgeClass(status) {

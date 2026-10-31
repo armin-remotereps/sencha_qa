@@ -19,6 +19,13 @@ from knowledge_base.models import KnowledgeItem
 from knowledge_base.types import KnowledgeItemSummary
 from machine_setup.force_stop_policy import force_stop_in
 from machine_setup.models import (
+    APPROVAL_APPROACH_MAX_LENGTH,
+    APPROVAL_KEY_MAX_LENGTH,
+    APPROVAL_MAX_ATTEMPTS,
+    APPROVAL_TARGET_MAX_LENGTH,
+    APPROVAL_TITLE_MAX_LENGTH,
+    APPROVAL_VERSION_MAX_LENGTH,
+    SetupActionApproval,
     SetupDocument,
     SetupMessage,
     SetupMessageKind,
@@ -55,13 +62,15 @@ _RESULT_EXPLANATION_LIMIT = 2000
 _RESULT_EFFECTS_LIMIT = 1000
 _CONFIRM_BODY_LIMIT = 1000
 
-# What a SetupMessage load joins so the result-chat cards build without
-# further queries (``message_payload`` reads both FKs when set; the caller
+# What a SetupMessage load joins so the card rows build without further
+# queries: the main chat's action approval card and the result-chat cards
+# (``message_payload`` reads each FK when set; the caller
 # passes ``project_id``, so the run is not joined). The case's log is never
 # read; a result change's card reads only the case's result fields, so its
 # checkpoint is deferred too. A redesign's card needs the checkpoint for the
 # plan fingerprint (there is no stored one to compare instead).
 CARD_SELECT_RELATED: tuple[str, ...] = (
+    "action_approval",
     "result_change__test_run_test_case",
     "result_change__decided_by",
     "plan_revision__test_run_test_case",
@@ -184,6 +193,31 @@ class PlanRedesignCardPayload(TypedDict):
     discard_url: str
 
 
+class ActionApprovalCardPayload(TypedDict):
+    """One action the main agent asks a person to approve (main chat)."""
+
+    id: int
+    # An ``ApprovalActionKind`` value, and its label.
+    kind: str
+    kind_label: str
+    # Agent text, shown with x-text only.
+    title: str
+    target: str
+    version: str
+    requirement_key: str
+    artifact_key: str
+    # How it will be done; always in full, so the person sees the command.
+    approach: str
+    # An ``ApprovalStatus`` value, and its label.
+    status: str
+    status_label: str
+    # Sub-tasks that used it, out of ``max_attempts``.
+    attempts: int
+    max_attempts: int
+    approve_url: str
+    discard_url: str
+
+
 class SetupMessagePayload(TypedDict):
     id: int
     conversation_id: int
@@ -212,6 +246,8 @@ class SetupMessagePayload(TypedDict):
     # NOTICE rows of a result chat that show a result change / redesign card.
     result_change: ResultChangeCardPayload | None
     plan_redesign: PlanRedesignCardPayload | None
+    # NOTICE rows of the main chat that show an action approval card.
+    action_approval: ActionApprovalCardPayload | None
 
 
 class SetupTurnPayload(TypedDict):
@@ -289,8 +325,10 @@ def message_payload(
     (load it with ``select_related`` and ``case_ids`` deferred), and the
     result-chat cards only when ``result_change_id`` / ``plan_revision_id``
     is set (load them with ``CARD_SELECT_RELATED`` / ``CARD_DEFER`` and pass
-    ``project_id``; without it a card loads its run, one query). These rules
-    keep tool and child rows free of extra queries.
+    ``project_id``; without it a card loads its run, one query), and the
+    action approval only when ``action_approval_id`` is set (joined by
+    ``CARD_SELECT_RELATED``). These rules keep tool and child rows free of
+    extra queries.
     """
     rows = screenshots if screenshots is not None else list(message.screenshots.all())
     if attachments is None:
@@ -346,6 +384,36 @@ def message_payload(
             if message.plan_revision_id is not None and message.plan_revision
             else None
         ),
+        "action_approval": (
+            action_approval_card_payload(message.action_approval)
+            if message.action_approval_id is not None and message.action_approval
+            else None
+        ),
+    }
+
+
+def action_approval_card_payload(
+    approval: SetupActionApproval,
+) -> ActionApprovalCardPayload:
+    """No query: the URLs use the row's own ``project_id``."""
+    url_kwargs = {"project_id": approval.project_id, "approval_id": approval.pk}
+    return {
+        "id": approval.pk,
+        "kind": approval.kind,
+        "kind_label": approval.get_kind_display(),
+        "title": approval.title[:APPROVAL_TITLE_MAX_LENGTH],
+        "target": approval.target[:APPROVAL_TARGET_MAX_LENGTH],
+        "version": approval.version[:APPROVAL_VERSION_MAX_LENGTH],
+        "requirement_key": approval.requirement_key[:APPROVAL_KEY_MAX_LENGTH],
+        "artifact_key": approval.artifact_key[:APPROVAL_KEY_MAX_LENGTH],
+        # Never cut below what the service accepts: the card shows it in full.
+        "approach": approval.approach[:APPROVAL_APPROACH_MAX_LENGTH],
+        "status": approval.status,
+        "status_label": approval.get_status_display(),
+        "attempts": approval.attempts,
+        "max_attempts": APPROVAL_MAX_ATTEMPTS,
+        "approve_url": reverse("machine_setup:action_approve", kwargs=url_kwargs),
+        "discard_url": reverse("machine_setup:action_discard", kwargs=url_kwargs),
     }
 
 

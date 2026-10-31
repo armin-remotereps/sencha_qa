@@ -27,6 +27,10 @@ from machine_setup.forms import (
 )
 from machine_setup.models import SetupConversation, SetupConversationKind
 from machine_setup.payloads import HelpThreadPayload
+from machine_setup.services.action_approval_decision import (
+    approve_action,
+    discard_action,
+)
 from machine_setup.services.case_auto_fix import settle_stale_auto_fix_turn
 from machine_setup.services.chat_page import (
     OTHER_THREAD_TURN_MESSAGE,
@@ -410,6 +414,40 @@ def run_proposal_discard(
         discard_run_proposal(
             project=project, proposal_id=proposal_id, user=request.user
         )
+    except MachineSetupError as exc:
+        messages.error(request, exc.message)
+    return redirect("machine_setup:chat", project_id=project.id)
+
+
+@project_membership_required
+@require_POST
+def action_approve(
+    request: AuthenticatedRequest, project: Project, approval_id: int
+) -> HttpResponse:
+    try:
+        decision = approve_action(
+            project=project, user=request.user, approval_id=approval_id
+        )
+    except MachineSetupError as exc:
+        messages.error(request, exc.message)
+    else:
+        if not decision.turn_queued:
+            messages.info(
+                request,
+                "Approved. The agent is busy; it sees the approval with the next "
+                "message.",
+            )
+    # Approval cards live in the main chat only.
+    return redirect("machine_setup:chat", project_id=project.id)
+
+
+@project_membership_required
+@require_POST
+def action_discard(
+    request: AuthenticatedRequest, project: Project, approval_id: int
+) -> HttpResponse:
+    try:
+        discard_action(project=project, user=request.user, approval_id=approval_id)
     except MachineSetupError as exc:
         messages.error(request, exc.message)
     return redirect("machine_setup:chat", project_id=project.id)
