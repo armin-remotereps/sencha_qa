@@ -132,3 +132,7 @@ Not asked; kept as planned:
   - Verifier: the evidence keeps the check commands' output but not the command text. The command is already in the case log's tool-call lines next to it, and the TestRail step text names the step's command.
   - Verifier: pasted output is not redacted before it reaches the case log and TestRail. This was accepted in Risks; the card hint now warns against pasting secrets.
   - Verifier: a mark on a restore hand-off records a `resume` attempt. For Failed, the TestRail selection then falls back to the last shots, which are that attempt's evidence shots anyway.
+- Second review pass, fixed: the abort settle broadcasts the settled case and locks only person step rows (`of=("self",)`); every no-evidence path drops the `person` key; `close_marked_row` keeps the row's summary when there is no evidence; the web flash says "without evidence: <reason>" when the verdict was written at once.
+- Second pass, accepted as is (documented):
+  - A Needs re-test mark that lands during the evidence pass wins: the row closes as `marked_retest` and the person's earlier Failed/Blocked is not written. That is the later person decision.
+  - A worker that dies hard during the evidence pass (no abort) leaves the case In progress with the `marked_*` key, like any crashed worker; a Resume then drops the key and the mark is lost.

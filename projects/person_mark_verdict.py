@@ -96,7 +96,16 @@ def close_marked_row(
             else PersonStepStatus.CANCELLED
         ),
         closed_at=now,
-        agent_summary=cap_text(agent_summary, PERSON_STEP_AGENT_TEXT_MAX_LENGTH),
+        # Without evidence the row keeps the summary it had.
+        **(
+            {
+                "agent_summary": cap_text(
+                    agent_summary, PERSON_STEP_AGENT_TEXT_MAX_LENGTH
+                )
+            }
+            if agent_summary.strip()
+            else {}
+        ),
     )
 
 
@@ -155,15 +164,18 @@ def apply_person_mark(
     return True
 
 
-def settle_person_marks_on_abort(test_run_id: int, now: datetime) -> None:
+def settle_person_marks_on_abort(
+    test_run_id: int, now: datetime
+) -> list[TestRunTestCase]:
     """The run is aborted while a person's mark waits for its evidence pass:
     the person's verdict stands, without evidence.
 
     Called by the abort under the run lock, before it cancels the open person
     steps and cases (person step, then case). A run has at most one such case.
+    The settled cases, for the caller to broadcast.
     """
     rows = list(
-        CasePersonStep.objects.select_for_update()
+        CasePersonStep.objects.select_for_update(of=("self",))
         .filter(
             test_run_test_case__test_run_id=test_run_id,
             status=PersonStepStatus.REPORTED,
@@ -171,6 +183,7 @@ def settle_person_marks_on_abort(test_run_id: int, now: datetime) -> None:
         )
         .values_list("pk", "test_run_test_case_id", "close_reason")
     )
+    settled: list[TestRunTestCase] = []
     for person_step_id, pivot_id, close_reason in rows:
         pivot = (
             TestRunTestCase.objects.select_for_update()
@@ -196,6 +209,9 @@ def settle_person_marks_on_abort(test_run_id: int, now: datetime) -> None:
         close_case_segment(pivot.pk, now)
         close_marked_row(pivot.pk, person_step_id, verdict, now)
         log_no_evidence(pivot.pk, "the run was stopped")
+        pivot.segment_started_at = None
+        settled.append(pivot)
+    return settled
 
 
 def log_no_evidence(pivot_id: int, reason: str) -> None:

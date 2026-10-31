@@ -26,7 +26,11 @@ from datetime import datetime
 from django.db import transaction
 from django.utils import timezone
 
-from agents.checkpoint import read_checkpoint_person_step, with_person_step
+from agents.checkpoint import (
+    read_checkpoint_person_step,
+    with_person_step,
+    without_person_step,
+)
 from agents.types import (
     CheckpointPersonStep,
     PersonHowToItem,
@@ -161,6 +165,9 @@ class PersonStepActionResult:
     queued: bool
     # User-safe reason when a gate refused and the run stays paused.
     blocker: str = ""
+    # Mark failed / blocked written at once, without the agent's evidence
+    # (why); "" otherwise.
+    no_evidence: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -481,7 +488,10 @@ def _mark_person_step(
             # No saved progress to record evidence against.
             _write_mark_now(locked_pivot, step, verdict, result_text, now)
             log_no_evidence(locked_pivot.pk, "the case has no saved progress")
-            return _after_action(project, test_run, locked_pivot, actor)
+            return dataclasses.replace(
+                _after_action(project, test_run, locked_pivot, actor),
+                no_evidence="The case has no saved progress.",
+            )
         checkpoint_before = locked_pivot.execution_checkpoint
         locked_pivot.execution_checkpoint = marked
         locked_pivot.status = TestRunTestCaseStatus.CREATED
@@ -502,12 +512,14 @@ def _mark_person_step(
         if result.queued:
             return result
         # The run cannot continue: the person's verdict stands now.
-        locked_pivot.execution_checkpoint = checkpoint_before
+        locked_pivot.execution_checkpoint = without_person_step(checkpoint_before)
         _write_mark_now(locked_pivot, step, verdict, result_text, now)
         log_no_evidence(locked_pivot.pk, result.blocker)
         # Queued again: with no open case left the run finishes (no gates).
         blocker = _try_queue(test_run)
-        return PersonStepActionResult(queued=not blocker, blocker=blocker)
+        return PersonStepActionResult(
+            queued=not blocker, blocker=blocker, no_evidence=result.blocker
+        )
 
 
 def _write_mark_now(

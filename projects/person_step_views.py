@@ -106,8 +106,12 @@ def test_run_case_person_fail(
     else:
         _flash_result(
             request,
-            "Marked the case failed. The agent records evidence, then the run "
-            "continues.",
+            (
+                f"Marked the case failed without evidence: {result.no_evidence}"
+                if result.no_evidence
+                else "Marked the case failed. The agent records evidence, then the "
+                "run continues."
+            ),
             result,
         )
     return _case_redirect(project, pivot)
@@ -136,8 +140,12 @@ def test_run_case_person_block(
     else:
         _flash_result(
             request,
-            "Marked the case blocked. The agent records evidence, then the run "
-            "continues.",
+            (
+                f"Marked the case blocked without evidence: {result.no_evidence}"
+                if result.no_evidence
+                else "Marked the case blocked. The agent records evidence, then the "
+                "run continues."
+            ),
             result,
         )
     return _case_redirect(project, pivot)

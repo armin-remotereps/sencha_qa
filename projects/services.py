@@ -4021,7 +4021,9 @@ def abort_test_run(
     _cancel_run_help_requests(test_run, now)
     # A person's Mark failed / blocked still waiting for its evidence pass
     # keeps the person's verdict.
-    settle_person_marks_on_abort(test_run.pk, now)
+    for marked in settle_person_marks_on_abort(test_run.pk, now):
+        _broadcast_pivot_status_to_run(marked)
+        _broadcast_pivot_status_to_case(marked)
     _cancel_run_person_steps(test_run, now)
 
     # A Need help (or person step) case is Cancelled like a running one:
