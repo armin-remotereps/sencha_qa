@@ -12,10 +12,12 @@ from typing import Literal, TypedDict
 from django.conf import settings
 from django.db.models import Prefetch, QuerySet
 from django.urls import reverse
+from django.utils import timezone
 
 from agents.plan_revision import PlanDraftView
 from knowledge_base.models import KnowledgeItem
 from knowledge_base.types import KnowledgeItemSummary
+from machine_setup.force_stop_policy import force_stop_in
 from machine_setup.models import (
     SetupDocument,
     SetupMessage,
@@ -221,6 +223,9 @@ class SetupTurnPayload(TypedDict):
     ended_reason_label: str
     error_message: str
     stop_requested: bool
+    # Seconds until Force stop is allowed (0 = now); None unless the turn is
+    # running and Stop was pressed. Computed here so client clocks do not matter.
+    force_stop_in: int | None
     iterations: int
     max_iterations: int
 
@@ -484,6 +489,7 @@ def turn_payload(turn: SetupTurn) -> SetupTurnPayload:
         ),
         "error_message": turn.error_message,
         "stop_requested": turn.stop_requested,
+        "force_stop_in": force_stop_in(turn, timezone.now()),
         "iterations": turn.iterations,
         "max_iterations": settings.MACHINE_SETUP_MAX_ITERATIONS,
     }

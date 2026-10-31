@@ -12,12 +12,14 @@ propagate unchanged and end the turn.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from django.conf import settings
 
 from agents.services.agent_loop import run_tool_loop
 from agents.types import (
+    AgentCancelledError,
     AgentConfig,
     CancellationCheck,
     ChatMessage,
@@ -55,6 +57,8 @@ class SetupTaskRuntime:
     project_prompt: str | None
     llm_config: LLMConfig
     cancellation_check: CancellationCheck
+    # False once the turn row is no longer running (force stop, worker_lost).
+    turn_live: Callable[[], bool]
 
 
 def run_setup_task(
@@ -134,6 +138,15 @@ def run_setup_task(
         budget,
         request.read_only,
     )
+
+    def on_transcript(
+        message: ChatMessage, _transcript: tuple[ChatMessage, ...]
+    ) -> None:
+        # A model call that returns after the turn was closed records nothing.
+        if not runtime.turn_live():
+            raise AgentCancelledError("The setup turn is no longer running")
+        recorder.on_message(message)
+
     started = agent_monotonic()
     result = run_tool_loop(
         [
@@ -144,14 +157,16 @@ def run_setup_task(
         config=config,
         tool_definitions=machine_tool_definitions(),
         dispatch=recorder.wrap(build_machine_dispatcher(runtime.project_id)),
-        on_transcript=lambda message, _transcript: recorder.on_message(message),
+        on_transcript=on_transcript,
     )
     elapsed = int(agent_monotonic() - started)
 
     report = parse_subtask_report(result)
     # Same instance the main recorder holds: its result update broadcasts this.
     parent_row.subtask_result = report.result
-    parent_row.save(update_fields=["subtask_result", "updated_at"])
+    # Not onto the interrupted row of a turn closed meanwhile.
+    if runtime.turn_live():
+        parent_row.save(update_fields=["subtask_result", "updated_at"])
     logger.info(
         "Setup turn %s: sub-task %s ended %s after %s rounds, %s s",
         runtime.turn_id,

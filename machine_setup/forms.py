@@ -133,6 +133,15 @@ class SetupThreadForm(forms.Form):
     )
 
 
+class SetupForceStopForm(forms.Form):
+    """The running turn to force stop, and the thread to return to."""
+
+    turn_id = forms.IntegerField(min_value=1, widget=forms.HiddenInput)
+    conversation_id = forms.IntegerField(
+        required=False, min_value=1, widget=forms.HiddenInput
+    )
+
+
 class OpenHelpChatForm(forms.Form):
     """Open the help chat of a case that needs help, with an optional first message."""
 

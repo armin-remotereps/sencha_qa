@@ -156,6 +156,9 @@ class SetupPage:
     finishing_previous_turn: bool
     # That archived conversation, so the page ignores its late rows.
     finishing_conversation_id: int | None
+    # That archived conversation's live turn, so the main chat can offer
+    # Force stop on its "finishing the previous turn" line.
+    finishing_turn: SetupTurnPayload | None
     # A turn is live in another (not archived) thread of the project.
     other_thread_turn_live: bool
 
@@ -465,6 +468,11 @@ def get_setup_page(
         max_iterations=settings.MACHINE_SETUP_MAX_ITERATIONS,
         finishing_previous_turn=finishing_conversation_id is not None,
         finishing_conversation_id=finishing_conversation_id,
+        finishing_turn=(
+            turn_payload(live_turn)
+            if live_turn is not None and finishing_conversation_id is not None
+            else None
+        ),
         other_thread_turn_live=other_thread_turn_live,
     )
 

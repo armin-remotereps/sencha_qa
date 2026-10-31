@@ -98,3 +98,7 @@ class RunProposalEmptyError(MachineSetupError):
     default_message = (
         "None of the proposed runs has any case left, so nothing was created."
     )
+
+
+class SetupForceStopNotAllowedError(MachineSetupError):
+    default_message = "Force stop is not possible for this turn right now."

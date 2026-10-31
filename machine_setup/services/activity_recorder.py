@@ -31,6 +31,8 @@ from machine_setup.models import (
     SetupScreenshot,
     SetupSubtaskResult,
     SetupToolStatus,
+    SetupTurn,
+    SetupTurnStatus,
 )
 from machine_setup.payloads import (
     CARD_DEFER,
@@ -154,6 +156,12 @@ class ActivityRecorder:
         row = self.current_row()
         if row is None:
             logger.debug("Setup turn %s: screenshot outside a tool call", self.turn_id)
+            return
+        # A controller call that returns after the turn was closed (force
+        # stop, worker_lost) adds nothing to the closed turn.
+        if not SetupTurn.objects.filter(
+            pk=self.turn_id, status=SetupTurnStatus.RUNNING
+        ).exists():
             return
         timestamp_ms = int(time.time() * 1000)
         screenshot = SetupScreenshot.objects.create(

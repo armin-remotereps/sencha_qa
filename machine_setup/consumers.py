@@ -90,6 +90,7 @@ class MachineSetupConsumer(AuthenticatedConsumer):
                     "send_blockers": list(page.send_blockers),
                     "finishing_previous_turn": page.finishing_previous_turn,
                     "finishing_conversation_id": page.finishing_conversation_id,
+                    "finishing_turn": page.finishing_turn,
                     "agent_connected": project.agent_connected,
                     "visual_engine": page.visual_engine,
                     "help": help_state,

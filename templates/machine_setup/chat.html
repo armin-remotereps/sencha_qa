@@ -33,7 +33,7 @@
     page       — machine_setup.services.chat_page.SetupPage (conversation_id,
                  kind, thread, messages, hidden_message_count, turn,
                  send_blockers, can_send, finishing_previous_turn,
-                 other_thread_turn_live, …)
+                 finishing_turn, other_thread_turn_live, …)
     form       — SetupMessageForm (field `text`, max_length 8000); only its
                  errors arrive via messages after PRG, so it is not rendered
     blocker_texts — {machine_not_ready, turn_active, other_thread}: the
@@ -58,6 +58,9 @@
   rows themselves arrive only with current_state (page.messages is empty here),
   so the empty state waits for `loaded`:
     setup-turn             — page.turn (SetupTurnPayload | null)
+    setup-finishing-turn   — page.finishing_turn: the live turn of a
+                             conversation archived by Reset (main chat's
+                             Force stop on the finishing line), or null
     setup-blocker-texts    — blocker_texts
     setup-blockers         — page.send_blockers (list[str])
     setup-visual-engine    — visual_engine (object)
@@ -84,6 +87,15 @@
   back/forward-cache pageshow.
   While hidden, the tab title gets '(N) ' per turn of the shown
   conversation ending completed or failed.
+
+  Force stop: every turn payload carries force_stop_in (seconds until the
+  server allows it, null unless running with Stop pressed). setTurn /
+  setFinishingTurn turn it into a client deadline per payload; a 1 s clock
+  runs only while a deadline is pending. forceStopReady (shown turn) and
+  finishingForceStopReady (finishing line) show the Force stop buttons in
+  _composer.html; openForceStop(id) sets forceStopTurnId and opens the
+  force-stop confirm dialog there. A turn payload for the shown conversation
+  (or the finishing turn) with a lower id than the one held is ignored.
 
   Client model (machineSetupChat): every row gets a client-only `args` (its
   tool_arguments_text parsed once on arrival, {} if it does not parse).
@@ -115,6 +127,7 @@
 {% block page %}
 {{ blocker_texts|json_script:"setup-blocker-texts" }}
 {{ page.turn|json_script:"setup-turn" }}
+{{ page.finishing_turn|json_script:"setup-finishing-turn" }}
 {{ page.send_blockers|json_script:"setup-blockers" }}
 {{ visual_engine|json_script:"setup-visual-engine" }}
 {{ thread_ids|json_script:"setup-thread-ids" }}
@@ -315,6 +328,8 @@ document.addEventListener('alpine:init', () => {
   const PRESENCE_INTERVAL_MS = 15000;
   let socket = null;
   let presenceTimer = null;
+  // The Force stop countdown clock (see syncClock), outside Alpine too.
+  let forceStopTimer = null;
   // Unread badge: '(N) ' before the page title while the tab is hidden.
   const BASE_TITLE = document.title;
   const REPLY_END_STATUSES = ['completed', 'failed'];
@@ -827,6 +842,14 @@ document.addEventListener('alpine:init', () => {
     messages: [],
     hiddenMessageCount: {{ page.hidden_message_count }},
     turn: readJson('setup-turn'),
+    // The archived conversation's live turn (after a Reset), or null.
+    finishingTurn: readJson('setup-finishing-turn'),
+    // Client deadlines (ms) when Force stop is allowed, from force_stop_in.
+    turnForceStopAt: null,
+    finishingForceStopAt: null,
+    // The turn the force-stop confirm dialog posts, and the 1 s clock.
+    forceStopTurnId: null,
+    clock: Date.now(),
     serverBlockers: readJson('setup-blockers'),
     finishingPreviousTurn: {{ page.finishing_previous_turn|yesno:'true,false' }},
     agentConnected: {{ project.agent_connected|yesno:'true,false' }},
@@ -857,6 +880,8 @@ document.addEventListener('alpine:init', () => {
     lastCountedTurnId: null,
 
     init() {
+      this.setTurn(this.turn);
+      this.setFinishingTurn(this.finishingTurn);
       this.connect();
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') this.clearUnread();
@@ -911,9 +936,10 @@ document.addEventListener('alpine:init', () => {
         this.messages = (data.messages || []).map(withArgs);
         this.loaded = true;
         this.hiddenMessageCount = data.hidden_message_count || 0;
-        this.turn = data.turn;
+        this.setTurn(data.turn);
         this.serverBlockers = data.send_blockers || [];
         this.finishingPreviousTurn = !!data.finishing_previous_turn;
+        this.setFinishingTurn(data.finishing_turn || null);
         this.otherThreadTurnLive = !!data.other_thread_turn_live;
         this.agentConnected = !!data.agent_connected;
         if (data.visual_engine) this.visualEngine = data.visual_engine;
@@ -935,11 +961,14 @@ document.addEventListener('alpine:init', () => {
         // Reset archives the main chat only; a thread page keeps its rows.
         if (THREAD_VIEW) return;
         if (this.conversationId !== null) this.archivedConversationIds.push(this.conversationId);
-        if (this.turnLive) this.finishingPreviousTurn = true;
+        if (this.turnLive) {
+          this.finishingPreviousTurn = true;
+          this.setFinishingTurn(this.turn);
+        }
         this.conversationId = null;
         this.messages = [];
         this.hiddenMessageCount = 0;
-        this.turn = null;
+        this.setTurn(null);
       } else if (data.type === 'agent_status') {
         this.agentConnected = !!data.agent_connected;
         if (data.visual_engine) this.visualEngine = data.visual_engine;
@@ -1029,14 +1058,20 @@ document.addEventListener('alpine:init', () => {
 
     applyTurn(turn) {
       if (turn.conversation_id === this.conversationId) {
+        // A late broadcast of an older turn never replaces a newer one.
+        if (this.turn && this.turn.conversation_id === turn.conversation_id && turn.id < this.turn.id) return;
         this.countUnread(turn);
-        this.turn = turn;
+        this.setTurn(turn);
         return;
       }
       const live = LIVE_STATUSES.includes(turn.status);
       if (this.archivedConversationIds.includes(turn.conversation_id)) {
         // A turn of an archived conversation: the agent is still finishing it.
+        if (this.finishingTurn && turn.id < this.finishingTurn.id) return;
         this.finishingPreviousTurn = live;
+        this.setFinishingTurn(live ? turn : null);
+        // The main chat loaded after a Reset shows that turn as its own.
+        if (this.turn && this.turn.id === turn.id) this.setTurn(turn);
         return;
       }
       // A turn in another thread (an auto-fix, or the main chat seen from a
@@ -1047,6 +1082,52 @@ document.addEventListener('alpine:init', () => {
 
     get turnLive() {
       return !!this.turn && LIVE_STATUSES.includes(this.turn.status);
+    },
+
+    // Force stop deadline from a payload's force_stop_in (server seconds).
+    forceStopDeadline(turn) {
+      if (!turn || turn.force_stop_in === null || turn.force_stop_in === undefined) return null;
+      return Date.now() + turn.force_stop_in * 1000;
+    },
+
+    setTurn(turn) {
+      this.turn = turn;
+      this.turnForceStopAt = this.forceStopDeadline(turn);
+      this.syncClock();
+    },
+
+    setFinishingTurn(turn) {
+      this.finishingTurn = turn;
+      this.finishingForceStopAt = this.forceStopDeadline(turn);
+      this.syncClock();
+    },
+
+    // Ticks once a second only while a Force stop deadline is still ahead.
+    syncClock() {
+      this.clock = Date.now();
+      const pending = [this.turnForceStopAt, this.finishingForceStopAt].some((at) => at !== null && at > this.clock);
+      if (pending && forceStopTimer === null) {
+        forceStopTimer = setInterval(() => this.syncClock(), 1000);
+      } else if (!pending && forceStopTimer !== null) {
+        clearInterval(forceStopTimer);
+        forceStopTimer = null;
+      }
+    },
+
+    // The shown turn is stopping and the grace period is over.
+    get forceStopReady() {
+      return this.turnLive && !!this.turn.stop_requested && this.turnForceStopAt !== null && this.clock >= this.turnForceStopAt;
+    },
+
+    // The same for the turn a Reset left finishing (main chat only).
+    get finishingForceStopReady() {
+      if (!this.finishingPreviousTurn || !this.finishingTurn || this.turnLive) return false;
+      return LIVE_STATUSES.includes(this.finishingTurn.status) && !!this.finishingTurn.stop_requested && this.finishingForceStopAt !== null && this.clock >= this.finishingForceStopAt;
+    },
+
+    openForceStop(turnId) {
+      this.forceStopTurnId = turnId;
+      this.$dispatch('open-force-stop-turn');
     },
 
     get machineState() {
@@ -1114,6 +1195,7 @@ document.addEventListener('alpine:init', () => {
       const running = [...blocks].reverse().find((b) => (b.kind === 'activity' || b.kind === 'subtask') && b.running);
       let text = 'Thinking…';
       if (this.turn.status === 'queued') text = 'Waiting for a worker…';
+      else if (this.forceStopReady) text = 'Stopping… (the agent is not responding)';
       else if (this.turn.stop_requested) text = 'Stopping after the current action…';
       else if (running) text = running.liveText;
       let stepText = this.turn.iterations > 0 ? 'Step ' + this.turn.iterations + ' of ' + this.turn.max_iterations : '';

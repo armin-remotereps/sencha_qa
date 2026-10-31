@@ -6,6 +6,10 @@ the auto-fix of a help request without importing the agent runtime.
 
 from __future__ import annotations
 
+from django.db.models import Value
+from django.db.models.functions import Coalesce
+from django.utils import timezone
+
 from machine_setup.models import LIVE_TURN_STATUSES, SetupTurn
 
 
@@ -21,5 +25,8 @@ def request_auto_fix_stop(help_request_id: int) -> bool:
         auto_fix=True,
         conversation__help_request_id=help_request_id,
         status__in=LIVE_TURN_STATUSES,
-    ).update(stop_requested=True)
+    ).update(
+        stop_requested=True,
+        stop_requested_at=Coalesce("stop_requested_at", Value(timezone.now())),
+    )
     return updated > 0

@@ -351,6 +351,14 @@ MACHINE_SETUP_MAX_ITERATIONS: int = config(
 MACHINE_SETUP_TURN_TIMEOUT_SECONDS: int = config(
     "MACHINE_SETUP_TURN_TIMEOUT_SECONDS", default=3600, cast=int
 )
+# Seconds after Stop before Force stop is offered (0 = at once).
+MACHINE_SETUP_FORCE_STOP_GRACE_SECONDS: int = config(
+    "MACHINE_SETUP_FORCE_STOP_GRACE_SECONDS", default=30, cast=int
+)
+if MACHINE_SETUP_FORCE_STOP_GRACE_SECONDS < 0:
+    raise ImproperlyConfigured(
+        "MACHINE_SETUP_FORCE_STOP_GRACE_SECONDS must be 0 or more"
+    )
 # One delegated sub-task of a setup turn: its wall-clock budget (clamped to
 # [MIN, MAX] and to what the turn has left) and its LLM rounds.
 MACHINE_SETUP_SUBTASK_TIMEOUT_SECONDS: int = config(

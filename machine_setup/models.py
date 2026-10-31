@@ -29,6 +29,7 @@ class SetupTurnEndReason(models.TextChoices):
     ITERATION_LIMIT = "iteration_limit", "Step limit reached"
     TIME_LIMIT = "time_limit", "Time limit reached"
     STOPPED_BY_USER = "stopped_by_user", "Stopped"
+    FORCE_STOPPED = "force_stopped", "Force stopped"
     RESET = "reset", "Chat reset"
     RUNNER_DISCONNECTED = "runner_disconnected", "Test Runner disconnected"
     VISUAL_ENGINE = "visual_engine", "Visual engine unavailable"
@@ -188,6 +189,9 @@ class SetupTurn(models.Model):
     # User-safe text shown on the page.
     error_message = models.TextField(blank=True, default="")
     stop_requested = models.BooleanField(default=False)
+    # When Stop was pressed; Force stop is offered a grace period later. Null
+    # with stop_requested (rows flagged before this field) counts as long ago.
+    stop_requested_at = models.DateTimeField(null=True, blank=True)
     stop_requested_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
