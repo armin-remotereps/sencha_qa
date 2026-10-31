@@ -1,6 +1,6 @@
 # feat: Machine setup intake, artifacts inventory and per-run stage 0
 
-Status: In progress
+Status: Done
 Created: 2026-10-31
 Request: Machine setup and getting test runs going take too long. The user wants four things in the Machine setup flow.
 - (4, first in order) Before the agent touches the machine, it asks about the project's artifacts and understands them, so it can actually help. Artifacts are apps, builds, installers, configs, data and licences, plus where they come from, for example a TeamCity export the person keeps as a knowledge base item.
@@ -480,3 +480,4 @@ There are no automated tests (project rule): use the type checker plus manual sm
 - 2026-10-31: review round 2. Fixed: NT-namespace (`\??\`) network paths and drive-letter rule for agent-written Windows base directories; network application check targets; more invisible characters on approval cards; refused scan reaches the chat; `request_quick_check` in its own module. Kept: precondition analysis stays on the `upload` queue (plan Q4); a dedicated queue would need a new worker and is a follow-up if imports wait behind it.
 - 2026-10-31: review round 3. Fixed: application check targets are refused, dropped and skipped when any lookup variant the runner tries is a network path (`protocol.app_check_variants` / `is_network_app_target`, shared by server and runner; the runner also skips network variants), so `\-\host\share` cannot become `\\host\share`; person edits refuse network targets for applications only (path targets stay gated by `network_inspection_allowed`); approval cards refuse every Unicode format character (category Cf) plus variation selectors, the combining grapheme joiner and Hangul fillers; the unreachable drive-letter branch in `agent_network_path_errors` removed (`profile_rules` already limits Windows base directories to drive or UNC paths); the scan flash message says an *open* chat shows a refusal.
 - 2026-10-31: review round 4 (no findings requiring changes). Applied the nits: approval cards also refuse supplementary and Mongolian free variation selectors, Khmer inherent vowels and the Braille blank, and say "invisible or formatting characters"; `stage0_rules` drops network targets with `is_network_app_target` alone. Kept as is (informational): `/net/<host>` automounts on POSIX runners (no credentials sent) and the setup agent's own `check_app_installed` tool, guarded only on the runner (the agent can run commands anyway).
+- 2026-10-31: review round 5 clean on both sides. Status Done; change note `docs/changed/2026-10-31-machine-setup-intake.md`.
