@@ -20,6 +20,7 @@ from knowledge_base.formats import (
 from knowledge_base.models import (
     KNOWLEDGE_DESCRIPTION_MAX,
     KNOWLEDGE_NAME_MAX_LENGTH,
+    KnowledgeBlob,
     KnowledgeItem,
     KnowledgeItemStatus,
     KnowledgeKind,
@@ -31,10 +32,17 @@ from knowledge_base.services.project_quota import (
     lock_project_usage,
     project_usage,
 )
+from knowledge_base.services.upload_budget import (
+    release_upload_bytes,
+    reserve_upload_bytes,
+)
 from knowledge_base.types import RefusedFile, UploadOutcome
 
 _MIB = 1024 * 1024
 _QUOTA_MESSAGE = "the project's knowledge base storage limit would be exceeded"
+_BUDGET_MESSAGE = (
+    "too much was uploaded to this project in the last hour; try again later"
+)
 
 
 def _size_label(size_bytes: int) -> str:
@@ -97,6 +105,9 @@ def upload_knowledge_files(
         if reason is None and not fits_quota(planned, size):
             reason = _QUOTA_MESSAGE
         kind = kind_for_name(upload_name)
+        if reason is None and kind is not None:
+            if not reserve_upload_bytes(project_id, size):
+                reason = _BUDGET_MESSAGE
         if reason is not None or kind is None:
             refused.append(_refused(upload_name, reason))
             continue
@@ -105,11 +116,15 @@ def upload_knowledge_files(
     # Written to disk before the project row is locked, so a large upload
     # never holds up run starts or setup messages. A blob left unused by a
     # quota refusal below (a concurrent upload won the room) is removed by
-    # the daily sweep.
-    stored = [
-        (upload, accepted_kind, store_blob(upload.chunks()))
-        for upload, accepted_kind in accepted
-    ]
+    # the hourly sweep.
+    stored: list[tuple[UploadedFile, KnowledgeKind, KnowledgeBlob]] = []
+    try:
+        for upload, accepted_kind in accepted:
+            stored.append((upload, accepted_kind, store_blob(upload.chunks())))
+    finally:
+        # Reserved bytes of files that were never written go back.
+        for upload, _kind in accepted[len(stored) :]:
+            release_upload_bytes(project_id, upload.size or 0)
     items: list[KnowledgeItem] = []
     with transaction.atomic():
         used = lock_project_usage(project_id)

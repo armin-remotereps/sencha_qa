@@ -237,11 +237,12 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "schedule": 900.0,
         "options": {"expire_seconds": 840},
     },
-    # Removes knowledge base blobs and files no item uses any more.
+    # Removes knowledge base blobs and files no item uses any more (an hour
+    # after they were last stored), so deleted uploads leave the disk soon.
     "knowledge-base-sweep-storage": {
         "task": "knowledge_base.tasks.sweep_knowledge_storage",
-        "schedule": crontab(hour=3, minute=30),
-        "options": {"expire_seconds": 3600},
+        "schedule": crontab(minute=30),
+        "options": {"expire_seconds": 3000},
     },
 }
 
@@ -447,6 +448,16 @@ KNOWLEDGE_BASE_SHEET_MAX_CELLS: int = config(
 KNOWLEDGE_BASE_EXTRACT_TIME_LIMIT_SECONDS: int = config(
     "KNOWLEDGE_BASE_EXTRACT_TIME_LIMIT_SECONDS", default=600, cast=int
 )
+# Bytes a project may upload per hour (deleted items free quota at once, but
+# their files stay until the hourly storage sweep). At least the file limit.
+KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR: int = config(
+    "KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR", default=2147483648, cast=int
+)
+if KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR < KNOWLEDGE_BASE_MAX_FILE_BYTES:
+    raise ImproperlyConfigured(
+        "KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR must be at least "
+        "KNOWLEDGE_BASE_MAX_FILE_BYTES"
+    )
 KNOWLEDGE_BASE_ACCEPT_7Z: bool = config(
     "KNOWLEDGE_BASE_ACCEPT_7Z", default=True, cast=bool
 )

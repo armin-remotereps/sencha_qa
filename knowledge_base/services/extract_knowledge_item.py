@@ -63,7 +63,12 @@ def extract_knowledge_item(item_id: int) -> None:
         logger.exception("Knowledge item %s could not be extracted", item_id)
         fail_claimed_item(item_id, claimed_at, UNREADABLE_MESSAGE)
         return
-    _save_chunks(item_id, claimed_at, output, drafts)
+    try:
+        _save_chunks(item_id, claimed_at, output, drafts)
+    except SoftTimeLimitExceeded:
+        # The save rolled back; a large item can hit the limit while indexing.
+        fail_claimed_item(item_id, claimed_at, TIMED_OUT_MESSAGE)
+        raise
 
 
 def _save_chunks(

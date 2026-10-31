@@ -27,7 +27,7 @@ def lock_project_usage(project_id: int) -> int | None:
 
 
 def project_usage(project_id: int) -> int:
-    """The bytes the project's items use (unlocked: a pre-check only)."""
+    """The bytes the project's items use (no lock taken here)."""
     used: int = KnowledgeItem.objects.filter(project_id=project_id).aggregate(
         total=Coalesce(Sum("size_bytes"), 0)
     )["total"]

@@ -2,7 +2,7 @@
 
 Files are content addressed (``ab/abcdef…`` by sha256). A file is written to a
 temp name under ``tmp/`` first and renamed into place, so a reader never sees
-a half-written blob; abandoned temp files are removed by the daily sweep.
+a half-written blob; abandoned temp files are removed by the hourly sweep.
 """
 
 from __future__ import annotations
@@ -145,14 +145,30 @@ def read_blob_bytes(blob: KnowledgeBlob) -> bytes:
     return data
 
 
-def delete_blob_files(storage_names: Sequence[str]) -> None:
-    """Delete stored files; a file that cannot be removed is left to the sweep."""
+def delete_blob_files(
+    storage_names: Sequence[str], *, modified_before: datetime | None = None
+) -> int:
+    """Delete stored files; return how many were removed.
+
+    A file that cannot be removed is left to the sweep. With
+    ``modified_before``, a file touched since (an upload just reused it) is
+    kept.
+    """
     storage = knowledge_storage()
+    removed = 0
     for name in storage_names:
         try:
+            if modified_before is not None:
+                modified = datetime.fromtimestamp(
+                    os.stat(storage.path(name)).st_mtime, tz=timezone.utc
+                )
+                if modified >= modified_before:
+                    continue
             storage.delete(name)
+            removed += 1
         except OSError:
             logger.warning("Could not delete knowledge base file %s", name)
+    return removed
 
 
 def iter_stored_files() -> Iterator[StoredFile]:

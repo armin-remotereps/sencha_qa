@@ -69,6 +69,7 @@ def _sweep_orphan_files(cutoff: datetime) -> int:
             )
         )
         orphans = [name for name in names if name not in known]
-        delete_blob_files(orphans)
-        removed += len(orphans)
+        # Re-checked right before the unlink: an upload reusing the file
+        # refreshes its mtime before its new row commits.
+        removed += delete_blob_files(orphans, modified_before=cutoff)
     return removed

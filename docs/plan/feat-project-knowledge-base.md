@@ -747,3 +747,9 @@ Answered on 2026-10-31: Q1–Q10 (see Decisions). One remains. It does not block
   - Copy skipped when the target already has items: a duplicated project is new, and the same check keeps a redelivered task (acks_late) from copying twice; the skip is logged.
   - Reading `copy_knowledge_base` from `request.POST` in `project_duplicate`: the existing view reads its other fields the same way; a form for one checkbox is out of scope.
 - 2026-10-31: review round 2. Fixed: an unlocked quota pre-check before any file is written (a project at its quota stores nothing; the locked check stays authoritative); delete and the sweep unlink blob files while the rows are locked (an upload of the same bytes waits, then rewrites the file); a soft time limit fails the item under the worker's own claim (`fail_timed_out_item` and its time-window guess removed); the sweep only removes `tmp/upload-<hex>` and `<xx>/<sha256>` names; blob-storage comments describe the grace window; the `.doc` field filter caps nesting at 64 levels.
+- 2026-10-31: review round 3. Fixed:
+  - Disk fill by an upload/delete cycle or parallel uploads: a per-project upload byte budget per hour (`KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR`, default 2 GiB, atomic Redis counter in `services/upload_budget.py`, reserved before any file is written and released when a write fails), and the storage sweep now runs hourly.
+  - A soft time limit while saving chunks fails the item under its claim.
+  - The orphan-file sweep re-checks a file's mtime right before unlinking it.
+  - The `project_usage` docstring.
+  - Accepted trade-off: delete and the sweep unlink files before their transaction commits. A commit that then fails leaves unused rows without files, which a re-upload rewrites; an item whose delete failed to commit would read as "Could not read this file" and can be deleted again.

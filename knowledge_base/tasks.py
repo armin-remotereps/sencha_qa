@@ -34,8 +34,8 @@ _EXTRACT_TIME_LIMIT = _EXTRACT_SOFT_TIME_LIMIT + 30
 # Copy and sweep are set-based SQL and a directory walk.
 _COPY_SOFT_TIME_LIMIT = 600
 _COPY_TIME_LIMIT = 630
-_SWEEP_SOFT_TIME_LIMIT = 1800
-_SWEEP_TIME_LIMIT = 1830
+_SWEEP_SOFT_TIME_LIMIT = 1500
+_SWEEP_TIME_LIMIT = 1530
 
 
 @shared_task(
@@ -89,7 +89,7 @@ def copy_project_knowledge(source_project_id: int, target_project_id: int) -> No
 
 @shared_task(
     name=SWEEP_KNOWLEDGE_STORAGE_TASK,
-    # Beat (CELERY_BEAT_SCHEDULE), daily.
+    # Beat (CELERY_BEAT_SCHEDULE), hourly.
     queue="knowledge",
     max_retries=0,
     soft_time_limit=_SWEEP_SOFT_TIME_LIMIT,
