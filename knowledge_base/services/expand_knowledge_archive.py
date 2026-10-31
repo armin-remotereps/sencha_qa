@@ -78,9 +78,9 @@ def expand_knowledge_archive(item_id: int) -> None:
     Whole-archive problems (limits, encryption) fail the archive and leave no
     children. Members over the project quota or the hourly upload budget are
     skipped and listed in the archive's warning. Blobs stored for members
-    that end up unused are left to the storage sweep; when the archive is
-    refused or fails, the hourly upload budget reserved for them is given
-    back.
+    that end up unused are left to the storage sweep, and the hourly upload
+    budget of every stored member that does not become a child (a refused or
+    failed archive, a dropped result, a locked quota skip) is given back.
 
     Each child keeps its folder (its folder tag), inherits the archive's
     manual tags and is flagged when it is its folder's instructions.

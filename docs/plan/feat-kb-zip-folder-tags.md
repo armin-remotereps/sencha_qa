@@ -1,6 +1,6 @@
 # feat: Knowledge base archives keep their folders (folder tags, folder instructions, folder browser, fuller expansion)
 
-Status: In progress
+Status: Done
 Created: 2026-10-31
 Request: (verbatim) "On knowledge base, user may upload a .zip with lot of directories in it, system should go through each of them and process alll of the files, the directory instruction is important as well and it's better to be a tag on the kb as well".
 
@@ -572,3 +572,28 @@ None. All answered on 2026-10-31 (Decisions D1–D8).
   - Q3 → reject the whole archive over a limit. Partial expansion, `ArchiveLimitReached` and the "Read N of M" warning are removed. The higher defaults and readable-only counting are kept, with the D3 messages.
   - Q4–Q8 → defaults accepted. Tag case: manual tags lower-case; the folder tag shows its original case and matches case-insensitively.
   - The step split gains Part B3 (agent text), separate from B2 (read services). Foundation stubs the new B2 services so the parallel parts type-check.
+- 2026-10-31: implemented (foundation, then parts A, B1, B2, B3, C in parallel; D folded into integration). `ArchiveDamaged` moved to `exceptions.py`.
+- 2026-10-31: review round 1.
+  - **Fixed:**
+    - the entry limit is shared across nesting levels (`ArchiveAllowance`), and the skip list is capped (`SkippedEntries`);
+    - the zip EOCD pre-check mirrors `zipfile`'s lookup, exits early and refuses what it cannot read (two verified bypasses);
+    - refusals say "more than" when the total is unknown;
+    - OOXML keeps a 500-part cap;
+    - a refused archive releases its hourly budget;
+    - `list_knowledge` fetches `LIST_MAX_ITEMS + 1` rows plus a count;
+    - the folder browser is capped at `LIST_ROW_LIMIT`;
+    - no duplicate detail query on the archive item page;
+    - `archive_folder_counts` moved to `list_knowledge_items.py`;
+    - no new `Any` in the forms;
+    - `KNOWLEDGE_BASE_MAX_UPLOAD_REQUEST_BYTES` setting;
+    - CLAUDE.md line and the KB plan pointer.
+  - **Rejected:** a set-based 0003 backfill. It is a one-off, the KB is a day old, and two UPDATEs per member is acceptable.
+  - **Accepted:** extensionless top-level uploads, and the `format_size` wording.
+- 2026-10-31: review round 2.
+  - **Fixed:**
+    - zip directories keep the full entry limit as their cap, not the allowance left;
+    - tar directory headers are capped;
+    - budget is released in a `finally` for every stored member that did not become a child;
+    - the capped browser hint no longer promises a filter.
+  - **Accepted:** `browse_knowledge_archive(archive=)` as an optional preloaded detail (one caller).
+- 2026-10-31: review round 3 clean (reviewer and verifier). Expand docstring updated. Accepted, not a regression: when the broker fails in an `on_commit` send after the children commit, `kept` stays 0 and their budget is released (the budget is only too generous); a tar refused on its directory cap says "entries", as zip does. Status Done; change note `docs/changed/2026-10-31-kb-zip-folder-tags.md`.
