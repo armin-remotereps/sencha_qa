@@ -1,6 +1,6 @@
 # feat: Pause a running case and discuss it with the agent
 
-Status: In progress
+Status: Done
 Created: 2026-10-31
 Request: While a test case is running, a person must be able to pause it and go
 straight to a discussion with the agent about that case. In the discussion they
@@ -754,3 +754,4 @@ All resolved on 2026-10-31.
   to `CELERY_TASK_ROUTES` (a by-name send ignores the task's own `queue`);
   change note wording fixed. Accepted: a live viewer learns of a refused
   (no thread) or dropped discussion only after the one fallback reload.
+- 2026-10-31: review pass 5 clean (reviewer + verifier). Status Done.
