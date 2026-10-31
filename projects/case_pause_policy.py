@@ -38,6 +38,10 @@ PAUSE_RUN_NOT_ACTIVE = "This run is not running, so its cases cannot be paused."
 PAUSE_STEP_BEING_CONFIRMED = (
     "The agent is checking the reported step. Try again in a moment."
 )
+PAUSE_MARK_RECORDING = (
+    "The agent is recording evidence for a person's mark; the case finishes "
+    "with that verdict."
+)
 PAUSE_SECOND_MESSAGE = (
     "A pause was already requested with a message; yours was not sent. "
     "Write it in the discussion once it opens."

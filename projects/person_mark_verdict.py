@@ -21,7 +21,9 @@ from django.utils import timezone
 from agents.checkpoint import checkpoint_to_json, without_person_step
 from agents.types import OrchestratorCheckpoint, PersonMarkVerdict
 from projects.case_duration_services import close_case_segment
+from projects.case_pause_rows import clear_pause_request
 from projects.models import (
+    PAUSE_REQUEST_FIELDS,
     PERSON_STEP_AGENT_TEXT_MAX_LENGTH,
     BlockedReason,
     CasePersonStep,
@@ -143,6 +145,11 @@ def apply_person_mark(
             else without_person_step(locked.execution_checkpoint)
         )
         fields.append("execution_checkpoint")
+        # As every verdict writer: an empty pause request ends with the case;
+        # one with a message stays as the "Too late to pause" record.
+        if locked.pause_requested_generation is not None and not locked.pause_message:
+            clear_pause_request(locked)
+            fields.extend(PAUSE_REQUEST_FIELDS)
         locked.save(update_fields=fields)
         close_case_segment(locked.pk, now)
         summary = ""

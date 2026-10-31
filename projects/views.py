@@ -1142,6 +1142,9 @@ def test_run_case_detail(
                 person_step_status=(
                     person_step_panel.step.status if person_step_panel else None
                 ),
+                person_step_close_reason=(
+                    person_step_panel.step.close_reason if person_step_panel else None
+                ),
             ),
             "resumes": list_case_resumes(pivot),
             "step_progress": step_progress,

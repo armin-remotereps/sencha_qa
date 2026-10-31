@@ -29,6 +29,7 @@ from projects.case_help_state import enqueue_open_paused_help_chat
 from projects.case_pause_policy import (
     PAUSE_ALREADY_NEEDS_HELP,
     PAUSE_LABEL_MAX_LENGTH,
+    PAUSE_MARK_RECORDING,
     PAUSE_NOT_RUNNING,
     PAUSE_NOTHING_TO_DISMISS,
     PAUSE_RUN_NOT_ACTIVE,
@@ -59,6 +60,7 @@ from projects.models import (
     TestRunTestCase,
     TestRunTestCaseStatus,
 )
+from projects.person_mark_verdict import MARK_CLOSE_REASONS
 from projects.person_step_actor import PersonStepActor
 from projects.run_reopen_services import lock_project_and_run
 from projects.services import broadcast_run_and_pivots
@@ -154,6 +156,13 @@ def request_case_pause(
         if locked_pivot.status == TestRunTestCaseStatus.NEED_HELP:
             raise CasePauseError(PAUSE_ALREADY_NEEDS_HELP)
         if (
+            step is not None
+            and step.status == PersonStepStatus.REPORTED
+            and step.close_reason in MARK_CLOSE_REASONS
+        ):
+            # A person's Mark failed / blocked: its evidence pass must not stop.
+            raise CasePauseError(PAUSE_MARK_RECORDING)
+        if (
             test_run.status == TestRunStatus.STARTED
             and locked_pivot.status == TestRunTestCaseStatus.IN_PROGRESS
         ):
@@ -181,19 +190,23 @@ def get_case_pause_panel(
     *,
     help_panel: HelpPanel | None = None,
     person_step_status: str | None = None,
+    person_step_close_reason: str | None = None,
 ) -> CasePausePanel:
     """The case's pause state from loaded rows (no queries).
 
     ``help_panel``: the run's help panel when the caller built it (its
     request and thread are read only when they are this case's).
     ``person_step_status``: the status of the case's open person step, if any.
+    ``person_step_close_reason``: that step's close reason, if any.
     """
     pending = (
         pivot.status == TestRunTestCaseStatus.IN_PROGRESS
         and pivot.pause_requested_generation is not None
         and pivot.pause_requested_generation == test_run.execution_generation
     )
-    can_pause, blocker = _can_pause(test_run, pivot, pending, person_step_status)
+    can_pause, blocker = _can_pause(
+        test_run, pivot, pending, person_step_status, person_step_close_reason
+    )
 
     request = None
     thread_id: int | None = None
@@ -360,6 +373,7 @@ def _can_pause(
     pivot: TestRunTestCase,
     pending: bool,
     person_step_status: str | None,
+    person_step_close_reason: str | None,
 ) -> tuple[bool, str]:
     """Whether Pause applies now, else the user-safe reason ("" while pending)."""
     if pending:
@@ -368,6 +382,11 @@ def _can_pause(
         return False, PAUSE_RUN_NOT_ACTIVE
     if pivot.status == TestRunTestCaseStatus.NEED_HELP:
         return False, PAUSE_ALREADY_NEEDS_HELP
+    if (
+        person_step_status == PersonStepStatus.REPORTED
+        and person_step_close_reason in MARK_CLOSE_REASONS
+    ):
+        return False, PAUSE_MARK_RECORDING
     if (
         test_run.status == TestRunStatus.STARTED
         and pivot.status == TestRunTestCaseStatus.IN_PROGRESS
