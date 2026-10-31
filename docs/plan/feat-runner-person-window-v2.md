@@ -245,3 +245,9 @@ These are minor and do not block Ready. The Q1 decision follows the window's pur
   - The Continue radios use `allowed_continue_modes` (`continue_mode_choices`) and show the agent's suggested mode.
   - Anonymous pause messages are sent after step 6.
 - 2026-10-31: implementation started. `CLIENT_VERSION` goes 0.11.0 → **0.12.0**, not 0.10.3 → 0.11.0: machine setup intake merged first and took 0.11.0 for `ARTIFACT_SCAN_V1`. Every "0.11.0" above reads 0.12.0.
+- 2026-10-31: implementation notes.
+  - Step entries gained `pivot_id` (the plan assumed they had one), so the window maps a step to its case by id.
+  - Snapshot cost with a waiting help case is about 20 queries, not ≤ 5: the help part reuses `get_help_panel` (wake gates, draft, screenshot) and the discussion re-checks the send gates without side effects, so the window and the web share one source of truth. It runs only while a help case waits for a person, only on nudges (coalesced to one push per second per connection) and is deduplicated; 1 query for an older runner, 2 with no help case.
+  - Discussion sends use `open_help_chat` in every case (it reuses an existing thread), so a runner send also clears a refused / dropped pause message, as a web send does.
+  - Discussion sends have their own 10/min runner throttle; help actions share the 20/min runner answer bucket.
+

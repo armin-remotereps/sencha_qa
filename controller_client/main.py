@@ -101,7 +101,7 @@ async def _person_window(config: ClientConfig) -> PersonWindow | None:
         )
         return None
     logger.info("Person step window: available (%s)", result.detail)
-    return PersonWindow()
+    return PersonWindow(text_size=config.person_window_text_size)
 
 
 def main(argv: list[str] | None = None) -> None:

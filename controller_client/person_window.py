@@ -22,6 +22,14 @@ before every agent action:
   changes when it shows: the person keeps working on the step. Its answer
   arrives in a later snapshot whose step keys are unchanged, so that snapshot
   only re-renders the window in place.
+- Window v2 (``cases``): an open help case (role help, with its discussion)
+  also makes the window want to be visible, until the person closes it or
+  resolves it; a running case alone never does (it only enables Pause). The
+  "news" that re-shows after the short delay is a new step round, a new help
+  request, or an agent turn that ended with a new reply. Pausing and sending
+  a discussion message never hide or raise the window (like a question); a
+  help resolution hides it like an answer. A closed discussion stays hidden
+  until a new help request or a finished turn with a new reply.
 - A dead window process is restarted while a step is open, at most
   ``_MAX_STARTS`` times per ``_START_WINDOW_SECONDS``; then the runner keeps
   working without it (people answer on Punk Hazard).
@@ -42,11 +50,17 @@ from controller_client.exceptions import ProtocolError
 from controller_client.person_window_ipc import (
     IPC_TO_RUNNER_MAX_BYTES,
     IPC_TO_WINDOW_MAX_BYTES,
+    TEXT_SIZE_DEFAULT,
     ActionEvent,
+    CaseRequestKind,
+    CaseResultCommand,
+    ChatSendEvent,
     ClosedByUserEvent,
     ConnectionCommand,
+    HelpActionEvent,
     HiddenEvent,
     HideCommand,
+    PauseEvent,
     QuestionEvent,
     QuestionResultCommand,
     QuitCommand,
@@ -55,11 +69,20 @@ from controller_client.person_window_ipc import (
     ShowCommand,
     StateCommand,
     WindowCommand,
+    clamp_text_size,
     decode_event,
     encode_command,
     next_seq,
 )
 from controller_client.protocol import (
+    CasePauseActionPayload,
+    DiscussionMessageKind,
+    PersonCaseRole,
+    PersonCaseStatePayload,
+    PersonChatSendPayload,
+    PersonHelpActionKind,
+    PersonHelpActionPayload,
+    PersonHelpPayload,
     PersonStepActionPayload,
     PersonStepActionResultPayload,
     PersonStepQuestionAskPayload,
@@ -101,11 +124,46 @@ _QUESTION_UNAVAILABLE: Final[str] = (
     "Asking the AI is not available on this server; ask on Punk Hazard."
 )
 
+_CASE_STALE: Final[str] = "This case changed; look at it again."
+_PAUSE_REFUSED: Final[str] = "This case cannot be paused now."
+_HELP_STALE: Final[str] = "This help request is no longer open."
+_HELP_MODE_REFUSED: Final[str] = "That way to continue is not offered for this case."
+_HELP_PLAN_STALE: Final[str] = "The redesigned plan changed; look at it again."
+_CHAT_REFUSED: Final[str] = "You cannot send a message now."
+
 _StepKey = tuple[int, int]
+# What the person is asked to look at: ("step", step id, round) or ("help",
+# help request id, the newest agent reply seen at the end of a turn).
+_AttentionKey = tuple[str, int, int]
+
+# A window case request, forwarded to the server by the client.
+PersonCaseRequest = (
+    CasePauseActionPayload | PersonChatSendPayload | PersonHelpActionPayload
+)
 
 
 def _key(step: PersonStepStatePayload) -> _StepKey:
     return (step.person_step_id, step.round)
+
+
+def _step_attention(step: PersonStepStatePayload) -> _AttentionKey:
+    return ("step", step.person_step_id, step.round)
+
+
+def _help_of(case: PersonCaseStatePayload) -> PersonHelpPayload | None:
+    """The case's open help request when the window should show it."""
+    return case.help if case.role is PersonCaseRole.HELP else None
+
+
+def _newest_reply(help_state: PersonHelpPayload) -> int:
+    return max(
+        (
+            message.message_id
+            for message in help_state.messages
+            if message.kind is DiscussionMessageKind.ASSISTANT
+        ),
+        default=0,
+    )
 
 
 async def _spawn_app(
@@ -194,8 +252,14 @@ class PersonWindow:
     loop); process start-up happens in a background task.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, text_size: int = TEXT_SIZE_DEFAULT) -> None:
+        # Passed to the window process at spawn (CONTROLLER_PERSON_WINDOW_TEXT_SIZE).
+        self._text_size = clamp_text_size(text_size)
         self._steps: tuple[PersonStepStatePayload, ...] = ()
+        self._cases: tuple[PersonCaseStatePayload, ...] = ()
+        # Per open help request: the newest agent reply seen while no turn
+        # ran (a turn that ends with a newer one is news).
+        self._reply_marks: dict[int, int] = {}
         # The last snapshot said the server takes questions.
         self._questions_enabled = False
         self._connected = True
@@ -205,12 +269,13 @@ class PersonWindow:
         # What the manager last told the window (the window may hide itself
         # earlier on an answer or close; that is reported as an event).
         self._visible = False
-        # Steps the person answered or closed the window on: no re-show for them.
-        self._suppressed: frozenset[_StepKey] = frozenset()
+        # What the person answered, resolved or closed the window on: no
+        # re-show for it.
+        self._suppressed: frozenset[_AttentionKey] = frozenset()
         # A server reply the person must see (refused, or saved but not queued).
         self._result_needs_attention = False
-        # Step rounds the window was told to show (once shown, not "new").
-        self._shown: frozenset[_StepKey] = frozenset()
+        # What the window was told to show (once shown, not "new").
+        self._shown: frozenset[_AttentionKey] = frozenset()
         self._holds = 0
         # When the last agent action ended (loop time); None before any.
         self._last_action_end: float | None = None
@@ -219,6 +284,7 @@ class PersonWindow:
         self._hide_waiters: dict[int, asyncio.Future[None]] = {}
         self._actions: asyncio.Queue[PersonStepActionPayload] = asyncio.Queue()
         self._questions: asyncio.Queue[PersonStepQuestionAskPayload] = asyncio.Queue()
+        self._case_requests: asyncio.Queue[PersonCaseRequest] = asyncio.Queue()
         self._starts: deque[float] = deque()
         self._disabled = False
         self._stopping = False
@@ -238,25 +304,30 @@ class PersonWindow:
         steps: Sequence[PersonStepStatePayload],
         *,
         questions_enabled: bool = False,
+        cases: Sequence[PersonCaseStatePayload] = (),
     ) -> None:
         """The latest ``person_step_state`` snapshot (newest first).
 
         ``questions_enabled``: the server takes ``person_step_question`` from
-        this runner, so the window offers the Ask AI box.
+        this runner, so the window offers the Ask AI box. ``cases``: the
+        cases behind the steps, open help cases and the running case
+        (PERSON_CASE_CONTEXT_V1; empty from an older server).
         """
         if self._disabled or self._stopping:
             return
         self._steps = tuple(steps)
         self._questions_enabled = questions_enabled
-        keys = {_key(step) for step in self._steps}
+        self._cases = tuple(cases)
+        self._update_reply_marks()
+        keys = self._attention_keys()
         self._suppressed &= keys
         self._shown &= keys
         self._send(self._state_command())
-        if not self._steps:
-            # The window hides itself on an empty snapshot.
+        if not self._has_content():
+            # The window hides itself when nothing is open for the person.
             self._visible = False
         self._sync_visibility()
-        if self._steps and self._supervisor is None:
+        if self._has_content() and self._supervisor is None:
             self._supervisor = asyncio.get_running_loop().create_task(
                 self._supervise(), name="person-window"
             )
@@ -293,6 +364,25 @@ class PersonWindow:
         """Every validated question the person asks the AI, forever."""
         while True:
             yield await self._questions.get()
+
+    async def case_requests(self) -> AsyncIterator[PersonCaseRequest]:
+        """Every validated pause, discussion message and help resolution."""
+        while True:
+            yield await self._case_requests.get()
+
+    def show_case_result(self, kind: CaseRequestKind, ok: bool, message: str) -> None:
+        """The server's reply to a case request (or a local refusal or timeout).
+
+        A refused help resolution brings the window back so the person sees
+        why; a pause or a message never changes visibility.
+        """
+        self._send(CaseResultCommand(kind=kind, ok=ok, message=message))
+        if kind is CaseRequestKind.HELP and not ok:
+            self._suppressed = frozenset(
+                key for key in self._suppressed if key[0] != "help"
+            )
+            self._result_needs_attention = True
+            self._sync_visibility()
 
     @contextlib.asynccontextmanager
     async def hidden_for_action(self) -> AsyncIterator[None]:
@@ -361,10 +451,43 @@ class PersonWindow:
 
     # --- visibility -----------------------------------------------------------
 
+    def _help_cases(
+        self,
+    ) -> tuple[tuple[PersonCaseStatePayload, PersonHelpPayload], ...]:
+        return tuple(
+            (case, help_state)
+            for case in self._cases
+            if (help_state := _help_of(case)) is not None
+        )
+
+    def _has_content(self) -> bool:
+        """Something the window shows for the person (not a running case alone)."""
+        return bool(self._steps) or bool(self._help_cases())
+
+    def _update_reply_marks(self) -> None:
+        marks: dict[int, int] = {}
+        for _case, help_state in self._help_cases():
+            request_id = help_state.help_request_id
+            previous = self._reply_marks.get(request_id)
+            if help_state.turn_live and previous is not None:
+                # Replies during a turn are news only once the turn ends.
+                marks[request_id] = previous
+            else:
+                marks[request_id] = _newest_reply(help_state)
+        self._reply_marks = marks
+
+    def _attention_keys(self) -> frozenset[_AttentionKey]:
+        keys = {_step_attention(step) for step in self._steps}
+        keys.update(
+            ("help", request_id, reply)
+            for request_id, reply in self._reply_marks.items()
+        )
+        return frozenset(keys)
+
     def _wants_visible(self) -> bool:
         if self._result_needs_attention:
             return True
-        return any(_key(step) not in self._suppressed for step in self._steps)
+        return bool(self._attention_keys() - self._suppressed)
 
     def _sync_visibility(self) -> None:
         if not self._ready:
@@ -378,10 +501,11 @@ class PersonWindow:
         if self._visible or self._holds > 0:
             return
         loop = asyncio.get_running_loop()
-        keys = frozenset(_key(step) for step in self._steps)
+        keys = self._attention_keys()
         if self._last_action_end is not None:
-            # Something new for the person: a new step round, or a server
-            # reply about their answer (shown once when no step is open).
+            # Something new for the person: a new step round, a new help
+            # request or a finished turn with a new reply, or a server reply
+            # about their answer (shown once when nothing is open).
             news = bool(keys - self._shown) or self._result_needs_attention
             quiet = _RESHOW_QUIET_SECONDS if news else _RESHOW_IDLE_SECONDS
             delay = self._last_action_end + quiet - loop.time()
@@ -391,7 +515,7 @@ class PersonWindow:
                 return
         self._visible = True
         self._shown |= keys
-        if not self._steps:
+        if not self._has_content():
             # Nothing open: the reply is shown this once, never re-shown.
             self._result_needs_attention = False
         self._send(ShowCommand())
@@ -414,7 +538,7 @@ class PersonWindow:
 
     async def _supervise(self) -> None:
         try:
-            while self._steps and not self._stopping:
+            while self._has_content() and not self._stopping:
                 if not self._may_start():
                     logger.error(
                         "The person-step window keeps closing; it stays off for "
@@ -423,9 +547,12 @@ class PersonWindow:
                     )
                     self._disabled = True
                     self._steps = ()
+                    self._cases = ()
                     return
                 try:
                     process = await _spawn_app(
+                        "--text-size",
+                        str(self._text_size),
                         stdin=asyncio.subprocess.PIPE,
                         stderr=None,
                         limit=IPC_TO_RUNNER_MAX_BYTES + 1,
@@ -488,9 +615,14 @@ class PersonWindow:
                 event = decode_event(line)
             except ProtocolError as e:
                 logger.warning("Invalid message from the person-step window: %s", e)
-                # Either kind of request may be waiting: release both.
+                # Any kind of request may be waiting: release them all (the
+                # window ignores a result for a kind it does not wait for).
                 self._send(ResultCommand(ok=False, message=_REFUSED_INVALID))
                 self._send(QuestionResultCommand(ok=False, message=""))
+                for kind in CaseRequestKind:
+                    self._send(
+                        CaseResultCommand(kind=kind, ok=False, message=_REFUSED_INVALID)
+                    )
                 continue
             match event:
                 case HiddenEvent(seq=seq):
@@ -501,10 +633,16 @@ class PersonWindow:
                     self._on_action(action)
                 case QuestionEvent(question=question):
                     self._on_question(question)
+                case PauseEvent(pause=pause):
+                    self._on_pause(pause)
+                case ChatSendEvent(send=send):
+                    self._on_chat_send(send)
+                case HelpActionEvent(action=help_action):
+                    self._on_help_action(help_action)
                 case ClosedByUserEvent():
                     self._visible = False
                     self._result_needs_attention = False
-                    self._suppressed = frozenset(_key(s) for s in self._steps)
+                    self._suppressed = self._attention_keys()
                 case ReadyEvent():
                     pass
 
@@ -520,8 +658,9 @@ class PersonWindow:
                 )
             )
             return
-        # Stay hidden until a new step or round, or a refusal.
-        self._suppressed = keys
+        # Stay hidden until a new step or round, or a refusal (an open help
+        # case still brings the window back).
+        self._suppressed |= {_step_attention(step) for step in self._steps}
         self._actions.put_nowait(action)
 
     def _on_question(self, question: PersonStepQuestionAskPayload) -> None:
@@ -538,9 +677,84 @@ class PersonWindow:
             PersonStepQuestionResultPayload(ok=False, message=message)
         )
 
+    def _case(self, pivot_id: int) -> PersonCaseStatePayload | None:
+        for case in self._cases:
+            if case.pivot_id == pivot_id:
+                return case
+        return None
+
+    def _open_help(
+        self, pivot_id: int, help_request_id: int
+    ) -> PersonHelpPayload | None:
+        case = self._case(pivot_id)
+        if case is None:
+            return None
+        help_state = _help_of(case)
+        if help_state is None or help_state.help_request_id != help_request_id:
+            return None
+        return help_state
+
+    def _on_pause(self, pause: CasePauseActionPayload) -> None:
+        # The window stays as it is: no hide, no suppression.
+        case = self._case(pause.pivot_id)
+        if case is None:
+            message = _CASE_STALE
+        elif case.pause is None or not case.pause.can_pause:
+            message = (
+                case.pause.pause_blocker if case.pause is not None else ""
+            ) or _PAUSE_REFUSED
+        else:
+            self._case_requests.put_nowait(pause)
+            return
+        self.show_case_result(CaseRequestKind.PAUSE, False, message)
+
+    def _on_chat_send(self, send: PersonChatSendPayload) -> None:
+        # The window stays as it is: no hide, no suppression.
+        help_state = self._open_help(send.pivot_id, send.help_request_id)
+        if help_state is None:
+            message = _HELP_STALE
+        elif not help_state.can_send:
+            message = help_state.send_blocker or _CHAT_REFUSED
+        else:
+            self._case_requests.put_nowait(send)
+            return
+        self.show_case_result(CaseRequestKind.CHAT, False, message)
+
+    def _on_help_action(self, action: PersonHelpActionPayload) -> None:
+        # The window hid itself before sending the resolution.
+        self._visible = False
+        self._result_needs_attention = False
+        help_state = self._open_help(action.pivot_id, action.help_request_id)
+        message = ""
+        if help_state is None:
+            message = _HELP_STALE
+        elif action.action is PersonHelpActionKind.CONTINUE:
+            draft = help_state.plan_draft
+            if (
+                action.continue_mode is not None
+                and action.continue_mode not in help_state.continue_mode_choices
+            ):
+                message = _HELP_MODE_REFUSED
+            elif action.use_plan_revision and (
+                draft is None or draft.revision_id != action.plan_revision_id
+            ):
+                message = _HELP_PLAN_STALE
+        if message:
+            self.show_case_result(CaseRequestKind.HELP, False, message)
+            return
+        # Stay hidden until something new arrives, or a refusal.
+        self._suppressed |= {
+            key
+            for key in self._attention_keys()
+            if key[0] == "help" and key[1] == action.help_request_id
+        }
+        self._case_requests.put_nowait(action)
+
     def _state_command(self) -> StateCommand:
         return StateCommand(
-            steps=self._steps, questions_enabled=self._questions_enabled
+            steps=self._steps,
+            questions_enabled=self._questions_enabled,
+            cases=self._cases,
         )
 
     def _send(self, command: WindowCommand) -> None:
@@ -553,7 +767,20 @@ class PersonWindow:
         try:
             data = encode_command(command)
         except ProtocolError as e:
-            logger.error("Could not send to the person-step window: %s", e)
+            if not isinstance(command, StateCommand) or not command.cases:
+                logger.error("Could not send to the person-step window: %s", e)
+                return
+            # Only possible with pathological escaping: keep the steps.
+            logger.warning(
+                "The person-step window snapshot is too large (%s); sending it "
+                "without the cases",
+                e,
+            )
+            self._send(
+                StateCommand(
+                    steps=command.steps, questions_enabled=command.questions_enabled
+                )
+            )
             return
         if stdin.transport.get_write_buffer_size() > _MAX_WRITE_BUFFER_BYTES:
             logger.error("The person-step window stopped reading; closing it")

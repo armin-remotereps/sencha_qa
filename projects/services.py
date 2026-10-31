@@ -4689,6 +4689,8 @@ def _generate_env_content(project: Project) -> str:
         "CONTROLLER_PERSON_WINDOW=true\n"
         # Asked for when the Test Runner first starts, then written here.
         "CONTROLLER_PERSON_EMAIL=\n"
+        # Base text size of the person window (10-28; A-/A+ change it per session).
+        "# CONTROLLER_PERSON_WINDOW_TEXT_SIZE=14\n"
     )
 
 
