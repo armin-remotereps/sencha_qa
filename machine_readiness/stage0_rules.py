@@ -36,7 +36,7 @@ from machine_readiness.models import (
     REQUIREMENT_TITLE_MAX_LENGTH,
     RequirementKind,
 )
-from machine_readiness.network_paths import is_network_app_target, is_network_path
+from machine_readiness.network_paths import is_network_app_target
 from machine_readiness.types import (
     Stage0BatchResult,
     Stage0RequirementData,
@@ -158,7 +158,7 @@ def _requirements(
             problems.append(f"Requirement {index} was not an object.")
             continue
         check_target = _text(entry.get("check_target")).strip()
-        if is_network_path(check_target) or is_network_app_target(check_target):
+        if is_network_app_target(check_target):
             problems.append(
                 f"Requirement {index}: its check target is a network path; "
                 "the target was dropped."

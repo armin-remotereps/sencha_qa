@@ -45,11 +45,14 @@ _LINE_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _TEXT_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 # Format characters (Unicode category Cf: bidi controls, zero-width, word
 # joiner, tags, BOM, ...) plus invisible marks and fillers outside Cf
-# (combining grapheme joiner, variation selectors, Hangul fillers) are refused
+# (combining grapheme joiner, variation selectors incl. Mongolian free ones,
+# Hangul fillers, Khmer inherent vowels, Braille blank) are refused
 # in every field: they can make the text a person approves read differently
 # from what it does.
 _INVISIBLE_EXTRA = frozenset(
-    "\u034f\u115f\u1160\u3164\uffa0" + "".join(map(chr, range(0xFE00, 0xFE10)))
+    "\u034f\u115f\u1160\u17b4\u17b5\u180b\u180c\u180d\u180f\u2800\u3164\uffa0"
+    + "".join(map(chr, range(0xFE00, 0xFE10)))
+    + "".join(map(chr, range(0xE0100, 0xE01F0)))
 )
 
 
@@ -187,7 +190,7 @@ def _line(name: str, value: str, limit: int, *, required: bool) -> str:
         )
     if _has_invisible(value):
         raise ActionApprovalInvalidError(
-            f"{name} must not contain bidirectional or zero-width characters."
+            f"{name} must not contain invisible or formatting characters."
         )
     return value
 
@@ -210,7 +213,7 @@ def _approach(value: str) -> str:
         )
     if _has_invisible(value):
         raise ActionApprovalInvalidError(
-            "approach must not contain bidirectional or zero-width characters."
+            "approach must not contain invisible or formatting characters."
         )
     return value
 
