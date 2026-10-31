@@ -130,9 +130,11 @@ def _match_item(
             item_key=item.key,
             status=MatchStatus.UNCHECKED if truncated else MatchStatus.MISSING,
             expected_version=expected_text,
-            detail="The scan was cut short; not found in the part scanned."
-            if truncated
-            else "",
+            detail=(
+                "The scan was cut short; not found in the part scanned."
+                if truncated
+                else ""
+            ),
         )
     per_path = {path: extract_versions(posixpath.basename(path)) for path in matched}
     candidates = tuple(sorted({v for versions in per_path.values() for v in versions}))

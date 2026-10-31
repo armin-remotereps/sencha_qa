@@ -7,17 +7,26 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('projects', '0050_case_pause'),
+        ("projects", "0050_case_pause"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='testcase',
-            name='preconditions_md5',
-            field=models.GeneratedField(db_persist=True, expression=django.db.models.functions.text.MD5(django.db.models.functions.text.Trim('preconditions')), output_field=models.CharField(max_length=32)),
+            model_name="testcase",
+            name="preconditions_md5",
+            field=models.GeneratedField(
+                db_persist=True,
+                expression=django.db.models.functions.text.MD5(
+                    django.db.models.functions.text.Trim("preconditions")
+                ),
+                output_field=models.CharField(max_length=32),
+            ),
         ),
         migrations.AddIndex(
-            model_name='testcase',
-            index=models.Index(fields=['project', 'preconditions_md5'], name='testcase_project_precond_idx'),
+            model_name="testcase",
+            index=models.Index(
+                fields=["project", "preconditions_md5"],
+                name="testcase_project_precond_idx",
+            ),
         ),
     ]

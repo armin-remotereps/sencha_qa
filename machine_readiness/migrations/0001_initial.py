@@ -10,134 +10,444 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ('projects', '0051_testcase_preconditions_md5'),
+        ("projects", "0051_testcase_preconditions_md5"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
         migrations.CreateModel(
-            name='ArtifactProfile',
+            name="ArtifactProfile",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('base_dir_windows', models.CharField(blank=True, default='', max_length=500)),
-                ('base_dir_macos', models.CharField(blank=True, default='', max_length=500)),
-                ('base_dir_linux', models.CharField(blank=True, default='', max_length=500)),
-                ('notes', models.TextField(blank=True, default='', max_length=4000)),
-                ('revision', models.PositiveIntegerField(default=0)),
-                ('source', models.CharField(blank=True, choices=[('user', 'Project member'), ('setup_agent', 'Machine setup agent'), ('restore', 'Restore')], default='', max_length=20)),
-                ('written_at', models.DateTimeField(blank=True, null=True)),
-                ('change_summary', models.CharField(blank=True, default='', max_length=300)),
-                ('intake_skipped_at', models.DateTimeField(blank=True, null=True)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('intake_skipped_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL)),
-                ('project', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='artifact_profile', to='projects.project')),
-                ('written_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "base_dir_windows",
+                    models.CharField(blank=True, default="", max_length=500),
+                ),
+                (
+                    "base_dir_macos",
+                    models.CharField(blank=True, default="", max_length=500),
+                ),
+                (
+                    "base_dir_linux",
+                    models.CharField(blank=True, default="", max_length=500),
+                ),
+                ("notes", models.TextField(blank=True, default="", max_length=4000)),
+                ("revision", models.PositiveIntegerField(default=0)),
+                (
+                    "source",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("user", "Project member"),
+                            ("setup_agent", "Machine setup agent"),
+                            ("restore", "Restore"),
+                        ],
+                        default="",
+                        max_length=20,
+                    ),
+                ),
+                ("written_at", models.DateTimeField(blank=True, null=True)),
+                (
+                    "change_summary",
+                    models.CharField(blank=True, default="", max_length=300),
+                ),
+                ("intake_skipped_at", models.DateTimeField(blank=True, null=True)),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "intake_skipped_by",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="+",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "project",
+                    models.OneToOneField(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="artifact_profile",
+                        to="projects.project",
+                    ),
+                ),
+                (
+                    "written_by",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="+",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
         ),
         migrations.CreateModel(
-            name='Stage0Requirement',
+            name="Stage0Requirement",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('key', models.CharField(max_length=64)),
-                ('title', models.CharField(max_length=200)),
-                ('kind', models.CharField(choices=[('application', 'Application'), ('artifact', 'Artifact'), ('path', 'Path'), ('configuration', 'Configuration'), ('account', 'Account'), ('service', 'Service'), ('os_setting', 'OS setting'), ('other', 'Other')], default='other', max_length=20)),
-                ('check_target', models.CharField(blank=True, default='', max_length=300)),
-                ('install_hint', models.TextField(blank=True, default='', max_length=600)),
-                ('conflicts_with', models.JSONField(blank=True, default=list)),
-                ('ignored', models.BooleanField(default=False)),
-                ('status', models.CharField(choices=[('unknown', 'Unknown'), ('present', 'Present'), ('missing', 'Missing'), ('mismatch', 'Version mismatch')], default='unknown', max_length=10)),
-                ('status_detail', models.CharField(blank=True, default='', max_length=500)),
-                ('status_source', models.CharField(blank=True, choices=[('quick_check', 'Check machine'), ('setup_agent', 'Machine setup agent'), ('person', 'Project member')], default='', max_length=20)),
-                ('checked_at', models.DateTimeField(blank=True, null=True)),
-                ('checked_host', models.CharField(blank=True, default='', max_length=255)),
-                ('origin', models.CharField(choices=[('analysis', 'Precondition analysis'), ('setup_agent', 'Machine setup agent'), ('person', 'Project member')], default='analysis', max_length=20)),
-                ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('updated_at', models.DateTimeField(auto_now=True)),
-                ('checked_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL)),
-                ('project', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='stage0_requirements', to='projects.project')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("key", models.CharField(max_length=64)),
+                ("title", models.CharField(max_length=200)),
+                (
+                    "kind",
+                    models.CharField(
+                        choices=[
+                            ("application", "Application"),
+                            ("artifact", "Artifact"),
+                            ("path", "Path"),
+                            ("configuration", "Configuration"),
+                            ("account", "Account"),
+                            ("service", "Service"),
+                            ("os_setting", "OS setting"),
+                            ("other", "Other"),
+                        ],
+                        default="other",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "check_target",
+                    models.CharField(blank=True, default="", max_length=300),
+                ),
+                (
+                    "install_hint",
+                    models.TextField(blank=True, default="", max_length=600),
+                ),
+                ("conflicts_with", models.JSONField(blank=True, default=list)),
+                ("ignored", models.BooleanField(default=False)),
+                (
+                    "status",
+                    models.CharField(
+                        choices=[
+                            ("unknown", "Unknown"),
+                            ("present", "Present"),
+                            ("missing", "Missing"),
+                            ("mismatch", "Version mismatch"),
+                        ],
+                        default="unknown",
+                        max_length=10,
+                    ),
+                ),
+                (
+                    "status_detail",
+                    models.CharField(blank=True, default="", max_length=500),
+                ),
+                (
+                    "status_source",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("quick_check", "Check machine"),
+                            ("setup_agent", "Machine setup agent"),
+                            ("person", "Project member"),
+                        ],
+                        default="",
+                        max_length=20,
+                    ),
+                ),
+                ("checked_at", models.DateTimeField(blank=True, null=True)),
+                (
+                    "checked_host",
+                    models.CharField(blank=True, default="", max_length=255),
+                ),
+                (
+                    "origin",
+                    models.CharField(
+                        choices=[
+                            ("analysis", "Precondition analysis"),
+                            ("setup_agent", "Machine setup agent"),
+                            ("person", "Project member"),
+                        ],
+                        default="analysis",
+                        max_length=20,
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                (
+                    "checked_by",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="+",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    "project",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="stage0_requirements",
+                        to="projects.project",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['key'],
+                "ordering": ["key"],
             },
         ),
         migrations.CreateModel(
-            name='PreconditionAnalysis',
+            name="PreconditionAnalysis",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('preconditions_md5', models.CharField(max_length=32)),
-                ('analysed_at', models.DateTimeField()),
-                ('unclear', models.CharField(blank=True, default='', max_length=500)),
-                ('none_needed', models.BooleanField(default=False)),
-                ('project', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='precondition_analyses', to='projects.project')),
-                ('requirements', models.ManyToManyField(blank=True, related_name='analyses', to='machine_readiness.stage0requirement')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("preconditions_md5", models.CharField(max_length=32)),
+                ("analysed_at", models.DateTimeField()),
+                ("unclear", models.CharField(blank=True, default="", max_length=500)),
+                ("none_needed", models.BooleanField(default=False)),
+                (
+                    "project",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="precondition_analyses",
+                        to="projects.project",
+                    ),
+                ),
+                (
+                    "requirements",
+                    models.ManyToManyField(
+                        blank=True,
+                        related_name="analyses",
+                        to="machine_readiness.stage0requirement",
+                    ),
+                ),
             ],
         ),
         migrations.CreateModel(
-            name='ArtifactInventory',
+            name="ArtifactInventory",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('os_name', models.CharField(choices=[('windows', 'Windows'), ('macos', 'macOS'), ('linux', 'Linux')], max_length=10)),
-                ('base_dir', models.CharField(max_length=500)),
-                ('host', models.CharField(blank=True, default='', max_length=255)),
-                ('scanned_at', models.DateTimeField()),
-                ('source', models.CharField(choices=[('runner_scan', 'Test Runner scan'), ('setup_agent', 'Machine setup agent')], default='runner_scan', max_length=20)),
-                ('entry_count', models.PositiveIntegerField(default=0)),
-                ('truncated', models.BooleanField(default=False)),
-                ('permission_errors', models.PositiveIntegerField(default=0)),
-                ('error', models.CharField(blank=True, default='', max_length=500)),
-                ('entries', models.JSONField(blank=True, default=list)),
-                ('project', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='artifact_inventories', to='projects.project')),
-                ('scanned_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                (
+                    "os_name",
+                    models.CharField(
+                        choices=[
+                            ("windows", "Windows"),
+                            ("macos", "macOS"),
+                            ("linux", "Linux"),
+                        ],
+                        max_length=10,
+                    ),
+                ),
+                ("base_dir", models.CharField(max_length=500)),
+                ("host", models.CharField(blank=True, default="", max_length=255)),
+                ("scanned_at", models.DateTimeField()),
+                (
+                    "source",
+                    models.CharField(
+                        choices=[
+                            ("runner_scan", "Test Runner scan"),
+                            ("setup_agent", "Machine setup agent"),
+                        ],
+                        default="runner_scan",
+                        max_length=20,
+                    ),
+                ),
+                ("entry_count", models.PositiveIntegerField(default=0)),
+                ("truncated", models.BooleanField(default=False)),
+                ("permission_errors", models.PositiveIntegerField(default=0)),
+                ("error", models.CharField(blank=True, default="", max_length=500)),
+                ("entries", models.JSONField(blank=True, default=list)),
+                (
+                    "project",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="artifact_inventories",
+                        to="projects.project",
+                    ),
+                ),
+                (
+                    "scanned_by",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="+",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'constraints': [models.UniqueConstraint(fields=('project', 'os_name'), name='artifact_inventory_one_per_os')],
+                "constraints": [
+                    models.UniqueConstraint(
+                        fields=("project", "os_name"),
+                        name="artifact_inventory_one_per_os",
+                    )
+                ],
             },
         ),
         migrations.CreateModel(
-            name='ArtifactItem',
+            name="ArtifactItem",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('position', models.PositiveSmallIntegerField()),
-                ('key', models.CharField(max_length=64)),
-                ('name', models.CharField(max_length=200)),
-                ('kind', models.CharField(choices=[('application', 'Application'), ('build', 'Build'), ('installer', 'Installer'), ('package', 'Package'), ('config', 'Configuration'), ('data', 'Data'), ('licence', 'Licence'), ('other', 'Other')], default='other', max_length=20)),
-                ('path_pattern', models.CharField(blank=True, default='', max_length=300)),
-                ('expected_version', models.CharField(blank=True, default='', max_length=100)),
-                ('source', models.CharField(blank=True, default='', max_length=300)),
-                ('install_hint', models.TextField(blank=True, default='', max_length=600)),
-                ('knowledge_item_id', models.PositiveIntegerField(blank=True, null=True)),
-                ('profile', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='items', to='machine_readiness.artifactprofile')),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("position", models.PositiveSmallIntegerField()),
+                ("key", models.CharField(max_length=64)),
+                ("name", models.CharField(max_length=200)),
+                (
+                    "kind",
+                    models.CharField(
+                        choices=[
+                            ("application", "Application"),
+                            ("build", "Build"),
+                            ("installer", "Installer"),
+                            ("package", "Package"),
+                            ("config", "Configuration"),
+                            ("data", "Data"),
+                            ("licence", "Licence"),
+                            ("other", "Other"),
+                        ],
+                        default="other",
+                        max_length=20,
+                    ),
+                ),
+                (
+                    "path_pattern",
+                    models.CharField(blank=True, default="", max_length=300),
+                ),
+                (
+                    "expected_version",
+                    models.CharField(blank=True, default="", max_length=100),
+                ),
+                ("source", models.CharField(blank=True, default="", max_length=300)),
+                (
+                    "install_hint",
+                    models.TextField(blank=True, default="", max_length=600),
+                ),
+                (
+                    "knowledge_item_id",
+                    models.PositiveIntegerField(blank=True, null=True),
+                ),
+                (
+                    "profile",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="items",
+                        to="machine_readiness.artifactprofile",
+                    ),
+                ),
             ],
             options={
-                'ordering': ['position', 'id'],
-                'constraints': [models.UniqueConstraint(fields=('profile', 'key'), name='artifact_item_unique_key')],
+                "ordering": ["position", "id"],
+                "constraints": [
+                    models.UniqueConstraint(
+                        fields=("profile", "key"), name="artifact_item_unique_key"
+                    )
+                ],
             },
         ),
         migrations.CreateModel(
-            name='ArtifactProfileVersion',
+            name="ArtifactProfileVersion",
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                ('revision', models.PositiveIntegerField()),
-                ('snapshot', models.JSONField(default=dict)),
-                ('source', models.CharField(blank=True, choices=[('user', 'Project member'), ('setup_agent', 'Machine setup agent'), ('restore', 'Restore')], default='', max_length=20)),
-                ('written_at', models.DateTimeField(blank=True, null=True)),
-                ('change_summary', models.CharField(blank=True, default='', max_length=300)),
-                ('replaced_at', models.DateTimeField()),
-                ('profile', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='versions', to='machine_readiness.artifactprofile')),
-                ('written_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL)),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("revision", models.PositiveIntegerField()),
+                ("snapshot", models.JSONField(default=dict)),
+                (
+                    "source",
+                    models.CharField(
+                        blank=True,
+                        choices=[
+                            ("user", "Project member"),
+                            ("setup_agent", "Machine setup agent"),
+                            ("restore", "Restore"),
+                        ],
+                        default="",
+                        max_length=20,
+                    ),
+                ),
+                ("written_at", models.DateTimeField(blank=True, null=True)),
+                (
+                    "change_summary",
+                    models.CharField(blank=True, default="", max_length=300),
+                ),
+                ("replaced_at", models.DateTimeField()),
+                (
+                    "profile",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="versions",
+                        to="machine_readiness.artifactprofile",
+                    ),
+                ),
+                (
+                    "written_by",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="+",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
-                'ordering': ['-revision'],
-                'constraints': [models.UniqueConstraint(fields=('profile', 'revision'), name='artifact_version_unique')],
+                "ordering": ["-revision"],
+                "constraints": [
+                    models.UniqueConstraint(
+                        fields=("profile", "revision"), name="artifact_version_unique"
+                    )
+                ],
             },
         ),
         migrations.AddConstraint(
-            model_name='stage0requirement',
-            constraint=models.UniqueConstraint(fields=('project', 'key'), name='stage0_requirement_unique_key'),
+            model_name="stage0requirement",
+            constraint=models.UniqueConstraint(
+                fields=("project", "key"), name="stage0_requirement_unique_key"
+            ),
         ),
         migrations.AddConstraint(
-            model_name='preconditionanalysis',
-            constraint=models.UniqueConstraint(fields=('project', 'preconditions_md5'), name='precondition_analysis_unique_md5'),
+            model_name="preconditionanalysis",
+            constraint=models.UniqueConstraint(
+                fields=("project", "preconditions_md5"),
+                name="precondition_analysis_unique_md5",
+            ),
         ),
     ]

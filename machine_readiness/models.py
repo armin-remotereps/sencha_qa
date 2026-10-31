@@ -180,9 +180,7 @@ class ArtifactItem(models.Model):
         max_length=ITEM_EXPECTED_VERSION_MAX_LENGTH, blank=True, default=""
     )
     # Where it comes from, e.g. "TeamCity › Desktop › Release, artifact app-*.msi".
-    source = models.CharField(
-        max_length=ITEM_SOURCE_MAX_LENGTH, blank=True, default=""
-    )
+    source = models.CharField(max_length=ITEM_SOURCE_MAX_LENGTH, blank=True, default="")
     install_hint = models.TextField(
         max_length=INSTALL_HINT_MAX_LENGTH, blank=True, default=""
     )
@@ -327,9 +325,7 @@ class Stage0Requirement(models.Model):
     )
     checked_at = models.DateTimeField(null=True, blank=True)
     # The runner's hostname when the status was recorded.
-    checked_host = models.CharField(
-        max_length=HOST_MAX_LENGTH, blank=True, default=""
-    )
+    checked_host = models.CharField(max_length=HOST_MAX_LENGTH, blank=True, default="")
     # The person who recorded it, or whose turn or check did.
     checked_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -390,4 +386,3 @@ class PreconditionAnalysis(models.Model):
 
     def __str__(self) -> str:
         return f"Analysis {self.preconditions_md5} (project {self.project_id})"
-

@@ -101,7 +101,9 @@ def item_errors(item: ProfileItemData, *, position: int) -> list[str]:
         ("install hint", item.install_hint, INSTALL_HINT_MAX_LENGTH),
     ):
         if len(value) > limit:
-            errors.append(f"{label}: the {field_label} has more than {limit} characters.")
+            errors.append(
+                f"{label}: the {field_label} has more than {limit} characters."
+            )
     for field_label, value in (
         ("name", item.name),
         ("path", item.path_pattern),
@@ -218,6 +220,10 @@ def _is_downloads(os_name: ArtifactOs, segments: list[str]) -> bool:
     if lowered[:2] == ["~", _DOWNLOADS]:
         return True
     # /Users/<name>/Downloads (macOS), /home/<name>/Downloads, /root/Downloads.
-    if len(lowered) >= 3 and lowered[0] in ("users", "home") and lowered[2] == _DOWNLOADS:
+    if (
+        len(lowered) >= 3
+        and lowered[0] in ("users", "home")
+        and lowered[2] == _DOWNLOADS
+    ):
         return True
     return lowered[:2] == ["root", _DOWNLOADS]

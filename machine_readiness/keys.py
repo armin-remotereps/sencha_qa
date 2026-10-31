@@ -16,7 +16,9 @@ def key_error(key: str) -> str | None:
     if not key:
         return "A key is required."
     if len(key) > KEY_MAX_LENGTH:
-        return f"Key «{key[:KEY_MAX_LENGTH]}…» is longer than {KEY_MAX_LENGTH} characters."
+        return (
+            f"Key «{key[:KEY_MAX_LENGTH]}…» is longer than {KEY_MAX_LENGTH} characters."
+        )
     if not KEY_RE.fullmatch(key):
         return (
             f"Key «{key}» may hold only lower-case letters and digits, "

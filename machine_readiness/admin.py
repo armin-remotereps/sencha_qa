@@ -36,9 +36,7 @@ class ArtifactProfileAdmin(_ReadOnlyAdminMixin, admin.ModelAdmin[ArtifactProfile
 
 
 @admin.register(ArtifactInventory)
-class ArtifactInventoryAdmin(
-    _ReadOnlyAdminMixin, admin.ModelAdmin[ArtifactInventory]
-):
+class ArtifactInventoryAdmin(_ReadOnlyAdminMixin, admin.ModelAdmin[ArtifactInventory]):
     list_display = ("id", "project", "os_name", "host", "entry_count", "scanned_at")
     list_select_related = ("project",)
 
@@ -48,9 +46,7 @@ class ArtifactInventoryAdmin(
 
 
 @admin.register(Stage0Requirement)
-class Stage0RequirementAdmin(
-    _ReadOnlyAdminMixin, admin.ModelAdmin[Stage0Requirement]
-):
+class Stage0RequirementAdmin(_ReadOnlyAdminMixin, admin.ModelAdmin[Stage0Requirement]):
     list_display = ("id", "project", "key", "kind", "status", "checked_at")
     list_select_related = ("project",)
     list_filter = ("status", "kind")

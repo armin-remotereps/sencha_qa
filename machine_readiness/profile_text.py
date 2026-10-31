@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-
 from accounts.models import CustomUser
 from knowledge_base.services.find_knowledge_items import find_knowledge_items
 from machine_readiness.models import (
@@ -43,7 +42,9 @@ def kb_label(item_id: int, kb_names: Mapping[int, str | None]) -> str:
     return f"KB item #{item_id} «{name}»"
 
 
-def render_profile_body(data: ProfileData, *, kb_names: Mapping[int, str | None]) -> str:
+def render_profile_body(
+    data: ProfileData, *, kb_names: Mapping[int, str | None]
+) -> str:
     """Base directories, notes and items; what the write-time cap measures."""
     lines = ["Base directories (one per test machine OS):"]
     for os_name, label in _OS_LABELS:
@@ -76,8 +77,7 @@ def render_profile(
             else "unknown"
         )
         header += (
-            f" (last written by {source}, "
-            f"{snapshot.written_at:%Y-%m-%d %H:%M} UTC)"
+            f" (last written by {source}, " f"{snapshot.written_at:%Y-%m-%d %H:%M} UTC)"
         )
     return f"{header}\n{render_profile_body(snapshot.data, kb_names=kb_names)}"
 

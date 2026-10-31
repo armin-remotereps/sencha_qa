@@ -52,7 +52,9 @@ class ProfileItemData:
             source=_text(raw.get("source")),
             install_hint=_text(raw.get("install_hint")),
             knowledge_item_id=(
-                kb_id if isinstance(kb_id, int) and not isinstance(kb_id, bool) else None
+                kb_id
+                if isinstance(kb_id, int) and not isinstance(kb_id, bool)
+                else None
             ),
         )
 

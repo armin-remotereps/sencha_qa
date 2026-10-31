@@ -102,7 +102,9 @@ def requirement_errors(requirement: Stage0RequirementData) -> list[str]:
         ("install hint", requirement.install_hint, INSTALL_HINT_MAX_LENGTH),
     ):
         if len(value) > limit:
-            errors.append(f"«{requirement.key}»: the {label} has more than {limit} characters.")
+            errors.append(
+                f"«{requirement.key}»: the {label} has more than {limit} characters."
+            )
     for label, value in (
         ("title", requirement.title),
         ("check target", requirement.check_target),
@@ -110,7 +112,9 @@ def requirement_errors(requirement: Stage0RequirementData) -> list[str]:
         if any(char in value for char in ("\x00", "\n", "\r")):
             errors.append(f"«{requirement.key}»: the {label} must be on one line.")
     if "\x00" in requirement.install_hint:
-        errors.append(f"«{requirement.key}»: the install hint contains a NUL character.")
+        errors.append(
+            f"«{requirement.key}»: the install hint contains a NUL character."
+        )
     if requirement.kind not in RequirementKind.values:
         errors.append(f"«{requirement.key}»: unknown kind «{requirement.kind}».")
     if len(requirement.conflicts_with) > REQUIREMENT_MAX_CONFLICTS:
@@ -142,7 +146,9 @@ def _requirements(
             continue
         requirement = Stage0RequirementData(
             key=normalise_key(_text(entry.get("key"))),
-            title=_clip(_one_line(_text(entry.get("title"))), REQUIREMENT_TITLE_MAX_LENGTH),
+            title=_clip(
+                _one_line(_text(entry.get("title"))), REQUIREMENT_TITLE_MAX_LENGTH
+            ),
             kind=_text(entry.get("kind")).strip().lower() or RequirementKind.OTHER,
             check_target=_text(entry.get("check_target")).strip(),
             install_hint=_clip(
