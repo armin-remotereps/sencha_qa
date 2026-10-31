@@ -750,3 +750,7 @@ All resolved on 2026-10-31.
   discussion, and the one fallback reload (`?discussion=retry`) never arms
   another. A runner-update switch to a stored mode the thread page does not
   offer keeps the person's current radio.
+- 2026-10-31: review pass 4: `machine_setup.tasks.open_paused_help_chat` added
+  to `CELERY_TASK_ROUTES` (a by-name send ignores the task's own `queue`);
+  change note wording fixed. Accepted: a live viewer learns of a refused
+  (no thread) or dropped discussion only after the one fallback reload.
