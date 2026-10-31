@@ -16,6 +16,7 @@ LIST_TEST_RUNS_TOOL = "list_test_runs"
 GET_TEST_RUN_STATE_TOOL = "get_test_run_state"
 LIST_CASE_GROUPS_TOOL = "list_test_case_groups"
 PROPOSE_TEST_RUNS_TOOL = "propose_test_runs"
+STAGE0_GROUP_KEY_MAX = 32
 
 
 @dataclass(frozen=True)
@@ -23,7 +24,7 @@ class RunSpec:
     """One proposed run: a name and the criteria that pick its cases.
 
     The filters (``title_contains``, ``testrail_suite_id``, ``testrail_run_id``,
-    ``priorities``, ``types``) are ANDed; ``all_cases`` selects every case. The
+    ``priorities``, ``types``, ``stage0_group``) are ANDed; ``all_cases`` selects every case. The
     explicit ``case_ids`` and ``testrail_case_ids`` are unioned with that set,
     and ``exclude_case_ids`` is removed last. At least one selector is set.
     """
@@ -40,6 +41,8 @@ class RunSpec:
     priorities: tuple[str, ...] = ()
     types: tuple[str, ...] = ()
     exclude_case_ids: tuple[int, ...] = ()
+    # A ``list_stage0_groups`` group key: cases that need that stage 0.
+    stage0_group: str = ""
 
     def has_filter(self) -> bool:
         return bool(
@@ -48,6 +51,7 @@ class RunSpec:
             or self.testrail_run_id is not None
             or self.priorities
             or self.types
+            or self.stage0_group
         )
 
     def has_selector(self) -> bool:

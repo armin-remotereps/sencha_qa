@@ -16,8 +16,6 @@ from machine_setup.exceptions import (
     MachineSetupError,
     SetupDocumentNotAllowedError,
     SetupKnowledgeRefError,
-    SetupMachineNotReadyError,
-    SetupRunActiveError,
     SetupTurnActiveError,
 )
 from machine_setup.models import SetupConversation, SetupConversationKind, SetupTurn
@@ -27,13 +25,11 @@ from machine_setup.services.queue_turn import (
     create_user_turn,
     link_knowledge_refs,
 )
-from projects.models import Project, TestRun, TestRunStatus
-from projects.runner_update_state import (
-    RUNNER_UPDATE_RUNNING_MESSAGE,
-    runner_update_in_progress,
+from machine_setup.services.send_gates import (
+    machine_not_ready_refusal,
+    run_and_update_refusal,
 )
-from projects.services import MachineState, get_machine_state
-from visual_engine.services.pool_status import get_visual_engine_status
+from projects.models import Project
 
 THREAD_CLOSED_MESSAGE = (
     "This conversation was reset. Send your message in the current chat."
@@ -58,7 +54,8 @@ def send_setup_message(
     ``conversation`` is a thread of this project to reply in (the main chat or
     an auto-fix thread); ``None`` means the main chat, created when missing.
     Raises ``SetupTurnActiveError``, ``SetupRunActiveError``,
-    ``SetupMachineNotReadyError``, or ``MachineSetupError`` when the Test
+    ``SetupMachineNotReadyError`` (help, result and auto-fix threads only:
+    the main chat may run with the machine offline), or ``MachineSetupError`` when the Test
     Runner is being updated or the thread was archived meanwhile, or ``SetupDocumentNotAllowedError`` when ``document``
     targets any thread but the main chat. A stale live turn is closed as
     ``worker_lost`` first, and stays closed even when the send is refused. A paused (Needs help) run
@@ -94,7 +91,9 @@ def _send_locked(
         .only("id", "agent_connected")
         .get(pk=project.pk)
     )
-    refusal = _refusal(locked, timezone.now())
+    # The main chat (None, or the chat thread itself) skips the READY gate.
+    main_chat = conversation is None or conversation.kind == SetupConversationKind.CHAT
+    refusal = _refusal(locked, timezone.now(), main_chat=main_chat)
     if refusal is not None:
         # Returned, not raised: a stale turn closed above must still commit.
         return refusal
@@ -121,17 +120,16 @@ def _send_locked(
     return turn
 
 
-def _refusal(project: Project, now: datetime) -> MachineSetupError | None:
+def _refusal(
+    project: Project, now: datetime, *, main_chat: bool
+) -> MachineSetupError | None:
     if resolve_live_turn(project_id=project.pk, now=now) is not None:
         return SetupTurnActiveError()
-    if TestRun.objects.filter(project=project, status=TestRunStatus.STARTED).exists():
-        return SetupRunActiveError()
-    if runner_update_in_progress(project.pk, now):
-        return MachineSetupError(RUNNER_UPDATE_RUNNING_MESSAGE)
-    visual_engine = get_visual_engine_status()
-    if get_machine_state(project, visual_engine) != MachineState.READY:
-        return SetupMachineNotReadyError()
-    return None
+    refusal = run_and_update_refusal(project, now)
+    if refusal is not None or main_chat:
+        # Q3: the main chat may run offline; its machine tools say so.
+        return refusal
+    return machine_not_ready_refusal(project)
 
 
 def _target_conversation(

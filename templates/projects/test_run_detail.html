@@ -17,7 +17,12 @@
      project, test_run, cases (Page[TestRunTestCase], failures first),
      summary {total, created, in_progress, success, failed, blocked, cancelled,
      needs_retest},
-     readiness (RunReadiness — present only while test_run.status == "waiting"),
+     readiness (RunReadiness — present only while test_run.status == "waiting";
+     its non-blocking `machine_prepared` warning links to #run-stage0),
+     run_stage0 (dict, RunStage0Checklist.to_payload(); Draft and Paused runs
+     only): the "Machine for this run" card
+     (machine_readiness/includes/_run_stage0.html), seeded into testRunLive's
+     `stage0` and replaced by the run socket's "stage0" event,
      narrative, can_rerun_failed, failed_titles (unused directly here —
      narrative already folds them in), can_rerun_blocked, form (TestCaseForm, for the shared
      edit-case dialog's type/priority choices), can_edit, per_page,
@@ -326,6 +331,11 @@
       {% endif %}
     </div>
   </template>
+
+  {# Section: Machine for this run — stage-0 checklist (Draft and Paused runs) #}
+  {% if run_stage0 %}
+  {% include "machine_readiness/includes/_run_stage0.html" with project=project test_run=test_run csrf_token=csrf_token can_write=project_can_write only %}
+  {% endif %}
 
   {# Section: Result summary — stat cards + human-readable narrative #}
   <template x-if="testRunStatus !== 'waiting'">
@@ -796,6 +806,7 @@
 {% endblock %}
 
 {% block extra_scripts %}
+{% if run_stage0 %}{{ run_stage0|json_script:"run-stage0-data" }}{% endif %}
 <script>
 document.addEventListener('alpine:init', () => {
   Alpine.data('testRunLive', () => ({
@@ -824,6 +835,35 @@ document.addEventListener('alpine:init', () => {
       awaiting_person: {{ summary.awaiting_person|default:0 }},
       needs_retest: {{ summary.needs_retest|default:0 }}
     },
+    // "Machine for this run" (Draft / Paused): RunStage0Checklist payload.
+    stage0: (() => {
+      const el = document.getElementById('run-stage0-data');
+      return el ? JSON.parse(el.textContent) : null;
+    })(),
+    // Why the last Check machine was refused in the worker; '' otherwise.
+    stage0Refused: '',
+
+    stage0Icon(status) {
+      return { present: '✓', missing: '✕', mismatch: '✕' }[status] || '•';
+    },
+
+    stage0IconClass(status) {
+      return { present: 'is-pass', missing: 'is-fail', mismatch: 'is-fail' }[status] || 'is-pending';
+    },
+
+    stage0BadgeClass(status) {
+      return {
+        present: 'badge-passed',
+        missing: 'badge-failed',
+        mismatch: 'badge-warning',
+      }[status] || 'badge-draft';
+    },
+
+    stage0FormatTime(iso) {
+      const date = new Date(iso);
+      return isNaN(date.getTime()) ? iso : date.toLocaleString();
+    },
+
     // Pause requested for a running case (hides its Pause button).
     pivotPausePending: {},
     pivotStatuses: {
@@ -931,6 +971,14 @@ document.addEventListener('alpine:init', () => {
             // link are server-rendered — reload once to pick them up.
             setTimeout(() => window.location.reload(), 1000);
           }
+          return;
+        }
+
+        if (data.type === 'stage0') {
+          // A Check machine finished (new statuses) or the worker refused it
+          // (the card says why instead of waiting).
+          this.stage0Refused = data.refused || '';
+          if (this.stage0 && data.checklist) this.stage0 = data.checklist;
           return;
         }
 

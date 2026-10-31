@@ -1,0 +1,74 @@
+{% comment %}
+  One action approval card of the main chat: a NOTICE row whose
+  action_approval is set (block role 'action_approval', block.approval =
+  ActionApprovalCardPayload, see machine_setup/chat.html). Rendered inside
+  `<template x-for="block in blocks">` of _transcript.html; reads
+  approvalBadgeClass, approvalKindBadgeClass and proposalSubmitting from the
+  machineSetupChat scope. Every status change re-broadcasts the row, so the
+  card is replaced live (upsert by id).
+
+  One action per card. Title, target, version, keys and approach are agent
+  text: x-text only. The approach is shown in full (never cut or collapsed):
+  it is what the helper will run, and the person approves exactly that. The
+  form actions are the server-built approve_url / discard_url; badge classes
+  come from fixed client maps keyed by the enums.
+
+  pending: Approve / Discard (POST + CSRF, PRG back to the chat).
+  approved / used / discarded / superseded: state only.
+  Single root element (it is the content of an x-if template).
+  project_can_write (inherited): false hides the buttons; a read-only member
+  sees the action and its status only.
+{% endcomment %}
+<section class="chat-proposal action-approval-card" :class="{ 'is-closed': block.approval.status === 'superseded' || block.approval.status === 'discarded' }" aria-label="Action waiting for approval">
+  <header class="chat-proposal-header">
+    <h3 class="chat-proposal-title">
+      <span class="badge" :class="approvalKindBadgeClass(block.approval.kind)" x-text="block.approval.kind_label"></span>
+      <span x-text="'#' + block.approval.id + ' ' + block.approval.title"></span>
+    </h3>
+    <span class="badge" :class="approvalBadgeClass(block.approval.status)" x-text="block.approval.status_label"></span>
+  </header>
+
+  <dl class="small">
+    <div>
+      <dt class="label">Target</dt>
+      <dd class="pre-wrap" x-text="block.approval.target"></dd>
+    </div>
+    <div x-show="block.approval.version">
+      <dt class="label">Version</dt>
+      <dd x-text="block.approval.version"></dd>
+    </div>
+    <div x-show="block.approval.requirement_key">
+      <dt class="label">Requirement</dt>
+      <dd x-text="block.approval.requirement_key"></dd>
+    </div>
+    <div x-show="block.approval.artifact_key">
+      <dt class="label">Artifact</dt>
+      <dd x-text="block.approval.artifact_key"></dd>
+    </div>
+  </dl>
+
+  <div>
+    <div class="label">How it will be done</div>
+    <pre class="pre-wrap small" x-text="block.approval.approach"></pre>
+  </div>
+
+  <template x-if="block.approval.status === 'pending'">
+    <div class="chat-proposal-actions">
+      <p class="chat-proposal-hint small">Nothing changes on the test machine until you press Approve. Read the steps above: the helper carries out exactly this one action.</p>
+      {% if project_can_write %}
+      <div class="chat-proposal-buttons">
+        <form method="post" :action="block.approval.discard_url" @submit="proposalSubmitting = true">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-secondary btn-sm" :disabled="proposalSubmitting">Discard</button>
+        </form>
+        <form method="post" :action="block.approval.approve_url" @submit="proposalSubmitting = true">
+          {% csrf_token %}
+          <button type="submit" class="btn btn-primary btn-sm" :disabled="proposalSubmitting">Approve</button>
+        </form>
+      </div>
+      {% endif %}
+    </div>
+  </template>
+
+  <p class="muted small" x-show="block.approval.status === 'approved' && block.approval.attempts > 0" x-text="'Tried ' + block.approval.attempts + ' of ' + block.approval.max_attempts + ' times.'"></p>
+</section>

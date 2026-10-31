@@ -5,7 +5,8 @@
   toolBadgeLabel, formatClock and openLightbox from the ancestor
   machineSetupChat scope (machine_setup/chat.html; `blocks` is documented
   there; sub-task blocks render through _subtask.html, run proposal cards
-  through _run_proposal.html, result chat cards through _result_change.html
+  through _run_proposal.html, action approval cards through
+  _action_approval.html, result chat cards through _result_change.html
   and _plan_redesign.html). Every field is model or agent text, so it is
   rendered with x-text (and :title) only, except agent reply and narration
   rows: Markdown, rendered to sanitized HTML by renderMarkdown (marked +
@@ -98,6 +99,10 @@
 
       <template x-if="block.kind === 'row' && block.role === 'plan_redesign'">
         {% include "machine_setup/includes/_plan_redesign.html" %}
+      </template>
+
+      <template x-if="block.kind === 'row' && block.role === 'action_approval'">
+        {% include "machine_setup/includes/_action_approval.html" %}
       </template>
 
       <template x-if="block.kind === 'activity'">

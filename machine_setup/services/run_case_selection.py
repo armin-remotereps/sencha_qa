@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from django.db.models import Q
 
+from machine_readiness.services.stage0_groups import stage0_group_md5s
 from machine_setup.run_proposal_types import (
     MAX_CASES_PER_PROPOSED_RUN,
     MAX_IDS_PER_LIST,
@@ -15,10 +18,18 @@ from projects.models import TestCase
 from projects.run_case_order import PICKER_CASE_ORDERING
 
 
-def resolve_selection(*, project_id: int, spec: RunSpec) -> ResolvedSelection:
+def resolve_selection(
+    *,
+    project_id: int,
+    spec: RunSpec,
+    group_md5s: Mapping[str, frozenset[str]] | None = None,
+) -> ResolvedSelection:
     """The cases ``spec`` selects in this project, in picker order.
 
-    One ``values("id", "title")`` query. Semantics are those of ``RunSpec``:
+    One ``values("id", "title")`` query; a ``stage0_group`` filters on the
+    group's ``preconditions_md5`` values from ``group_md5s``
+    (``stage0_group_md5s``, resolved once per proposal by the caller; two
+    more queries here when it is not passed). Semantics are those of ``RunSpec``:
     the filters are ANDed (``all_cases`` alone selects every case), the
     explicit ``case_ids`` and ``testrail_case_ids`` are unioned with that set,
     and ``exclude_case_ids`` is removed last. Explicit ids outside the project
@@ -29,7 +40,9 @@ def resolve_selection(*, project_id: int, spec: RunSpec) -> ResolvedSelection:
     exact count.
     """
     cases = TestCase.objects.filter(project_id=project_id)
-    filtered = _filters_q(spec)
+    if spec.stage0_group and group_md5s is None:
+        group_md5s = stage0_group_md5s(project_id)
+    filtered = _filters_q(spec, group_md5s or {})
     if not (spec.all_cases and filtered is None):
         # Not "every case": the filters and the explicit ids, unioned.
         explicit = _explicit_q(spec)
@@ -51,9 +64,16 @@ def resolve_selection(*, project_id: int, spec: RunSpec) -> ResolvedSelection:
     )
 
 
-def _filters_q(spec: RunSpec) -> Q | None:
-    """The ANDed filters, or None when the spec has none."""
+def _filters_q(spec: RunSpec, group_md5s: Mapping[str, frozenset[str]]) -> Q | None:
+    """The ANDed filters, or None when the spec has none.
+
+    A ``stage0_group`` matches the cases whose preconditions hash is one of
+    the group's; an unknown key matches no case.
+    """
     parts: list[Q] = []
+    if spec.stage0_group:
+        md5s = sorted(group_md5s.get(spec.stage0_group, frozenset()))
+        parts.append(Q(preconditions_md5__in=md5s) if md5s else Q(pk__in=[]))
     title = spec.title_contains.strip()
     if title:
         parts.append(Q(title__icontains=title))

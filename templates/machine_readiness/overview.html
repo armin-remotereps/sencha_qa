@@ -1,0 +1,321 @@
+{% extends "layouts/project.html" %}
+
+{% comment %} Machine readiness tab: the artifacts profile (with provenance and version
+   history), then the inventory of the base directory and the gap report.
+
+   Context contract (machine_readiness.views.overview):
+     project        — current Project
+     active_tab     — "machine_readiness"
+     profile        — ProfileSnapshot (profile.data: ProfileData)
+     items          — Sequence[ProfileItemRow]: item (ProfileItemData), kind_label,
+                      kb_label ("" without a citation), kb_exists
+     provenance     — ProfileProvenance, or None while intake is pending
+     versions       — Sequence[ProfileVersionRow], newest first
+     intake_pending — no profile row yet: Machine setup asks about artifacts first
+     inventory      — InventorySummary of the runner OS's last scan (no entries), or None
+     matches        — Sequence[MatchRow] (profile items against that inventory)
+     runner_os      — the runner's OS label ("Windows", ...), "" when unknown
+     scan_available — a scan can be queued now
+     scan_reason    — why not ("" when available)
+     gap_report     — GapReport of the whole project (machine_readiness.services.gap_report)
+     project_can_write (context processor) — false hides Edit, Skip intake and Restore
+
+   Blocks "readiness_inventory" and "readiness_gaps" hold the scan and the
+   gap report. {% endcomment %}
+{% block title %}Machine readiness · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumb_extra %}
+  <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Machine readiness</span>
+{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>Machine readiness</h1>
+    <p class="subtitle">What the tests need on the test machine, where it comes from, and what is missing.</p>
+  </div>
+  {% if project_can_write %}
+  <div class="actions">
+    <a class="btn btn-primary" href="{% url 'machine_readiness:artifacts_edit' project_id=project.id %}">Edit artifacts</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block project_content %}
+<nav class="mr-subnav" aria-label="Machine readiness sections">
+  <a href="{% url 'machine_readiness:overview' project_id=project.id %}" aria-current="page">Artifacts and gaps</a>
+  <a href="{% url 'machine_readiness:requirements' project_id=project.id %}">Requirements</a>
+</nav>
+<div class="stack">
+  {% if intake_pending %}
+  <div class="alert alert-info mr-intake">
+    <p><strong>Intake pending.</strong> Machine setup asks about the project's artifacts (builds, installers, configs, data, licences and where they come from) before it works on the machine. Fill in the profile here, answer the questions in the Machine setup chat, or skip the intake.</p>
+    {% if project_can_write %}
+    <div class="mr-intake-actions">
+      <a class="btn btn-secondary btn-sm" href="{% url 'machine_setup:chat' project_id=project.id %}">Open Machine setup</a>
+      <form method="post" action="{% url 'machine_readiness:intake_skip' project_id=project.id %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-ghost btn-sm">Skip intake</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <section class="card" aria-labelledby="mr-artifacts-title">
+    <div class="card-header">
+      <h2 id="mr-artifacts-title">Artifacts</h2>
+      {% if items %}<span class="card-header-count">{{ items|length }}</span>{% endif %}
+    </div>
+
+    {% if provenance %}
+      <p class="context-provenance">
+        {% if provenance.revision %}
+          Revision {{ provenance.revision }}, written by {{ provenance.source_label|default:"unknown" }}{% if provenance.author_name %} ({{ provenance.author_name }}){% endif %}{% if provenance.written_at %} on {{ provenance.written_at|date:"M j, Y, H:i" }}{% endif %}{% if provenance.change_summary %} — {{ provenance.change_summary }}{% endif %}
+        {% elif provenance.intake_skipped_at %}
+          Intake skipped{% if provenance.intake_skipped_by_name %} by {{ provenance.intake_skipped_by_name }}{% endif %} on {{ provenance.intake_skipped_at|date:"M j, Y, H:i" }}. Nothing recorded yet.
+        {% endif %}
+      </p>
+    {% endif %}
+
+    <dl class="kv">
+      <div><dt>Windows base directory</dt><dd class="mr-path">{{ profile.data.base_dir_windows|default:"Not set" }}</dd></div>
+      <div><dt>macOS base directory</dt><dd class="mr-path">{{ profile.data.base_dir_macos|default:"Not set" }}</dd></div>
+      <div><dt>Linux base directory</dt><dd class="mr-path">{{ profile.data.base_dir_linux|default:"Not set" }}</dd></div>
+    </dl>
+
+    {% if profile.data.notes %}
+      <h3 class="mr-subtitle">Notes</h3>
+      <p class="pre-wrap">{{ profile.data.notes }}</p>
+    {% endif %}
+
+    {% if items %}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">Artifact</th>
+              <th scope="col">Kind</th>
+              <th scope="col">Path</th>
+              <th scope="col">Expected version</th>
+              <th scope="col">Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in items %}
+            <tr>
+              <td data-label="Artifact" class="cell-primary">
+                <strong>{{ row.item.name }}</strong>
+                <div class="muted small mr-path">{{ row.item.key }}</div>
+                {% if row.item.install_hint %}<div class="small pre-wrap mr-hint">{{ row.item.install_hint }}</div>{% endif %}
+              </td>
+              <td data-label="Kind"><span class="chip">{{ row.kind_label }}</span></td>
+              <td data-label="Path" class="mr-path">{{ row.item.path_pattern|default:"—" }}</td>
+              <td data-label="Expected version">{{ row.item.expected_version|default:"—" }}</td>
+              <td data-label="Source">
+                {% if row.item.source %}<div>{{ row.item.source }}</div>{% endif %}
+                {% if row.kb_label %}
+                  {% if row.kb_exists %}
+                    <a class="small" href="{% url 'knowledge_base:item' project_id=project.id item_id=row.item.knowledge_item_id %}">{{ row.kb_label }}</a>
+                  {% else %}
+                    <span class="small muted">{{ row.kb_label }}</span>
+                  {% endif %}
+                {% endif %}
+                {% if not row.item.source and not row.kb_label %}—{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <p class="muted">No artifacts recorded yet.{% if project_can_write %} <a href="{% url 'machine_readiness:artifacts_edit' project_id=project.id %}">Add them</a>, or let Machine setup ask about them.{% endif %}</p>
+    {% endif %}
+  </section>
+
+  {% if versions %}
+  <section class="card" aria-labelledby="mr-history-title">
+    <div class="card-header">
+      <h2 id="mr-history-title">Version history</h2>
+    </div>
+    <p class="hint">Earlier versions of the artifacts profile.{% if project_can_write %} Restoring one saves the current profile here first, so a restore can be undone.{% endif %}</p>
+    <ol class="version-list">
+      {% for version in versions %}
+      <li>
+        <div class="version-head">
+          <div>
+            <strong>Revision {{ version.revision }}</strong>
+            <span class="chip">{{ version.source_label|default:"Unknown" }}</span>
+            <p class="version-meta">
+              {% if version.author_name %}{{ version.author_name }} · {% endif %}
+              {% if version.written_at %}written {{ version.written_at|date:"M j, Y, H:i" }} · {% endif %}
+              replaced {{ version.replaced_at|date:"M j, Y, H:i" }}
+            </p>
+          </div>
+          {% if project_can_write %}<button type="button" class="btn btn-ghost btn-sm" @click="$dispatch('open-restore-artifacts-{{ version.id }}')">Restore</button>{% endif %}
+        </div>
+        {% if version.change_summary %}<p class="version-summary">{{ version.change_summary }}</p>{% endif %}
+
+        {% if project_can_write %}
+        {% url 'machine_readiness:artifacts_version_restore' project_id=project.id version_id=version.id as restore_url %}
+        {% with version_id=version.id|stringformat:"s" revision=version.revision|stringformat:"s" %}
+        {% with dialog_id="restore-artifacts-"|add:version_id title="Restore revision "|add:revision|add:"?" %}
+          {% include "partials/confirm_dialog.html" with dialog_id=dialog_id title=title body="Replaces the current artifacts profile with this version. The current profile is kept in the history." confirm_label="Restore" confirm_class="btn-primary" action_url=restore_url csrf_token=csrf_token only %}
+        {% endwith %}
+        {% endwith %}
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+  </section>
+  {% endif %}
+
+  {% block readiness_inventory %}
+  <section class="card" aria-labelledby="mr-inventory-title">
+    <div class="card-header">
+      <h2 id="mr-inventory-title">Inventory</h2>
+      {% if project_can_write %}
+      <form method="post" action="{% url 'projects:machine_readiness_scan' project.id %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-secondary btn-sm"{% if not scan_available %} disabled aria-describedby="mr-scan-reason"{% endif %}>Scan base directory</button>
+      </form>
+      {% endif %}
+    </div>
+    {% if not scan_available and scan_reason %}<p class="hint" id="mr-scan-reason">{{ scan_reason }}</p>{% endif %}
+
+    {% if inventory %}
+      <dl class="kv">
+        <div><dt>Test machine OS</dt><dd>{{ inventory.os_label }}</dd></div>
+        <div><dt>Base directory</dt><dd class="mr-path">{{ inventory.base_dir }}</dd></div>
+        <div><dt>Scanned</dt><dd>{{ inventory.scanned_at|date:"M j, Y, H:i" }}{% if inventory.host %} on <span class="mr-path">{{ inventory.host }}</span>{% endif %}{% if inventory.scanned_by_name %} · {{ inventory.scanned_by_name }}{% endif %}{% if inventory.source_label %} · {{ inventory.source_label }}{% endif %}</dd></div>
+        <div><dt>Entries</dt><dd>{{ inventory.entry_count }}{% if inventory.truncated %} <span class="badge badge-warning">Cut short</span>{% endif %}{% if inventory.permission_errors %} · {{ inventory.permission_errors }} folder{{ inventory.permission_errors|pluralize }} could not be read{% endif %}</dd></div>
+      </dl>
+      {% if inventory.error %}
+        <div class="alert alert-warning"><p><strong>The scan failed.</strong> <span class="mr-path">{{ inventory.error }}</span></p></div>
+      {% endif %}
+
+      {% if matches %}
+        <h3 class="mr-subtitle">Artifacts on the test machine</h3>
+        <div class="table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Artifact</th>
+                <th scope="col">Status</th>
+                <th scope="col">Version</th>
+                <th scope="col">Found at</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in matches %}
+              <tr>
+                <td data-label="Artifact" class="cell-primary"><strong>{{ row.name }}</strong><div class="muted small mr-path">{{ row.key }}</div></td>
+                <td data-label="Status">
+                  <span class="badge {% if row.status == 'found' %}badge-passed{% elif row.status == 'missing' %}badge-failed{% elif row.status == 'version_mismatch' %}badge-warning{% else %}badge-draft{% endif %}">{{ row.status_label }}</span>
+                  {% if row.detail %}<div class="small muted mr-hint">{{ row.detail }}</div>{% endif %}
+                </td>
+                <td data-label="Version">
+                  {% if row.found_version %}{{ row.found_version }}{% elif row.candidates %}<span class="muted">{{ row.candidates }}</span>{% else %}—{% endif %}
+                  {% if row.expected_version %}<div class="small muted">expected {{ row.expected_version }}</div>{% endif %}
+                </td>
+                <td data-label="Found at">
+                  {% for path in row.paths %}<div class="small mr-path">{{ path }}</div>{% empty %}—{% endfor %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% elif not inventory.error %}
+        <p class="muted">No artifacts with a path in the profile to match against.</p>
+      {% endif %}
+    {% else %}
+      <div class="empty">
+        <h3>Not scanned yet</h3>
+        <p>{% if runner_os %}No inventory of the {{ runner_os }} base directory yet.{% else %}The Test Runner has not reported its OS yet.{% endif %} A scan lists the base directory on the test machine (no AI involved) and matches it against the artifacts above.</p>
+      </div>
+    {% endif %}
+  </section>
+  {% endblock %}
+
+  {% block readiness_gaps %}
+  <section class="card" aria-labelledby="mr-gaps-title">
+    <div class="card-header">
+      <h2 id="mr-gaps-title">Gaps</h2>
+      {% if gap_report.gap_count %}<span class="card-header-count">{{ gap_report.gap_count }}</span>{% endif %}
+    </div>
+    <p class="hint">
+      {{ gap_report.present_count }} of {{ gap_report.requirement_count }} stage-0 requirement{{ gap_report.requirement_count|pluralize }} present{% if gap_report.runner_host %} on <span class="mr-path">{{ gap_report.runner_host }}</span>{% endif %}.
+      {% if gap_report.unanalysed_cases %}{{ gap_report.unanalysed_cases }} case{{ gap_report.unanalysed_cases|pluralize }} not analysed yet — see <a href="{% url 'machine_readiness:requirements' project_id=project.id %}">Requirements</a>.{% endif %}
+    </p>
+
+    {% if not gap_report.gap_count and not gap_report.unknown_count %}
+      <p class="muted">No gaps recorded.</p>
+    {% else %}
+      {% if gap_report.missing_artifacts %}
+      <h3 class="mr-subtitle">Missing artifacts</h3>
+      <ul class="mr-gap-list">
+        {% for gap in gap_report.missing_artifacts %}
+        <li><strong>{{ gap.name }}</strong> <span class="muted small mr-path">{{ gap.key }}</span>{% if gap.path_pattern %} · <span class="mr-path small">{{ gap.path_pattern }}</span>{% endif %}{% if gap.expected_version %} · expected {{ gap.expected_version }}{% endif %}{% if gap.source %}<div class="small muted">From {{ gap.source }}</div>{% endif %}{% if gap.install_hint %}<div class="small pre-wrap mr-hint">{{ gap.install_hint }}</div>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if gap_report.apps_to_install %}
+      <h3 class="mr-subtitle">Apps to install</h3>
+      <ul class="mr-gap-list">
+        {% for gap in gap_report.apps_to_install %}
+        <li><strong>{{ gap.title }}</strong>{% if gap.check_target %} · <span class="mr-path small">{{ gap.check_target }}</span>{% endif %}{% if gap.status_detail %}<div class="small muted">{{ gap.status_detail }}</div>{% endif %}{% if gap.install_hint %}<div class="small pre-wrap mr-hint">{{ gap.install_hint }}</div>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if gap_report.missing_requirements %}
+      <h3 class="mr-subtitle">Other missing requirements</h3>
+      <ul class="mr-gap-list">
+        {% for gap in gap_report.missing_requirements %}
+        <li><strong>{{ gap.title }}</strong> <span class="chip">{{ gap.kind_label }}</span>{% if gap.check_target %} · <span class="mr-path small">{{ gap.check_target }}</span>{% endif %}{% if gap.status_detail %}<div class="small muted">{{ gap.status_detail }}</div>{% endif %}{% if gap.install_hint %}<div class="small pre-wrap mr-hint">{{ gap.install_hint }}</div>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if gap_report.artifact_mismatches or gap_report.requirement_mismatches %}
+      <h3 class="mr-subtitle">Version mismatches</h3>
+      <ul class="mr-gap-list">
+        {% for gap in gap_report.artifact_mismatches %}
+        <li><strong>{{ gap.name }}</strong> <span class="muted small mr-path">{{ gap.key }}</span> · expected {{ gap.expected_version }}{% if gap.candidates %}, found {{ gap.candidates }}{% endif %}{% if gap.install_hint %}<div class="small pre-wrap mr-hint">{{ gap.install_hint }}</div>{% endif %}</li>
+        {% endfor %}
+        {% for gap in gap_report.requirement_mismatches %}
+        <li><strong>{{ gap.title }}</strong>{% if gap.check_target %} · <span class="mr-path small">{{ gap.check_target }}</span>{% endif %}{% if gap.status_detail %}<div class="small muted">{{ gap.status_detail }}</div>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if gap_report.conflicts %}
+      <h3 class="mr-subtitle">Conflicting requirements</h3>
+      <ul class="mr-gap-list">
+        {% for conflict in gap_report.conflicts %}
+        <li><strong>{{ conflict.first_title }}</strong> cannot be in place together with <strong>{{ conflict.second_title }}</strong></li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+
+      {% if gap_report.unknown_artifacts or gap_report.unknown_requirements %}
+      <h3 class="mr-subtitle">Unknown</h3>
+      <ul class="mr-gap-list">
+        {% for gap in gap_report.unknown_artifacts %}
+        <li><strong>{{ gap.name }}</strong> <span class="muted small mr-path">{{ gap.key }}</span>{% if gap.detail %}<div class="small muted">{{ gap.detail }}</div>{% endif %}</li>
+        {% endfor %}
+        {% for gap in gap_report.unknown_requirements %}
+        <li><strong>{{ gap.title }}</strong> <span class="chip">{{ gap.kind_label }}</span>{% if gap.how_to_check %}<div class="small muted">{{ gap.how_to_check }}</div>{% endif %}</li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    {% endif %}
+  </section>
+  {% endblock %}
+</div>
+{% endblock %}

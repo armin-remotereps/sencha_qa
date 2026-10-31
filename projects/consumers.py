@@ -189,6 +189,22 @@ class TestRunConsumer(AuthenticatedConsumer):
             )
         )
 
+    async def test_run_stage0(self, event: dict[str, Any]) -> None:
+        """Relay a finished "Check machine": the run's stage-0 checklist
+        (``RunStage0Checklist.to_payload``) and the check's outcome counts, or,
+        when the worker refused the check, ``refused`` (why; checklist and
+        outcome are then null)."""
+        await self.send(
+            text_data=json.dumps(
+                {
+                    "type": "stage0",
+                    "checklist": event["checklist"],
+                    "outcome": event.get("outcome"),
+                    "refused": event.get("refused", ""),
+                }
+            )
+        )
+
     async def test_run_testrail_source_push(self, event: dict[str, Any]) -> None:
         """Relay the "Send checked to TestRail" status (pushing/pushed/failed)."""
         await self.send(

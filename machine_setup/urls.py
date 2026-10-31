@@ -47,4 +47,14 @@ urlpatterns: list[URLPattern] = [
         views.run_proposal_discard,
         name="run_proposal_discard",
     ),
+    path(
+        "approvals/<int:approval_id>/approve/",
+        views.action_approve,
+        name="action_approve",
+    ),
+    path(
+        "approvals/<int:approval_id>/discard/",
+        views.action_discard,
+        name="action_discard",
+    ),
 ]

@@ -4802,3 +4802,134 @@ details.card[open] > summary,
   overflow-wrap: anywhere;
   min-width: 0;
 }
+
+/* --------------------------------------------------------------------------
+   Machine readiness tab (artifacts profile)
+   -------------------------------------------------------------------------- */
+
+.mr-intake-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.mr-path {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.mr-subtitle {
+  margin: 18px 0 6px;
+  font-size: 0.95rem;
+}
+
+.mr-hint {
+  margin-top: 4px;
+  color: var(--text-muted);
+}
+
+.mr-item {
+  margin: 0 0 16px;
+  padding: 14px 16px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.mr-item-legend {
+  padding: 0 6px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.mr-item .textarea {
+  min-height: 64px;
+}
+
+.mr-item-remove {
+  margin-bottom: 12px;
+}
+
+.mr-subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 16px;
+}
+
+.mr-subnav a {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.mr-subnav a:hover,
+.mr-subnav a:focus-visible {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.mr-subnav a[aria-current="page"] {
+  color: var(--brand-cyan);
+  border-color: var(--brand-cyan);
+  background: var(--cyan-soft);
+}
+
+.mr-gap-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mr-gap-list li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.mr-gap-list li:last-child {
+  border-bottom: 0;
+}
+
+.mr-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.mr-chips .chip + .chip {
+  margin-left: 0;
+}
+
+.mr-ignored .cell-primary strong {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.mr-req-edit {
+  margin-top: 8px;
+}
+
+.mr-req-edit > summary {
+  cursor: pointer;
+  color: var(--brand-cyan);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.mr-req-form {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.mr-req-form .btn {
+  margin-top: 10px;
+}

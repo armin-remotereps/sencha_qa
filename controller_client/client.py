@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import functools
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
@@ -19,6 +20,7 @@ from controller_client.app_close_policy import (
 )
 from controller_client.app_closer import execute_close_app, execute_close_tab
 from controller_client.app_launcher import execute_launch_app
+from controller_client.artifact_scan import inspect_paths, scan_directory
 from controller_client.browser_executor import (
     BrowserSession,
     execute_browser_click,
@@ -85,6 +87,7 @@ from controller_client.protocol import (
     UpdatePhase,
     advertised_capabilities,
     deserialize_server_message,
+    inspect_paths_result_to_json,
     parse_browser_click_payload,
     parse_browser_download_payload,
     parse_browser_hover_payload,
@@ -99,12 +102,14 @@ from controller_client.protocol import (
     parse_drag_payload,
     parse_handshake_ack_payload,
     parse_hover_payload,
+    parse_inspect_paths_payload,
     parse_key_press_payload,
     parse_launch_app_payload,
     parse_person_step_action_result_payload,
     parse_person_step_question_result_payload,
     parse_person_step_state_payload,
     parse_run_command_payload,
+    parse_scan_directory_payload,
     parse_scroll_payload,
     parse_send_input_payload,
     parse_start_interactive_cmd_payload,
@@ -113,6 +118,7 @@ from controller_client.protocol import (
     parse_wait_for_command_payload,
     peek_request_id,
     peek_update_id,
+    scan_directory_result_to_json,
     serialize_message,
     serialize_person_step_action,
     serialize_person_step_question,
@@ -158,6 +164,9 @@ _WINDOW_SAFE_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
         MessageType.PERSON_STEP_ACTION_RESULT,
         MessageType.PERSON_STEP_QUESTION_RESULT,
         MessageType.UPDATE_RUNNER,
+        # Read-only file system inventory; nothing on screen changes.
+        MessageType.SCAN_DIRECTORY,
+        MessageType.INSPECT_PATHS,
     }
 )
 _ANSWER_NO_REPLY: Final[str] = "No answer from the server; check Punk Hazard."
@@ -262,6 +271,8 @@ class ControllerClient:
             MessageType.CLOSE_TAB: self._handle_close_tab,
             MessageType.CHECK_APP_INSTALLED: self._handle_check_app_installed,
             MessageType.CLEANUP_ENVIRONMENT: self._handle_cleanup_environment,
+            MessageType.SCAN_DIRECTORY: self._handle_scan_directory,
+            MessageType.INSPECT_PATHS: self._handle_inspect_paths,
         }
         # Self-update (SELF_UPDATE_V1).
         self._handlers[MessageType.UPDATE_RUNNER] = self._handle_update_runner
@@ -1081,6 +1092,39 @@ class ControllerClient:
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
             await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+
+    async def _handle_scan_directory(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_scan_directory_payload(data)
+        start = time.monotonic()
+        result = await asyncio.to_thread(scan_directory, payload)
+        await self._send_artifact_scan_result(
+            request_id, scan_directory_result_to_json(result), start
+        )
+
+    async def _handle_inspect_paths(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_inspect_paths_payload(data)
+        start = time.monotonic()
+        result = await asyncio.to_thread(inspect_paths, payload)
+        await self._send_artifact_scan_result(
+            request_id, inspect_paths_result_to_json(result), start
+        )
+
+    async def _send_artifact_scan_result(
+        self, request_id: str, result: object, start: float
+    ) -> None:
+        await self._send_message(
+            serialize_message(
+                MessageType.ARTIFACT_SCAN_RESULT,
+                request_id=request_id,
+                success=True,
+                result=result,
+                duration_ms=(time.monotonic() - start) * 1000,
+            )
+        )
 
     async def _handle_cleanup_environment(
         self, request_id: str, data: dict[str, object]

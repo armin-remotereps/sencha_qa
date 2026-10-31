@@ -151,6 +151,18 @@ class CleanupEnvironmentActionEvent(BaseActionEvent):
     pass
 
 
+class ScanDirectoryActionEvent(BaseActionEvent):
+    path: str
+    max_depth: int
+    max_entries: int
+    allow_network: bool
+
+
+class InspectPathsActionEvent(BaseActionEvent):
+    paths: list[str]
+    allow_network: bool
+
+
 class UpdateRunnerEvent(TypedDict):
     """Channel-layer event ``controller.update_runner``.
 
@@ -197,6 +209,8 @@ class ActionTypeRegistry:
         "controller.close_tab": MessageType.CLOSE_TAB,
         "controller.check_app_installed": MessageType.CHECK_APP_INSTALLED,
         "controller.cleanup_environment": MessageType.CLEANUP_ENVIRONMENT,
+        "controller.scan_directory": MessageType.SCAN_DIRECTORY,
+        "controller.inspect_paths": MessageType.INSPECT_PATHS,
         "controller.update_runner": MessageType.UPDATE_RUNNER,
     }
 
@@ -237,6 +251,13 @@ class ActionTypeRegistry:
         "controller.close_tab": ("app_name",),
         "controller.check_app_installed": ("app_name",),
         "controller.cleanup_environment": (),
+        "controller.scan_directory": (
+            "path",
+            "max_depth",
+            "max_entries",
+            "allow_network",
+        ),
+        "controller.inspect_paths": ("paths", "allow_network"),
         "controller.update_runner": (
             "update_id",
             "target_version",

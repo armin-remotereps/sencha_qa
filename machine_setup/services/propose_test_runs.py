@@ -13,6 +13,7 @@ from functools import partial
 from django.db import IntegrityError, transaction
 from django.db.models.functions import Lower
 
+from machine_readiness.services.stage0_groups import stage0_group_md5s
 from machine_setup.exceptions import RunProposalInvalidError
 from machine_setup.models import (
     SetupConversation,
@@ -61,7 +62,16 @@ def propose_test_runs(
         raise RunProposalInvalidError(
             f"The note is {len(note)} characters; keep it to {PROPOSAL_NOTE_MAX}."
         )
-    selections = [resolve_selection(project_id=project_id, spec=spec) for spec in specs]
+    # Stage-0 groups are resolved once for every run of the proposal.
+    group_md5s = (
+        stage0_group_md5s(project_id)
+        if any(spec.stage0_group for spec in specs)
+        else {}
+    )
+    selections = [
+        resolve_selection(project_id=project_id, spec=spec, group_md5s=group_md5s)
+        for spec in specs
+    ]
     _check_sizes(names, selections)
     used = _names_in_use(project_id, names)
     runs = [

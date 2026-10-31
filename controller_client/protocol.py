@@ -12,7 +12,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.10.3"
+CLIENT_VERSION: Final[str] = "0.11.0"
 
 
 class CloseCode(IntEnum):
@@ -84,6 +84,12 @@ class MessageType(StrEnum):
     # request_id). The answer itself arrives in the next ``person_step_state``.
     PERSON_STEP_QUESTION = "person_step_question"
     PERSON_STEP_QUESTION_RESULT = "person_step_question_result"
+    # Artifact scan (ARTIFACT_SCAN_V1): server -> runner with ``scan_directory``
+    # or ``inspect_paths``, runner -> server with ``artifact_scan_result``
+    # (same request_id) carrying the result object under ``result``.
+    SCAN_DIRECTORY = "scan_directory"
+    INSPECT_PATHS = "inspect_paths"
+    ARTIFACT_SCAN_RESULT = "artifact_scan_result"
 
 
 class ClientCapability(StrEnum):
@@ -119,6 +125,10 @@ class ClientCapability(StrEnum):
     # case steps it covers (``case_steps``); older windows get the label inside
     # ``step_label``. Advertised only together with PERSON_STEPS_V1.
     PERSON_STEP_CASE_STEPS_V1 = "person_step_case_steps_v1"
+    # Optional: ``scan_directory`` and ``inspect_paths`` (read-only file system
+    # inventory, answered with ``artifact_scan_result``). Older controllers
+    # answer UNKNOWN_COMMAND.
+    ARTIFACT_SCAN_V1 = "artifact_scan_v1"
 
 
 # Capabilities that need the person step window; dropped without it.
@@ -157,8 +167,8 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
 # authenticate fine and then silently time out on first use. Optional
 # capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1,
 # WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1,
-# PERSON_STEP_ASSIST_V1, PERSON_STEP_CASE_STEPS_V1) are checked
-# where they are used instead.
+# PERSON_STEP_ASSIST_V1, PERSON_STEP_CASE_STEPS_V1, ARTIFACT_SCAN_V1) are
+# checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
@@ -1577,3 +1587,291 @@ def parse_check_app_installed_payload(
     return CheckAppInstalledPayload(
         app_name=_extract_str(data, "app_name"),
     )
+
+
+# --- Artifact scan (ARTIFACT_SCAN_V1) ---------------------------------------
+#
+# Read-only inventory of the test machine's file system. ``scan_directory``
+# lists a bounded tree (``controller_client/artifact_scan.py``);
+# ``inspect_paths`` stats a few absolute paths. Neither reads file contents nor
+# runs a shell. Both are answered with one ``artifact_scan_result`` message
+# whose ``result`` is the JSON form below; the server re-validates it.
+
+# Runner-side hard caps; the server's settings must not exceed them.
+SCAN_DIRECTORY_MAX_DEPTH: Final[int] = 4
+SCAN_DIRECTORY_MAX_ENTRIES: Final[int] = 2000
+# Wall-clock budget of one scan on the runner; the result is then truncated.
+SCAN_DIRECTORY_TIME_LIMIT_SECONDS: Final[float] = 10.0
+INSPECT_PATHS_MAX: Final[int] = 50
+# Longest absolute path a request may carry.
+ARTIFACT_PATH_MAX_CHARS: Final[int] = 4096
+# Longest relative entry path a scan reports; deeper names are skipped.
+SCAN_ENTRY_PATH_MAX_CHARS: Final[int] = 1024
+# Longest ``error`` text a scan result carries.
+SCAN_ERROR_MAX_CHARS: Final[int] = 500
+
+
+@dataclass(frozen=True)
+class ScanDirectoryPayload:
+    """``scan_directory``: an absolute path (``~`` expanded on the runner)."""
+
+    path: str
+    # 1..SCAN_DIRECTORY_MAX_DEPTH; 1 lists only the directory's own children.
+    max_depth: int
+    # 1..SCAN_DIRECTORY_MAX_ENTRIES.
+    max_entries: int
+    # A network root (``is_network_path``) is refused unless this is True.
+    # The server sets it only for a base directory a person entered.
+    allow_network: bool = False
+
+
+@dataclass(frozen=True)
+class InspectPathsPayload:
+    """``inspect_paths``: 1..INSPECT_PATHS_MAX absolute paths."""
+
+    paths: tuple[str, ...]
+    # Network paths (``is_network_path``) come back absent unless this is
+    # True; the server sets it only for paths under a person-entered base
+    # directory.
+    allow_network: bool = False
+
+
+_PATH_SEPARATORS = "\\/"
+
+
+def app_check_variants(query: str) -> list[str]:
+    """The names ``check_app_installed`` looks up for ``query``, in order: as
+    given, lower-cased with spaces as ``-``, then without ``-``."""
+    base = query.lower().replace(" ", "-")
+    variants: list[str] = [query]
+    if base != query:
+        variants.append(base)
+    no_separator = base.replace("-", "")
+    if no_separator not in variants:
+        variants.append(no_separator)
+    return variants
+
+
+def is_network_app_target(query: str) -> bool:
+    """Whether any lookup variant of an app check target is a network path
+    (``\\-\\host\\s`` turns into ``\\\\host\\s`` once ``-`` is removed)."""
+    return any(is_network_path(variant) for variant in app_check_variants(query))
+
+
+def is_network_path(path: str) -> bool:
+    """Whether ``path`` may name another machine: ``\\\\host\\share``, ``//host``.
+
+    On Windows merely opening such a path makes an SMB connection that can
+    send the runner user's NTLM credentials to that host, so neither scan
+    action touches one unless the server explicitly allows it. Mixed
+    separators and the ``\\\\?\\`` / ``\\\\.\\`` device prefixes count too, and
+    so does the NT object namespace prefix ``\\??\\`` (``\\??\\UNC\\host\\share``)
+    in any separator mix: such paths are refused whole, even ``\\??\\C:\\``.
+    """
+    head = path.strip()[:4]
+    if len(head) >= 2 and head[0] in _PATH_SEPARATORS and head[1] in _PATH_SEPARATORS:
+        return True
+    return (
+        len(head) == 4
+        and head[0] in _PATH_SEPARATORS
+        and head[1:3] == "??"
+        and head[3] in _PATH_SEPARATORS
+    )
+
+
+@dataclass(frozen=True)
+class ScanEntryPayload:
+    """One scanned path; field names are kept short on the wire.
+
+    ``p`` path relative to the scan root with "/" separators, ``d`` is a
+    directory, ``s`` size in bytes (0 for directories), ``m`` mtime as epoch
+    seconds.
+    """
+
+    p: str
+    d: bool
+    s: int
+    m: float
+
+
+@dataclass(frozen=True)
+class ScanDirectoryResultPayload:
+    # The expanded, normalized absolute path that was scanned (or requested,
+    # when the scan was refused).
+    root: str
+    # Breadth first: shallower entries come first when the list is truncated.
+    entries: tuple[ScanEntryPayload, ...]
+    # True when ``max_entries`` or the time limit cut the listing short.
+    truncated: bool
+    # Directories or entries that could not be read for lack of permission.
+    permission_errors: int
+    # Why nothing was scanned (not absolute, missing, not a directory, a link,
+    # unreadable); "" on success.
+    error: str
+
+
+@dataclass(frozen=True)
+class PathInfoPayload:
+    # The path exactly as requested.
+    path: str
+    exists: bool
+    is_dir: bool
+    # Bytes; 0 for directories and missing paths.
+    size: int
+    # Epoch seconds; 0.0 for missing paths.
+    mtime: float
+
+
+def _extract_path(data: Mapping[str, object], field: str) -> str:
+    value = data.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ProtocolError(f"Missing or invalid '{field}': expected a path")
+    if len(value) > ARTIFACT_PATH_MAX_CHARS or "\x00" in value:
+        raise ProtocolError(f"Invalid '{field}': path too long or contains NUL")
+    return value
+
+
+def parse_scan_directory_payload(data: dict[str, object]) -> ScanDirectoryPayload:
+    return ScanDirectoryPayload(
+        path=_extract_path(data, "path"),
+        max_depth=_extract_bounded_int(data, "max_depth", SCAN_DIRECTORY_MAX_DEPTH),
+        max_entries=_extract_bounded_int(
+            data, "max_entries", SCAN_DIRECTORY_MAX_ENTRIES
+        ),
+        allow_network=_extract_bool(data, "allow_network", default=False),
+    )
+
+
+def parse_inspect_paths_payload(data: dict[str, object]) -> InspectPathsPayload:
+    raw = data.get("paths")
+    if not isinstance(raw, list) or not 1 <= len(raw) <= INSPECT_PATHS_MAX:
+        raise ProtocolError(
+            f"Missing or invalid 'paths': expected 1 to {INSPECT_PATHS_MAX} paths"
+        )
+    return InspectPathsPayload(
+        paths=tuple(_extract_path({"path": item}, "path") for item in raw),
+        allow_network=_extract_bool(data, "allow_network", default=False),
+    )
+
+
+def scan_directory_result_to_json(
+    result: ScanDirectoryResultPayload,
+) -> dict[str, object]:
+    return {
+        "root": result.root,
+        "entries": [
+            {"p": entry.p, "d": entry.d, "s": entry.s, "m": entry.m}
+            for entry in result.entries
+        ],
+        "truncated": result.truncated,
+        "permission_errors": result.permission_errors,
+        "error": result.error,
+    }
+
+
+def inspect_paths_result_to_json(
+    result: Sequence[PathInfoPayload],
+) -> list[dict[str, object]]:
+    return [
+        {
+            "path": info.path,
+            "exists": info.exists,
+            "is_dir": info.is_dir,
+            "size": info.size,
+            "mtime": info.mtime,
+        }
+        for info in result
+    ]
+
+
+def _extract_size(data: Mapping[str, object], field: str) -> int:
+    value = data.get(field, 0)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ProtocolError(f"Invalid '{field}': expected a non-negative int")
+    return value
+
+
+def _extract_mtime(data: Mapping[str, object], field: str) -> float:
+    value = data.get(field, 0.0)
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        raise ProtocolError(f"Invalid '{field}': expected a number")
+    return float(value)
+
+
+def _parse_scan_entry(raw: object) -> ScanEntryPayload:
+    if not isinstance(raw, dict):
+        raise ProtocolError("Invalid scan entry: expected an object")
+    item: dict[str, object] = raw
+    path = item.get("p")
+    if (
+        not isinstance(path, str)
+        or not path
+        or len(path) > SCAN_ENTRY_PATH_MAX_CHARS
+        or "\\" in path
+        or path.startswith("/")
+        or any(part in ("", ".", "..") for part in path.split("/"))
+    ):
+        raise ProtocolError("Invalid scan entry path: expected a relative path")
+    return ScanEntryPayload(
+        p=path,
+        d=_extract_bool(item, "d"),
+        s=_extract_size(item, "s"),
+        m=_extract_mtime(item, "m"),
+    )
+
+
+def parse_scan_directory_result(
+    raw: object, *, max_entries: int
+) -> ScanDirectoryResultPayload:
+    """Validate a ``scan_directory`` result (server side).
+
+    Entries must be relative paths below the root, at most ``max_entries`` of
+    them; anything else raises ProtocolError.
+    """
+    if not isinstance(raw, dict):
+        raise ProtocolError("Invalid scan result: expected an object")
+    data: dict[str, object] = raw
+    entries = data.get("entries", [])
+    if not isinstance(entries, list) or len(entries) > max_entries:
+        raise ProtocolError(
+            f"Invalid 'entries': expected a list of at most {max_entries} entries"
+        )
+    root = data.get("root", "")
+    if not isinstance(root, str) or len(root) > ARTIFACT_PATH_MAX_CHARS:
+        raise ProtocolError("Invalid 'root': expected a path")
+    return ScanDirectoryResultPayload(
+        root=root,
+        entries=tuple(_parse_scan_entry(entry) for entry in entries),
+        truncated=_extract_bool(data, "truncated", default=False),
+        permission_errors=_extract_size(data, "permission_errors"),
+        error=_extract_text(data, "error", SCAN_ERROR_MAX_CHARS, truncate=True),
+    )
+
+
+def parse_inspect_paths_result(
+    raw: object, *, paths: Sequence[str]
+) -> tuple[PathInfoPayload, ...]:
+    """Validate an ``inspect_paths`` result (server side).
+
+    One item per requested path, in the same order and echoing it.
+    """
+    if not isinstance(raw, list) or len(raw) != len(paths):
+        raise ProtocolError(
+            f"Invalid inspect result: expected {len(paths)} items in a list"
+        )
+    infos: list[PathInfoPayload] = []
+    for requested, item in zip(paths, raw, strict=True):
+        if not isinstance(item, dict) or item.get("path") != requested:
+            raise ProtocolError("Invalid inspect result: items do not match paths")
+        fields: dict[str, object] = item
+        exists = _extract_bool(fields, "exists")
+        infos.append(
+            PathInfoPayload(
+                path=requested,
+                exists=exists,
+                is_dir=exists and _extract_bool(fields, "is_dir", default=False),
+                size=_extract_size(fields, "size"),
+                mtime=_extract_mtime(fields, "mtime"),
+            )
+        )
+    return tuple(infos)

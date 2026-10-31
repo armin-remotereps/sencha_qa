@@ -102,3 +102,22 @@ class RunProposalEmptyError(MachineSetupError):
 
 class SetupForceStopNotAllowedError(MachineSetupError):
     default_message = "Force stop is not possible for this turn right now."
+
+
+class ActionApprovalInvalidError(MachineSetupError):
+    """Tool-facing: the proposed action breaks a rule; ``message`` says which."""
+
+    default_message = "The proposed action is not valid."
+
+
+class ActionApprovalClosedError(MachineSetupError):
+    """A person acted on a card that is no longer waiting for a decision."""
+
+    default_message = "This action is no longer waiting for a decision."
+
+
+class ActionApprovalUnusableError(MachineSetupError):
+    """Tool-facing: ``run_setup_task(approval_id=)`` names an approval it may
+    not use; ``message`` says why."""
+
+    default_message = "That approval cannot be used."

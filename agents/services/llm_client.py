@@ -21,6 +21,10 @@ from agents.types import (
 
 logger = logging.getLogger(__name__)
 
+# The Responses API's string ``tool_choice`` values: "auto" (the model picks),
+# "none" (no tool call) and "required" (at least one tool call).
+ToolChoice = Literal["auto", "none", "required"]
+
 # Provider error bodies can be long (or echo the prompt); keep only a short
 # prefix in the user-facing message.
 _PROVIDER_ERROR_MAX_CHARS = 300
@@ -34,7 +38,7 @@ def _build_payload(
     config: LLMConfig,
     messages: tuple[ChatMessage, ...],
     tools: tuple[ToolDefinition, ...],
-    tool_choice: Literal["auto", "none"],
+    tool_choice: ToolChoice,
 ) -> dict[str, object]:
     instructions, input_items = _serialize_input(messages)
     payload: dict[str, object] = {
@@ -57,7 +61,8 @@ def _build_payload(
     if tools:
         payload["tools"] = _serialize_tools(tools)
         # "none" keeps the tool list (same request prefix, so the prompt cache
-        # still hits) while forbidding calls.
+        # still hits) while forbidding calls; "required" makes the model call
+        # at least one of the tools (Responses API ``tool_choice``).
         payload["tool_choice"] = tool_choice
 
     return payload
@@ -68,7 +73,7 @@ def send_chat_completion(
     messages: tuple[ChatMessage, ...],
     tools: tuple[ToolDefinition, ...] = (),
     *,
-    tool_choice: Literal["auto", "none"] = "auto",
+    tool_choice: ToolChoice = "auto",
     timeout_seconds: float | None = None,
 ) -> LLMResponse:
     """Send one Responses request; ``timeout_seconds`` None means

@@ -61,16 +61,26 @@ from agents.types import (
     PixelParseResult,
 )
 from auto_tester.celery import app as celery_app
+from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
+    ARTIFACT_PATH_MAX_CHARS,
     CLIENT_VERSION,
+    INSPECT_PATHS_MAX,
     REQUIRED_CLIENT_CAPABILITIES,
+    SCAN_DIRECTORY_MAX_DEPTH,
+    SCAN_DIRECTORY_MAX_ENTRIES,
     BrowserName,
     ClientCapability,
     ErrorCode,
     ScrollDirection,
+    parse_inspect_paths_result,
+    parse_scan_directory_result,
 )
 from knowledge_base.services.item_processing import COPY_PROJECT_KNOWLEDGE_TASK
 from knowledge_base.services.knowledge_index import knowledge_index_text
+from machine_readiness.profile_text import artifacts_profile_text
+from machine_readiness.run_stage0_state import Stage0Summary, run_stage0_summary
+from machine_readiness.types import InventoryEntry
 from machine_setup.auto_fix_stop import request_auto_fix_stop
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from notifications.services.inbox_broadcast import broadcast_project_attention_changed
@@ -865,16 +875,74 @@ def _no_runner_update_check(project: Project) -> ReadinessCheck:
     )
 
 
+# The run page's "Machine for this run" card (machine_readiness run stage 0).
+RUN_STAGE0_ANCHOR: Final = "run-stage0"
+
+
+def _machine_prepared_check(
+    project: Project, test_run: TestRun, summary: Stage0Summary | None
+) -> ReadinessCheck:
+    """Warning only (plan Q6): the run's stage-0 requirements.
+
+    2 queries, none when the caller passes the ``summary`` it already has.
+    """
+    if summary is None:
+        summary = run_stage0_summary(project, test_run.id)
+    passed = summary.prepared
+    gaps: list[str] = []
+    if summary.missing:
+        gaps.append(f"{summary.missing} missing")
+    if summary.mismatch:
+        gaps.append(
+            f"{summary.mismatch} version mismatch"
+            f"{'es' if summary.mismatch != 1 else ''}"
+        )
+    if summary.unknown:
+        gaps.append(f"{summary.unknown} not checked")
+    if summary.unanalysed_case_count:
+        count = summary.unanalysed_case_count
+        gaps.append(f"{count} case{'s' if count != 1 else ''} not analysed")
+    if passed:
+        title = (
+            "Machine has what this run needs"
+            if summary.requirement_count
+            else "This run's cases need nothing installed"
+        )
+        help_text = ""
+    else:
+        title = "Machine may not be prepared for this run"
+        help_text = (
+            f"{', '.join(gaps).capitalize()}. Use Check machine or Prepare "
+            "machine on this run's card; this does not block the run."
+        )
+    return ReadinessCheck(
+        key="machine_prepared",
+        passed=passed,
+        blocking=False,
+        title=title,
+        help=help_text,
+        link_url=(
+            reverse("projects:test_run_detail", args=[project.id, test_run.id])
+            + f"#{RUN_STAGE0_ANCHOR}"
+        ),
+    )
+
+
 def get_run_readiness(
     project: Project,
     *,
     test_run: TestRun | None = None,
     selected_count: int | None = None,
+    stage0_summary: Stage0Summary | None = None,
 ) -> RunReadiness:
-    """Compute the "Ready to run?" checklist shown before starting a run."""
+    """Compute the "Ready to run?" checklist shown before starting a run.
+
+    ``stage0_summary``: the run's stage-0 counts when the caller already
+    loaded them (the run page's checklist), so they are not queried twice.
+    """
     visual_engine = get_visual_engine_status()
     machine_state = get_machine_state(project, visual_engine)
-    checks = (
+    checks: tuple[ReadinessCheck, ...] = (
         _cases_selected_check(test_run, selected_count),
         _machine_connected_check(project, machine_state),
         _visual_engine_ready_check(visual_engine),
@@ -883,6 +951,8 @@ def get_run_readiness(
         _no_runner_update_check(project),
         _application_context_check(project),
     )
+    if test_run is not None:
+        checks += (_machine_prepared_check(project, test_run, stage0_summary),)
     return RunReadiness(checks=checks)
 
 
@@ -2043,6 +2113,130 @@ def controller_check_app_installed(
         runner_local=True,
     )
     return _build_action_result(reply)
+
+
+@dataclass(frozen=True)
+class DirectoryScan:
+    """A ``scan_directory`` answer, validated (ARTIFACT_SCAN_V1)."""
+
+    # The expanded, normalized absolute path the runner scanned.
+    root: str
+    # Relative to ``root``, breadth first.
+    entries: tuple[InventoryEntry, ...]
+    # Cut short by ``max_entries`` or the runner's 10 s budget.
+    truncated: bool
+    permission_errors: int
+    # Why nothing was scanned (relative, missing, not a directory, a link,
+    # unreadable); "" on success. Runner text: may name local paths.
+    error: str
+
+
+@dataclass(frozen=True)
+class PathInfo:
+    """One ``inspect_paths`` answer (stat only; ``path`` as requested)."""
+
+    path: str
+    exists: bool
+    is_dir: bool
+    size: int
+    mtime: float
+
+
+def _check_artifact_path(path: str) -> None:
+    if not path.strip() or len(path) > ARTIFACT_PATH_MAX_CHARS or "\x00" in path:
+        raise ValueError("Expected a non-empty path without NUL characters")
+
+
+def controller_scan_directory(
+    project_id: int,
+    path: str,
+    *,
+    max_depth: int,
+    max_entries: int,
+    allow_network: bool = False,
+    timeout: float = 30.0,
+) -> DirectoryScan:
+    """List a directory tree on the test machine (needs ARTIFACT_SCAN_V1).
+
+    The caller checks ``runner_supports``; an older runner answers
+    UNKNOWN_COMMAND (ControllerActionError). A refused root comes back as
+    ``error``, not as an exception. Raises ValueError for out-of-range limits.
+    ``allow_network`` lets the runner open a network (UNC) root: pass it only
+    for a base directory a person entered.
+    """
+    _check_artifact_path(path)
+    if not 1 <= max_depth <= SCAN_DIRECTORY_MAX_DEPTH:
+        raise ValueError(f"max_depth must be 1..{SCAN_DIRECTORY_MAX_DEPTH}")
+    if not 1 <= max_entries <= SCAN_DIRECTORY_MAX_ENTRIES:
+        raise ValueError(f"max_entries must be 1..{SCAN_DIRECTORY_MAX_ENTRIES}")
+    # The 30 s timeout is well above the runner's 10 s scan budget.
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.scan_directory",
+        timeout,
+        path=path,
+        max_depth=max_depth,
+        max_entries=max_entries,
+        allow_network=allow_network,
+        runner_local=True,
+    )
+    try:
+        scan = parse_scan_directory_result(reply.get("result"), max_entries=max_entries)
+    except ProtocolError as exc:
+        raise ControllerActionError(f"Invalid scan_directory reply: {exc}") from exc
+    return DirectoryScan(
+        root=scan.root,
+        entries=tuple(
+            InventoryEntry(p=entry.p, d=entry.d, s=entry.s, m=entry.m)
+            for entry in scan.entries
+        ),
+        truncated=scan.truncated,
+        permission_errors=scan.permission_errors,
+        error=scan.error,
+    )
+
+
+def controller_inspect_paths(
+    project_id: int,
+    paths: Sequence[str],
+    *,
+    allow_network: bool = False,
+    timeout: float = 30.0,
+) -> list[PathInfo]:
+    """Stat up to INSPECT_PATHS_MAX absolute paths (needs ARTIFACT_SCAN_V1).
+
+    Missing, relative or unreadable paths come back with ``exists=False``;
+    so do network (UNC) paths unless ``allow_network`` (only for paths under
+    a base directory a person entered). Raises ValueError for an empty or
+    oversized list.
+    """
+    if not 1 <= len(paths) <= INSPECT_PATHS_MAX:
+        raise ValueError(f"paths must hold 1..{INSPECT_PATHS_MAX} items")
+    for path in paths:
+        _check_artifact_path(path)
+    requested = list(paths)
+    reply = _dispatch_controller_action(
+        project_id,
+        "controller.inspect_paths",
+        timeout,
+        paths=requested,
+        allow_network=allow_network,
+        runner_local=True,
+    )
+    try:
+        infos = parse_inspect_paths_result(reply.get("result"), paths=requested)
+    except ProtocolError as exc:
+        raise ControllerActionError(f"Invalid inspect_paths reply: {exc}") from exc
+    return [
+        PathInfo(
+            path=info.path,
+            exists=info.exists,
+            is_dir=info.is_dir,
+            size=info.size,
+            mtime=info.mtime,
+        )
+        for info in infos
+    ]
 
 
 def controller_cleanup_environment(
@@ -3298,6 +3492,11 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
             on_log(f"=== Resumed from step {resume.next_step} ===")
         # Built once per execution: it reads the case's open person step.
         checkpoint_saved_hook = _build_checkpoint_saved_hook(pivot)
+        # Only a fresh plan reads the artifacts profile (2-3 queries, once per
+        # execution); a resume continues the saved plan.
+        artifacts_profile = (
+            artifacts_profile_text(project.id) if resume is None else None
+        )
         while True:
             result = run_orchestrator(
                 task_description,
@@ -3321,6 +3520,7 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
                 knowledge_index=(
                     knowledge_index_text(project.id) if resume is None else None
                 ),
+                artifacts_profile=artifacts_profile,
             )
             # Once a Resume or Start took the run over, the pivot belongs to
             # the newer chain: this worker records nothing (here and below).

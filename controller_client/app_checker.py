@@ -9,7 +9,12 @@ from controller_client.app_discovery import (
     discover_apps,
     find_best_match,
 )
-from controller_client.protocol import ActionResultPayload, CheckAppInstalledPayload
+from controller_client.protocol import (
+    ActionResultPayload,
+    CheckAppInstalledPayload,
+    app_check_variants,
+    is_network_path,
+)
 
 
 def execute_check_app_installed(
@@ -44,23 +49,15 @@ def _determine_installation_status(query: str) -> str:
 
 
 def _check_cli(query: str) -> str | None:
-    variants = _build_cli_variants(query)
-    for variant in variants:
+    for variant in app_check_variants(query):
+        # which() stats a name with a directory part; a network one would
+        # open SMB and send the runner user's credentials to that host.
+        if is_network_path(variant):
+            continue
         path = shutil.which(variant)
         if path is not None:
             return path
     return None
-
-
-def _build_cli_variants(query: str) -> list[str]:
-    base = query.lower().replace(" ", "-")
-    variants: list[str] = [query]
-    if base != query:
-        variants.append(base)
-    no_separator = base.replace("-", "")
-    if no_separator not in variants:
-        variants.append(no_separator)
-    return variants
 
 
 def _check_gui(query: str) -> AppCandidate | None:

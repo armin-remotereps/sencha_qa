@@ -16,6 +16,8 @@ from machine_setup.payloads import (
 
 
 def setup_group(project_id: int) -> str:
+    # machine_readiness.events.setup_socket_group repeats this string (that
+    # app must not import machine_setup); keep the two equal.
     return f"machine_setup_{project_id}"
 
 
