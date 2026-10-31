@@ -10,6 +10,7 @@ from django.db import transaction
 
 from accounts.models import CustomUser
 from auto_tester.file_names import sanitize_file_name
+from knowledge_base.archive_guard import format_size
 from knowledge_base.exceptions import KnowledgeUploadInvalidError
 from knowledge_base.formats import (
     SEVEN_ZIP_DISABLED_MESSAGE,
@@ -36,33 +37,35 @@ from knowledge_base.services.upload_budget import (
     release_upload_bytes,
     reserve_upload_bytes,
 )
+from knowledge_base.tags import merge_tags
 from knowledge_base.types import RefusedFile, UploadOutcome
 
-_MIB = 1024 * 1024
 _QUOTA_MESSAGE = "the project's knowledge base storage limit would be exceeded"
 _BUDGET_MESSAGE = (
     "too much was uploaded to this project in the last hour; try again later"
 )
 
 
-def _size_label(size_bytes: int) -> str:
-    if size_bytes % _MIB == 0:
-        return f"{size_bytes // _MIB} MiB"
-    return f"{size_bytes / _MIB:.1f} MiB"
-
-
 def _refusal_reason(upload_name: str, size: int) -> str | None:
-    """Why this file cannot be stored (type, disabled 7z, size), or None."""
-    if kind_for_name(upload_name) is None:
+    """Why this file cannot be stored (type, disabled 7z, size), or None.
+
+    Archives have their own, higher size limit.
+    """
+    kind = kind_for_name(upload_name)
+    if kind is None:
         return "this file type is not supported"
     if (
         matched_extension(upload_name) == SEVEN_ZIP_EXTENSION
         and not settings.KNOWLEDGE_BASE_ACCEPT_7Z
     ):
         return SEVEN_ZIP_DISABLED_MESSAGE
-    max_bytes: int = settings.KNOWLEDGE_BASE_MAX_FILE_BYTES
+    max_bytes: int = (
+        settings.KNOWLEDGE_BASE_MAX_ARCHIVE_BYTES
+        if kind == KnowledgeKind.ARCHIVE
+        else settings.KNOWLEDGE_BASE_MAX_FILE_BYTES
+    )
     if size > max_bytes:
-        return f"larger than {_size_label(max_bytes)}"
+        return f"larger than {format_size(max_bytes)}"
     return None
 
 
@@ -79,11 +82,13 @@ def upload_knowledge_files(
     user: CustomUser,
     files: Sequence[UploadedFile],
     description: str,
+    tags: Sequence[str] = (),
 ) -> UploadOutcome:
     """Store each acceptable file and create a pending item for it.
 
     A refused file (type, size, disabled 7z, quota) is listed in ``refused``
-    and gets no item. Extraction is queued after commit.
+    and gets no item. Every item gets the normalised ``tags`` (an archive's
+    files inherit them at expansion). Extraction is queued after commit.
     """
     if not files:
         raise KnowledgeUploadInvalidError("Choose at least one file to upload.")
@@ -93,6 +98,7 @@ def upload_knowledge_files(
             f"Upload at most {max_files} files at a time."
         )
     clean_description = description.strip()[:KNOWLEDGE_DESCRIPTION_MAX]
+    clean_tags = merge_tags(tags)
     refused: list[RefusedFile] = []
     accepted: list[tuple[UploadedFile, KnowledgeKind]] = []
     # Each accepted file has its bytes reserved in the hourly budget; the
@@ -147,6 +153,7 @@ def upload_knowledge_files(
                     original_name=upload_name[:KNOWLEDGE_NAME_MAX_LENGTH],
                     kind=item_kind,
                     description=clean_description,
+                    tags=list(clean_tags),
                     status=KnowledgeItemStatus.PENDING,
                     size_bytes=blob.size_bytes,
                 )

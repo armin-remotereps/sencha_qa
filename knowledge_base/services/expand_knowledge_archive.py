@@ -12,8 +12,10 @@ from django.conf import settings
 from django.db import transaction
 
 from auto_tester.file_names import sanitize_file_name
+from knowledge_base.archive_guard import display_label
 from knowledge_base.archive_readers import iter_archive_members
 from knowledge_base.exceptions import KnowledgeExtractionError, UnsupportedContent
+from knowledge_base.folder_instructions import pick_instruction_files
 from knowledge_base.formats import (
     SEVEN_ZIP_DISABLED_MESSAGE,
     archive_format,
@@ -22,7 +24,6 @@ from knowledge_base.formats import (
 from knowledge_base.models import (
     KNOWLEDGE_ERROR_MAX_LENGTH,
     KNOWLEDGE_EXTRACTOR_VERSION,
-    KNOWLEDGE_NAME_MAX_LENGTH,
     KnowledgeBlob,
     KnowledgeItem,
     KnowledgeItemStatus,
@@ -48,6 +49,7 @@ from knowledge_base.services.upload_budget import (
     release_upload_bytes,
     reserve_upload_bytes,
 )
+from knowledge_base.tags import merge_tags, split_member_path
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +61,13 @@ _OVER_BUDGET_REASON = "hourly upload limit reached"
 
 @dataclass(frozen=True)
 class _StoredMember:
-    label: str
+    path: str
     kind: KnowledgeKind
     blob: KnowledgeBlob
+
+    @property
+    def label(self) -> str:
+        return display_label(self.path)
 
 
 def expand_knowledge_archive(item_id: int) -> None:
@@ -69,8 +75,11 @@ def expand_knowledge_archive(item_id: int) -> None:
 
     Whole-archive problems (limits, encryption) fail the archive and leave no
     children. Members over the project quota or the hourly upload budget are
-    skipped and listed in the archive's warning. Blobs stored for members that end up unused are left
-    to the storage sweep.
+    skipped and listed in the archive's warning. Blobs stored for members
+    that end up unused are left to the storage sweep.
+
+    Each child keeps its folder (its folder tag), inherits the archive's
+    manual tags and is flagged when it is its folder's instructions.
     """
     item = claim_item(item_id, archive=True)
     if item is None:
@@ -113,17 +122,19 @@ def _store_members(
     stored: list[_StoredMember] = []
     planned = project_usage(project_id)
     for member in iter_archive_members(fmt, data, skipped):
-        kind = kind_for_name(member.label)
-        if kind is None or kind == KnowledgeKind.ARCHIVE:
-            # The readers already skip these; kept as a guard.
-            skipped.append(f"{member.label} (unsupported type)")
+        label = display_label(member.path)
+        kind = kind_for_name(member.path)
+        if member.is_archive or kind is None or kind == KnowledgeKind.ARCHIVE:
+            # The readers never yield these; kept as a guard so an archive's
+            # own bytes are never stored as an item.
+            skipped.append(f"{label} (unsupported type)")
             continue
         size = len(member.data)
         if not fits_quota(planned, size):
-            skipped.append(f"{member.label} ({_OVER_QUOTA_REASON})")
+            skipped.append(f"{label} ({_OVER_QUOTA_REASON})")
             continue
         if not reserve_upload_bytes(project_id, size):
-            skipped.append(f"{member.label} ({_OVER_BUDGET_REASON})")
+            skipped.append(f"{label} ({_OVER_BUDGET_REASON})")
             continue
         try:
             blob = store_blob_bytes(member.data)
@@ -131,7 +142,7 @@ def _store_members(
             release_upload_bytes(project_id, size)
             raise
         planned += size
-        stored.append(_StoredMember(label=member.label, kind=kind, blob=blob))
+        stored.append(_StoredMember(path=member.path, kind=kind, blob=blob))
     return stored
 
 
@@ -149,28 +160,36 @@ def _create_children(
         used = lock_project_usage(archive.project_id)
         if used is None:
             return
+        # Read under the claim lock: the archive's tags as they are now.
+        tags = merge_tags(archive.tags)
         children: list[KnowledgeItem] = []
+        locations: list[tuple[str, str]] = []
         for member in members:
             size = member.blob.size_bytes
             if not fits_quota(used, size):
                 skipped.append(f"{member.label} ({_OVER_QUOTA_REASON})")
                 continue
             used += size
+            folder, file_name = split_member_path(member.path)
+            locations.append((folder, file_name))
             children.append(
                 KnowledgeItem(
                     project_id=archive.project_id,
                     parent_id=archive.pk,
                     blob=member.blob,
                     uploaded_by_id=archive.uploaded_by_id,
-                    name=sanitize_file_name(
-                        member.label, fallback=f"file.{member.kind}"
-                    ),
-                    original_name=member.label[:KNOWLEDGE_NAME_MAX_LENGTH],
+                    name=sanitize_file_name(file_name, fallback=f"file.{member.kind}"),
+                    original_name=member.label,
+                    folder=folder,
+                    tags=list(tags),
                     kind=member.kind,
                     status=KnowledgeItemStatus.PENDING,
                     size_bytes=size,
                 )
             )
+        # Picked among the children actually created (quota skips excluded).
+        for index in pick_instruction_files(locations):
+            children[index].is_folder_instructions = True
         created = KnowledgeItem.objects.bulk_create(children)
         archive.status = KnowledgeItemStatus.READY
         archive.error = ""

@@ -4694,3 +4694,111 @@ details.card[open] > summary,
 .kb-page-jump .input {
   width: 6em;
 }
+
+/* Tags and folders: a folder tag (original case) plus manual tags, each a
+   chip linking to the list filtered by it. */
+.kb-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.kb-tags .chip + .chip {
+  margin-left: 0;
+}
+
+.chip-link {
+  text-decoration: none;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+
+.chip-link:hover,
+.chip-link:focus-visible {
+  color: var(--brand-cyan);
+  border-color: var(--brand-cyan);
+}
+
+.chip-folder {
+  gap: 4px;
+  font-family: var(--mono);
+  font-weight: 500;
+}
+
+.chip-instructions {
+  color: var(--info);
+  background: var(--info-soft);
+}
+
+.kb-folder-path {
+  overflow-wrap: anywhere;
+}
+
+/* Folder browser (archive folders): breadcrumbs, instructions, subfolders. */
+.kb-browser .card-header {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kb-browser-crumbs {
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+
+.kb-browser-crumbs [aria-current="page"] {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.kb-instructions {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--info-soft);
+}
+
+.kb-instructions p {
+  margin: 0 0 6px;
+}
+
+.kb-instructions-list {
+  margin: 0;
+  padding-left: 1.2em;
+  overflow-wrap: anywhere;
+}
+
+.kb-instructions-excerpt {
+  max-height: 16em;
+  margin: 10px 0 0;
+}
+
+.kb-folder-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.kb-folder-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.kb-folder-list li:last-child {
+  border-bottom: 0;
+}
+
+.kb-folder-link {
+  font-family: var(--mono);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}

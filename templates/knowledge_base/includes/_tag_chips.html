@@ -1,0 +1,17 @@
+{% comment %} An item's tags as chips: the folder tag (folder glyph, original case), the
+   manual tags, each linking to the list filtered by it, plus a plain
+   "Folder instructions" chip. Renders nothing when there is nothing to show.
+
+   Context contract:
+     project — current Project
+     folder  — str: the folder tag, "" to leave it out
+     tags    — Sequence[str]: manual tags
+     is_folder_instructions — bool {% endcomment %}
+{% if folder or tags or is_folder_instructions %}
+<div class="kb-tags">
+  {% url 'knowledge_base:list' project_id=project.id as list_url %}
+  {% if folder %}<a class="chip chip-link chip-folder" href="{{ list_url }}?tag={{ folder|urlencode }}" title="Files in this folder and its subfolders"><span aria-hidden="true">▸</span> {{ folder }}</a>{% endif %}
+  {% for tag in tags %}<a class="chip chip-link" href="{{ list_url }}?tag={{ tag|urlencode }}">{{ tag }}</a>{% endfor %}
+  {% if is_folder_instructions %}<span class="chip chip-instructions">Folder instructions</span>{% endif %}
+</div>
+{% endif %}

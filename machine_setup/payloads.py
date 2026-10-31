@@ -118,6 +118,8 @@ class KnowledgeChoicePayload(TypedDict):
     status: str
     # An archive's member file.
     in_archive: bool
+    # A member's folder inside its archive, "" at the root or for uploads.
+    folder: str
     # Archives: how many member files.
     member_count: int
 
@@ -244,6 +246,7 @@ def knowledge_choice_payload(summary: KnowledgeItemSummary) -> KnowledgeChoicePa
         "kind_label": summary.kind_label,
         "status": summary.status,
         "in_archive": summary.parent_id is not None,
+        "folder": summary.folder,
         "member_count": summary.member_count,
     }
 

@@ -29,6 +29,9 @@ _COPIED_FIELDS = (
     "extractor_version",
     "blob_id",
     "uploaded_by_id",
+    "folder",
+    "tags",
+    "is_folder_instructions",
 )
 
 

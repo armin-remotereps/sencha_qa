@@ -77,11 +77,13 @@ def related_knowledge(
         KnowledgeChunk.objects.filter(id__in=best)
         .annotate(rank=rank)
         .order_by("-rank", "item_id", "ordinal")
-        .values_list("item_id", "item__name", "location", "page", "text")
+        .values_list(
+            "item_id", "item__name", "item__folder", "location", "page", "text"
+        )
     )
     excerpts: list[KnowledgeExcerpt] = []
     budget = max_chars
-    for item_id, item_name, location, page, chunk_text in rows:
+    for item_id, item_name, item_folder, location, page, chunk_text in rows:
         if budget <= 0:
             break
         if len(chunk_text) > budget:
@@ -98,6 +100,7 @@ def related_knowledge(
                 location=location,
                 page=page,
                 text=chunk_text,
+                item_folder=item_folder,
             )
         )
     return excerpts

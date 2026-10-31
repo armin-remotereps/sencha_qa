@@ -3,7 +3,8 @@
    Context contract:
      project     — current Project
      upload_form — KnowledgeUploadForm (the files input carries accept=)
-     limits      — {max_file_bytes, max_files, max_request_bytes, accept}
+     limits      — {max_file_bytes, max_files, max_request_bytes, max_archive_bytes,
+                   max_archive_files, accept}
      usage_bytes / quota_bytes — the project's storage use and quota
      accept_7z   — False adds the "repack as .zip" note
      seven_zip_disabled_message — formats.SEVEN_ZIP_DISABLED_MESSAGE {% endcomment %}
@@ -18,8 +19,12 @@
       {{ upload_form.uploads }}
       <p class="hint" x-show="count > 0" x-cloak x-text="count + (count === 1 ? ' file chosen' : ' files chosen')"></p>
       <p class="hint">
-        Up to {{ limits.max_files }} files and {{ limits.max_request_bytes|filesizeformat }} per upload, {{ limits.max_file_bytes|filesizeformat }} per file.
+        Up to {{ limits.max_files }} files and {{ limits.max_request_bytes|filesizeformat }} per upload, {{ limits.max_file_bytes|filesizeformat }} per file and {{ limits.max_archive_bytes|filesizeformat }} per archive.
         Text, Markdown, CSV, XML, JSON, YAML, config, scripts, source code, HTML, PDF, Word, Excel and archives (.zip, .tar, .tar.gz, .tgz{% if accept_7z %}, .7z{% endif %}).
+      </p>
+      <p class="hint">
+        Every readable file in every folder of an archive is added, up to {{ limits.max_archive_files }} files; a bigger archive is refused, so split it.
+        Each file keeps its folder path as a tag, and a README or INSTRUCTIONS file (.md, .txt or no extension) becomes the instructions of its folder and subfolders.
       </p>
       {% if not accept_7z %}
         <p class="hint">{{ seven_zip_disabled_message }}: repack a .7z archive as .zip before uploading it.</p>
@@ -28,6 +33,10 @@
     <div class="field">
       <label for="{{ upload_form.description.id_for_label }}">Description <span class="optional">(optional, applied to every file)</span></label>
       {{ upload_form.description }}
+    </div>
+    <div class="field">
+      <label for="{{ upload_form.tags.id_for_label }}">Tags <span class="optional">(optional, comma separated, applied to every file and to the files inside archives)</span></label>
+      {{ upload_form.tags }}
     </div>
     <div class="kb-upload-footer">
       <p class="muted small">{{ usage_bytes|filesizeformat }} of {{ quota_bytes|filesizeformat }} used</p>

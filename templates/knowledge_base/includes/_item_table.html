@@ -2,9 +2,14 @@
    Each row is a [data-kb-item] element that knowledgeStatus updates live
    (status badge, warning, error, page count).
 
+   Under the name: "in <archive>" on archive members listed outside the folder
+   browser (tag-filtered rows), then the tag chips (folder tag, manual tags) and
+   a "Folder instructions" chip on instruction files.
+
    Context contract:
-     project — current Project
-     items   — Sequence[KnowledgeListEntry] {% endcomment %}
+     project    — current Project
+     items      — Sequence[KnowledgeListEntry]
+     in_browser — bool: rows of one archive folder (no archive line, no folder chip) {% endcomment %}
 <div class="table-wrap">
   <table class="data-table">
     <thead>
@@ -25,7 +30,15 @@
           <td data-label="Name" class="cell-primary kb-name-cell">
             <div class="kb-name-block">
               <a href="{% url 'knowledge_base:item' project_id=project.id item_id=item.id %}">{{ item.name }}</a>
+              {% if entry.archive_name and not in_browser %}
+                <div class="muted small kb-folder-path">in <a href="{% url 'knowledge_base:list' project_id=project.id %}?archive={{ item.parent_id }}">{{ entry.archive_name }}</a></div>
+              {% endif %}
               {% if item.description %}<div class="muted small kb-description">{{ item.description }}</div>{% endif %}
+              {% if in_browser %}
+                {% include "knowledge_base/includes/_tag_chips.html" with project=project folder="" tags=item.tags is_folder_instructions=item.is_folder_instructions only %}
+              {% else %}
+                {% include "knowledge_base/includes/_tag_chips.html" with project=project folder=item.folder tags=item.tags is_folder_instructions=item.is_folder_instructions only %}
+              {% endif %}
               {% if item.kind == "archive" %}<div class="small"><a href="{% url 'knowledge_base:list' project_id=project.id %}?archive={{ item.id }}">{{ item.member_count }} file{{ item.member_count|pluralize }} inside</a></div>{% endif %}
             </div>
           </td>
