@@ -503,6 +503,7 @@ def _fail(
         actor=actor,
         person_step_id=action.person_step_id,
         note=action.note,
+        output=action.output,
         expected_round=action.round,
     )
 
@@ -515,6 +516,7 @@ def _block(
         actor=actor,
         person_step_id=action.person_step_id,
         note=action.note,
+        output=action.output,
         expected_round=action.round,
     )
 

@@ -1,6 +1,6 @@
 # fix: Human in the loop failures always carry AI-recorded evidence
 
-Status: Ready
+Status: Done
 Created: 2026-10-31
 Request: The user says that in Human in the loop the AI is responsible for recording the result. So even when a command-based step fails, the AI should take a screenshot and record the failure logs. Today a person step can end Failed with no screenshot, and the command output the person pasted never reaches the attempt or the case log. Required at minimum:
 - every confirm attempt takes a screenshot;
@@ -121,3 +121,21 @@ Not asked; kept as planned:
 ## Changelog
 - 2026-10-31: created (Draft), split from `feat-tester-console.md` at the user's request.
 - 2026-10-31: the user answered Q1 (worker pass), Q2 (keep the verdict) and Q4 (AI on with a switch); Q3 stays "no". Status Ready.
+- 2026-10-31: implemented (In progress). First review pass, fixed:
+  - Reviewer: an abort (or a runner drop, which aborts the run) while a mark waits for its evidence pass cancelled the case and lost the person's verdict. `abort_test_run` now calls `person_mark_verdict.settle_person_marks_on_abort` first: the verdict is written, the row closed, "no evidence: the run was stopped".
+  - Reviewer: `apply_person_mark` locked the case before the person step; it now locks the person step first.
+  - Reviewer: the evidence block made every verdict prompt bigger. `format_attempt_lines` now shows a person attempt's `error` head and tail only, capped at `EVIDENCE_PROMPT_MAX_CHARS` (1500). The log and TestRail keep the whole block.
+  - Reviewer/verifier: the mark label matched the phrase anywhere in the summary; it now matches the headline only. The card gets `PersonStepPanel.marked_verdict` instead of comparing `close_reason` in the template. `ControllerNotConnectedError` gets its own "no evidence" text.
+  - Verifier: a gate refusal on the last case left the run Paused with nothing to do. After the direct verdict, the service queues once more, and with no open case left the run finishes.
+  - Verifier: an unusable checkpoint left the row open and the `marked_*` key stored. The row id now comes from the `person` key itself, the key is dropped, and "no evidence" is logged. The evidence pass also waits for the runner first (`wait_for_controller`, the usual reconnect grace).
+- Not changed, with reasons:
+  - Verifier: the evidence keeps the check commands' output but not the command text. The command is already in the case log's tool-call lines next to it, and the TestRail step text names the step's command.
+  - Verifier: pasted output is not redacted before it reaches the case log and TestRail. This was accepted in Risks; the card hint now warns against pasting secrets.
+  - Verifier: a mark on a restore hand-off records a `resume` attempt. For Failed, the TestRail selection then falls back to the last shots, which are that attempt's evidence shots anyway.
+- Second review pass, fixed: the abort settle broadcasts the settled case and locks only person step rows (`of=("self",)`); every no-evidence path drops the `person` key; `close_marked_row` keeps the row's summary when there is no evidence; the web flash says "without evidence: <reason>" when the verdict was written at once.
+- Second pass, accepted as is (documented):
+  - A Needs re-test mark that lands during the evidence pass wins: the row closes as `marked_retest` and the person's earlier Failed/Blocked is not written. That is the later person decision.
+  - A worker that dies hard during the evidence pass (no abort) leaves the case In progress with the `marked_*` key, like any crashed worker; a Resume then drops the key and the mark is lost.
+- Third pass, fixed: the warning flash shown when the run cannot continue now also says the verdict was saved without evidence; `close_marked_row` builds its update fields first instead of unpacking them inline.
+- Fourth pass: reviewer and verifier clean. Accepted as is: when the run stays gated after a no-evidence mark, the warning flash may repeat the same gate sentence (once as the no-evidence reason, once as the blocker). The message is still correct, and both agents marked it optional.
+- 2026-10-31: Done. Change note: docs/changed/2026-10-31-hitl-failure-evidence.md.

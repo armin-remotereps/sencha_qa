@@ -26,6 +26,7 @@ from agents.types import (
     OrchestratorCheckpoint,
     OrchestratorPhase,
     PersonHowToItem,
+    PersonMarkVerdict,
     PersonReportOutcome,
     PersonStepCheckpointState,
     PersonStepHandOff,
@@ -57,7 +58,14 @@ _HELP_SOURCES = ("human", "auto_fix")
 _HELP_KEY = "help"
 _PERSON_KEY = "person"
 _HAND_OFF_KINDS = ("interactive", "command", "restore")
-_PERSON_STATES = ("waiting", "reported", "overruled", "handed_back")
+_PERSON_STATES = (
+    "waiting",
+    "reported",
+    "overruled",
+    "handed_back",
+    "marked_failed",
+    "marked_blocked",
+)
 _PERSON_OUTCOMES = ("as_expected", "different")
 _PLAN_VERSION_KEY = "plan_version"
 _PLAN_REVISIONS_KEY = "plan_revisions"
@@ -295,6 +303,19 @@ def read_checkpoint_person_step(
     if not isinstance(checkpoint_json, dict):
         return None
     return _parse_person(cast(dict[str, object], checkpoint_json).get(_PERSON_KEY))
+
+
+def person_mark_verdict(
+    person: CheckpointPersonStep | None,
+) -> PersonMarkVerdict | None:
+    """The verdict a person marked at ``person``'s step; None when not marked."""
+    if person is None:
+        return None
+    if person.state == "marked_failed":
+        return "failed"
+    if person.state == "marked_blocked":
+        return "blocked"
+    return None
 
 
 def with_person_step(

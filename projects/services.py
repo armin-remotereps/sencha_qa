@@ -41,6 +41,7 @@ from django.utils import dateformat, timezone
 
 from accounts.models import CustomUser
 from agents.checkpoint import (
+    person_mark_verdict,
     read_checkpoint_help,
     read_checkpoint_person_step,
     with_person_step,
@@ -55,6 +56,7 @@ from agents.types import (
     HelpRequestInfo,
     LogCallback,
     OrchestratorCheckpoint,
+    PersonMarkVerdict,
     PersonStepHandOff,
     PixelParseResult,
 )
@@ -179,6 +181,10 @@ from projects.models import (
     TestRunTestCase,
     TestRunTestCaseStatus,
     UploadStatus,
+)
+from projects.person_mark_verdict import (
+    apply_person_mark,
+    settle_person_marks_on_abort,
 )
 from projects.person_step_notifications import notify_person_step
 from projects.person_step_rows import (
@@ -3256,6 +3262,17 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
     # the machine is kept as it is.
     pause_redelivered = pivot.pause_requested_generation == generation
 
+    mark = person_mark_verdict(checkpoint_person)
+    if mark is not None:
+        # A person marked the case failed or blocked: record evidence, then
+        # write their verdict (no orchestrator, teardown or cleanup).
+        try:
+            _finish_person_mark(pivot, project, mark, generation, cancellation_check)
+        finally:
+            if not _is_stale_execution(run_id, generation):
+                _update_test_run_status_if_needed(pivot.test_run, generation=generation)
+        return
+
     try:
         wait_for_controller(project.id)
 
@@ -3404,6 +3421,73 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
             if not paused_for_help:
                 _safe_cleanup(project.id, wait_for_runner=False)
             _update_test_run_status_if_needed(pivot.test_run, generation=generation)
+
+
+def _finish_person_mark(
+    pivot: TestRunTestCase,
+    project: Project,
+    mark: PersonMarkVerdict,
+    generation: int,
+    cancellation_check: Callable[[], bool],
+) -> None:
+    """The evidence pass of a person's Mark failed / Mark blocked, then the
+    verdict. Any fault keeps the person's verdict and logs "no evidence"; it
+    never opens Need help."""
+    from agents.services.person_mark import (  # local import: breaks circular dependency
+        record_person_mark,
+    )
+
+    on_log = _build_log_callback(pivot, generation)
+    checkpoint = load_resume_checkpoint(pivot)
+    # Read from the key itself: it also names the row when the rest of the
+    # checkpoint cannot be used.
+    person = read_checkpoint_person_step(pivot.execution_checkpoint)
+    person_step_id = person.request_id if person is not None else None
+    recorded: OrchestratorCheckpoint | None = None
+    if checkpoint is None:
+        on_log("[Evidence] no evidence: the case has no usable saved progress")
+    else:
+        project.refresh_from_db(
+            fields=["project_prompt", "application_url", "application_platform"]
+        )
+        try:
+            # A runner that is reconnecting gets the usual grace period.
+            wait_for_controller(project.id)
+            recorded = record_person_mark(
+                checkpoint,
+                project.id,
+                on_log=on_log,
+                on_screenshot=_build_screenshot_callback(pivot, generation),
+                system_info=project.agent_system_info or None,
+                project_prompt=build_agent_project_context(project),
+                cancellation_check=cancellation_check,
+            )
+        except AgentCancelledError:
+            on_log("[Evidence] no evidence: the case was stopped")
+        except ControllerNotConnectedError:
+            on_log("[Evidence] no evidence: the Test Runner is not connected")
+        except Exception as exc:
+            reason = classify_case_fault(exc)
+            logger.warning(
+                "Pivot %d: no evidence for the person's mark (%s): %s",
+                pivot.pk,
+                reason.value,
+                exc,
+            )
+            on_log(f"[Evidence] no evidence: {reason.label}")
+        if recorded is None:
+            recorded = replace(checkpoint, person=None)
+    if _is_stale_execution(pivot.test_run_id, generation):
+        return
+    if apply_person_mark(
+        pivot,
+        mark,
+        recorded,
+        person_step_id=person_step_id,
+        generation=generation,
+    ):
+        _broadcast_pivot_status_to_run(pivot)
+        _broadcast_pivot_status_to_case(pivot)
 
 
 def _restore_attempt_count(checkpoint: OrchestratorCheckpoint) -> int:
@@ -4215,6 +4299,11 @@ def abort_test_run(
     # Help requests and person steps before cases: the lock order of every
     # help and person step writer.
     _cancel_run_help_requests(test_run, now)
+    # A person's Mark failed / blocked still waiting for its evidence pass
+    # keeps the person's verdict.
+    for marked in settle_person_marks_on_abort(test_run.pk, now):
+        _broadcast_pivot_status_to_run(marked)
+        _broadcast_pivot_status_to_case(marked)
     _cancel_run_person_steps(test_run, now)
 
     # A Need help (or person step) case is Cancelled like a running one:

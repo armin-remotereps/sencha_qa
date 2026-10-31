@@ -99,11 +99,21 @@ def test_run_case_person_fail(
             actor=PersonStepActor.web(request.user),
             person_step_id=form.cleaned_data["person_step_id"],
             note=form.cleaned_data["note"],
+            output=form.cleaned_data["output"],
         )
     except PersonStepError as exc:
         messages.error(request, exc.message)
     else:
-        _flash_result(request, "Marked the case failed. The run continues.", result)
+        _flash_result(
+            request,
+            (
+                f"Marked the case failed without evidence: {result.no_evidence}"
+                if result.no_evidence
+                else "Marked the case failed. The agent records evidence, then the "
+                "run continues."
+            ),
+            result,
+        )
     return _case_redirect(project, pivot)
 
 
@@ -123,11 +133,21 @@ def test_run_case_person_block(
             actor=PersonStepActor.web(request.user),
             person_step_id=form.cleaned_data["person_step_id"],
             note=form.cleaned_data["note"],
+            output=form.cleaned_data["output"],
         )
     except PersonStepError as exc:
         messages.error(request, exc.message)
     else:
-        _flash_result(request, "Marked the case blocked. The run continues.", result)
+        _flash_result(
+            request,
+            (
+                f"Marked the case blocked without evidence: {result.no_evidence}"
+                if result.no_evidence
+                else "Marked the case blocked. The agent records evidence, then the "
+                "run continues."
+            ),
+            result,
+        )
     return _case_redirect(project, pivot)
 
 
@@ -153,8 +173,13 @@ def _flash_result(
     if result.queued:
         messages.success(request, success)
         return
+    saved = (
+        f"The verdict was saved without evidence: {result.no_evidence} The run"
+        if result.no_evidence
+        else "Saved, but the run"
+    )
     messages.warning(
         request,
-        f"Saved, but the run cannot continue yet: {result.blocker} "
+        f"{saved} cannot continue yet: {result.blocker} "
         "Then use Continue run on the run page.",
     )

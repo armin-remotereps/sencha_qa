@@ -8,7 +8,8 @@
                   kind, instruction, expected_result, command, round,
                   requested_at, outcome, note, output), step_label
                   ("Step N of M"), is_open (waiting / not_confirmed),
-                  confirming (reported), objection (the agent's reason while
+                  confirming (reported), marked_verdict ("failed" /
+                  "blocked" while the agent records evidence of a mark), objection (the agent's reason while
                   not_confirmed), shell_label (command steps), can_report,
                   blockers, runner_can_answer (the connected Test Runner
                   shows the step in its window), reported_at_runner (the
@@ -199,8 +200,13 @@
       <div class="alert alert-info">
         <span class="alert-icon" aria-hidden="true">⚙</span>
         <div>
+          {% if person_step_panel.marked_verdict %}
+          <strong>Recording evidence…</strong>
+          <p>The case was marked {{ person_step_panel.marked_verdict }}. The agent takes a screenshot of the test machine and keeps the command output, then records that verdict. This page updates when it is done.</p>
+          {% else %}
           <strong>The agent is checking {% if person_step_panel.reported_at_runner %}the report{% else %}your report{% endif %}…</strong>
           <p>It looks at the test machine to confirm the step. This page updates when it is done.</p>
+          {% endif %}
         </div>
       </div>
     {% endif %}
@@ -246,10 +252,10 @@
         <div class="field">
           <label class="label" for="{{ person_step_form.output.id_for_label }}">{{ person_step_form.output.label }}</label>
           {{ person_step_form.output }}
-          <p class="hint">Optional. Paste what the command printed; the agent reads it as evidence.</p>
+          <p class="hint">Optional. Paste what the command printed; the agent reads it as evidence, and with Mark failed or Mark blocked it is kept on the case log and sent to TestRail. Leave out passwords, keys and other secrets.</p>
         </div>
       {% endif %}
-      <p class="hint">{% if person_step_panel.objection %}Report again sends a new report for the agent to check. Overrule records the step as passed without another check.{% else %}Report hands the step to the agent to confirm.{% endif %} Mark failed records a Failed verdict. Mark blocked leaves the case Blocked so it can be resumed later. In every case the rest of the run then continues.</p>
+      <p class="hint">{% if person_step_panel.objection %}Report again sends a new report for the agent to check. Overrule records the step as passed without another check.{% else %}Report hands the step to the agent to confirm.{% endif %} Mark failed records a Failed verdict. Mark blocked leaves the case Blocked so it can be resumed later. Both first let the agent record evidence (a screenshot and the output). In every case the rest of the run then continues.</p>
       {% if person_step_panel.blockers %}
         <p class="hint" id="person-step-blockers">The run cannot continue right now: {{ person_step_panel.blockers|join:" " }}</p>
       {% endif %}

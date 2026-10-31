@@ -70,7 +70,8 @@ from projects.services import (
     controller_wait_for_command,
 )
 
-_LOG_PREFIX = "$ "
+# Marks command output in the case log (person step checks keep these lines).
+COMMAND_LOG_PREFIX = "$ "
 
 
 def _ensure_action_succeeded(result: ActionResult) -> None:
@@ -128,7 +129,7 @@ def execute_command(
             controller_start_interactive_command(project_id, effective_command)
         )
         if on_log is not None and result["output"]:
-            on_log(f"{_LOG_PREFIX}{result['output'].rstrip()}")
+            on_log(f"{COMMAND_LOG_PREFIX}{result['output'].rstrip()}")
         if not result["is_alive"]:
             parts: list[str] = []
             if result["output"]:
@@ -167,7 +168,7 @@ def wait_for_command(
     def _do() -> ToolResult:
         result = _clean_output(controller_wait_for_command(project_id, session_id))
         if on_log is not None and result["output"]:
-            on_log(f"{_LOG_PREFIX}{result['output'].rstrip()}")
+            on_log(f"{COMMAND_LOG_PREFIX}{result['output'].rstrip()}")
         content = _format_interactive_output(result)
         is_error = result["exit_code"] is not None and result["exit_code"] != 0
         return ToolResult(tool_call_id="", content=content, is_error=is_error)
@@ -205,6 +206,16 @@ def take_screenshot(
         return ToolResult(tool_call_id="", content=answer, is_error=False)
 
     return safe_tool_call("take_screenshot", _do)
+
+
+def capture_screenshot(project_id: int, *, on_screenshot: ScreenshotCallback) -> None:
+    """Take one screenshot for the record, with no vision question.
+
+    Evidence of a person step when the agent took none; faults (runner lost,
+    ...) raise.
+    """
+    result = controller_screenshot(project_id)
+    on_screenshot(result["image_base64"], "take_screenshot")
 
 
 _AttemptFunc = Callable[[VerificationBudget], ToolResult | None]

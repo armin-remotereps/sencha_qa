@@ -26,10 +26,15 @@ from datetime import datetime
 from django.db import transaction
 from django.utils import timezone
 
-from agents.checkpoint import read_checkpoint_person_step, with_person_step
+from agents.checkpoint import (
+    read_checkpoint_person_step,
+    with_person_step,
+    without_person_step,
+)
 from agents.types import (
     CheckpointPersonStep,
     PersonHowToItem,
+    PersonMarkVerdict,
     PersonReportOutcome,
     PersonStepHandOff,
 )
@@ -46,9 +51,7 @@ from projects.models import (
     OPEN_PERSON_STEP_STATUSES,
     PERSON_STEP_OUTPUT_MAX_LENGTH,
     RETEST_NOTE_MAX_LENGTH,
-    BlockedReason,
     CasePersonStep,
-    FailedBy,
     PersonStepChannel,
     PersonStepClose,
     PersonStepOutcome,
@@ -58,6 +61,11 @@ from projects.models import (
     TestRunStatus,
     TestRunTestCase,
     TestRunTestCaseStatus,
+)
+from projects.person_mark_verdict import (
+    close_marked_row,
+    log_no_evidence,
+    write_person_mark_verdict,
 )
 from projects.person_step_actor import PersonStepActor
 from projects.person_step_question_services import (
@@ -103,6 +111,9 @@ class PersonStepPanel:
     is_open: bool
     # The agent is confirming the person's report (``reported``).
     confirming: bool
+    # "failed" / "blocked" while the agent records evidence of the person's
+    # mark before that verdict is written (``reported`` with a mark); "" else.
+    marked_verdict: str
     # The agent's reason while ``not_confirmed``; empty otherwise.
     objection: str
     # Where to run a command step, e.g. "Terminal (bash)"; empty otherwise.
@@ -154,6 +165,9 @@ class PersonStepActionResult:
     queued: bool
     # User-safe reason when a gate refused and the run stays paused.
     blocker: str = ""
+    # Mark failed / blocked written at once, without the agent's evidence
+    # (why); "" otherwise.
+    no_evidence: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +242,7 @@ def get_person_step_panel(
         step_label=step_label,
         is_open=is_open,
         confirming=step.status == PersonStepStatus.REPORTED,
+        marked_verdict=_marked_verdict(step),
         objection=step.agent_objection if not_confirmed else "",
         shell_label=step.shell_label,
         can_report=paused and is_open and not blockers,
@@ -358,42 +373,22 @@ def mark_failed_person_step(
     actor: PersonStepActor,
     person_step_id: int,
     note: str,
+    output: str = "",
     expected_round: int | None = None,
 ) -> PersonStepActionResult:
-    """The person judges the case Failed; the rest of the run continues."""
-    note = _cap_note(note)
-    with transaction.atomic():
-        project, test_run = _lock_paused_run(pivot.test_run_id)
-        locked_pivot, step = _lock_step(
-            test_run, pivot.pk, person_step_id, _ACTIONABLE_STATUSES, expected_round
-        )
-        now = timezone.now()
-        objection = _open_objection(step)
-        _close_step(
-            step, PersonStepStatus.FAILED, PersonStepClose.MARKED_FAILED, actor, now
-        )
-        locked_pivot.status = TestRunTestCaseStatus.FAILED
-        locked_pivot.failed_by = FailedBy.HELP
-        locked_pivot.blocked_reason = ""
-        locked_pivot.result = _verdict_text(
-            f"Marked failed by {actor.label()} at step {step.step_num} "
-            "while it was waiting for a person.",
-            step,
-            objection,
-            note,
-        )
-        locked_pivot.finished_at = now
-        locked_pivot.save(
-            update_fields=[
-                "status",
-                "failed_by",
-                "blocked_reason",
-                "result",
-                "finished_at",
-                "updated_at",
-            ]
-        )
-        return _after_action(project, test_run, locked_pivot, actor)
+    """The person judges the case Failed; the rest of the run continues.
+
+    The agent records evidence first (``_mark_person_step``).
+    """
+    return _mark_person_step(
+        pivot=pivot,
+        actor=actor,
+        person_step_id=person_step_id,
+        note=note,
+        output=output,
+        expected_round=expected_round,
+        verdict="failed",
+    )
 
 
 def mark_blocked_person_step(
@@ -402,16 +397,47 @@ def mark_blocked_person_step(
     actor: PersonStepActor,
     person_step_id: int,
     note: str,
+    output: str = "",
     expected_round: int | None = None,
 ) -> PersonStepActionResult:
     """The person marks the case Blocked (``help_skipped``); the run continues.
 
     A person-only Blocked writer next to ``mark_blocked_after_help`` and the
-    result-change Apply; the status comes from a variable so the single
-    literal Blocked assignment stays in ``case_help_services``.
+    result-change Apply (``person_mark_verdict.write_person_mark_verdict``).
+    The agent records evidence first (``_mark_person_step``).
+    """
+    return _mark_person_step(
+        pivot=pivot,
+        actor=actor,
+        person_step_id=person_step_id,
+        note=note,
+        output=output,
+        expected_round=expected_round,
+        verdict="blocked",
+    )
+
+
+def _mark_person_step(
+    *,
+    pivot: TestRunTestCase,
+    actor: PersonStepActor,
+    person_step_id: int,
+    note: str,
+    output: str,
+    expected_round: int | None,
+    verdict: PersonMarkVerdict,
+) -> PersonStepActionResult:
+    """Mark failed / Mark blocked: the verdict is the person's, final.
+
+    The row stays ``reported`` with the mark's close reason, the checkpoint
+    ``person`` key becomes ``marked_failed`` / ``marked_blocked`` (note, output,
+    who, when) and the case is queued first: the worker records the agent's
+    evidence, then writes the verdict (``person_mark_verdict.apply_person_mark``)
+    with the verdict text written into ``result`` here. When the run cannot
+    continue (a gate refuses) the verdict is written now, without evidence.
     """
     note = _cap_note(note)
-    blocked = TestRunTestCaseStatus.BLOCKED
+    output = _cap_output(output)
     with transaction.atomic():
         project, test_run = _lock_paused_run(pivot.test_run_id)
         locked_pivot, step = _lock_step(
@@ -419,26 +445,62 @@ def mark_blocked_person_step(
         )
         now = timezone.now()
         objection = _open_objection(step)
-        # Not performed: the blocked case resumes later from its checkpoint.
-        _close_step(
-            step,
-            PersonStepStatus.CANCELLED,
-            PersonStepClose.MARKED_BLOCKED,
-            actor,
-            now,
-        )
-        locked_pivot.status = blocked
-        locked_pivot.blocked_reason = BlockedReason.HELP_SKIPPED
-        locked_pivot.result = _verdict_text(
-            f"Marked blocked by {actor.label()} at step {step.step_num} "
+        result_text = _verdict_text(
+            f"Marked {verdict} by {actor.label()} at step {step.step_num} "
             "while it was waiting for a person.",
             step,
             objection,
             note,
         )
-        locked_pivot.finished_at = now
+        base = _checkpoint_person(locked_pivot, step)
+        marked = with_person_step(
+            locked_pivot.execution_checkpoint,
+            dataclasses.replace(
+                base,
+                state="marked_failed" if verdict == "failed" else "marked_blocked",
+                note=note,
+                output=output or base.output,
+                reporter=actor.label(),
+                reported_at=now,
+                continue_pending=True,
+            ),
+        )
+        step.status = PersonStepStatus.REPORTED
+        step.close_reason = (
+            PersonStepClose.MARKED_FAILED
+            if verdict == "failed"
+            else PersonStepClose.MARKED_BLOCKED
+        )
+        step.closed_by = actor.user
+        step.closed_via = actor.via
+        if output:
+            step.output = output
+        step.save(
+            update_fields=[
+                "status",
+                "close_reason",
+                "closed_by",
+                "closed_via",
+                "output",
+            ]
+        )
+        if not marked:
+            # No saved progress to record evidence against.
+            _write_mark_now(locked_pivot, step, verdict, result_text, now)
+            log_no_evidence(locked_pivot.pk, "the case has no saved progress")
+            return dataclasses.replace(
+                _after_action(project, test_run, locked_pivot, actor),
+                no_evidence="The case has no saved progress.",
+            )
+        checkpoint_before = locked_pivot.execution_checkpoint
+        locked_pivot.execution_checkpoint = marked
+        locked_pivot.status = TestRunTestCaseStatus.CREATED
+        locked_pivot.blocked_reason = ""
+        locked_pivot.result = result_text
+        locked_pivot.finished_at = None
         locked_pivot.save(
             update_fields=[
+                "execution_checkpoint",
                 "status",
                 "blocked_reason",
                 "result",
@@ -446,7 +508,32 @@ def mark_blocked_person_step(
                 "updated_at",
             ]
         )
-        return _after_action(project, test_run, locked_pivot, actor)
+        result = _after_action(project, test_run, locked_pivot, actor)
+        if result.queued:
+            return result
+        # The run cannot continue: the person's verdict stands now.
+        locked_pivot.execution_checkpoint = without_person_step(checkpoint_before)
+        _write_mark_now(locked_pivot, step, verdict, result_text, now)
+        log_no_evidence(locked_pivot.pk, result.blocker)
+        # Queued again: with no open case left the run finishes (no gates).
+        blocker = _try_queue(test_run)
+        return PersonStepActionResult(
+            queued=not blocker, blocker=blocker, no_evidence=result.blocker
+        )
+
+
+def _write_mark_now(
+    pivot: TestRunTestCase,
+    step: CasePersonStep,
+    verdict: PersonMarkVerdict,
+    result_text: str,
+    now: datetime,
+) -> None:
+    """The person's verdict without an evidence pass (locked case and row)."""
+    pivot.result = result_text
+    fields = write_person_mark_verdict(pivot, verdict, now)
+    pivot.save(update_fields=[*fields, "execution_checkpoint", "result"])
+    close_marked_row(pivot.pk, step.pk, verdict, now)
 
 
 def mark_retest_person_step(
@@ -754,6 +841,16 @@ def _open_objection(step: CasePersonStep) -> str:
     """The agent's objection while the step is ``not_confirmed``; "" otherwise."""
     if step.status == PersonStepStatus.NOT_CONFIRMED:
         return step.agent_objection
+    return ""
+
+
+def _marked_verdict(step: CasePersonStep) -> str:
+    if step.status != PersonStepStatus.REPORTED:
+        return ""
+    if step.close_reason == PersonStepClose.MARKED_FAILED:
+        return "failed"
+    if step.close_reason == PersonStepClose.MARKED_BLOCKED:
+        return "blocked"
     return ""
 
 

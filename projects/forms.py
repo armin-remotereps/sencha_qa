@@ -542,6 +542,11 @@ class PersonStepDecisionForm(forms.Form):
             }
         ),
     )
+    # Mark failed / Mark blocked only: the pasted command output, kept as the
+    # evidence the agent records (the card's shared form posts it).
+    output = forms.CharField(
+        required=False, max_length=PERSON_STEP_OUTPUT_MAX_LENGTH, strip=False
+    )
 
 
 class _WireTextField(forms.CharField):
@@ -583,9 +588,12 @@ class RunnerPersonStepActionForm(forms.Form):
 
     def clean(self) -> dict[str, Any]:
         cleaned_data = super().clean() or {}
-        if cleaned_data.get("action") != PersonStepActionKind.REPORT:
+        action = cleaned_data.get("action")
+        if action != PersonStepActionKind.REPORT:
             cleaned_data["outcome"] = ""
-            cleaned_data["output"] = ""
+            # Mark failed / blocked keep the output as evidence.
+            if action not in (PersonStepActionKind.FAIL, PersonStepActionKind.BLOCK):
+                cleaned_data["output"] = ""
             return cleaned_data
         outcome = cleaned_data.get("outcome")
         if "outcome" not in self.errors and not outcome:

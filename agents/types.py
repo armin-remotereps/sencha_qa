@@ -406,9 +406,21 @@ class CheckpointHelp:
 
 
 # Where a person step stands in the checkpoint: handed out and waiting, the
-# person reported it, the person overruled the agent's objection, or the run
-# left Human in the loop and the agent runs the step itself.
-PersonStepCheckpointState = Literal["waiting", "reported", "overruled", "handed_back"]
+# person reported it, the person overruled the agent's objection, the run
+# left Human in the loop and the agent runs the step itself, or the person
+# marked the case failed / blocked and the worker records evidence before it
+# writes that verdict.
+PersonStepCheckpointState = Literal[
+    "waiting",
+    "reported",
+    "overruled",
+    "handed_back",
+    "marked_failed",
+    "marked_blocked",
+]
+
+# The verdict a person marked at their step (``marked_failed`` / ``marked_blocked``).
+PersonMarkVerdict = Literal["failed", "blocked"]
 
 # The person's report: the step went as expected, or the result was different.
 PersonReportOutcome = Literal["as_expected", "different"]
