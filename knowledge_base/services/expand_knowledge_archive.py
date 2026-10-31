@@ -12,8 +12,10 @@ from django.conf import settings
 from django.db import transaction
 
 from auto_tester.file_names import sanitize_file_name
+from knowledge_base.archive_guard import SkippedEntries, display_label
 from knowledge_base.archive_readers import iter_archive_members
 from knowledge_base.exceptions import KnowledgeExtractionError, UnsupportedContent
+from knowledge_base.folder_instructions import pick_instruction_files
 from knowledge_base.formats import (
     SEVEN_ZIP_DISABLED_MESSAGE,
     archive_format,
@@ -22,7 +24,6 @@ from knowledge_base.formats import (
 from knowledge_base.models import (
     KNOWLEDGE_ERROR_MAX_LENGTH,
     KNOWLEDGE_EXTRACTOR_VERSION,
-    KNOWLEDGE_NAME_MAX_LENGTH,
     KnowledgeBlob,
     KnowledgeItem,
     KnowledgeItemStatus,
@@ -48,6 +49,7 @@ from knowledge_base.services.upload_budget import (
     release_upload_bytes,
     reserve_upload_bytes,
 )
+from knowledge_base.tags import merge_tags, split_member_path
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +61,15 @@ _OVER_BUDGET_REASON = "hourly upload limit reached"
 
 @dataclass(frozen=True)
 class _StoredMember:
-    label: str
+    path: str
     kind: KnowledgeKind
     blob: KnowledgeBlob
+    # Bytes reserved against the hourly upload budget for this member.
+    reserved: int
+
+    @property
+    def label(self) -> str:
+        return display_label(self.path)
 
 
 def expand_knowledge_archive(item_id: int) -> None:
@@ -69,8 +77,13 @@ def expand_knowledge_archive(item_id: int) -> None:
 
     Whole-archive problems (limits, encryption) fail the archive and leave no
     children. Members over the project quota or the hourly upload budget are
-    skipped and listed in the archive's warning. Blobs stored for members that end up unused are left
-    to the storage sweep.
+    skipped and listed in the archive's warning. Blobs stored for members
+    that end up unused are left to the storage sweep, and the hourly upload
+    budget of every stored member that does not become a child (a refused or
+    failed archive, a dropped result, a locked quota skip) is given back.
+
+    Each child keeps its folder (its folder tag), inherits the archive's
+    manual tags and is flagged when it is its folder's instructions.
     """
     item = claim_item(item_id, archive=True)
     if item is None:
@@ -78,7 +91,11 @@ def expand_knowledge_archive(item_id: int) -> None:
     claimed_at = item.extract_started_at
     if claimed_at is None:  # always set by the claim; narrows the type
         return
-    skipped: list[str] = []
+    skipped = SkippedEntries()
+    # Filled as members are stored; whatever does not become a child (a
+    # failure, a dropped result, a locked quota skip) gives its budget back.
+    stored: list[_StoredMember] = []
+    kept = 0
     try:
         fmt = archive_format(item.original_name) or archive_format(item.name)
         if fmt is None:
@@ -86,10 +103,11 @@ def expand_knowledge_archive(item_id: int) -> None:
         if fmt == "7z" and not settings.KNOWLEDGE_BASE_ACCEPT_7Z:
             raise UnsupportedContent(SEVEN_ZIP_DISABLED_MESSAGE)
         data = read_blob_bytes(item.blob)
-        members = _store_members(item.project_id, fmt, data, skipped)
+        _store_members(item.project_id, fmt, data, skipped, stored)
         del data
-        _create_children(item_id, claimed_at, members, skipped)
+        kept = _create_children(item_id, claimed_at, stored, skipped)
     except SoftTimeLimitExceeded:
+        # Fail first: the hard time limit may follow soon after.
         fail_claimed_item(item_id, claimed_at, TIMED_OUT_MESSAGE)
         raise
     except KnowledgeExtractionError as exc:
@@ -98,32 +116,41 @@ def expand_knowledge_archive(item_id: int) -> None:
         # Never log member contents: only the item id and the traceback.
         logger.exception("Knowledge archive %s could not be expanded", item_id)
         fail_claimed_item(item_id, claimed_at, UNREADABLE_ARCHIVE_MESSAGE)
+    finally:
+        _release_reserved(item.project_id, stored, kept=kept)
 
 
 def _store_members(
-    project_id: int, fmt: str, data: bytes, skipped: list[str]
-) -> list[_StoredMember]:
-    """Store the accepted members' bytes (outside the project lock).
+    project_id: int,
+    fmt: str,
+    data: bytes,
+    skipped: SkippedEntries,
+    stored: list[_StoredMember],
+) -> None:
+    """Store the accepted members' bytes (outside the project lock) into
+    ``stored``.
 
     Like an upload, each member must fit the quota (unlocked pre-check; the
     locked check in ``_create_children`` is authoritative) and the project's
     hourly upload budget before it is written, so a small, highly compressed
-    archive cannot write past either.
+    archive cannot write past either. A member is appended once its blob is
+    written, so on a failure ``stored`` lists every reservation still held.
     """
-    stored: list[_StoredMember] = []
     planned = project_usage(project_id)
     for member in iter_archive_members(fmt, data, skipped):
-        kind = kind_for_name(member.label)
-        if kind is None or kind == KnowledgeKind.ARCHIVE:
-            # The readers already skip these; kept as a guard.
-            skipped.append(f"{member.label} (unsupported type)")
+        label = display_label(member.path)
+        kind = kind_for_name(member.path)
+        if member.is_archive or kind is None or kind == KnowledgeKind.ARCHIVE:
+            # The readers never yield these; kept as a guard so an archive's
+            # own bytes are never stored as an item.
+            skipped.add(f"{label} (unsupported type)")
             continue
         size = len(member.data)
         if not fits_quota(planned, size):
-            skipped.append(f"{member.label} ({_OVER_QUOTA_REASON})")
+            skipped.add(f"{label} ({_OVER_QUOTA_REASON})")
             continue
         if not reserve_upload_bytes(project_id, size):
-            skipped.append(f"{member.label} ({_OVER_BUDGET_REASON})")
+            skipped.add(f"{label} ({_OVER_BUDGET_REASON})")
             continue
         try:
             blob = store_blob_bytes(member.data)
@@ -131,46 +158,80 @@ def _store_members(
             release_upload_bytes(project_id, size)
             raise
         planned += size
-        stored.append(_StoredMember(label=member.label, kind=kind, blob=blob))
-    return stored
+        stored.append(
+            _StoredMember(path=member.path, kind=kind, blob=blob, reserved=size)
+        )
+
+
+def _release_reserved(
+    project_id: int, stored: Sequence[_StoredMember], *, kept: int
+) -> None:
+    """Give back the upload budget of stored members that became no child.
+
+    ``kept`` is the budget of the members that did (it stays charged).
+
+    Their blobs stay for the storage sweep. A cache error is logged, never
+    raised, so it cannot hide the archive's own failure.
+    """
+    reserved = sum(member.reserved for member in stored) - kept
+    if reserved <= 0:
+        return
+    try:
+        release_upload_bytes(project_id, reserved)
+    except Exception:
+        logger.exception(
+            "Upload budget of knowledge archive members not released (project %s)",
+            project_id,
+        )
 
 
 def _create_children(
     item_id: int,
     claimed_at: datetime,
     members: Sequence[_StoredMember],
-    skipped: list[str],
-) -> None:
+    skipped: SkippedEntries,
+) -> int:
+    """Create the children; return the upload budget they keep charged."""
     with transaction.atomic():
         archive = lock_claimed_item(item_id, claimed_at)
         if archive is None:
             # Retried, re-claimed or deleted meanwhile: drop this result.
-            return
+            return 0
         used = lock_project_usage(archive.project_id)
         if used is None:
-            return
+            return 0
+        # Read under the claim lock: the archive's tags as they are now.
+        tags = merge_tags(archive.tags)
         children: list[KnowledgeItem] = []
+        locations: list[tuple[str, str]] = []
+        kept = 0
         for member in members:
             size = member.blob.size_bytes
             if not fits_quota(used, size):
-                skipped.append(f"{member.label} ({_OVER_QUOTA_REASON})")
+                skipped.add(f"{member.label} ({_OVER_QUOTA_REASON})")
                 continue
             used += size
+            kept += member.reserved
+            folder, file_name = split_member_path(member.path)
+            locations.append((folder, file_name))
             children.append(
                 KnowledgeItem(
                     project_id=archive.project_id,
                     parent_id=archive.pk,
                     blob=member.blob,
                     uploaded_by_id=archive.uploaded_by_id,
-                    name=sanitize_file_name(
-                        member.label, fallback=f"file.{member.kind}"
-                    ),
-                    original_name=member.label[:KNOWLEDGE_NAME_MAX_LENGTH],
+                    name=sanitize_file_name(file_name, fallback=f"file.{member.kind}"),
+                    original_name=member.label,
+                    folder=folder,
+                    tags=list(tags),
                     kind=member.kind,
                     status=KnowledgeItemStatus.PENDING,
                     size_bytes=size,
                 )
             )
+        # Picked among the children actually created (quota skips excluded).
+        for index in pick_instruction_files(locations):
+            children[index].is_folder_instructions = True
         created = KnowledgeItem.objects.bulk_create(children)
         archive.status = KnowledgeItemStatus.READY
         archive.error = ""
@@ -194,24 +255,29 @@ def _create_children(
         broadcast_item_state(archive)
         for child in created:
             enqueue_item_processing(child.pk, child.kind)
+    return kept
 
 
-def skipped_warning(skipped: Sequence[str]) -> str:
-    """ "Skipped: a (reason), b (reason) and N more", within the warning limit."""
-    if not skipped:
+def skipped_warning(skipped: SkippedEntries) -> str:
+    """ "Skipped: a (reason), b (reason) and N more", within the warning limit.
+
+    N also counts the entries past ``SKIPPED_KEEP_MAX`` that were only counted.
+    """
+    total = skipped.total
+    if total == 0:
         return ""
     prefix = "Skipped: "
     shown: list[str] = []
-    for index, entry in enumerate(skipped):
-        rest = len(skipped) - index - 1
+    for index, entry in enumerate(skipped.entries):
+        rest = total - index - 1
         tail = f" and {rest} more" if rest else ""
         candidate = prefix + ", ".join([*shown, entry]) + tail
         if len(candidate) > KNOWLEDGE_ERROR_MAX_LENGTH:
             break
         shown.append(entry)
-    remaining = len(skipped) - len(shown)
+    remaining = total - len(shown)
     if not shown:
-        return f"Skipped {len(skipped)} entries."[:KNOWLEDGE_ERROR_MAX_LENGTH]
+        return f"Skipped {total} entries."[:KNOWLEDGE_ERROR_MAX_LENGTH]
     text = prefix + ", ".join(shown)
     if remaining:
         text += f" and {remaining} more"

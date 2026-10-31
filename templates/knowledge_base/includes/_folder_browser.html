@@ -1,0 +1,81 @@
+{% comment %} One folder of an archive: breadcrumbs, the folder instructions that apply
+   (links, nearest first, plus the nearest one's excerpt), the subfolders with
+   their recursive file counts, then the files directly in the folder.
+   Used by the list page (?archive=&folder=) and an archive's item page (root).
+   Every path, name and excerpt is member data: autoescaped, |urlencode in links.
+
+   Context contract:
+     project — current Project
+     browse  — KnowledgeArchiveBrowse (files_capped: more files than shown) {% endcomment %}
+{% url 'knowledge_base:list' project_id=project.id as list_url %}
+{% with archive=browse.archive.entry.summary %}
+<section class="card kb-browser" aria-labelledby="kb-browser-title">
+  <div class="card-header">
+    <h2 id="kb-browser-title" class="visually-hidden">Files in this archive</h2>
+    <nav class="breadcrumbs kb-browser-crumbs" aria-label="Folder">
+      {% if browse.folder %}
+        <a href="{{ list_url }}?archive={{ archive.id }}">{{ archive.name }}</a>
+      {% else %}
+        <span aria-current="page">{{ archive.name }}</span>
+      {% endif %}
+      {% for crumb in browse.breadcrumbs %}
+        <span class="sep" aria-hidden="true">/</span>
+        {% if forloop.last %}
+          <span aria-current="page">{{ crumb.name }}</span>
+        {% else %}
+          <a href="{{ list_url }}?archive={{ archive.id }}&amp;folder={{ crumb.path|urlencode }}">{{ crumb.name }}</a>
+        {% endif %}
+      {% endfor %}
+    </nav>
+    {% if browse.folder %}
+      <a class="btn btn-sm btn-ghost" href="{{ list_url }}?tag={{ browse.folder|urlencode }}">All files below</a>
+    {% endif %}
+  </div>
+
+  {% if browse.instructions %}
+    <div class="kb-instructions">
+      <p class="small"><strong>Folder instructions</strong> <span class="muted">(the agents are pointed to these first, nearest first)</span></p>
+      <ul class="kb-instructions-list">
+        {% for ref in browse.instructions %}
+          <li>
+            <a href="{% url 'knowledge_base:item' project_id=project.id item_id=ref.item_id %}">{% if ref.folder %}{{ ref.folder }}/{% endif %}{{ ref.name }}</a>
+            <span class="muted small">{{ ref.kind_label }}{% if ref.status != "ready" %} · not readable yet{% endif %}</span>
+          </li>
+        {% endfor %}
+      </ul>
+      {% with nearest=browse.instructions.0 %}
+        {% if nearest.excerpt %}<pre class="kb-preview kb-instructions-excerpt">{{ nearest.excerpt }}</pre>{% endif %}
+      {% endwith %}
+    </div>
+  {% endif %}
+
+  {% if browse.subfolders %}
+    <ul class="kb-folder-list">
+      {% for sub in browse.subfolders %}
+        <li>
+          <a class="kb-folder-link" href="{{ list_url }}?archive={{ archive.id }}&amp;folder={{ sub.path|urlencode }}"><span aria-hidden="true">▸</span> {{ sub.name }}</a>
+          <span class="muted small">{{ sub.file_count }} file{{ sub.file_count|pluralize }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if not browse.files and not browse.subfolders %}
+    {% if browse.folder %}
+      <p class="muted">No files in this folder.</p>
+    {% else %}
+      <p class="muted">No files read from this archive yet. The archive is still being read, or it held no supported files; its details list what was skipped.</p>
+    {% endif %}
+  {% endif %}
+</section>
+
+{% if browse.files %}
+  {% include "knowledge_base/includes/_item_table.html" with project=project items=browse.files in_browser=True only %}
+  {% if browse.files_capped %}
+    <p class="muted small">
+      Showing the first {{ browse.files|length }} files of this folder.
+      Search the knowledge base to find the others.
+    </p>
+  {% endif %}
+{% endif %}
+{% endwith %}

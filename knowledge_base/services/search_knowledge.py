@@ -18,6 +18,7 @@ from django.db.models.functions import RowNumber
 from knowledge_base.exceptions import KnowledgeQueryInvalidError
 from knowledge_base.models import KnowledgeChunk, KnowledgeItemStatus
 from knowledge_base.search_config import KNOWLEDGE_SEARCH_CONFIG
+from knowledge_base.services.tag_filter import item_tag_q
 from knowledge_base.types import KnowledgeHit
 
 SEARCH_QUERY_MAX_LENGTH = 300
@@ -32,6 +33,7 @@ _HEADLINE_MAX_WORDS = 35
 _HEADLINE_MIN_WORDS = 15
 _HEADLINE_MAX_FRAGMENTS = 2
 _ELLIPSIS = "…"
+_HIT_ITEM_FIELDS = ("item_id", "item__name", "item__folder", "item__parent_id")
 
 
 def ready_chunks(project_id: int) -> QuerySet[KnowledgeChunk]:
@@ -86,8 +88,13 @@ def search_knowledge(
     limit: int,
     item_ids: Sequence[int] | None = None,
     exact: bool = False,
+    tag: str | None = None,
 ) -> list[KnowledgeHit]:
-    """Best hits for ``query``, at most 3 per item; ready items only."""
+    """Best hits for ``query``, at most 3 per item; ready items only.
+
+    ``tag`` (a manual tag, or a folder path with its subfolders) narrows the
+    search to the items it matches; None or "" does not filter.
+    """
     cleaned = clean_query(query)
     limit = clamp_limit(limit)
     chunks = ready_chunks(project_id)
@@ -96,6 +103,8 @@ def search_knowledge(
         if not wanted:
             return []
         chunks = chunks.filter(item_id__in=wanted)
+    if tag:
+        chunks = chunks.filter(item_tag_q(tag, prefix="item__"))
     if not exact:
         hits = _full_text_hits(chunks, cleaned, limit)
         if hits:
@@ -134,7 +143,7 @@ def _full_text_hits(
             ),
         )
         .order_by("-rank", "item_id", "ordinal")
-        .values_list("item_id", "item__name", "location", "page", "headline")
+        .values_list(*_HIT_ITEM_FIELDS, "location", "page", "headline")
     )
     return [
         KnowledgeHit(
@@ -143,8 +152,10 @@ def _full_text_hits(
             location=location,
             page=page,
             snippet=_one_line(str(headline)),
+            item_folder=item_folder,
+            item_parent_id=item_parent_id,
         )
-        for item_id, item_name, location, page, headline in rows
+        for item_id, item_name, item_folder, item_parent_id, location, page, headline in rows
     ]
 
 
@@ -162,7 +173,7 @@ def _exact_hits(
     rows = (
         KnowledgeChunk.objects.filter(id__in=best)
         .order_by("-item_id", "ordinal")
-        .values_list("item_id", "item__name", "location", "page", "text")
+        .values_list(*_HIT_ITEM_FIELDS, "location", "page", "text")
     )
     return [
         KnowledgeHit(
@@ -171,8 +182,10 @@ def _exact_hits(
             location=location,
             page=page,
             snippet=exact_snippet(text, query),
+            item_folder=item_folder,
+            item_parent_id=item_parent_id,
         )
-        for item_id, item_name, location, page, text in rows
+        for item_id, item_name, item_folder, item_parent_id, location, page, text in rows
     ]
 
 

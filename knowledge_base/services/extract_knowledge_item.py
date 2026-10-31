@@ -98,9 +98,15 @@ def _save_chunks(
                     for draft in drafts[start : start + CHUNK_BATCH_SIZE]
                 ]
             )
-        # Name and description read under the lock: a rename during the
-        # extraction is not lost.
-        write_search_vectors(item_id, item.name, item.description)
+        # Name, description, folder and tags read under the lock: an edit
+        # during the extraction is not lost.
+        write_search_vectors(
+            item_id,
+            name=item.name,
+            description=item.description,
+            folder=item.folder,
+            tags=item.tags,
+        )
         item.status = KnowledgeItemStatus.READY
         item.error = ""
         item.warning = output.warning[:KNOWLEDGE_ERROR_MAX_LENGTH]

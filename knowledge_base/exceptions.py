@@ -23,6 +23,10 @@ class KnowledgeItemNotFoundError(KnowledgeBaseError):
     """No such item in this project (or it was deleted)."""
 
 
+class KnowledgeFolderNotFoundError(KnowledgeBaseError):
+    """No such folder in this archive."""
+
+
 class KnowledgeItemNotReadyError(KnowledgeBaseError):
     """The item has no extracted text yet (waiting, reading or failed)."""
 
@@ -49,6 +53,10 @@ class ContentMismatch(KnowledgeExtractionError):
 
 class ArchiveRejected(KnowledgeExtractionError):
     """An archive or container broke the archive guard's limits."""
+
+
+class ArchiveDamaged(ArchiveRejected):
+    """The archive's structure could not be read (not a limit)."""
 
 
 class EncryptedDocument(KnowledgeExtractionError):

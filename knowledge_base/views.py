@@ -8,12 +8,13 @@ from django.http import FileResponse, Http404, HttpResponse
 from django.http.response import HttpResponseBase
 from django.shortcuts import redirect, render
 from django.urls import reverse
-from django.utils.http import content_disposition_header
+from django.utils.http import content_disposition_header, urlencode
 from django.views.decorators.http import require_GET, require_POST
 
 from accounts.types import AuthenticatedRequest
 from knowledge_base.exceptions import (
     KnowledgeBaseError,
+    KnowledgeFolderNotFoundError,
     KnowledgeItemNotFoundError,
     KnowledgeItemNotReadyError,
     KnowledgePageOutOfRangeError,
@@ -25,7 +26,10 @@ from knowledge_base.forms import (
     KnowledgeSearchForm,
     KnowledgeUploadForm,
 )
-from knowledge_base.models import KnowledgeKind
+from knowledge_base.models import KNOWLEDGE_FOLDER_MAX_LENGTH, KnowledgeKind
+from knowledge_base.services.browse_knowledge_archive import (
+    browse_knowledge_archive,
+)
 from knowledge_base.services.delete_knowledge_item import delete_knowledge_item
 from knowledge_base.services.download_knowledge_item import open_knowledge_download
 from knowledge_base.services.edit_knowledge_item import edit_knowledge_item
@@ -34,19 +38,27 @@ from knowledge_base.services.list_knowledge_items import (
     knowledge_usage_bytes,
     list_knowledge_entries,
 )
+from knowledge_base.services.list_knowledge_tags import list_knowledge_tags
 from knowledge_base.services.read_knowledge_item import read_knowledge_item
 from knowledge_base.services.retry_knowledge_item import retry_knowledge_item
 from knowledge_base.services.search_knowledge import search_knowledge
 from knowledge_base.services.upload_knowledge_files import upload_knowledge_files
-from knowledge_base.types import KnowledgeHit, KnowledgeItemDetail, KnowledgePage
+from knowledge_base.tags import normalise_folder_query
+from knowledge_base.types import (
+    KnowledgeArchiveBrowse,
+    KnowledgeHit,
+    KnowledgeItemDetail,
+    KnowledgeListEntry,
+    KnowledgePage,
+    KnowledgeTagFacet,
+)
 from projects.decorators import project_membership_required
 from projects.models import Project
 
 SEARCH_RESULT_LIMIT = 20
-# Rows on the tab; older items stay searchable (and listed to agents).
+# Rows on the tab and files in one archive folder; the rest stay searchable
+# (and listed to agents).
 LIST_ROW_LIMIT = 500
-# nginx's client_max_body_size: the whole upload request, stated on the page.
-UPLOAD_REQUEST_MAX_BYTES = 200 * 1024 * 1024
 
 
 def _ws_path(project_id: int) -> str:
@@ -77,40 +89,71 @@ def _list_url(project_id: int, archive_id: int | None = None) -> str:
     return f"{url}?archive={archive_id}" if archive_id is not None else url
 
 
+def _browse(
+    project_id: int, archive_param: str, folder_param: str
+) -> KnowledgeArchiveBrowse:
+    """``?archive=<id>&folder=<path>``; 404 for anything that is not a folder."""
+    archive_id = _positive_int(archive_param)
+    if archive_id is None or len(folder_param) > KNOWLEDGE_FOLDER_MAX_LENGTH:
+        raise Http404("No such archive folder.")
+    try:
+        browse = browse_knowledge_archive(
+            project_id,
+            archive_id,
+            folder=normalise_folder_query(folder_param),
+            file_limit=LIST_ROW_LIMIT,
+        )
+    except (KnowledgeItemNotFoundError, KnowledgeFolderNotFoundError) as exc:
+        raise Http404(exc.message) from exc
+    if browse.archive.entry.summary.kind != KnowledgeKind.ARCHIVE:
+        raise Http404("No such archive.")
+    return browse
+
+
+def _tag_listed(facet: KnowledgeTagFacet, tag: str) -> bool:
+    """Whether the tag picker already offers ``tag`` as an option."""
+    return any(count.tag == tag for count in (*facet.tags, *facet.folders))
+
+
 @project_membership_required
 @require_GET
 def knowledge_list(request: AuthenticatedRequest, project: Project) -> HttpResponse:
     archive_param = request.GET.get("archive")
-    archive: KnowledgeItemDetail | None = None
+    browse: KnowledgeArchiveBrowse | None = None
     if archive_param is not None:
-        archive_id = _positive_int(archive_param)
-        if archive_id is None:
-            raise Http404("No such archive.")
-        archive = _get_detail(project.id, archive_id)
-        if archive.entry.summary.kind != KnowledgeKind.ARCHIVE:
-            raise Http404("No such archive.")
-        items = list(archive.members)
-        items_capped = False
-    else:
-        items = list_knowledge_entries(project.id, limit=LIST_ROW_LIMIT + 1)
+        browse = _browse(project.id, archive_param, request.GET.get("folder", ""))
+
+    bound = "q" in request.GET or "tag" in request.GET
+    search_form = KnowledgeSearchForm(request.GET if bound else None)
+    query = ""
+    active_tag = ""
+    if search_form.is_bound and search_form.is_valid():
+        query = search_form.cleaned_data["q"]
+        active_tag = search_form.cleaned_data["tag"]
+
+    items: list[KnowledgeListEntry] = []
+    items_capped = False
+    if browse is None:
+        items = list_knowledge_entries(
+            project.id, tag=active_tag or None, limit=LIST_ROW_LIMIT + 1
+        )
         items_capped = len(items) > LIST_ROW_LIMIT
         items = items[:LIST_ROW_LIMIT]
 
-    search_form = KnowledgeSearchForm(request.GET if "q" in request.GET else None)
     hits: list[KnowledgeHit] | None = None
-    if search_form.is_bound and search_form.is_valid():
-        query: str = search_form.cleaned_data["q"]
-        if query:
-            try:
-                hits = search_knowledge(
-                    project.id,
-                    query,
-                    limit=SEARCH_RESULT_LIMIT,
-                    exact=search_form.cleaned_data["exact"],
-                )
-            except KnowledgeQueryInvalidError as exc:
-                search_form.add_error("q", exc.message)
+    if query:
+        try:
+            hits = search_knowledge(
+                project.id,
+                query,
+                limit=SEARCH_RESULT_LIMIT,
+                exact=search_form.cleaned_data["exact"],
+                tag=active_tag or None,
+            )
+        except KnowledgeQueryInvalidError as exc:
+            search_form.add_error("q", exc.message)
 
+    tag_facet = list_knowledge_tags(project.id)
     accept_7z = settings.KNOWLEDGE_BASE_ACCEPT_7Z
     return render(
         request,
@@ -121,16 +164,22 @@ def knowledge_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
             "items": items,
             "items_capped": items_capped,
             "list_row_limit": LIST_ROW_LIMIT,
-            "archive": archive,
+            "browse": browse,
             "hits": hits,
             "search_form": search_form,
+            "tag_facet": tag_facet,
+            "active_tag": active_tag,
+            "active_tag_listed": _tag_listed(tag_facet, active_tag),
+            "clear_tag_url": _clear_tag_url(project.id, query, search_form),
             "upload_form": KnowledgeUploadForm(),
             "usage_bytes": knowledge_usage_bytes(project.id),
             "quota_bytes": settings.KNOWLEDGE_BASE_MAX_PROJECT_BYTES,
             "limits": {
                 "max_file_bytes": settings.KNOWLEDGE_BASE_MAX_FILE_BYTES,
                 "max_files": settings.KNOWLEDGE_BASE_MAX_FILES_PER_UPLOAD,
-                "max_request_bytes": UPLOAD_REQUEST_MAX_BYTES,
+                "max_request_bytes": (settings.KNOWLEDGE_BASE_MAX_UPLOAD_REQUEST_BYTES),
+                "max_archive_bytes": settings.KNOWLEDGE_BASE_MAX_ARCHIVE_BYTES,
+                "max_archive_files": settings.KNOWLEDGE_BASE_ARCHIVE_MAX_MEMBERS,
                 "accept": accept_attribute(accept_7z=accept_7z),
             },
             "accept_7z": accept_7z,
@@ -138,6 +187,17 @@ def knowledge_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
             "ws_path": _ws_path(project.id),
         },
     )
+
+
+def _clear_tag_url(project_id: int, query: str, form: KnowledgeSearchForm) -> str:
+    """The list URL keeping the search but dropping the tag filter."""
+    url = reverse("knowledge_base:list", kwargs={"project_id": project_id})
+    if not query:
+        return url
+    params = {"q": query}
+    if form.cleaned_data.get("exact"):
+        params["exact"] = "on"
+    return f"{url}?{urlencode(params)}"
 
 
 @project_membership_required
@@ -155,6 +215,7 @@ def knowledge_upload(request: AuthenticatedRequest, project: Project) -> HttpRes
             user=request.user,
             files=form.cleaned_files(),
             description=form.cleaned_data["description"],
+            tags=form.cleaned_data["tags"],
         )
     except KnowledgeBaseError as exc:
         messages.error(request, exc.message)
@@ -183,7 +244,19 @@ def knowledge_item(
     detail = _get_detail(project.id, item_id)
     summary = detail.entry.summary
     page: KnowledgePage | None = None
-    if summary.kind != KnowledgeKind.ARCHIVE:
+    browse: KnowledgeArchiveBrowse | None = None
+    if summary.kind == KnowledgeKind.ARCHIVE:
+        try:
+            browse = browse_knowledge_archive(
+                project.id,
+                item_id,
+                folder="",
+                file_limit=LIST_ROW_LIMIT,
+                archive=detail,
+            )
+        except (KnowledgeItemNotFoundError, KnowledgeFolderNotFoundError) as exc:
+            raise Http404(exc.message) from exc
+    else:
         requested = _positive_int(request.GET.get("page")) or 1
         try:
             try:
@@ -203,9 +276,13 @@ def knowledge_item(
             "active_tab": "knowledge_base",
             "item": detail,
             "page": page,
-            "members": detail.members,
+            "browse": browse,
             "edit_form": KnowledgeItemEditForm(
-                initial={"name": summary.name, "description": summary.description}
+                initial={
+                    "name": summary.name,
+                    "description": summary.description,
+                    "tags": ", ".join(summary.tags),
+                }
             ),
             "ws_path": _ws_path(project.id),
         },
@@ -229,6 +306,7 @@ def knowledge_item_edit(
             item_id=item_id,
             name=form.cleaned_data["name"],
             description=form.cleaned_data["description"],
+            tags=form.cleaned_data["tags"],
         )
     except KnowledgeItemNotFoundError as exc:
         raise Http404(exc.message) from exc

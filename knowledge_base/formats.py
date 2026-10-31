@@ -85,6 +85,34 @@ _EXTENSIONS: dict[str, KnowledgeKind] = {
     ".7z": KnowledgeKind.ARCHIVE,
 }
 
+# Well-known names without an extension, matched case-insensitively. Only
+# names with no dot can match, so "Makefile.am" stays unsupported.
+_EXTENSIONLESS_NAMES: dict[str, KnowledgeKind] = {
+    **{
+        name: KnowledgeKind.TEXT
+        for name in (
+            "readme",
+            "instructions",
+            "license",
+            "changelog",
+            "notice",
+            "authors",
+        )
+    },
+    **{
+        name: KnowledgeKind.SCRIPT
+        for name in (
+            "makefile",
+            "dockerfile",
+            "jenkinsfile",
+            "vagrantfile",
+            "procfile",
+            "gemfile",
+            "rakefile",
+        )
+    },
+}
+
 # Kinds whose content is decoded as text and cut by line ranges.
 TEXT_KINDS: frozenset[str] = frozenset(
     {
@@ -119,10 +147,16 @@ def matched_extension(name: str) -> str | None:
 
 
 def kind_for_name(name: str) -> KnowledgeKind | None:
-    """The kind of a file by its name, or None when it is not accepted."""
-    extension = matched_extension(name)
+    """The kind of a file by its name, or None when it is not accepted.
+
+    Only the base name counts (a member path's folders may hold dots). A
+    name without an accepted extension may still be a well-known
+    extensionless file (``README``, ``Dockerfile``, ...).
+    """
+    base_name = name.replace("\\", "/").rsplit("/", 1)[-1]
+    extension = matched_extension(base_name)
     if extension is None:
-        return None
+        return _EXTENSIONLESS_NAMES.get(base_name.lower())
     return _COMPOUND_EXTENSIONS.get(extension) or _EXTENSIONS[extension]
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from django.conf import settings
+from django.contrib.postgres.fields import ArrayField
 from django.contrib.postgres.indexes import GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.db import models
@@ -13,6 +14,10 @@ KNOWLEDGE_DESCRIPTION_MAX = 1000
 KNOWLEDGE_ERROR_MAX_LENGTH = 500
 KNOWLEDGE_LOCATION_MAX_LENGTH = 120
 KNOWLEDGE_HEADING_MAX_LENGTH = 255
+# A member's directory inside its archive ("docs/install/windows").
+KNOWLEDGE_FOLDER_MAX_LENGTH = 1024
+KNOWLEDGE_TAG_MAX_LENGTH = 64
+KNOWLEDGE_MAX_TAGS_PER_ITEM = 20
 # Bumped when extraction output changes in a way worth re-extracting for.
 KNOWLEDGE_EXTRACTOR_VERSION = 1
 
@@ -91,6 +96,25 @@ class KnowledgeItem(models.Model):
     name = models.CharField(max_length=KNOWLEDGE_NAME_MAX_LENGTH)
     # The upload's name, or the member path inside its archive (a label only).
     original_name = models.CharField(max_length=KNOWLEDGE_NAME_MAX_LENGTH)
+    # An archive member's directory ("/" separators, no leading or trailing
+    # slash; a nested archive's file name is one segment), "" at the root and
+    # for top-level uploads. It is the item's folder tag: shown in its own
+    # case, matched case-insensitively with subfolders, never edited.
+    folder = models.CharField(
+        max_length=KNOWLEDGE_FOLDER_MAX_LENGTH, blank=True, default=""
+    )
+    # Manual tags only (given at upload, inherited from the archive, or
+    # edited), lower-case, at most KNOWLEDGE_MAX_TAGS_PER_ITEM
+    # (knowledge_base.tags).
+    tags = ArrayField(
+        models.CharField(max_length=KNOWLEDGE_TAG_MAX_LENGTH),
+        blank=True,
+        default=list,
+    )
+    # Set at expansion on the one README / INSTRUCTIONS file of a folder
+    # (knowledge_base.folder_instructions); it applies to that folder and
+    # every subfolder of the same archive, resolved at read time.
+    is_folder_instructions = models.BooleanField(default=False)
     kind = models.CharField(max_length=20, choices=KnowledgeKind.choices)
     description = models.TextField(
         max_length=KNOWLEDGE_DESCRIPTION_MAX, blank=True, default=""
@@ -124,6 +148,12 @@ class KnowledgeItem(models.Model):
             ),
             models.Index(
                 fields=["project", "-created_at"], name="kb_item_proj_created"
+            ),
+            GinIndex(fields=["tags"], name="kb_item_tags"),
+            models.Index(
+                fields=["parent", "folder"],
+                condition=models.Q(is_folder_instructions=True),
+                name="kb_item_folder_instr",
             ),
         ]
 

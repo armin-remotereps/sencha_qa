@@ -1,32 +1,38 @@
 {% extends "layouts/project.html" %}
 
-{% comment %} Knowledge base tab: upload, search (the agents' search) and the item list,
-   or one archive's members with ?archive=<id>.
+{% comment %} Knowledge base tab: upload, search (the agents' search), the tag filter and
+   the item list, or one folder of an archive with ?archive=<id>&folder=<path>.
 
    Context contract (knowledge_base.views.knowledge_list):
      project      — current Project
      active_tab   — "knowledge_base"
-     items        — Sequence[KnowledgeListEntry]: top-level items, or the archive's members
-     items_capped — bool: more top-level items exist than list_row_limit
-     archive      — KnowledgeItemDetail of ?archive, or None
-     hits         — Sequence[KnowledgeHit] for ?q, or None when no search ran
-     search_form  — KnowledgeSearchForm (GET: q, exact)
+     items        — Sequence[KnowledgeListEntry]: top-level items, or every level when
+                    active_tag is set (empty while browsing an archive)
+     items_capped — bool: more rows exist than list_row_limit
+     browse       — KnowledgeArchiveBrowse of ?archive / ?folder, or None
+     hits         — Sequence[KnowledgeHit] for ?q (scoped to active_tag), or None when no search ran
+     search_form  — KnowledgeSearchForm (GET: q, exact, tag)
+     tag_facet    — KnowledgeTagFacet: the tag picker's folders and manual tags with counts
+     active_tag   — str: the ?tag filter, "" for none
+     active_tag_listed — bool: tag_facet already offers active_tag
+     clear_tag_url — the list URL keeping ?q / ?exact without the tag
      upload_form  — KnowledgeUploadForm
      usage_bytes / quota_bytes — the project's storage use and quota
-     limits       — {max_file_bytes, max_files, max_request_bytes, accept}
+     limits       — {max_file_bytes, max_files, max_request_bytes, max_archive_bytes,
+                    max_archive_files, accept}
      accept_7z    — settings.KNOWLEDGE_BASE_ACCEPT_7Z
      seven_zip_disabled_message — the refusal text when 7z is off
      ws_path      — the knowledgeStatus socket path
      project_can_write (context processor) — false hides the upload card {% endcomment %}
-{% block title %}{% if archive %}{{ archive.entry.summary.name }} · {% endif %}Knowledge base · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+{% block title %}{% if browse %}{{ browse.archive.entry.summary.name }} · {% endif %}Knowledge base · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
 {% block breadcrumb_extra %}
-  {% if archive %}
+  {% if browse %}
     <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
     <span class="sep" aria-hidden="true">›</span>
     <a href="{% url 'knowledge_base:list' project_id=project.id %}">Knowledge base</a>
     <span class="sep" aria-hidden="true">›</span>
-    <span aria-current="page">{{ archive.entry.summary.name }}</span>
+    <span aria-current="page">{{ browse.archive.entry.summary.name }}</span>
   {% else %}
     {{ block.super }}
   {% endif %}
@@ -35,17 +41,17 @@
 {% block page_header %}
 <div class="page-header">
   <div>
-    {% if archive %}
-      <h1>{{ archive.entry.summary.name }}</h1>
-      <p class="subtitle">{{ items|length }} file{{ items|length|pluralize }} read from this archive</p>
+    {% if browse %}
+      <h1 class="kb-item-title">{{ browse.archive.entry.summary.name }}</h1>
+      <p class="subtitle">{{ browse.archive.entry.summary.member_count }} file{{ browse.archive.entry.summary.member_count|pluralize }} read from this archive</p>
     {% else %}
       <h1>Knowledge base</h1>
       <p class="subtitle">Documents, logs, configs and code the agents can search and read while they set up machines and run tests.</p>
     {% endif %}
   </div>
-  {% if archive %}
+  {% if browse %}
   <div class="actions">
-    <a class="btn btn-secondary" href="{% url 'knowledge_base:item' project_id=project.id item_id=archive.entry.summary.id %}">Archive details</a>
+    <a class="btn btn-secondary" href="{% url 'knowledge_base:item' project_id=project.id item_id=browse.archive.entry.summary.id %}">Archive details</a>
   </div>
   {% endif %}
 </div>
@@ -58,7 +64,7 @@
     <p>Agents read everything here; do not upload secrets you would not paste into the chat.</p>
   </div>
 
-  {% if project_can_write and not archive %}
+  {% if project_can_write and not browse %}
     {% include "knowledge_base/includes/_upload_card.html" %}
   {% endif %}
 
@@ -67,24 +73,61 @@
       <label class="visually-hidden" for="{{ search_form.q.id_for_label }}">Search the knowledge base</label>
       {{ search_form.q }}
     </div>
+    {% if tag_facet.folders or tag_facet.tags or active_tag %}
+    <div>
+      <label class="visually-hidden" for="kb-tag-filter">Filter by tag or folder</label>
+      <select class="select" id="kb-tag-filter" name="tag" onchange="this.form.requestSubmit()">
+        <option value="">All</option>
+        {% if active_tag and not active_tag_listed %}
+          <option value="{{ active_tag }}" selected>{{ active_tag }}</option>
+        {% endif %}
+        {% if tag_facet.folders %}
+        <optgroup label="Folders">
+          {% for folder in tag_facet.folders %}
+            <option value="{{ folder.tag }}"{% if folder.tag == active_tag %} selected{% endif %}>{{ folder.tag }} ({{ folder.count }})</option>
+          {% endfor %}
+        </optgroup>
+        {% endif %}
+        {% if tag_facet.tags %}
+        <optgroup label="Tags">
+          {% for tag in tag_facet.tags %}
+            <option value="{{ tag.tag }}"{% if tag.tag == active_tag %} selected{% endif %}>{{ tag.tag }} ({{ tag.count }})</option>
+          {% endfor %}
+        </optgroup>
+        {% endif %}
+      </select>
+    </div>
+    {% endif %}
     <label class="checkbox" for="{{ search_form.exact.id_for_label }}">
       {{ search_form.exact }}
       <span>Exact text</span>
     </label>
     <button type="submit" class="btn btn-secondary">Search</button>
-    {% if hits is not None %}<a class="btn btn-ghost" href="{% url 'knowledge_base:list' project_id=project.id %}">Clear</a>{% endif %}
+    {% if hits is not None or active_tag %}<a class="btn btn-ghost" href="{% url 'knowledge_base:list' project_id=project.id %}">Clear</a>{% endif %}
   </form>
   {% for error in search_form.q.errors %}<p class="error-text">{{ error }}</p>{% endfor %}
+  {% for error in search_form.tag.errors %}<p class="error-text">{{ error }}</p>{% endfor %}
+
+  {% if active_tag %}
+    <div class="kb-tags" aria-label="Active filter">
+      <span class="muted small">Tagged</span>
+      <a class="chip chip-link" href="{{ clear_tag_url }}" aria-label="Remove the filter {{ active_tag }}">{{ active_tag }} <span aria-hidden="true">✕</span></a>
+    </div>
+  {% endif %}
 
   {% if hits is not None %}
     {% include "knowledge_base/includes/_search_results.html" with project=project hits=hits only %}
   {% endif %}
 
-  {% if items %}
-    {% include "knowledge_base/includes/_item_table.html" with project=project items=items only %}
+  {% if browse %}
+    {% include "knowledge_base/includes/_folder_browser.html" with project=project browse=browse only %}
+  {% elif items %}
+    {% include "knowledge_base/includes/_item_table.html" with project=project items=items in_browser=False only %}
     {% if items_capped %}<p class="muted small">Showing the newest {{ list_row_limit }} files. Search to find older ones.</p>{% endif %}
-  {% elif archive %}
-    {% include "partials/empty_state.html" with icon="▤" title="No files read from this archive" body="The archive is still being read, or it held no supported files. Its details page lists what was skipped." only %}
+  {% elif active_tag %}
+    {% with title="No files tagged "|add:active_tag %}
+      {% include "partials/empty_state.html" with icon="▤" title=title body="No file carries this tag, and no archive folder has this path. Pick another tag, or clear the filter." only %}
+    {% endwith %}
   {% elif project_can_write %}
     {% include "partials/empty_state.html" with icon="▤" title="No files yet" body="Upload manuals, release notes, logs or configs above. The agents search and read them while they work." only %}
   {% else %}

@@ -1167,7 +1167,7 @@ document.addEventListener('alpine:init', () => {
 
     knowledgeMeta(choice) {
       const parts = [choice.kind_label];
-      if (choice.in_archive) parts.push('in an archive');
+      if (choice.in_archive) parts.push(choice.folder ? 'in ' + choice.folder : 'in an archive');
       if (choice.member_count > 0) parts.push(choice.member_count + ' files');
       const status = this.knowledgeStatusLabel(choice.status);
       if (status) parts.push(status);

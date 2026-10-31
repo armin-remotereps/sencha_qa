@@ -2,15 +2,16 @@
 
 {% comment %} One Knowledge base item: details, live status, edit / retry / delete /
    download, and a page-by-page preview of the extracted text (what the agents
-   read), or an archive's members.
+   read), or an archive's root folder (the folder browser).
 
    Context contract (knowledge_base.views.knowledge_item):
      project    — current Project
      active_tab — "knowledge_base"
-     item       — KnowledgeItemDetail (item.entry: KnowledgeListEntry)
+     item       — KnowledgeItemDetail (item.entry: KnowledgeListEntry; folder_instructions
+                  nearest first for an archive member)
      page       — KnowledgePage, or None (archive, or no text yet)
-     members    — Sequence[KnowledgeListEntry] (an archive's members; empty otherwise)
-     edit_form  — KnowledgeItemEditForm with the current name and description
+     browse     — KnowledgeArchiveBrowse of an archive's root folder; None otherwise
+     edit_form  — KnowledgeItemEditForm with the current name, description and tags
      ws_path    — the knowledgeStatus socket path
      project_can_write (context processor) — false hides edit, retry and delete {% endcomment %}
 {% block title %}{{ item.entry.summary.name }} · Knowledge base · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
@@ -21,7 +22,7 @@
   <a href="{% url 'knowledge_base:list' project_id=project.id %}">Knowledge base</a>
   {% if item.entry.summary.parent_id %}
     <span class="sep" aria-hidden="true">›</span>
-    <a href="{% url 'knowledge_base:list' project_id=project.id %}?archive={{ item.entry.summary.parent_id }}">Archive</a>
+    <a href="{% url 'knowledge_base:list' project_id=project.id %}?archive={{ item.entry.summary.parent_id }}">{{ item.entry.archive_name|default:"Archive" }}</a>
   {% endif %}
   <span class="sep" aria-hidden="true">›</span>
   <span aria-current="page">{{ item.entry.summary.name }}</span>
@@ -71,6 +72,23 @@
           <div><dt>Pages</dt><dd data-kb-pages>{% if summary.page_count %}{{ summary.page_count }}{% else %}&mdash;{% endif %}</dd></div>
           <div><dt>Characters</dt><dd>{{ item.char_count }}</dd></div>
         {% endif %}
+        {% if summary.parent_id %}
+          <div><dt>Folder</dt><dd>
+            <a class="chip chip-link chip-folder" href="{% url 'knowledge_base:list' project_id=project.id %}?archive={{ summary.parent_id }}{% if summary.folder %}&amp;folder={{ summary.folder|urlencode }}{% endif %}"><span aria-hidden="true">▸</span> {% if summary.folder %}{{ summary.folder }}{% else %}Archive root{% endif %}</a>
+          </dd></div>
+        {% endif %}
+        {% if summary.tags or summary.is_folder_instructions %}
+          <div><dt>Tags</dt><dd>{% include "knowledge_base/includes/_tag_chips.html" with project=project folder="" tags=summary.tags is_folder_instructions=summary.is_folder_instructions only %}</dd></div>
+        {% endif %}
+        {% if item.folder_instructions %}
+          <div><dt>Folder instructions</dt><dd>
+            <ul class="kb-instructions-list">
+              {% for ref in item.folder_instructions %}
+                <li><a href="{% url 'knowledge_base:item' project_id=project.id item_id=ref.item_id %}">{% if ref.folder %}{{ ref.folder }}/{% endif %}{{ ref.name }}</a>{% if ref.status != "ready" %} <span class="muted small">not readable yet</span>{% endif %}</li>
+              {% endfor %}
+            </ul>
+          </dd></div>
+        {% endif %}
         <div><dt>Uploaded</dt><dd>{{ item.entry.created_at|date:"M j, Y H:i" }}{% if item.entry.uploaded_by %} by {{ item.entry.uploaded_by }}{% endif %}</dd></div>
       </dl>
     </section>
@@ -78,7 +96,7 @@
     {% if project_can_write %}
     <section class="card" aria-labelledby="kb-edit-title">
       <div class="card-header">
-        <h2 id="kb-edit-title">Name and description</h2>
+        <h2 id="kb-edit-title">Name, description and tags</h2>
       </div>
       <form method="post" action="{% url 'knowledge_base:item_edit' project_id=project.id item_id=summary.id %}">
         {% csrf_token %}
@@ -90,6 +108,11 @@
           <label for="{{ edit_form.description.id_for_label }}">Description <span class="optional">(optional; helps the agents find it)</span></label>
           {{ edit_form.description }}
         </div>
+        <div class="field">
+          <label for="{{ edit_form.tags.id_for_label }}">Tags <span class="optional">(optional; comma separated, at most 20)</span></label>
+          {{ edit_form.tags }}
+          {% if summary.kind == "archive" %}<p class="hint">Changing an archive's tags does not change the tags of the files read from it.</p>{% endif %}
+        </div>
         <div class="card-actions">
           <button type="submit" class="btn btn-primary">Save</button>
         </div>
@@ -99,11 +122,7 @@
   </div>
 
   {% if summary.kind == "archive" %}
-    {% if members %}
-      {% include "knowledge_base/includes/_item_table.html" with project=project items=members only %}
-    {% else %}
-      {% include "partials/empty_state.html" with icon="▤" title="No files read from this archive" body="The archive is still being read, or it held no supported files." only %}
-    {% endif %}
+    {% include "knowledge_base/includes/_folder_browser.html" with project=project browse=browse only %}
   {% else %}
     <section class="card" aria-labelledby="kb-preview-title">
       <div class="card-header">
