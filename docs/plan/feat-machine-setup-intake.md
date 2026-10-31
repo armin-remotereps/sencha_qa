@@ -1,6 +1,6 @@
 # feat: Machine setup intake, artifacts inventory and per-run stage 0
 
-Status: Ready
+Status: In progress
 Created: 2026-10-31
 Request: Machine setup and getting test runs going take too long. The user wants four things in the Machine setup flow.
 - (4, first in order) Before the agent touches the machine, it asks about the project's artifacts and understands them, so it can actually help. Artifacts are apps, builds, installers, configs, data and licences, plus where they come from, for example a TeamCity export the person keeps as a knowledge base item.

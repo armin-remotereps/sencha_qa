@@ -291,6 +291,22 @@ class SetupMessage(models.Model):
         blank=True,
         related_name="+",
     )
+    # Set on the NOTICE row that shows an action approval card (main chat).
+    action_approval = models.ForeignKey(
+        "SetupActionApproval",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    # Set on run_setup_task rows: the approved action that sub-task carried out.
+    approval_used = models.ForeignKey(
+        "SetupActionApproval",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
     # USER rows: knowledge base items the person referenced (composer picker,
     # at most knowledge_base.reference_note.MAX_KNOWLEDGE_REFS_PER_MESSAGE).
     # Deleting an item drops the link; the note in the transcript stays.
@@ -430,3 +446,111 @@ class SetupRunProposal(models.Model):
 
     def __str__(self) -> str:
         return f"Run proposal #{self.pk} ({self.status})"
+
+
+class ApprovalActionKind(models.TextChoices):
+    INSTALL = "install", "Install"
+    UPGRADE = "upgrade", "Upgrade"
+    UNINSTALL = "uninstall", "Uninstall"
+    # Delete or overwrite existing files in the artifacts base directory.
+    REMOVE_DATA = "remove_data", "Remove data"
+
+
+class ApprovalStatus(models.TextChoices):
+    PENDING = "pending", "Waiting for you"
+    APPROVED = "approved", "Approved"
+    USED = "used", "Done"
+    DISCARDED = "discarded", "Discarded"
+    SUPERSEDED = "superseded", "Replaced"
+
+
+# Statuses in which the same action (fingerprint) may exist only once.
+OPEN_APPROVAL_STATUSES = (ApprovalStatus.PENDING, ApprovalStatus.APPROVED)
+# Pending cards per conversation (checked in the service).
+APPROVAL_MAX_PENDING = 10
+# Sub-tasks one approval may be used by (a failed attempt may retry once).
+APPROVAL_MAX_ATTEMPTS = 2
+APPROVAL_TITLE_MAX_LENGTH = 200
+APPROVAL_TARGET_MAX_LENGTH = 200
+APPROVAL_VERSION_MAX_LENGTH = 100
+APPROVAL_KEY_MAX_LENGTH = 64
+APPROVAL_APPROACH_MAX_LENGTH = 1000
+
+
+class SetupActionApproval(models.Model):
+    """One software change the main agent wants; a person approves or discards it.
+
+    ``run_setup_task(approval_id=)`` is the only way a helper may carry out
+    an install, upgrade, uninstall or base-directory data removal.
+    """
+
+    # Denormalised for scoping.
+    project = models.ForeignKey(
+        Project, on_delete=models.CASCADE, related_name="setup_action_approvals"
+    )
+    conversation = models.ForeignKey(
+        SetupConversation, on_delete=models.CASCADE, related_name="action_approvals"
+    )
+    proposed_turn = models.ForeignKey(
+        SetupTurn,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    kind = models.CharField(max_length=20, choices=ApprovalActionKind.choices)
+    # e.g. "Install JDK 17".
+    title = models.CharField(max_length=APPROVAL_TITLE_MAX_LENGTH)
+    # The app, package or path acted on.
+    target = models.CharField(max_length=APPROVAL_TARGET_MAX_LENGTH)
+    version = models.CharField(
+        max_length=APPROVAL_VERSION_MAX_LENGTH, blank=True, default=""
+    )
+    # machine_readiness keys (Stage0Requirement.key / ArtifactItem.key).
+    requirement_key = models.CharField(
+        max_length=APPROVAL_KEY_MAX_LENGTH, blank=True, default=""
+    )
+    artifact_key = models.CharField(
+        max_length=APPROVAL_KEY_MAX_LENGTH, blank=True, default=""
+    )
+    # How it will be done; shown in full on the card before approval.
+    approach = models.TextField(max_length=APPROVAL_APPROACH_MAX_LENGTH)
+    status = models.CharField(
+        max_length=20, choices=ApprovalStatus.choices, default=ApprovalStatus.PENDING
+    )
+    # Sub-tasks that used it; at most APPROVAL_MAX_ATTEMPTS.
+    attempts = models.PositiveSmallIntegerField(default=0)
+    decided_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
+    used_at = models.DateTimeField(null=True, blank=True)
+    # sha256 hex of kind + normalised target + version.
+    fingerprint = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            # The same action is never on two open cards of a conversation.
+            models.UniqueConstraint(
+                fields=["conversation", "fingerprint"],
+                condition=Q(status__in=["pending", "approved"]),
+                name="setup_one_open_approval_per_action",
+            ),
+            models.CheckConstraint(
+                condition=Q(attempts__lte=APPROVAL_MAX_ATTEMPTS),
+                name="setup_approval_attempts_cap",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["conversation", "status"], name="setup_approval_conv_status"
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"Action approval #{self.pk} ({self.kind}, {self.status})"

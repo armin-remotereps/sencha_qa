@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from django.conf import settings
 from django.db import models
+from django.db.models.functions import MD5, Trim
 
 from controller_client.protocol import (
     MAX_VERSION_LENGTH,
@@ -530,6 +531,13 @@ class TestCase(models.Model):
     estimate = models.CharField(max_length=50, blank=True, default="")
     references = models.CharField(max_length=500, blank=True, default="")
     preconditions = models.TextField(blank=True, default="")
+    # Computed by Postgres; the cache key of the stage-0 analysis
+    # (machine_readiness.PreconditionAnalysis). Never written by Django.
+    preconditions_md5 = models.GeneratedField(
+        expression=MD5(Trim("preconditions")),
+        output_field=models.CharField(max_length=32),
+        db_persist=True,
+    )
     steps = models.TextField(blank=True, default="")
     expected = models.TextField(blank=True, default="")
     is_converted = models.BooleanField(default=False)
@@ -540,7 +548,11 @@ class TestCase(models.Model):
         indexes = [
             models.Index(
                 fields=["project", "testrail_id"], name="testcase_project_testrail_idx"
-            )
+            ),
+            models.Index(
+                fields=["project", "preconditions_md5"],
+                name="testcase_project_precond_idx",
+            ),
         ]
 
     def __str__(self) -> str:

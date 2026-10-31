@@ -60,6 +60,7 @@ INSTALLED_APPS: list[str] = [
     "notifications",
     "test_sessions",
     "knowledge_base",
+    "machine_readiness",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -215,6 +216,11 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "knowledge_base.tasks.expand_knowledge_archive": {"queue": "knowledge"},
     "knowledge_base.tasks.copy_project_knowledge": {"queue": "knowledge"},
     "knowledge_base.tasks.sweep_knowledge_storage": {"queue": "knowledge"},
+    # Short runner round trips, no LLM; a person is waiting on the page.
+    "machine_readiness.tasks.scan_artifacts_task": {"queue": "assist"},
+    "machine_readiness.tasks.quick_check_task": {"queue": "assist"},
+    # Several LLM calls over minutes, like an import (sent by name after one).
+    "machine_readiness.tasks.analyse_preconditions_task": {"queue": "upload"},
 }
 # Installed into django-celery-beat's tables by its DatabaseScheduler when
 # beat starts (machine_setup.task_names.SWEEP_STALE_AUTO_FIXES).
@@ -531,6 +537,47 @@ for _kb_name, _kb_value in (
 ):
     if _kb_value < 1:
         raise ImproperlyConfigured(f"{_kb_name} must be 1 or more")
+
+# Machine readiness (artifacts profile, base directory inventory, stage 0)
+# Caps of the Test Runner's scan_directory over the artifacts base directory
+# (the runner also stops after 10 s).
+ARTIFACT_SCAN_MAX_ENTRIES: int = config(
+    "ARTIFACT_SCAN_MAX_ENTRIES", default=2000, cast=int
+)
+ARTIFACT_SCAN_MAX_DEPTH: int = config("ARTIFACT_SCAN_MAX_DEPTH", default=4, cast=int)
+# Rendered artifacts profile, checked at write time so the planner always gets
+# all of it.
+ARTIFACT_PROFILE_MAX_CHARS: int = config(
+    "ARTIFACT_PROFILE_MAX_CHARS", default=12000, cast=int
+)
+# Precondition text per stage-0 analysis LLM call, and calls per analysis.
+STAGE0_ANALYSIS_BATCH_CHARS: int = config(
+    "STAGE0_ANALYSIS_BATCH_CHARS", default=24000, cast=int
+)
+STAGE0_ANALYSIS_MAX_CALLS: int = config(
+    "STAGE0_ANALYSIS_MAX_CALLS", default=20, cast=int
+)
+# Wall-clock cap of one "Check machine" (no LLM).
+STAGE0_QUICK_CHECK_BUDGET_SECONDS: int = config(
+    "STAGE0_QUICK_CHECK_BUDGET_SECONDS", default=60, cast=int
+)
+for _mr_name, _mr_value in (
+    ("ARTIFACT_SCAN_MAX_ENTRIES", ARTIFACT_SCAN_MAX_ENTRIES),
+    ("ARTIFACT_SCAN_MAX_DEPTH", ARTIFACT_SCAN_MAX_DEPTH),
+    ("ARTIFACT_PROFILE_MAX_CHARS", ARTIFACT_PROFILE_MAX_CHARS),
+    ("STAGE0_ANALYSIS_BATCH_CHARS", STAGE0_ANALYSIS_BATCH_CHARS),
+    ("STAGE0_ANALYSIS_MAX_CALLS", STAGE0_ANALYSIS_MAX_CALLS),
+    ("STAGE0_QUICK_CHECK_BUDGET_SECONDS", STAGE0_QUICK_CHECK_BUDGET_SECONDS),
+):
+    if _mr_value < 1:
+        raise ImproperlyConfigured(f"{_mr_name} must be 1 or more")
+# The controller protocol caps (controller_client.artifact_scan) are the upper
+# bound: the runner refuses larger requests.
+if ARTIFACT_SCAN_MAX_ENTRIES > 2000 or ARTIFACT_SCAN_MAX_DEPTH > 4:
+    raise ImproperlyConfigured(
+        "ARTIFACT_SCAN_MAX_ENTRIES must be at most 2000 and "
+        "ARTIFACT_SCAN_MAX_DEPTH at most 4 (the Test Runner's caps)"
+    )
 
 # Controller
 CONTROLLER_SERVER_HOST: str = config(
