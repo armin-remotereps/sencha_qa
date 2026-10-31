@@ -1,6 +1,6 @@
 # feat: Pause a running case and discuss it with the agent
 
-Status: Ready
+Status: In progress
 Created: 2026-10-31
 Request: While a test case is running, a person must be able to pause it and go
 straight to a discussion with the agent about that case. In the discussion they

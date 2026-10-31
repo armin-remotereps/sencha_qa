@@ -210,6 +210,7 @@ def help_to_json(help: CheckpointHelp) -> dict[str, object]:
         "auto_fix_summary": help.auto_fix_summary,
         "auto_fix_fixed": help.auto_fix_fixed,
         "fault": help.fault,
+        "paused_by": help.paused_by,
     }
 
 
@@ -486,10 +487,10 @@ def _parse_help(value: object) -> CheckpointHelp | None:
         return None
     if isinstance(request_id, bool) or not isinstance(request_id, int):
         request_id = None
-    # ``ask``, ``auto_fix_summary``, ``auto_fix_fixed`` and ``fault`` are absent
-    # from older help keys.
+    # ``ask``, ``auto_fix_summary``, ``auto_fix_fixed``, ``fault`` and
+    # ``paused_by`` are absent from older help keys.
     ask, auto_fix_summary = item.get("ask"), item.get("auto_fix_summary")
-    fault = item.get("fault")
+    fault, paused_by = item.get("fault"), item.get("paused_by")
     return CheckpointHelp(
         step_num=step_num,
         request_id=request_id,
@@ -502,6 +503,7 @@ def _parse_help(value: object) -> CheckpointHelp | None:
         ),
         auto_fix_fixed=item.get("auto_fix_fixed") is True,
         fault=fault if isinstance(fault, str) else "",
+        paused_by=paused_by if isinstance(paused_by, str) else "",
     )
 
 

@@ -152,6 +152,44 @@ RETEST_CLEARED: dict[str, object] = {
     "retest_note": "",
 }
 
+# Cap on a pause's first message for the agent. Kept equal to
+# ``machine_setup.forms.SETUP_MESSAGE_MAX_LENGTH`` (it becomes a help-chat
+# turn); ``projects`` cannot import ``machine_setup.forms``.
+PAUSE_MESSAGE_MAX_LENGTH = 8000
+# A case's pause request fields (``TestRunTestCase.pause_*``) and the
+# `QuerySet.update` values that clear them.
+PAUSE_REQUEST_FIELDS: tuple[str, ...] = (
+    "pause_requested_generation",
+    "pause_requested_by",
+    "pause_requested_label",
+    "pause_requested_via",
+    "pause_requested_at",
+    "pause_message",
+)
+PAUSE_REQUEST_CLEARED: dict[str, object] = {
+    "pause_requested_generation": None,
+    "pause_requested_by": None,
+    "pause_requested_label": "",
+    "pause_requested_via": "",
+    "pause_requested_at": None,
+    "pause_message": "",
+}
+
+
+class PersonStepChannel(models.TextChoices):
+    """Where a person answered a person step (or asked to pause a case);
+    blank until a person acts.
+
+    Rows from before the channel existed keep blank and were answered on the
+    web (``reported_by``/``closed_by`` name the user). A Test Runner answer has
+    a user only when the runner's ``CONTROLLER_PERSON_EMAIL`` named an active
+    project member.
+    """
+
+    NONE = "", "Not answered by a person"
+    WEB = "web", "Punk Hazard"
+    RUNNER = "runner", "Test Runner"
+
 
 class BlockedReason(models.TextChoices):
     """Why a case could not be executed or judged; never a verdict on the app.
@@ -678,6 +716,30 @@ class TestRunTestCase(models.Model):
     # Serialized orchestrator progress (plan, attempts, next step, browser) so a
     # Blocked or Cancelled case can resume in place; {} means plan from scratch.
     execution_checkpoint = models.JSONField(default=dict, blank=True)
+    # A person's request to pause the running case (at most one; see
+    # ``PAUSE_REQUEST_FIELDS``). It counts only for the run's
+    # ``execution_generation`` it names; the worker stops at its next check.
+    pause_requested_generation = models.PositiveIntegerField(null=True, blank=True)
+    # Null: an anonymous person at the Test Runner (or the user was deleted).
+    pause_requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        db_index=False,
+    )
+    # Server-written actor label ("Ana", "Ana via Test Runner").
+    pause_requested_label = models.CharField(max_length=255, blank=True, default="")
+    pause_requested_via = models.CharField(
+        max_length=16, choices=PersonStepChannel.choices, blank=True, default=""
+    )
+    pause_requested_at = models.DateTimeField(null=True, blank=True)
+    # The person's first message for the agent; sent once the case stopped.
+    # Kept after the verdict won the race (a "dropped" record) until dismissed.
+    pause_message = models.TextField(
+        max_length=PAUSE_MESSAGE_MAX_LENGTH, blank=True, default=""
+    )
 
     class Meta:
         unique_together = ("test_run", "test_case")
@@ -792,6 +854,22 @@ class HelpContinueMode(models.TextChoices):
     FROM_SCRATCH = "from_scratch", "Start the case again"
 
 
+class PauseMessageState(models.TextChoices):
+    """What became of a pause's first message (``CaseHelpRequest``)."""
+
+    NONE = "", "None"
+    # The discussion opens once the request commits (``open_paused_help_chat``).
+    PENDING = "pending", "Opening the discussion"
+    SENT = "sent", "Sent"
+    # Not sent (no member to send it as, machine busy, ...); a person re-sends.
+    REFUSED = "refused", "Not sent"
+    # The request was resolved before the discussion opened.
+    DROPPED = "dropped", "Dropped"
+
+
+PAUSE_MESSAGE_NOTE_MAX_LENGTH = 500
+
+
 class CaseHelpRequest(models.Model):
     """One Need help event of a run case: the failing step and the agent's ask."""
 
@@ -851,6 +929,39 @@ class CaseHelpRequest(models.Model):
         max_length=HELP_NOTE_MAX_LENGTH, blank=True, default=""
     )
     agent_proposal_at = models.DateTimeField(null=True, blank=True)
+    # The continue mode the help-chat agent recommends with a Continue
+    # suggestion; blank when none. Shown only, never pre-selected.
+    agent_proposal_continue_mode = models.CharField(
+        max_length=16, choices=HelpContinueMode.choices, blank=True, default=""
+    )
+    # A person's pause stopped the case: ``fault`` is blank and ``reason`` /
+    # ``ask`` are server texts.
+    stopped_by_pause = models.BooleanField(default=False)
+    # Who asked to pause. Also set when a pending pause lost the race to the
+    # agent's need_help or a fault: that person still gets the discussion.
+    paused_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        db_index=False,
+    )
+    paused_by_label = models.CharField(max_length=255, blank=True, default="")
+    paused_via = models.CharField(
+        max_length=16, choices=PersonStepChannel.choices, blank=True, default=""
+    )
+    # The pauser's first message for the agent, copied from the case.
+    pause_message = models.TextField(
+        max_length=PAUSE_MESSAGE_MAX_LENGTH, blank=True, default=""
+    )
+    pause_message_state = models.CharField(
+        max_length=16, choices=PauseMessageState.choices, blank=True, default=""
+    )
+    # User-safe reason when ``pause_message_state`` is ``refused``.
+    pause_message_note = models.CharField(
+        max_length=PAUSE_MESSAGE_NOTE_MAX_LENGTH, blank=True, default=""
+    )
 
     class Meta:
         constraints = [
@@ -872,6 +983,15 @@ class CaseHelpRequest(models.Model):
     @property
     def is_open(self) -> bool:
         return self.resolution == HelpResolution.OPEN
+
+    @property
+    def is_person_pause(self) -> bool:
+        return self.stopped_by_pause
+
+    @property
+    def has_pending_person(self) -> bool:
+        """A person asked to pause the case: no Night auto-fix takes it."""
+        return self.paused_by_label != ""
 
     def __str__(self) -> str:
         return f"Help request #{self.pk} of TRTC #{self.test_run_test_case_id}"
@@ -1130,20 +1250,7 @@ class PersonStepClose(models.TextChoices):
     MARKED_FAILED = "marked_failed", "Marked failed"
     MARKED_BLOCKED = "marked_blocked", "Marked blocked"
     MARKED_RETEST = "marked_retest", "Marked for re-test"
-
-
-class PersonStepChannel(models.TextChoices):
-    """Where a person answered a person step; blank until a person acts.
-
-    Rows from before the channel existed keep blank and were answered on the
-    web (``reported_by``/``closed_by`` name the user). A Test Runner answer has
-    a user only when the runner's ``CONTROLLER_PERSON_EMAIL`` named an active
-    project member.
-    """
-
-    NONE = "", "Not answered by a person"
-    WEB = "web", "Punk Hazard"
-    RUNNER = "runner", "Test Runner"
+    PAUSED = "paused", "Paused for a discussion"
 
 
 class CasePersonStep(models.Model):

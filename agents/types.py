@@ -397,6 +397,9 @@ class CheckpointHelp:
     # Label of the infrastructure fault that interrupted the step; empty when
     # the agent asked for help (and on older checkpoints).
     fault: str = ""
+    # Label of the person whose pause interrupted the step (a member name or a
+    # fixed Test Runner label, never runner-reported text); empty otherwise.
+    paused_by: str = ""
 
 
 # Where a person step stands in the checkpoint: handed out and waiting, the
