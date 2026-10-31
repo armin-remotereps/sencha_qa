@@ -102,7 +102,10 @@ from projects.forms import (
 from projects.models import HelpContinueMode, Project
 from projects.person_step_services import PersonStepActionResult
 from projects.runner_case_pause_services import pause_from_runner
-from projects.runner_case_services import RunnerHelpAction, resolve_help_from_runner
+from projects.runner_help_action_services import (
+    RunnerHelpAction,
+    resolve_help_from_runner,
+)
 from projects.runner_person_step_services import (
     RunnerPersonStepAnswer,
     answer_from_runner,
@@ -192,6 +195,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     # wait for (coalescing bursts of chat and tool rows).
     _last_push_at: float
     _trailing_push: asyncio.Task[None] | None
+    # Serialises snapshot pushes, so an older snapshot is never sent last.
+    _push_lock: asyncio.Lock
 
     async def connect(self) -> None:
         self._authenticated = False
@@ -206,6 +211,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self._person_steps_sent = None
         self._last_push_at = 0.0
         self._trailing_push = None
+        self._push_lock = asyncio.Lock()
         self._reply_tracker = ReplyTracker(self.channel_layer)
         self._authenticator = ControllerAuthenticator()
         self._message_builder = ControllerMessageBuilder(ActionTypeRegistry())
@@ -473,7 +479,11 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             await asyncio.sleep(wait)
         finally:
             self._trailing_push = None
-        await self._push_person_steps()
+        try:
+            await self._push_person_steps()
+        except Exception:
+            # Nobody awaits this task: log here (e.g. the socket closed).
+            logger.exception("Trailing person step push failed")
 
     async def _push_person_steps(self, *, force: bool = False) -> None:
         """Send the window's snapshot when it changed since the last send.
@@ -484,10 +494,14 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         """
         if not self._person_steps_enabled or self._project is None:
             return
+        async with self._push_lock:
+            await self._push_snapshot(self._project.id, force=force)
+
+    async def _push_snapshot(self, project_id: int, *, force: bool) -> None:
         self._last_push_at = asyncio.get_running_loop().time()
         try:
             state = await sync_to_async(get_runner_window_state)(
-                self._project.id,
+                project_id,
                 RunnerWindowFeatures(
                     assist=self._assist_enabled,
                     case_steps=self._case_steps_enabled,
@@ -497,9 +511,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
                 ),
             )
         except Exception:
-            logger.exception(
-                "Reading person steps failed for project %s", self._project.id
-            )
+            logger.exception("Reading person steps failed for project %s", project_id)
             return
         snapshot = (state.steps, state.cases)
         # The first push of a connection always goes out (even empty), so a

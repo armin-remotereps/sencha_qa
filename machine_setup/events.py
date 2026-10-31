@@ -31,8 +31,10 @@ def _send(project_id: int, event: dict[str, object]) -> None:
 
 def broadcast_message(project_id: int, payload: SetupMessagePayload) -> None:
     _send(project_id, {"type": "machine_setup.message", "message": payload})
-    # The Test Runner window shows help discussions (coalesced by its consumer).
-    nudge_runner_person_steps(project_id)
+    # The Test Runner window shows help discussions (coalesced by its
+    # consumer); it never shows sub-agent rows.
+    if payload["parent_id"] is None:
+        nudge_runner_person_steps(project_id)
 
 
 def broadcast_screenshot(

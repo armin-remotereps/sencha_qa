@@ -29,10 +29,7 @@ from machine_setup.services.queue_turn import (
     create_user_turn,
     link_knowledge_refs,
 )
-from machine_setup.services.send_gates import (
-    machine_not_ready_refusal,
-    run_and_update_refusal,
-)
+from machine_setup.services.send_gates import thread_send_refusal
 from projects.models import PersonStepChannel, Project
 from projects.person_step_actor import PersonStepActor
 
@@ -142,11 +139,7 @@ def _refusal(
 ) -> MachineSetupError | None:
     if resolve_live_turn(project_id=project.pk, now=now) is not None:
         return SetupTurnActiveError()
-    refusal = run_and_update_refusal(project, now)
-    if refusal is not None or main_chat:
-        # Q3: the main chat may run offline; its machine tools say so.
-        return refusal
-    return machine_not_ready_refusal(project)
+    return thread_send_refusal(project, now, main_chat=main_chat)
 
 
 def _target_conversation(

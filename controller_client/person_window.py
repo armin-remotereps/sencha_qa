@@ -735,8 +735,8 @@ class PersonWindow:
                 and action.continue_mode not in help_state.continue_mode_choices
             ):
                 message = _HELP_MODE_REFUSED
-            elif action.use_plan_revision and (
-                draft is None or draft.revision_id != action.plan_revision_id
+            elif (draft.revision_id if draft is not None else None) != (
+                action.plan_revision_id
             ):
                 message = _HELP_PLAN_STALE
         if message:

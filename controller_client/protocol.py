@@ -2231,7 +2231,9 @@ def cut_log_tail(text: str) -> str:
     PERSON_CASE_LOG_TAIL_MAX_CHARS characters, newest kept; a first line cut
     by the character cap is dropped unless it is the only one.
     """
-    if len(text) > PERSON_CASE_LOG_TAIL_MAX_CHARS:
+    # At the cap the text may be the SQL tail of a longer log: its first
+    # line is then cut mid-way and is dropped.
+    if len(text) >= PERSON_CASE_LOG_TAIL_MAX_CHARS:
         cut = text[-PERSON_CASE_LOG_TAIL_MAX_CHARS:]
         newline = cut.find("\n")
         text = cut[newline + 1 :] if 0 <= newline < len(cut) - 1 else cut

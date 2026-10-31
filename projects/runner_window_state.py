@@ -12,8 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from controller_client.protocol import PersonCaseStatePayload, PersonStepStatePayload
-from machine_setup.services.runner_discussion import get_runner_discussion
-from projects.models import Project
+from machine_setup.services.runner_discussion import (
+    get_runner_discussion,
+    get_runner_send_blocker,
+)
 from projects.runner_case_services import RunnerCaseStep, get_runner_cases
 from projects.runner_person_step_services import get_runner_person_steps
 
@@ -54,7 +56,7 @@ def get_runner_window_state(
     steps = tuple(view.to_payload() for view in views)
     if not features.case_context:
         return RunnerWindowState(steps=steps, cases=None)
-    case_views = get_runner_cases(
+    runner_cases = get_runner_cases(
         project_id,
         tuple(
             RunnerCaseStep(pivot_id=view.pivot_id, status=view.status.value)
@@ -63,14 +65,21 @@ def get_runner_window_state(
         discussion=features.discussion,
         pause=features.pause,
     )
-    project: Project | None = None
+    project = runner_cases.project
+    send_blocker: str | None = None
     cases: list[PersonCaseStatePayload] = []
-    for case_view in case_views:
+    for case_view in runner_cases.views:
         payload = case_view.payload
-        if case_view.help_request_id is not None and payload.help is not None:
-            if project is None:
-                project = Project.objects.get(pk=project_id)
-            discussion = get_runner_discussion(project, case_view.help_request_id)
+        if (
+            case_view.help_request_id is not None
+            and payload.help is not None
+            and project is not None
+        ):
+            if send_blocker is None:
+                send_blocker = get_runner_send_blocker(project)
+            discussion = get_runner_discussion(
+                project, case_view.help_request_id, send_blocker=send_blocker
+            )
             payload = replace(
                 payload,
                 help=replace(

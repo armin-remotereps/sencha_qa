@@ -575,11 +575,12 @@ def mark_retest_after_help(
         now = timezone.now()
         auto_fix_live = auto_fix_turn_live(request.pk)
         retest_note = note.strip()[:RETEST_NOTE_MAX_LENGTH]
+        actor = PersonStepActor.web(user)
         # Human in the loop: a step left open on the case closes with it.
         _cancel_person_steps(
             person_step_ids,
             PersonStepClose.MARKED_RETEST,
-            PersonStepActor.web(user),
+            actor,
             now,
         )
         # The case is re-run later from scratch: no redesign carries over.
@@ -588,7 +589,7 @@ def mark_retest_after_help(
         _resolve(
             request,
             HelpResolution.MARKED_RETEST,
-            PersonStepActor.web(user),
+            actor,
             _cap_note(note),
             now,
             auto_fix_live,

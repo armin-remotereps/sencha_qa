@@ -2447,7 +2447,9 @@ class PersonWindowApp:
             PersonHelpActionKind.CONTINUE,
             note,
             mode,
-            draft.revision_id if use_plan and draft is not None else None,
+            # The shown draft's id even when not used: the server supersedes
+            # only the draft the person saw (as the web form posts it).
+            draft.revision_id if draft is not None else None,
             use_plan,
         )
 

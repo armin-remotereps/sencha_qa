@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from django.core.cache import cache
 from django.urls import reverse
 from django.utils import timezone
 
@@ -32,18 +31,19 @@ from controller_client.protocol import (
 from machine_setup.exceptions import MachineSetupError, SetupTurnActiveError
 from machine_setup.models import SetupConversation, SetupMessage, SetupMessageKind
 from machine_setup.services.open_help_chat import open_help_chat
-from machine_setup.services.send_gates import (
-    machine_not_ready_refusal,
-    run_and_update_refusal,
-)
+from machine_setup.services.send_gates import thread_send_refusal
 from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 from machine_setup.turn_state import live_turn_exists, person_turn_live
 from notifications.services.site_url import absolute_url
 from projects.exceptions import RunHelpError
 from projects.models import Project
 from projects.person_step_actor import PersonStepActor
-from projects.runner_case_services import find_runner_help_case
-from projects.runner_person_step_services import current_member, owns_project
+from projects.runner_help_action_services import find_runner_help_case
+from projects.runner_person_step_services import (
+    current_member,
+    hit_runner_throttle,
+    owns_project,
+)
 
 # Discussion turns one project's Test Runner may send per window.
 RUNNER_CHAT_LIMIT = 10
@@ -76,13 +76,12 @@ class RunnerDiscussionView:
 
 
 def get_runner_discussion(
-    project: Project, help_request_id: int
+    project: Project, help_request_id: int, *, send_blocker: str
 ) -> RunnerDiscussionView:
-    """The request's discussion; no thread yet gives an empty one that can send.
+    """The request's discussion; no thread yet gives an empty one.
 
-    Queries: the thread (``llm_transcript`` deferred), its newest rows, the
-    live turn checks and the send gates (the refusals ``send_setup_message``
-    applies, checked without sending or closing stale turns).
+    ``send_blocker``: ``get_runner_send_blocker(project)``, computed once per
+    snapshot. Queries: the thread, its newest rows and the live turn check.
     """
     thread = (
         SetupConversation.objects.filter(
@@ -102,7 +101,7 @@ def get_runner_discussion(
             kwargs={"project_id": project.pk, "conversation_id": thread.pk},
         )
         thread_url = (absolute_url(path) or "")[:PERSON_STEP_URL_MAX_CHARS]
-    blocker = _send_blocker(project)
+    blocker = send_blocker
     return RunnerDiscussionView(
         thread_url=thread_url,
         turn_live=person_turn_live(help_request_id),
@@ -112,15 +111,18 @@ def get_runner_discussion(
     )
 
 
-def _send_blocker(project: Project) -> str:
+def get_runner_send_blocker(project: Project) -> str:
+    """Why a help-thread message cannot be sent now ("" when it can).
+
+    The refusals ``send_setup_message`` applies to a help thread, checked
+    without sending and without closing a stale turn.
+    """
     now = timezone.now()
-    refusal: MachineSetupError | None = None
+    refusal: MachineSetupError | None
     if live_turn_exists(project.pk, now):
         refusal = SetupTurnActiveError()
     else:
-        refusal = run_and_update_refusal(project, now) or machine_not_ready_refusal(
-            project
-        )
+        refusal = thread_send_refusal(project, now, main_chat=False)
     return refusal.message if refusal is not None else ""
 
 
@@ -179,7 +181,8 @@ def _author(row: SetupMessage, kind: DiscussionMessageKind) -> str:
     if author is None:
         # The server's brief of the case.
         return "Case brief"
-    return author.get_full_name() or author.email
+    # Never an email on the runner socket (anyone with the key reads it).
+    return author.get_full_name() or "A member"
 
 
 def _tool_notice(row: SetupMessage) -> str:
@@ -224,13 +227,9 @@ def send_from_runner(
 
 
 def _check_chat_throttle(project_id: int) -> None:
-    key = f"machine_setup:runner-chat:{project_id}"
-    cache.add(key, 0, timeout=RUNNER_CHAT_WINDOW_SECONDS)
-    try:
-        attempts = cache.incr(key)
-    except ValueError:
-        # The key expired between add and incr: this is the window's first send.
-        cache.add(key, 1, timeout=RUNNER_CHAT_WINDOW_SECONDS)
-        attempts = 1
-    if attempts > RUNNER_CHAT_LIMIT:
+    if not hit_runner_throttle(
+        f"machine_setup:runner-chat:{project_id}",
+        limit=RUNNER_CHAT_LIMIT,
+        window_seconds=RUNNER_CHAT_WINDOW_SECONDS,
+    ):
         raise MachineSetupError(_THROTTLED)
