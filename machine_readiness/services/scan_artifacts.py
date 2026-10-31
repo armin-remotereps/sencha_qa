@@ -277,10 +277,37 @@ def scan_artifacts(
     Runs under the project's scan lock: the one ``request_scan`` handed over
     as ``lock_token``, or a new one (the setup agent's tool, ``during_turn``).
     Raises ``ArtifactScanUnavailableError`` (a gate, a scan already running,
-    runner offline or too old, no base directory, no answer). A root the
-    runner refuses (missing, not a directory, a link, a network path) is
-    stored as the inventory's ``error``, not raised.
+    runner offline or too old, no base directory, no answer); a queued scan
+    (``lock_token``) then also sends the setup page a ``scan`` readiness event
+    with ``failed`` and the ``reason``, since nobody waits for the task. A
+    root the runner refuses (missing, not a directory, a link, a network
+    path) is stored as the inventory's ``error``, not raised.
     """
+    try:
+        return _scan_locked(
+            project_id=project_id,
+            actor_id=actor_id,
+            ports=ports,
+            lock_token=lock_token,
+            during_turn=during_turn,
+        )
+    except ArtifactScanUnavailableError as exc:
+        if lock_token is not None:
+            broadcast_readiness(
+                project_id,
+                {"event": "scan", "failed": True, "reason": exc.message},
+            )
+        raise
+
+
+def _scan_locked(
+    *,
+    project_id: int,
+    actor_id: int | None,
+    ports: RunnerPorts,
+    lock_token: str | None,
+    during_turn: bool,
+) -> ScanOutcome:
     lock = (
         project_locks.claim(
             project_locks.SCAN_LOCK_PREFIX,

@@ -43,7 +43,6 @@ from machine_readiness.artifact_matching import (
 )
 from machine_readiness.exceptions import QuickCheckRefusedError
 from machine_readiness.keys import normalise_key
-from machine_readiness.locked_task import send_on_commit
 from machine_readiness.models import (
     LATEST_VERSION,
     ArtifactInventory,
@@ -68,7 +67,6 @@ from machine_readiness.services.requirement_status import (
 )
 from machine_readiness.services.run_stage0 import get_run_stage0
 from machine_readiness.services.runner_gates import runner_action_refusal
-from machine_readiness.task_names import QUICK_CHECK
 from machine_readiness.types import (
     InventoryEntry,
     MatchStatus,
@@ -96,7 +94,9 @@ QUICK_CHECK_TASK_SOFT_LIMIT_SECONDS = (
 QUICK_CHECK_TASK_TIME_LIMIT_SECONDS = QUICK_CHECK_TASK_SOFT_LIMIT_SECONDS + 30
 # The per-project check lock outlives the task's hard limit only a little.
 QUICK_CHECK_LOCK_TTL_SECONDS = QUICK_CHECK_TASK_TIME_LIMIT_SECONDS + 30
-_BUSY_MESSAGE = "This machine is being checked already; the card updates when it ends."
+QUICK_CHECK_BUSY_MESSAGE = (
+    "This machine is being checked already; the card updates when it ends."
+)
 
 
 @dataclass(frozen=True)
@@ -160,26 +160,6 @@ def ensure_quick_check_allowed(*, project_id: int, ports: RunnerPorts) -> Runner
     return runner
 
 
-def request_quick_check(
-    *, project_id: int, run_id: int | None, actor_id: int, ports: RunnerPorts
-) -> None:
-    """Queue a check (``assist`` queue) after the same gates as the check.
-
-    Takes the project's check lock, handed to the task (``projects.tasks``),
-    which frees it. Raises ``QuickCheckRefusedError`` when a gate refuses or
-    a check is already queued or running.
-    """
-    ensure_quick_check_allowed(project_id=project_id, ports=ports)
-    lock = project_locks.acquire(
-        project_locks.QUICK_CHECK_LOCK_PREFIX,
-        project_id,
-        ttl=QUICK_CHECK_LOCK_TTL_SECONDS,
-    )
-    if lock is None:
-        raise QuickCheckRefusedError(_BUSY_MESSAGE)
-    send_on_commit(QUICK_CHECK, [project_id, run_id, actor_id], lock)
-
-
 def check_requirements(
     *,
     project_id: int,
@@ -213,7 +193,7 @@ def check_requirements(
     )
     try:
         if lock is None:
-            raise QuickCheckRefusedError(_BUSY_MESSAGE)
+            raise QuickCheckRefusedError(QUICK_CHECK_BUSY_MESSAGE)
         return _check(
             project_id=project_id, run_id=run_id, actor_id=actor_id, ports=ports
         )
@@ -549,9 +529,21 @@ def _run_app_checks(
     decided: dict[str, RequirementStatusUpdate],
     deadline: float,
 ) -> bool:
-    """One check_app_installed per application; False when stopped early."""
+    """One check_app_installed per application; False when stopped early.
+
+    A network check target is never sent (the runner would stat it); it is
+    left unknown like a network path.
+    """
     for target in targets:
         if target.kind != RequirementKind.APPLICATION or not target.check_target:
+            continue
+        if is_network_path(target.check_target):
+            if target.stored_status == RequirementStatus.UNKNOWN:
+                decided[target.key] = RequirementStatusUpdate(
+                    key=target.key,
+                    status=RequirementStatus.UNKNOWN,
+                    detail=NETWORK_PATH_NOT_CHECKED,
+                )
             continue
         remaining = deadline - time.monotonic()
         if remaining < _MIN_ACTION_SECONDS:

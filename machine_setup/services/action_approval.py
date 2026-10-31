@@ -42,9 +42,13 @@ from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 _LINE_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # The approach may span lines; every other control character is refused.
 _TEXT_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
-# Bidi controls and zero-width characters are refused in every field: they
-# can make the text a person approves read differently from what it does.
-_INVISIBLE = re.compile("[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
+# Bidi controls and zero-width or invisible format characters (soft hyphen,
+# Arabic letter mark, Mongolian vowel separator, word joiner, invisible
+# operators) are refused in every field: they can make the text a person
+# approves read differently from what it does.
+_INVISIBLE = re.compile(
+    "[\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]"
+)
 _SPACES = re.compile(r"\s+")
 
 

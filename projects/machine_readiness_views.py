@@ -38,6 +38,7 @@ def machine_readiness_scan(
         messages.success(
             request,
             f"Scanning the {availability.runner_os_label} base directory. "
-            "Reload this page in a few seconds to see the inventory.",
+            "Reload this page in a few seconds to see the inventory; if it does "
+            "not change, the Machine setup chat says why the scan did not run.",
         )
     return redirect("machine_readiness:overview", project_id=project.id)

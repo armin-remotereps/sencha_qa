@@ -84,7 +84,8 @@
   current_state (with `help` on a help thread, and `intake_pending`), message,
   screenshot, turn, reset, help, agent_status, visual_engine,
   machine_readiness ({event: profile|intake_skipped|scan|analysis, …} from
-  machine_readiness.events: a saved profile hides the intake banner; each
+  machine_readiness.events: a saved profile hides the intake banner; a scan
+  the worker refused comes with failed and reason; each
   event sets the one-line readiness note shown under it). `help` (and current_state's
   `help`) is re-dispatched as the `help-state` window event for the nested
   helpPanel. All dynamic text is rendered with x-text, except agent reply and
@@ -1043,8 +1044,11 @@ document.addEventListener('alpine:init', () => {
         this.intakePending = false;
         this.readinessNote = 'Intake skipped.';
       } else if (readiness.event === 'scan') {
+        // reason: set when the worker refused the scan (shown with x-text).
         this.readinessNote = readiness.failed
-          ? 'The base directory scan failed; see Machine readiness.'
+          ? (readiness.reason
+            ? 'The base directory scan did not run: ' + String(readiness.reason)
+            : 'The base directory scan failed; see Machine readiness.')
           : 'Base directory scanned: ' + Number(readiness.entry_count || 0) + ' entries.';
       } else if (readiness.event === 'analysis') {
         const remaining = Number(readiness.remaining || 0);

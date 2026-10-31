@@ -16,8 +16,7 @@ RUN_STARTED_MESSAGE = (
     "A run is executing on this machine. Try again when it has finished."
 )
 SETUP_RUNNING_MESSAGE = (
-    "Machine setup is working on this machine. Try again when its turn has "
-    "finished."
+    "Machine setup is working on this machine. Try again when its turn has " "finished."
 )
 RUNNER_UPDATING_MESSAGE = (
     "The Test Runner is being updated. Wait for the update to finish."

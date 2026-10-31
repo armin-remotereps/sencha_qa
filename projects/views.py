@@ -27,7 +27,7 @@ from auto_tester.pagination import (
 )
 from machine_readiness.exceptions import QuickCheckRefusedError
 from machine_readiness.run_stage0_state import runner_host
-from machine_readiness.services.quick_check import request_quick_check
+from machine_readiness.services.request_quick_check import request_quick_check
 from machine_readiness.services.run_stage0 import (
     get_run_stage0,
     prepare_machine_text,

@@ -6,7 +6,8 @@ ever opened when a person chose it (pure rules, no database access):
 
 - The setup agent cannot introduce one: its profile writes may keep a network
   base directory or item path the saved profile already has, never add or
-  change one (``agent_network_path_errors``). A person can, on the edit page,
+  change one, and a Windows base directory it adds or changes must start with
+  a drive letter or ``~`` (``agent_network_path_errors``). A person can, on the edit page,
   and a restore is a person's act. So every network base directory in a
   profile was entered by a person.
 - The analysis drops network check targets (``stage0_rules``).
@@ -20,12 +21,15 @@ ever opened when a person chose it (pure rules, no database access):
 from __future__ import annotations
 
 import ntpath
+import re
 
 from controller_client.protocol import is_network_path
 from machine_readiness.models import ArtifactOs
 from machine_readiness.types import ProfileData
 
 NETWORK_PATH_NOT_CHECKED = "Network path not checked."
+# The only Windows base directory forms a setup agent may introduce.
+_WINDOWS_DRIVE = re.compile(r"[A-Za-z]:[\\/]")
 
 __all__ = [
     "NETWORK_PATH_NOT_CHECKED",
@@ -56,16 +60,29 @@ def network_inspection_allowed(path: str, base_dir: str, os_name: ArtifactOs) ->
 def agent_network_path_errors(data: ProfileData, current: ProfileData) -> list[str]:
     """Network paths a setup-agent write would add or change (refused).
 
-    Base directories and item paths equal to the saved profile's are kept.
+    Base directories and item paths equal to the saved profile's are kept. A
+    new or changed Windows base directory must also start with a drive letter
+    (``X:\\`` / ``X:/``) or ``~``: any other form (UNC, device or NT namespace
+    prefixes) is kept only when a person saved it.
     """
     errors: list[str] = []
     for os_name in ArtifactOs:
         new = data.base_dir_for(os_name)
-        if is_network_path(new) and new != current.base_dir_for(os_name):
+        if not new or new == current.base_dir_for(os_name):
+            continue
+        if is_network_path(new):
             errors.append(
                 f"{os_name.label} base directory: a network path (\\\\server or "
                 "//server) can only be set by a person on the Machine readiness "
                 "tab."
+            )
+        elif os_name == ArtifactOs.WINDOWS and not (
+            _WINDOWS_DRIVE.match(new) or new.startswith("~")
+        ):
+            errors.append(
+                f"{os_name.label} base directory: start it with a drive letter, "
+                "such as D:\\qa; other forms can only be set by a person on the "
+                "Machine readiness tab."
             )
     saved_patterns = {
         (item.key, item.path_pattern)

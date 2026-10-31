@@ -40,7 +40,9 @@ def load_runner_info(project_id: int) -> RunnerInfo:
     return _runner_info(connected, system_info, capabilities)
 
 
-def _runner_info(connected: object, system_info: object, capabilities: object) -> RunnerInfo:
+def _runner_info(
+    connected: object, system_info: object, capabilities: object
+) -> RunnerInfo:
     os_raw = system_info.get("os") if isinstance(system_info, dict) else None
     return RunnerInfo(
         connected=bool(connected),

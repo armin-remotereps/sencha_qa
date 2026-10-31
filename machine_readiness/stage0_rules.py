@@ -115,6 +115,11 @@ def requirement_errors(requirement: Stage0RequirementData) -> list[str]:
     ):
         if any(char in value for char in ("\x00", "\n", "\r")):
             errors.append(f"«{requirement.key}»: the {label} must be on one line.")
+    if is_network_path(requirement.check_target):
+        errors.append(
+            f"«{requirement.key}»: the check target must not be a network path "
+            "(\\\\server or //server)."
+        )
     if "\x00" in requirement.install_hint:
         errors.append(
             f"«{requirement.key}»: the install hint contains a NUL character."

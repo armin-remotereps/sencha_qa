@@ -1636,16 +1636,28 @@ class InspectPathsPayload:
     allow_network: bool = False
 
 
+_PATH_SEPARATORS = "\\/"
+
+
 def is_network_path(path: str) -> bool:
-    """Whether ``path`` names another machine: ``\\\\host\\share``, ``//host``.
+    """Whether ``path`` may name another machine: ``\\\\host\\share``, ``//host``.
 
     On Windows merely opening such a path makes an SMB connection that can
     send the runner user's NTLM credentials to that host, so neither scan
     action touches one unless the server explicitly allows it. Mixed
-    separators and the ``\\\\?\\`` / ``\\\\.\\`` device prefixes count too.
+    separators and the ``\\\\?\\`` / ``\\\\.\\`` device prefixes count too, and
+    so does the NT object namespace prefix ``\\??\\`` (``\\??\\UNC\\host\\share``)
+    in any separator mix: such paths are refused whole, even ``\\??\\C:\\``.
     """
-    head = path.strip()[:2]
-    return len(head) == 2 and head[0] in "\\/" and head[1] in "\\/"
+    head = path.strip()[:4]
+    if len(head) >= 2 and head[0] in _PATH_SEPARATORS and head[1] in _PATH_SEPARATORS:
+        return True
+    return (
+        len(head) == 4
+        and head[0] in _PATH_SEPARATORS
+        and head[1:3] == "??"
+        and head[3] in _PATH_SEPARATORS
+    )
 
 
 @dataclass(frozen=True)
