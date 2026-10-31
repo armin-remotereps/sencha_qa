@@ -37,6 +37,7 @@ from projects.models import (
     Project,
     TestRunTestCase,
 )
+from projects.person_step_actor import PersonStepActor
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +48,12 @@ HELP_CHAT_CLOSED_MESSAGE = "This help chat was closed and cannot be reopened."
 
 
 def open_help_chat(
-    *, project: Project, pivot: TestRunTestCase, user: CustomUser, text: str
+    *, project: Project, pivot: TestRunTestCase, actor: PersonStepActor, text: str
 ) -> SetupConversation:
     """The help request's thread, with the person's first message sent.
+
+    ``actor``: a member on the web, or a person at the Test Runner (the
+    message is then labelled, and anonymous when no member was named).
 
     Raises ``RunHelpError`` when the run is not paused or the case has no open
     request (nothing is created), ``MachineSetupError`` when the request's
@@ -58,7 +62,9 @@ def open_help_chat(
     ready, ...). An empty ``text`` asks for a read-only look; reopening an
     existing help chat with an empty ``text`` sends nothing.
     """
-    thread, brief_row = _open_thread(project=project, pivot_id=pivot.pk, user=user)
+    thread, brief_row = _open_thread(
+        project=project, pivot_id=pivot.pk, user=actor.user
+    )
     created = brief_row is not None
     if brief_row is not None:
         # After commit: a caller's outer transaction may still roll it back.
@@ -70,7 +76,9 @@ def open_help_chat(
             return thread
         first = DEFAULT_FIRST_MESSAGE
     try:
-        send_setup_message(project=project, user=user, text=first, conversation=thread)
+        send_setup_message(
+            project=project, actor=actor, text=first, conversation=thread
+        )
     except MachineSetupError as exc:
         raise HelpChatSendRefusedError(exc.message, conversation_id=thread.pk) from exc
     if text.strip() and thread.help_request_id is not None:
@@ -97,7 +105,7 @@ def find_help_case(project: Project, pivot_id: int) -> TestRunTestCase | None:
 
 @transaction.atomic
 def _open_thread(
-    *, project: Project, pivot_id: int, user: CustomUser
+    *, project: Project, pivot_id: int, user: CustomUser | None
 ) -> tuple[SetupConversation, SetupMessage | None]:
     """The request's thread, and its brief row when it was created now."""
     # Locks project -> run -> request; releases a queued auto-fix to the person.

@@ -1,6 +1,6 @@
 # feat: Test Runner person window v2 (readable, full case, log, Pause, discussion)
 
-Status: Ready
+Status: In progress
 Created: 2026-10-31
 Supersedes: `docs/plan/feat-tester-console.md` (web console, dropped by the user)
 Depends on: `docs/plan/feat-pause-and-discuss.md` (Ready). It supplies the pause service, the runner pause seam, the first-message auto-send and the continue modes. This plan owns the runner protocol for pause and supersedes that plan's proposed protocol names (see "Pause from the runner").
@@ -244,3 +244,4 @@ These are minor and do not block Ready. The Q1 decision follows the window's pur
   - Adopted `case_pause_action` / `case_pause_action_result` / `CASE_PAUSE_V1`; this plan owns them and supersedes that plan's proposal.
   - The Continue radios use `allowed_continue_modes` (`continue_mode_choices`) and show the agent's suggested mode.
   - Anonymous pause messages are sent after step 6.
+- 2026-10-31: implementation started. `CLIENT_VERSION` goes 0.11.0 → **0.12.0**, not 0.10.3 → 0.11.0: machine setup intake merged first and took 0.11.0 for `ARTIFACT_SCAN_V1`. Every "0.11.0" above reads 0.12.0.

@@ -926,6 +926,14 @@ class CaseHelpRequest(models.Model):
         related_name="+",
     )
     resolved_at = models.DateTimeField(null=True, blank=True)
+    # Where the person resolved it (the web or the Test Runner window); blank
+    # for ``auto_fixed``, while open, and on rows from before the field.
+    resolved_via = models.CharField(
+        max_length=16, choices=PersonStepChannel.choices, blank=True, default=""
+    )
+    # How texts name the resolver (``PersonStepActor.label()``): set even when
+    # ``resolved_by`` is null (an anonymous Test Runner answer).
+    resolved_by_label = models.CharField(max_length=255, blank=True, default="")
     # The person's note; empty for ``auto_fixed`` and while open.
     note = models.TextField(max_length=HELP_NOTE_MAX_LENGTH, blank=True, default="")
     # The setup agent's report of its auto-fix (fixed or not fixed); empty when

@@ -32,6 +32,7 @@ from projects.models import (
     Project,
     TestRunTestCase,
 )
+from projects.person_step_actor import PersonStepActor
 from projects.project_access_services import get_project_access
 from projects.services import broadcast_case_status
 
@@ -108,7 +109,10 @@ def _open_locked(help_request_id: int) -> _Outcome | None:
 
     try:
         thread = open_help_chat(
-            project=project, pivot=pivot, user=user, text=request.pause_message
+            project=project,
+            pivot=pivot,
+            actor=PersonStepActor.web(user),
+            text=request.pause_message,
         )
     except HelpChatSendRefusedError as exc:
         _set_state(help_request_id, PauseMessageState.REFUSED, note=exc.message)

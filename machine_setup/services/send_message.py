@@ -1,4 +1,9 @@
-"""Use case: a member sends a chat message, which starts one agent turn."""
+"""Use case: a person sends a chat message, which starts one agent turn.
+
+The person is a member on the web, or a person at the project's Test Runner
+(a member, or anonymous; ``PersonStepActor``): a runner send stores no author
+but an ``author_label`` naming it.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,6 @@ from datetime import datetime
 from django.db import transaction
 from django.utils import timezone
 
-from accounts.models import CustomUser
 from knowledge_base.exceptions import KnowledgeItemNotFoundError
 from knowledge_base.services.resolve_knowledge_refs import resolve_knowledge_refs
 from machine_setup.document_text import UploadedDocument
@@ -29,7 +33,8 @@ from machine_setup.services.send_gates import (
     machine_not_ready_refusal,
     run_and_update_refusal,
 )
-from projects.models import Project
+from projects.models import PersonStepChannel, Project
+from projects.person_step_actor import PersonStepActor
 
 THREAD_CLOSED_MESSAGE = (
     "This conversation was reset. Send your message in the current chat."
@@ -39,7 +44,7 @@ THREAD_CLOSED_MESSAGE = (
 def send_setup_message(
     *,
     project: Project,
-    user: CustomUser,
+    actor: PersonStepActor,
     text: str,
     conversation: SetupConversation | None = None,
     document: UploadedDocument | None = None,
@@ -63,7 +68,7 @@ def send_setup_message(
     """
     outcome = _send_locked(
         project=project,
-        user=user,
+        actor=actor,
         text=text,
         conversation=conversation,
         document=document,
@@ -78,7 +83,7 @@ def send_setup_message(
 def _send_locked(
     *,
     project: Project,
-    user: CustomUser,
+    actor: PersonStepActor,
     text: str,
     conversation: SetupConversation | None,
     document: UploadedDocument | None,
@@ -97,7 +102,7 @@ def _send_locked(
     if refusal is not None:
         # Returned, not raised: a stale turn closed above must still commit.
         return refusal
-    target = _target_conversation(locked, user, conversation)
+    target = _target_conversation(locked, actor, conversation)
     if target is None:
         return MachineSetupError(THREAD_CLOSED_MESSAGE)
     if document is not None and target.kind != SetupConversationKind.CHAT:
@@ -111,13 +116,25 @@ def _send_locked(
     except KnowledgeItemNotFoundError:
         return SetupKnowledgeRefError()
     turn, message, documents = create_user_turn(
-        conversation=target, requested_by=user, text=text, document=document
+        conversation=target,
+        requested_by=actor.user,
+        text=text,
+        document=document,
+        author_label=_author_label(actor),
     )
     knowledge_refs = link_knowledge_refs(message, knowledge_items)
     transaction.on_commit(
         lambda: broadcast_and_enqueue(turn, message, documents, knowledge_refs)
     )
     return turn
+
+
+def _author_label(actor: PersonStepActor) -> str:
+    """The stored sender name of a Test Runner send; "" for the web (the
+    author FK names the person)."""
+    if actor.channel == PersonStepChannel.RUNNER:
+        return actor.label()
+    return ""
 
 
 def _refusal(
@@ -133,7 +150,7 @@ def _refusal(
 
 
 def _target_conversation(
-    project: Project, user: CustomUser, conversation: SetupConversation | None
+    project: Project, actor: PersonStepActor, conversation: SetupConversation | None
 ) -> SetupConversation | None:
     """The thread to write to; ``None`` when the given thread was archived."""
     if conversation is not None:
@@ -154,5 +171,5 @@ def _target_conversation(
         .first()
     )
     if chat is None:
-        chat = SetupConversation.objects.create(project=project, created_by=user)
+        chat = SetupConversation.objects.create(project=project, created_by=actor.user)
     return chat

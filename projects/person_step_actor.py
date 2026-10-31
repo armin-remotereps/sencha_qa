@@ -1,6 +1,8 @@
-"""Who answered a person step (Human in the loop), and how to name them.
+"""A person acting on a run case, and how to name them.
 
-A person answers on the web (a signed-in member) or at the Test Runner. A
+Used for person-step answers (Human in the loop), pauses, help resolutions
+and help-chat sends. A person acts on the web (a signed-in member) or at the
+Test Runner. A
 runner answer names a member only when the runner's ``person_email`` matched
 an active member of its project at handshake; otherwise it is anonymous. The
 label never includes runner-reported text such as the hostname: it reaches

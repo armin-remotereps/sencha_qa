@@ -350,7 +350,9 @@ def message_payload(
         "turn_id": message.turn_id,
         "kind": message.kind,
         "text": message.text,
-        "author_name": (author.get_full_name() or author.email) if author else "",
+        # A Test Runner send stores its label (the author may be anonymous).
+        "author_name": message.author_label
+        or ((author.get_full_name() or author.email) if author else ""),
         "tool_name": message.tool_name,
         "tool_arguments_text": (
             _delegation_arguments_text(message.tool_arguments)
