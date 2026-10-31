@@ -155,10 +155,12 @@ class ScanDirectoryActionEvent(BaseActionEvent):
     path: str
     max_depth: int
     max_entries: int
+    allow_network: bool
 
 
 class InspectPathsActionEvent(BaseActionEvent):
     paths: list[str]
+    allow_network: bool
 
 
 class UpdateRunnerEvent(TypedDict):
@@ -249,8 +251,13 @@ class ActionTypeRegistry:
         "controller.close_tab": ("app_name",),
         "controller.check_app_installed": ("app_name",),
         "controller.cleanup_environment": (),
-        "controller.scan_directory": ("path", "max_depth", "max_entries"),
-        "controller.inspect_paths": ("paths",),
+        "controller.scan_directory": (
+            "path",
+            "max_depth",
+            "max_entries",
+            "allow_network",
+        ),
+        "controller.inspect_paths": ("paths", "allow_network"),
         "controller.update_runner": (
             "update_id",
             "target_version",

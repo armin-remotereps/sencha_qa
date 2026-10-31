@@ -12,12 +12,28 @@ from django.conf import settings
 from django.db import transaction
 
 from auto_tester.celery import app as celery_app
-from machine_readiness.task_names import ANALYSE_PRECONDITIONS
+from machine_readiness.exceptions import MachineReadinessError
+from machine_readiness.services.quick_check import (
+    QUICK_CHECK_TASK_SOFT_LIMIT_SECONDS,
+    QUICK_CHECK_TASK_TIME_LIMIT_SECONDS,
+    check_requirements,
+)
+from machine_readiness.services.scan_artifacts import (
+    SCAN_TASK_SOFT_LIMIT_SECONDS,
+    SCAN_TASK_TIME_LIMIT_SECONDS,
+    scan_artifacts,
+)
+from machine_readiness.task_names import (
+    ANALYSE_PRECONDITIONS,
+    QUICK_CHECK,
+    SCAN_ARTIFACTS,
+)
 from projects.checked_push_limits import (
     CHECKED_PUSH_SOFT_TIME_LIMIT,
     CHECKED_PUSH_TIME_LIMIT,
 )
 from projects.controller_reconnect_services import max_outage_seconds_per_case
+from projects.machine_readiness_ports import build_runner_ports
 from projects.models import (
     PROJECT_PROMPT_MAX_LENGTH,
     ContextWriteSource,
@@ -552,3 +568,70 @@ def push_checked_results_to_testrail(
             test_run_id,
         )
         mark_checked_push_failed(test_run, GENERIC_CHECKED_PUSH_FAILURE_MESSAGE)
+
+
+# --- Machine readiness: scan and quick check --------------------------------
+# Here, not in machine_readiness.tasks: they need runner calls, which
+# machine_readiness gets injected (plan D2); projects composes the ports.
+
+
+@shared_task(
+    name=SCAN_ARTIFACTS,
+    max_retries=0,
+    soft_time_limit=SCAN_TASK_SOFT_LIMIT_SECONDS,
+    time_limit=SCAN_TASK_TIME_LIMIT_SECONDS,
+)
+def scan_artifacts_task(project_id: int, actor_id: int | None, lock_token: str) -> None:
+    """Inventory of the base directory on the test machine (``assist``).
+
+    ``lock_token``: the scan lock ``request_scan`` took; the service frees it.
+    """
+    try:
+        outcome = scan_artifacts(
+            project_id=project_id,
+            actor_id=actor_id,
+            ports=build_runner_ports(),
+            lock_token=lock_token,
+        )
+    except MachineReadinessError as exc:
+        logger.info("artifact scan not done: project=%s reason=%s", project_id, exc)
+        return
+    logger.info(
+        "artifact scan done: project=%s os=%s entries=%d truncated=%s error=%s",
+        project_id,
+        outcome.os_name,
+        outcome.entry_count,
+        outcome.truncated,
+        "yes" if outcome.error else "no",
+    )
+
+
+@shared_task(
+    name=QUICK_CHECK,
+    max_retries=0,
+    soft_time_limit=QUICK_CHECK_TASK_SOFT_LIMIT_SECONDS,
+    time_limit=QUICK_CHECK_TASK_TIME_LIMIT_SECONDS,
+)
+def quick_check_task(
+    project_id: int, run_id: int | None, actor_id: int | None, lock_token: str
+) -> None:
+    """Check machine: the stage-0 requirements without an LLM (``assist``).
+
+    The service broadcasts its own result (or refusal) event and frees the
+    check lock ``request_quick_check`` took.
+    """
+    try:
+        check_requirements(
+            project_id=project_id,
+            run_id=run_id,
+            actor_id=actor_id,
+            ports=build_runner_ports(),
+            lock_token=lock_token,
+        )
+    except MachineReadinessError as exc:
+        logger.info(
+            "quick check not done: project=%s run=%s reason=%s",
+            project_id,
+            run_id,
+            exc,
+        )

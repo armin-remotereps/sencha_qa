@@ -4,7 +4,9 @@ Stdlib only. Nothing here reads file contents, follows a link while walking or
 runs a shell: ``scan_directory`` walks one absolute directory breadth first
 with ``os.scandir`` (``follow_symlinks=False``), never entering symlinks,
 Windows junctions or other reparse points, within a depth, entry and time
-budget; ``inspect_paths`` only stats the paths it is given.
+budget; ``inspect_paths`` only stats the paths it is given. Network paths
+(UNC, ``//host``) are never opened unless the request allows them: on Windows
+that alone would send the user's NTLM credentials to the named host.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from controller_client.protocol import (
     ScanDirectoryPayload,
     ScanDirectoryResultPayload,
     ScanEntryPayload,
+    is_network_path,
 )
 
 # Windows FILE_ATTRIBUTE_REPARSE_POINT; typeshed declares ``stat``'s copy only
@@ -40,8 +43,13 @@ def scan_directory(
     """List ``payload.path`` down to ``max_depth`` levels, at most ``max_entries``.
 
     A refused or unreadable root comes back with ``error`` set and no entries.
+    A network root is refused unless ``payload.allow_network``.
     """
     root = os.path.expanduser(payload.path)
+    if not payload.allow_network and (
+        is_network_path(payload.path) or is_network_path(root)
+    ):
+        return _refused(payload.path, "Network paths are not scanned.")
     if not os.path.isabs(root):
         return _refused(payload.path, "The path must be absolute.")
     root = os.path.normpath(root)
@@ -65,8 +73,12 @@ def scan_directory(
 
 
 def inspect_paths(payload: InspectPathsPayload) -> tuple[PathInfoPayload, ...]:
-    """Stat each path (``~`` expanded); missing, relative or unreadable = absent."""
-    return tuple(_inspect(path) for path in payload.paths)
+    """Stat each path (``~`` expanded); missing, relative or unreadable = absent.
+
+    Network paths are reported absent without being opened unless
+    ``payload.allow_network``.
+    """
+    return tuple(_inspect(path, payload.allow_network) for path in payload.paths)
 
 
 def _walk(
@@ -160,9 +172,11 @@ def _is_reparse_point(info: os.stat_result) -> bool:
     return bool(attributes & _FILE_ATTRIBUTE_REPARSE_POINT)
 
 
-def _inspect(path: str) -> PathInfoPayload:
+def _inspect(path: str, allow_network: bool) -> PathInfoPayload:
     absent = PathInfoPayload(path=path, exists=False, is_dir=False, size=0, mtime=0.0)
     expanded = os.path.expanduser(path)
+    if not allow_network and (is_network_path(path) or is_network_path(expanded)):
+        return absent
     if not os.path.isabs(expanded):
         return absent
     try:

@@ -262,6 +262,7 @@ class _TurnRunner:
             on_profile_saved=self._on_profile_saved,
             on_action_proposed=self._on_action_proposed,
             intake_pending=pending,
+            should_stop=self._should_stop,
         )
         result = run_tool_loop(
             [ChatMessage(role="system", content=system_prompt), *history],

@@ -11,12 +11,10 @@ the single ``record_stage0`` tool, validated by ``stage0_rules``.
 from __future__ import annotations
 
 import logging
-import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from django.conf import settings
-from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Count, Max
 from django.db.models.functions import Length
@@ -26,6 +24,7 @@ from agents.exceptions import AIServiceError
 from agents.services.llm_client import send_chat_completion
 from agents.services.llm_config import build_llm_config
 from agents.types import ChatMessage, LLMConfig
+from machine_readiness import project_locks
 from machine_readiness.events import broadcast_readiness
 from machine_readiness.exceptions import Stage0AnalysisBusyError
 from machine_readiness.models import (
@@ -52,9 +51,19 @@ logger = logging.getLogger(__name__)
 EMPTY_PRECONDITIONS_MD5 = "d41d8cd98f00b204e9800998ecf8427e"
 # One extraction call; a batch is at most STAGE0_ANALYSIS_BATCH_CHARS of text.
 CALL_TIMEOUT_SECONDS = 300
-# The lock outlives the longest possible analysis, plus the writes.
-_LOCK_MARGIN_SECONDS = 120
-_LOCK_PREFIX = "stage0-analysis:"
+# The project's analysis lock covers one call plus its writes and is
+# refreshed before every batch, so it is never held longer than about six
+# minutes after its holder died (a SIGTERM'd setup turn, a killed worker),
+# however many calls the analysis was allowed.
+ANALYSIS_LOCK_TTL_SECONDS = CALL_TIMEOUT_SECONDS + 60
+# The Celery task: every call may take CALL_TIMEOUT_SECONDS; the writes add
+# little.
+ANALYSIS_TASK_SOFT_LIMIT_SECONDS = (
+    max(int(settings.STAGE0_ANALYSIS_MAX_CALLS), 1) * CALL_TIMEOUT_SECONDS + 60
+)
+ANALYSIS_BUSY_MESSAGE = (
+    "The preconditions are being analysed already; try again in a few minutes."
+)
 _CUT_NOTE = "\n[… text cut: too long for one analysis call]"
 # Problems kept in the outcome across every batch.
 _MAX_OUTCOME_PROBLEMS = 20
@@ -95,33 +104,59 @@ class _Catalog:
         return [(key, title) for key, (_, title) in sorted(self.rows.items())]
 
 
-def analysis_lock_key(project_id: int) -> str:
-    return f"{_LOCK_PREFIX}{project_id}"
-
-
 def analysis_running(project_id: int) -> bool:
-    """Whether an analysis of the project holds the lock (one cache read)."""
-    return cache.get(analysis_lock_key(project_id)) is not None
+    """Whether an analysis of the project is queued or holds the lock."""
+    return project_locks.is_locked(project_locks.ANALYSIS_LOCK_PREFIX, project_id)
 
 
-def analyse_preconditions(*, project_id: int, max_calls: int) -> AnalysisOutcome:
+def analyse_preconditions(
+    *,
+    project_id: int,
+    max_calls: int,
+    lock_token: str | None = None,
+    should_stop: Callable[[], bool] | None = None,
+) -> AnalysisOutcome:
     """Analyse the project's unanalysed precondition texts, at most ``max_calls``
-    LLM calls. Raises ``Stage0AnalysisBusyError`` while another runs."""
-    lock_key = analysis_lock_key(project_id)
-    token = secrets.token_hex(8)
-    lock_seconds = max(max_calls, 1) * CALL_TIMEOUT_SECONDS + _LOCK_MARGIN_SECONDS
-    if not cache.add(lock_key, token, timeout=lock_seconds):
-        raise Stage0AnalysisBusyError(
-            "The preconditions are being analysed already; try again in a few minutes."
+    LLM calls. Raises ``Stage0AnalysisBusyError`` while another runs.
+
+    ``lock_token``: the lock ``request_analysis`` took for the task (else a
+    new one is taken). ``should_stop`` is asked before each batch (a setup
+    turn's Stop); the batches done so far are kept.
+    """
+    lock = (
+        project_locks.claim(
+            project_locks.ANALYSIS_LOCK_PREFIX,
+            project_id,
+            lock_token,
+            ttl=ANALYSIS_LOCK_TTL_SECONDS,
         )
+        if lock_token is not None
+        else project_locks.acquire(
+            project_locks.ANALYSIS_LOCK_PREFIX,
+            project_id,
+            ttl=ANALYSIS_LOCK_TTL_SECONDS,
+        )
+    )
+    if lock is None:
+        raise Stage0AnalysisBusyError(ANALYSIS_BUSY_MESSAGE)
     try:
-        return _analyse(project_id=project_id, max_calls=max_calls)
+        return _analyse(
+            project_id=project_id,
+            max_calls=max_calls,
+            lock=lock,
+            should_stop=should_stop,
+        )
     finally:
-        if cache.get(lock_key) == token:
-            cache.delete(lock_key)
+        project_locks.release(lock)
 
 
-def _analyse(*, project_id: int, max_calls: int) -> AnalysisOutcome:
+def _analyse(
+    *,
+    project_id: int,
+    max_calls: int,
+    lock: project_locks.ProjectLock,
+    should_stop: Callable[[], bool] | None,
+) -> AnalysisOutcome:
     pending = _pending_texts(project_id)
     if not pending:
         return AnalysisOutcome()
@@ -150,6 +185,14 @@ def _analyse(*, project_id: int, max_calls: int) -> AnalysisOutcome:
         config = build_llm_config()
         system_prompt = build_stage0_system_prompt()
         for batch in batches:
+            if should_stop is not None and should_stop():
+                error = "Stopped before every batch was analysed."
+                break
+            if not project_locks.refresh(lock, ttl=ANALYSIS_LOCK_TTL_SECONDS):
+                # The lock expired and another analysis took it: leave the
+                # rest to that one rather than analyse the same texts twice.
+                error = "Another analysis took over."
+                break
             refs = {f"T{index}": md5 for index, md5 in enumerate(batch, start=1)}
             calls += 1
             try:

@@ -13,6 +13,7 @@ from datetime import datetime
 
 from machine_readiness.models import RequirementKind, RequirementStatus
 from machine_readiness.run_stage0_state import (
+    Stage0Summary,
     host_mismatch,
     load_run_stage0_rows,
 )
@@ -99,6 +100,18 @@ class RunStage0Checklist:
     @property
     def unknown_count(self) -> int:
         return self.count(RequirementStatus.UNKNOWN)
+
+    def summary(self) -> Stage0Summary:
+        """The "Machine prepared" counts, without querying again."""
+        return Stage0Summary(
+            case_count=self.case_count,
+            unanalysed_case_count=self.unanalysed_case_count,
+            requirement_count=len(self.items),
+            present=self.present_count,
+            missing=self.missing_count,
+            mismatch=self.mismatch_count,
+            unknown=self.unknown_count,
+        )
 
     def to_payload(self) -> dict[str, object]:
         """JSON for the run page (``json_script``) and the ``stage0`` event."""

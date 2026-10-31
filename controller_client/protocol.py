@@ -1620,6 +1620,9 @@ class ScanDirectoryPayload:
     max_depth: int
     # 1..SCAN_DIRECTORY_MAX_ENTRIES.
     max_entries: int
+    # A network root (``is_network_path``) is refused unless this is True.
+    # The server sets it only for a base directory a person entered.
+    allow_network: bool = False
 
 
 @dataclass(frozen=True)
@@ -1627,6 +1630,22 @@ class InspectPathsPayload:
     """``inspect_paths``: 1..INSPECT_PATHS_MAX absolute paths."""
 
     paths: tuple[str, ...]
+    # Network paths (``is_network_path``) come back absent unless this is
+    # True; the server sets it only for paths under a person-entered base
+    # directory.
+    allow_network: bool = False
+
+
+def is_network_path(path: str) -> bool:
+    """Whether ``path`` names another machine: ``\\\\host\\share``, ``//host``.
+
+    On Windows merely opening such a path makes an SMB connection that can
+    send the runner user's NTLM credentials to that host, so neither scan
+    action touches one unless the server explicitly allows it. Mixed
+    separators and the ``\\\\?\\`` / ``\\\\.\\`` device prefixes count too.
+    """
+    head = path.strip()[:2]
+    return len(head) == 2 and head[0] in "\\/" and head[1] in "\\/"
 
 
 @dataclass(frozen=True)
@@ -1688,6 +1707,7 @@ def parse_scan_directory_payload(data: dict[str, object]) -> ScanDirectoryPayloa
         max_entries=_extract_bounded_int(
             data, "max_entries", SCAN_DIRECTORY_MAX_ENTRIES
         ),
+        allow_network=_extract_bool(data, "allow_network", default=False),
     )
 
 
@@ -1698,7 +1718,8 @@ def parse_inspect_paths_payload(data: dict[str, object]) -> InspectPathsPayload:
             f"Missing or invalid 'paths': expected 1 to {INSPECT_PATHS_MAX} paths"
         )
     return InspectPathsPayload(
-        paths=tuple(_extract_path({"path": item}, "path") for item in raw)
+        paths=tuple(_extract_path({"path": item}, "path") for item in raw),
+        allow_network=_extract_bool(data, "allow_network", default=False),
     )
 
 

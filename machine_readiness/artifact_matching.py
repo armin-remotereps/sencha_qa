@@ -11,7 +11,7 @@ import re
 from collections.abc import Sequence
 from fnmatch import fnmatchcase
 
-from machine_readiness.models import LATEST_VERSION
+from machine_readiness.models import LATEST_VERSION, ArtifactOs
 from machine_readiness.types import (
     ArtifactMatch,
     InventoryEntry,
@@ -102,6 +102,28 @@ def match_inventory(
     ]
     base = _normalise(base_dir, case_sensitive).rstrip("/")
     return [_match_item(item, paths, base, truncated, case_sensitive) for item in items]
+
+
+def match_for_os(
+    items: Sequence[ProfileItemData],
+    entries: Sequence[InventoryEntry],
+    *,
+    os_name: ArtifactOs,
+    base_dir: str,
+    truncated: bool,
+) -> list[ArtifactMatch]:
+    """``match_inventory`` with the case rule of ``os_name``'s file system.
+
+    The one place that rule lives (scan, gap report, quick check):
+    case-sensitive on Linux, case-insensitive on Windows and macOS.
+    """
+    return match_inventory(
+        items,
+        entries,
+        base_dir=base_dir,
+        truncated=truncated,
+        case_sensitive=os_name == ArtifactOs.LINUX,
+    )
 
 
 def _match_item(

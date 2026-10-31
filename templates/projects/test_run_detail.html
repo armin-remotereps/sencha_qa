@@ -840,6 +840,8 @@ document.addEventListener('alpine:init', () => {
       const el = document.getElementById('run-stage0-data');
       return el ? JSON.parse(el.textContent) : null;
     })(),
+    // Why the last Check machine was refused in the worker; '' otherwise.
+    stage0Refused: '',
 
     stage0Icon(status) {
       return { present: '✓', missing: '✕', mismatch: '✕' }[status] || '•';
@@ -973,7 +975,9 @@ document.addEventListener('alpine:init', () => {
         }
 
         if (data.type === 'stage0') {
-          // A Check machine finished: the card shows the new statuses.
+          // A Check machine finished (new statuses) or the worker refused it
+          // (the card says why instead of waiting).
+          this.stage0Refused = data.refused || '';
           if (this.stage0 && data.checklist) this.stage0 = data.checklist;
           return;
         }

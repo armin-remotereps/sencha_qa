@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from functools import partial
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from accounts.models import CustomUser
@@ -30,6 +30,7 @@ from machine_readiness.models import (
     ArtifactProfileVersion,
     ProfileWriteSource,
 )
+from machine_readiness.network_paths import agent_network_path_errors
 from machine_readiness.profile_rules import validate_profile
 from machine_readiness.profile_text import load_profile_snapshot
 from machine_readiness.types import ProfileData, ProfileItemData, ProfileSnapshot
@@ -59,13 +60,12 @@ def write_profile(
     profile already cites (a deleted item never blocks a save) and
     ``accept_knowledge_ids`` (restore: ids the restored version cited).
     Raises ``ArtifactProfileInvalidError`` (``ArtifactKnowledgeRefError`` for
-    refused KB ids).
+    refused KB ids). A setup-agent write may not add or change a network
+    (UNC) path (``network_paths.agent_network_path_errors``).
     """
     validate_profile(data, change_summary=change_summary)
     with transaction.atomic():
-        profile, _ = ArtifactProfile.objects.select_for_update().get_or_create(
-            project_id=project_id
-        )
+        profile = lock_profile_row(project_id)
         if expected_revision is not None and expected_revision != profile.revision:
             raise ArtifactProfileConflictError(
                 f"The artifacts profile changed since revision {expected_revision}; "
@@ -76,6 +76,10 @@ def write_profile(
         current = _current_data(profile)
         if profile.revision > 0 and current == data:
             return profile.revision
+        if source == ProfileWriteSource.SETUP_AGENT:
+            network_errors = agent_network_path_errors(data, current)
+            if network_errors:
+                raise ArtifactProfileInvalidError(network_errors)
         _check_knowledge_refs(
             project_id,
             data,
@@ -135,6 +139,39 @@ def write_profile(
             )
         )
         return profile.revision
+
+
+def lock_profile_row(project_id: int) -> ArtifactProfile:
+    """The project's profile row, locked; created (empty) when missing.
+
+    Call inside ``transaction.atomic``. Two first writes racing on the
+    one-to-one constraint: the loser's insert fails in a savepoint and it
+    locks the winner's row instead; a second failure is reported as a
+    conflict.
+    """
+    profile = (
+        ArtifactProfile.objects.select_for_update()
+        .filter(project_id=project_id)
+        .first()
+    )
+    if profile is not None:
+        return profile
+    try:
+        with transaction.atomic():
+            return ArtifactProfile.objects.create(project_id=project_id)
+    except IntegrityError:
+        pass
+    profile = (
+        ArtifactProfile.objects.select_for_update()
+        .filter(project_id=project_id)
+        .first()
+    )
+    if profile is None:
+        raise ArtifactProfileConflictError(
+            "The artifacts profile was being saved at the same time; try again.",
+            current_revision=0,
+        )
+    return profile
 
 
 def _current_data(profile: ArtifactProfile) -> ProfileData:

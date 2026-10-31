@@ -16,7 +16,7 @@ urlpatterns: list[URLPattern] = [
         name="artifacts_version_restore",
     ),
     path("intake/skip/", views.intake_skip, name="intake_skip"),
-    path("scan/", views.scan, name="scan"),
+    # scan/ is projects:machine_readiness_scan (it needs the runner ports).
     path("requirements/", views.requirements, name="requirements"),
     path(
         "requirements/analyse/",

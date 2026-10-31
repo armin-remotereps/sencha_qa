@@ -4,6 +4,7 @@ from django.urls import URLPattern, path
 
 from projects import (
     case_pause_views,
+    machine_readiness_views,
     member_views,
     person_step_question_views,
     person_step_views,
@@ -240,6 +241,12 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-runs/<int:test_run_id>/help-mode/",
         views.test_run_help_mode,
         name="test_run_help_mode",
+    ),
+    # The Machine readiness tab's Scan (machine_readiness.urls has the rest).
+    path(
+        "<int:project_id>/machine-readiness/scan/",
+        machine_readiness_views.machine_readiness_scan,
+        name="machine_readiness_scan",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/machine-check/",

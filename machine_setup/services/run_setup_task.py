@@ -114,6 +114,9 @@ def run_setup_task(
     if request.approval_id is not None:
         if not runtime.main_chat:
             return _error(tool_call, "Approvals are used in the main chat only.")
+        # A turn closed meanwhile (force stop) must not spend an attempt.
+        if not runtime.turn_live():
+            raise AgentCancelledError("The setup turn is no longer running")
         try:
             approved = claim_approval_for_subtask(
                 conversation_id=runtime.conversation_id,

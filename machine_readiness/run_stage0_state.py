@@ -18,6 +18,7 @@ from datetime import datetime
 from django.db.models import Count
 
 from machine_readiness.models import (
+    HOST_MAX_LENGTH,
     PreconditionAnalysis,
     RequirementStatus,
 )
@@ -77,27 +78,36 @@ class Stage0Summary:
         )
 
 
+def normalise_host(host: str) -> str:
+    """A hostname as stored and compared: trimmed, at most HOST_MAX_LENGTH."""
+    return host.strip()[:HOST_MAX_LENGTH]
+
+
 def runner_host(system_info: object) -> str | None:
     """The connected runner's hostname from ``Project.agent_system_info``.
 
     None when no runner is connected (the field is cleared on disconnect) or
-    it reported no hostname: statuses are then shown as stored.
+    it reported no hostname: statuses are then shown as stored. The one
+    definition every reader (gap report, scan, quick check, views) uses.
     """
     if not isinstance(system_info, Mapping):
         return None
     host = system_info.get("hostname")
-    if not isinstance(host, str) or not host.strip():
+    if not isinstance(host, str):
         return None
-    return host.strip()
+    return normalise_host(host) or None
 
 
 def host_mismatch(checked_host: str, current_host: str | None) -> bool:
     """True when the status was recorded on another machine (D5).
 
-    Compared only when both are known: a status recorded without a host (a
-    person, with no runner connected) is trusted as stored.
+    Compared only when both are known (a status recorded without a host, by
+    a person with no runner connected, is trusted as stored), normalised and
+    case-insensitively: hostnames are not case-sensitive.
     """
-    return bool(current_host and checked_host and checked_host.strip() != current_host)
+    checked = normalise_host(checked_host).casefold()
+    current = normalise_host(current_host or "").casefold()
+    return bool(checked and current and checked != current)
 
 
 def effective_status(row: RunRequirementRow, current_host: str | None) -> str:

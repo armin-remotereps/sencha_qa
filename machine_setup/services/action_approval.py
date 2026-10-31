@@ -42,6 +42,9 @@ from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 _LINE_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 # The approach may span lines; every other control character is refused.
 _TEXT_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+# Bidi controls and zero-width characters are refused in every field: they
+# can make the text a person approves read differently from what it does.
+_INVISIBLE = re.compile("[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]")
 _SPACES = re.compile(r"\s+")
 
 
@@ -168,6 +171,10 @@ def _line(name: str, value: str, limit: int, *, required: bool) -> str:
         raise ActionApprovalInvalidError(
             f"{name} must be one line without control characters."
         )
+    if _INVISIBLE.search(value):
+        raise ActionApprovalInvalidError(
+            f"{name} must not contain bidirectional or zero-width characters."
+        )
     return value
 
 
@@ -186,6 +193,10 @@ def _approach(value: str) -> str:
     if _TEXT_CONTROL.search(value):
         raise ActionApprovalInvalidError(
             "approach must not contain control characters."
+        )
+    if _INVISIBLE.search(value):
+        raise ActionApprovalInvalidError(
+            "approach must not contain bidirectional or zero-width characters."
         )
     return value
 

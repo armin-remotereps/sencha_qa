@@ -25,8 +25,9 @@ from machine_readiness.models import (
     RequirementStatus,
     Stage0Requirement,
 )
-from machine_readiness.profile_rules import artifact_os_for
 from machine_readiness.profile_text import load_profile_snapshot
+from machine_readiness.run_stage0_state import host_mismatch
+from machine_readiness.runner_info import RunnerInfo, load_runner_info
 from machine_readiness.services.scan_artifacts import (
     InventorySummary,
     MatchRow,
@@ -34,15 +35,15 @@ from machine_readiness.services.scan_artifacts import (
     data_line,
     fence_lines,
     match_profile,
-    runner_host,
 )
 from machine_readiness.types import (
     InventoryEntry,
     MatchStatus,
     ProfileData,
     ProfileItemData,
+    ProfileSnapshot,
 )
-from projects.models import Project, TestCase, TestRunTestCase
+from projects.models import TestCase, TestRunTestCase
 
 # get_gap_report's default text budget (plan: ≤ 12k characters).
 GAP_REPORT_MAX_CHARS = 12_000
@@ -144,19 +145,23 @@ class GapReport:
         return len(self.unknown_artifacts) + len(self.unknown_requirements)
 
 
-def build_gap_report(*, project_id: int, run_id: int | None) -> GapReport:
+def build_gap_report(
+    *,
+    project_id: int,
+    run_id: int | None,
+    runner: RunnerInfo | None = None,
+    snapshot: ProfileSnapshot | None = None,
+) -> GapReport:
     """The gap report; six queries at most (project, profile, items,
-    inventory, requirements, unanalysed count). A ``run_id`` of another
-    project reports nothing for the run's cases."""
-    connected, system_info = (
-        Project.objects.filter(pk=project_id)
-        .values_list("agent_connected", "agent_system_info")
-        .get()
-    )
-    os_raw = system_info.get("os") if isinstance(system_info, dict) else None
-    runner_os = artifact_os_for(os_raw) if isinstance(os_raw, str) else None
-    host = runner_host(system_info)
-    snapshot = load_profile_snapshot(project_id)
+    inventory, requirements, unanalysed count), fewer when the caller passes
+    the ``runner`` and profile ``snapshot`` it already loaded. A ``run_id``
+    of another project reports nothing for the run's cases."""
+    if runner is None:
+        runner = load_runner_info(project_id)
+    if snapshot is None:
+        snapshot = load_profile_snapshot(project_id)
+    runner_os = runner.os_name
+    host = runner.host or ""
     data = snapshot.data
     base_dir = data.base_dir_for(runner_os).strip() if runner_os is not None else ""
 
@@ -173,7 +178,7 @@ def build_gap_report(*, project_id: int, run_id: int | None) -> GapReport:
     return GapReport(
         run_id=run_id,
         runner_os=runner_os,
-        runner_connected=bool(connected),
+        runner_connected=runner.connected,
         runner_host=host,
         base_dir=base_dir,
         profile_exists=snapshot.exists,
@@ -454,11 +459,7 @@ def _unanalysed_cases(project_id: int, run_id: int | None) -> int:
 
 def _requirement_gap(row: Stage0Requirement, runner_host_name: str) -> RequirementGap:
     status = row.status if row.status in RequirementStatus.values else ""
-    other_host = bool(
-        runner_host_name
-        and row.checked_host
-        and row.checked_host.lower() != runner_host_name.lower()
-    )
+    other_host = host_mismatch(row.checked_host, runner_host_name)
     if other_host or not status:
         status = RequirementStatus.UNKNOWN
     how = ""

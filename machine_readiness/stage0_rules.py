@@ -16,7 +16,10 @@ and the current requirement catalog; the model answers with one call:
 
 ``parse_stage0_payload`` never raises on model output: it keeps every valid
 entry and lists what it dropped in ``Stage0BatchResult.problems``. Keys are
-normalised (``keys.normalise_key``) before they are checked.
+normalised (``keys.normalise_key``) before they are checked. A network (UNC,
+``//host``) check target is dropped from the requirement and listed as a
+problem: case text must never make the runner open a network path
+(``network_paths``).
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ from machine_readiness.models import (
     REQUIREMENT_TITLE_MAX_LENGTH,
     RequirementKind,
 )
+from machine_readiness.network_paths import is_network_path
 from machine_readiness.types import (
     Stage0BatchResult,
     Stage0RequirementData,
@@ -144,13 +148,20 @@ def _requirements(
         if not isinstance(entry, Mapping):
             problems.append(f"Requirement {index} was not an object.")
             continue
+        check_target = _text(entry.get("check_target")).strip()
+        if is_network_path(check_target):
+            problems.append(
+                f"Requirement {index}: its check target is a network path; "
+                "the target was dropped."
+            )
+            check_target = ""
         requirement = Stage0RequirementData(
             key=normalise_key(_text(entry.get("key"))),
             title=_clip(
                 _one_line(_text(entry.get("title"))), REQUIREMENT_TITLE_MAX_LENGTH
             ),
             kind=_text(entry.get("kind")).strip().lower() or RequirementKind.OTHER,
-            check_target=_text(entry.get("check_target")).strip(),
+            check_target=check_target,
             install_hint=_clip(
                 _text(entry.get("install_hint")).strip(), INSTALL_HINT_MAX_LENGTH
             ),

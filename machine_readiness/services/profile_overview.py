@@ -62,12 +62,16 @@ class ProfileOverview:
         return self.profile.intake_pending
 
 
-def get_profile_overview(project_id: int) -> ProfileOverview:
+def get_profile_overview(
+    project_id: int, *, snapshot: ProfileSnapshot | None = None
+) -> ProfileOverview:
     """Profile, item rows with KB labels, provenance and history.
 
-    Four queries at most: profile, items, cited KB names, versions.
+    Four queries at most: profile, items (both skipped when the caller
+    passes the ``snapshot`` it loaded), cited KB names, versions.
     """
-    snapshot = get_profile(project_id)
+    if snapshot is None:
+        snapshot = get_profile(project_id)
     if not snapshot.exists:
         return ProfileOverview(profile=snapshot, items=(), provenance=None, versions=())
     return ProfileOverview(

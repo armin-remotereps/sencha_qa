@@ -217,8 +217,9 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "knowledge_base.tasks.copy_project_knowledge": {"queue": "knowledge"},
     "knowledge_base.tasks.sweep_knowledge_storage": {"queue": "knowledge"},
     # Short runner round trips, no LLM; a person is waiting on the page.
-    "machine_readiness.tasks.scan_artifacts_task": {"queue": "assist"},
-    "machine_readiness.tasks.quick_check_task": {"queue": "assist"},
+    # In projects.tasks: projects composes their runner ports (plan D2).
+    "projects.tasks.scan_artifacts_task": {"queue": "assist"},
+    "projects.tasks.quick_check_task": {"queue": "assist"},
     # Several LLM calls over minutes, like an import (sent by name after one).
     "machine_readiness.tasks.analyse_preconditions_task": {"queue": "upload"},
 }

@@ -5,14 +5,16 @@ Deterministic, no LLM: the runner's ``scan_directory`` action
 (ARTIFACT_SCAN_V1) lists the base directory of the runner's OS, the listing is
 stored as that OS's ``ArtifactInventory`` (one per project and OS, overwritten)
 and matched against the profile's items. Older runners get a message pointing
-to a read-only setup helper instead.
+to a read-only setup helper instead. Runner calls and gates come through
+``RunnerPorts`` (plan D2); one scan per project at a time
+(``project_locks.SCAN_LOCK_PREFIX``).
 """
 
 from __future__ import annotations
 
 import logging
 import posixpath
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -20,21 +22,23 @@ from django.conf import settings
 from django.utils import timezone
 
 from agents.exceptions import InfrastructureError
-from controller_client.protocol import ClientCapability
 from knowledge_base.tool_text import neutralize
-from machine_readiness.artifact_matching import format_version, match_inventory
+from machine_readiness import project_locks
+from machine_readiness.artifact_matching import format_version, match_for_os
 from machine_readiness.events import broadcast_readiness
 from machine_readiness.exceptions import ArtifactScanUnavailableError
 from machine_readiness.models import (
-    HOST_MAX_LENGTH,
     INVENTORY_ERROR_MAX_LENGTH,
     ArtifactInventory,
     ArtifactOs,
     ArtifactProfile,
     InventorySource,
 )
-from machine_readiness.profile_rules import artifact_os_for
+from machine_readiness.network_paths import is_network_path
 from machine_readiness.profile_text import load_profile_snapshot
+from machine_readiness.runner_info import RunnerInfo, load_runner_info
+from machine_readiness.runner_ports import RunnerPorts
+from machine_readiness.services.runner_gates import runner_action_refusal
 from machine_readiness.types import (
     ArtifactMatch,
     InventoryEntry,
@@ -42,9 +46,6 @@ from machine_readiness.types import (
     ProfileData,
 )
 from projects.exceptions import ControllerActionError, ControllerNotConnectedError
-from projects.models import Project
-from projects.runner_capability_services import runner_supports
-from projects.services import controller_scan_directory
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,15 @@ TREE_SUMMARY_DEPTH = 2
 TREE_SUMMARY_MAX_LINES = 200
 # The scan reply waits this long (the runner stops its own scan after 10 s).
 SCAN_REPLY_TIMEOUT_SECONDS = 30.0
+# The scan task: one runner reply (with a reconnect retry) plus the writes.
+SCAN_TASK_SOFT_LIMIT_SECONDS = int(SCAN_REPLY_TIMEOUT_SECONDS) * 2 + 30
+SCAN_TASK_TIME_LIMIT_SECONDS = SCAN_TASK_SOFT_LIMIT_SECONDS + 30
+# The per-project scan lock outlives the task's hard limit only a little, so
+# a killed worker frees it within a minute of its limit.
+SCAN_LOCK_TTL_SECONDS = SCAN_TASK_TIME_LIMIT_SECONDS + 30
+SCAN_BUSY_MESSAGE = (
+    "The base directory is being scanned already; reload the page in a few " "seconds."
+)
 
 DATA_FENCE = "---"
 DATA_NOTE = (
@@ -189,31 +199,31 @@ class ScanOutcome:
         return str(self.os_name.label)
 
 
-def runner_host(system_info: object) -> str:
-    """The hostname in a runner's ``agent_system_info``; "" when absent."""
-    if not isinstance(system_info, Mapping):
-        return ""
-    host = system_info.get("hostname")
-    return host.strip()[:HOST_MAX_LENGTH] if isinstance(host, str) else ""
-
-
-def scan_availability(project_id: int) -> ScanAvailability:
-    """Whether a scan can run now (two or three queries, no runner call).
+def scan_availability(
+    project_id: int,
+    *,
+    runner: RunnerInfo | None = None,
+    profile: ProfileData | None = None,
+) -> ScanAvailability:
+    """Whether a scan can run now (no runner call).
 
     Checked in order: runner connected, a supported OS reported, a base
-    directory set for that OS, the runner advertises ARTIFACT_SCAN_V1.
+    directory set for that OS, the runner advertises ARTIFACT_SCAN_V1. One
+    query for the runner and one for the base directory, each skipped when
+    the caller passes what it already loaded.
     """
-    connected, system_info = (
-        Project.objects.filter(pk=project_id)
-        .values_list("agent_connected", "agent_system_info")
-        .get()
-    )
-    os_name_raw = system_info.get("os") if isinstance(system_info, dict) else None
-    runner_os = artifact_os_for(os_name_raw) if isinstance(os_name_raw, str) else None
-    host = runner_host(system_info)
-    base_dir = _base_dir(project_id, runner_os) if runner_os is not None else ""
+    if runner is None:
+        runner = load_runner_info(project_id)
+    runner_os = runner.os_name
+    base_dir = ""
+    if runner_os is not None:
+        base_dir = (
+            profile.base_dir_for(runner_os).strip()
+            if profile is not None
+            else _base_dir(project_id, runner_os)
+        )
     reason = ""
-    if not connected:
+    if not runner.connected:
         reason = _NOT_CONNECTED
     elif runner_os is None:
         reason = _NO_OS
@@ -222,27 +232,88 @@ def scan_availability(project_id: int) -> ScanAvailability:
             f"No {runner_os.label} base directory is set in the artifacts "
             "profile. Edit the artifacts and set it first."
         )
-    elif not runner_supports(project_id, ClientCapability.ARTIFACT_SCAN_V1):
+    elif not runner.scan_supported:
         reason = _TOO_OLD
     return ScanAvailability(
         runner_os=runner_os,
-        runner_connected=bool(connected),
+        runner_connected=runner.connected,
         base_dir=base_dir,
-        host=host,
+        host=runner.host or "",
         reason=reason,
     )
 
 
-def scan_artifacts(*, project_id: int, actor_id: int | None) -> ScanOutcome:
+def scan_refusal(
+    *, project_id: int, ports: RunnerPorts, during_turn: bool
+) -> tuple[ScanAvailability, str | None]:
+    """The availability, and why a scan may not start now (or None).
+
+    The runner gates (run Started, setup turn live unless ``during_turn``,
+    runner updating, not connected), then the availability.
+    """
+    runner = load_runner_info(project_id)
+    availability = scan_availability(project_id, runner=runner)
+    refusal = runner_action_refusal(
+        project_id=project_id,
+        ports=ports,
+        connected=runner.connected,
+        during_turn=during_turn,
+    )
+    if refusal is None and not availability.available:
+        refusal = availability.reason or _NO_OS
+    return availability, refusal
+
+
+def scan_artifacts(
+    *,
+    project_id: int,
+    actor_id: int | None,
+    ports: RunnerPorts,
+    lock_token: str | None = None,
+    during_turn: bool = False,
+) -> ScanOutcome:
     """Scan the runner OS's base directory, store and match the inventory.
 
-    Raises ``ArtifactScanUnavailableError`` (runner offline or too old, no
-    base directory, no answer). A root the runner refuses (missing, not a
-    directory, a link) is stored as the inventory's ``error``, not raised.
+    Runs under the project's scan lock: the one ``request_scan`` handed over
+    as ``lock_token``, or a new one (the setup agent's tool, ``during_turn``).
+    Raises ``ArtifactScanUnavailableError`` (a gate, a scan already running,
+    runner offline or too old, no base directory, no answer). A root the
+    runner refuses (missing, not a directory, a link, a network path) is
+    stored as the inventory's ``error``, not raised.
     """
-    availability = scan_availability(project_id)
-    if not availability.available or availability.runner_os is None:
-        raise ArtifactScanUnavailableError(availability.reason or _NO_OS)
+    lock = (
+        project_locks.claim(
+            project_locks.SCAN_LOCK_PREFIX,
+            project_id,
+            lock_token,
+            ttl=SCAN_LOCK_TTL_SECONDS,
+        )
+        if lock_token is not None
+        else project_locks.acquire(
+            project_locks.SCAN_LOCK_PREFIX, project_id, ttl=SCAN_LOCK_TTL_SECONDS
+        )
+    )
+    if lock is None:
+        raise ArtifactScanUnavailableError(SCAN_BUSY_MESSAGE)
+    try:
+        return _scan(
+            project_id=project_id,
+            actor_id=actor_id,
+            ports=ports,
+            during_turn=during_turn,
+        )
+    finally:
+        project_locks.release(lock)
+
+
+def _scan(
+    *, project_id: int, actor_id: int | None, ports: RunnerPorts, during_turn: bool
+) -> ScanOutcome:
+    availability, refusal = scan_refusal(
+        project_id=project_id, ports=ports, during_turn=during_turn
+    )
+    if refusal is not None or availability.runner_os is None:
+        raise ArtifactScanUnavailableError(refusal or _NO_OS)
     os_name = availability.runner_os
     snapshot = load_profile_snapshot(project_id)
     base_dir = snapshot.data.base_dir_for(os_name).strip()
@@ -251,11 +322,14 @@ def scan_artifacts(*, project_id: int, actor_id: int | None) -> ScanOutcome:
             f"No {os_name.label} base directory is set in the artifacts profile."
         )
     try:
-        scan = controller_scan_directory(
+        scan = ports.scan_directory(
             project_id,
             base_dir,
             max_depth=int(settings.ARTIFACT_SCAN_MAX_DEPTH),
             max_entries=int(settings.ARTIFACT_SCAN_MAX_ENTRIES),
+            # Agent writes cannot introduce a network base directory, so a
+            # network one was entered by a person (network_paths).
+            allow_network=is_network_path(base_dir),
             timeout=SCAN_REPLY_TIMEOUT_SECONDS,
         )
     except ControllerNotConnectedError as exc:
@@ -331,14 +405,10 @@ def match_profile(
     base_dir: str,
     truncated: bool,
 ) -> tuple[ArtifactMatch, ...]:
-    """``match_inventory`` of the profile's items (case-sensitive on Linux)."""
+    """``match_for_os`` of the profile's items (case-sensitive on Linux)."""
     return tuple(
-        match_inventory(
-            data.items,
-            entries,
-            base_dir=base_dir,
-            truncated=truncated,
-            case_sensitive=os_name == ArtifactOs.LINUX,
+        match_for_os(
+            data.items, entries, os_name=os_name, base_dir=base_dir, truncated=truncated
         )
     )
 

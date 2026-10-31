@@ -448,6 +448,7 @@ def build_setup_dispatcher(
     on_profile_saved: ProfileSavedCallback,
     on_action_proposed: ActionProposedCallback,
     intake_pending: bool,
+    should_stop: Callable[[], bool],
 ) -> ToolDispatcher:
     """The main agent's per-turn dispatcher.
 
@@ -463,7 +464,8 @@ def build_setup_dispatcher(
     Main chat only: ``intake_pending`` (read once by the turn runner) gates
     ``run_setup_task`` and ``scan_artifacts`` until the profile is saved in
     this turn (``on_profile_saved`` runs after a save); both also check the
-    machine at call time.
+    machine at call time. ``should_stop`` is the turn's cancellation check
+    (the readiness tools' long analysis asks it between batches).
     """
     project_id = project.pk
     main_chat = role == ThreadRole.MAIN
@@ -610,6 +612,7 @@ def build_setup_dispatcher(
                 turn_id=turn_id,
                 on_profile_saved=_profile_saved,
                 on_action_proposed=on_action_proposed,
+                should_stop=should_stop,
             )
         )
     elif role == ThreadRole.AUTO_FIX:

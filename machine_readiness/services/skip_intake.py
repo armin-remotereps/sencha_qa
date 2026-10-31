@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from functools import partial
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from accounts.models import CustomUser
@@ -16,14 +16,22 @@ def skip_intake(*, project_id: int, author: CustomUser) -> None:
     """Create the (empty) profile row, which marks intake done.
 
     Idempotent: when a row exists (written or skipped earlier) nothing
-    changes. One query, two on a first skip (``get_or_create``). A first
-    skip tells open Machine setup pages to hide the intake banner.
+    changes. One query, two on a first skip. A first
+    skip tells open Machine setup pages to hide the intake banner. A first
+    write racing it (a concurrent skip or profile save) wins: the failed
+    insert is rolled back in its savepoint and nothing changes.
     """
-    _, created = ArtifactProfile.objects.get_or_create(
-        project_id=project_id,
-        defaults={"intake_skipped_at": timezone.now(), "intake_skipped_by": author},
+    if ArtifactProfile.objects.filter(project_id=project_id).exists():
+        return
+    try:
+        with transaction.atomic():
+            ArtifactProfile.objects.create(
+                project_id=project_id,
+                intake_skipped_at=timezone.now(),
+                intake_skipped_by=author,
+            )
+    except IntegrityError:
+        return
+    transaction.on_commit(
+        partial(broadcast_readiness, project_id, {"event": "intake_skipped"})
     )
-    if created:
-        transaction.on_commit(
-            partial(broadcast_readiness, project_id, {"event": "intake_skipped"})
-        )

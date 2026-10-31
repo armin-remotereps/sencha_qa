@@ -79,7 +79,7 @@ from controller_client.protocol import (
 from knowledge_base.services.item_processing import COPY_PROJECT_KNOWLEDGE_TASK
 from knowledge_base.services.knowledge_index import knowledge_index_text
 from machine_readiness.profile_text import artifacts_profile_text
-from machine_readiness.run_stage0_state import run_stage0_summary
+from machine_readiness.run_stage0_state import Stage0Summary, run_stage0_summary
 from machine_readiness.types import InventoryEntry
 from machine_setup.auto_fix_stop import request_auto_fix_stop
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
@@ -879,9 +879,15 @@ def _no_runner_update_check(project: Project) -> ReadinessCheck:
 RUN_STAGE0_ANCHOR: Final = "run-stage0"
 
 
-def _machine_prepared_check(project: Project, test_run: TestRun) -> ReadinessCheck:
-    """Warning only (plan Q6): the run's stage-0 requirements (2 queries)."""
-    summary = run_stage0_summary(project, test_run.id)
+def _machine_prepared_check(
+    project: Project, test_run: TestRun, summary: Stage0Summary | None
+) -> ReadinessCheck:
+    """Warning only (plan Q6): the run's stage-0 requirements.
+
+    2 queries, none when the caller passes the ``summary`` it already has.
+    """
+    if summary is None:
+        summary = run_stage0_summary(project, test_run.id)
     passed = summary.prepared
     gaps: list[str] = []
     if summary.missing:
@@ -927,8 +933,13 @@ def get_run_readiness(
     *,
     test_run: TestRun | None = None,
     selected_count: int | None = None,
+    stage0_summary: Stage0Summary | None = None,
 ) -> RunReadiness:
-    """Compute the "Ready to run?" checklist shown before starting a run."""
+    """Compute the "Ready to run?" checklist shown before starting a run.
+
+    ``stage0_summary``: the run's stage-0 counts when the caller already
+    loaded them (the run page's checklist), so they are not queried twice.
+    """
     visual_engine = get_visual_engine_status()
     machine_state = get_machine_state(project, visual_engine)
     checks: tuple[ReadinessCheck, ...] = (
@@ -941,7 +952,7 @@ def get_run_readiness(
         _application_context_check(project),
     )
     if test_run is not None:
-        checks += (_machine_prepared_check(project, test_run),)
+        checks += (_machine_prepared_check(project, test_run, stage0_summary),)
     return RunReadiness(checks=checks)
 
 
@@ -2142,6 +2153,7 @@ def controller_scan_directory(
     *,
     max_depth: int,
     max_entries: int,
+    allow_network: bool = False,
     timeout: float = 30.0,
 ) -> DirectoryScan:
     """List a directory tree on the test machine (needs ARTIFACT_SCAN_V1).
@@ -2149,6 +2161,8 @@ def controller_scan_directory(
     The caller checks ``runner_supports``; an older runner answers
     UNKNOWN_COMMAND (ControllerActionError). A refused root comes back as
     ``error``, not as an exception. Raises ValueError for out-of-range limits.
+    ``allow_network`` lets the runner open a network (UNC) root: pass it only
+    for a base directory a person entered.
     """
     _check_artifact_path(path)
     if not 1 <= max_depth <= SCAN_DIRECTORY_MAX_DEPTH:
@@ -2163,6 +2177,7 @@ def controller_scan_directory(
         path=path,
         max_depth=max_depth,
         max_entries=max_entries,
+        allow_network=allow_network,
         runner_local=True,
     )
     try:
@@ -2185,12 +2200,15 @@ def controller_inspect_paths(
     project_id: int,
     paths: Sequence[str],
     *,
+    allow_network: bool = False,
     timeout: float = 30.0,
 ) -> list[PathInfo]:
     """Stat up to INSPECT_PATHS_MAX absolute paths (needs ARTIFACT_SCAN_V1).
 
-    Missing, relative or unreadable paths come back with ``exists=False``.
-    Raises ValueError for an empty or oversized list.
+    Missing, relative or unreadable paths come back with ``exists=False``;
+    so do network (UNC) paths unless ``allow_network`` (only for paths under
+    a base directory a person entered). Raises ValueError for an empty or
+    oversized list.
     """
     if not 1 <= len(paths) <= INSPECT_PATHS_MAX:
         raise ValueError(f"paths must hold 1..{INSPECT_PATHS_MAX} items")
@@ -2202,6 +2220,7 @@ def controller_inspect_paths(
         "controller.inspect_paths",
         timeout,
         paths=requested,
+        allow_network=allow_network,
         runner_local=True,
     )
     try:

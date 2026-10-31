@@ -11,7 +11,9 @@
      items: [{key, title, kind, kind_label, check_target, install_hint, status,
      status_label, status_detail, checked_at, checked_host, host_mismatch,
      case_count}]}), seeded from the `run-stage0-data` json_script and replaced
-     by the run socket's `stage0` event after a Check machine.
+     by the run socket's `stage0` event after a Check machine; `stage0Refused`
+     (string) holds why the worker refused a check, from that event's
+     `refused`.
    Every requirement, path and detail is member-, agent- or runner-written
    text: x-text only. {% endcomment %}
 <section class="card" id="run-stage0" aria-labelledby="run-stage0-title">
@@ -67,6 +69,10 @@
       <a href="{% url 'machine_readiness:requirements' project.id %}">Stage 0 requirements</a>
     </p>
   </template>
+
+  <p class="error-text" role="alert" x-show="stage0Refused" x-cloak>
+    Check machine did not run: <span x-text="stage0Refused"></span>
+  </p>
 
   <p class="muted small">
     <template x-if="stage0.last_checked_at">

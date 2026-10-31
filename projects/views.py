@@ -92,6 +92,7 @@ from projects.forms import (
     TestRunStartForm,
     form_error_text,
 )
+from projects.machine_readiness_ports import build_runner_ports
 from projects.models import (
     PROJECT_PROMPT_MAX_LENGTH,
     RETEST_NOTE_MAX_LENGTH,
@@ -1055,15 +1056,21 @@ def _build_test_run_detail_context(
         "active_nav": "projects",
     }
     # "Machine for this run": what the cases need on the machine (Draft and
-    # Paused runs only; 2 queries).
+    # Paused runs only; 2 queries, shared with "Ready to run?").
+    run_stage0 = None
     if test_run.status in (TestRunStatus.WAITING, TestRunStatus.PAUSED):
-        context["run_stage0"] = get_run_stage0(
+        run_stage0 = get_run_stage0(
             project_id=project.id,
             run_id=test_run.id,
             runner_host=runner_host(project.agent_system_info),
-        ).to_payload()
+        )
+        context["run_stage0"] = run_stage0.to_payload()
     if test_run.status == TestRunStatus.WAITING:
-        context["readiness"] = get_run_readiness(project, test_run=test_run)
+        context["readiness"] = get_run_readiness(
+            project,
+            test_run=test_run,
+            stage0_summary=run_stage0.summary() if run_stage0 is not None else None,
+        )
         context["start_form"] = TestRunStartForm(
             initial={"help_mode": test_run.help_mode}
         )
@@ -1092,7 +1099,10 @@ def test_run_machine_check(
         raise Http404
     try:
         request_quick_check(
-            project_id=project.id, run_id=test_run.id, actor_id=request.user.id
+            project_id=project.id,
+            run_id=test_run.id,
+            actor_id=request.user.id,
+            ports=build_runner_ports(),
         )
     except QuickCheckRefusedError as exc:
         messages.error(request, exc.message)

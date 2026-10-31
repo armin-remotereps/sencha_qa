@@ -11,7 +11,6 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from accounts.types import AuthenticatedRequest
-from auto_tester.celery import app as celery_app
 from auto_tester.pagination import elided_page_range, parse_page
 from machine_readiness.exceptions import (
     ArtifactKnowledgeRefError,
@@ -20,6 +19,7 @@ from machine_readiness.exceptions import (
     ArtifactProfileVersionNotFoundError,
     MachineReadinessError,
     RequirementNotFoundError,
+    Stage0AnalysisBusyError,
 )
 from machine_readiness.forms import (
     REQUIREMENT_ACTION_EDIT,
@@ -35,13 +35,15 @@ from machine_readiness.forms import (
     profile_form_initial,
 )
 from machine_readiness.models import PROFILE_MAX_ITEMS, ProfileWriteSource
-from machine_readiness.services.analyse_preconditions import analysis_running
+from machine_readiness.run_stage0_state import runner_host
+from machine_readiness.runner_info import runner_info_of
 from machine_readiness.services.artifact_profile import get_profile, write_profile
 from machine_readiness.services.gap_report import build_gap_report
 from machine_readiness.services.profile_overview import (
     get_profile_overview,
     kb_labels_for,
 )
+from machine_readiness.services.request_analysis import request_analysis
 from machine_readiness.services.requirement_list import get_requirements_page
 from machine_readiness.services.requirement_status import (
     edit_requirement,
@@ -50,9 +52,8 @@ from machine_readiness.services.requirement_status import (
 from machine_readiness.services.restore_profile_version import (
     restore_profile_version,
 )
-from machine_readiness.services.scan_artifacts import runner_host, scan_availability
+from machine_readiness.services.scan_artifacts import scan_availability
 from machine_readiness.services.skip_intake import skip_intake
-from machine_readiness.task_names import ANALYSE_PRECONDITIONS, SCAN_ARTIFACTS
 from projects.decorators import project_membership_required
 from projects.models import Project
 
@@ -62,9 +63,14 @@ ITEM_FORMSET_PREFIX = "items"
 @project_membership_required
 @require_GET
 def overview(request: AuthenticatedRequest, project: Project) -> HttpResponse:
-    data = get_profile_overview(project.id)
-    scan = scan_availability(project.id)
-    gap_report = build_gap_report(project_id=project.id, run_id=None)
+    # The profile and the runner are loaded once and shared by all three.
+    snapshot = get_profile(project.id)
+    runner = runner_info_of(project)
+    data = get_profile_overview(project.id, snapshot=snapshot)
+    scan = scan_availability(project.id, runner=runner, profile=snapshot.data)
+    gap_report = build_gap_report(
+        project_id=project.id, run_id=None, runner=runner, snapshot=snapshot
+    )
     return render(
         request,
         "machine_readiness/overview.html",
@@ -166,22 +172,6 @@ def intake_skip(request: AuthenticatedRequest, project: Project) -> HttpResponse
 
 
 @project_membership_required
-@require_POST
-def scan(request: AuthenticatedRequest, project: Project) -> HttpResponse:
-    availability = scan_availability(project.id)
-    if not availability.available:
-        messages.error(request, availability.reason)
-    else:
-        celery_app.send_task(SCAN_ARTIFACTS, args=[project.id, request.user.id])
-        messages.success(
-            request,
-            f"Scanning the {availability.runner_os_label} base directory. "
-            "Reload this page in a few seconds to see the inventory.",
-        )
-    return redirect("machine_readiness:overview", project_id=project.id)
-
-
-@project_membership_required
 @require_GET
 def requirements(request: AuthenticatedRequest, project: Project) -> HttpResponse:
     data = get_requirements_page(project.id, page=parse_page(request))
@@ -229,14 +219,15 @@ def requirements(request: AuthenticatedRequest, project: Project) -> HttpRespons
 def requirements_analyse(
     request: AuthenticatedRequest, project: Project
 ) -> HttpResponse:
-    if analysis_running(project.id):
+    try:
+        request_analysis(project_id=project.id)
+    except Stage0AnalysisBusyError:
         messages.info(
             request,
             "The preconditions are being analysed already; reload this page in "
             "a few minutes.",
         )
     else:
-        celery_app.send_task(ANALYSE_PRECONDITIONS, args=[project.id])
         messages.success(
             request,
             "Analysing the preconditions. This takes a few minutes; reload this "
@@ -278,7 +269,7 @@ def requirement_update(
                     status=status_form.cleaned_data["status"],
                     detail=status_form.cleaned_data["detail"],
                     author=request.user,
-                    host=runner_host(project.agent_system_info),
+                    host=runner_host(project.agent_system_info) or "",
                 )
                 messages.success(request, "Status recorded.")
         else:

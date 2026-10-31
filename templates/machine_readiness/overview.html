@@ -178,7 +178,7 @@
     <div class="card-header">
       <h2 id="mr-inventory-title">Inventory</h2>
       {% if project_can_write %}
-      <form method="post" action="{% url 'machine_readiness:scan' project_id=project.id %}">
+      <form method="post" action="{% url 'projects:machine_readiness_scan' project.id %}">
         {% csrf_token %}
         <button type="submit" class="btn btn-secondary btn-sm"{% if not scan_available %} disabled aria-describedby="mr-scan-reason"{% endif %}>Scan base directory</button>
       </form>
