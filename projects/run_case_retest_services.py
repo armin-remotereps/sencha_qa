@@ -36,7 +36,11 @@ from projects.case_result_text import result_status_label
 from projects.case_retest_marking import RETEST_MARK_FIELDS, apply_retest_mark
 from projects.case_review_redesign_store import supersede_cases_review_drafts
 from projects.exceptions import PersonStepError, RunCaseRetestError, RunHelpError
+from projects.manual_run_finish import finish_manual_run_if_settled
+from projects.manual_run_policy import is_manual_run
 from projects.models import (
+    MANUAL_CLAIM_CLEARED,
+    MANUAL_CLAIM_FIELDS,
     OPEN_PERSON_STEP_STATUSES,
     RETEST_CLEARED,
     RETEST_VERDICT_STATUSES,
@@ -54,6 +58,7 @@ from projects.run_reopen_services import (
     list_testrail_push_blockers,
     lock_project_and_run,
 )
+from projects.runner_person_step_push import nudge_runner_person_steps
 from projects.services import broadcast_run_and_pivots
 from test_sessions.case_activity import CaseActivity
 from test_sessions.services.record_case_activity import record_case_activity
@@ -168,6 +173,14 @@ def mark_cases_for_retest(
         ]
         if direct_ids:
             marked = _mark_direct(locked_run, direct_ids, user, note)
+            # A Manual run has no worker to finish it: marking its claimed
+            # (last open) case settles the run here.
+            if marked and is_manual_run(locked_run):
+                finish_manual_run_if_settled(locked_run)
+                manual_project_id = project.pk
+                transaction.on_commit(
+                    lambda: nudge_runner_person_steps(manual_project_id)
+                )
             if marked:
                 project_id = project.pk
                 transaction.on_commit(
@@ -248,11 +261,19 @@ def _mark_direct(
     # Before the write: other sessions keep the verdict they saw.
     record_case_activity(user=user, pivot_ids=marked_ids, activity=CaseActivity.RETEST)
     now = timezone.now()
+    manual = is_manual_run(test_run)
     for pivot in pivots:
         if pivot.status == TestRunTestCaseStatus.IN_PROGRESS:
             close_case_segment(pivot.pk, now)
         apply_retest_mark(pivot, user=user, note=note, now=now)
-    TestRunTestCase.objects.bulk_update(pivots, RETEST_MARK_FIELDS)
+        if manual:
+            # The tester's claim ends with the mark; the window drops the case.
+            for field, value in MANUAL_CLAIM_CLEARED.items():
+                setattr(pivot, field, value)
+    fields = (
+        (*RETEST_MARK_FIELDS, *MANUAL_CLAIM_FIELDS) if manual else RETEST_MARK_FIELDS
+    )
+    TestRunTestCase.objects.bulk_update(pivots, fields)
     if person_step_ids:
         CasePersonStep.objects.filter(pk__in=person_step_ids).update(
             status=PersonStepStatus.CANCELLED,

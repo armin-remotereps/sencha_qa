@@ -4946,3 +4946,103 @@ ol.person-step-howto + .person-step-howto-source {
 .mr-req-form .btn {
   margin-top: 10px;
 }
+
+/* --------------------------------------------------------------------------
+   Manual run (a tester performs every case at the Test Runner window; the
+   web shows the hand-in only)
+   -------------------------------------------------------------------------- */
+
+/* "Manual" / "Performed at the Test Runner": brand cyan outline, no pulse
+   (nothing runs on the server), so it never reads as Running or Your turn. */
+.badge-manual {
+  color: var(--brand-cyan);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--brand-cyan) 45%, transparent);
+}
+
+.card-tone-manual {
+  border-left: 3px solid var(--brand-cyan);
+}
+
+/* Screenshots still arriving from the Test Runner after a submit. */
+.badge-uploading {
+  color: var(--info);
+  background: var(--info-soft);
+  border-color: rgba(77, 163, 255, 0.35);
+}
+
+.badge-uploading::before {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* No screenshot arrived for the stale window. */
+.badge-upload-incomplete {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: rgba(242, 184, 75, 0.35);
+}
+
+.manual-subhead {
+  margin: 18px 0 6px;
+  font-size: 0.95rem;
+}
+
+/* Smaller thumbnails than the case gallery: one or two per step. */
+.manual-shots {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 160px));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.manual-shots .shot-img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+}
+
+/* Tester's text next to the AI rewrite for TestRail. */
+.manual-compare {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.manual-compare h4 {
+  margin: 0 0 4px;
+}
+
+.manual-compare p {
+  margin: 0;
+}
+
+.manual-questions {
+  margin-top: 14px;
+}
+
+.manual-questions summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.manual-questions ol {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.manual-questions li + li {
+  margin-top: 10px;
+}
+
+@media (max-width: 767px) {
+  .manual-compare {
+    grid-template-columns: 1fr;
+  }
+
+  .manual-shots {
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  }
+}

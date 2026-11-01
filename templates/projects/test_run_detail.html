@@ -80,6 +80,15 @@
      the run moves into or out of "paused" or help_state changes, since the
      banner is server-rendered. Agent and human text is autoescaped.
 
+     Manual run: manual_panel
+     (projects.manual_case_display_services.ManualRunPanel, or None unless
+     the run is Manual): the "Manual run: performed at the Test Runner" card
+     (claimed case and who has it, runner_notice), and `uploads` (pivot id ->
+     ManualUpload, open uploads of the cases on this page, read with
+     get_item) for the Reason column's upload badges. A manual case in
+     progress shows pivot.manual_claimed_label. The page reloads once when a
+     case of a manual run changes status (claim, release, submit).
+
      test_run also carries testrail_source_push_status; testRunLive exposes it
      as `testrailSourcePushStatus` (WS message "testrail_source_push").
 
@@ -161,7 +170,7 @@
           {% endfor %}
         </select>
         <button type="submit" class="btn btn-sm btn-secondary" :disabled="helpModeChoice === runHelpMode" :aria-disabled="(helpModeChoice === runHelpMode).toString()">Save</button>
-        <span class="visually-hidden" id="run-help-mode-hint">Applies from the next case that needs help. Night also hands a case waiting for a person to the Machine setup agent. Human in the loop hands the next step to a person; leaving it hands a step waiting for a person back to the agent.</span>
+        <span class="visually-hidden" id="run-help-mode-hint">Applies from the next case that needs help. Night also hands a case waiting for a person to the Machine setup agent. Human in the loop hands the next step to a person; leaving it hands a step waiting for a person back to the agent. A run switches to or from Manual only while it is a draft.</span>
       </form>
       {% endif %}
     </div>
@@ -285,6 +294,33 @@
   {% include "projects/includes/_run_help_banner.html" with project=project test_run=test_run help_panel=help_panel person_step_panel=person_step_panel help_state=help_state paused_run_blockers=paused_run_blockers csrf_token=csrf_token can_write=project_can_write only %}
   {% endif %}
 
+  {% if manual_panel and test_run.status != "waiting" %}
+  {# Section: Manual run — performed at the Test Runner window; the web only shows who holds a case (server-rendered) #}
+  <section class="card card-tone-manual" aria-labelledby="manual-run-h">
+    <div class="card-header">
+      <h2 id="manual-run-h">Manual run: performed at the Test Runner</h2>
+      <span class="badge badge-manual">Manual</span>
+    </div>
+    {% if manual_panel.runner_notice %}
+    <div class="alert alert-warning">
+      <span class="alert-icon" aria-hidden="true">⚠</span>
+      <div><p>{{ manual_panel.runner_notice }}</p></div>
+    </div>
+    {% endif %}
+    {% if manual_panel.claimed_pivot_id %}
+    <p>
+      <strong>In progress:</strong>
+      <a href="{% url 'projects:test_run_case_detail' project.id test_run.id manual_panel.claimed_pivot_id %}">{{ manual_panel.claimed_title }}</a>
+      · {{ manual_panel.claimed_by_label|default:"a person at the Test Runner" }}{% if manual_panel.claimed_at %} since <time datetime="{{ manual_panel.claimed_at|date:'c' }}">{{ manual_panel.claimed_at|date:"M j, H:i" }}</time>{% endif %}
+    </p>
+    {% if project_can_write %}<p class="hint">If that Test Runner is gone, open the case to release it.</p>{% endif %}
+    {% elif manual_panel.is_live %}
+    <p class="muted">No case is being performed right now. Testers pick the next case in the Test Runner window.</p>
+    {% endif %}
+    <p class="hint">Testers mark each step Pass or Fail with a screenshot and submit Passed, Failed or Blocked from the Test Runner window. Results and screenshots appear here; screenshots upload after each case is submitted.</p>
+  </section>
+  {% endif %}
+
   {% include "partials/project_tabs.html" with project=project active_tab=active_tab only %}
 
   {# Section: Draft readiness — checklist + the actual Start run action #}
@@ -308,6 +344,8 @@
               <div class="muted small">
                 {% if value == "attended" %}
                 A case that hits a machine problem (a stuck installer, a stray dialog, a UAC prompt) pauses the run and notifies the project's members. Someone fixes the machine and continues the case.
+                {% elif value == "manual" %}
+                Manual: testers perform every case themselves in the Test Runner window, following the test case's own steps. They mark each step Pass or Fail with a screenshot and submit Passed, Failed or Blocked; the AI does not plan, run or judge anything. It only rewrites the notes when results go to TestRail. Needs a Test Runner with its window enabled.
                 {% elif value == "hitl" %}
                 Human in the loop: a person performs every step; the agent prepares each step and confirms the result. The run pauses at each step until someone reports it on the case page; a machine problem notifies people as in Attended.
                 {% else %}
@@ -538,7 +576,7 @@
               {% endif %}
             </td>
             <td data-label="Duration">{{ pivot.shown_duration|duration }}</td>
-            <td data-label="Reason" class="muted">{% if pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>{% if help_panel and help_panel.request.fault and help_panel.request.test_run_test_case_id == pivot.id %}{{ help_panel.request.get_fault_display }}{% else %}Needs help{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "awaiting_person" %}<strong>{% if person_step_panel and person_step_panel.step.test_run_test_case_id == pivot.id %}Waiting for a person: {{ person_step_panel.step_label|lower }}{% else %}Waiting for a person{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "needs_retest" %}<strong>Marked by {{ pivot.retest_marked_by.get_full_name|default:pivot.retest_marked_by.email|default:"a removed user" }}</strong>{% if pivot.retest_note %} · {{ pivot.retest_note|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
+            <td data-label="Reason" class="muted">{% if manual_panel %}{% with upload=manual_panel.uploads|get_item:pivot.id %}{% if upload %}<span class="badge {% if upload.is_incomplete %}badge-upload-incomplete{% else %}badge-uploading{% endif %}">{% if upload.is_incomplete %}Screenshots incomplete {{ upload.received }}/{{ upload.expected }}{% else %}Uploading screenshots {{ upload.received }}/{{ upload.expected }}{% endif %}</span> {% endif %}{% endwith %}{% endif %}{% if pivot.status == "in_progress" and pivot.manual_claim_token %}<strong>At the Test Runner: {{ pivot.manual_claimed_label|default:"a person at the Test Runner" }}</strong>{% elif pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>{% if help_panel and help_panel.request.fault and help_panel.request.test_run_test_case_id == pivot.id %}{{ help_panel.request.get_fault_display }}{% else %}Needs help{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "awaiting_person" %}<strong>{% if person_step_panel and person_step_panel.step.test_run_test_case_id == pivot.id %}Waiting for a person: {{ person_step_panel.step_label|lower }}{% else %}Waiting for a person{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "needs_retest" %}<strong>Marked by {{ pivot.retest_marked_by.get_full_name|default:pivot.retest_marked_by.email|default:"a removed user" }}</strong>{% if pivot.retest_note %} · {{ pivot.retest_note|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
             {% if can_edit and project_can_write %}
             <td data-label="" x-show="testRunStatus === 'waiting'" x-cloak>
               <div class="actions">
@@ -864,6 +902,10 @@ document.addEventListener('alpine:init', () => {
       return isNaN(date.getTime()) ? iso : date.toLocaleString();
     },
 
+    // Manual run: the manual card and the rows' "At the Test Runner" text
+    // are server-rendered; a claim, release or submit reloads once.
+    manualRun: {{ manual_panel|yesno:"true,false" }},
+    manualReload: null,
     // Pause requested for a running case (hides its Pause button).
     pivotPausePending: {},
     pivotStatuses: {
@@ -983,6 +1025,9 @@ document.addEventListener('alpine:init', () => {
         }
 
         if (data.type === 'pivot_status') {
+          if (this.manualRun && this.pivotStatuses[data.pivot_id] !== data.status && !this.manualReload) {
+            this.manualReload = setTimeout(() => window.location.reload(), 1500);
+          }
           this.pivotStatuses[data.pivot_id] = data.status;
           this.pivotPausePending[data.pivot_id] = !!data.pause_pending;
           this.summary = data.summary;

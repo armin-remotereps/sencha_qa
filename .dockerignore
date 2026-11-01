@@ -11,6 +11,8 @@ controller_client/.env
 controller_client/.pytest_cache/
 controller_client/.mypy_cache/
 controller_client/logs/
+# Manual run screenshots waiting to upload (per machine).
+controller_client/manual_spool/
 # Side-by-side installs and start script left by a runner self-update run
 # from this checkout (they also hold a copy of controller_client/.env).
 test-runner-*/

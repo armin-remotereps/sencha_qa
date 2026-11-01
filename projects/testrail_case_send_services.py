@@ -17,13 +17,17 @@ from django.utils import timezone
 
 from accounts.models import CustomUser
 from projects.exceptions import NothingToSendError, RunNotFinishedError
+from projects.manual_current_submission import uploading_manual_case_ids
 from projects.models import (
     TestRun,
     TestRunStatus,
     TestRunTestCase,
     TestRunTestCaseStatus,
 )
-from projects.run_case_check_services import check_locked_pivots
+from projects.run_case_check_services import (
+    MANUAL_UPLOADING_MESSAGE,
+    check_locked_pivots,
+)
 from projects.testrail_checked_push_services import (
     TESTRAIL_NOT_CONFIGURED_MESSAGE,
     dispatch_checked_push,
@@ -146,6 +150,14 @@ def start_case_send(
             )
             if not pivots:
                 raise NothingToSendError(_NOTHING_TO_SEND_MESSAGE)
+            # A manual case cannot be checked (so sent) while its
+            # screenshots are still uploading.
+            uploading = uploading_manual_case_ids(
+                pivot.id for pivot in pivots if pivot.checked_at is None
+            )
+            pivots = [pivot for pivot in pivots if pivot.id not in uploading]
+            if not pivots:
+                raise NothingToSendError(MANUAL_UPLOADING_MESSAGE)
             now = timezone.now()
             checked_now = check_locked_pivots(
                 [pivot for pivot in pivots if pivot.checked_at is None],

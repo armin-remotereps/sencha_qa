@@ -6,6 +6,9 @@ open request waits for a person and never had an auto-fix gets one at once
 when switched to Night, if the step is eligible. Switching to Attended never
 stops a running auto-fix; Stop auto-fix on the case page does that.
 
+Manual: only a draft may be switched to or from Manual (D11); a running or
+paused run refuses.
+
 Human in the loop applies from the next step (the worker reads the mode at
 each step boundary). Choosing any other mode (even the current one) while a
 step waits for a person hands that step back to the agent at once
@@ -29,6 +32,10 @@ from machine_setup.models import SetupConversation
 from projects.case_help_policy import auto_fix_eligible
 from projects.case_help_state import enqueue_case_auto_fix, mark_auto_fix_running
 from projects.exceptions import HelpModeNotAllowedError, RunHelpError
+from projects.manual_run_policy import (
+    MANUAL_MODE_SWITCH_REFUSED,
+    crosses_manual_boundary,
+)
 from projects.models import (
     CaseHelpRequest,
     HelpAutoFixState,
@@ -47,7 +54,7 @@ _CHANGEABLE_STATUSES = (
     TestRunStatus.PAUSED,
 )
 _NOT_CHANGEABLE = "The help mode can only be changed while the run is active."
-_UNKNOWN_MODE = "Choose Attended, Night or Human in the loop."
+_UNKNOWN_MODE = "Choose Attended, Night, Human in the loop or Manual."
 
 
 @dataclass(frozen=True)
@@ -81,6 +88,12 @@ def change_run_help_mode(
         _, locked_run = lock_project_and_run(test_run.pk)
         if locked_run.status not in _CHANGEABLE_STATUSES:
             raise RunHelpError(_NOT_CHANGEABLE)
+        # A live run switched into or out of Manual would be an agent run with
+        # no chain or a manual run with one (D11): drafts only.
+        if locked_run.status != TestRunStatus.WAITING and crosses_manual_boundary(
+            locked_run.help_mode, help_mode
+        ):
+            raise RunHelpError(MANUAL_MODE_SWITCH_REFUSED)
         changed = locked_run.help_mode != help_mode
         if changed:
             locked_run.help_mode = help_mode

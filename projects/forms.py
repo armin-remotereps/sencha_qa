@@ -6,13 +6,17 @@ from urllib.parse import urlsplit
 
 from django import forms
 from django.core.exceptions import NON_FIELD_ERRORS
+from django.core.validators import RegexValidator
 from django.forms import BaseForm
 from django.http import QueryDict
 from django.utils.text import Truncator
 
 from controller_client.protocol import (
+    MANUAL_CASE_MAX_STEPS,
+    MANUAL_CLAIM_TOKEN_MAX_CHARS,
     MAX_VERSION_LENGTH,
     PERSON_CHAT_TEXT_MAX_CHARS,
+    ManualCaseActionKind,
     PersonHelpActionKind,
     PersonStepActionKind,
 )
@@ -622,6 +626,59 @@ class RunnerPersonStepQuestionForm(forms.Form):
     question = _WireTextField(max_length=PERSON_STEP_QUESTION_MAX_LENGTH, strip=True)
 
 
+# A server-minted claim token as the protocol allows it.
+_claim_token_validator = RegexValidator(
+    r"\A[A-Za-z0-9_-]+\Z", message="Invalid claim.", code="invalid"
+)
+
+
+class RunnerManualCaseActionForm(forms.Form):
+    """A claim or release of a Manual run case sent from the Test Runner window.
+
+    Fed from the ``manual_case_action`` message (not a rendered form).
+    ``claim_token`` is required for a release and ignored for a claim.
+    """
+
+    action = forms.ChoiceField(
+        choices=[(kind.value, kind.value) for kind in ManualCaseActionKind]
+    )
+    pivot_id = forms.IntegerField(min_value=1, max_value=_MAX_BIGINT)
+    claim_token = _WireTextField(
+        required=False,
+        max_length=MANUAL_CLAIM_TOKEN_MAX_CHARS,
+        strip=False,
+        validators=[_claim_token_validator],
+    )
+
+    def clean(self) -> dict[str, Any]:
+        cleaned_data = super().clean() or {}
+        if cleaned_data.get("action") != ManualCaseActionKind.RELEASE:
+            cleaned_data["claim_token"] = ""
+        elif "claim_token" not in self.errors and not cleaned_data.get("claim_token"):
+            self.add_error("claim_token", "Missing claim.")
+        return cleaned_data
+
+
+class RunnerManualStepQuestionForm(forms.Form):
+    """A question to the AI about the claimed Manual run case (Test Runner window).
+
+    Fed from the manual form of ``person_step_question`` (``pivot_id`` set).
+    The same question rule as ``RunnerPersonStepQuestionForm``; ``step_num``
+    blank asks about the case as a whole.
+    """
+
+    pivot_id = forms.IntegerField(min_value=1, max_value=_MAX_BIGINT)
+    claim_token = _WireTextField(
+        max_length=MANUAL_CLAIM_TOKEN_MAX_CHARS,
+        strip=False,
+        validators=[_claim_token_validator],
+    )
+    step_num = forms.IntegerField(
+        required=False, min_value=1, max_value=MANUAL_CASE_MAX_STEPS
+    )
+    question = _WireTextField(max_length=PERSON_STEP_QUESTION_MAX_LENGTH, strip=True)
+
+
 class RunnerCasePauseForm(forms.Form):
     """A person's pause of a case sent from the Test Runner window.
 
@@ -683,6 +740,13 @@ class RunnerHelpActionForm(forms.Form):
         elif not cleaned_data.get("plan_revision_id"):
             cleaned_data["plan_revision_id"] = None
         return cleaned_data
+
+
+class ManualReleaseForm(forms.Form):
+    """Release a stuck Manual run claim from the web; ``next`` is where to go
+    back to (validated same-host by the view)."""
+
+    next = forms.CharField(required=False, max_length=2000, widget=forms.HiddenInput)
 
 
 class HelpReturnForm(forms.Form):

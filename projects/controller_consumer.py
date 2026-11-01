@@ -8,10 +8,14 @@ from collections.abc import Sequence
 from typing import Any
 
 from asgiref.sync import sync_to_async
+from channels.db import database_sync_to_async
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
+    MANUAL_CASE_ACTION_MAX_BYTES,
+    MANUAL_CASE_SUBMIT_MAX_BYTES,
+    MANUAL_SCREENSHOT_UPLOAD_MAX_BYTES,
     PERSON_CASE_ACTION_MAX_BYTES,
     PERSON_STEP_ACTION_MAX_BYTES,
     PERSON_STEP_QUESTION_MAX_BYTES,
@@ -19,6 +23,11 @@ from controller_client.protocol import (
     ClientCapability,
     CloseCode,
     ErrorCode,
+    ManualCaseActionKind,
+    ManualCaseActionResultPayload,
+    ManualCaseSubmitResultPayload,
+    ManualRunStateMessage,
+    ManualScreenshotAckPayload,
     MessageType,
     PersonCaseActionResultPayload,
     PersonCaseStatePayload,
@@ -29,10 +38,16 @@ from controller_client.protocol import (
     PersonStepQuestionResultPayload,
     PersonStepStatePayload,
     parse_handshake_capabilities,
+    parse_manual_case_submit_payload,
     parse_person_email,
     parse_update_in_flight_id,
     parse_update_status_payload,
+    peek_manual_upload_ids,
     serialize_case_pause_action_result,
+    serialize_manual_case_action_result,
+    serialize_manual_case_submit_result,
+    serialize_manual_run_state,
+    serialize_manual_screenshot_ack,
     serialize_person_case_action_result,
     serialize_person_step_action_result,
     serialize_person_step_question_result,
@@ -87,6 +102,9 @@ from projects.controller_protocol import (
 from projects.controller_reply_tracker import ReplyTracker
 from projects.exceptions import (
     CasePauseError,
+    ManualRunError,
+    ManualShotRejectedError,
+    ManualSubmissionDroppedError,
     PersonStepError,
     PersonStepQuestionError,
     RunHelpError,
@@ -95,6 +113,8 @@ from projects.forms import (
     RunnerCasePauseForm,
     RunnerChatSendForm,
     RunnerHelpActionForm,
+    RunnerManualCaseActionForm,
+    RunnerManualStepQuestionForm,
     RunnerPersonStepActionForm,
     RunnerPersonStepQuestionForm,
     form_error_text,
@@ -105,6 +125,12 @@ from projects.runner_case_pause_services import pause_from_runner
 from projects.runner_help_action_services import (
     RunnerHelpAction,
     resolve_help_from_runner,
+)
+from projects.runner_manual_services import (
+    act_from_runner,
+    ask_manual_from_runner,
+    submit_from_runner,
+    upload_from_runner,
 )
 from projects.runner_person_step_services import (
     RunnerPersonStepAnswer,
@@ -118,6 +144,7 @@ from projects.runner_update_progress import (
 )
 from projects.runner_window_state import (
     RunnerWindowFeatures,
+    get_runner_manual_state,
     get_runner_window_state,
 )
 from projects.services import broadcast_agent_status, release_agent_connection
@@ -155,10 +182,18 @@ _HELP_ACTION_VERB: dict[PersonHelpActionKind, str] = {
     PersonHelpActionKind.MARK_BLOCKED: "Marked the case blocked",
 }
 _CHAT_SENT = "Sent. The agent is answering."
+_MANUAL_UNSUPPORTED = "This Test Runner did not offer manual testing."
+_MANUAL_TOO_LARGE = "The message is too large."
+_MANUAL_ACTION_FAILED = "That did not work. Try again in a moment."
+_MANUAL_SUBMIT_FAILED = "The result could not be saved. It is kept and sent again."
+_MANUAL_SUBMITTED = "Submitted. Screenshots upload in the background."
+_MANUAL_UPLOAD_FAILED = "The screenshot could not be saved. It is sent again."
 # Nudges within this many seconds of a push wait for one trailing push.
 _PUSH_COALESCE_SECONDS = 1.0
 # Longest ``request_id`` echoed back; a longer one gets a fresh id.
 _MAX_REQUEST_ID_LENGTH = 128
+# Longest raw ``submission_id`` read back for a refused hand-in.
+_MAX_SUBMISSION_ID_LENGTH = 64
 
 
 class ControllerConsumer(AsyncWebsocketConsumer):
@@ -185,6 +220,12 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     _case_context_enabled: bool
     _discussion_enabled: bool
     _pause_enabled: bool
+    # Manual runs in the window (MANUAL_RUN_V1, only with PERSON_STEPS_V1).
+    _manual_enabled: bool
+    # Everything the handshake advertised (passed to the manual snapshot).
+    _capabilities: frozenset[str]
+    # The last ``manual_run_state`` sent; None before the first one.
+    _manual_state_sent: ManualRunStateMessage | None
     # The last ``person_step_state`` sent (steps, cases); None before the
     # first one.
     _person_steps_sent: (
@@ -211,6 +252,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self._case_context_enabled = False
         self._discussion_enabled = False
         self._pause_enabled = False
+        self._manual_enabled = False
+        self._capabilities = frozenset()
+        self._manual_state_sent = None
         self._person_user_id = None
         self._person_steps_sent = None
         self._last_push_at = 0.0
@@ -287,6 +331,18 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
         if msg_type in (MessageType.PERSON_CHAT_SEND, MessageType.PERSON_HELP_ACTION):
             await self._handle_person_case_action(msg_type, data, raw_length)
+            return
+
+        if msg_type == MessageType.MANUAL_CASE_ACTION:
+            await self._handle_manual_case_action(data, raw_length)
+            return
+
+        if msg_type == MessageType.MANUAL_CASE_SUBMIT:
+            await self._handle_manual_case_submit(data, raw_length)
+            return
+
+        if msg_type == MessageType.MANUAL_SCREENSHOT_UPLOAD:
+            await self._handle_manual_screenshot_upload(data, raw_length)
             return
 
         handlers = {
@@ -389,6 +445,12 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             self._case_context_enabled
             and ClientCapability.CASE_PAUSE_V1.value in capabilities
         )
+        # Advertised only together with PERSON_STEPS_V1 (the window).
+        self._manual_enabled = (
+            self._person_steps_enabled
+            and ClientCapability.MANUAL_RUN_V1.value in capabilities
+        )
+        self._capabilities = frozenset(capabilities)
         await self._establish_authenticated_connection(
             result.project,
             system_info,
@@ -498,13 +560,16 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         """Send the window's snapshot when it changed since the last send.
 
         Only to a runner that advertised PERSON_STEPS_V1; ``cases`` only to one
-        with PERSON_CASE_CONTEXT_V1. ``force`` resends an unchanged snapshot
-        (after a refused answer the window must re-sync).
+        with PERSON_CASE_CONTEXT_V1; and the ``manual_run_state`` only to one
+        with MANUAL_RUN_V1. ``force`` resends an unchanged snapshot (after a
+        refused answer the window must re-sync).
         """
         if not self._person_steps_enabled or self._project is None:
             return
         async with self._push_lock:
             await self._push_snapshot(self._project.id, force=force)
+            if self._manual_enabled:
+                await self._send_manual_state(self._project, force=force)
 
     async def _push_snapshot(self, project_id: int, *, force: bool) -> None:
         self._last_push_at = asyncio.get_running_loop().time()
@@ -536,6 +601,31 @@ class ControllerConsumer(AsyncWebsocketConsumer):
                 cases=state.cases,
             )
         )
+
+    async def _push_manual_state(self, *, force: bool = False) -> None:
+        """Send only the Manual run snapshot (after a manual message)."""
+        if not self._manual_enabled or self._project is None:
+            return
+        async with self._push_lock:
+            await self._send_manual_state(self._project, force=force)
+
+    async def _send_manual_state(self, project: Project, *, force: bool) -> None:
+        """Send ``manual_run_state`` to a MANUAL_RUN_V1 runner when it changed.
+
+        The first send of a connection always goes out (even empty), so a
+        reconnected runner learns its pending uploads and drops a stale claim.
+        """
+        try:
+            state = await database_sync_to_async(get_runner_manual_state)(
+                project, self._capabilities
+            )
+        except Exception:
+            logger.exception("Reading the manual run failed for project %s", project.id)
+            return
+        if not force and state == self._manual_state_sent:
+            return
+        self._manual_state_sent = state
+        await self.send(text_data=serialize_manual_run_state(state))
 
     async def _handle_case_pause_action(
         self, data: dict[str, Any], raw_length: int
@@ -708,7 +798,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self, data: dict[str, Any], raw_length: int
     ) -> None:
         request_id = _echoed_request_id(data)
-        result = await self._ask_person_step(data, raw_length)
+        if _is_manual_question(data):
+            result = await self._ask_manual_step(data, raw_length)
+        else:
+            result = await self._ask_person_step(data, raw_length)
         await self.send(
             text_data=serialize_person_step_question_result(result, request_id)
         )
@@ -751,6 +844,195 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             return _question_refused(_PERSON_STEP_QUESTION_FAILED)
         # The answer arrives in a later ``person_step_state``.
         return PersonStepQuestionResultPayload(ok=True, message="")
+
+    async def _ask_manual_step(
+        self, data: dict[str, Any], raw_length: int
+    ) -> PersonStepQuestionResultPayload:
+        """The manual form of ``person_step_question`` (``pivot_id`` set)."""
+        if not (self._manual_enabled and self._assist_enabled) or self._project is None:
+            return _question_refused(_PERSON_STEP_QUESTION_UNSUPPORTED)
+        if raw_length > PERSON_STEP_QUESTION_MAX_BYTES:
+            return _question_refused(_PERSON_STEP_QUESTION_TOO_LARGE)
+        form = RunnerManualStepQuestionForm(
+            {
+                field: data.get(field)
+                for field in RunnerManualStepQuestionForm.base_fields
+            }
+        )
+        if not form.is_valid():
+            return _question_refused(form_error_text(form))
+        try:
+            await database_sync_to_async(ask_manual_from_runner)(
+                project=self._project,
+                channel_name=self.channel_name,
+                person_user_id=self._person_user_id,
+                pivot_id=form.cleaned_data["pivot_id"],
+                claim_token=form.cleaned_data["claim_token"],
+                step_num=form.cleaned_data["step_num"],
+                question=form.cleaned_data["question"],
+            )
+        except (ManualRunError, PersonStepQuestionError) as exc:
+            return _question_refused(exc.message)
+        except Exception:
+            logger.exception(
+                "Manual step question failed for project %s", self._project.id
+            )
+            return _question_refused(_PERSON_STEP_QUESTION_FAILED)
+        # The answer arrives in a later ``manual_run_state``.
+        return PersonStepQuestionResultPayload(ok=True, message="")
+
+    async def _handle_manual_case_action(
+        self, data: dict[str, Any], raw_length: int
+    ) -> None:
+        request_id = _echoed_request_id(data)
+        result = await self._act_on_manual_case(data, raw_length)
+        await self.send(
+            text_data=serialize_manual_case_action_result(result, request_id)
+        )
+        # A success nudges on commit; only a refusal re-syncs the window here.
+        if not result.ok:
+            await self._push_manual_state(force=True)
+
+    async def _act_on_manual_case(
+        self, data: dict[str, Any], raw_length: int
+    ) -> ManualCaseActionResultPayload:
+        if not self._manual_enabled or self._project is None:
+            return _manual_action_refused(_MANUAL_UNSUPPORTED)
+        if raw_length > MANUAL_CASE_ACTION_MAX_BYTES:
+            return _manual_action_refused(_MANUAL_TOO_LARGE)
+        form = RunnerManualCaseActionForm(
+            {field: data.get(field) for field in RunnerManualCaseActionForm.base_fields}
+        )
+        if not form.is_valid():
+            return _manual_action_refused(form_error_text(form))
+        try:
+            message = await database_sync_to_async(act_from_runner)(
+                project=self._project,
+                channel_name=self.channel_name,
+                person_user_id=self._person_user_id,
+                action=ManualCaseActionKind(form.cleaned_data["action"]),
+                pivot_id=form.cleaned_data["pivot_id"],
+                claim_token=form.cleaned_data["claim_token"],
+            )
+        except ManualRunError as exc:
+            return _manual_action_refused(exc.message)
+        except Exception:
+            logger.exception(
+                "Manual case action failed for project %s", self._project.id
+            )
+            return _manual_action_refused(_MANUAL_ACTION_FAILED)
+        return ManualCaseActionResultPayload(ok=True, message=message)
+
+    async def _handle_manual_case_submit(
+        self, data: dict[str, Any], raw_length: int
+    ) -> None:
+        request_id = _echoed_request_id(data)
+        result = await self._submit_manual_case(data, raw_length)
+        await self.send(
+            text_data=serialize_manual_case_submit_result(result, request_id)
+        )
+        # A success nudges on commit; only a refusal re-syncs the window here.
+        if not result.ok:
+            await self._push_manual_state(force=True)
+
+    async def _submit_manual_case(
+        self, data: dict[str, Any], raw_length: int
+    ) -> ManualCaseSubmitResultPayload:
+        if not self._manual_enabled or self._project is None:
+            return _manual_submit_refused(_MANUAL_UNSUPPORTED, "")
+        if raw_length > MANUAL_CASE_SUBMIT_MAX_BYTES:
+            return _manual_submit_refused(_MANUAL_TOO_LARGE, "")
+        # Nested lists: the protocol parser is the form here (structure, caps,
+        # note rules); the service checks the claim and the stored plan.
+        try:
+            payload = parse_manual_case_submit_payload(data)
+        except ProtocolError as exc:
+            # The same hand-in can never pass: the runner deletes it.
+            return _manual_submit_refused(
+                f"The result was refused: {exc}",
+                _peek_submission_id(data),
+                drop=True,
+            )
+        submission_id = payload.submission_id
+        try:
+            missing = await database_sync_to_async(submit_from_runner)(
+                project=self._project,
+                channel_name=self.channel_name,
+                person_user_id=self._person_user_id,
+                payload=payload,
+            )
+        except ManualSubmissionDroppedError as exc:
+            return _manual_submit_refused(exc.message, submission_id, drop=True)
+        except ManualRunError as exc:
+            return _manual_submit_refused(exc.message, submission_id)
+        except Exception:
+            logger.exception(
+                "Manual case submit failed for project %s", self._project.id
+            )
+            return _manual_submit_refused(_MANUAL_SUBMIT_FAILED, submission_id)
+        return ManualCaseSubmitResultPayload(
+            ok=True,
+            message=_MANUAL_SUBMITTED,
+            submission_id=submission_id,
+            missing=missing,
+        )
+
+    async def _handle_manual_screenshot_upload(
+        self, data: dict[str, Any], raw_length: int
+    ) -> None:
+        request_id = _echoed_request_id(data)
+        ids = peek_manual_upload_ids(data)
+        if ids is None:
+            # No ack the runner could match: answer with a plain error.
+            await self._send_error(
+                "Invalid manual_screenshot_upload: missing submission_id or key",
+                request_id,
+            )
+            return
+        submission_id, key = ids
+        ok = False
+        drop = False
+        drop_shot = False
+        message = ""
+        if not self._manual_enabled or self._project is None:
+            message = _MANUAL_UNSUPPORTED
+        elif raw_length > MANUAL_SCREENSHOT_UPLOAD_MAX_BYTES:
+            message = _MANUAL_TOO_LARGE
+        else:
+            try:
+                # Base64, sha256 and Pillow off the shared sync thread.
+                await database_sync_to_async(
+                    upload_from_runner, thread_sensitive=False
+                )(project=self._project, channel_name=self.channel_name, data=data)
+                ok = True
+            except ManualSubmissionDroppedError as exc:
+                message = exc.message
+                drop = True
+            except ManualShotRejectedError as exc:
+                # Only this shot: the hand-in's other screenshots still upload.
+                message = exc.message
+                drop_shot = True
+            except ManualRunError as exc:
+                message = exc.message
+            except Exception:
+                logger.exception(
+                    "Manual screenshot upload failed for project %s",
+                    self._project.id,
+                )
+                message = _MANUAL_UPLOAD_FAILED
+        await self.send(
+            text_data=serialize_manual_screenshot_ack(
+                ManualScreenshotAckPayload(
+                    submission_id=submission_id,
+                    key=key,
+                    ok=ok,
+                    drop=drop,
+                    message=message,
+                    drop_shot=drop_shot,
+                ),
+                request_id,
+            )
+        )
 
     async def _forward_action(self, event: BaseActionEvent) -> None:
         request_id: str = event.get("request_id") or str(uuid.uuid4())
@@ -916,6 +1198,35 @@ def _echoed_request_id(data: dict[str, Any]) -> str:
     ):
         return raw_request_id
     return ""
+
+
+def _is_manual_question(data: dict[str, Any]) -> bool:
+    """The manual form of ``person_step_question``: a positive ``pivot_id``."""
+    pivot_id = data.get("pivot_id")
+    return isinstance(pivot_id, int) and not isinstance(pivot_id, bool) and pivot_id > 0
+
+
+def _peek_submission_id(data: dict[str, Any]) -> str:
+    """The message's ``submission_id`` as a normalized UUID, or blank."""
+    raw = data.get("submission_id")
+    if not isinstance(raw, str) or len(raw) > _MAX_SUBMISSION_ID_LENGTH:
+        return ""
+    try:
+        return str(uuid.UUID(raw))
+    except ValueError:
+        return ""
+
+
+def _manual_action_refused(message: str) -> ManualCaseActionResultPayload:
+    return ManualCaseActionResultPayload(ok=False, message=message)
+
+
+def _manual_submit_refused(
+    message: str, submission_id: str, *, drop: bool = False
+) -> ManualCaseSubmitResultPayload:
+    return ManualCaseSubmitResultPayload(
+        ok=False, message=message, submission_id=submission_id, drop=drop
+    )
 
 
 def _pause_refused(message: str) -> CasePauseActionResultPayload:

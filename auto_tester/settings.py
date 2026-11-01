@@ -10,7 +10,12 @@ from decouple import Choices, Csv, config
 from django.core.exceptions import ImproperlyConfigured
 
 from auto_tester.encryption_key import validate_fernet_key
-from controller_client.protocol import UPDATE_MAX_SECONDS
+from controller_client.protocol import (
+    MANUAL_SHOT_MAX_BYTES as PROTOCOL_MANUAL_SHOT_MAX_BYTES,
+)
+from controller_client.protocol import (
+    UPDATE_MAX_SECONDS,
+)
 
 load_dotenv()
 
@@ -196,6 +201,11 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "projects.tasks.import_testrail_run_cases": {"queue": "upload"},
     "projects.tasks.push_test_run_results": {"queue": "upload"},
     "projects.tasks.push_checked_results_to_testrail": {"queue": "upload"},
+    # Manual run: the AI rewrite of a hand-in's notes for TestRail, queued
+    # when its screenshots finish uploading (sent by name).
+    "projects.tasks.refine_manual_case_result": {"queue": "upload"},
+    # Beat sweep: quick, must run while upload is busy with imports.
+    "projects.tasks.sweep_stalled_manual_uploads": {"queue": "notify"},
     # An LLM call of tens of seconds on its own small queue: not "notify"
     # (kept quick), not "execution" (may be full of long cases), not "upload"
     # (a long TestRail import would hold a person waiting on an answer).
@@ -243,6 +253,13 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     # Ends test sessions left open past TEST_SESSION_MAX_HOURS (a no-op at 0).
     "test-sessions-close-stale": {
         "task": "test_sessions.tasks.close_stale_test_sessions",
+        "schedule": 900.0,
+        "options": {"expire_seconds": 840},
+    },
+    # Manual run: hand-ins with no screenshot for MANUAL_UPLOAD_STALE_HOURS
+    # become "Screenshots incomplete", so they can be checked and sent.
+    "projects-sweep-stalled-manual-uploads": {
+        "task": "projects.tasks.sweep_stalled_manual_uploads",
         "schedule": 900.0,
         "options": {"expire_seconds": 840},
     },
@@ -613,11 +630,67 @@ PERSON_EVIDENCE_OUTPUT_MAX_CHARS: int = config(
 # Mark failed / Mark blocked on a person step: the agent records evidence with
 # one read-only check (True) or only takes a screenshot (False).
 PERSON_EVIDENCE_LLM: bool = config("PERSON_EVIDENCE_LLM", default=True, cast=bool)
-# Human in the loop, Ask AI: timeout of the LLM call answering a person's
-# question; a question still pending 60 s past it is failed at the next ask.
+# Human in the loop, Ask AI: total time for answering a person's question
+# (knowledge base look-ups and the answer); a question still pending 60 s past
+# it is failed at the next ask.
 PERSON_STEP_QUESTION_TIMEOUT_SECONDS: int = config(
-    "PERSON_STEP_QUESTION_TIMEOUT_SECONDS", default=120, cast=int
+    "PERSON_STEP_QUESTION_TIMEOUT_SECONDS", default=180, cast=int
 )
+# Knowledge base look-up rounds Ask AI takes before answering (only in projects
+# with ready knowledge base items); 0 keeps a single call without tools.
+PERSON_STEP_QUESTION_MAX_TOOL_ROUNDS: int = config(
+    "PERSON_STEP_QUESTION_MAX_TOOL_ROUNDS", default=3, cast=int
+)
+if PERSON_STEP_QUESTION_MAX_TOOL_ROUNDS < 0:
+    raise ImproperlyConfigured("PERSON_STEP_QUESTION_MAX_TOOL_ROUNDS must be 0 or more")
+# Ask AI reads the knowledge base on every question: leave time for a look-up
+# round besides the 40 s kept for the answer. Keep 60 above the sum of
+# _ANSWER_RESERVE_SECONDS and _MIN_LOOKUP_SECONDS in
+# agents/services/person_step_advisor.py.
+if (
+    PERSON_STEP_QUESTION_MAX_TOOL_ROUNDS > 0
+    and PERSON_STEP_QUESTION_TIMEOUT_SECONDS < 60
+):
+    raise ImproperlyConfigured(
+        "PERSON_STEP_QUESTION_TIMEOUT_SECONDS must be 60 or more while "
+        "PERSON_STEP_QUESTION_MAX_TOOL_ROUNDS is above 0"
+    )
+# Manual run: largest screenshot (raw PNG/JPEG bytes) the server stores from
+# the Test Runner; may only lower the protocol's MANUAL_SHOT_MAX_BYTES (7 MiB).
+# Runners size shots to the protocol limit: lowering it rejects larger ones.
+MANUAL_SHOT_MAX_BYTES: int = config(
+    "MANUAL_SHOT_MAX_BYTES", default=PROTOCOL_MANUAL_SHOT_MAX_BYTES, cast=int
+)
+if not 1 <= MANUAL_SHOT_MAX_BYTES <= PROTOCOL_MANUAL_SHOT_MAX_BYTES:
+    raise ImproperlyConfigured(
+        f"MANUAL_SHOT_MAX_BYTES must be between 1 and {PROTOCOL_MANUAL_SHOT_MAX_BYTES}"
+    )
+# Manual run: screenshot uploads accepted per project and minute.
+MANUAL_SHOT_RATE_PER_MINUTE: int = config(
+    "MANUAL_SHOT_RATE_PER_MINUTE", default=120, cast=int
+)
+if MANUAL_SHOT_RATE_PER_MINUTE < 1:
+    raise ImproperlyConfigured("MANUAL_SHOT_RATE_PER_MINUTE must be 1 or more")
+# Manual run: most screenshots attached to one case's TestRail result.
+MANUAL_TESTRAIL_MAX_SHOTS: int = config(
+    "MANUAL_TESTRAIL_MAX_SHOTS", default=30, cast=int
+)
+if MANUAL_TESTRAIL_MAX_SHOTS < 0:
+    raise ImproperlyConfigured("MANUAL_TESTRAIL_MAX_SHOTS must be 0 or more")
+# Manual run: time for the AI rewrite of a tester's notes (at completion and,
+# when not yet done, inline in a TestRail push).
+MANUAL_REFINE_TIMEOUT_SECONDS: int = config(
+    "MANUAL_REFINE_TIMEOUT_SECONDS", default=120, cast=int
+)
+if MANUAL_REFINE_TIMEOUT_SECONDS < 1:
+    raise ImproperlyConfigured("MANUAL_REFINE_TIMEOUT_SECONDS must be 1 or more")
+# Manual run: a hand-in with no screenshot received for this long is marked
+# "Screenshots incomplete" (a later upload still completes it).
+MANUAL_UPLOAD_STALE_HOURS: int = config(
+    "MANUAL_UPLOAD_STALE_HOURS", default=24, cast=int
+)
+if MANUAL_UPLOAD_STALE_HOURS < 1:
+    raise ImproperlyConfigured("MANUAL_UPLOAD_STALE_HOURS must be 1 or more")
 # Test Runner self-update: an update with no outcome after this long counts as
 # expired. It must outlast the runner's own deadline (UPDATE_MAX_SECONDS), or
 # the run/setup gates would reopen while the runner is still installing.

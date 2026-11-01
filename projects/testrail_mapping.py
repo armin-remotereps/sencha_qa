@@ -274,20 +274,84 @@ def format_step_breakdown(progress: CaseStepProgress) -> str:
     return "\n".join([header, *entries])
 
 
+# Manual run comments (``projects.manual_refinement_services``): code lays
+# out every manual case the same way; only the notes come from the tester (or
+# their AI rewrite).
+MANUAL_STEPS_HEADER: Final = "Steps (performed manually):"
+MANUAL_UNKNOWN_TESTER: Final = "a person at the Test Runner"
+
+
+@dataclass(frozen=True)
+class ManualStepLine:
+    """One verbatim case step of a manual case, as the comment lists it.
+
+    ``outcome_label`` comes from the checkpoint ("Passed", "Failed",
+    "Not run"), never from the AI; ``note`` is the tester's note or its
+    rewrite ("" for none).
+    """
+
+    num: int
+    text: str
+    outcome_label: str
+    note: str
+
+
+def format_manual_result_header(
+    *, outcome_label: str, tester_label: str, run_name: str
+) -> str:
+    """e.g. "Passed manually by Ana via Test Runner in run “Smoke”."."""
+    tester = tester_label.strip() or MANUAL_UNKNOWN_TESTER
+    if outcome_label == _TESTRAIL_STATUS_TO_LABEL[TESTRAIL_STATUS_RETEST]:
+        return f"Retest in run “{run_name}”. Performed manually by {tester}."
+    return f"{outcome_label} manually by {tester} in run “{run_name}”."
+
+
+def format_manual_step_breakdown(
+    steps: Sequence[ManualStepLine], *, shots_note: str = ""
+) -> str:
+    """The manual step list ("n. Passed: <step text> — <note>"), then
+    ``shots_note`` ("3 of 5 screenshots received ...") when given."""
+    paragraphs: list[str] = []
+    if steps:
+        lines = [MANUAL_STEPS_HEADER]
+        for step in steps:
+            line = f"{step.num}. {step.outcome_label}: " + _one_line(step.text)
+            note = _one_line(step.note)
+            if note:
+                line += f" — {note}"
+            lines.append(line)
+        paragraphs.append("\n".join(lines))
+    if shots_note:
+        paragraphs.append(shots_note)
+    return "\n\n".join(paragraphs)
+
+
+def format_manual_shots_note(received: int, expected: int) -> str:
+    """The note for a hand-in whose screenshots never all arrived."""
+    return (
+        f"{received} of {pluralize_count(expected, 'screenshot', 'screenshots')} "
+        "received from the Test Runner."
+    )
+
+
 def build_result_comment(
     *,
     outcome_label: str,
     run_name: str,
     result_text: str,
     step_breakdown: str,
+    header: str = "",
 ) -> str:
     """Build the TestRail result comment body for one pushed case result.
 
-    The full result text, then ``step_breakdown`` (from
-    ``format_step_breakdown``; empty for none). No length cap and no link back.
+    ``header`` replaces the "<outcome> by Punk Hazard in run …" line (a
+    manual case's ``format_manual_result_header``). The full result text,
+    then ``step_breakdown`` (from ``format_step_breakdown`` or
+    ``format_manual_step_breakdown``; empty for none). No length cap and no
+    link back.
     """
     text = result_text.strip()
-    paragraphs = [f"{outcome_label} by Punk Hazard in run “{run_name}”."]
+    paragraphs = [header or f"{outcome_label} by Punk Hazard in run “{run_name}”."]
     if text:
         paragraphs.append(text)
     if step_breakdown:
@@ -319,11 +383,13 @@ def build_checked_result_comment(
     checked_at: datetime,
     screenshot_count: int,
     screenshot_steps: Sequence[int],
+    header: str = "",
 ) -> str:
     """The 018 result comment plus who checked it and how many screenshots follow.
 
     `screenshot_steps` are the plan steps the attached screenshots were taken
     in (empty when unknown, e.g. untagged screenshots from older runs).
+    `header` as in `build_result_comment`.
     """
     paragraphs = [
         build_result_comment(
@@ -331,6 +397,7 @@ def build_checked_result_comment(
             run_name=run_name,
             result_text=result_text,
             step_breakdown=step_breakdown,
+            header=header,
         ),
         f"Checked by {checked_by_label} on {checked_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC.",
     ]

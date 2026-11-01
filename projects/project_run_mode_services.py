@@ -18,11 +18,18 @@ from django.utils import timezone
 
 from accounts.models import CustomUser
 from projects.exceptions import HelpModeNotAllowedError, RunHelpError
-from projects.models import Project, ProjectRunModeScope, TestRun, TestRunStatus
+from projects.manual_run_policy import crosses_manual_boundary
+from projects.models import (
+    Project,
+    ProjectRunModeScope,
+    RunHelpMode,
+    TestRun,
+    TestRunStatus,
+)
 from projects.run_help_mode_services import change_run_help_mode
 from projects.run_reopen_services import is_valid_help_mode
 
-_UNKNOWN_MODE = "Choose Attended, Night or Human in the loop."
+_UNKNOWN_MODE = "Choose Attended, Night, Human in the loop or Manual."
 _FINISHED_STATUSES = (TestRunStatus.DONE, TestRunStatus.CANCELLED)
 _OPEN_STATUSES = (TestRunStatus.STARTED, TestRunStatus.PAUSED)
 
@@ -41,6 +48,9 @@ class ProjectRunModeChange:
     active_skipped: int
     # Person steps handed back to the agent by those switches.
     handed_back: int
+    # Running, paused or finished runs left as they were because the change
+    # would cross the Manual boundary (drafts only, D11).
+    manual_skipped: int = 0
 
 
 def change_project_run_mode(
@@ -62,8 +72,10 @@ def change_project_run_mode(
     if not user.is_superuser:
         raise HelpModeNotAllowedError()
 
-    changed, drafts_updated, finished_updated = _save_mode_and_bulk_update(
-        project_id=project.pk, help_mode=help_mode, scope=scope
+    changed, drafts_updated, finished_updated, manual_skipped = (
+        _save_mode_and_bulk_update(
+            project_id=project.pk, help_mode=help_mode, scope=scope
+        )
     )
     project.default_help_mode = help_mode
 
@@ -72,10 +84,13 @@ def change_project_run_mode(
         runs = (
             TestRun.objects.filter(project_id=project.pk, status__in=_OPEN_STATUSES)
             .exclude(help_mode=help_mode)
-            .only("id")
+            .only("id", "help_mode")
             .order_by("pk")
         )
         for run in runs:
+            if crosses_manual_boundary(run.help_mode, help_mode):
+                manual_skipped += 1
+                continue
             # Each switch has its own transaction and the project-then-run
             # lock order, and reuses the hand-back, Night auto-fix start and
             # broadcasts of a single run's switch.
@@ -98,16 +113,19 @@ def change_project_run_mode(
         active_switched=active_switched,
         active_skipped=active_skipped,
         handed_back=handed_back,
+        manual_skipped=manual_skipped,
     )
 
 
 @transaction.atomic
 def _save_mode_and_bulk_update(
     *, project_id: int, help_mode: str, scope: ProjectRunModeScope
-) -> tuple[bool, int, int]:
+) -> tuple[bool, int, int, int]:
     """Lock the project, save its mode, rewrite drafts (and finished runs).
 
-    Returns ``(changed, drafts_updated, finished_updated)``. These runs have no
+    Returns ``(changed, drafts_updated, finished_updated, manual_skipped)``:
+    finished runs whose change would cross the Manual boundary are left as
+    they are and counted in ``manual_skipped`` (``all`` only). These runs have no
     live person step, help request or worker, so a bulk write is safe; a draft
     started meanwhile no longer matches ``status`` once Postgres re-checks the
     row after waiting on its lock, so it is left to ``start_test_run``.
@@ -122,16 +140,25 @@ def _save_mode_and_bulk_update(
         locked.default_help_mode = help_mode
         locked.save(update_fields=["default_help_mode", "updated_at"])
     if scope == ProjectRunModeScope.NEW_ONLY:
-        return changed, 0, 0
+        return changed, 0, 0, 0
 
     now = timezone.now()
     runs = TestRun.objects.filter(project_id=project_id).exclude(help_mode=help_mode)
     drafts_updated = runs.filter(status=TestRunStatus.WAITING).update(
         help_mode=help_mode, updated_at=now
     )
-    finished_updated = 0
+    finished_updated = manual_skipped = 0
     if scope == ProjectRunModeScope.ALL:
-        finished_updated = runs.filter(status__in=_FINISHED_STATUSES).update(
+        finished = runs.filter(status__in=_FINISHED_STATUSES)
+        # A manual result must stay manual (and an agent one agent): Resume
+        # and Re-run read the run's mode.
+        crossing = (
+            finished.exclude(help_mode=RunHelpMode.MANUAL)
+            if help_mode == RunHelpMode.MANUAL
+            else finished.filter(help_mode=RunHelpMode.MANUAL)
+        )
+        manual_skipped = crossing.count()
+        finished_updated = finished.exclude(pk__in=crossing.values("pk")).update(
             help_mode=help_mode, updated_at=now
         )
-    return changed, drafts_updated, finished_updated
+    return changed, drafts_updated, finished_updated, manual_skipped

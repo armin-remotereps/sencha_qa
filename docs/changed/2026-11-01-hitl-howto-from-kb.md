@@ -11,8 +11,8 @@ Plan: docs/plan/feat-hitl-howto-from-kb.md
 - `agents/types.py`, `agents/checkpoint.py`, `agents/json_values.py`, `agents/case_log.py`: `PersonHowToItem.source_*`, `PersonGuideSources/Context/Notes`, `person_guide` key; shared helpers.
 - `projects/person_guide_sources.py`, `projects/services.py`: `build_person_guide_sources` passed to `run_orchestrator` on every execution (fresh or resumed); profile and index memoized and shared with the planner's fresh read. `machine_readiness/profile_text.py`: one function for the profile text and its cited ids.
 - `projects/person_step_rows.py`, `person_step_services.py`, `_person_step_card.html`, `punk-hazard.css`: rows store sources; the card shows "Source: «name», page N" links (or the artifacts profile) and a "general guidance" hint when no item has one.
-- `controller_client/protocol.py`, `person_window_app.py`, `person_window_diagnostics.py`, `projects/runner_person_step_services.py`, `runner_window_state.py`, `controller_consumer.py`: `PersonHowToPayload.source`, 12 items, capability `PERSON_STEP_GUIDE_V1`, CLIENT_VERSION 0.13.0; runners without it get ≤ 8 items, the 8th pointing to the case page.
-- `agents/services/person_step_advice_prompts.py`, `projects/person_step_question_services.py`: Ask AI gets the (redacted, fenced) artifacts profile and a secrets rule; its own KB excerpt lookup is unchanged.
+- `controller_client/protocol.py`, `person_window_app.py`, `person_window_diagnostics.py`, `projects/runner_person_step_services.py`, `runner_window_state.py`, `controller_consumer.py`: `PersonHowToPayload.source`, 12 items, capability `PERSON_STEP_GUIDE_V1`, CLIENT_VERSION 0.14.0; runners without it get ≤ 8 items, the 8th pointing to the case page.
+- `agents/services/person_step_advice_prompts.py`, `person_step_advisor.py`, `projects/advice_context.py` (on top of `docs/changed/2026-11-01-ask-ai-context.md`): the Ask AI profile is redacted, the prompt has the secrets rule, and answers pass through `redact_secrets` (case-stated values kept); its KB lookup is unchanged.
 
 ## Why
 Testers found the how-to just repeated the step. It now draws on the project's documents and machine profile to give exact paths, values, navigation, checks and what a wrong result looks like.
@@ -20,7 +20,7 @@ Testers found the how-to just repeated the step. It now draws on the project's d
 ## Behaviour and contract changes
 - New settings `PERSON_GUIDE_RESEARCH_MAX_TOOL_ROUNDS` (4; 0 disables research, excerpts and profile still used) and `PERSON_GUIDE_RESEARCH_TIMEOUT_SECONDS` (120); `example.env` updated.
 - Checkpoint: optional `person_guide` key; how-to items gain optional `source_kind`, `source_item_id`, `source_page`, `source_label` (also in `CasePersonStep.how_to` JSON; no migration). `PERSON_STEP_HOW_TO_MAX_ITEMS` 8 → 12.
-- Controller protocol 0.13.0: optional `source` per how-to item, `person_step_guide_v1`. Update runners from the Environment page.
+- Controller protocol 0.14.0: optional `source` per how-to item, `person_step_guide_v1`. Update runners from the Environment page.
 - The prepare prompt changed for every HITL step, also in projects without KB or profile (no longer "write it whenever …").
 
 ## Notes for future changes

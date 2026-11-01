@@ -34,6 +34,12 @@ from projects.checked_push_limits import (
 )
 from projects.controller_reconnect_services import max_outage_seconds_per_case
 from projects.machine_readiness_ports import build_runner_ports
+from projects.manual_refinement_services import (
+    REFINE_MANUAL_CASE_RESULT_TASK,
+    SWEEP_STALLED_MANUAL_UPLOADS_TASK,
+    refine_manual_submission,
+    sweep_stalled_manual_uploads,
+)
 from projects.models import (
     PROJECT_PROMPT_MAX_LENGTH,
     ContextWriteSource,
@@ -412,6 +418,31 @@ def refine_project_prompt_task(
 def answer_person_step_question(question_id: int) -> None:
     """Ask AI: answer one person's question about their step (``assist`` queue)."""
     answer_person_step_question_now(question_id)
+
+
+@shared_task(
+    name=REFINE_MANUAL_CASE_RESULT_TASK,
+    queue="upload",
+    max_retries=0,
+    # A lost or failed rewrite is made again inline by the next push.
+    soft_time_limit=settings.MANUAL_REFINE_TIMEOUT_SECONDS + 15,
+    time_limit=settings.MANUAL_REFINE_TIMEOUT_SECONDS + 45,
+)
+def refine_manual_case_result(submission_pk: int) -> None:
+    """Manual run: rewrite a hand-in's notes for TestRail early (``upload``)."""
+    refine_manual_submission(submission_pk)
+
+
+@shared_task(
+    name=SWEEP_STALLED_MANUAL_UPLOADS_TASK,
+    queue="notify",
+    max_retries=0,
+    soft_time_limit=60,
+    time_limit=90,
+)
+def sweep_stalled_manual_uploads_task() -> None:
+    """Beat: mark manual hand-ins whose screenshots stopped arriving incomplete."""
+    sweep_stalled_manual_uploads()
 
 
 def _fetch_test_run(test_run_id: int) -> TestRun | None:

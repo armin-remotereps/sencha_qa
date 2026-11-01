@@ -1,7 +1,9 @@
 """Mark a run's cases as Checked (a human reviewed the AI verdict), or undo it.
 
 A case can be checked once it has a verdict (Passed, Failed, Blocked). It can
-be unchecked until its result has been sent to its source TestRail run.
+be unchecked until its result has been sent to its source TestRail run. A
+Manual run case cannot be checked while its screenshots are still uploading
+from the Test Runner (its evidence would be frozen without them).
 Unchecking clears the reason a previous send skipped the case, so checking it
 again puts it back in line for the next send.
 """
@@ -18,6 +20,7 @@ from django.utils import timezone
 from accounts.models import CustomUser
 from projects.checked_push_limits import is_checked_push_live
 from projects.exceptions import RunCaseCheckError
+from projects.manual_current_submission import uploading_manual_case_ids
 from projects.models import TestRun, TestRunTestCase, TestRunTestCaseStatus
 from projects.testrail_evidence_services import freeze_testrail_evidence
 
@@ -28,6 +31,10 @@ CHECKABLE_STATUSES: tuple[str, ...] = (
     TestRunTestCaseStatus.NEEDS_RETEST,
 )
 
+MANUAL_UPLOADING_MESSAGE = (
+    "Screenshots are still uploading from the Test Runner: check these cases "
+    "once they have arrived."
+)
 _NOTHING_TO_CHECK_MESSAGE = (
     "None of the selected cases could be checked: they have no verdict "
     "yet or are already checked."
@@ -89,6 +96,9 @@ def check_run_cases(
     if not pivots:
         raise RunCaseCheckError(_NOTHING_TO_CHECK_MESSAGE)
     changed = check_locked_pivots(pivots, user=user, now=timezone.now())
+    if changed == 0:
+        # Every eligible case is a manual one still uploading.
+        raise RunCaseCheckError(MANUAL_UPLOADING_MESSAGE)
     return CheckOutcome(changed=changed, skipped=len(selected) - changed)
 
 
@@ -98,10 +108,16 @@ def check_locked_pivots(
     """Check pivots the caller locked in its open transaction; returns the count.
 
     ``pivots`` are unchecked cases with a verdict, loaded with at least ``id``
-    and ``status`` under ``select_for_update``. Freezes which of their
-    screenshots the next TestRail send attaches, then sets Checked by ``user``
-    and clears a previous send's skip reason (one UPDATE).
+    and ``status`` under ``select_for_update``. Manual cases whose screenshots
+    are still uploading are left unchecked (callers that report them use
+    ``uploading_manual_case_ids`` first). Freezes which of the others'
+    screenshots the next TestRail send attaches, then sets Checked by
+    ``user`` and clears a previous send's skip reason (one UPDATE).
     """
+    if not pivots:
+        return 0
+    uploading = uploading_manual_case_ids(pivot.id for pivot in pivots)
+    pivots = [pivot for pivot in pivots if pivot.id not in uploading]
     if not pivots:
         return 0
     freeze_testrail_evidence(pivots)

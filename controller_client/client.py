@@ -64,8 +64,20 @@ from controller_client.executor import (
     execute_wait_for_command,
 )
 from controller_client.interactive_session import InteractiveSessionManager
-from controller_client.person_window import PersonCaseRequest, PersonWindow
-from controller_client.person_window_ipc import CaseRequestKind
+from controller_client.manual_capture import ManualCapturer
+from controller_client.manual_coordinator import ManualCoordinator
+from controller_client.manual_spool import ManualSpool
+from controller_client.manual_uploader import ManualUploader
+from controller_client.person_window import (
+    ManualWindowRequest,
+    PersonCaseRequest,
+    PersonWindow,
+)
+from controller_client.person_window_ipc import (
+    CaseRequestKind,
+    ManualCaseActionEvent,
+    ManualResultKind,
+)
 from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import (
     CLIENT_VERSION,
@@ -79,6 +91,8 @@ from controller_client.protocol import (
     CommandResultPayload,
     ErrorCode,
     InteractiveOutputPayload,
+    ManualCaseActionKind,
+    ManualCaseActionPayload,
     MessageType,
     PersonChatSendPayload,
     PersonHelpActionPayload,
@@ -110,6 +124,10 @@ from controller_client.protocol import (
     parse_inspect_paths_payload,
     parse_key_press_payload,
     parse_launch_app_payload,
+    parse_manual_case_action_result_payload,
+    parse_manual_case_submit_result_payload,
+    parse_manual_run_state_payload,
+    parse_manual_screenshot_ack_payload,
     parse_person_case_action_result_payload,
     parse_person_step_action_result_payload,
     parse_person_step_question_result_payload,
@@ -126,6 +144,7 @@ from controller_client.protocol import (
     peek_update_id,
     scan_directory_result_to_json,
     serialize_case_pause_action,
+    serialize_manual_case_action,
     serialize_message,
     serialize_person_chat_send,
     serialize_person_help_action,
@@ -165,6 +184,9 @@ PERSON_STEP_QUESTION_TIMEOUT_SECONDS: Final[float] = 30.0
 # The same for a pause, a discussion message or a help resolution from the
 # window (one slot per kind).
 PERSON_CASE_REQUEST_TIMEOUT_SECONDS: Final[float] = 30.0
+# The same for a manual claim or release (one at a time).
+MANUAL_CASE_ACTION_TIMEOUT_SECONDS: Final[float] = 30.0
+_MIB: Final[int] = 1024 * 1024
 # Messages that never touch or capture the screen, so the person step window
 # stays up while they are handled. Every other message is an agent action and
 # runs with the window hidden (it must never be in a screenshot, the vision
@@ -177,6 +199,12 @@ _WINDOW_SAFE_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
         MessageType.PERSON_STEP_QUESTION_RESULT,
         MessageType.CASE_PAUSE_ACTION_RESULT,
         MessageType.PERSON_CASE_ACTION_RESULT,
+        # Manual run: snapshots and replies; tester screenshots hide the
+        # window themselves (manual_capture).
+        MessageType.MANUAL_RUN_STATE,
+        MessageType.MANUAL_CASE_ACTION_RESULT,
+        MessageType.MANUAL_CASE_SUBMIT_RESULT,
+        MessageType.MANUAL_SCREENSHOT_ACK,
         MessageType.UPDATE_RUNNER,
         # Read-only file system inventory; nothing on screen changes.
         MessageType.SCAN_DIRECTORY,
@@ -208,6 +236,18 @@ _QUESTION_NOT_CONNECTED: Final[str] = (
 _QUESTION_BUSY: Final[str] = "Your previous question is still being sent; wait for it."
 _QUESTION_UNAVAILABLE: Final[str] = (
     "Asking the AI is not available on this server; ask on Punk Hazard."
+)
+_MANUAL_ACTION_NOUNS: Final[dict[ManualCaseActionKind, str]] = {
+    ManualCaseActionKind.CLAIM: "start",
+    ManualCaseActionKind.RELEASE: "release",
+}
+_MANUAL_ACTION_KINDS: Final[dict[ManualCaseActionKind, ManualResultKind]] = {
+    ManualCaseActionKind.CLAIM: ManualResultKind.CLAIM,
+    ManualCaseActionKind.RELEASE: ManualResultKind.RELEASE,
+}
+_UPDATE_SPOOL_NOT_EMPTY: Final[str] = (
+    "Finish uploading the manual test screenshots first: the Test Runner "
+    "still holds {spool}"
 )
 # What each case request is called in the window's messages.
 _CASE_REQUEST_NOUNS: Final[dict[CaseRequestKind, str]] = {
@@ -361,11 +401,44 @@ class ControllerClient:
         # resolutions; one waits for its result per kind.
         self._case_request_task: asyncio.Task[None] | None = None
         self._pending_case: dict[CaseRequestKind, tuple[str, asyncio.Task[None]]] = {}
+        # Manual run (MANUAL_RUN_V1). The spool and its uploader work with or
+        # without the window (hand-ins of an earlier session still upload);
+        # the coordinator and captures need the window.
+        self._manual_spool = ManualSpool(max_bytes=config.manual_spool_max_mb * _MIB)
+        self._manual_uploader = ManualUploader(
+            self._manual_spool, on_change=self._on_manual_upload_change
+        )
+        self._manual_upload_task: asyncio.Task[None] | None = None
+        self._manual: ManualCoordinator | None = None
+        self._manual_request_task: asyncio.Task[None] | None = None
+        # The one claim or release waiting for its result:
+        # (request_id, action, its timeout).
+        self._pending_manual_action: (
+            tuple[str, ManualCaseActionPayload, asyncio.Task[None]] | None
+        ) = None
+        # A manual question waits in its own slot (never blocks a step's).
+        self._pending_manual_question: tuple[str, asyncio.Task[None]] | None = None
+        self._handlers[MessageType.MANUAL_RUN_STATE] = self._handle_manual_run_state
+        self._handlers[MessageType.MANUAL_CASE_ACTION_RESULT] = (
+            self._handle_manual_case_action_result
+        )
+        self._handlers[MessageType.MANUAL_CASE_SUBMIT_RESULT] = (
+            self._handle_manual_case_submit_result
+        )
+        self._handlers[MessageType.MANUAL_SCREENSHOT_ACK] = (
+            self._handle_manual_screenshot_ack
+        )
         self._window_pid_source: Callable[[], int | None] | None = None
         if person_window is not None:
             self._window_pid_source = lambda: person_window.pid
             # close_app / close_tab never close the window process.
             register_helper_pid_source(self._window_pid_source)
+            self._manual = ManualCoordinator(
+                window=person_window,
+                spool=self._manual_spool,
+                uploader=self._manual_uploader,
+                capturer=ManualCapturer(person_window),
+            )
 
     async def run(self) -> None:
         self._running = True
@@ -380,6 +453,13 @@ class ControllerClient:
             self._case_request_task = asyncio.create_task(
                 self._forward_case_requests(window)
             )
+        if window is not None and self._manual_request_task is None:
+            self._manual_request_task = asyncio.create_task(
+                self._forward_manual_requests(window)
+            )
+        if self._manual_upload_task is None:
+            await self._recover_manual_spool()
+            self._manual_upload_task = asyncio.create_task(self._manual_uploader.run())
 
         while self._running:
             self._session_authenticated = False
@@ -451,6 +531,7 @@ class ControllerClient:
         self._running = False
         self._stop_event.set()
         await self._cancel_update_tasks()
+        await self._stop_manual_upload()
         await self._stop_person_window()
         self._process_tracker.kill_all()
         self._session_manager.terminate_all()
@@ -1250,6 +1331,13 @@ class ControllerClient:
                 f"Another update ({running.update_id}) is already in progress",
             )
             return
+        if not await asyncio.to_thread(self._manual_spool.is_empty):
+            # The update deletes this install's folder, spool included.
+            spool = await asyncio.to_thread(self._manual_spool.describe)
+            await self._refuse_update(
+                update_id, _UPDATE_SPOOL_NOT_EMPTY.format(spool=spool)
+            )
+            return
         try:
             payload, layout = await asyncio.to_thread(prepare_update, data)
         except (ProtocolError, UpdateError, OSError) as e:
@@ -1375,6 +1463,7 @@ class ControllerClient:
         return True
 
     async def _after_handshake(self) -> None:
+        self._manual_uploader.attach(self._send_manual_upload)
         if self._update_status_unsent or self._update_in_flight() is not None:
             self._update_status_unsent = not await self._try_send_update_status(
                 self._last_update_status
@@ -1488,6 +1577,15 @@ class ControllerClient:
     async def _handle_person_step_question_result(
         self, request_id: str, data: dict[str, object]
     ) -> None:
+        manual_pending = self._pending_manual_question
+        if manual_pending is not None and manual_pending[0] == request_id:
+            try:
+                manual_result = parse_person_step_question_result_payload(data)
+            except ProtocolError as e:
+                logger.warning("Invalid person_step_question_result: %s", e)
+                manual_result = _question_failed(_ANSWER_UNREADABLE)
+            self._settle_manual_question(request_id, manual_result)
+            return
         pending = self._pending_question
         if pending is None or pending[0] != request_id:
             logger.info(
@@ -1505,10 +1603,70 @@ class ControllerClient:
     async def _forward_questions(self, window: PersonWindow) -> None:
         async for question in window.questions():
             try:
-                await self._send_question(window, question)
+                if question.is_manual:
+                    await self._send_manual_question(window, question)
+                else:
+                    await self._send_question(window, question)
             except Exception:
                 logger.exception("Could not send the person's question")
-                window.show_question_result(_question_failed(_QUESTION_NOT_CONNECTED))
+                window.show_question_result(
+                    _question_failed(_QUESTION_NOT_CONNECTED),
+                    manual=question.is_manual,
+                )
+
+    async def _send_manual_question(
+        self, window: PersonWindow, question: PersonStepQuestionAskPayload
+    ) -> None:
+        """A question about the claimed manual case (its own pending slot)."""
+        manual = self._manual
+        if manual is None or not manual.can_ask(
+            question.pivot_id, question.claim_token
+        ):
+            window.show_question_result(
+                _question_failed(_QUESTION_UNAVAILABLE), manual=True
+            )
+            return
+        if self._pending_manual_question is not None:
+            window.show_question_result(_question_failed(_QUESTION_BUSY), manual=True)
+            return
+        connection = self._connection
+        if connection is None or not self._session_authenticated:
+            window.show_question_result(
+                _question_failed(_QUESTION_NOT_CONNECTED), manual=True
+            )
+            return
+        request_id = str(uuid.uuid4())
+        expiry = asyncio.create_task(self._expire_manual_question(request_id))
+        self._pending_manual_question = (request_id, expiry)
+        logger.info(
+            "Sending the person's question about manual run case %d",
+            question.pivot_id,
+        )
+        try:
+            await connection.send(serialize_person_step_question(question, request_id))
+        except ConnectionClosed:
+            self._settle_manual_question(
+                request_id, _question_failed(_QUESTION_CONNECTION_LOST)
+            )
+
+    async def _expire_manual_question(self, request_id: str) -> None:
+        await asyncio.sleep(PERSON_STEP_QUESTION_TIMEOUT_SECONDS)
+        logger.warning(
+            "No result for the person's manual question (request_id=%s)", request_id
+        )
+        self._settle_manual_question(request_id, _question_failed(_QUESTION_NO_REPLY))
+
+    def _settle_manual_question(
+        self, request_id: str, result: PersonStepQuestionResultPayload
+    ) -> None:
+        pending = self._pending_manual_question
+        if pending is None or pending[0] != request_id:
+            return
+        self._pending_manual_question = None
+        if pending[1] is not asyncio.current_task():
+            pending[1].cancel()
+        if self._window is not None:
+            self._window.show_question_result(result, manual=True)
 
     async def _send_question(
         self, window: PersonWindow, question: PersonStepQuestionAskPayload
@@ -1694,6 +1852,197 @@ class ControllerClient:
         if self._window is not None:
             self._window.show_case_result(kind, ok, message)
 
+    # --- Manual run (MANUAL_RUN_V1) ----------------------------------------
+    #
+    # The window's Manual run tab: the server's snapshot and replies go to
+    # the coordinator and the uploader; claim and release are sent here (one
+    # at a time, matched by request_id); captures, notes and hand-ins stay on
+    # this machine (manual_coordinator) until the uploader sends them.
+
+    async def _recover_manual_spool(self) -> None:
+        try:
+            await asyncio.to_thread(self._manual_spool.recover)
+            if not await asyncio.to_thread(self._manual_spool.is_empty):
+                spool = await asyncio.to_thread(self._manual_spool.describe)
+                logger.info("Manual run spool: %s; uploading once connected", spool)
+        except OSError:
+            logger.warning("Could not check the manual screenshot spool", exc_info=True)
+
+    async def _stop_manual_upload(self) -> None:
+        task = self._manual_upload_task
+        self._manual_upload_task = None
+        self._manual_uploader.detach()
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.wait({task})
+
+    async def _send_manual_upload(self, message: str) -> None:
+        connection = self._connection
+        if connection is None or not self._session_authenticated:
+            raise ConnectionClosed(None, None)
+        await connection.send(message)
+
+    def _on_manual_upload_change(self) -> None:
+        if self._manual is not None:
+            self._manual.push_view()
+
+    async def _handle_manual_run_state(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        # A push, not a request: a bad one is logged, never answered.
+        try:
+            state = parse_manual_run_state_payload(data)
+        except ProtocolError as e:
+            logger.warning("Ignoring an invalid manual_run_state: %s", e)
+            return
+        if self._manual is None:
+            self._manual_uploader.on_server_pending(state.pending_uploads)
+            return
+        await self._manual.on_server_state(state)
+
+    async def _handle_manual_case_submit_result(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        try:
+            result = parse_manual_case_submit_result_payload(data)
+        except ProtocolError as e:
+            logger.warning("Invalid manual_case_submit_result: %s", e)
+            self._manual_uploader.on_submit_result(request_id, None)
+            return
+        if not self._manual_uploader.on_submit_result(request_id, result):
+            logger.info(
+                "Ignoring a manual submit result nothing waits for (request_id=%s)",
+                request_id,
+            )
+
+    async def _handle_manual_screenshot_ack(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        try:
+            ack = parse_manual_screenshot_ack_payload(data)
+        except ProtocolError as e:
+            logger.warning("Invalid manual_screenshot_ack: %s", e)
+            self._manual_uploader.on_ack(request_id, None)
+            return
+        if not self._manual_uploader.on_ack(request_id, ack):
+            logger.info(
+                "Ignoring a manual screenshot ack nothing waits for (request_id=%s)",
+                request_id,
+            )
+
+    async def _forward_manual_requests(self, window: PersonWindow) -> None:
+        # Captures run as their own tasks (they take a moment and serialize
+        # themselves), so notes typed meanwhile are still saved.
+        captures: set[asyncio.Task[None]] = set()
+        async for request in window.manual_requests():
+            if isinstance(request, ManualCaseActionEvent):
+                await self._send_manual_action(window, request.action)
+                continue
+            manual = self._manual
+            if manual is None:
+                continue
+            task = asyncio.create_task(self._handle_manual_request(manual, request))
+            captures.add(task)
+            task.add_done_callback(captures.discard)
+
+    @staticmethod
+    async def _handle_manual_request(
+        manual: ManualCoordinator, request: ManualWindowRequest
+    ) -> None:
+        try:
+            await manual.handle(request)
+        except Exception:
+            logger.exception("A manual run request from the window failed")
+
+    async def _send_manual_action(
+        self, window: PersonWindow, action: ManualCaseActionPayload
+    ) -> None:
+        kind = _MANUAL_ACTION_KINDS[action.action]
+        noun = _MANUAL_ACTION_NOUNS[action.action]
+        if self._pending_manual_action is not None:
+            window.show_manual_result(
+                kind, False, f"Your previous {noun} is still being sent; wait for it."
+            )
+            return
+        connection = self._connection
+        if connection is None or not self._session_authenticated:
+            window.show_manual_result(
+                kind,
+                False,
+                f"Not connected to Punk Hazard; {noun} the case again once the "
+                "Test Runner reconnects.",
+            )
+            return
+        request_id = str(uuid.uuid4())
+        expiry = asyncio.create_task(self._expire_manual_action(request_id, noun))
+        self._pending_manual_action = (request_id, action, expiry)
+        logger.info(
+            "Sending manual case %s for run case %d",
+            action.action.value,
+            action.pivot_id,
+        )
+        try:
+            await connection.send(serialize_manual_case_action(action, request_id))
+        except ConnectionClosed:
+            self._settle_manual_action(
+                request_id, False, self._manual_connection_lost(action.action)
+            )
+
+    @staticmethod
+    def _manual_connection_lost(action: ManualCaseActionKind) -> str:
+        return (
+            "The connection to Punk Hazard was lost before it answered; look at "
+            f"the case list again before you {_MANUAL_ACTION_NOUNS[action]} it."
+        )
+
+    async def _expire_manual_action(self, request_id: str, noun: str) -> None:
+        await asyncio.sleep(MANUAL_CASE_ACTION_TIMEOUT_SECONDS)
+        logger.warning(
+            "No result for the manual case %s (request_id=%s)", noun, request_id
+        )
+        self._settle_manual_action(
+            request_id, False, "No answer from the server; check Punk Hazard."
+        )
+
+    async def _handle_manual_case_action_result(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        pending = self._pending_manual_action
+        if pending is None or pending[0] != request_id:
+            logger.info(
+                "Ignoring a manual case action result nothing waits for "
+                "(request_id=%s)",
+                request_id,
+            )
+            return
+        try:
+            result = parse_manual_case_action_result_payload(data)
+        except ProtocolError as e:
+            logger.warning("Invalid manual_case_action_result: %s", e)
+            self._settle_manual_action(request_id, False, _ANSWER_UNREADABLE)
+            return
+        action = pending[1]
+        if (
+            result.ok
+            and action.action is ManualCaseActionKind.RELEASE
+            and self._manual is not None
+        ):
+            await self._manual.on_released(action.claim_token)
+        self._settle_manual_action(request_id, result.ok, result.message)
+
+    def _settle_manual_action(self, request_id: str, ok: bool, message: str) -> None:
+        pending = self._pending_manual_action
+        if pending is None or pending[0] != request_id:
+            return
+        self._pending_manual_action = None
+        _request_id, action, expiry = pending
+        if expiry is not asyncio.current_task():
+            expiry.cancel()
+        if self._window is not None:
+            self._window.show_manual_result(
+                _MANUAL_ACTION_KINDS[action.action], ok, message
+            )
+
     def _on_session_ended(self) -> None:
         """The socket is gone: the window shows it, waiting requests are released."""
         pending = self._pending_answer
@@ -1704,6 +2053,19 @@ class ControllerClient:
             self._settle_question(
                 pending_question[0], _question_failed(_QUESTION_CONNECTION_LOST)
             )
+        pending_manual_question = self._pending_manual_question
+        if pending_manual_question is not None:
+            self._settle_manual_question(
+                pending_manual_question[0], _question_failed(_QUESTION_CONNECTION_LOST)
+            )
+        pending_manual = self._pending_manual_action
+        if pending_manual is not None:
+            self._settle_manual_action(
+                pending_manual[0],
+                False,
+                self._manual_connection_lost(pending_manual[1].action),
+            )
+        self._manual_uploader.detach()
         for kind, (request_id, _expiry) in list(self._pending_case.items()):
             self._settle_case_request(
                 kind, request_id, False, self._case_connection_lost(kind)
@@ -1718,7 +2080,12 @@ class ControllerClient:
         window = self._window
         if window is None:
             return
-        for task in (self._answer_task, self._question_task, self._case_request_task):
+        for task in (
+            self._answer_task,
+            self._question_task,
+            self._case_request_task,
+            self._manual_request_task,
+        ):
             if task is not None and not task.done():
                 task.cancel()
                 await asyncio.wait({task})
@@ -1733,6 +2100,15 @@ class ControllerClient:
         for _request_id, expiry in self._pending_case.values():
             expiry.cancel()
         self._pending_case.clear()
+        for pending_slot in (
+            self._pending_manual_question,
+            self._pending_manual_action,
+        ):
+            if pending_slot is not None:
+                pending_slot[-1].cancel()
+        self._pending_manual_question = None
+        self._pending_manual_action = None
+        self._manual = None
         try:
             await window.stop()
         except Exception:

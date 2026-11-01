@@ -10,8 +10,11 @@ from typing import TYPE_CHECKING
 from django.conf import settings
 from django.db import models
 from django.db.models.functions import MD5, Trim
+from django.utils import timezone
 
 from controller_client.protocol import (
+    MANUAL_CLAIM_TOKEN_MAX_CHARS,
+    MANUAL_VERDICT_NOTE_MAX_CHARS,
     MAX_VERSION_LENGTH,
     UPDATE_STATUS_DETAIL_MAX_LENGTH,
 )
@@ -86,6 +89,10 @@ class RunHelpMode(models.TextChoices):
     ATTENDED = "attended", "Attended"
     NIGHT = "night", "Night (auto-fix first)"
     HUMAN_IN_THE_LOOP = "hitl", "Human in the loop"
+    # A person performs every case end to end at the Test Runner window and
+    # decides every result; no agent, chain, help or person steps
+    # (``projects.manual_run_policy``).
+    MANUAL = "manual", "Manual"
 
 
 class ProjectRunModeScope(StrEnum):
@@ -176,6 +183,25 @@ PAUSE_REQUEST_CLEARED: dict[str, object] = {
     "pause_message": "",
 }
 
+# Manual run: a case's claim by the tester at the Test Runner window
+# (``TestRunTestCase.manual_claim*``; at most one claimed case per run,
+# enforced under the run lock by ``projects.manual_case_claim_services``) and
+# the `QuerySet.update` values that clear it (submit, release, Reset, Re-run,
+# Stop run).
+MANUAL_CLAIM_TOKEN_LENGTH = MANUAL_CLAIM_TOKEN_MAX_CHARS
+MANUAL_CLAIM_FIELDS: tuple[str, ...] = (
+    "manual_claim_token",
+    "manual_claimed_by",
+    "manual_claimed_label",
+    "manual_claimed_at",
+)
+MANUAL_CLAIM_CLEARED: dict[str, object] = {
+    "manual_claim_token": "",
+    "manual_claimed_by": None,
+    "manual_claimed_label": "",
+    "manual_claimed_at": None,
+}
+
 
 class PersonStepChannel(models.TextChoices):
     """Where a person answered a person step (or asked to pause a case);
@@ -197,8 +223,8 @@ class BlockedReason(models.TextChoices):
 
     Also classifies the fault behind a help request (``CaseHelpRequest.fault``).
     Only a person marks a case Blocked: ``HELP_SKIPPED`` (Mark blocked) or
-    ``PERSON_REVIEW`` (an applied result change); the other values remain on
-    older Blocked rows.
+    ``PERSON_REVIEW`` (an applied result change), or the tester of a Manual
+    run (``MANUAL_VERDICT``); the other values remain on older Blocked rows.
     """
 
     RUNNER_DISCONNECTED = "runner_disconnected", "Test Runner disconnected"
@@ -218,6 +244,9 @@ class BlockedReason(models.TextChoices):
     INTERNAL_ERROR = "internal_error", "Internal error"
     HELP_SKIPPED = "help_skipped", "Marked blocked by a person"
     PERSON_REVIEW = "person_review", "Marked blocked by a person after review"
+    # Manual run: the tester's Blocked case verdict from the Test Runner
+    # window (``result`` holds the tester's required note).
+    MANUAL_VERDICT = "manual_verdict", "Marked blocked by the tester"
 
 
 class FailedBy(models.TextChoices):
@@ -231,6 +260,9 @@ class FailedBy(models.TextChoices):
     AGENT = "agent", "AI verdict"
     HELP = "help", "Marked failed (help)"
     REVIEW = "review", "Changed after review"
+    # Manual run: the tester's Failed case verdict (``result`` holds the
+    # tester's case note, or a generated line when it was empty).
+    MANUAL = "manual", "Manual verdict"
 
 
 class ApplicationPlatform(models.TextChoices):
@@ -752,6 +784,23 @@ class TestRunTestCase(models.Model):
     pause_message = models.TextField(
         max_length=PAUSE_MESSAGE_MAX_LENGTH, blank=True, default=""
     )
+    # Manual run: the tester's claim on the case (see ``MANUAL_CLAIM_FIELDS``).
+    # Blank token: not claimed. A submit must carry the token it closes.
+    manual_claim_token = models.CharField(
+        max_length=MANUAL_CLAIM_TOKEN_LENGTH, blank=True, default=""
+    )
+    # Null: an anonymous person at the Test Runner (or the user was deleted).
+    manual_claimed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        db_index=False,
+    )
+    # Server-written actor label ("Ana via Test Runner").
+    manual_claimed_label = models.CharField(max_length=255, blank=True, default="")
+    manual_claimed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         unique_together = ("test_run", "test_case")
@@ -1396,14 +1445,38 @@ class PersonStepQuestionStatus(models.TextChoices):
 class PersonStepQuestion(models.Model):
     """A person's question to the AI about the step waiting for them.
 
-    Advisory only: answering never changes the step, case or run. At most one
-    ``pending`` question per step; a stale pending one is failed lazily.
+    Anchored on exactly one of a Human in the loop ``person_step`` or, in a
+    Manual run, a claimed ``manual_case`` (and its verbatim step
+    ``manual_step_num``). Advisory only: answering never changes the step,
+    case or run. At most one ``pending`` question per anchor; a stale pending
+    one is failed lazily.
     """
 
+    # Null for a Manual run question (``manual_case`` is set instead).
     person_step = models.ForeignKey(
-        CasePersonStep, on_delete=models.CASCADE, related_name="questions"
+        CasePersonStep,
+        on_delete=models.CASCADE,
+        related_name="questions",
+        null=True,
+        blank=True,
     )
-    # The step round it was asked in.
+    # Manual run: the claimed case the question is about; null for a person
+    # step question.
+    manual_case = models.ForeignKey(
+        TestRunTestCase,
+        on_delete=models.CASCADE,
+        related_name="manual_questions",
+        null=True,
+        blank=True,
+        # ``manual_question_case_idx`` leads with it.
+        db_index=False,
+    )
+    # Manual run: the verbatim case step (1-based, the checkpoint plan's
+    # number); null asks about the case as a whole. Always null for a person
+    # step question.
+    manual_step_num = models.PositiveSmallIntegerField(null=True, blank=True)
+    # The step round it was asked in; always 1 for a Manual run question
+    # (the wire format requires a positive round).
     round = models.PositiveSmallIntegerField()
     # Person-written and model-written; shown escaped.
     question = models.TextField(max_length=PERSON_STEP_QUESTION_MAX_LENGTH)
@@ -1432,16 +1505,39 @@ class PersonStepQuestion(models.Model):
                 fields=["person_step"],
                 condition=models.Q(status=PersonStepQuestionStatus.PENDING),
                 name="person_step_question_one_pending",
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["manual_case"],
+                condition=models.Q(status=PersonStepQuestionStatus.PENDING),
+                name="manual_question_one_pending",
+            ),
+            # Exactly one anchor; a step number only on a manual question.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        person_step__isnull=False,
+                        manual_case__isnull=True,
+                        manual_step_num__isnull=True,
+                    )
+                    | models.Q(person_step__isnull=True, manual_case__isnull=False)
+                ),
+                name="person_step_question_one_anchor",
+            ),
         ]
         indexes = [
             models.Index(
                 fields=["person_step", "created_at"],
                 name="person_step_question_step_idx",
-            )
+            ),
+            models.Index(
+                fields=["manual_case", "created_at"],
+                name="manual_question_case_idx",
+            ),
         ]
 
     def __str__(self) -> str:
+        if self.manual_case_id is not None:
+            return f"Question #{self.pk} on manual case #{self.manual_case_id}"
         return f"Question #{self.pk} on person step #{self.person_step_id}"
 
 
@@ -1569,9 +1665,144 @@ class TestRunScreenshot(models.Model):
     # Selected for the next "Send checked to TestRail"; frozen when the case is
     # checked (projects/testrail_evidence_services.py).
     testrail_evidence = models.BooleanField(default=False)
+    # Manual run: the runner-minted shot key (the upload idempotency key; one
+    # row per case and key). Blank for every other screenshot.
+    manual_key = models.CharField(max_length=64, blank=True, default="")
 
     class Meta:
         ordering = ["created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["test_run_test_case", "manual_key"],
+                condition=~models.Q(manual_key=""),
+                name="screenshot_manual_key_unique",
+            )
+        ]
 
     def __str__(self) -> str:
         return f"Screenshot #{self.pk} — {self.tool_name}"
+
+
+class ManualVerdict(models.TextChoices):
+    """A Manual run tester's case verdict; values equal the case status set."""
+
+    SUCCESS = "success", "Passed"
+    FAILED = "failed", "Failed"
+    BLOCKED = "blocked", "Blocked"
+
+
+class ManualUploadState(models.TextChoices):
+    """Where the screenshots of a manual hand-in are."""
+
+    # Shots listed in ``shot_manifest`` are still arriving from the runner.
+    UPLOADING = "uploading", "Uploading screenshots"
+    # Every listed shot was stored (also: the hand-in listed none).
+    COMPLETE = "complete", "Screenshots received"
+    # Re-run or Reset discarded the hand-in; later uploads are refused with
+    # "drop" and the runner deletes them.
+    SUPERSEDED = "superseded", "Discarded"
+    # No shot arrived for ``MANUAL_UPLOAD_STALE_HOURS``; a later upload still
+    # completes the hand-in.
+    INCOMPLETE = "incomplete", "Screenshots incomplete"
+
+
+class ManualRefineState(models.TextChoices):
+    """The AI rewrite of a hand-in's notes for TestRail."""
+
+    PENDING = "pending", "Not rewritten yet"
+    DONE = "done", "Rewritten"
+    FAILED = "failed", "Rewrite failed"
+    # Nothing to rewrite (no notes).
+    SKIPPED = "skipped", "Nothing to rewrite"
+
+
+class ManualCaseSubmission(models.Model):
+    """One hand-in of a Manual run case from the Test Runner window.
+
+    Written by ``projects.manual_case_submit_services`` together with the case
+    verdict and the checkpoint attempts; the newest non-superseded row of a
+    case is its current hand-in. ``submission_id`` (minted by the runner) makes
+    a replayed submit idempotent.
+    """
+
+    test_run_test_case = models.ForeignKey(
+        TestRunTestCase,
+        on_delete=models.CASCADE,
+        related_name="manual_submissions",
+        # ``manual_submission_case_idx`` leads with it.
+        db_index=False,
+    )
+    submission_id = models.UUIDField(unique=True)
+    # The claim (``TestRunTestCase.manual_claim_token``) this hand-in closed.
+    claim_token = models.CharField(max_length=MANUAL_CLAIM_TOKEN_LENGTH)
+    # The run's ``execution_generation`` at submit time.
+    execution_generation = models.PositiveIntegerField()
+    # Null: an anonymous person at the Test Runner (or the user was deleted).
+    submitted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        db_index=False,
+    )
+    # Server-written actor label ("Ana via Test Runner").
+    submitted_label = models.CharField(max_length=255, blank=True, default="")
+    submitted_via = models.CharField(
+        max_length=16, choices=PersonStepChannel.choices, blank=True, default=""
+    )
+    submitted_at = models.DateTimeField(default=timezone.now)
+    verdict = models.CharField(max_length=16, choices=ManualVerdict.choices)
+    # The tester's case note, verbatim (runner-sent; shown escaped).
+    verdict_note = models.TextField(
+        max_length=MANUAL_VERDICT_NOTE_MAX_CHARS, blank=True, default=""
+    )
+    # The shots the runner announced: a list of ``{key, step_num, kind,
+    # sha256, size}`` objects (``ManualShotManifestPayload.to_wire``), the
+    # source of the allowed and missing keys.
+    shot_manifest = models.JSONField(default=list, blank=True)
+    shots_expected = models.PositiveSmallIntegerField(default=0)
+    shots_received = models.PositiveSmallIntegerField(default=0)
+    upload_state = models.CharField(
+        max_length=16,
+        choices=ManualUploadState.choices,
+        default=ManualUploadState.UPLOADING,
+    )
+    last_shot_at = models.DateTimeField(null=True, blank=True)
+    refine_state = models.CharField(
+        max_length=16,
+        choices=ManualRefineState.choices,
+        default=ManualRefineState.PENDING,
+    )
+    # The AI-rewritten case note and step notes (``{"<num>": text}``) for
+    # TestRail; valid only while ``refined_input_hash`` matches the input.
+    refined_summary = models.TextField(blank=True, default="")
+    refined_step_notes = models.JSONField(default=dict, blank=True)
+    refined_input_hash = models.CharField(max_length=64, blank=True, default="")
+    refined_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(shots_received__lte=models.F("shots_expected")),
+                name="manual_submission_shots_within_expected",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["test_run_test_case", "-submitted_at"],
+                name="manual_submission_case_idx",
+            ),
+            # Pending uploads of a project (runner snapshot, stale sweep).
+            models.Index(
+                fields=["upload_state"],
+                name="manual_submission_upload_idx",
+                condition=models.Q(upload_state=ManualUploadState.UPLOADING),
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return (
+            f"Manual submission {self.submission_id} of case "
+            f"#{self.test_run_test_case_id}"
+        )

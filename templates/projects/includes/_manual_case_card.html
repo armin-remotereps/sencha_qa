@@ -1,0 +1,209 @@
+{% comment %} Case page: the Manual run card — the tester's hand-in from the Test
+   Runner window (view only on the web, D5), the claim and its Release, the
+   screenshots grouped by step, the upload progress and the AI rewrite
+   prepared for TestRail. Every text came from the runner or the AI: rendered
+   autoescaped, never |safe.
+
+   Context contract:
+     project, test_run, pivot
+     panel       — projects.manual_case_display_services.ManualCasePanel
+     csrf_token  — the page's token (the include is rendered with `only`)
+     can_write   — project_can_write (Release is for writable members)
+
+   Must sit inside the case page's testRunCaseLive scope: the uploading
+   badge reads manualShotsReceived / manualShotsExpected, and the Ask AI list
+   follows the "person-step-questions" window event that scope dispatches.
+
+   Release posts to projects:test_run_case_manual_release through
+   partials/confirm_dialog.html (dialog id "manual-release"). {% endcomment %}
+<section aria-labelledby="manual-h" class="card card-tone-manual">
+  <div class="card-header">
+    <h2 id="manual-h">Manual test</h2>
+    <span class="badge badge-manual">Performed at the Test Runner</span>
+  </div>
+
+  {% if panel.is_claimed %}
+  <div class="alert alert-info">
+    <span class="alert-icon" aria-hidden="true">ℹ</span>
+    <div>
+      <p>
+        <strong>In progress at the Test Runner</strong>: {{ panel.claimed_by_label|default:"a person at the Test Runner" }}{% if panel.claimed_at %} picked this case at <time datetime="{{ panel.claimed_at|date:'c' }}">{{ panel.claimed_at|date:"M j, H:i" }}</time>{% endif %}.
+        The result appears here when they submit it.
+      </p>
+      {% if can_write and panel.can_release %}
+      <div class="actions card-actions">
+        <button type="button" class="btn btn-sm btn-secondary" @click="$dispatch('open-manual-release')">Release case</button>
+        <span class="hint">Only when the tester's Test Runner is gone: the case goes back to Not started and anything they marked is discarded.</span>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% elif not panel.has_submission %}
+  <p class="hint">{% if panel.run_is_manual %}Not performed yet. A tester picks this case in the Test Runner window, marks each step and submits the result.{% else %}No result was handed in for this case.{% endif %}</p>
+  {% endif %}
+
+  {% if panel.has_submission %}
+  <dl class="kv">
+    <div>
+      <dt>Tester's verdict</dt>
+      <dd>
+        <span class="badge {% if panel.verdict == 'success' %}badge-passed{% elif panel.verdict == 'failed' %}badge-failed{% else %}badge-blocked{% endif %}">{% if panel.verdict == "blocked" %}Marked blocked by the tester{% else %}{{ panel.verdict_label }}{% endif %}</span>
+      </dd>
+    </div>
+    <div>
+      <dt>Submitted</dt>
+      <dd>{{ panel.submitted_label|default:"a person at the Test Runner" }}{% if panel.submitted_at %} · <time datetime="{{ panel.submitted_at|date:'c' }}">{{ panel.submitted_at|date:"M j, Y H:i" }}</time>{% endif %}</dd>
+    </div>
+    {% if panel.upload %}
+    <div>
+      <dt>Screenshots</dt>
+      <dd>
+        {% if panel.upload.is_uploading %}
+        <span class="badge badge-uploading" x-text="'Uploading ' + manualShotsReceived + '/' + manualShotsExpected">Uploading {{ panel.upload.received }}/{{ panel.upload.expected }}</span>
+        {% elif panel.upload.is_incomplete %}
+        <span class="badge badge-upload-incomplete">Incomplete {{ panel.upload.received }}/{{ panel.upload.expected }}</span>
+        <span class="hint">Some screenshots never arrived from the Test Runner; they still complete the case if they do.</span>
+        {% elif panel.upload.is_complete %}
+        {% if panel.upload.expected %}<span class="badge badge-passed">All {{ panel.upload.expected }} received</span>{% else %}<span class="muted">None taken</span>{% endif %}
+        {% else %}
+        {{ panel.upload.label }}
+        {% endif %}
+      </dd>
+    </div>
+    {% endif %}
+  </dl>
+
+  <h3 class="manual-subhead">Case note</h3>
+  {% if panel.verdict_note %}
+  <p class="pre-wrap">{{ panel.verdict_note }}</p>
+  {% else %}
+  <p class="muted">The tester left no case note.</p>
+  {% endif %}
+  {% if panel.case_shots %}
+  <div class="manual-shots" aria-label="Case screenshots">
+    {% for shot in panel.case_shots %}
+    <a class="shot" href="{{ shot.url }}" target="_blank" rel="noopener">
+      <img class="shot-img" src="{{ shot.url }}" alt="Case screenshot {{ forloop.counter }}" loading="lazy">
+      <span class="shot-caption">{{ shot.label }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endif %}
+
+  {% if panel.steps %}
+  <h3 class="manual-subhead">Steps</h3>
+  <p class="hint">The test case's own steps, as the tester saw them. Each marked step has its screenshot; unmarked steps were not run.</p>
+  <ol class="step-list manual-step-list">
+    {% for step in panel.steps %}
+    <li class="step-row">
+      <span class="step-num is-{% if step.outcome == 'passed' %}passed{% elif step.outcome == 'failed' %}failed{% else %}not_run{% endif %}" aria-hidden="true">{{ step.num }}</span>
+      <div class="step-body">
+        <div class="step-head">
+          <span class="step-title pre-wrap">{{ step.description }}</span>
+          <span class="step-badges">
+            <span class="badge {% if step.outcome == 'passed' %}badge-passed{% elif step.outcome == 'failed' %}badge-failed{% else %}badge-cancelled{% endif %}">{{ step.outcome_label }}</span>
+          </span>
+        </div>
+        {% if step.expected_result or step.duration_seconds is not None %}
+        <div class="step-meta">
+          {% if step.expected_result %}<span class="pre-wrap">Expected: {{ step.expected_result }}</span>{% endif %}
+          {% if step.duration_seconds is not None %}<span>{% if step.expected_result %} · {% endif %}{{ step.duration_seconds }}s</span>{% endif %}
+        </div>
+        {% endif %}
+        {% if step.note %}<p class="step-detail pre-wrap{% if step.outcome == 'failed' %} is-error{% endif %}">{{ step.note }}</p>{% endif %}
+        {% if step.shots %}
+        <div class="manual-shots" aria-label="Screenshots of step {{ step.num }}">
+          {% for shot in step.shots %}
+          <a class="shot" href="{{ shot.url }}" target="_blank" rel="noopener">
+            <img class="shot-img" src="{{ shot.url }}" alt="Step {{ step.num }} screenshot {{ forloop.counter }}" loading="lazy">
+            <span class="shot-caption">{{ shot.label }}</span>
+          </a>
+          {% endfor %}
+        </div>
+        {% elif step.outcome != "not_run" and panel.upload and not panel.upload.is_complete %}
+        <p class="step-detail muted">Screenshot not received yet.</p>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% endif %}
+
+  {% if panel.has_submission %}
+  <h3 class="manual-subhead">Prepared for TestRail</h3>
+  {% if panel.is_refined %}
+  <p class="hint">The AI rewrote the tester's notes so every case reads the same way. Statuses, step texts and quoted values are unchanged; the original is shown next to it.</p>
+  <div class="manual-compare">
+    <div>
+      <h4 class="small muted">Tester's case note</h4>
+      <p class="pre-wrap">{{ panel.verdict_note|default:"—" }}</p>
+    </div>
+    <div>
+      <h4 class="small muted">Rewritten for TestRail</h4>
+      <p class="pre-wrap">{{ panel.refined_summary|default:"—" }}</p>
+    </div>
+  </div>
+  {% if panel.has_refined_step_notes %}
+  {% for step in panel.steps %}
+  {% if step.refined_note %}
+  <div class="manual-compare">
+    <div>
+      <h4 class="small muted">Step {{ step.num }} · tester's note</h4>
+      <p class="pre-wrap">{{ step.note|default:"—" }}</p>
+    </div>
+    <div>
+      <h4 class="small muted">Step {{ step.num }} · rewritten</h4>
+      <p class="pre-wrap">{{ step.refined_note }}</p>
+    </div>
+  </div>
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+  {% elif panel.refine_state == "failed" %}
+  <p class="hint">The AI rewrite failed; the tester's own text goes to TestRail.</p>
+  {% elif panel.refine_state == "skipped" %}
+  <p class="hint">Nothing to rewrite: the tester's own text goes to TestRail.</p>
+  {% else %}
+  <p class="hint">{{ panel.refine_state_label }}. The AI rewrites the notes once every screenshot has arrived; if it fails, the tester's own text is sent.</p>
+  {% endif %}
+  {% endif %}
+
+  {% comment %} Ask AI questions about this case: seeded from the server and
+     replaced by the case socket's person_step_questions event with
+     person_step_id 0 (re-dispatched on window as "person-step-questions").
+     Text through x-text only. {% endcomment %}
+  {{ panel.questions_payload|json_script:"manual-questions-data" }}
+  <details
+    class="manual-questions"
+    x-data="{
+      questions: JSON.parse(document.getElementById('manual-questions-data').textContent),
+      stepLabels: {},
+      statusLabels: { pending: 'Waiting for the AI', answered: 'Answered', failed: 'Not answered' },
+      init() { this.questions.forEach((q) => { this.stepLabels[q.question_id] = q.step_label; }); },
+      update(detail) {
+        if (!detail || detail.person_step_id !== 0 || !Array.isArray(detail.questions)) return;
+        this.questions = detail.questions;
+      },
+    }"
+    x-show="questions.length > 0"
+    {% if not panel.questions %}x-cloak{% endif %}
+    @person-step-questions.window="update($event.detail)"
+  >
+    <summary x-text="'Questions to the AI (' + questions.length + ')'">Questions to the AI ({{ panel.questions|length }})</summary>
+    <ol>
+      <template x-for="q in questions" :key="q.question_id">
+        <li>
+          <p class="small muted" x-text="[stepLabels[q.question_id], q.asked_by, statusLabels[q.status] || q.status].filter(Boolean).join(' · ')"></p>
+          <p class="pre-wrap"><strong>Q:</strong> <span x-text="q.question"></span></p>
+          <p class="pre-wrap" x-show="q.answer"><strong>A:</strong> <span x-text="q.answer"></span></p>
+        </li>
+      </template>
+    </ol>
+  </details>
+</section>
+
+{% if can_write and panel.can_release %}
+{% url 'projects:test_run_case_manual_release' project.id test_run.id pivot.id as manual_release_url %}
+{% include "partials/confirm_dialog.html" with dialog_id="manual-release" title="Release this case?" body="The case goes back to Not started and the tester's unsubmitted marks are discarded. Use this only when the Test Runner that picked it is gone; the tester can release it from the window themselves." confirm_label="Release case" confirm_class="btn-danger-solid" action_url=manual_release_url csrf_token=csrf_token only %}
+{% endif %}

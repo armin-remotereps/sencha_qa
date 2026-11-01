@@ -78,6 +78,7 @@ _CASE_STEPS_KEY = "case_steps"
 _CASE_STEPS_TESTRAIL_KEY = "case_steps_testrail"
 _PERSON_GUIDE_KEY = "person_guide"
 _PERSON_GUIDE_STATUSES = ("ready", "empty", "failed")
+_MANUAL_KEY = "manual"
 # Only the newest earlier plans are kept (display and prompt data).
 MAX_PLAN_REVISION_RECORDS = 5
 
@@ -109,6 +110,8 @@ def checkpoint_to_json(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
             data[_CASE_STEPS_TESTRAIL_KEY] = False
     if checkpoint.person_guide is not None:
         data[_PERSON_GUIDE_KEY] = _person_guide_to_json(checkpoint.person_guide)
+    if checkpoint.manual:
+        data[_MANUAL_KEY] = True
     if checkpoint.plan_revisions:
         data[_PLAN_REVISIONS_KEY] = [
             _revision_to_json(record)
@@ -444,6 +447,8 @@ def _parse(data: object) -> OrchestratorCheckpoint:
         case_step_count=case_step_count,
         case_steps_testrail=root.get(_CASE_STEPS_TESTRAIL_KEY) is not False,
         person_guide=_parse_person_guide(root.get(_PERSON_GUIDE_KEY)),
+        # Optional: only a strict JSON true marks a manual case.
+        manual=root.get(_MANUAL_KEY) is True,
     )
 
 

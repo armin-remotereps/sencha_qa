@@ -1,9 +1,10 @@
-"""The Test Runner window's snapshot: open person steps, their cases, discussions.
+"""The Test Runner window's snapshots: open person steps, their cases,
+discussions, and the Manual run.
 
 Composition only, no rules: ``runner_person_step_services`` gives the steps,
 ``runner_case_services`` the cases (test case, log tail, pause and help
-panels) and ``machine_setup.services.runner_discussion`` each help case's
-discussion. Imported only by ``controller_consumer`` (it sits above both
+panels), ``machine_setup.services.runner_discussion`` each help case's
+discussion and ``runner_manual_state_services`` the Manual run snapshot. Imported only by ``controller_consumer`` (it sits above both
 apps, so ``projects`` services never import it).
 """
 
@@ -11,12 +12,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from controller_client.protocol import PersonCaseStatePayload, PersonStepStatePayload
+from controller_client.protocol import (
+    ManualRunStateMessage,
+    PersonCaseStatePayload,
+    PersonStepStatePayload,
+)
 from machine_setup.services.runner_discussion import (
     get_runner_discussion,
     get_runner_send_blocker,
 )
+from projects.models import Project
 from projects.runner_case_services import RunnerCaseStep, get_runner_cases
+from projects.runner_manual_state_services import build_manual_run_state
 from projects.runner_person_step_services import get_runner_person_steps
 
 
@@ -99,3 +106,14 @@ def get_runner_window_state(
             )
         cases.append(payload)
     return RunnerWindowState(steps=steps, cases=tuple(cases))
+
+
+def get_runner_manual_state(
+    project: Project, capabilities: frozenset[str]
+) -> ManualRunStateMessage:
+    """The Manual run snapshot for a MANUAL_RUN_V1 runner window.
+
+    The same for every person at the runner: a project's claims all belong to
+    its one runner connection.
+    """
+    return build_manual_run_state(project=project, runner_capabilities=capabilities)

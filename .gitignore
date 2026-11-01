@@ -76,3 +76,6 @@ vision_worker/.mypy_cache/
 
 # Project knowledge base files (private storage, outside media/)
 private_media/
+
+# Test Runner manual run screenshot spool (per machine)
+controller_client/manual_spool/

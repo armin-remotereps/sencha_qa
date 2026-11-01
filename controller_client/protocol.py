@@ -1,3 +1,6 @@
+import base64
+import binascii
+import hashlib
 import json
 import re
 import uuid
@@ -12,7 +15,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.13.0"
+CLIENT_VERSION: Final[str] = "0.14.0"
 
 
 class CloseCode(IntEnum):
@@ -99,6 +102,17 @@ class MessageType(StrEnum):
     SCAN_DIRECTORY = "scan_directory"
     INSPECT_PATHS = "inspect_paths"
     ARTIFACT_SCAN_RESULT = "artifact_scan_result"
+    # Manual run (MANUAL_RUN_V1): server -> runner with a snapshot of the
+    # manual run; runner -> server with a claim or release of a case, a case
+    # hand-in and one screenshot of it; server -> runner with each outcome
+    # (same request_id). New state arrives in the next ``manual_run_state``.
+    MANUAL_RUN_STATE = "manual_run_state"
+    MANUAL_CASE_ACTION = "manual_case_action"
+    MANUAL_CASE_ACTION_RESULT = "manual_case_action_result"
+    MANUAL_CASE_SUBMIT = "manual_case_submit"
+    MANUAL_CASE_SUBMIT_RESULT = "manual_case_submit_result"
+    MANUAL_SCREENSHOT_UPLOAD = "manual_screenshot_upload"
+    MANUAL_SCREENSHOT_ACK = "manual_screenshot_ack"
 
 
 class ClientCapability(StrEnum):
@@ -153,6 +167,12 @@ class ClientCapability(StrEnum):
     # so the server folds a longer guide for them. Advertised only together
     # with PERSON_STEP_ASSIST_V1 (dropped with the window).
     PERSON_STEP_GUIDE_V1 = "person_step_guide_v1"
+    # Optional: Manual runs in the window (``manual_run_state``,
+    # ``manual_case_action``, ``manual_case_submit``,
+    # ``manual_screenshot_upload`` and their results; the manual form of
+    # ``person_step_question`` together with PERSON_STEP_ASSIST_V1).
+    # Advertised only together with PERSON_STEPS_V1.
+    MANUAL_RUN_V1 = "manual_run_v1"
 
 
 # Capabilities that need the person step window; dropped without it.
@@ -165,6 +185,7 @@ _PERSON_WINDOW_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
         ClientCapability.PERSON_CASE_CONTEXT_V1,
         ClientCapability.PERSON_DISCUSSION_V1,
         ClientCapability.CASE_PAUSE_V1,
+        ClientCapability.MANUAL_RUN_V1,
     }
 )
 
@@ -180,9 +201,8 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
     ``person_window`` is False when the person step window is disabled
     (``CONTROLLER_PERSON_WINDOW=false``) or Tk is unavailable; the server then
     never sends ``person_step_state`` and the person answers on the web.
-    PERSON_STEP_ASSIST_V1, PERSON_STEP_GUIDE_V1, PERSON_STEP_CASE_STEPS_V1,
-    PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1 and CASE_PAUSE_V1 are dropped
-    with it.
+    PERSON_STEP_ASSIST_V1, PERSON_STEP_GUIDE_V1, PERSON_STEP_CASE_STEPS_V1, PERSON_CASE_CONTEXT_V1,
+    PERSON_DISCUSSION_V1, CASE_PAUSE_V1 and MANUAL_RUN_V1 are dropped with it.
     """
     if person_window:
         return CLIENT_CAPABILITIES
@@ -197,10 +217,9 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
 # authenticate fine and then silently time out on first use. Optional
 # capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1,
 # WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1,
-# PERSON_STEP_ASSIST_V1, PERSON_STEP_GUIDE_V1, PERSON_STEP_CASE_STEPS_V1,
-# ARTIFACT_SCAN_V1, PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1,
-# CASE_PAUSE_V1) are
-# checked where they are used instead.
+# PERSON_STEP_ASSIST_V1, PERSON_STEP_GUIDE_V1, PERSON_STEP_CASE_STEPS_V1, ARTIFACT_SCAN_V1,
+# PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1)
+# are checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
@@ -1247,13 +1266,31 @@ class PersonStepActionResultPayload:
 
 @dataclass(frozen=True)
 class PersonStepQuestionAskPayload:
-    """A person's question to the AI about an open step (``person_step_question``)."""
+    """A person's question to the AI about an open step (``person_step_question``).
 
+    Two forms: a person step question (``person_step_id`` and ``round`` set,
+    ``pivot_id`` 0) or, from a MANUAL_RUN_V1 runner, a question about the
+    claimed case of a Manual run (``pivot_id`` and ``claim_token`` set,
+    ``person_step_id`` and ``round`` 0; ``step_num`` None asks about the case
+    as a whole).
+    """
+
+    # 0 in the manual form.
     person_step_id: int
     # The round the window showed; a reopened step refuses an older round.
+    # 0 in the manual form.
     round: int
     # Stripped, non-empty, ≤ PERSON_STEP_QUESTION_MAX_CHARS.
     question: str
+    # Manual form only: the claimed run case and the claim the window holds.
+    pivot_id: int = 0
+    claim_token: str = ""
+    # Manual form only: the verbatim step (1..MANUAL_CASE_MAX_STEPS) or None.
+    step_num: int | None = None
+
+    @property
+    def is_manual(self) -> bool:
+        return self.pivot_id > 0
 
 
 @dataclass(frozen=True)
@@ -1593,13 +1630,25 @@ def parse_person_step_question_payload(
     """Validate a ``person_step_question`` (both sides).
 
     The question is stripped (as the web form does); an empty or over-long
-    question raises ProtocolError (refused, not cut).
+    question raises ProtocolError (refused, not cut). A message with a
+    non-zero ``pivot_id`` is the manual form: it needs a valid
+    ``claim_token`` and ignores ``person_step_id`` and ``round``.
     """
     question = _extract_text(
         data, "question", PERSON_STEP_QUESTION_MAX_CHARS, truncate=False
     ).strip()
     if not question:
         raise ProtocolError("Missing 'question'")
+    pivot_id = _extract_non_negative_int(data, "pivot_id")
+    if pivot_id:
+        return PersonStepQuestionAskPayload(
+            person_step_id=0,
+            round=0,
+            question=question,
+            pivot_id=pivot_id,
+            claim_token=_extract_claim_token(data),
+            step_num=_extract_optional_step_num(data, "step_num"),
+        )
     return PersonStepQuestionAskPayload(
         person_step_id=_extract_bounded_int(
             data, "person_step_id", _PERSON_STEP_MAX_ID
@@ -1613,6 +1662,15 @@ def serialize_person_step_question(
     question: PersonStepQuestionAskPayload, request_id: str
 ) -> str:
     """A ``person_step_question`` message (runner side; one request_id per question)."""
+    if question.is_manual:
+        return serialize_message(
+            MessageType.PERSON_STEP_QUESTION,
+            request_id,
+            pivot_id=question.pivot_id,
+            claim_token=question.claim_token,
+            step_num=question.step_num,
+            question=question.question,
+        )
     return serialize_message(
         MessageType.PERSON_STEP_QUESTION,
         request_id,
@@ -2729,3 +2787,862 @@ def parse_inspect_paths_result(
             )
         )
     return tuple(infos)
+
+
+# ---------------------------------------------------------------------------
+# Manual run (MANUAL_RUN_V1)
+# ---------------------------------------------------------------------------
+
+# Largest screenshot (raw PNG or JPEG bytes) one ``manual_screenshot_upload``
+# carries. The server setting MANUAL_SHOT_MAX_BYTES may only lower it.
+MANUAL_SHOT_MAX_BYTES: Final[int] = 7 * _MIB
+# Largest screenshot in pixels (one 8K screen). The runner downscales to it
+# before encoding; the server refuses anything larger (decode memory guard).
+MANUAL_SHOT_MAX_PIXELS: Final[int] = 7680 * 4320
+# Room for the rest of a ``manual_screenshot_upload`` besides the base64 text.
+_MANUAL_UPLOAD_JSON_OVERHEAD_BYTES: Final[int] = 4 * 1024
+# Largest raw ``manual_screenshot_upload`` message the server reads.
+MANUAL_SCREENSHOT_UPLOAD_MAX_BYTES: Final[int] = (
+    4 * -(-MANUAL_SHOT_MAX_BYTES // 3) + _MANUAL_UPLOAD_JSON_OVERHEAD_BYTES
+)
+assert (
+    MANUAL_SCREENSHOT_UPLOAD_MAX_BYTES <= MAX_MESSAGE_SIZE
+), "MANUAL_SHOT_MAX_BYTES does not fit in MAX_MESSAGE_SIZE"
+# Verbatim steps of one manual case (the server drops steps beyond it).
+MANUAL_CASE_MAX_STEPS: Final[int] = 100
+# Screenshots of one hand-in: one per marked step plus one optional case
+# screenshot (D8).
+MANUAL_STEP_MAX_SHOTS: Final[int] = 1
+MANUAL_CASE_SHOT_MAX: Final[int] = 1
+MANUAL_SUBMISSION_MAX_SHOTS: Final[int] = (
+    MANUAL_CASE_MAX_STEPS * MANUAL_STEP_MAX_SHOTS + MANUAL_CASE_SHOT_MAX
+)
+# The tester's notes; refused (not cut) when longer. The server stores them
+# within these limits (projects.models imports them).
+MANUAL_STEP_NOTE_MAX_CHARS: Final[int] = 2000
+MANUAL_VERDICT_NOTE_MAX_CHARS: Final[int] = 4000
+# A step's time on the window's timer; longer values are capped, not refused.
+MANUAL_STEP_MAX_SECONDS: Final[int] = 24 * 3600
+# Largest raw ``manual_case_submit`` message the server reads: room for every
+# step with a full note (JSON may escape a character as six bytes) besides
+# 64 KiB for the rest.
+MANUAL_CASE_SUBMIT_MAX_BYTES: Final[int] = 64 * 1024 + MANUAL_CASE_MAX_STEPS * (
+    16 * 1024
+)
+# Largest raw ``manual_case_action`` message the server reads.
+MANUAL_CASE_ACTION_MAX_BYTES: Final[int] = 4 * 1024
+# Server-minted claim token (``TestRunTestCase.manual_claim_token``).
+MANUAL_CLAIM_TOKEN_MAX_CHARS: Final[int] = 32
+_MANUAL_CLAIM_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_-]{1,32}")
+# Runner-minted screenshot key, unique within its hand-in; the server's
+# idempotency key (``TestRunScreenshot.manual_key``). Short enough that
+# "m" + key fits ``SubTaskAttempt.attempt_id`` (32 characters).
+MANUAL_SHOT_KEY_MAX_CHARS: Final[int] = 24
+_MANUAL_SHOT_KEY_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_-]{1,24}")
+# Snapshot caps; longer lists are cut, longer texts cut when parsed.
+MANUAL_RUN_STATE_MAX_CASES: Final[int] = 300
+MANUAL_PENDING_UPLOADS_MAX: Final[int] = 50
+MANUAL_STEP_TEXT_MAX_CHARS: Final[int] = 8000
+MANUAL_PRECONDITIONS_MAX_CHARS: Final[int] = 8000
+MANUAL_CASE_TITLE_MAX_CHARS: Final[int] = 500
+MANUAL_TESTRAIL_ID_MAX_CHARS: Final[int] = 50
+MANUAL_CASE_STATUS_MAX_CHARS: Final[int] = 32
+_MANUAL_ISO_MAX_CHARS: Final[int] = 64
+
+
+class ManualCaseActionKind(StrEnum):
+    CLAIM = "claim"
+    RELEASE = "release"
+
+
+class ManualStepOutcome(StrEnum):
+    PASS = "pass"
+    FAIL = "fail"
+
+
+class ManualShotKind(StrEnum):
+    """What a screenshot of a hand-in shows: a passed or failed step, or the
+    optional case screenshot taken with the verdict."""
+
+    PASS = "pass"
+    FAIL = "fail"
+    CASE = "case"
+
+
+class ManualCaseVerdictWire(StrEnum):
+    """The tester's case verdict on the wire (server: ``ManualVerdict``)."""
+
+    PASSED = "passed"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+
+
+class ManualShotMime(StrEnum):
+    PNG = "image/png"
+    JPEG = "image/jpeg"
+
+
+@dataclass(frozen=True)
+class ManualRunInfoPayload:
+    run_id: int
+    name: str
+
+    def to_wire(self) -> dict[str, object]:
+        return {"id": self.run_id, "name": self.name}
+
+
+@dataclass(frozen=True)
+class ManualCaseListItemPayload:
+    """One case of the manual run as the window's case list shows it."""
+
+    pivot_id: int
+    title: str
+    # Blank when the case did not come from TestRail.
+    testrail_id: str
+    # A ``TestRunTestCaseStatus`` value (kept a string so a new server status
+    # never breaks an older window).
+    status: str
+    # Who holds the claim ("Ana via Test Runner"); blank when unclaimed.
+    claimed_label: str
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "pivot_id": self.pivot_id,
+            "title": self.title,
+            "testrail_id": self.testrail_id,
+            "status": self.status,
+            "claimed_label": self.claimed_label,
+        }
+
+
+@dataclass(frozen=True)
+class ManualStepPayload:
+    """One verbatim test case step (never reworded by the AI)."""
+
+    num: int
+    text: str
+    # Blank when the case gives no expected result for the step.
+    expected: str = ""
+
+    def to_wire(self) -> dict[str, object]:
+        return {"num": self.num, "text": self.text, "expected": self.expected}
+
+
+@dataclass(frozen=True)
+class ManualActiveCasePayload:
+    """The case this runner holds the claim on."""
+
+    pivot_id: int
+    claim_token: str
+    title: str
+    preconditions: str
+    steps: tuple[ManualStepPayload, ...]
+    # ISO 8601; blank when unknown.
+    claimed_at: str
+    # Ask AI questions about the case, oldest first (same shape as a person
+    # step's; ``round`` is always 1).
+    questions: tuple[PersonStepQuestionPayload, ...] = ()
+    # The server takes a manual ``person_step_question`` for this case now.
+    can_ask: bool = False
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "pivot_id": self.pivot_id,
+            "claim_token": self.claim_token,
+            "title": self.title,
+            "preconditions": self.preconditions,
+            "steps": [step.to_wire() for step in self.steps[:MANUAL_CASE_MAX_STEPS]],
+            "claimed_at": self.claimed_at,
+            "questions": [
+                question.to_wire()
+                for question in self.questions[-PERSON_STEP_STATE_MAX_QUESTIONS:]
+            ],
+            "can_ask": self.can_ask,
+        }
+
+
+@dataclass(frozen=True)
+class ManualPendingUploadPayload:
+    """A hand-in of this project whose screenshots the server still waits for."""
+
+    # Normalized UUID.
+    submission_id: str
+    missing: tuple[str, ...]
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "submission_id": self.submission_id,
+            "missing": list(self.missing[:MANUAL_SUBMISSION_MAX_SHOTS]),
+        }
+
+
+@dataclass(frozen=True)
+class ManualRunStateMessage:
+    # None: the project has no manual run to show (the window leaves the
+    # manual view); ``pending_uploads`` may still list hand-ins.
+    run: ManualRunInfoPayload | None
+    cases: tuple[ManualCaseListItemPayload, ...]
+    active: ManualActiveCasePayload | None
+    pending_uploads: tuple[ManualPendingUploadPayload, ...] = ()
+
+
+@dataclass(frozen=True)
+class ManualCaseActionPayload:
+    action: ManualCaseActionKind
+    pivot_id: int
+    # Release only (the claim being given back); blank for claim.
+    claim_token: str
+
+
+@dataclass(frozen=True)
+class ManualCaseActionResultPayload:
+    ok: bool
+    # User-safe text to show in the window.
+    message: str
+
+
+@dataclass(frozen=True)
+class ManualStepResultPayload:
+    """One step the tester marked (unmarked steps are not sent: "Not run")."""
+
+    num: int
+    outcome: ManualStepOutcome
+    # Stripped; required (non-empty) for a failed step.
+    note: str
+    # The step's screenshot keys (1..MANUAL_STEP_MAX_SHOTS), each listed in
+    # the hand-in's ``shots`` with this step and a matching kind.
+    shots: tuple[str, ...]
+    # Time on the window's step timer, capped at MANUAL_STEP_MAX_SECONDS.
+    seconds: int
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "num": self.num,
+            "outcome": self.outcome.value,
+            "note": self.note,
+            "shots": list(self.shots),
+            "seconds": self.seconds,
+        }
+
+
+@dataclass(frozen=True)
+class ManualShotManifestPayload:
+    """One screenshot a hand-in announces; uploaded afterwards."""
+
+    key: str
+    # None for the case screenshot.
+    step_num: int | None
+    kind: ManualShotKind
+    # Lowercase hex of the raw image bytes.
+    sha256: str
+    size: int
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "key": self.key,
+            "step_num": self.step_num,
+            "kind": self.kind.value,
+            "sha256": self.sha256,
+            "size": self.size,
+        }
+
+
+@dataclass(frozen=True)
+class ManualCaseSubmitPayload:
+    """A case hand-in (``manual_case_submit``).
+
+    The parser checks the structure and the note rules (D3/D4); the server
+    also checks the claim, the case state and the step numbers against the
+    stored plan.
+    """
+
+    # Normalized UUID minted by the runner; a replay returns the stored result.
+    submission_id: str
+    pivot_id: int
+    claim_token: str
+    # Ordered by step number, unique.
+    steps: tuple[ManualStepResultPayload, ...]
+    verdict: ManualCaseVerdictWire
+    # Stripped; required for Blocked, and for Failed with no failed step.
+    verdict_note: str
+    shots: tuple[ManualShotManifestPayload, ...]
+
+
+@dataclass(frozen=True)
+class ManualCaseSubmitResultPayload:
+    ok: bool
+    # User-safe text to show in the window.
+    message: str
+    # The hand-in this answers (normalized UUID; "" when the message had none).
+    submission_id: str
+    # Screenshot keys the server still needs (all of them for a new hand-in).
+    missing: tuple[str, ...] = ()
+    # The server will never accept this hand-in (the claim was released, the
+    # case re-run, ...): the runner deletes it and its screenshots.
+    drop: bool = False
+
+
+@dataclass(frozen=True)
+class ManualScreenshotUploadPayload:
+    submission_id: str
+    key: str
+    sha256: str
+    mime: ManualShotMime
+    # Decoded image bytes; length and sha256 already checked by the parser.
+    data: bytes
+
+
+@dataclass(frozen=True)
+class ManualScreenshotAckPayload:
+    submission_id: str
+    key: str
+    ok: bool
+    # The server will never take any screenshot of this hand-in (superseded
+    # or unknown): the runner deletes the whole hand-in.
+    drop: bool
+    # User-safe text; blank when ok.
+    message: str
+    # The server will never take this one screenshot (invalid image, too big,
+    # not announced, checksum mismatch): the runner deletes only this key and
+    # keeps uploading the hand-in's other screenshots.
+    drop_shot: bool = False
+
+
+def _extract_claim_token(data: Mapping[str, object]) -> str:
+    value = data.get("claim_token")
+    if not isinstance(value, str) or not _MANUAL_CLAIM_TOKEN_RE.fullmatch(value):
+        raise ProtocolError("Missing or invalid 'claim_token'")
+    return value
+
+
+def _extract_optional_step_num(data: Mapping[str, object], field: str) -> int | None:
+    value = data.get(field)
+    if value is None:
+        return None
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 1 <= value <= MANUAL_CASE_MAX_STEPS
+    ):
+        raise ProtocolError(f"Invalid '{field}': expected a step number or null")
+    return value
+
+
+def _extract_shot_key(value: object, field: str) -> str:
+    if not isinstance(value, str) or not _MANUAL_SHOT_KEY_RE.fullmatch(value):
+        raise ProtocolError(f"Missing or invalid '{field}': expected a shot key")
+    return value
+
+
+def _extract_submission_id(data: Mapping[str, object]) -> str:
+    submission_id = _normalized_uuid(data.get("submission_id"))
+    if submission_id is None:
+        raise ProtocolError("Missing or invalid 'submission_id': expected a UUID")
+    return submission_id
+
+
+def _extract_sha256(data: Mapping[str, object]) -> str:
+    value = data.get("sha256")
+    if not isinstance(value, str) or not _SHA256_HEX_RE.fullmatch(value):
+        raise ProtocolError("Missing or invalid 'sha256'")
+    return value
+
+
+def _extract_list(data: Mapping[str, object], field: str) -> list[object]:
+    value = data.get(field, [])
+    if not isinstance(value, list):
+        raise ProtocolError(f"Invalid '{field}': expected a list")
+    return value
+
+
+def _extract_object(raw: object, name: str) -> dict[str, object]:
+    if not isinstance(raw, dict):
+        raise ProtocolError(f"Invalid {name}: expected an object")
+    return raw
+
+
+def _parse_manual_run(raw: dict[str, object] | None) -> ManualRunInfoPayload | None:
+    if raw is None:
+        return None
+    return ManualRunInfoPayload(
+        run_id=_extract_bounded_int(raw, "id", _PERSON_STEP_MAX_ID),
+        name=_extract_text(raw, "name", PERSON_STEP_LABEL_MAX_CHARS, truncate=True),
+    )
+
+
+def _parse_manual_case_item(raw: object) -> ManualCaseListItemPayload:
+    item = _extract_object(raw, "manual case")
+    return ManualCaseListItemPayload(
+        pivot_id=_extract_bounded_int(item, "pivot_id", _PERSON_STEP_MAX_ID),
+        title=_extract_text(item, "title", MANUAL_CASE_TITLE_MAX_CHARS, truncate=True),
+        testrail_id=_extract_text(
+            item, "testrail_id", MANUAL_TESTRAIL_ID_MAX_CHARS, truncate=True
+        ),
+        status=_extract_text(
+            item, "status", MANUAL_CASE_STATUS_MAX_CHARS, truncate=True
+        ),
+        claimed_label=_extract_text(
+            item, "claimed_label", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
+        ),
+    )
+
+
+def _parse_manual_step(raw: object) -> ManualStepPayload:
+    item = _extract_object(raw, "manual step")
+    return ManualStepPayload(
+        num=_extract_bounded_int(item, "num", MANUAL_CASE_MAX_STEPS),
+        text=_extract_text(item, "text", MANUAL_STEP_TEXT_MAX_CHARS, truncate=True),
+        expected=_extract_text(
+            item, "expected", MANUAL_STEP_TEXT_MAX_CHARS, truncate=True
+        ),
+    )
+
+
+def _parse_manual_active(
+    raw: dict[str, object] | None,
+) -> ManualActiveCasePayload | None:
+    if raw is None:
+        return None
+    return ManualActiveCasePayload(
+        pivot_id=_extract_bounded_int(raw, "pivot_id", _PERSON_STEP_MAX_ID),
+        claim_token=_extract_claim_token(raw),
+        title=_extract_text(raw, "title", MANUAL_CASE_TITLE_MAX_CHARS, truncate=True),
+        preconditions=_extract_text(
+            raw, "preconditions", MANUAL_PRECONDITIONS_MAX_CHARS, truncate=True
+        ),
+        steps=tuple(
+            _parse_manual_step(entry)
+            for entry in _extract_list(raw, "steps")[:MANUAL_CASE_MAX_STEPS]
+        ),
+        claimed_at=_extract_text(
+            raw, "claimed_at", _MANUAL_ISO_MAX_CHARS, truncate=True
+        ),
+        questions=_parse_questions(raw.get("questions", [])),
+        can_ask=_extract_bool(raw, "can_ask", default=False),
+    )
+
+
+def _parse_manual_pending_upload(raw: object) -> ManualPendingUploadPayload:
+    item = _extract_object(raw, "pending upload")
+    return ManualPendingUploadPayload(
+        submission_id=_extract_submission_id(item),
+        missing=tuple(
+            _extract_shot_key(key, "missing")
+            for key in _extract_list(item, "missing")[:MANUAL_SUBMISSION_MAX_SHOTS]
+        ),
+    )
+
+
+def parse_manual_run_state_payload(
+    data: Mapping[str, object],
+) -> ManualRunStateMessage:
+    """Validate a ``manual_run_state`` (runner side).
+
+    Lists beyond their caps are cut and over-long texts cut; a wrong type
+    raises ProtocolError.
+    """
+    return ManualRunStateMessage(
+        run=_parse_manual_run(_extract_optional_object(data, "run")),
+        cases=tuple(
+            _parse_manual_case_item(entry)
+            for entry in _extract_list(data, "cases")[:MANUAL_RUN_STATE_MAX_CASES]
+        ),
+        active=_parse_manual_active(_extract_optional_object(data, "active")),
+        pending_uploads=tuple(
+            _parse_manual_pending_upload(entry)
+            for entry in _extract_list(data, "pending_uploads")[
+                :MANUAL_PENDING_UPLOADS_MAX
+            ]
+        ),
+    )
+
+
+def serialize_manual_run_state(state: ManualRunStateMessage) -> str:
+    """A ``manual_run_state`` message (server side; fresh request_id)."""
+    return serialize_message(
+        MessageType.MANUAL_RUN_STATE,
+        None,
+        run=state.run.to_wire() if state.run is not None else None,
+        cases=[case.to_wire() for case in state.cases[:MANUAL_RUN_STATE_MAX_CASES]],
+        active=state.active.to_wire() if state.active is not None else None,
+        pending_uploads=[
+            upload.to_wire()
+            for upload in state.pending_uploads[:MANUAL_PENDING_UPLOADS_MAX]
+        ],
+    )
+
+
+def parse_manual_case_action_payload(
+    data: Mapping[str, object],
+) -> ManualCaseActionPayload:
+    """Validate a ``manual_case_action`` (both sides).
+
+    ``claim_token`` is required for ``release`` and dropped for ``claim``.
+    """
+    raw_action = data.get("action")
+    if not isinstance(raw_action, str):
+        raise ProtocolError("Missing or invalid 'action'")
+    try:
+        action = ManualCaseActionKind(raw_action)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown manual case action: {raw_action[:40]!r}") from e
+    claim_token = (
+        _extract_claim_token(data) if action is ManualCaseActionKind.RELEASE else ""
+    )
+    return ManualCaseActionPayload(
+        action=action,
+        pivot_id=_extract_bounded_int(data, "pivot_id", _PERSON_STEP_MAX_ID),
+        claim_token=claim_token,
+    )
+
+
+def serialize_manual_case_action(
+    action: ManualCaseActionPayload, request_id: str
+) -> str:
+    """A ``manual_case_action`` message (runner side; one request_id per action)."""
+    return serialize_message(
+        MessageType.MANUAL_CASE_ACTION,
+        request_id,
+        action=action.action.value,
+        pivot_id=action.pivot_id,
+        claim_token=action.claim_token,
+    )
+
+
+def parse_manual_case_action_result_payload(
+    data: Mapping[str, object],
+) -> ManualCaseActionResultPayload:
+    """Validate a ``manual_case_action_result`` (runner side)."""
+    return ManualCaseActionResultPayload(
+        ok=_extract_bool(dict(data), "ok"),
+        message=_extract_text(
+            data, "message", PERSON_STEP_RESULT_MESSAGE_MAX_CHARS, truncate=True
+        ),
+    )
+
+
+def serialize_manual_case_action_result(
+    result: ManualCaseActionResultPayload, request_id: str
+) -> str:
+    """A ``manual_case_action_result`` (server side; echoes the action's id)."""
+    return serialize_message(
+        MessageType.MANUAL_CASE_ACTION_RESULT,
+        request_id,
+        ok=result.ok,
+        message=result.message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
+    )
+
+
+def _parse_manual_step_result(raw: object) -> ManualStepResultPayload:
+    item = _extract_object(raw, "manual step result")
+    raw_outcome = item.get("outcome")
+    if not isinstance(raw_outcome, str):
+        raise ProtocolError("Missing or invalid 'outcome'")
+    try:
+        outcome = ManualStepOutcome(raw_outcome)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown step outcome: {raw_outcome[:40]!r}") from e
+    num = _extract_bounded_int(item, "num", MANUAL_CASE_MAX_STEPS)
+    note = _extract_text(
+        item, "note", MANUAL_STEP_NOTE_MAX_CHARS, truncate=False
+    ).strip()
+    if outcome is ManualStepOutcome.FAIL and not note:
+        raise ProtocolError(f"Step {num} failed without a note")
+    raw_shots = _extract_list(item, "shots")
+    if not 1 <= len(raw_shots) <= MANUAL_STEP_MAX_SHOTS:
+        raise ProtocolError(
+            f"Step {num} needs 1 to {MANUAL_STEP_MAX_SHOTS} screenshot keys"
+        )
+    raw_seconds = item.get("seconds", 0)
+    if (
+        not isinstance(raw_seconds, int)
+        or isinstance(raw_seconds, bool)
+        or raw_seconds < 0
+    ):
+        raise ProtocolError("Invalid 'seconds': expected a non-negative int")
+    return ManualStepResultPayload(
+        num=num,
+        outcome=outcome,
+        note=note,
+        shots=tuple(_extract_shot_key(key, "shots") for key in raw_shots),
+        seconds=min(raw_seconds, MANUAL_STEP_MAX_SECONDS),
+    )
+
+
+def _parse_manual_shot(raw: object) -> ManualShotManifestPayload:
+    item = _extract_object(raw, "manual shot")
+    raw_kind = item.get("kind")
+    if not isinstance(raw_kind, str):
+        raise ProtocolError("Missing or invalid 'kind'")
+    try:
+        kind = ManualShotKind(raw_kind)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown shot kind: {raw_kind[:40]!r}") from e
+    step_num = _extract_optional_step_num(item, "step_num")
+    if (kind is ManualShotKind.CASE) != (step_num is None):
+        raise ProtocolError("A case screenshot has no step; a step screenshot has one")
+    size = item.get("size")
+    if (
+        not isinstance(size, int)
+        or isinstance(size, bool)
+        or not 1 <= size <= MANUAL_SHOT_MAX_BYTES
+    ):
+        raise ProtocolError("Missing or invalid 'size'")
+    return ManualShotManifestPayload(
+        key=_extract_shot_key(item.get("key"), "key"),
+        step_num=step_num,
+        kind=kind,
+        sha256=_extract_sha256(item),
+        size=size,
+    )
+
+
+def _check_manual_manifest(
+    steps: Sequence[ManualStepResultPayload],
+    shots: Sequence[ManualShotManifestPayload],
+) -> None:
+    """Every step shot is announced once, with its step and outcome, and every
+    announced shot belongs to a marked step or is the one case screenshot."""
+    by_key: dict[str, ManualShotManifestPayload] = {}
+    for shot in shots:
+        if shot.key in by_key:
+            raise ProtocolError("Duplicate screenshot key")
+        by_key[shot.key] = shot
+    if sum(1 for shot in shots if shot.kind is ManualShotKind.CASE) > (
+        MANUAL_CASE_SHOT_MAX
+    ):
+        raise ProtocolError("Too many case screenshots")
+    referenced: set[str] = set()
+    for step in steps:
+        expected_kind = (
+            ManualShotKind.PASS
+            if step.outcome is ManualStepOutcome.PASS
+            else ManualShotKind.FAIL
+        )
+        for key in step.shots:
+            announced = by_key.get(key)
+            if (
+                key in referenced
+                or announced is None
+                or announced.step_num != step.num
+                or announced.kind is not expected_kind
+            ):
+                raise ProtocolError(f"Screenshot {key} does not match step {step.num}")
+            referenced.add(key)
+    for shot in shots:
+        if shot.kind is not ManualShotKind.CASE and shot.key not in referenced:
+            raise ProtocolError(f"Screenshot {shot.key} belongs to no marked step")
+
+
+# Both sides run this parser: the runner before it spools a hand-in, the
+# server on receipt, and a refusal drops the spooled hand-in. Tightening a rule
+# here therefore requires a CLIENT_VERSION bump and keeping the old rule for
+# older runners, or their already-spooled results would be deleted.
+def parse_manual_case_submit_payload(
+    data: Mapping[str, object],
+) -> ManualCaseSubmitPayload:
+    """Validate a ``manual_case_submit`` (both sides).
+
+    Refused (ProtocolError): over-long notes, a failed step without a note,
+    duplicate step numbers, a step without exactly its screenshots, a
+    screenshot that matches no marked step, more than one case screenshot, a
+    Blocked verdict without a note, and a Failed verdict without a note when
+    no step failed. Notes are stripped.
+    """
+    raw_steps = _extract_list(data, "steps")
+    if len(raw_steps) > MANUAL_CASE_MAX_STEPS:
+        raise ProtocolError("Too many steps")
+    steps = tuple(
+        sorted(
+            (_parse_manual_step_result(entry) for entry in raw_steps),
+            key=lambda step: step.num,
+        )
+    )
+    if len({step.num for step in steps}) != len(steps):
+        raise ProtocolError("Duplicate step number")
+    raw_shots = _extract_list(data, "shots")
+    if len(raw_shots) > MANUAL_SUBMISSION_MAX_SHOTS:
+        raise ProtocolError("Too many screenshots")
+    shots = tuple(_parse_manual_shot(entry) for entry in raw_shots)
+    _check_manual_manifest(steps, shots)
+    raw_verdict = data.get("verdict")
+    if not isinstance(raw_verdict, str):
+        raise ProtocolError("Missing or invalid 'verdict'")
+    try:
+        verdict = ManualCaseVerdictWire(raw_verdict)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown verdict: {raw_verdict[:40]!r}") from e
+    verdict_note = _extract_text(
+        data, "verdict_note", MANUAL_VERDICT_NOTE_MAX_CHARS, truncate=False
+    ).strip()
+    if not verdict_note:
+        if verdict is ManualCaseVerdictWire.BLOCKED:
+            raise ProtocolError("A Blocked verdict needs a note")
+        if verdict is ManualCaseVerdictWire.FAILED and not any(
+            step.outcome is ManualStepOutcome.FAIL for step in steps
+        ):
+            raise ProtocolError("A Failed verdict with no failed step needs a note")
+    return ManualCaseSubmitPayload(
+        submission_id=_extract_submission_id(data),
+        pivot_id=_extract_bounded_int(data, "pivot_id", _PERSON_STEP_MAX_ID),
+        claim_token=_extract_claim_token(data),
+        steps=steps,
+        verdict=verdict,
+        verdict_note=verdict_note,
+        shots=shots,
+    )
+
+
+def serialize_manual_case_submit(
+    submit: ManualCaseSubmitPayload, request_id: str
+) -> str:
+    """A ``manual_case_submit`` message (runner side; one request_id per send)."""
+    return serialize_message(
+        MessageType.MANUAL_CASE_SUBMIT,
+        request_id,
+        submission_id=submit.submission_id,
+        pivot_id=submit.pivot_id,
+        claim_token=submit.claim_token,
+        steps=[step.to_wire() for step in submit.steps],
+        verdict=submit.verdict.value,
+        verdict_note=submit.verdict_note,
+        shots=[shot.to_wire() for shot in submit.shots],
+    )
+
+
+def parse_manual_case_submit_result_payload(
+    data: Mapping[str, object],
+) -> ManualCaseSubmitResultPayload:
+    """Validate a ``manual_case_submit_result`` (runner side)."""
+    return ManualCaseSubmitResultPayload(
+        ok=_extract_bool(dict(data), "ok"),
+        message=_extract_text(
+            data, "message", PERSON_STEP_RESULT_MESSAGE_MAX_CHARS, truncate=True
+        ),
+        submission_id=_normalized_uuid(data.get("submission_id")) or "",
+        missing=tuple(
+            _extract_shot_key(key, "missing")
+            for key in _extract_list(data, "missing")[:MANUAL_SUBMISSION_MAX_SHOTS]
+        ),
+        drop=_extract_bool(dict(data), "drop", default=False),
+    )
+
+
+def serialize_manual_case_submit_result(
+    result: ManualCaseSubmitResultPayload, request_id: str
+) -> str:
+    """A ``manual_case_submit_result`` (server side; echoes the submit's id)."""
+    return serialize_message(
+        MessageType.MANUAL_CASE_SUBMIT_RESULT,
+        request_id,
+        ok=result.ok,
+        message=result.message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
+        submission_id=result.submission_id,
+        missing=list(result.missing[:MANUAL_SUBMISSION_MAX_SHOTS]),
+        drop=result.drop,
+    )
+
+
+def parse_manual_screenshot_upload_payload(
+    data: Mapping[str, object],
+) -> ManualScreenshotUploadPayload:
+    """Validate a ``manual_screenshot_upload`` (server side).
+
+    Decodes the base64 strictly and refuses (ProtocolError) an image over
+    MANUAL_SHOT_MAX_BYTES or one whose sha256 does not match. The image
+    format itself is checked by the server's service.
+    """
+    raw_mime = data.get("mime")
+    if not isinstance(raw_mime, str):
+        raise ProtocolError("Missing or invalid 'mime'")
+    try:
+        mime = ManualShotMime(raw_mime)
+    except ValueError as e:
+        raise ProtocolError(f"Unsupported image type: {raw_mime[:40]!r}") from e
+    raw_data = data.get("data_b64")
+    if not isinstance(raw_data, str):
+        raise ProtocolError("Missing or invalid 'data_b64'")
+    # Checked before decoding, so an oversized message is never decoded.
+    if len(raw_data) > 4 * -(-MANUAL_SHOT_MAX_BYTES // 3):
+        raise ProtocolError("Screenshot too large")
+    try:
+        image = base64.b64decode(raw_data, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise ProtocolError("Invalid 'data_b64': not base64") from e
+    if not 1 <= len(image) <= MANUAL_SHOT_MAX_BYTES:
+        raise ProtocolError("Screenshot empty or too large")
+    sha256 = _extract_sha256(data)
+    if hashlib.sha256(image).hexdigest() != sha256:
+        raise ProtocolError("Screenshot does not match its sha256")
+    return ManualScreenshotUploadPayload(
+        submission_id=_extract_submission_id(data),
+        key=_extract_shot_key(data.get("key"), "key"),
+        sha256=sha256,
+        mime=mime,
+        data=image,
+    )
+
+
+def serialize_manual_screenshot_upload(
+    upload: ManualScreenshotUploadPayload, request_id: str
+) -> str:
+    """A ``manual_screenshot_upload`` message (runner side; one request_id per
+    upload). The caller keeps ``upload.data`` within MANUAL_SHOT_MAX_BYTES."""
+    return serialize_message(
+        MessageType.MANUAL_SCREENSHOT_UPLOAD,
+        request_id,
+        submission_id=upload.submission_id,
+        key=upload.key,
+        sha256=upload.sha256,
+        mime=upload.mime.value,
+        data_b64=base64.b64encode(upload.data).decode("ascii"),
+    )
+
+
+def peek_manual_upload_ids(data: Mapping[str, object]) -> tuple[str, str] | None:
+    """The ``(submission_id, key)`` of an upload message, or None.
+
+    Lets the server answer a refused upload with an ack the runner can match
+    even when the rest of the message is invalid.
+    """
+    submission_id = _normalized_uuid(data.get("submission_id"))
+    key = data.get("key")
+    if (
+        submission_id is None
+        or not isinstance(key, str)
+        or not _MANUAL_SHOT_KEY_RE.fullmatch(key)
+    ):
+        return None
+    return submission_id, key
+
+
+def parse_manual_screenshot_ack_payload(
+    data: Mapping[str, object],
+) -> ManualScreenshotAckPayload:
+    """Validate a ``manual_screenshot_ack`` (runner side)."""
+    return ManualScreenshotAckPayload(
+        submission_id=_extract_submission_id(data),
+        key=_extract_shot_key(data.get("key"), "key"),
+        ok=_extract_bool(dict(data), "ok"),
+        drop=_extract_bool(dict(data), "drop", default=False),
+        message=_extract_text(
+            data, "message", PERSON_STEP_RESULT_MESSAGE_MAX_CHARS, truncate=True
+        ),
+        drop_shot=_extract_bool(dict(data), "drop_shot", default=False),
+    )
+
+
+def serialize_manual_screenshot_ack(
+    ack: ManualScreenshotAckPayload, request_id: str
+) -> str:
+    """A ``manual_screenshot_ack`` (server side; echoes the upload's id)."""
+    return serialize_message(
+        MessageType.MANUAL_SCREENSHOT_ACK,
+        request_id,
+        submission_id=ack.submission_id,
+        key=ack.key,
+        ok=ack.ok,
+        drop=ack.drop,
+        message=ack.message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
+        drop_shot=ack.drop_shot,
+    )

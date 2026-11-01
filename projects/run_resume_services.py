@@ -30,6 +30,12 @@ from agents.checkpoint import (
 from projects.case_checkpoint_services import load_resume_checkpoint
 from projects.case_credit import credit_cases
 from projects.exceptions import RunResumeError
+from projects.manual_run_policy import (
+    MANUAL_RESUME_REFUSED,
+    crosses_manual_boundary,
+    is_manual_checkpoint,
+    is_manual_run,
+)
 from projects.models import (
     Project,
     TestRun,
@@ -82,7 +88,7 @@ def get_resume_panel(test_run: TestRun, *, blockers: Sequence[str]) -> ResumePan
     With resumable cases but a blocker, ``can_resume`` is False and
     ``blockers`` says why (the page shows the button disabled).
     """
-    if test_run.status not in REOPENABLE_RUN_STATUSES:
+    if test_run.status not in REOPENABLE_RUN_STATUSES or is_manual_run(test_run):
         return ResumePanel(0, 0, 0, False, (), "")
     no_checkpoint = Q(execution_checkpoint={})
     cancelled = Q(status=TestRunTestCaseStatus.CANCELLED)
@@ -114,6 +120,8 @@ def can_resume_case(pivot: TestRunTestCase) -> bool:
     return (
         pivot.status in RESUMABLE_STATUSES
         and pivot.test_run.status in REOPENABLE_RUN_STATUSES
+        and not is_manual_run(pivot.test_run)
+        and not is_manual_checkpoint(pivot.execution_checkpoint)
     )
 
 
@@ -188,6 +196,17 @@ def _resume_pivots(
         resolved_help_mode = resolve_help_mode(
             user=user, requested=help_mode, current=test_run.help_mode
         )
+        # A manual case is redone from the Test Runner, never continued; an
+        # agent mode never continues a manual checkpoint either.
+        if (
+            is_manual_run(test_run)
+            or (
+                resolved_help_mode is not None
+                and crosses_manual_boundary(test_run.help_mode, resolved_help_mode)
+            )
+            or any(is_manual_checkpoint(p.execution_checkpoint) for p in pivots)
+        ):
+            raise RunResumeError(MANUAL_RESUME_REFUSED)
         record_case_activity(
             user=user,
             pivot_ids=[pivot.pk for pivot in pivots],

@@ -122,6 +122,16 @@
      when the case moves between two finished statuses (a person applied a
      result change), since these parts are server-rendered.
 
+     Manual run: manual_result
+     (projects.manual_case_display_services.ManualCasePanel, or None unless
+     the run is Manual or the case's checkpoint is manual): the Manual test
+     card (includes/_manual_case_card.html: claim and Release, which posts
+     to projects:test_run_case_manual_release; the tester's verdict, note,
+     per-step outcome, notes and screenshots grouped by step; upload
+     progress; the AI rewrite "Prepared for TestRail" next to the original;
+     the case's Ask AI questions). The page reloads when a manual case
+     changes status, and once when its last manual screenshot arrives.
+
      Pause and discuss: pause_panel (projects.case_pause_services.CasePausePanel:
      can_pause, pause_pending, pause_requested_by_label, pause_message_state,
      dropped_message, ...), pause_form (unbound CasePauseForm). "Pause and
@@ -285,6 +295,11 @@
     {% endif %}
   </section>
 
+  {% if manual_result %}
+  {# Section: Manual test — the tester's hand-in from the Test Runner window, view only (server-rendered) #}
+  {% include "projects/includes/_manual_case_card.html" with project=project test_run=test_run pivot=pivot panel=manual_result csrf_token=csrf_token can_write=project_can_write only %}
+  {% endif %}
+
   {% if pause_panel.dropped_message %}
   {# Section: Too late to pause — the verdict came first; the pause message is offered for the result chat (never sent automatically) #}
   <section aria-labelledby="pause-dropped-h" class="card card-tone-warning">
@@ -358,7 +373,11 @@
     </div>
     <p class="hint" x-show="!steps.available && steps.planning" x-cloak>Planning the steps…</p>
     <p class="hint" x-show="!steps.available && !steps.planning" x-cloak>No step breakdown was recorded for this execution.</p>
+    {% if manual_result %}
+    <p class="hint" x-show="steps.available" x-cloak>The test case's own steps, marked by the tester at the Test Runner.</p>
+    {% else %}
     <p class="hint" x-show="steps.available" x-cloak>The agent splits the test case into these steps; they rarely match the test case's own step numbers.</p>
+    {% endif %}
     <ol class="step-list" x-show="steps.available" x-cloak>
       <template x-for="row in steps.rows" :key="row.num">
         <li class="step-row" :class="(row.num === steps.current_step ? 'is-current ' : '') + (row.carried_from ? 'step-carried' : '')" :aria-current="row.num === steps.current_step ? 'step' : null">
@@ -431,7 +450,8 @@
     <p class="pre-wrap" x-text="result || 'No details were recorded.'"></p>
     <p class="hint" x-show="blockedReason === 'help_skipped'"{% if pivot.blocked_reason != "help_skipped" %} x-cloak{% endif %}>A person marked this case blocked while it was waiting for help, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
     <p class="hint" x-show="blockedReason === 'person_review'"{% if pivot.blocked_reason != "person_review" %} x-cloak{% endif %}>A person marked this case blocked after reviewing its result with the agent, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
-    <p class="hint" x-show="blockedReason !== 'help_skipped' && blockedReason !== 'person_review'"{% if pivot.blocked_reason == "help_skipped" or pivot.blocked_reason == "person_review" %} x-cloak{% endif %}>This case was not judged: an infrastructure problem stopped it before the agent could reach a verdict, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
+    <p class="hint" x-show="blockedReason === 'manual_verdict'"{% if pivot.blocked_reason != "manual_verdict" %} x-cloak{% endif %}>The tester marked this case blocked at the Test Runner, so it counts as neither passed nor failed. Fix the problem, then select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a>.</p>
+    <p class="hint" x-show="blockedReason !== 'help_skipped' && blockedReason !== 'person_review' && blockedReason !== 'manual_verdict'"{% if pivot.blocked_reason == "help_skipped" or pivot.blocked_reason == "person_review" or pivot.blocked_reason == "manual_verdict" %} x-cloak{% endif %}>This case was not judged: an infrastructure problem stopped it before the agent could reach a verdict, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
     {% if can_resume and project_can_write %}
     <div class="actions card-actions">
       <button type="button" class="btn btn-primary" @click="$dispatch('open-resume-case')">Resume case</button>
@@ -992,6 +1012,13 @@ document.addEventListener('alpine:init', () => {
     ],
     showLightbox: false,
     lightboxIndex: 0,
+    // Manual run: the card is server-rendered, so a claim, release or
+    // submit reloads the page; the upload count follows the manual
+    // screenshots as they arrive and reloads once when the last one lands.
+    manual: {{ manual_result|yesno:"true,false" }},
+    manualUploading: {% if manual_result.upload.is_uploading %}true{% else %}false{% endif %},
+    manualShotsReceived: {{ manual_result.upload.received|default:0 }},
+    manualShotsExpected: {{ manual_result.upload.expected|default:0 }},
     // Pause and discuss: a pause is pending (the agent stops at its next
     // action), and who asked. awaitingDiscussion: this page waits for the
     // server to open the discussion, then follows `discussion_url`.
@@ -1174,6 +1201,13 @@ document.addEventListener('alpine:init', () => {
             tool_name: data.tool_name,
             created_at: data.created_at,
           });
+          if (this.manualUploading && String(data.tool_name).startsWith('manual_')) {
+            this.manualShotsReceived = Math.min(this.manualShotsReceived + 1, this.manualShotsExpected);
+            if (this.manualShotsReceived >= this.manualShotsExpected) {
+              this.manualUploading = false;
+              setTimeout(() => window.location.reload(), 1000);
+            }
+          }
           return;
         }
 
@@ -1201,6 +1235,13 @@ document.addEventListener('alpine:init', () => {
           }
           // A pending pause lost to the verdict: the "Too late to pause"
           // notice is server-rendered.
+          if (this.manual && data.status !== this.status) {
+            // Manual: claimed, released or submitted at the Test Runner (or
+            // by Release here); the manual card is server-rendered.
+            this.status = data.status;
+            window.location.reload();
+            return;
+          }
           const finishedWhilePausing = this.pausePending && ['success', 'failed', 'blocked', 'cancelled'].includes(data.status);
           const reloadOn = ['need_help', 'awaiting_person', 'needs_retest'];
           if (finishedWhilePausing || reloadOn.includes(data.status) || reloadOn.includes(this.status)) {
