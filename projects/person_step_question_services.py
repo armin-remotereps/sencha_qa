@@ -21,6 +21,7 @@ from django.utils import timezone
 
 from agents.exceptions import AIServiceError
 from agents.os_shell import get_os_name, shell_label
+from agents.secret_redaction import redact_secrets
 from agents.services.llm_config import build_llm_config
 from agents.services.person_step_advisor import answer_person_step_question
 from agents.types import PersonStepAdviceContext, PersonStepHandOff
@@ -29,6 +30,7 @@ from controller_client.protocol import PERSON_STEP_STATE_MAX_QUESTIONS
 from knowledge_base.exceptions import KnowledgeBaseError
 from knowledge_base.services.related_knowledge import related_knowledge
 from knowledge_base.tool_text import render_excerpts
+from machine_readiness.profile_text import artifacts_profile_text
 from projects.case_step_refs import stored_case_steps
 from projects.case_task_text import build_task_description
 from projects.exceptions import PersonStepQuestionError
@@ -71,6 +73,8 @@ _PROJECT_CONTEXT_MAX_LENGTH = 4000
 # Knowledge base excerpts given to the advisor (one query).
 _KNOWLEDGE_EXCERPT_LIMIT = 4
 _KNOWLEDGE_EXCERPT_MAX_CHARS = 6000
+# The project's artifacts profile given to the advisor (two or three queries).
+_ARTIFACTS_PROFILE_MAX_CHARS = 6000
 # A pending question older than the LLM timeout plus this is a lost task.
 _STALE_GRACE_SECONDS = 60
 
@@ -280,11 +284,16 @@ def answer_person_step_question_now(question_id: int) -> None:
     context = _advice_context(step, pivot, history, row.question)
     status = PersonStepQuestionStatus.ANSWERED
     try:
-        answer = answer_person_step_question(
-            build_llm_config(),
-            context,
-            row.question,
-            timeout_seconds=settings.PERSON_STEP_QUESTION_TIMEOUT_SECONDS,
+        # Obvious secret values the case does not state never reach the
+        # web card or the runner window.
+        answer = redact_secrets(
+            answer_person_step_question(
+                build_llm_config(),
+                context,
+                row.question,
+                timeout_seconds=settings.PERSON_STEP_QUESTION_TIMEOUT_SECONDS,
+            ),
+            known_text=context.case_text,
         ).strip()[:PERSON_STEP_ANSWER_MAX_LENGTH]
     except AIServiceError as exc:
         logger.warning("Ask AI question %d not answered: %s", question_id, exc)
@@ -435,6 +444,11 @@ def _advice_context(
             project.pk,
             f"{question}\n{step.instruction}\n{step.expected_result}",
         ),
+        # Redacted before it reaches the advisor: the answer is shown at the
+        # test machine too.
+        artifacts_profile=redact_secrets(artifacts_profile_text(project.pk) or "")[
+            :_ARTIFACTS_PROFILE_MAX_CHARS
+        ],
     )
 
 
