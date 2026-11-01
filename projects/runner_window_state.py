@@ -13,12 +13,14 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 
 from controller_client.protocol import (
+    ClientCapability,
     ManualRunStateMessage,
     PersonCaseStatePayload,
     PersonStepStatePayload,
 )
 from machine_setup.services.runner_discussion import (
     get_runner_discussion,
+    get_runner_manual_discussion,
     get_runner_send_blocker,
 )
 from projects.models import Project
@@ -114,6 +116,19 @@ def get_runner_manual_state(
     """The Manual run snapshot for a MANUAL_RUN_V1 runner window.
 
     The same for every person at the runner: a project's claims all belong to
-    its one runner connection.
+    its one runner connection. A MANUAL_PAUSE_DISCUSS_V1 window also gets the
+    claimed case's discussion (``active`` is the claimed IN_PROGRESS case of
+    ``run``, the project's STARTED manual run, so the discussion does not
+    re-check the claim).
     """
-    return build_manual_run_state(project=project, runner_capabilities=capabilities)
+    state = build_manual_run_state(project=project, runner_capabilities=capabilities)
+    if (
+        state.active is None
+        or state.run is None
+        or ClientCapability.MANUAL_PAUSE_DISCUSS_V1.value not in capabilities
+    ):
+        return state
+    discussion = get_runner_manual_discussion(
+        project, state.active.pivot_id, test_run_id=state.run.run_id
+    )
+    return replace(state, active=replace(state.active, discussion=discussion))

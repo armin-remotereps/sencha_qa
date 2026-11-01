@@ -14,7 +14,9 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
     MANUAL_CASE_ACTION_MAX_BYTES,
+    MANUAL_CASE_PROGRESS_MAX_BYTES,
     MANUAL_CASE_SUBMIT_MAX_BYTES,
+    MANUAL_CHAT_SEND_MAX_BYTES,
     MANUAL_SCREENSHOT_UPLOAD_MAX_BYTES,
     PERSON_CASE_ACTION_MAX_BYTES,
     PERSON_STEP_ACTION_MAX_BYTES,
@@ -38,6 +40,7 @@ from controller_client.protocol import (
     PersonStepQuestionResultPayload,
     PersonStepStatePayload,
     parse_handshake_capabilities,
+    parse_manual_case_progress_payload,
     parse_manual_case_submit_payload,
     parse_person_email,
     parse_update_in_flight_id,
@@ -54,7 +57,10 @@ from controller_client.protocol import (
     serialize_person_step_state,
 )
 from machine_setup.exceptions import MachineSetupError
-from machine_setup.services.runner_discussion import send_from_runner
+from machine_setup.services.runner_discussion import (
+    send_from_runner,
+    send_manual_from_runner,
+)
 from projects.case_help_services import format_help_action_message
 from projects.case_pause_policy import PAUSE_SECOND_MESSAGE, CasePauseOutcome
 from projects.controller_authenticator import (
@@ -114,6 +120,7 @@ from projects.forms import (
     RunnerChatSendForm,
     RunnerHelpActionForm,
     RunnerManualCaseActionForm,
+    RunnerManualChatSendForm,
     RunnerManualStepQuestionForm,
     RunnerPersonStepActionForm,
     RunnerPersonStepQuestionForm,
@@ -129,6 +136,7 @@ from projects.runner_help_action_services import (
 from projects.runner_manual_services import (
     act_from_runner,
     ask_manual_from_runner,
+    progress_from_runner,
     submit_from_runner,
     upload_from_runner,
 )
@@ -188,6 +196,11 @@ _MANUAL_ACTION_FAILED = "That did not work. Try again in a moment."
 _MANUAL_SUBMIT_FAILED = "The result could not be saved. It is kept and sent again."
 _MANUAL_SUBMITTED = "Submitted. Screenshots upload in the background."
 _MANUAL_UPLOAD_FAILED = "The screenshot could not be saved. It is sent again."
+_MANUAL_PAUSE_UNSUPPORTED = "Update the Test Runner to pause or discuss manual cases."
+# Pause, continue and the discussion need MANUAL_PAUSE_DISCUSS_V1.
+_MANUAL_PAUSE_ACTIONS: frozenset[ManualCaseActionKind] = frozenset(
+    {ManualCaseActionKind.PAUSE, ManualCaseActionKind.CONTINUE}
+)
 # Nudges within this many seconds of a push wait for one trailing push.
 _PUSH_COALESCE_SECONDS = 1.0
 # Longest ``request_id`` echoed back; a longer one gets a fresh id.
@@ -222,6 +235,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     _pause_enabled: bool
     # Manual runs in the window (MANUAL_RUN_V1, only with PERSON_STEPS_V1).
     _manual_enabled: bool
+    # Manual pause and discuss (MANUAL_PAUSE_DISCUSS_V1, only with MANUAL_RUN_V1).
+    _manual_pause_enabled: bool
     # Everything the handshake advertised (passed to the manual snapshot).
     _capabilities: frozenset[str]
     # The last ``manual_run_state`` sent; None before the first one.
@@ -253,6 +268,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self._discussion_enabled = False
         self._pause_enabled = False
         self._manual_enabled = False
+        self._manual_pause_enabled = False
         self._capabilities = frozenset()
         self._manual_state_sent = None
         self._person_user_id = None
@@ -343,6 +359,14 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
         if msg_type == MessageType.MANUAL_SCREENSHOT_UPLOAD:
             await self._handle_manual_screenshot_upload(data, raw_length)
+            return
+
+        if msg_type == MessageType.MANUAL_CASE_PROGRESS:
+            await self._handle_manual_case_progress(data, raw_length)
+            return
+
+        if msg_type == MessageType.MANUAL_CHAT_SEND:
+            await self._handle_manual_chat_send(data, raw_length)
             return
 
         handlers = {
@@ -449,6 +473,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self._manual_enabled = (
             self._person_steps_enabled
             and ClientCapability.MANUAL_RUN_V1.value in capabilities
+        )
+        self._manual_pause_enabled = (
+            self._manual_enabled
+            and ClientCapability.MANUAL_PAUSE_DISCUSS_V1.value in capabilities
         )
         self._capabilities = frozenset(capabilities)
         await self._establish_authenticated_connection(
@@ -905,12 +933,15 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         )
         if not form.is_valid():
             return _manual_action_refused(form_error_text(form))
+        action = ManualCaseActionKind(form.cleaned_data["action"])
+        if action in _MANUAL_PAUSE_ACTIONS and not self._manual_pause_enabled:
+            return _manual_action_refused(_MANUAL_PAUSE_UNSUPPORTED)
         try:
             message = await database_sync_to_async(act_from_runner)(
                 project=self._project,
                 channel_name=self.channel_name,
                 person_user_id=self._person_user_id,
-                action=ManualCaseActionKind(form.cleaned_data["action"]),
+                action=action,
                 pivot_id=form.cleaned_data["pivot_id"],
                 claim_token=form.cleaned_data["claim_token"],
             )
@@ -922,6 +953,78 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             )
             return _manual_action_refused(_MANUAL_ACTION_FAILED)
         return ManualCaseActionResultPayload(ok=True, message=message)
+
+    async def _handle_manual_case_progress(
+        self, data: dict[str, Any], raw_length: int
+    ) -> None:
+        """The tester's marks so far (no reply; refusals are only logged)."""
+        if not self._manual_pause_enabled or self._project is None:
+            return
+        if raw_length > MANUAL_CASE_PROGRESS_MAX_BYTES:
+            logger.warning("Manual progress too large for project %s", self._project.id)
+            return
+        # Nested list: the protocol parser is the form here, as for the hand-in.
+        try:
+            payload = parse_manual_case_progress_payload(data)
+        except ProtocolError as exc:
+            logger.warning(
+                "Manual progress refused for project %s: %s", self._project.id, exc
+            )
+            return
+        try:
+            await database_sync_to_async(progress_from_runner)(
+                project=self._project,
+                channel_name=self.channel_name,
+                payload=payload,
+            )
+        except ManualRunError as exc:
+            logger.info(
+                "Manual progress refused for project %s: %s",
+                self._project.id,
+                exc.message,
+            )
+        except Exception:
+            logger.exception("Manual progress failed for project %s", self._project.id)
+
+    async def _handle_manual_chat_send(
+        self, data: dict[str, Any], raw_length: int
+    ) -> None:
+        request_id = _echoed_request_id(data)
+        result = await self._send_manual_chat(data, raw_length)
+        await self.send(
+            text_data=serialize_manual_case_action_result(result, request_id)
+        )
+        # A sent message nudges through the discussion events.
+        if not result.ok:
+            await self._push_manual_state(force=True)
+
+    async def _send_manual_chat(
+        self, data: dict[str, Any], raw_length: int
+    ) -> ManualCaseActionResultPayload:
+        if not self._manual_pause_enabled or self._project is None:
+            return _manual_action_refused(_MANUAL_PAUSE_UNSUPPORTED)
+        if raw_length > MANUAL_CHAT_SEND_MAX_BYTES:
+            return _manual_action_refused(_MANUAL_TOO_LARGE)
+        form = RunnerManualChatSendForm(
+            {field: data.get(field) for field in RunnerManualChatSendForm.base_fields}
+        )
+        if not form.is_valid():
+            return _manual_action_refused(form_error_text(form))
+        try:
+            await database_sync_to_async(send_manual_from_runner)(
+                project=self._project,
+                channel_name=self.channel_name,
+                person_user_id=self._person_user_id,
+                pivot_id=form.cleaned_data["pivot_id"],
+                claim_token=form.cleaned_data["claim_token"],
+                text=form.cleaned_data["text"],
+            )
+        except MachineSetupError as exc:
+            return _manual_action_refused(exc.message)
+        except Exception:
+            logger.exception("Manual chat send failed for project %s", self._project.id)
+            return _manual_action_refused(_MANUAL_ACTION_FAILED)
+        return ManualCaseActionResultPayload(ok=True, message=_CHAT_SENT)
 
     async def _handle_manual_case_submit(
         self, data: dict[str, Any], raw_length: int
