@@ -18,6 +18,14 @@ tester works through a Manual run here:
   Failed with no failed step) asks for an inline confirmation first. Hand in
   is local and instant (the runner spools it); the next case is preselected.
 - Release gives the case back (inline confirmation; its draft is dropped).
+- Pause / Continue testing (MANUAL_PAUSE_DISCUSS_V1): while the case is
+  paused a banner says since when and by whom, and Pass, Fail, Retake, the
+  case screenshot and Hand in are off (the step timer stops too); Release,
+  Ask the AI and Discuss stay on.
+- Discuss (MANUAL_PAUSE_DISCUSS_V1): the case's discussion with the agent
+  (``person_window_chat``), a message box and "Open on Punk Hazard".
+- Pause and Discuss show only when the server sends their fields, so an
+  older server leaves the tab as it was.
 - The upload line says what still waits to be sent.
 
 Marks (a step's outcome and screenshot) belong to the runner, which keeps
@@ -32,10 +40,12 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Final, Protocol
 
+from controller_client.person_window_chat import ChatHost, ChatPanel, clock
 from controller_client.person_window_how_to import clear_copy_buttons, render_how_to
 from controller_client.person_window_ipc import (
     ManualCaptureEvent,
     ManualCaseActionEvent,
+    ManualChatSendEvent,
     ManualDraftEvent,
     ManualDraftTexts,
     ManualMarkView,
@@ -45,18 +55,22 @@ from controller_client.person_window_ipc import (
     ManualWindowState,
     QuestionEvent,
     WindowEvent,
+    manual_pause_discuss_supported,
     next_seq,
 )
 from controller_client.protocol import (
     MANUAL_STEP_MAX_SECONDS,
     MANUAL_STEP_NOTE_MAX_CHARS,
     MANUAL_VERDICT_NOTE_MAX_CHARS,
+    PERSON_CHAT_TEXT_MAX_CHARS,
     PERSON_STEP_QUESTION_MAX_CHARS,
     ManualActiveCasePayload,
     ManualCaseActionKind,
     ManualCaseActionPayload,
     ManualCaseListItemPayload,
     ManualCaseVerdictWire,
+    ManualChatSendPayload,
+    ManualDiscussionPayload,
     ManualShotKind,
     ManualStepOutcome,
     ManualStepPayload,
@@ -90,6 +104,14 @@ _THUMBNAIL_CACHE: Final[int] = 24
 _HOW_TO_PENDING: Final[str] = "Preparing a guide for this step…"
 _ASK_CLOSED: Final[str] = "▸ Ask the AI about this step"
 _ASK_OPEN: Final[str] = "▾ Ask the AI about this step"
+_DISCUSS_CLOSED: Final[str] = "▸ Discuss the case with the agent"
+_DISCUSS_OPEN: Final[str] = "▾ Discuss the case with the agent"
+_CHAT_LINES: Final[int] = 12
+# The server refuses Continue while a discussion turn is live (its
+# MANUAL_PAUSE_AGENT_BUSY); the window says so instead of sending.
+_AGENT_BUSY: Final[str] = (
+    "The agent is working on the machine. Wait for it to finish or stop it first."
+)
 _STATUS_LABELS: Final[dict[str, str]] = {
     "created": "To do",
     "in_progress": "In progress",
@@ -126,7 +148,7 @@ class ManualBlock(Protocol):
     def show(self, visible: bool) -> None: ...
 
 
-class ManualHost(Protocol):
+class ManualHost(ChatHost, Protocol):
     """What the view needs from the window (``PersonWindowApp``)."""
 
     def manual_block(
@@ -146,6 +168,8 @@ class ManualHost(Protocol):
     def manual_send(self, event: WindowEvent) -> None: ...
 
     def manual_connected(self) -> bool: ...
+
+    def manual_open_url(self, url: str) -> None: ...
 
 
 @dataclass
@@ -174,6 +198,11 @@ def _case_line(case: ManualCaseListItemPayload, submitted: bool) -> str:
     ref = f"C{case.testrail_id} · " if case.testrail_id else ""
     who = f"  ({case.claimed_label})" if case.claimed_label and not submitted else ""
     return f"{_status_label(case, submitted)}  ·  {ref}{case.title}{who}"
+
+
+def _agent_busy(active: ManualActiveCasePayload) -> bool:
+    """A turn of the case's discussion is live: the agent may be on the machine."""
+    return active.discussion is not None and active.discussion.turn_live
 
 
 def _qa_text(questions: tuple[PersonStepQuestionPayload, ...]) -> str:
@@ -214,6 +243,10 @@ class ManualView:
         self._submit_busy = False
         self._asking = False
         self._ask_open = False
+        # Pause / Continue and a discussion message with the server.
+        self._pause_busy = False
+        self._chat_busy = False
+        self._discuss_open = False
         self._rendered_qa: str | None = None
         self._rendered_how_to: _HowToKey | None = None
         self._confirm: str | None = None
@@ -270,10 +303,13 @@ class ManualView:
         self._case_title = host.manual_label(head, "")
         self._case_title.configure(font=_HEADING_FONT)
         self._case_title.grid(row=0, column=0, sticky="w")
+        self._pause_button = ttk.Button(head, text="Pause", command=self._pause)
+        self._pause_button.grid(row=0, column=1, sticky="ne", padx=(8, 0))
         self._release_button = ttk.Button(
             head, text="Release case", command=self._ask_release
         )
-        self._release_button.grid(row=0, column=1, sticky="ne", padx=(8, 0))
+        self._release_button.grid(row=0, column=2, sticky="ne", padx=(8, 0))
+        self._build_pause(head)
         self._preconditions = host.manual_block(
             active, title="Preconditions", max_lines=_STEP_LINES
         )
@@ -356,10 +392,11 @@ class ManualView:
         self._capture_status = host.manual_label(active, "")
         self._capture_status.grid(row=11, column=0, sticky="w", pady=(4, 0))
         self._build_ask(active, row=12)
+        self._build_discuss(active, row=13)
 
         verdict = ttk.Frame(active)
         verdict.columnconfigure(0, weight=1)
-        verdict.grid(row=13, column=0, sticky="ew", pady=(14, 0))
+        verdict.grid(row=14, column=0, sticky="ew", pady=(14, 0))
         ttk.Label(verdict, text="Case result", font=_BOLD_FONT).grid(
             row=0, column=0, sticky="w"
         )
@@ -417,10 +454,81 @@ class ManualView:
         ttk.Button(confirm_buttons, text="Cancel", command=self._cancel_confirm).pack(
             side="left", padx=(6, 0)
         )
-        self._confirm_frame.grid(row=14, column=0, sticky="ew", pady=(10, 0))
+        self._confirm_frame.grid(row=15, column=0, sticky="ew", pady=(10, 0))
         self._confirm_frame.grid_remove()
         self._submit_status = host.manual_label(active, "")
-        self._submit_status.grid(row=15, column=0, sticky="w", pady=(4, 0))
+        self._submit_status.grid(row=16, column=0, sticky="w", pady=(4, 0))
+
+    def _build_pause(self, head: "ttk.Frame") -> None:
+        """Under the title: the paused banner with Continue testing, why
+        Pause / Continue does not apply now, and the last reply."""
+        pause = ttk.Frame(head)
+        pause.columnconfigure(0, weight=1)
+        pause.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(4, 0))
+        self._pause_frame = pause
+        self._paused_banner = ttk.Frame(pause)
+        self._paused_banner.columnconfigure(0, weight=1)
+        self._paused_banner.grid(row=0, column=0, sticky="ew")
+        self._paused_label = self._host.manual_label(
+            self._paused_banner, "", foreground=_WARN_COLOR
+        )
+        self._paused_label.configure(font=_BOLD_FONT)
+        self._paused_label.grid(row=0, column=0, sticky="w")
+        self._host.manual_label(
+            self._paused_banner,
+            "Pass, Fail, screenshots and Hand in are off until you continue. "
+            "You can still ask the AI, discuss the case or release it.",
+            foreground=_MUTED_COLOR,
+        ).grid(row=1, column=0, sticky="w")
+        self._continue_button = ttk.Button(
+            self._paused_banner, text="Continue testing", command=self._continue
+        )
+        self._continue_button.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self._pause_blocker = self._host.manual_label(
+            pause, "", foreground=_MUTED_COLOR
+        )
+        self._pause_blocker.grid(row=1, column=0, sticky="w")
+        self._pause_status = self._host.manual_label(pause, "")
+        self._pause_status.grid(row=2, column=0, sticky="w")
+        pause.grid_remove()
+
+    def _build_discuss(self, parent: "ttk.Frame", *, row: int) -> None:
+        discuss = ttk.Frame(parent)
+        discuss.columnconfigure(0, weight=1)
+        discuss.grid(row=row, column=0, sticky="ew", pady=(10, 0))
+        self._discuss_frame = discuss
+        self._discuss_toggle = ttk.Button(
+            discuss, text=_DISCUSS_CLOSED, command=self._toggle_discuss
+        )
+        self._discuss_toggle.grid(row=0, column=0, sticky="w")
+        content = ttk.Frame(discuss)
+        content.columnconfigure(0, weight=1)
+        content.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self._discuss_content = content
+        self._host.manual_label(
+            content,
+            "The agent knows this case, its steps, the marks so far and the "
+            "knowledge base. It advises only: it does not mark steps or decide "
+            "the result.",
+            foreground=_MUTED_COLOR,
+        ).grid(row=0, column=0, sticky="w")
+        # Rows 1 (chat), 2 (answering) and 3 (message box).
+        self._chat = ChatPanel(
+            self._host,
+            content,
+            row=1,
+            title="Discussion with the agent (this case)",
+            lines=_CHAT_LINES,
+            on_send=self._send_chat,
+            on_input=self._on_chat_input,
+            working_text="The agent is answering…",
+        )
+        self._thread_link = ttk.Button(
+            content, text="Open on Punk Hazard", command=self._open_thread
+        )
+        self._thread_link.grid(row=4, column=0, sticky="w", pady=(6, 0))
+        content.grid_remove()
+        discuss.grid_remove()
 
     def _build_ask(self, parent: "ttk.Frame", *, row: int) -> None:
         ask = ttk.Frame(parent)
@@ -473,7 +581,8 @@ class ManualView:
         if state is None or state.run is None:
             return "", ""
         if state.active is not None:
-            return state.active.title, f"Manual run · {state.run.name}"
+            paused = " · Paused" if state.active.paused else ""
+            return state.active.title, f"Manual run · {state.run.name}{paused}"
         return "Manual run", state.run.name
 
     # --- commands from the runner ---------------------------------------------
@@ -498,9 +607,25 @@ class ManualView:
             self._load_claim(
                 active, draft.texts if draft is not None and claim else None
             )
+            if active is not None:
+                # The runner learns the shown step (progress reports).
+                self._schedule_draft()
+        self._sync_step_timer(active is not None and active.paused)
         if self._claim_busy and active is not None:
             self._claim_busy = False
         self.render()
+
+    def _sync_step_timer(self, paused: bool) -> None:
+        """The step timer stops while the case is paused."""
+        now = time.monotonic()
+        if paused and self._step_started is not None:
+            if self._step is not None:
+                self._seconds[self._step] = self._seconds.get(self._step, 0.0) + (
+                    now - self._step_started
+                )
+            self._step_started = None
+        elif not paused and self._step_started is None and self._step is not None:
+            self._step_started = now
 
     def _load_claim(
         self, active: ManualActiveCasePayload | None, texts: ManualDraftTexts | None
@@ -511,6 +636,8 @@ class ManualView:
         self._confirm = None
         self._capture = None
         self._asking = False
+        self._pause_busy = False
+        self._chat_busy = False
         self._rendered_qa = None
         self._rendered_how_to = None
         self._thumbnails.clear()
@@ -525,6 +652,9 @@ class ManualView:
         self._verdict_var.set(verdict.value if verdict is not None else "")
         _set_text(self._verdict_note, texts.verdict_note if texts is not None else "")
         _set_text(self._question, "")
+        self._chat.set_input("")
+        self._chat.set_status("")
+        self._pause_status.configure(text="")
         self._capture_status.configure(text="")
         self._submit_status.configure(text="")
         self._ask_status.configure(text="")
@@ -589,6 +719,21 @@ class ManualView:
                 self._list_status.configure(text=message, foreground=color)
             else:
                 self._submit_status.configure(text=message, foreground=color)
+        elif kind in (ManualResultKind.PAUSE, ManualResultKind.CONTINUE):
+            if not self._pause_busy:
+                return
+            self._pause_busy = False
+            # Success shows in the next snapshot (the banner); keep a reply.
+            self._pause_status.configure(
+                text=message if message or not ok else "", foreground=color
+            )
+        elif kind is ManualResultKind.CHAT:
+            if not self._chat_busy:
+                return
+            self._chat_busy = False
+            if ok:
+                self._chat.set_input("")
+            self._chat.set_status(message, color)
         else:
             # A capture notice the window missed while it restarted.
             self._capture = None
@@ -728,8 +873,90 @@ class ManualView:
         self._render_how_to(active, step)
         self._render_step_mark(step)
         self._render_ask(active)
+        self._render_pause(active)
+        self._render_discuss(active)
         self._render_verdict()
         self._render_confirm()
+
+    def _paused(self) -> bool:
+        active = self.state.active if self.state is not None else None
+        return active is not None and active.paused
+
+    def _render_pause(self, active: ManualActiveCasePayload) -> None:
+        if not manual_pause_discuss_supported(active):
+            self._pause_button.grid_remove()
+            self._pause_frame.grid_remove()
+            return
+        self._pause_frame.grid()
+        connected = self._host.manual_connected()
+        if active.paused:
+            self._pause_button.grid_remove()
+            at = clock(active.paused_at)
+            since = f"Paused since {at}" if at else "Paused"
+            by = f" (by {active.paused_by})" if active.paused_by else ""
+            self._paused_label.configure(text=f"{since}{by}")
+            self._paused_banner.grid()
+            busy = _agent_busy(active)
+            can = (
+                active.can_continue and connected and not self._pause_busy and not busy
+            )
+            self._continue_button.configure(
+                text="Continuing…" if self._pause_busy else "Continue testing",
+                state="normal" if can else "disabled",
+            )
+            if not active.can_continue:
+                blocker = active.pause_blocker
+            else:
+                blocker = _AGENT_BUSY if busy else ""
+        else:
+            self._paused_banner.grid_remove()
+            self._pause_button.grid()
+            can = (
+                active.can_pause
+                and connected
+                and not self._pause_busy
+                and not self._submit_busy
+            )
+            self._pause_button.configure(
+                text="Pausing…" if self._pause_busy else "Pause",
+                state="normal" if can else "disabled",
+            )
+            blocker = "" if active.can_pause else active.pause_blocker
+        self._pause_blocker.configure(text=blocker)
+
+    def _render_discuss(self, active: ManualActiveCasePayload) -> None:
+        discussion = active.discussion
+        if discussion is None:
+            self._discuss_frame.grid_remove()
+            return
+        self._discuss_frame.grid()
+        count = f" ({len(discussion.messages)})" if discussion.messages else ""
+        live = " · the agent is answering…" if discussion.turn_live else ""
+        self._discuss_toggle.configure(
+            text=(_DISCUSS_OPEN if self._discuss_open else _DISCUSS_CLOSED)
+            + count
+            + live
+        )
+        # Rendered while closed too: only new rows are appended.
+        self._chat.render_rows(active.claim_token, discussion.messages)
+        self._chat.set_working(discussion.turn_live)
+        self._render_chat_send(discussion)
+        if discussion.thread_url:
+            self._thread_link.grid()
+        else:
+            self._thread_link.grid_remove()
+        if self._discuss_open:
+            self._discuss_content.grid()
+        else:
+            self._discuss_content.grid_remove()
+
+    def _render_chat_send(self, discussion: ManualDiscussionPayload) -> None:
+        self._chat.render_send(
+            connected=self._host.manual_connected(),
+            can_send=discussion.can_send,
+            busy=self._chat_busy,
+            send_blocker=discussion.send_blocker,
+        )
 
     def _render_how_to(
         self, active: ManualActiveCasePayload, step: ManualStepPayload | None
@@ -792,6 +1019,7 @@ class ManualView:
             step is not None
             and not busy
             and not self._submit_busy
+            and not self._paused()
             and self.state is not None
             and not self.state.spool_full
         )
@@ -830,7 +1058,8 @@ class ManualView:
         else:
             label = "Note for the case (optional)"
         self._verdict_note_label.configure(text=label)
-        busy = self._capture is not None or self._submit_busy
+        busy = self._capture is not None or self._submit_busy or self._pause_busy
+        paused = self._paused()
         full = self.state is not None and self.state.spool_full
         if self._case_shot_key:
             self._show_thumbnail(self._case_thumb, self._case_shot_key)
@@ -838,10 +1067,12 @@ class ManualView:
         else:
             self._case_thumb.configure(image="")
             self._case_shot_button.configure(text="Take a case screenshot (optional)")
-        self._case_shot_button.configure(state="disabled" if busy or full else "normal")
+        self._case_shot_button.configure(
+            state="disabled" if busy or full or paused else "normal"
+        )
         self._submit_button.configure(
             text="Handing in…" if self._submit_busy else "Hand in",
-            state="disabled" if busy or verdict is None else "normal",
+            state="disabled" if busy or paused or verdict is None else "normal",
         )
         self._release_button.configure(
             state=(
@@ -994,6 +1225,7 @@ class ManualView:
                 pivot_id=active.pivot_id,
                 claim_token=active.claim_token,
                 texts=self._texts(),
+                current_step=self._step,
             )
         )
 
@@ -1065,7 +1297,7 @@ class ManualView:
                 now - self._step_started
             )
         self._step = num
-        self._step_started = now
+        self._step_started = None if self._paused() else now
         _set_text(self._note, self._notes.get(num, ""))
         self._note.edit_modified(False)
         self._capture_status.configure(text="")
@@ -1089,7 +1321,7 @@ class ManualView:
 
     def _send_capture(self, kind: ManualShotKind, step_num: int | None) -> None:
         active = self.state.active if self.state is not None else None
-        if active is None or self._capture is not None:
+        if active is None or self._capture is not None or active.paused:
             return
         self._seq = next_seq(self._seq)
         self._capture = _Capture(seq=self._seq, kind=kind, step_num=step_num)
@@ -1162,7 +1394,7 @@ class ManualView:
         return "", None
 
     def _ask_submit(self) -> None:
-        if self._submit_busy or self._capture is not None:
+        if self._submit_busy or self._capture is not None or self._paused():
             return
         texts = self._texts()
         message, step = self._validation_error(texts)
@@ -1218,7 +1450,7 @@ class ManualView:
 
     def _submit(self, texts: ManualDraftTexts) -> None:
         active = self.state.active if self.state is not None else None
-        if active is None:
+        if active is None or active.paused:
             return
         if self._draft_job is not None:
             self._root.after_cancel(self._draft_job)
@@ -1275,3 +1507,90 @@ class ManualView:
                 )
             )
         )
+
+    # --- pause and discuss (MANUAL_PAUSE_DISCUSS_V1) -------------------------------
+
+    def _send_pause_action(self, kind: ManualCaseActionKind) -> None:
+        active = self.state.active if self.state is not None else None
+        if active is None or self._pause_busy or not self._host.manual_connected():
+            return
+        allowed = (
+            active.can_continue and not _agent_busy(active)
+            if active.paused
+            else active.can_pause
+        )
+        if not allowed or (kind is ManualCaseActionKind.CONTINUE) != active.paused:
+            return
+        # Notes typed so far reach the runner first (it reports the marks
+        # before a pause).
+        self._flush_draft()
+        self._pause_busy = True
+        self._pause_status.configure(text="")
+        self.render()
+        # Never hides or raises the window.
+        self._host.manual_send(
+            ManualCaseActionEvent(
+                action=ManualCaseActionPayload(
+                    action=kind,
+                    pivot_id=active.pivot_id,
+                    claim_token=active.claim_token,
+                )
+            )
+        )
+
+    def _pause(self) -> None:
+        self._send_pause_action(ManualCaseActionKind.PAUSE)
+
+    def _continue(self) -> None:
+        self._send_pause_action(ManualCaseActionKind.CONTINUE)
+
+    def _toggle_discuss(self) -> None:
+        self._discuss_open = not self._discuss_open
+        self.render()
+        if self._discuss_open:
+            self._chat.block.text.see("end")
+
+    def _on_chat_input(self) -> None:
+        active = self.state.active if self.state is not None else None
+        if active is not None and active.discussion is not None:
+            self._render_chat_send(active.discussion)
+
+    def _send_chat(self) -> None:
+        active = self.state.active if self.state is not None else None
+        if active is None or active.discussion is None:
+            return
+        if self._chat_busy or not self._host.manual_connected():
+            return
+        if not active.discussion.can_send:
+            return
+        text = self._chat.input_text().strip()
+        if not text:
+            return
+        if len(text) > PERSON_CHAT_TEXT_MAX_CHARS:
+            self._chat.set_status(
+                f"The message is too long ({len(text)} of "
+                f"{PERSON_CHAT_TEXT_MAX_CHARS} characters).",
+                _ERROR_COLOR,
+            )
+            return
+        # Notes typed so far reach the runner first (it reports the marks
+        # before the message).
+        self._flush_draft()
+        self._chat_busy = True
+        self._chat.set_status("")
+        self.render()
+        # Never hides or raises the window.
+        self._host.manual_send(
+            ManualChatSendEvent(
+                send=ManualChatSendPayload(
+                    pivot_id=active.pivot_id,
+                    claim_token=active.claim_token,
+                    text=text,
+                )
+            )
+        )
+
+    def _open_thread(self) -> None:
+        active = self.state.active if self.state is not None else None
+        if active is not None and active.discussion is not None:
+            self._host.manual_open_url(active.discussion.thread_url)

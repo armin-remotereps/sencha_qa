@@ -70,6 +70,7 @@ from controller_client.person_window_ipc import (
     ManualCaptureEvent,
     ManualCaptureResultCommand,
     ManualCaseActionEvent,
+    ManualChatSendEvent,
     ManualDraftEvent,
     ManualResultCommand,
     ManualResultKind,
@@ -158,14 +159,16 @@ _AttentionKey = tuple[str, int, int]
 PersonCaseRequest = (
     CasePauseActionPayload | PersonChatSendPayload | PersonHelpActionPayload
 )
-# A Manual run request from the window, handled by the client (claim and
-# release go to the server; the rest stays on this machine until a hand-in).
+# A Manual run request from the window, handled by the client (claim,
+# release, pause, continue and discussion messages go to the server; the rest
+# stays on this machine until a hand-in).
 ManualWindowRequest = (
     ManualCaseActionEvent
     | ManualCaptureEvent
     | ManualDraftEvent
     | ManualSubmitEvent
     | ManualThumbnailRequestEvent
+    | ManualChatSendEvent
 )
 _MANUAL_QUESTION_STALE: Final[str] = (
     "This case is no longer yours to work on; nothing was asked."
@@ -401,7 +404,8 @@ class PersonWindow:
     def show_manual_result(
         self, kind: ManualResultKind, ok: bool, message: str
     ) -> None:
-        """The answer to a claim, release or hand-in; never changes visibility."""
+        """The answer to a claim, release, pause, continue, discussion message
+        or hand-in; never changes visibility."""
         self._send(ManualResultCommand(kind=kind, ok=ok, message=message))
 
     def show_capture_result(
@@ -819,6 +823,7 @@ class PersonWindow:
                     | ManualDraftEvent()
                     | ManualSubmitEvent()
                     | ManualThumbnailRequestEvent()
+                    | ManualChatSendEvent()
                 ):
                     # Never hides or raises the window; validated by the client.
                     self._manual_requests.put_nowait(event)

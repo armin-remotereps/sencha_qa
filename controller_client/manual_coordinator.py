@@ -10,7 +10,15 @@ Keeps the server's latest ``manual_run_state`` and the claimed case's draft
 - a hand-in: the ``manual_case_submit`` payload is built from the draft's
   marks and the window's final texts, checked with the shared protocol
   parser (the server's own rules), committed to the spool's outbox and handed
-  to the uploader. The window moves on at once; the upload runs later.
+  to the uploader. The window moves on at once; the upload runs later;
+- the tester's marks so far (MANUAL_PAUSE_DISCUSS_V1): a
+  ``manual_case_progress`` (marked steps with outcome and note, the step the
+  window shows) sent at least ``PROGRESS_DELAY_SECONDS`` after the last
+  change and only when it differs from the last one sent, and flushed by the
+  client just before a pause and a discussion message (one socket keeps the
+  order, so the agent sees fresh marks). Only while the server's snapshot
+  carries the pause and discussion fields. While the case is paused,
+  captures and the hand-in are refused here too.
 
 The window view it composes hides a case whose hand-in waits in the spool
 (the server still shows it in progress until the hand-in arrives). The
@@ -27,7 +35,9 @@ import json
 import logging
 import secrets
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from typing import Final
 
 from controller_client.exceptions import ProtocolError
 from controller_client.manual_capture import CaptureAbortedError, ManualCapturer
@@ -50,17 +60,24 @@ from controller_client.person_window_ipc import (
     ManualSubmitEvent,
     ManualThumbnailRequestEvent,
     ManualWindowState,
+    manual_pause_discuss_supported,
 )
 from controller_client.protocol import (
+    MANUAL_CASE_MAX_STEPS,
     MANUAL_STEP_MAX_SECONDS,
+    MANUAL_STEP_NOTE_MAX_CHARS,
     ManualActiveCasePayload,
+    ManualCaseProgressPayload,
     ManualCaseSubmitPayload,
+    ManualProgressStepPayload,
     ManualRunStateMessage,
     ManualShotKind,
     ManualShotManifestPayload,
     ManualStepOutcome,
     ManualStepResultPayload,
+    parse_manual_case_progress_payload,
     parse_manual_case_submit_payload,
+    serialize_manual_case_progress,
     serialize_manual_case_submit,
 )
 
@@ -76,6 +93,14 @@ _SPOOL_FULL = (
 )
 _NO_VERDICT = "Choose Passed, Failed or Blocked for the case."
 _HANDED_IN = "Handed in. The screenshots upload in the background."
+_PAUSED_CAPTURE = "The case is paused: press Continue testing first."
+_PAUSED_SUBMIT = "The case is paused: press Continue testing before you hand it in."
+# A progress report goes out this long after the last mark or note change.
+PROGRESS_DELAY_SECONDS: Final[float] = 2.0
+# Sends one message on the runner's socket; raises when it is not connected.
+Sender = Callable[[str], Awaitable[None]]
+# What a progress report said (claim, shown step, marks), to skip repeats.
+_ProgressKey = tuple[str, int | None, tuple[ManualProgressStepPayload, ...]]
 
 
 def _outcome_of(kind: ManualShotKind) -> ManualStepOutcome:
@@ -138,6 +163,34 @@ def build_submit_payload(
     return payload
 
 
+def build_progress_payload(
+    active: ManualActiveCasePayload, draft: ManualDraft | None, current_step: int | None
+) -> ManualCaseProgressPayload:
+    """The tester's marks so far on ``active`` (steps of the case only)."""
+    step_nums = {step.num for step in active.steps}
+    marks = (
+        draft.marks
+        if draft is not None and draft.claim_token == active.claim_token
+        else {}
+    )
+    notes = draft.texts.notes if draft is not None and marks else {}
+    steps = tuple(
+        ManualProgressStepPayload(
+            num=num,
+            outcome=_outcome_of(shot.kind),
+            note=notes.get(num, "").strip()[:MANUAL_STEP_NOTE_MAX_CHARS],
+        )
+        for num, shot in sorted(marks.items())
+        if num in step_nums
+    )[:MANUAL_CASE_MAX_STEPS]
+    return ManualCaseProgressPayload(
+        pivot_id=active.pivot_id,
+        claim_token=active.claim_token,
+        current_step=current_step if current_step in step_nums else None,
+        steps=steps,
+    )
+
+
 def _draft_view(draft: ManualDraft) -> ManualDraftView:
     return ManualDraftView(
         pivot_id=draft.pivot_id,
@@ -161,11 +214,13 @@ class ManualCoordinator:
         spool: ManualSpool,
         uploader: ManualUploader,
         capturer: ManualCapturer,
+        send: Sender,
     ) -> None:
         self._window = window
         self._spool = spool
         self._uploader = uploader
         self._capturer = capturer
+        self._send = send
         self._server: ManualRunStateMessage | None = None
         # The claimed case's draft, once loaded or started.
         self._draft: ManualDraft | None = None
@@ -175,6 +230,12 @@ class ManualCoordinator:
         # time (before the uploader's view of the spool catches up), so no
         # later capture or hand-in can reuse the claim.
         self._handed_in: set[str] = set()
+        # Progress reports: the step the window shows (per claim), the last
+        # report sent, and the pending delayed report.
+        self._current_step: tuple[str, int | None] | None = None
+        self._sent_progress: _ProgressKey | None = None
+        self._progress_timer: asyncio.TimerHandle | None = None
+        self._progress_tasks: set[asyncio.Task[None]] = set()
 
     # --- server -----------------------------------------------------------------
 
@@ -195,6 +256,12 @@ class ManualCoordinator:
                 self._draft = await asyncio.to_thread(
                     self._spool.load_draft, active.claim_token
                 )
+        if active is None or not manual_pause_discuss_supported(active):
+            self._cancel_progress_timer()
+        elif self._progress_timer is None:
+            # A report that never went out (offline, a new session) goes out
+            # now; repeats are skipped. A pending one is not postponed.
+            self._schedule_progress()
         self.push_view()
 
     def can_ask(self, pivot_id: int, claim_token: str) -> bool:
@@ -206,6 +273,11 @@ class ManualCoordinator:
             and active.claim_token == claim_token
             and active.can_ask
         )
+
+    def paused(self) -> bool:
+        """The server shows the claimed case paused."""
+        active = self._visible_active()
+        return active is not None and active.paused
 
     def claimed(self, pivot_id: int, claim_token: str) -> bool:
         active = self._server.active if self._server is not None else None
@@ -303,6 +375,9 @@ class ManualCoordinator:
         if active is None:
             self._window.show_capture_result(event.seq, False, _NOT_YOURS)
             return
+        if active.paused:
+            self._window.show_capture_result(event.seq, False, _PAUSED_CAPTURE)
+            return
         if event.step_num is not None and event.step_num not in {
             step.num for step in active.steps
         }:
@@ -356,6 +431,7 @@ class ManualCoordinator:
             key=key,
             thumbnail_b64=base64.b64encode(shot.thumbnail_png).decode("ascii"),
         )
+        self._schedule_progress()
         await self._uploader.refresh()
 
     async def _save_texts(self, event: ManualDraftEvent) -> None:
@@ -369,6 +445,8 @@ class ManualCoordinator:
             except (SpoolError, OSError) as e:
                 logger.warning("Could not save the manual case draft: %s", e)
             self._draft = draft
+            self._current_step = (active.claim_token, event.current_step)
+        self._schedule_progress()
 
     async def _submit(self, event: ManualSubmitEvent) -> None:
         async with self._lock:
@@ -376,6 +454,11 @@ class ManualCoordinator:
             if active is None:
                 self._window.show_manual_result(
                     ManualResultKind.SUBMIT, False, _NOT_YOURS
+                )
+                return
+            if active.paused:
+                self._window.show_manual_result(
+                    ManualResultKind.SUBMIT, False, _PAUSED_SUBMIT
                 )
                 return
             draft = replace(self._draft_for(active), texts=event.texts)
@@ -422,4 +505,66 @@ class ManualCoordinator:
         )
         self._window.send_thumbnail(
             key, base64.b64encode(data).decode("ascii") if data else ""
+        )
+
+    # --- progress (MANUAL_PAUSE_DISCUSS_V1) -----------------------------------
+
+    def _schedule_progress(self) -> None:
+        """Report the marks ``PROGRESS_DELAY_SECONDS`` after the last change."""
+        self._cancel_progress_timer()
+        self._progress_timer = asyncio.get_running_loop().call_later(
+            PROGRESS_DELAY_SECONDS, self._progress_due
+        )
+
+    def _cancel_progress_timer(self) -> None:
+        if self._progress_timer is not None:
+            self._progress_timer.cancel()
+            self._progress_timer = None
+
+    def _progress_due(self) -> None:
+        self._progress_timer = None
+        task = asyncio.create_task(self.flush_progress())
+        self._progress_tasks.add(task)
+        task.add_done_callback(self._progress_tasks.discard)
+
+    async def flush_progress(self) -> None:
+        """Send the marks now when they changed since the last report.
+
+        Waits for draft changes already queued (the lock), so a pause or a
+        discussion message sent right after it follows the newest marks.
+        Advisory: a failure is logged and retried with the next change or
+        snapshot.
+        """
+        self._cancel_progress_timer()
+        async with self._lock:
+            active = self._visible_active()
+            if active is None or not manual_pause_discuss_supported(active):
+                return
+            shown = self._current_step
+            current_step = (
+                shown[1]
+                if shown is not None and shown[0] == active.claim_token
+                else None
+            )
+            payload = build_progress_payload(active, self._draft, current_step)
+        key: _ProgressKey = (payload.claim_token, payload.current_step, payload.steps)
+        if key == self._sent_progress:
+            return
+        message = serialize_manual_case_progress(payload, str(uuid.uuid4()))
+        try:
+            # The same parser the server runs on the message.
+            parse_manual_case_progress_payload(json.loads(message))
+        except ProtocolError as e:
+            logger.warning("Not reporting the manual case progress: %s", e)
+            return
+        try:
+            await self._send(message)
+        except Exception as e:  # advisory: retried with the next change
+            logger.info("Could not report the manual case progress: %r", e)
+            return
+        self._sent_progress = key
+        logger.debug(
+            "Reported %d marked step(s) of run case %d",
+            len(payload.steps),
+            payload.pivot_id,
         )

@@ -84,11 +84,11 @@ import traceback
 import webbrowser
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
 from types import TracebackType
 from typing import BinaryIO, Final
 
 from controller_client.exceptions import ProtocolError
+from controller_client.person_window_chat import ChatBlock, ChatPanel
 from controller_client.person_window_front_app import FrontAppKeeper
 from controller_client.person_window_how_to import render_how_to
 from controller_client.person_window_ipc import (
@@ -134,12 +134,10 @@ from controller_client.protocol import (
     PERSON_STEP_QUESTION_MAX_CHARS,
     CasePauseActionPayload,
     ContinueModeWire,
-    DiscussionMessageKind,
     PersonCaseRole,
     PersonCaseStatePayload,
     PersonCaseStepPayload,
     PersonChatSendPayload,
-    PersonDiscussionMessagePayload,
     PersonHelpActionKind,
     PersonHelpActionPayload,
     PersonHelpPayload,
@@ -309,8 +307,6 @@ class _ViewState:
     rendered_log: tuple[int, int] | None = None
     # Discussion: the help request on screen, its chat rows and drafts.
     help_id: int | None = None
-    chat_rows: tuple[PersonDiscussionMessagePayload, ...] = ()
-    chat_help_id: int | None = None
     rendered_help: tuple[object, ...] | None = None
     rendered_modes: tuple[object, ...] | None = None
     help_drafts: dict[int, _HelpDraft] = field(default_factory=dict)
@@ -407,26 +403,6 @@ def _qa_text(questions: tuple[PersonStepQuestionPayload, ...]) -> str:
             answer = f"AI: {q.answer}"
         blocks.append(f"You: {q.question}\n{answer}")
     return "\n\n".join(blocks)
-
-
-def _clock(created_at: str) -> str:
-    """ "14:05" in local time for an ISO 8601 time; "" when unreadable."""
-    try:
-        return datetime.fromisoformat(created_at).astimezone().strftime("%H:%M")
-    except ValueError:
-        return ""
-
-
-def _chat_segments(message: PersonDiscussionMessagePayload, first: bool) -> _Segments:
-    gap = "" if first else "\n\n"
-    if message.kind is DiscussionMessageKind.NOTICE:
-        return ((f"{gap}{message.text}", ("notice",)),)
-    author = message.author or (
-        "Agent" if message.kind is DiscussionMessageKind.ASSISTANT else "Someone"
-    )
-    clock = _clock(message.created_at)
-    head = f"{author} · {clock}" if clock else author
-    return ((f"{gap}{head}\n", ("author",)), (message.text, ("body",)))
 
 
 def _help_reason_text(help_state: PersonHelpPayload) -> str:
@@ -734,6 +710,21 @@ class PersonWindowApp:
     def manual_entry(self, parent: "tk.Misc", *, row: int, height: int) -> "tk.Text":
         return self._entry_text(parent, row=row, height=height)
 
+    # --- host of the shared chat (person_window_chat.ChatHost) -------------
+
+    def chat_block(
+        self, parent: "ttk.Frame", *, title: str, fixed_lines: int
+    ) -> ChatBlock:
+        return _ReadOnlyBlock(self, parent, title=title, fixed_lines=fixed_lines)
+
+    def chat_label(
+        self, parent: "tk.Misc", text: str = "", foreground: str = ""
+    ) -> "ttk.Label":
+        return self._label(parent, text, foreground)
+
+    def chat_entry(self, parent: "tk.Misc", *, row: int, height: int) -> "tk.Text":
+        return self._entry_text(parent, row=row, height=height)
+
     def manual_copy(self, text: str) -> None:
         self.copy(text)
 
@@ -742,6 +733,9 @@ class PersonWindowApp:
 
     def manual_connected(self) -> bool:
         return self._view.connected
+
+    def manual_open_url(self, url: str) -> None:
+        self._open_url(url)
 
     def _label(
         self, parent: "tk.Misc", text: str = "", foreground: str = ""
@@ -1104,31 +1098,16 @@ class PersonWindowApp:
     def _build_discussion_tab(self, frame: "ttk.Frame") -> None:
         self._help_reason = _ReadOnlyBlock(self, frame, title="Why the case stopped")
         self._help_reason.frame.grid(row=0, column=0, sticky="ew")
-        self._chat = _ReadOnlyBlock(
-            self, frame, title="Discussion with the agent", fixed_lines=_CHAT_LINES
+        # Rows 1 (chat), 2 (working) and 3 (message box).
+        self._chat = ChatPanel(
+            self,
+            frame,
+            row=1,
+            title="Discussion with the agent",
+            lines=_CHAT_LINES,
+            on_send=self._send_chat,
+            on_input=self._on_chat_modified,
         )
-        self._chat.text.tag_configure("author", font=_BOLD_FONT)
-        self._chat.text.tag_configure("notice", foreground=_MUTED_COLOR)
-        self._chat.frame.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        self._working = self._label(
-            frame, "The agent is working…", foreground=_MUTED_COLOR
-        )
-        self._working.grid(row=2, column=0, sticky="w")
-
-        send = ttk.Frame(frame)
-        send.columnconfigure(0, weight=1)
-        send.grid(row=3, column=0, sticky="ew", pady=(6, 0))
-        ttk.Label(send, text="Your message").grid(row=0, column=0, sticky="w")
-        self._chat_input = self._entry_text(send, row=1, height=3)
-        self._chat_input.bind("<<Modified>>", self._on_chat_modified)
-        send_row = ttk.Frame(send)
-        send_row.grid(row=2, column=0, sticky="w", pady=(4, 0))
-        self._send_button = ttk.Button(send_row, text="Send", command=self._send_chat)
-        self._send_button.pack(side="left")
-        self._send_blocker = self._label(send, "", foreground=_WARN_COLOR)
-        self._send_blocker.grid(row=3, column=0, sticky="w")
-        self._chat_status = self._label(send, "")
-        self._chat_status.grid(row=4, column=0, sticky="w")
 
         self._proposal = _ReadOnlyBlock(self, frame, title="")
         self._proposal.frame.grid(row=4, column=0, sticky="ew", pady=(10, 0))
@@ -2026,63 +2005,20 @@ class PersonWindowApp:
                 self._thread_url_frame.grid()
             else:
                 self._thread_url_frame.grid_remove()
-        if help_state.turn_live:
-            self._working.grid()
-        else:
-            self._working.grid_remove()
+        self._chat.set_working(help_state.turn_live)
         self._render_send(help_state)
         self._render_modes(help_state)
         self._render_resolve(help_state)
 
     def _render_chat(self, help_state: PersonHelpPayload) -> None:
-        view = self._view
-        rows = help_state.messages
-        text = self._chat.text
-        old = view.chat_rows
-        if (
-            view.chat_help_id == help_state.help_request_id
-            and old
-            and len(rows) >= len(old)
-            and rows[: len(old)] == old
-        ):
-            new = rows[len(old) :]
-            if not new:
-                return
-            at_end = text.yview()[1] >= 0.999
-            for message in new:
-                for chunk, tags in _chat_segments(message, first=not view.chat_rows):
-                    text.insert("end", chunk, tags)
-                view.chat_rows += (message,)
-        else:
-            # Another thread, an earlier row changed or rows were dropped.
-            at_end = True
-            text.delete("1.0", "end")
-            for index, message in enumerate(rows):
-                for chunk, tags in _chat_segments(message, first=index == 0):
-                    text.insert("end", chunk, tags)
-            if not rows:
-                text.insert(
-                    "end", "No messages yet. Write the first one below.", ("notice",)
-                )
-            view.chat_rows = rows
-            view.chat_help_id = help_state.help_request_id
-        if at_end:
-            text.see("end")
+        self._chat.render_rows(help_state.help_request_id, help_state.messages)
 
     def _render_send(self, help_state: PersonHelpPayload) -> None:
-        view = self._view
-        can = (
-            view.connected
-            and help_state.can_send
-            and not view.chat_busy
-            and bool(_editable_text(self._chat_input).strip())
-        )
-        self._send_button.configure(
-            text="Sending…" if view.chat_busy else "Send",
-            state="normal" if can else "disabled",
-        )
-        self._send_blocker.configure(
-            text="" if help_state.can_send else help_state.send_blocker
+        self._chat.render_send(
+            connected=self._view.connected,
+            can_send=help_state.can_send,
+            busy=self._view.chat_busy,
+            send_blocker=help_state.send_blocker,
         )
 
     def _render_modes(self, help_state: PersonHelpPayload) -> None:
@@ -2172,7 +2108,7 @@ class PersonWindowApp:
         if view.help_id is None:
             return
         view.help_drafts[view.help_id] = _HelpDraft(
-            chat=_editable_text(self._chat_input),
+            chat=self._chat.input_text(),
             note=_editable_text(self._help_note),
             mode=self._mode_var.get(),
             use_plan=self._use_plan_var.get(),
@@ -2180,11 +2116,11 @@ class PersonWindowApp:
 
     def _load_help_draft(self, help_state: PersonHelpPayload) -> None:
         draft = self._view.help_drafts.get(help_state.help_request_id, _HelpDraft())
-        _set_editable_text(self._chat_input, draft.chat)
+        self._chat.set_input(draft.chat)
         _set_editable_text(self._help_note, draft.note)
         self._mode_var.set(draft.mode or help_state.continue_mode.value)
         self._use_plan_var.set(draft.use_plan)
-        self._chat_status.configure(text="")
+        self._chat.set_status("")
         self._help_status.configure(text="")
 
     # --- person actions: step ------------------------------------------------
@@ -2449,8 +2385,7 @@ class PersonWindowApp:
             )
         )
 
-    def _on_chat_modified(self, _event: "tk.Event[tk.Text]") -> None:
-        self._chat_input.edit_modified(False)
+    def _on_chat_modified(self) -> None:
         help_case = self._help_case()
         if help_case is not None:
             self._render_send(help_case[1])
@@ -2461,18 +2396,18 @@ class PersonWindowApp:
         if help_case is None or view.chat_busy or not view.connected:
             return
         case, help_state = help_case
-        text = _editable_text(self._chat_input).strip()
+        text = self._chat.input_text().strip()
         if not text:
             return
         if len(text) > PERSON_CHAT_TEXT_MAX_CHARS:
-            self._chat_status.configure(
-                text=f"The message is too long ({len(text)} of "
+            self._chat.set_status(
+                f"The message is too long ({len(text)} of "
                 f"{PERSON_CHAT_TEXT_MAX_CHARS} characters).",
-                foreground=_ERROR_COLOR,
+                _ERROR_COLOR,
             )
             return
         view.chat_busy = True
-        self._chat_status.configure(text="")
+        self._chat.set_status("")
         self._render()
         # Sending never hides or raises the window.
         self._writer.send(
@@ -2590,8 +2525,8 @@ class PersonWindowApp:
                 return
             view.chat_busy = False
             if ok:
-                _set_editable_text(self._chat_input, "")
-            self._chat_status.configure(text=message, foreground=color)
+                self._chat.set_input("")
+            self._chat.set_status(message, color)
         else:
             if not view.help_busy:
                 return

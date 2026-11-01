@@ -6,7 +6,8 @@ whether this Python has tkinter, which Tk it has, which display Tk would use,
 whether a Tk window opens in a separate process the way the runner starts
 it, and whether the window renders a sample step, test case, log and
 discussion, and a sample Manual run (case list, a claimed case with marked
-steps, a step's "How to do it", a thumbnail and upload progress), without errors (in a window that is
+steps, a step's "How to do it", a thumbnail and upload progress, then the
+same case paused with its discussion), without errors (in a window that is
 never shown). The interactive
 check then shows that sample (a step with "How to do it" items and a sample
 Ask the AI exchange, its test case and log, and a paused case's discussion)
@@ -56,6 +57,7 @@ from controller_client.protocol import (
     ManualActiveCasePayload,
     ManualCaseListItemPayload,
     ManualCaseVerdictWire,
+    ManualDiscussionPayload,
     ManualRunInfoPayload,
     ManualStepOutcome,
     ManualStepPayload,
@@ -189,12 +191,21 @@ def _check_window_renders() -> str:
         StateCommand(steps=steps, questions_enabled=True, cases=cases)
         for steps, cases in (_sample_state(), _sample_state(extra_message=True))
     ]
-    # A manual run: the case list, then a claimed case with a thumbnail.
+    # A manual run: the case list, then a claimed case with a thumbnail,
+    # then the same case paused with its discussion (twice: a new row).
     commands.append(ManualStateCommand(state=_sample_manual_state(claimed=False)))
     commands.append(ManualStateCommand(state=_sample_manual_state(claimed=True)))
     commands.append(
         ManualThumbnailCommand(key=_SAMPLE_SHOT_KEY, thumbnail_b64=_sample_thumbnail())
     )
+    for extra in (False, True):
+        commands.append(
+            ManualStateCommand(
+                state=_sample_manual_state(
+                    claimed=True, paused=True, extra_message=extra
+                )
+            )
+        )
     lines = b"".join(encode_command(command) for command in commands)
     try:
         completed = subprocess.run(
@@ -465,8 +476,58 @@ def _sample_thumbnail() -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def _sample_manual_state(claimed: bool) -> ManualWindowState:
-    """A Manual run as the window shows it (nothing is sent anywhere)."""
+def _sample_manual_discussion(extra: bool) -> ManualDiscussionPayload:
+    """The claimed manual case's discussion (MANUAL_PAUSE_DISCUSS_V1)."""
+    messages = [
+        PersonDiscussionMessagePayload(
+            message_id=11,
+            kind=DiscussionMessageKind.USER,
+            author="diagnose --window via Test Runner",
+            text="Step 2 shows 'Example' instead of 'Sample'. Is that expected?",
+            created_at="2026-01-01T10:05:00+00:00",
+        ),
+        PersonDiscussionMessagePayload(
+            message_id=12,
+            kind=DiscussionMessageKind.NOTICE,
+            author="",
+            text="The agent searched the knowledge base",
+            created_at="2026-01-01T10:05:10+00:00",
+        ),
+        PersonDiscussionMessagePayload(
+            message_id=13,
+            kind=DiscussionMessageKind.ASSISTANT,
+            author="",
+            text="This is a sample answer; nothing is sent to Punk Hazard. The "
+            "case expects 'Sample', so step 2 failing is right.",
+            created_at="2026-01-01T10:05:40+00:00",
+        ),
+    ]
+    if extra:
+        messages.append(
+            PersonDiscussionMessagePayload(
+                message_id=14,
+                kind=DiscussionMessageKind.USER,
+                author="diagnose --window via Test Runner",
+                text="Thanks.",
+                created_at="2026-01-01T10:06:00+00:00",
+            )
+        )
+    return ManualDiscussionPayload(
+        thread_url="",
+        turn_live=not extra,
+        can_send=extra,
+        send_blocker="" if extra else "Wait for the agent to answer.",
+        messages=tuple(messages),
+    )
+
+
+def _sample_manual_state(
+    claimed: bool, paused: bool = False, extra_message: bool = False
+) -> ManualWindowState:
+    """A Manual run as the window shows it (nothing is sent anywhere).
+
+    ``paused``: the claimed case paused, with its discussion.
+    """
     cases = (
         ManualCaseListItemPayload(
             pivot_id=_SAMPLE_MANUAL_PIVOT,
@@ -535,6 +596,12 @@ def _sample_manual_state(claimed: bool) -> ManualWindowState:
         ),
         can_ask=True,
         shell_label=_SAMPLE_SHELL,
+        paused=paused,
+        paused_by="diagnose --window via Test Runner" if paused else "",
+        paused_at="2026-01-01T10:04:00+00:00" if paused else "",
+        can_pause=not paused,
+        can_continue=paused,
+        discussion=_sample_manual_discussion(extra_message) if paused else None,
     )
     draft = ManualDraftView(
         pivot_id=_SAMPLE_MANUAL_PIVOT,

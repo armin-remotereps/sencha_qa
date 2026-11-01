@@ -76,6 +76,7 @@ from controller_client.person_window import (
 from controller_client.person_window_ipc import (
     CaseRequestKind,
     ManualCaseActionEvent,
+    ManualChatSendEvent,
     ManualResultKind,
 )
 from controller_client.process_tracker import ProcessTracker
@@ -93,6 +94,7 @@ from controller_client.protocol import (
     InteractiveOutputPayload,
     ManualCaseActionKind,
     ManualCaseActionPayload,
+    ManualChatSendPayload,
     MessageType,
     PersonChatSendPayload,
     PersonHelpActionPayload,
@@ -145,6 +147,7 @@ from controller_client.protocol import (
     scan_directory_result_to_json,
     serialize_case_pause_action,
     serialize_manual_case_action,
+    serialize_manual_chat_send,
     serialize_message,
     serialize_person_chat_send,
     serialize_person_help_action,
@@ -184,7 +187,8 @@ PERSON_STEP_QUESTION_TIMEOUT_SECONDS: Final[float] = 30.0
 # The same for a pause, a discussion message or a help resolution from the
 # window (one slot per kind).
 PERSON_CASE_REQUEST_TIMEOUT_SECONDS: Final[float] = 30.0
-# The same for a manual claim or release (one at a time).
+# The same for a manual claim, release, pause or continue (one at a time), and
+# for a manual discussion message (its own slot).
 MANUAL_CASE_ACTION_TIMEOUT_SECONDS: Final[float] = 30.0
 _MIB: Final[int] = 1024 * 1024
 # Messages that never touch or capture the screen, so the person step window
@@ -240,11 +244,27 @@ _QUESTION_UNAVAILABLE: Final[str] = (
 _MANUAL_ACTION_NOUNS: Final[dict[ManualCaseActionKind, str]] = {
     ManualCaseActionKind.CLAIM: "start",
     ManualCaseActionKind.RELEASE: "release",
+    ManualCaseActionKind.PAUSE: "pause",
+    ManualCaseActionKind.CONTINUE: "continue",
 }
 _MANUAL_ACTION_KINDS: Final[dict[ManualCaseActionKind, ManualResultKind]] = {
     ManualCaseActionKind.CLAIM: ManualResultKind.CLAIM,
     ManualCaseActionKind.RELEASE: ManualResultKind.RELEASE,
+    ManualCaseActionKind.PAUSE: ManualResultKind.PAUSE,
+    ManualCaseActionKind.CONTINUE: ManualResultKind.CONTINUE,
 }
+# Sent right away; pause, continue and discussion messages queue behind the
+# window's earlier draft changes so the marks reported first are the newest.
+_MANUAL_CLAIM_ACTIONS: Final[frozenset[ManualCaseActionKind]] = frozenset(
+    {ManualCaseActionKind.CLAIM, ManualCaseActionKind.RELEASE}
+)
+_MANUAL_CHAT_NOT_YOURS: Final[str] = (
+    "This case is no longer yours; your message was not sent."
+)
+_MANUAL_CHAT_CONNECTION_LOST: Final[str] = (
+    "The connection to Punk Hazard was lost before it answered; check the "
+    "discussion whether your message arrived."
+)
 _UPDATE_SPOOL_NOT_EMPTY: Final[str] = (
     "Finish uploading the manual test screenshots first: the Test Runner "
     "still holds {spool}"
@@ -418,6 +438,9 @@ class ControllerClient:
         ) = None
         # A manual question waits in its own slot (never blocks a step's).
         self._pending_manual_question: tuple[str, asyncio.Task[None]] | None = None
+        # A manual discussion message (MANUAL_PAUSE_DISCUSS_V1), its own slot;
+        # answered by manual_case_action_result with its request_id.
+        self._pending_manual_chat: tuple[str, asyncio.Task[None]] | None = None
         self._handlers[MessageType.MANUAL_RUN_STATE] = self._handle_manual_run_state
         self._handlers[MessageType.MANUAL_CASE_ACTION_RESULT] = (
             self._handle_manual_case_action_result
@@ -438,6 +461,7 @@ class ControllerClient:
                 spool=self._manual_spool,
                 uploader=self._manual_uploader,
                 capturer=ManualCapturer(person_window),
+                send=self._send_manual_upload,
             )
 
     async def run(self) -> None:
@@ -1855,9 +1879,11 @@ class ControllerClient:
     # --- Manual run (MANUAL_RUN_V1) ----------------------------------------
     #
     # The window's Manual run tab: the server's snapshot and replies go to
-    # the coordinator and the uploader; claim and release are sent here (one
-    # at a time, matched by request_id); captures, notes and hand-ins stay on
-    # this machine (manual_coordinator) until the uploader sends them.
+    # the coordinator and the uploader; claim, release, pause and continue are
+    # sent here (one at a time, matched by request_id), discussion messages in
+    # their own slot; captures, notes and hand-ins stay on this machine
+    # (manual_coordinator) until the uploader sends them, the marks so far go
+    # out as progress reports (MANUAL_PAUSE_DISCUSS_V1).
 
     async def _recover_manual_spool(self) -> None:
         try:
@@ -1877,6 +1903,7 @@ class ControllerClient:
             await asyncio.wait({task})
 
     async def _send_manual_upload(self, message: str) -> None:
+        # Also the coordinator's progress reports: any message on the socket.
         connection = self._connection
         if connection is None or not self._session_authenticated:
             raise ConnectionClosed(None, None)
@@ -1935,13 +1962,23 @@ class ControllerClient:
         # themselves), so notes typed meanwhile are still saved.
         captures: set[asyncio.Task[None]] = set()
         async for request in window.manual_requests():
-            if isinstance(request, ManualCaseActionEvent):
+            if (
+                isinstance(request, ManualCaseActionEvent)
+                and request.action.action in _MANUAL_CLAIM_ACTIONS
+            ):
                 await self._send_manual_action(window, request.action)
                 continue
             manual = self._manual
             if manual is None:
                 continue
-            task = asyncio.create_task(self._handle_manual_request(manual, request))
+            if isinstance(request, ManualCaseActionEvent | ManualChatSendEvent):
+                # A task too, created after the draft changes before it: the
+                # progress flush waits for them (the coordinator's lock).
+                task = asyncio.create_task(
+                    self._send_manual_after_progress(window, manual, request)
+                )
+            else:
+                task = asyncio.create_task(self._handle_manual_request(manual, request))
             captures.add(task)
             task.add_done_callback(captures.discard)
 
@@ -1953,6 +1990,94 @@ class ControllerClient:
             await manual.handle(request)
         except Exception:
             logger.exception("A manual run request from the window failed")
+
+    async def _send_manual_after_progress(
+        self,
+        window: PersonWindow,
+        manual: ManualCoordinator,
+        request: ManualCaseActionEvent | ManualChatSendEvent,
+    ) -> None:
+        """Pause, continue or a discussion message (MANUAL_PAUSE_DISCUSS_V1).
+
+        A pause and a message first report the newest marks, so the server
+        (and the agent) see them before it; continue needs no report.
+        """
+        kind = (
+            ManualResultKind.CHAT
+            if isinstance(request, ManualChatSendEvent)
+            else _MANUAL_ACTION_KINDS[request.action.action]
+        )
+        try:
+            if kind is not ManualResultKind.CONTINUE:
+                await manual.flush_progress()
+            if isinstance(request, ManualChatSendEvent):
+                await self._send_manual_chat(window, manual, request.send)
+            else:
+                await self._send_manual_action(window, request.action)
+        except Exception:
+            logger.exception("Could not send the manual case %s", kind.value)
+            window.show_manual_result(
+                kind, False, "Not connected to Punk Hazard; nothing was sent."
+            )
+
+    async def _send_manual_chat(
+        self,
+        window: PersonWindow,
+        manual: ManualCoordinator,
+        send: ManualChatSendPayload,
+    ) -> None:
+        if self._pending_manual_chat is not None:
+            window.show_manual_result(
+                ManualResultKind.CHAT,
+                False,
+                "Your previous message is still being sent; wait for it.",
+            )
+            return
+        if not manual.claimed(send.pivot_id, send.claim_token):
+            window.show_manual_result(
+                ManualResultKind.CHAT, False, _MANUAL_CHAT_NOT_YOURS
+            )
+            return
+        connection = self._connection
+        if connection is None or not self._session_authenticated:
+            window.show_manual_result(
+                ManualResultKind.CHAT,
+                False,
+                "Not connected to Punk Hazard; send your message again once the "
+                "Test Runner reconnects.",
+            )
+            return
+        request_id = str(uuid.uuid4())
+        expiry = asyncio.create_task(self._expire_manual_chat(request_id))
+        self._pending_manual_chat = (request_id, expiry)
+        logger.info("Sending a discussion message about run case %d", send.pivot_id)
+        try:
+            await connection.send(serialize_manual_chat_send(send, request_id))
+        except ConnectionClosed:
+            self._settle_manual_chat(request_id, False, _MANUAL_CHAT_CONNECTION_LOST)
+
+    async def _expire_manual_chat(self, request_id: str) -> None:
+        await asyncio.sleep(MANUAL_CASE_ACTION_TIMEOUT_SECONDS)
+        logger.warning(
+            "No result for the manual discussion message (request_id=%s)", request_id
+        )
+        self._settle_manual_chat(
+            request_id,
+            False,
+            "No answer from the server; check the discussion whether your "
+            "message arrived.",
+        )
+
+    def _settle_manual_chat(self, request_id: str, ok: bool, message: str) -> None:
+        pending = self._pending_manual_chat
+        if pending is None or pending[0] != request_id:
+            return
+        self._pending_manual_chat = None
+        expiry = pending[1]
+        if expiry is not asyncio.current_task():
+            expiry.cancel()
+        if self._window is not None:
+            self._window.show_manual_result(ManualResultKind.CHAT, ok, message)
 
     async def _send_manual_action(
         self, window: PersonWindow, action: ManualCaseActionPayload
@@ -2007,6 +2132,16 @@ class ControllerClient:
     async def _handle_manual_case_action_result(
         self, request_id: str, data: dict[str, object]
     ) -> None:
+        chat = self._pending_manual_chat
+        if chat is not None and chat[0] == request_id:
+            try:
+                chat_result = parse_manual_case_action_result_payload(data)
+            except ProtocolError as e:
+                logger.warning("Invalid manual_case_action_result: %s", e)
+                self._settle_manual_chat(request_id, False, _ANSWER_UNREADABLE)
+                return
+            self._settle_manual_chat(request_id, chat_result.ok, chat_result.message)
+            return
         pending = self._pending_manual_action
         if pending is None or pending[0] != request_id:
             logger.info(
@@ -2065,6 +2200,11 @@ class ControllerClient:
                 False,
                 self._manual_connection_lost(pending_manual[1].action),
             )
+        pending_chat = self._pending_manual_chat
+        if pending_chat is not None:
+            self._settle_manual_chat(
+                pending_chat[0], False, _MANUAL_CHAT_CONNECTION_LOST
+            )
         self._manual_uploader.detach()
         for kind, (request_id, _expiry) in list(self._pending_case.items()):
             self._settle_case_request(
@@ -2103,11 +2243,13 @@ class ControllerClient:
         for pending_slot in (
             self._pending_manual_question,
             self._pending_manual_action,
+            self._pending_manual_chat,
         ):
             if pending_slot is not None:
                 pending_slot[-1].cancel()
         self._pending_manual_question = None
         self._pending_manual_action = None
+        self._pending_manual_chat = None
         self._manual = None
         try:
             await window.stop()

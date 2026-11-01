@@ -20,7 +20,9 @@ from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
     MANUAL_CASE_MAX_STEPS,
     MANUAL_CASE_SUBMIT_MAX_BYTES,
+    MANUAL_CHAT_SEND_MAX_BYTES,
     MANUAL_CLAIM_TOKEN_MAX_CHARS,
+    MANUAL_DISCUSSION_SNAPSHOT_MAX_BYTES,
     MANUAL_RUN_STATE_SAFE_BYTES,
     MANUAL_SHOT_KEY_MAX_CHARS,
     MANUAL_STEP_MAX_SECONDS,
@@ -35,6 +37,7 @@ from controller_client.protocol import (
     ManualCaseActionPayload,
     ManualCaseListItemPayload,
     ManualCaseVerdictWire,
+    ManualChatSendPayload,
     ManualRunInfoPayload,
     ManualRunStateMessage,
     ManualShotKind,
@@ -47,6 +50,7 @@ from controller_client.protocol import (
     PersonStepStatePayload,
     parse_case_pause_action_payload,
     parse_manual_case_action_payload,
+    parse_manual_chat_send_payload,
     parse_manual_run_state_payload,
     parse_person_chat_send_payload,
     parse_person_help_action_payload,
@@ -61,18 +65,22 @@ from controller_client.protocol import (
 # the runner then sends the snapshot without them (person_window).
 IPC_TO_WINDOW_MAX_BYTES: Final[int] = 4 * 1024 * 1024
 # The server keeps a ``manual_run_state`` (estimated) below this budget by
-# leaving the steps' how-to out; room is left for the window's own fields.
+# leaving the steps' how-to out, then adds the claimed case's discussion (at
+# most MANUAL_DISCUSSION_SNAPSHOT_MAX_BYTES); room is left for the window's
+# own fields.
 assert (
-    MANUAL_RUN_STATE_SAFE_BYTES < IPC_TO_WINDOW_MAX_BYTES
+    MANUAL_RUN_STATE_SAFE_BYTES + MANUAL_DISCUSSION_SNAPSHOT_MAX_BYTES
+    < IPC_TO_WINDOW_MAX_BYTES
 ), "MANUAL_RUN_STATE_SAFE_BYTES does not fit in IPC_TO_WINDOW_MAX_BYTES"
 # Largest window -> runner line: one answer (note + output), one question, one
-# pause, discussion message or help resolution, or one manual draft or hand-in
-# (every step note at its cap, fully escaped).
+# pause, discussion message or help resolution, or one manual draft, hand-in
+# (every step note at its cap, fully escaped) or manual discussion message.
 IPC_TO_RUNNER_MAX_BYTES: Final[int] = max(
     PERSON_STEP_ACTION_MAX_BYTES,
     PERSON_STEP_QUESTION_MAX_BYTES,
     PERSON_CASE_ACTION_MAX_BYTES,
     MANUAL_CASE_SUBMIT_MAX_BYTES,
+    MANUAL_CHAT_SEND_MAX_BYTES,
 )
 # A manual screenshot thumbnail (PNG, base64) sent to the window.
 MANUAL_THUMBNAIL_MAX_CHARS: Final[int] = 1024 * 1024
@@ -128,6 +136,9 @@ class WindowIpcType(StrEnum):
     MANUAL_DRAFT = "manual_draft"  # window -> runner
     MANUAL_SUBMIT = "manual_submit"  # window -> runner
     MANUAL_THUMBNAIL_REQUEST = "manual_thumbnail_request"  # window -> runner
+    # Manual pause and discuss (MANUAL_PAUSE_DISCUSS_V1). Pause / Continue
+    # travel as MANUAL_CASE_ACTION with the action "pause" / "continue".
+    MANUAL_CHAT_SEND = "manual_chat_send"  # window -> runner
 
 
 class CaseRequestKind(StrEnum):
@@ -145,6 +156,25 @@ class ManualResultKind(StrEnum):
     RELEASE = "release"
     SUBMIT = "submit"
     CAPTURE = "capture"
+    # MANUAL_PAUSE_DISCUSS_V1
+    PAUSE = "pause"
+    CONTINUE = "continue"
+    CHAT = "chat"
+
+
+def manual_pause_discuss_supported(active: ManualActiveCasePayload) -> bool:
+    """The server sent the claimed case's pause and discussion fields.
+
+    A server without MANUAL_PAUSE_DISCUSS_V1 sends none of them (they parse to
+    their defaults); a server with it always sends ``discussion``.
+    """
+    return (
+        active.discussion is not None
+        or active.paused
+        or active.can_pause
+        or active.can_continue
+        or bool(active.pause_blocker)
+    )
 
 
 # --- manual run view (runner -> window) -------------------------------------
@@ -420,6 +450,8 @@ class ManualDraftEvent:
     pivot_id: int
     claim_token: str
     texts: ManualDraftTexts
+    # The step the window shows (reported to the server with the marks).
+    current_step: int | None = None
 
 
 @dataclass(frozen=True)
@@ -436,6 +468,16 @@ class ManualThumbnailRequestEvent:
     key: str
 
 
+@dataclass(frozen=True)
+class ManualChatSendEvent:
+    """A message to the claimed case's discussion; the window stays as it is.
+
+    Answered with a ``ManualResultCommand`` of kind ``chat``.
+    """
+
+    send: ManualChatSendPayload
+
+
 WindowEvent = (
     ReadyEvent
     | HiddenEvent
@@ -450,6 +492,7 @@ WindowEvent = (
     | ManualDraftEvent
     | ManualSubmitEvent
     | ManualThumbnailRequestEvent
+    | ManualChatSendEvent
 )
 
 
@@ -969,12 +1012,18 @@ def encode_event(event: WindowEvent) -> bytes:
                 "kind": shot_kind.value,
                 "step_num": step_num,
             }
-        case ManualDraftEvent(pivot_id=pivot_id, claim_token=claim_token, texts=texts):
+        case ManualDraftEvent(
+            pivot_id=pivot_id,
+            claim_token=claim_token,
+            texts=texts,
+            current_step=current_step,
+        ):
             payload = {
                 "type": WindowIpcType.MANUAL_DRAFT.value,
                 "pivot_id": pivot_id,
                 "claim_token": claim_token,
                 "texts": manual_texts_to_wire(texts),
+                "current_step": current_step,
             }
         case ManualSubmitEvent(pivot_id=pivot_id, claim_token=claim_token, texts=texts):
             payload = {
@@ -985,6 +1034,13 @@ def encode_event(event: WindowEvent) -> bytes:
             }
         case ManualThumbnailRequestEvent(key=key):
             payload = {"type": WindowIpcType.MANUAL_THUMBNAIL_REQUEST.value, "key": key}
+        case ManualChatSendEvent(send=chat):
+            payload = {
+                "type": WindowIpcType.MANUAL_CHAT_SEND.value,
+                "pivot_id": chat.pivot_id,
+                "claim_token": chat.claim_token,
+                "text": chat.text,
+            }
     return _encode(payload, IPC_TO_RUNNER_MAX_BYTES)
 
 
@@ -1033,6 +1089,7 @@ def decode_event(line: bytes) -> WindowEvent:
                 pivot_id=_int(data, "pivot_id", 1, _MAX_SEQ),
                 claim_token=_claim_token(data),
                 texts=manual_texts_from_wire(_object(data, "texts")),
+                current_step=_optional_step_num(data, "current_step"),
             )
         case WindowIpcType.MANUAL_SUBMIT:
             return ManualSubmitEvent(
@@ -1042,4 +1099,6 @@ def decode_event(line: bytes) -> WindowEvent:
             )
         case WindowIpcType.MANUAL_THUMBNAIL_REQUEST:
             return ManualThumbnailRequestEvent(key=_shot_key(data.get("key")))
+        case WindowIpcType.MANUAL_CHAT_SEND:
+            return ManualChatSendEvent(send=parse_manual_chat_send_payload(data))
     raise ProtocolError(f"Not a window event: {kind.value}")
