@@ -3563,6 +3563,19 @@ details.card[open] > summary,
   overflow-wrap: anywhere;
 }
 
+/* "Source: «Install guide.pdf», page 3" under a how-to item, or the
+   general-guidance hint under the list. */
+.person-step-howto-source {
+  margin: 4px 0 0;
+  font-size: 0.85em;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+ol.person-step-howto + .person-step-howto-source {
+  margin: -8px 0 14px;
+}
+
 /* "Covers TestRail steps 3–5": the case steps a person step covers. */
 .person-step-covers {
   margin: 0 0 14px;

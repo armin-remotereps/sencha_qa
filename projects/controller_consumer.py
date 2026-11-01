@@ -206,6 +206,9 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     _person_steps_enabled: bool
     # The runner shows how-to lists and Ask AI (PERSON_STEP_ASSIST_V1).
     _assist_enabled: bool
+    # The runner takes up to 12 how-to items with sources
+    # (PERSON_STEP_GUIDE_V1, only together with PERSON_STEP_ASSIST_V1).
+    _guide_enabled: bool
     # The runner shows the test case steps a step covers
     # (PERSON_STEP_CASE_STEPS_V1).
     _case_steps_enabled: bool
@@ -244,6 +247,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self._project = None
         self._person_steps_enabled = False
         self._assist_enabled = False
+        self._guide_enabled = False
         self._case_steps_enabled = False
         self._case_context_enabled = False
         self._discussion_enabled = False
@@ -418,6 +422,11 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             self._person_steps_enabled
             and ClientCapability.PERSON_STEP_ASSIST_V1.value in capabilities
         )
+        # Advertised only together with PERSON_STEP_ASSIST_V1.
+        self._guide_enabled = (
+            self._assist_enabled
+            and ClientCapability.PERSON_STEP_GUIDE_V1.value in capabilities
+        )
         # Advertised only together with PERSON_STEPS_V1 (the window).
         self._case_steps_enabled = (
             self._person_steps_enabled
@@ -569,6 +578,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
                 project_id,
                 RunnerWindowFeatures(
                     assist=self._assist_enabled,
+                    guide=self._guide_enabled,
                     case_steps=self._case_steps_enabled,
                     case_context=self._case_context_enabled,
                     discussion=self._discussion_enabled,

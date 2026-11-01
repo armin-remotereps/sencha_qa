@@ -22,6 +22,7 @@ from agents.checkpoint import (
     read_checkpoint_person_step,
     with_person_step,
 )
+from agents.how_to_source import parse_stored_source
 from agents.os_shell import get_os_name, shell_label
 from agents.types import (
     CheckpointPersonStep,
@@ -60,12 +61,14 @@ def cap_text(text: str, limit: int) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
-def how_to_rows(how_to: Sequence[PersonHowToItem]) -> list[dict[str, str]]:
+def how_to_rows(how_to: Sequence[PersonHowToItem]) -> list[dict[str, object]]:
     """``CasePersonStep.how_to`` for a hand-off's items, capped again.
 
-    Items without text are dropped; a command keeps its first line only.
+    Items without text are dropped; a command keeps its first line only. The
+    source keys are written only for a valid source (``parse_stored_source``); a
+    malformed one is dropped and the item kept.
     """
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, object]] = []
     for item in how_to:
         text = cap_text(item.text, PERSON_STEP_HOW_TO_TEXT_MAX_LENGTH)
         if not text:
@@ -76,14 +79,34 @@ def how_to_rows(how_to: Sequence[PersonHowToItem]) -> list[dict[str, str]]:
             if command_lines
             else ""
         )
-        rows.append({"text": text, "command": command})
+        row: dict[str, object] = {"text": text, "command": command}
+        source = parse_stored_source(
+            {
+                "source_kind": item.source_kind,
+                "source_item_id": item.source_item_id,
+                "source_page": item.source_page,
+                "source_label": item.source_label,
+            }
+        )
+        if source is not None:
+            kind, item_id, page, label = source
+            row.update(
+                source_kind=kind,
+                source_item_id=item_id,
+                source_page=page,
+                source_label=label,
+            )
+        rows.append(row)
         if len(rows) >= PERSON_STEP_HOW_TO_MAX_ITEMS:
             break
     return rows
 
 
 def stored_how_to(value: object) -> tuple[PersonHowToItem, ...]:
-    """A row's stored ``how_to`` as items; malformed entries are skipped."""
+    """A row's stored ``how_to`` as items; malformed entries are skipped.
+
+    A malformed source is dropped and its item kept.
+    """
     if not isinstance(value, list):
         return ()
     items: list[PersonHowToItem] = []
@@ -94,7 +117,21 @@ def stored_how_to(value: object) -> tuple[PersonHowToItem, ...]:
         command = entry.get("command", "")
         if not isinstance(text, str) or not text or not isinstance(command, str):
             continue
-        items.append(PersonHowToItem(text=text, command=command))
+        source = parse_stored_source(entry)
+        if source is None:
+            items.append(PersonHowToItem(text=text, command=command))
+            continue
+        kind, item_id, page, label = source
+        items.append(
+            PersonHowToItem(
+                text=text,
+                command=command,
+                source_kind=kind,
+                source_item_id=item_id,
+                source_page=page,
+                source_label=label,
+            )
+        )
     return tuple(items)
 
 

@@ -17,6 +17,8 @@ from datetime import datetime
 from typing import Literal, cast
 
 from agents.case_step_refs import lenient_case_step_refs, normalize_case_step_refs
+from agents.how_to_source import parse_stored_source
+from agents.json_values import positive_int
 from agents.types import (
     CheckpointHelp,
     CheckpointPersonStep,
@@ -25,6 +27,8 @@ from agents.types import (
     HelpSource,
     OrchestratorCheckpoint,
     OrchestratorPhase,
+    PersonGuideNotes,
+    PersonGuideStatus,
     PersonHowToItem,
     PersonMarkVerdict,
     PersonReportOutcome,
@@ -72,6 +76,8 @@ _PLAN_REVISIONS_KEY = "plan_revisions"
 _CASE_STEP_COUNT_KEY = "case_step_count"
 _CASE_STEPS_KEY = "case_steps"
 _CASE_STEPS_TESTRAIL_KEY = "case_steps_testrail"
+_PERSON_GUIDE_KEY = "person_guide"
+_PERSON_GUIDE_STATUSES = ("ready", "empty", "failed")
 _MANUAL_KEY = "manual"
 # Only the newest earlier plans are kept (display and prompt data).
 MAX_PLAN_REVISION_RECORDS = 5
@@ -102,6 +108,8 @@ def checkpoint_to_json(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
         data[_CASE_STEP_COUNT_KEY] = checkpoint.case_step_count
         if not checkpoint.case_steps_testrail:
             data[_CASE_STEPS_TESTRAIL_KEY] = False
+    if checkpoint.person_guide is not None:
+        data[_PERSON_GUIDE_KEY] = _person_guide_to_json(checkpoint.person_guide)
     if checkpoint.manual:
         data[_MANUAL_KEY] = True
     if checkpoint.plan_revisions:
@@ -110,6 +118,15 @@ def checkpoint_to_json(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
             for record in checkpoint.plan_revisions[-MAX_PLAN_REVISION_RECORDS:]
         ]
     return data
+
+
+def _person_guide_to_json(notes: PersonGuideNotes) -> dict[str, object]:
+    return {
+        "text": notes.text,
+        "status": notes.status,
+        "researched_at": notes.researched_at.isoformat(),
+        "attempts": notes.attempts,
+    }
 
 
 def _attempt_to_json(attempt: SubTaskAttempt) -> dict[str, object]:
@@ -288,11 +305,22 @@ def person_step_to_json(person: CheckpointPersonStep) -> dict[str, object]:
     }
     # Optional: written only when present, so older parsers see no change.
     if hand_off.how_to:
-        data["how_to"] = [
-            {"text": item.text, "command": item.command} for item in hand_off.how_to
-        ]
+        data["how_to"] = [_how_to_item_to_json(item) for item in hand_off.how_to]
     if hand_off.case_steps:
         data[_CASE_STEPS_KEY] = list(hand_off.case_steps)
+    return data
+
+
+def _how_to_item_to_json(item: PersonHowToItem) -> dict[str, object]:
+    data: dict[str, object] = {"text": item.text, "command": item.command}
+    # Optional: written only when the item has a source.
+    if item.source_kind:
+        data["source_kind"] = item.source_kind
+        data["source_label"] = item.source_label
+        if item.source_item_id is not None:
+            data["source_item_id"] = item.source_item_id
+        if item.source_page is not None:
+            data["source_page"] = item.source_page
     return data
 
 
@@ -381,7 +409,7 @@ def _parse(data: object) -> OrchestratorCheckpoint:
     root = _as_dict(data, "checkpoint")
     if root.get("version") != CHECKPOINT_VERSION:
         raise _MalformedCheckpoint(f"unsupported version {root.get('version')!r}")
-    case_step_count = _parse_positive_int(root.get(_CASE_STEP_COUNT_KEY)) or 0
+    case_step_count = positive_int(root.get(_CASE_STEP_COUNT_KEY)) or 0
     plan = tuple(
         SubTask(
             description=_as_str(item.get("description"), "description"),
@@ -418,6 +446,7 @@ def _parse(data: object) -> OrchestratorCheckpoint:
         plan_revisions=_parse_revisions(root.get(_PLAN_REVISIONS_KEY)),
         case_step_count=case_step_count,
         case_steps_testrail=root.get(_CASE_STEPS_TESTRAIL_KEY) is not False,
+        person_guide=_parse_person_guide(root.get(_PERSON_GUIDE_KEY)),
         # Optional: only a strict JSON true marks a manual case.
         manual=root.get(_MANUAL_KEY) is True,
     )
@@ -443,11 +472,11 @@ def _parse_attempt(item: dict[str, object]) -> SubTaskAttempt:
         ),
         duration_seconds=_parse_duration(item.get("duration_seconds")),
         # Absent from attempts that were not carried over a plan redesign.
-        carried_from=_parse_positive_int(item.get("carried_from")),
+        carried_from=positive_int(item.get("carried_from")),
         attempt_id=_parse_attempt_id(item.get("attempt_id")),
         # Absent from agent attempts (and every attempt before Human in the loop).
         performed_by="person" if item.get("performed_by") == "person" else "agent",
-        person_step_id=_parse_positive_int(item.get("person_step_id")),
+        person_step_id=positive_int(item.get("person_step_id")),
     )
 
 
@@ -542,7 +571,7 @@ def _parse_person(value: object) -> CheckpointPersonStep | None:
         return None
     item = cast(dict[str, object], value)
     step_num, kind, state, outcome = (
-        _parse_positive_int(item.get("step_num")),
+        positive_int(item.get("step_num")),
         item.get("kind"),
         item.get("state"),
         item.get("outcome"),
@@ -565,7 +594,7 @@ def _parse_person(value: object) -> CheckpointPersonStep | None:
                 else lenient_case_step_refs(item.get(_CASE_STEPS_KEY))
             ),
         ),
-        request_id=_parse_positive_int(item.get("request_id")),
+        request_id=positive_int(item.get("request_id")),
         state=cast(PersonStepCheckpointState, state),
         outcome=(
             cast(PersonReportOutcome, outcome) if outcome in _PERSON_OUTCOMES else None
@@ -594,8 +623,48 @@ def _parse_how_to(value: object) -> tuple[PersonHowToItem, ...]:
         if not isinstance(text, str) or not text or not isinstance(command, str):
             logger.warning("Dropping malformed how-to item: bad text or command")
             continue
-        items.append(PersonHowToItem(text=text, command=command))
+        items.append(_with_source(PersonHowToItem(text=text, command=command), entry))
     return tuple(items)
+
+
+def _with_source(item: PersonHowToItem, entry: dict[str, object]) -> PersonHowToItem:
+    # Absent from items without a source (and before sources existed); a
+    # malformed source is dropped, the item kept.
+    source = parse_stored_source(entry)
+    if source is None:
+        return item
+    kind, item_id, page, label = source
+    return dataclasses.replace(
+        item,
+        source_kind=kind,
+        source_item_id=item_id,
+        source_page=page,
+        source_label=label,
+    )
+
+
+def _parse_person_guide(value: object) -> PersonGuideNotes | None:
+    # Absent outside Human in the loop and before guide research existed; a
+    # malformed key means "not researched yet", never fatal.
+    if not isinstance(value, dict):
+        return None
+    item = cast(dict[str, object], value)
+    text, status = item.get("text"), item.get("status")
+    researched_at = _parse_datetime(item.get("researched_at"))
+    if (
+        not isinstance(text, str)
+        or status not in _PERSON_GUIDE_STATUSES
+        or researched_at is None
+    ):
+        logger.warning("Dropping malformed person guide key")
+        return None
+    return PersonGuideNotes(
+        text=text,
+        status=cast(PersonGuideStatus, status),
+        researched_at=researched_at,
+        # Absent from keys written before attempts were counted: one run.
+        attempts=positive_int(item.get("attempts")) or 1,
+    )
 
 
 def _parse_case_steps(value: object, case_step_count: int) -> tuple[int, ...]:
@@ -612,7 +681,7 @@ def _str_or_empty(value: object) -> str:
 
 
 def _parse_plan_version(value: object) -> int:
-    return _parse_positive_int(value) or 0
+    return positive_int(value) or 0
 
 
 def _parse_revisions(value: object) -> tuple[PlanRevisionRecord, ...]:
@@ -671,12 +740,6 @@ def _parse_revision_source(value: object) -> Literal["help", "review"]:
     if value == "review":
         return "review"
     raise _MalformedCheckpoint("unknown plan revision source")
-
-
-def _parse_positive_int(value: object) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        return None
-    return value
 
 
 def _parse_digest(value: object) -> str:

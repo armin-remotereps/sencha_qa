@@ -1255,7 +1255,7 @@ PERSON_STEP_COMMAND_MAX_LENGTH = 2000
 PERSON_STEP_OUTPUT_MAX_LENGTH = 20000
 PERSON_STEP_AGENT_TEXT_MAX_LENGTH = 1000
 # "How to do it" items of a hand-off and the Ask AI questions of a step.
-PERSON_STEP_HOW_TO_MAX_ITEMS = 8
+PERSON_STEP_HOW_TO_MAX_ITEMS = 12
 PERSON_STEP_HOW_TO_TEXT_MAX_LENGTH = 400
 PERSON_STEP_HOW_TO_COMMAND_MAX_LENGTH = 500
 # Test case steps a person step covers. A row keeps every covered step (the

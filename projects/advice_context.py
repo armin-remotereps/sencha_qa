@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from typing import Final
 
 from agents.os_shell import get_os_name, shell_label
+from agents.secret_redaction import redact_secrets
 from agents.types import AdviceEarlierStep, AdviceStep, PersonStepAdviceContext
 from knowledge_base.exceptions import KnowledgeBaseError
 from knowledge_base.services.knowledge_index import knowledge_index_text
@@ -63,7 +64,7 @@ def build_advice_context(
         step=step,
         project_id=project.pk,
         earlier_steps=tuple(earlier_steps),
-        artifacts_profile=(artifacts_profile_text(project.pk) or "")[
+        artifacts_profile=redact_secrets(artifacts_profile_text(project.pk) or "")[
             :_PROFILE_MAX_CHARS
         ],
         knowledge_index=knowledge_index,

@@ -148,10 +148,23 @@ def artifacts_profile_text(project_id: int) -> str | None:
 
     Two queries, plus one KB lookup when items cite KB ids.
     """
+    profile = artifacts_profile_with_items(project_id)
+    return None if profile is None else profile[0]
+
+
+def artifacts_profile_with_items(
+    project_id: int,
+) -> tuple[str, tuple[int, ...]] | None:
+    """The profile text for prompts and the knowledge base item ids it cites
+    (in item order); None without a profile or when empty.
+
+    Two queries, plus one KB lookup when items cite KB ids.
+    """
     snapshot = load_profile_snapshot(project_id)
     if not snapshot.exists or snapshot.data.is_empty:
         return None
-    return render_profile(snapshot, kb_names=knowledge_names(project_id, snapshot.data))
+    text = render_profile(snapshot, kb_names=knowledge_names(project_id, snapshot.data))
+    return text, tuple(snapshot.data.knowledge_item_ids())
 
 
 def intake_pending(project_id: int) -> bool:

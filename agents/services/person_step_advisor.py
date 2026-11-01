@@ -18,6 +18,7 @@ from typing import Final
 from django.conf import settings
 
 from agents.exceptions import AIServiceError, AIServiceErrorKind
+from agents.secret_redaction import redact_secrets
 from agents.services.llm_client import ToolChoice, send_chat_completion
 from agents.services.person_step_advice_prompts import (
     ANSWER_NOW_PROMPT,
@@ -63,7 +64,29 @@ def answer_person_step_question(
     deadline: float,
     max_tool_rounds: int,
 ) -> str:
-    """The advisor's answer to ``question``, capped at ``ANSWER_MAX_CHARS``.
+    """The advisor's answer to ``question``, secrets redacted, then capped at
+    ``ANSWER_MAX_CHARS``.
+
+    Answers reach the Test Runner window, visible to anyone at the machine, and
+    may draw on knowledge base and profile text; a value the case states is kept.
+    """
+    answer = _answer(
+        llm, context, question, deadline=deadline, max_tool_rounds=max_tool_rounds
+    )
+    return cap_text(
+        redact_secrets(answer, known_text=context.case_text), ANSWER_MAX_CHARS
+    )
+
+
+def _answer(
+    llm: LLMConfig,
+    context: PersonStepAdviceContext,
+    question: str,
+    *,
+    deadline: float,
+    max_tool_rounds: int,
+) -> str:
+    """The advisor's raw answer to ``question`` (not yet redacted or capped).
 
     ``deadline`` is a ``time.monotonic()`` value. With ``max_tool_rounds`` > 0,
     a knowledge base (``context.knowledge_index``) and time for at least one
@@ -155,7 +178,9 @@ def _final_answer(
 
 def _answer_text(message: ChatMessage) -> str:
     content = message.content
-    answer = cap_text(content, ANSWER_MAX_CHARS) if isinstance(content, str) else ""
+    # Uncapped: answer_person_step_question redacts, then caps, so a cut can
+    # never split a secret (a PEM block) past the redaction patterns.
+    answer = content.strip() if isinstance(content, str) else ""
     if not answer:
         raise AIServiceError(
             AIServiceErrorKind.BAD_RESPONSE, "The AI service returned an empty answer."

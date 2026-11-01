@@ -13,6 +13,7 @@ from typing import Literal
 from django.conf import settings
 from django.utils import timezone
 
+from agents.case_log import log_line
 from agents.case_step_refs import normalize_case_step_refs
 from agents.checkpoint import final_step_indices
 from agents.exceptions import (
@@ -21,7 +22,8 @@ from agents.exceptions import (
     OrchestratorPlanError,
     ResumeStateLostError,
 )
-from agents.services.agent_loop import run_tool_loop
+from agents.os_shell import get_os_name
+from agents.services.knowledge_tool_loop import run_knowledge_tool_loop
 from agents.services.llm_client import send_chat_completion
 from agents.services.llm_config import (
     build_llm_config,
@@ -47,6 +49,10 @@ from agents.services.orchestrator_prompts import (
     verdict_redesign,
     was_resumed,
 )
+from agents.services.person_guide_context import (
+    build_person_guide_context,
+    refresh_person_guide_notes,
+)
 from agents.services.person_step_prompts import (
     OBJECTION_MAX_CHARS,
     cap_text,
@@ -67,8 +73,6 @@ from agents.services.sub_task_budget import (
     build_timeout_bounds,
     resolve_timeout_seconds,
 )
-from agents.services.tool_definitions import get_knowledge_tool_definitions
-from agents.services.tool_registry import allowlisted_dispatcher
 from agents.types import (
     AgentCancelledError,
     AgentConfig,
@@ -91,6 +95,9 @@ from agents.types import (
     OrchestratorDecision,
     OrchestratorPhase,
     OrchestratorResult,
+    PersonGuideContext,
+    PersonGuideNotes,
+    PersonGuideSources,
     PersonStepHandOff,
     PlanRevisionRecord,
     ScreenshotCallback,
@@ -98,10 +105,6 @@ from agents.types import (
     SubTask,
     SubTaskAttempt,
     SubTaskResult,
-    ToolCall,
-    ToolContext,
-    ToolDispatcher,
-    ToolResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -132,6 +135,7 @@ def run_orchestrator(
     case_steps_testrail: bool = True,
     knowledge_index: str | None = None,
     artifacts_profile: str | None = None,
+    person_guide_sources: PersonGuideSources | None = None,
 ) -> AgentResult:
     """Plan and run one test case.
 
@@ -150,6 +154,11 @@ def run_orchestrator(
 
     ``artifacts_profile`` is the project's artifacts profile text (None when
     it has none): a fresh plan sees it as a fenced reference block.
+
+    ``person_guide_sources`` (fresh and resumed executions) grounds every
+    person hand-off's "How to do it" in the project's artifacts profile and
+    knowledge base; the case's knowledge base research runs once and is
+    carried in the checkpoint. None: hand-offs are written ungrounded.
     """
     # One model serves every role. The distinct names keep the call sites below
     # readable and make a future per-role split a one-line change.
@@ -251,6 +260,7 @@ def run_orchestrator(
         cancellation_check=cancellation_check,
         task_description=task_description,
         person_mode=person_mode,
+        person_guide_sources=person_guide_sources,
     )
 
     if orchestrator_result.person_step is not None:
@@ -314,6 +324,12 @@ class _Progress:
     # redesigns' case step refs, carried like plan_version.
     case_step_count: int = 0
     case_steps_testrail: bool = True
+    # Human in the loop: the case's knowledge base research notes, researched
+    # once per case; carried into every checkpoint like plan_version (drop it
+    # and every step researches again).
+    person_guide: PersonGuideNotes | None = None
+    # The research was considered in this execution: never twice in one.
+    person_guide_considered: bool = False
 
     def set_phase(self, phase: OrchestratorPhase) -> None:
         # Every call enters a new phase (a new step is a new "step" phase), so
@@ -341,6 +357,7 @@ class _Progress:
                 plan_revisions=self.plan_revisions,
                 case_step_count=self.case_step_count,
                 case_steps_testrail=self.case_steps_testrail,
+                person_guide=self.person_guide,
             )
         )
 
@@ -366,6 +383,7 @@ def _new_progress(
     progress.decisions = list(resume.decisions)
     progress.plan_version = resume.plan_version
     progress.plan_revisions = resume.plan_revisions
+    progress.person_guide = resume.person_guide
     # The first checkpoint below already clears continue_pending: an
     # interruption after it resumes normally, with a restore.
     progress.help = (
@@ -797,6 +815,8 @@ def _restore_before_resume(
     on_log: LogCallback | None,
     task_description: str,
     person_mode: Callable[[], bool] | None,
+    person_guide_sources: PersonGuideSources | None,
+    cancellation_check: CancellationCheck | None,
 ) -> OrchestratorResult | None:
     """Restore the state before the cursor step; a result means wait for a person.
 
@@ -836,16 +856,28 @@ def _restore_before_resume(
         if person is not None and person.state == "waiting":
             return _await_person(progress, person, on_log)
         progress.set_phase("resume")
+        restore_task = _build_resume_sub_task(progress.plan, step_num, bounds)
         awaiting = _hand_off_to_person(
             progress,
             prepare_person_step(
                 orchestrator_llm,
-                _build_resume_sub_task(progress.plan, step_num, bounds),
+                restore_task,
                 step_num=step_num,
                 total_steps=len(progress.plan),
                 task_description=task_description,
                 system_info=system_info,
                 restore=True,
+                guide=_person_guide_context(
+                    progress,
+                    person_guide_sources,
+                    llm=orchestrator_llm,
+                    related_text=restore_task.description,
+                    task_description=task_description,
+                    system_info=system_info,
+                    project_id=project_id,
+                    on_log=on_log,
+                    cancellation_check=cancellation_check,
+                ),
             ),
             on_log,
             person_mode,
@@ -864,6 +896,54 @@ def _restore_before_resume(
         on_log=on_log,
     )
     return None
+
+
+def _person_guide_context(
+    progress: _Progress,
+    sources: PersonGuideSources | None,
+    *,
+    llm: LLMConfig,
+    related_text: str,
+    task_description: str,
+    system_info: dict[str, object] | None,
+    project_id: int,
+    on_log: LogCallback | None,
+    cancellation_check: CancellationCheck | None,
+) -> PersonGuideContext | None:
+    """The grounding of one person hand-off; None when the project has none.
+
+    The case's research is considered once per execution; new notes (also a
+    counted failure) are stored on ``progress`` and checkpointed.
+    """
+    if sources is None:
+        return None
+    if not progress.person_guide_considered:
+        progress.person_guide_considered = True
+        researched = refresh_person_guide_notes(
+            progress.person_guide,
+            sources,
+            llm=llm,
+            task_description=task_description,
+            os_name=get_os_name(system_info),
+            project_id=project_id,
+            on_log=on_log,
+            cancellation_check=cancellation_check,
+        )
+        if researched is not None:
+            progress.person_guide = researched
+            progress.checkpoint()
+    return build_person_guide_context(
+        progress.person_guide, sources, related_text=related_text, on_log=on_log
+    )
+
+
+def _step_related_text(task_description: str, sub_task: SubTask) -> str:
+    """What a step's knowledge excerpts are looked up by: the case title (its
+    first line), the step and its expected result."""
+    title = next(
+        (line.strip() for line in task_description.splitlines() if line.strip()), ""
+    )
+    return f"{title}\n{sub_task.description}\n{sub_task.expected_result}"
 
 
 def _person_mode_on(person_mode: Callable[[], bool] | None) -> bool:
@@ -1070,9 +1150,7 @@ def _build_sub_agent_execution_config(
 
 
 def _log(on_log: LogCallback | None, message: str) -> None:
-    logger.info(message)
-    if on_log is not None:
-        on_log(message)
+    log_line(on_log, message, logger)
 
 
 def _check_cancelled(
@@ -1169,75 +1247,24 @@ def _plan_with_knowledge_tools(
     plan JSON. ``AIServiceError`` and ``AgentCancelledError`` propagate as from
     the single planning call.
     """
-    tools = get_knowledge_tool_definitions()
-    names = frozenset(tool.name for tool in tools)
-    config = AgentConfig(
-        llm=orchestrator_llm,
-        # One round is one call: the last round's results are answered by the
-        # final call below, so at most ROUNDS + 1 calls in all.
-        max_iterations=settings.ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS,
+    return run_knowledge_tool_loop(
+        orchestrator_llm,
+        messages,
+        project_id=project_id,
+        max_rounds=settings.ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS,
         timeout_seconds=settings.ORCHESTRATOR_PLAN_TIMEOUT_SECONDS,
-        # The loop's own debug lines (thinking, full tool results) stay out of
-        # the case log; the dispatcher logs one line per look-up instead.
-        on_log=None,
+        final_prompt=_PLAN_NOW_PROMPT,
+        ended_note="asking for the plan.",
+        log_prefix="[Orchestrator]",
+        on_log=on_log,
         cancellation_check=cancellation_check,
     )
-    result = run_tool_loop(
-        list(messages),
-        ToolContext(project_id=project_id, browser_selection=BrowserSelection()),
-        config=config,
-        tool_definitions=tools,
-        dispatch=_logged_dispatcher(
-            allowlisted_dispatcher(names), names=names, on_log=on_log
-        ),
-    )
-    if result.stop_reason == AgentStopReason.TASK_COMPLETE:
-        return _extract_text(result.messages[-1])
-
-    _log(
-        on_log,
-        "[Orchestrator] Knowledge base look-ups ended "
-        f"({result.stop_reason.value}); asking for the plan.",
-    )
-    response = send_chat_completion(
-        orchestrator_llm,
-        (*result.messages, ChatMessage(role="user", content=_PLAN_NOW_PROMPT)),
-        tools,
-        tool_choice="none",
-    )
-    return _extract_text(response.message)
 
 
 _PLAN_NOW_PROMPT = (
     "No more knowledge base look-ups are possible. Answer now with ONLY the plan "
     "JSON in the OUTPUT FORMAT, using what you have found so far."
 )
-
-
-def _logged_dispatcher(
-    dispatch: ToolDispatcher, *, names: frozenset[str], on_log: LogCallback | None
-) -> ToolDispatcher:
-    """``dispatch`` with one case-log line per knowledge base look-up."""
-
-    def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
-        if tool_call.tool_name in names:
-            _log(on_log, f"[Orchestrator] KB: {_describe_knowledge_call(tool_call)}")
-        return dispatch(tool_call, context)
-
-    return _dispatch
-
-
-_KB_LOG_QUERY_MAX_CHARS = 200
-
-
-def _describe_knowledge_call(tool_call: ToolCall) -> str:
-    arguments = tool_call.arguments
-    if "query" in arguments:
-        query = str(arguments["query"])[:_KB_LOG_QUERY_MAX_CHARS]
-        return f"{tool_call.tool_name} {json.dumps(query, ensure_ascii=False)}"
-    page = arguments.get("page")
-    page_part = "" if page is None else f" page {page}"
-    return f"{tool_call.tool_name} id={arguments.get('item_id')}{page_part}"
 
 
 def _build_sub_task(
@@ -1301,6 +1328,7 @@ def _execute_sub_tasks(
     cancellation_check: CancellationCheck | None = None,
     task_description: str = "",
     person_mode: Callable[[], bool] | None = None,
+    person_guide_sources: PersonGuideSources | None = None,
 ) -> OrchestratorResult:
     sub_tasks = progress.plan
     attempts = progress.attempts
@@ -1344,6 +1372,8 @@ def _execute_sub_tasks(
             on_log=on_log,
             task_description=task_description,
             person_mode=person_mode,
+            person_guide_sources=person_guide_sources,
+            cancellation_check=cancellation_check,
         )
         if awaiting is not None:
             return awaiting
@@ -1449,6 +1479,17 @@ def _execute_sub_tasks(
                     total_steps=total,
                     task_description=task_description,
                     system_info=system_info,
+                    guide=_person_guide_context(
+                        progress,
+                        person_guide_sources,
+                        llm=orchestrator_llm,
+                        related_text=_step_related_text(task_description, sub_task),
+                        task_description=task_description,
+                        system_info=system_info,
+                        project_id=project_id,
+                        on_log=on_log,
+                        cancellation_check=cancellation_check,
+                    ),
                 ),
                 on_log,
                 person_mode,

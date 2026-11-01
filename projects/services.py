@@ -77,8 +77,6 @@ from controller_client.protocol import (
     parse_scan_directory_result,
 )
 from knowledge_base.services.item_processing import COPY_PROJECT_KNOWLEDGE_TASK
-from knowledge_base.services.knowledge_index import knowledge_index_text
-from machine_readiness.profile_text import artifacts_profile_text
 from machine_readiness.run_stage0_state import Stage0Summary, run_stage0_summary
 from machine_readiness.types import InventoryEntry
 from machine_setup.auto_fix_stop import request_auto_fix_stop
@@ -200,6 +198,7 @@ from projects.models import (
     TestRunTestCaseStatus,
     UploadStatus,
 )
+from projects.person_guide_sources import build_person_guide_sources
 from projects.person_mark_verdict import (
     apply_person_mark,
     settle_person_marks_on_abort,
@@ -3574,10 +3573,17 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
             on_log(f"=== Resumed from step {resume.next_step} ===")
         # Built once per execution: it reads the case's open person step.
         checkpoint_saved_hook = _build_checkpoint_saved_hook(pivot)
-        # Only a fresh plan reads the artifacts profile (2-3 queries, once per
-        # execution); a resume continues the saved plan.
+        # Every execution, fresh or resumed: Human in the loop hand-offs are
+        # prepared in resumed executions too (lazy, memoized per execution).
+        person_guide_sources = build_person_guide_sources(project.id)
+        # Only a fresh plan reads the artifacts profile (2-3 queries) and the
+        # knowledge base index (one query), through the same memo the
+        # hand-offs use; a resume continues the saved plan.
         artifacts_profile = (
-            artifacts_profile_text(project.id) if resume is None else None
+            person_guide_sources.artifacts_profile() if resume is None else None
+        )
+        knowledge_index = (
+            person_guide_sources.knowledge_index() if resume is None else None
         )
         while True:
             result = run_orchestrator(
@@ -3597,12 +3603,9 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
                 person_mode=_build_person_mode_check(run_id),
                 case_step_count=case_step_count,
                 case_steps_testrail=case_steps_testrail,
-                # Only a fresh plan reads the index (one query); a resume
-                # continues the saved plan.
-                knowledge_index=(
-                    knowledge_index_text(project.id) if resume is None else None
-                ),
+                knowledge_index=knowledge_index,
                 artifacts_profile=artifacts_profile,
+                person_guide_sources=person_guide_sources,
             )
             # Once a Resume or Start took the run over, the pivot belongs to
             # the newer chain: this worker records nothing (here and below).

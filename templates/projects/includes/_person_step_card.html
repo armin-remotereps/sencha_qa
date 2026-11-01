@@ -24,7 +24,9 @@
                   step and its state, no report form, no Abort, no ask form)
      person_step_question_form — unbound PersonStepQuestionForm (question;
                   person_step_id is written from the panel's step)
-   Panel fields for Ask AI: how_to (PersonHowToItem: text, command),
+   Panel fields for Ask AI: how_to (PersonHowToView: text, command,
+   source_label, source_url; both "" for general guidance),
+   how_to_has_sources (false: one "general guidance" hint under the list),
    has_commands (shows the output field), questions (PersonStepQuestionView:
    question_id, round, status, question, answer, asked_by; oldest first),
    can_ask, ask_blocker (why asking is refused now), has_pending (a fresh
@@ -116,9 +118,15 @@
               <p class="hint">Suggested by the AI. Check it before you run it, in {{ person_step_panel.shell_label|default:"the shell on the test machine" }}.</p>
             </div>
           {% endif %}
+          {% if item.source_url %}
+            <div class="person-step-howto-source">Source: <a href="{{ item.source_url }}">{{ item.source_label }}</a></div>
+          {% endif %}
         </li>
       {% endfor %}
     </ol>
+    {% if not person_step_panel.how_to_has_sources %}
+      <p class="hint person-step-howto-source">General guidance from the AI, not from the project's documents.</p>
+    {% endif %}
   {% endif %}
 
   {% if person_step_panel.is_open or person_step_panel.questions %}

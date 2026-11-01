@@ -59,6 +59,74 @@ class PersonHowToItem:
 
     text: str
     command: str = ""
+    # Where the item's facts came from: a knowledge base item (and page), the
+    # artifacts profile, or "" for general OS knowledge. Validated by the
+    # server; the model never writes the label.
+    source_kind: PersonHowToSourceKind = ""
+    source_item_id: int | None = None
+    source_page: int | None = None
+    # Server-built ("«Install guide.pdf», page 3" or "Artifacts profile").
+    source_label: str = ""
+
+
+PersonHowToSourceKind = Literal["", "kb", "profile"]
+
+
+PersonGuideStatus = Literal["ready", "empty", "failed"]
+
+
+@dataclass(frozen=True)
+class PersonGuideNotes:
+    """Per-case knowledge base research notes for Human in the loop guides.
+
+    Stored in the checkpoint ``person_guide`` key; ``text`` holds numbered
+    facts with their citations, already redacted and capped.
+    """
+
+    text: str
+    status: PersonGuideStatus
+    researched_at: datetime
+    # Research runs so far for this case (a failed one is retried once).
+    attempts: int = 1
+
+
+@dataclass(frozen=True)
+class RelatedKnowledgeText:
+    """Knowledge base excerpts rendered for a prompt, with the cited items."""
+
+    text: str
+    item_names: dict[int, str]
+
+
+@dataclass(frozen=True)
+class PersonGuideSources:
+    """Project material for person-step guides, injected by ``projects``.
+
+    Callables only, so ``agents`` never touches the ORM; each may make queries
+    and the caller memoizes what is per execution.
+    """
+
+    # Fenced-ready artifacts profile text; None when the project has none.
+    artifacts_profile: Callable[[], str | None]
+    # The knowledge base index for a research loop; None when no ready items.
+    knowledge_index: Callable[[], str | None]
+    # Excerpts related to a text ("" text when nothing matched).
+    related: Callable[[str], RelatedKnowledgeText]
+    # Existing, ready knowledge base item ids -> names.
+    resolve_items: Callable[[tuple[int, ...]], dict[int, str]]
+    # The knowledge base item ids the artifacts profile cites (() without one).
+    profile_item_ids: Callable[[], tuple[int, ...]]
+
+
+@dataclass(frozen=True)
+class PersonGuideContext:
+    """The grounding one ``prepare_person_step`` call gets."""
+
+    artifacts_profile: str = ""
+    research_notes: str = ""
+    knowledge_excerpts: str = ""
+    # Item ids the model may cite -> names (for server-built source labels).
+    allowed_items: dict[int, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -567,6 +635,9 @@ class OrchestratorCheckpoint:
     case_step_count: int = 0
     # The case came from TestRail ("TestRail steps 3–5"), else "Case steps".
     case_steps_testrail: bool = True
+    # Human in the loop: the case's knowledge base research notes for the
+    # "How to do it" guides, researched once per case; None until then.
+    person_guide: PersonGuideNotes | None = None
     # Manual run: the plan is the case's verbatim steps and every attempt was
     # recorded from the tester's hand-in (no agent ran). Lets push and
     # evidence code tell manual cases apart without reading the run.

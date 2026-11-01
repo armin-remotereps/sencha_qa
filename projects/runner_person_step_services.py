@@ -46,6 +46,9 @@ from controller_client.protocol import (
     PERSON_STEP_COMMAND_MAX_CHARS,
     PERSON_STEP_EXPECTED_MAX_CHARS,
     PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS,
+    PERSON_STEP_HOW_TO_LEGACY_MAX_ITEMS,
+    PERSON_STEP_HOW_TO_MAX_ITEMS,
+    PERSON_STEP_HOW_TO_SOURCE_MAX_CHARS,
     PERSON_STEP_HOW_TO_TEXT_MAX_CHARS,
     PERSON_STEP_INSTRUCTION_MAX_CHARS,
     PERSON_STEP_LABEL_MAX_CHARS,
@@ -210,7 +213,7 @@ class RunnerPersonStepAnswer:
 
 
 def get_runner_person_steps(
-    project_id: int, *, assist: bool, case_steps: bool
+    project_id: int, *, assist: bool, case_steps: bool, guide: bool
 ) -> tuple[RunnerPersonStepView, ...]:
     """The actionable person steps of the project's paused runs, newest first (≤ 5).
 
@@ -220,6 +223,10 @@ def get_runner_person_steps(
     ``assist`` (the runner advertised PERSON_STEP_ASSIST_V1): each step carries
     its how-to list and its questions (one more query, only when a step is
     open). Otherwise the how-to is inlined into the instruction text.
+
+    ``guide`` (the runner also advertised PERSON_STEP_GUIDE_V1): the whole
+    how-to list (≤ 12) with sources. Otherwise at most 8 items, a longer guide
+    folded into its 8th. No extra query either way.
 
     ``case_steps`` (the runner advertised PERSON_STEP_CASE_STEPS_V1): each
     step carries its case steps label and covered steps. Otherwise the label
@@ -265,6 +272,7 @@ def get_runner_person_steps(
             row,
             assist=assist,
             case_steps=case_steps,
+            guide=guide,
             questions=questions,
         )
         for row in rows
@@ -277,6 +285,7 @@ def _build_view(
     *,
     assist: bool,
     case_steps: bool,
+    guide: bool,
     questions: dict[int, tuple[PersonStepQuestionPayload, ...]],
 ) -> RunnerPersonStepView:
     person_step_id = _as_int(row["id"])
@@ -334,7 +343,7 @@ def _build_view(
         objection=objection[:PERSON_STEP_OBJECTION_MAX_CHARS],
         blockers=(),
         case_url=(absolute_url(path) or "")[:PERSON_STEP_URL_MAX_CHARS],
-        how_to=_how_to_payloads(how_to) if assist else (),
+        how_to=_how_to_payloads(how_to, guide=guide) if assist else (),
         questions=questions.get(person_step_id, ()),
         case_steps_label=(
             case_steps_label[:PERSON_STEP_LABEL_MAX_CHARS] if case_steps else ""
@@ -348,15 +357,33 @@ def _build_view(
 
 
 def _how_to_payloads(
-    how_to: Sequence[PersonHowToItem],
+    how_to: Sequence[PersonHowToItem], *, guide: bool
 ) -> tuple[PersonHowToPayload, ...]:
-    return tuple(
+    """The how-to items for the window; folded to 8 for a runner without GUIDE_V1.
+
+    An older window would cut a longer list at 8 and silently lose the
+    verification items at the end, so its 8th item names how many more there
+    are and sends the person to the case page (``case_url``) instead.
+    """
+    payloads = tuple(
         PersonHowToPayload(
             text=item.text[:PERSON_STEP_HOW_TO_TEXT_MAX_CHARS],
             command=item.command[:PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS],
+            source=item.source_label[:PERSON_STEP_HOW_TO_SOURCE_MAX_CHARS],
         )
-        for item in how_to
+        for item in how_to[:PERSON_STEP_HOW_TO_MAX_ITEMS]
     )
+    limit = PERSON_STEP_HOW_TO_LEGACY_MAX_ITEMS
+    if guide or len(payloads) <= limit:
+        return payloads
+    more = len(payloads) - (limit - 1)
+    fold = PersonHowToPayload(
+        text=(
+            f"This guide has {more} more items, including how to verify: "
+            "open the case page."
+        )
+    )
+    return payloads[: limit - 1] + (fold,)
 
 
 def _case_step_payloads(

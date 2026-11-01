@@ -773,6 +773,25 @@ ORCHESTRATOR_PLAN_TIMEOUT_SECONDS: int = config(
 )
 if ORCHESTRATOR_PLAN_TIMEOUT_SECONDS < 1:
     raise ImproperlyConfigured("ORCHESTRATOR_PLAN_TIMEOUT_SECONDS must be 1 or more")
+# Human in the loop: knowledge base tool rounds of the once-per-case research
+# behind the person steps' "How to do it" guides (only when the project has
+# ready knowledge base items); 0 turns research off (excerpts and the artifacts
+# profile are still used).
+PERSON_GUIDE_RESEARCH_MAX_TOOL_ROUNDS: int = config(
+    "PERSON_GUIDE_RESEARCH_MAX_TOOL_ROUNDS", default=4, cast=int
+)
+if PERSON_GUIDE_RESEARCH_MAX_TOOL_ROUNDS < 0:
+    raise ImproperlyConfigured(
+        "PERSON_GUIDE_RESEARCH_MAX_TOOL_ROUNDS must be 0 or more"
+    )
+# Wall-clock cap of that research loop.
+PERSON_GUIDE_RESEARCH_TIMEOUT_SECONDS: int = config(
+    "PERSON_GUIDE_RESEARCH_TIMEOUT_SECONDS", default=120, cast=int
+)
+if PERSON_GUIDE_RESEARCH_TIMEOUT_SECONDS < 1:
+    raise ImproperlyConfigured(
+        "PERSON_GUIDE_RESEARCH_TIMEOUT_SECONDS must be 1 or more"
+    )
 
 # Sub-Agent
 SUB_AGENT_MAX_ITERATIONS: int = config(
