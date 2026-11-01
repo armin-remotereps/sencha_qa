@@ -11,6 +11,9 @@ from django.core.exceptions import ImproperlyConfigured
 
 from auto_tester.encryption_key import validate_fernet_key
 from controller_client.protocol import (
+    MANUAL_GUIDE_MAX_STEPS_CAP,
+)
+from controller_client.protocol import (
     MANUAL_SHOT_MAX_BYTES as PROTOCOL_MANUAL_SHOT_MAX_BYTES,
 )
 from controller_client.protocol import (
@@ -210,6 +213,10 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     # (kept quick), not "execution" (may be full of long cases), not "upload"
     # (a long TestRail import would hold a person waiting on an answer).
     "projects.tasks.answer_person_step_question": {"queue": "assist"},
+    # Manual run "How to do it" guides: short chunks (research, or a few
+    # steps) that re-enqueue themselves, so Ask AI never waits long behind
+    # one (sent by name).
+    "projects.tasks.prepare_manual_case_guide": {"queue": "assist"},
     "machine_setup.tasks.run_setup_turn": {"queue": "execution"},
     "machine_setup.tasks.start_case_auto_fix": {"queue": "execution"},
     # Sent by name from projects (pause and discuss): needs a route entry.
@@ -691,6 +698,29 @@ MANUAL_UPLOAD_STALE_HOURS: int = config(
 )
 if MANUAL_UPLOAD_STALE_HOURS < 1:
     raise ImproperlyConfigured("MANUAL_UPLOAD_STALE_HOURS must be 1 or more")
+# Manual run: steps of a claimed case that get an AI "How to do it" guide
+# (the first N); 0 turns the guides off. At most MANUAL_GUIDE_MAX_STEPS_CAP,
+# so the worst-case guide fits the Test Runner snapshot.
+MANUAL_GUIDE_MAX_STEPS: int = config("MANUAL_GUIDE_MAX_STEPS", default=30, cast=int)
+if not 0 <= MANUAL_GUIDE_MAX_STEPS <= MANUAL_GUIDE_MAX_STEPS_CAP:
+    raise ImproperlyConfigured(
+        f"MANUAL_GUIDE_MAX_STEPS must be between 0 and {MANUAL_GUIDE_MAX_STEPS_CAP}"
+    )
+# Manual run: guide calls run in parallel per chunk (one chunk = one task).
+MANUAL_GUIDE_PARALLEL: int = config("MANUAL_GUIDE_PARALLEL", default=3, cast=int)
+if not 1 <= MANUAL_GUIDE_PARALLEL <= 8:
+    raise ImproperlyConfigured("MANUAL_GUIDE_PARALLEL must be between 1 and 8")
+# Manual run: wall-clock budget of one guide step chunk, from the chunk's start
+# (contexts included) until its steps are stored; each LLM call gets what is
+# left (minus a margin) as its timeout, and steps unfinished at the end are
+# stored failed. The task's soft time limit sits above max(this,
+# PERSON_GUIDE_RESEARCH_TIMEOUT_SECONDS), so the budget, not the signal, ends a
+# chunk. A guide in progress with no write for that max + 60 s is lost.
+MANUAL_GUIDE_CHUNK_TIMEOUT_SECONDS: int = config(
+    "MANUAL_GUIDE_CHUNK_TIMEOUT_SECONDS", default=120, cast=int
+)
+if MANUAL_GUIDE_CHUNK_TIMEOUT_SECONDS < 10:
+    raise ImproperlyConfigured("MANUAL_GUIDE_CHUNK_TIMEOUT_SECONDS must be 10 or more")
 # Test Runner self-update: an update with no outcome after this long counts as
 # expired. It must outlast the runner's own deadline (UPDATE_MAX_SECONDS), or
 # the run/setup gates would reopen while the runner is still installing.
