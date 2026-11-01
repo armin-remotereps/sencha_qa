@@ -2,6 +2,9 @@ services:
     db:
         image: postgres:17-alpine
         restart: always
+        # Cancel a query once its client is gone (a killed or soft-limited
+        # Celery task) instead of running it to the end.
+        command: ["postgres", "-c", "client_connection_check_interval=5s"]
         environment:
             - "POSTGRES_PASSWORD=root"
         volumes:
@@ -134,7 +137,7 @@ services:
             - "redis"
         extra_hosts:
             - "host.docker.internal:host-gateway"
-        entrypoint: "python -m celery -A auto_tester worker -l INFO -Q assist --concurrency=2"
+        entrypoint: "python -m celery -A auto_tester worker -l INFO -Q assist --concurrency=8"
 
     knowledge-celery:
         hostname: knowledge

@@ -17,6 +17,7 @@ from django.db.models.functions import RowNumber
 
 from knowledge_base.exceptions import KnowledgeQueryInvalidError
 from knowledge_base.models import KnowledgeChunk, KnowledgeItemStatus
+from knowledge_base.query_timeout import knowledge_search_timeout
 from knowledge_base.search_config import KNOWLEDGE_SEARCH_CONFIG
 from knowledge_base.services.tag_filter import item_tag_q
 from knowledge_base.types import KnowledgeHit
@@ -105,11 +106,12 @@ def search_knowledge(
         chunks = chunks.filter(item_id__in=wanted)
     if tag:
         chunks = chunks.filter(item_tag_q(tag, prefix="item__"))
-    if not exact:
-        hits = _full_text_hits(chunks, cleaned, limit)
-        if hits:
-            return hits
-    return _exact_hits(chunks, cleaned, limit)
+    with knowledge_search_timeout():
+        if not exact:
+            hits = _full_text_hits(chunks, cleaned, limit)
+            if hits:
+                return hits
+        return _exact_hits(chunks, cleaned, limit)
 
 
 def _full_text_hits(

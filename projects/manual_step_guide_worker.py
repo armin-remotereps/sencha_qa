@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Final
 
 from django.conf import settings
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from agents.checkpoint import person_guide_from_json, person_guide_to_json
@@ -93,6 +93,10 @@ def run_manual_guide_chunk(guide_id: int, generation: int) -> None:
         _run_chunk(guide_id, generation)
     except Exception:
         logger.exception("Step guide %s: chunk failed", guide_id)
+        # A soft time limit raised mid-query leaves the connection busy
+        # ("another command is already in progress"): reconnect, or the
+        # guide would stay WRITING until it reads stale.
+        connection.close()
         project_id = _set_state(guide_id, generation, ManualGuideState.FAILED)
         if project_id is not None:
             _nudge_on_commit(project_id)

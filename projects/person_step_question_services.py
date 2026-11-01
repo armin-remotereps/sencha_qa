@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.core.cache import cache
-from django.db import transaction
+from django.db import connection, transaction
 from django.utils import timezone
 
 from agents.checkpoint import checkpoint_from_json
@@ -448,9 +448,13 @@ def answer_person_step_question_now(question_id: int) -> None:
         # The person can ask again at once.
         logger.warning("Ask AI question %d hit the time limit", question_id)
         answer = ""
+        # Raised mid-query, the connection stays busy ("another command is
+        # already in progress"): reconnect so the FAILED write lands.
+        connection.close()
     except Exception:
         logger.exception("Ask AI question %d failed", question_id)
         answer = ""
+        connection.close()
     if not answer:
         status = PersonStepQuestionStatus.FAILED
         answer = QUESTION_FAILED_ANSWER

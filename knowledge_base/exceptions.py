@@ -39,6 +39,10 @@ class KnowledgeQueryInvalidError(KnowledgeBaseError):
     """A search query is empty or too long."""
 
 
+class KnowledgeSearchTimeoutError(KnowledgeBaseError):
+    """Postgres cancelled a search past ``KNOWLEDGE_SEARCH_TIMEOUT_MS``."""
+
+
 class KnowledgeExtractionError(KnowledgeBaseError):
     """Extraction failed for a reason the member can act on."""
 
