@@ -19,6 +19,7 @@ from projects.exceptions import (
     NotProjectMemberError,
 )
 from projects.models import WRITABLE_ROLES, Project, ProjectMembership, ProjectRole
+from projects.project_access import ProjectAccess, has_superuser_project_control
 
 # Invite attempts per inviter per window; limits probing which emails exist.
 INVITE_LIMIT = 10
@@ -40,14 +41,21 @@ class ProjectMemberRow:
 @dataclass(frozen=True)
 class ProjectMembers:
     rows: list[ProjectMemberRow]
-    # Another active member remains, and, for a writable viewer, another
-    # active writable one (a read-only viewer never holds the invariant).
+    # The viewer is a member, another active member remains, and, for a
+    # writable member, another active writable one (a read-only member never
+    # holds the invariant). A superuser without membership cannot leave.
     can_leave: bool
     viewer_can_write: bool
 
 
-def list_project_members(project: Project, *, viewer: CustomUser) -> ProjectMembers:
-    """All members of ``project`` with their roles, ordered by email, in one query."""
+def list_project_members(
+    project: Project, *, viewer: CustomUser, viewer_access: ProjectAccess
+) -> ProjectMembers:
+    """All members of ``project`` with their roles, ordered by email, in one query.
+
+    ``viewer_access`` is ``viewer``'s resolved access to ``project``: it decides
+    ``viewer_can_write`` (superuser control included) and whether they may leave.
+    """
     memberships = (
         ProjectMembership.objects.filter(project=project)
         .select_related("user")
@@ -74,10 +82,14 @@ def list_project_members(project: Project, *, viewer: CustomUser) -> ProjectMemb
         )
         for membership in memberships
     ]
-    viewer_can_write = any(row.is_you and row.can_write for row in rows)
+    viewer_can_write = viewer_access.can_write
+    # The invariant is membership-only: superuser control does not count.
+    viewer_is_writable_member = any(row.is_you and row.can_write for row in rows)
     others = [row for row in rows if row.is_active and not row.is_you]
-    can_leave = bool(others) and (
-        not viewer_can_write or any(row.can_write for row in others)
+    can_leave = (
+        viewer_access.is_member
+        and bool(others)
+        and (not viewer_is_writable_member or any(row.can_write for row in others))
     )
     return ProjectMembers(
         rows=rows, can_leave=can_leave, viewer_can_write=viewer_can_write
@@ -136,7 +148,12 @@ def _has_other_active_writer(project: Project, *, user_id: int) -> bool:
 
 
 def _ensure_writer(project: Project, actor: CustomUser) -> None:
-    """Defence in depth behind the view's write gate (call under the lock)."""
+    """Defence in depth behind the view's write gate (call under the lock).
+
+    A writable member or a superuser with project control passes.
+    """
+    if has_superuser_project_control(actor):
+        return
     if not ProjectMembership.objects.filter(
         project=project, user=actor, role__in=WRITABLE_ROLES
     ).exists():
@@ -154,7 +171,7 @@ def invite_member(
 
     Raises ``InvalidMemberRoleError``, ``MemberInviteThrottledError``,
     ``MemberNotFoundError``, ``MemberManagementNotAllowedError`` (``inviter``
-    is not a writable member) or ``AlreadyMemberError``.
+    is not a writable member nor a superuser) or ``AlreadyMemberError``.
     """
     _validate_role(role)
     _check_invite_throttle(inviter)
@@ -171,14 +188,16 @@ def invite_member(
 def change_member_role(
     *, project: Project, actor: CustomUser, user_id: int, role: str
 ) -> None:
-    """Set the role of member ``user_id``; ``actor`` must be a writable member.
+    """Set the role of member ``user_id``; ``actor`` must be a writable member
+    (or a superuser with project control).
 
     The project always keeps an active writable member, so demoting the last
     one (yourself included) is refused. The same role is a no-op.
 
     Raises ``InvalidMemberRoleError``, ``NotProjectMemberError`` (the target
     is no longer a member), ``LastWritableMemberError``, or
-    ``MemberManagementNotAllowedError`` when ``actor`` is not a writable member
+    ``MemberManagementNotAllowedError`` when ``actor`` is neither a writable
+    member nor a superuser
     (the view's gate normally stops it).
     """
     _validate_role(role)

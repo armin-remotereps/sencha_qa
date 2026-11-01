@@ -389,7 +389,7 @@ def project_archive(request: AuthenticatedRequest, project_id: int) -> HttpRespo
     project = get_writable_project(project_id, request.user)
 
     archive_project(project)
-    return redirect("projects:list")
+    return redirect(_next_or_default(request, reverse("projects:list")))
 
 
 @login_required
@@ -400,9 +400,10 @@ def project_restore(request: AuthenticatedRequest, project_id: int) -> HttpRespo
 
     unarchive_project(project)
     messages.success(request, f'"{project.name}" restored.')
+    default_url = reverse("projects:list")
     if request.POST.get("archived") == "1":
-        return redirect(f"{reverse('projects:list')}?archived=1")
-    return redirect("projects:list")
+        default_url = f"{default_url}?archived=1"
+    return redirect(_next_or_default(request, default_url))
 
 
 @login_required

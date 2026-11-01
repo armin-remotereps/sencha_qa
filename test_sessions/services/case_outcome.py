@@ -51,9 +51,11 @@ _FROZEN = Q(frozen_at__isnull=False)
 _LIVE = "test_run_test_case__"
 
 
-def _owner_is_member() -> Q:
-    """The session's owner is still a member of the row's project: only then
-    is the live run case read (a former member sees frozen outcomes only)."""
+def _owner_has_access() -> Q:
+    """The session's owner still has access to the row's project: only then
+    is the live run case read (a former member sees frozen outcomes only).
+    Access is a membership row, or the owner is an active superuser, who
+    controls every project without one."""
     return Q(
         Exists(
             ProjectMembership.objects.filter(
@@ -61,6 +63,11 @@ def _owner_is_member() -> Q:
                 user_id=OuterRef("session__user_id"),
             )
         )
+    ) | Q(
+        # Mirrors projects.project_access.has_superuser_project_control
+        # (test_sessions imports only projects.models from projects).
+        session__user__is_superuser=True,
+        session__user__is_active=True,
     )
 
 
@@ -75,7 +82,7 @@ def _frozen_or_live(
 ) -> Case:
     return Case(
         When(_FROZEN, then=F(f"frozen_{field}")),
-        When(_owner_is_member(), then=F(f"{_LIVE}{field}")),
+        When(_owner_has_access(), then=F(f"{_LIVE}{field}")),
         default=Value(None),
         output_field=output_field,
     )
@@ -84,7 +91,7 @@ def _frozen_or_live(
 def _frozen_or_live_time(field: str) -> Case:
     return Case(
         When(_FROZEN, then=F(f"frozen_{field}")),
-        When(_owner_is_member(), then=F(f"{_LIVE}{field}")),
+        When(_owner_has_access(), then=F(f"{_LIVE}{field}")),
         default=Value(None),
         output_field=DateTimeField(),
     )
@@ -110,7 +117,7 @@ def effective_duration() -> Case:
                     )
                 }
             )
-            & _owner_is_member(),
+            & _owner_has_access(),
             then=F(f"{_LIVE}active_duration"),
         ),
         default=Value(None, output_field=DurationField()),

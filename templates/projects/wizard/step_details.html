@@ -44,6 +44,7 @@
     </div>
   </div>
   {% else %}
+  {% if project_admin_access %}<p>{% include "partials/badge_admin_access.html" %}</p>{% endif %}
 
   <div class="alert alert-info">
     <span class="alert-icon" aria-hidden="true">ℹ</span>

@@ -316,13 +316,13 @@ _CASE_FIELDS = (
 )
 
 
-def _case_url(row: _CaseValues, member_project_ids: set[int]) -> str | None:
+def _case_url(row: _CaseValues, linked_project_ids: set[int]) -> str | None:
     project_id = row["project_id"]
     run_id = row["test_run_id"]
     pivot_id = row["test_run_test_case_id"]
     if project_id is None or run_id is None or pivot_id is None:
         return None
-    if project_id not in member_project_ids:
+    if project_id not in linked_project_ids:
         return None
     return reverse(
         "projects:test_run_case_detail",
@@ -334,9 +334,10 @@ def list_session_cases(
     session: TestSession, user: CustomUser, *, page: int, per_page: int
 ) -> Page[SessionCaseRow]:
     """One page of the session's cases in the order they were first acted on
-    (paginator count + one ``values()`` page + the user's member projects
+    (paginator count + one ``values()`` page + the user's accessible projects
     among them: at most 3 queries). A case links to its page only while the
-    user is still a member of its (unarchived) project."""
+    user still has access to its (unarchived) project: a membership, or the
+    user is an active superuser, who controls every project."""
     cases = (
         TestSessionCase.objects.filter(session=session)
         .annotate(**outcome_annotations())
@@ -350,20 +351,23 @@ def list_session_cases(
     page_project_ids = {
         row["project_id"] for row in values if row["project_id"] is not None
     }
-    member_project_ids: set[int] = set()
+    linked_project_ids: set[int] = set()
     if page_project_ids:
-        member_project_ids = set(
-            Project.objects.filter(
-                id__in=page_project_ids, members=user, archived=False
-            ).values_list("id", flat=True)
+        linked_projects = Project.objects.filter(
+            id__in=page_project_ids, archived=False
         )
-    rows = [_case_row(row, member_project_ids) for row in values]
+        # Mirrors projects.project_access.has_superuser_project_control
+        # (test_sessions imports only projects.models from projects).
+        if not (user.is_active and user.is_superuser):
+            linked_projects = linked_projects.filter(members=user)
+        linked_project_ids = set(linked_projects.values_list("id", flat=True))
+    rows = [_case_row(row, linked_project_ids) for row in values]
     # The paginator counted the dicts; this page holds the same rows mapped to
     # SessionCaseRow (the values() paginator is typed loosely by django-stubs).
     return Page(rows, case_page.number, paginator)
 
 
-def _case_row(row: _CaseValues, member_project_ids: set[int]) -> SessionCaseRow:
+def _case_row(row: _CaseValues, linked_project_ids: set[int]) -> SessionCaseRow:
     status = row["outcome_status"] or ""
     pivot_id = row["test_run_test_case_id"]
     run_id = row["test_run_id"]
@@ -389,5 +393,5 @@ def _case_row(row: _CaseValues, member_project_ids: set[int]) -> SessionCaseRow:
         actions_label=actions_label(row["first_activity"], row["last_activity"]),
         person_step_count=row["person_step_count"],
         is_live=row["frozen_at"] is None,
-        case_url=_case_url(row, member_project_ids),
+        case_url=_case_url(row, linked_project_ids),
     )

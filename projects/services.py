@@ -213,6 +213,7 @@ from projects.person_step_rows import (
     settle_person_steps,
     with_person_request_id,
 )
+from projects.project_access_services import get_project_access
 from projects.run_case_order import PICKER_CASE_ORDERING, RUN_CASE_ORDERING
 from projects.run_finished_notifications import notify_run_finished
 from projects.run_help_mode_policy import resolve_help_mode
@@ -367,10 +368,9 @@ def list_other_projects_for_user(
 
 
 def get_project_for_user(project_id: int, user: CustomUser) -> Project | None:
-    try:
-        return Project.objects.filter(id=project_id, archived=False, members=user).get()
-    except Project.DoesNotExist:
-        return None
+    """The project for its WebSockets: same rule as the page decorators."""
+    access = get_project_access(project_id, user)
+    return access.project if access is not None else None
 
 
 def get_project_tag_names(project: Project) -> list[str]:

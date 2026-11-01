@@ -27,6 +27,6 @@ Admins need to add users in the app, keep the expensive or risky run modes (Nigh
 - Never regenerate 0041 with `makemigrations` (the autodetector would drop the members table). The parallel test-sessions branch may also add `projects/0041_*`; whoever merges second renumbers.
 - A new write view must be POST and use `project_membership_required`; a GET view must not change user-visible state.
 - Django admin's membership inline can still demote or remove the last writable member (superuser-only, like deactivating a user).
-- Superusers only get superuser powers in projects they are members of; a project without a superuser member runs in its stored mode (Attended for new drafts).
+- Superseded by `2026-11-01-admin-all-projects.md` (active superusers now reach every project). Originally: superusers only get superuser powers in projects they are members of; a project without a superuser member runs in its stored mode (Attended for new drafts).
 - The Failures bulk bar is still offered on read-only projects' rows; the service skips them and the message says so.
 - Verified with pre-commit (strict mypy), `manage.py check`, `makemigrations --check`, `sqlmigrate projects 0041` (only `ADD COLUMN`), a throwaway-DB smoke (76 checks: migration round trip, read-only GETs 200 with no POST forms, 15+ POST families 403 with no change, role rules, help-mode refusal, recipients, runner attribution, Users page), and two reviewer/verifier rounds. Not checked in a browser.

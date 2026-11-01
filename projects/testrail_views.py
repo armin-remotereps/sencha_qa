@@ -90,8 +90,11 @@ def render_project_settings(
             initial={"help_mode": project.default_help_mode}
         )
     access = get_request_project_access(request)
-    project_can_write = access is not None and access.can_write
-    members = list_project_members(project, viewer=request.user)
+    if access is None:
+        # Every caller is behind @project_membership_required, which sets it.
+        raise Http404
+    project_can_write = access.can_write
+    members = list_project_members(project, viewer=request.user, viewer_access=access)
     return render(
         request,
         "projects/settings.html",

@@ -1,0 +1,173 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} All projects page (superusers only): every project in the installation,
+   with search, filters and pagination. The way in to projects the superuser
+   is not a member of; /projects/ keeps listing only their own.
+
+   Context contract (dashboard/all_projects_views.py::all_projects):
+     form              — AllProjectsFilterForm (GET; invalid fields fall back to defaults)
+     rows              — Page of dashboard.services.all_projects.AllProjectsRow
+     total_count       — number of projects matching the filters
+     has_filters       — any filter or sort differs from the defaults
+     connected_machine_state — "ready" | "starting" | "failed" | "offline", the
+                         machine state every connected project shares
+     return_path       — this page's full path; the "next" of Archive / Restore
+     page_obj, elided_page_range, per_page, allowed_per_page, query_params
+                       — partials/pagination.html keys {% endcomment %}
+
+{% block title %}All projects · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <h1>All projects</h1>
+    <p class="subtitle">Every project in {{ brand_name|default:"Punk Hazard" }}. As a superuser you can open and change any of them.</p>
+  </div>
+</div>
+
+{# Section: Filters #}
+<div class="card">
+  <form method="get" action="{% url 'dashboard:all_projects' %}" role="search" aria-label="Filter projects">
+    {% for error in form.non_field_errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+    <div class="grid grid-3">
+      {% include "partials/form_field.html" with field=form.q only %}
+      {% include "partials/form_field.html" with field=form.status only %}
+      {% include "partials/form_field.html" with field=form.runner only %}
+      {% include "partials/form_field.html" with field=form.run only %}
+      {% include "partials/form_field.html" with field=form.membership only %}
+      {% include "partials/form_field.html" with field=form.sort only %}
+    </div>
+    {% if per_page %}<input type="hidden" name="per_page" value="{{ per_page }}">{% endif %}
+    <div class="actions">
+      <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+      {% if has_filters %}<a class="btn btn-ghost btn-sm" href="{% url 'dashboard:all_projects' %}">Reset</a>{% endif %}
+    </div>
+  </form>
+</div>
+
+<p class="muted small">{{ total_count }} project{{ total_count|pluralize }}{% if has_filters %} matching the filters{% endif %}</p>
+
+{% if not rows.object_list %}
+  {% if has_filters %}
+    {% include "partials/empty_state.html" with icon="▦" title="No projects match" body="No project matches the current filters. Try another search or reset the filters." only %}
+  {% else %}
+    {% include "partials/empty_state.html" with icon="▦" title="No projects yet" body="Projects created by any user are listed here." only %}
+  {% endif %}
+{% else %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th scope="col">Project</th>
+        <th scope="col">Your access</th>
+        <th scope="col">Test machine</th>
+        <th scope="col">Latest run</th>
+        <th scope="col">Test cases</th>
+        <th scope="col">Members</th>
+        <th scope="col">Created</th>
+        <th scope="col"><span class="visually-hidden">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+        <tr{% if row.archived %} class="muted"{% endif %}>
+          <td data-label="Project" class="cell-primary">
+            <div>
+              {% if row.archived %}
+                {{ row.name }} <span class="badge badge-draft">Archived</span>
+              {% else %}
+                <a href="{% url 'projects:detail' row.id %}">{{ row.name }}</a>
+              {% endif %}
+              {% if row.tag_names %}<div class="muted small">{{ row.tag_names|join:", " }}</div>{% endif %}
+            </div>
+          </td>
+          <td data-label="Your access">
+            {% if row.viewer_is_member %}{{ row.viewer_role_label }}{% else %}<span class="muted">{{ row.viewer_role_label }}</span>{% endif %}
+          </td>
+          <td data-label="Test machine">
+            {% if row.runner_connected %}
+              {% include "partials/badge_machine.html" with machine_state=connected_machine_state only %}
+            {% else %}
+              {% include "partials/badge_machine.html" with machine_state="disconnected" only %}
+            {% endif %}
+            {% if row.runner_version %}<div class="muted small">Test Runner {{ row.runner_version }}</div>{% endif %}
+          </td>
+          <td data-label="Latest run">
+            {% with run=row.latest_run %}
+              {% if run %}
+                {% if row.archived %}{{ run.label }}{% else %}<a href="{% url 'projects:test_run_detail' row.id run.id %}">{{ run.label }}</a>{% endif %}
+                {% include "partials/badge_run_status.html" with status=run.status failed_count=run.failed_count blocked_count=run.blocked_count retest_count=run.retest_count only %}
+                <div class="muted small">{{ run.created_at|timesince }} ago</div>
+              {% else %}
+                <span class="muted">No runs yet</span>
+              {% endif %}
+            {% endwith %}
+          </td>
+          <td data-label="Test cases">{{ row.case_count }}</td>
+          <td data-label="Members">{{ row.member_count }}, {{ row.writable_member_count }} writable</td>
+          <td data-label="Created">{{ row.created_at|date:"M j, Y" }}</td>
+          <td data-label="Actions" class="cell-actions">
+            <div class="actions">
+              {% if row.archived %}
+                <form method="post" action="{% url 'projects:restore' row.id %}">
+                  {% csrf_token %}
+                  <input type="hidden" name="next" value="{{ return_path }}">
+                  <button type="submit" class="btn btn-sm btn-secondary">Restore</button>
+                </form>
+              {% else %}
+                <a class="btn btn-sm btn-ghost" href="{% url 'projects:detail' row.id %}">Open</a>
+                <button
+                  type="button"
+                  class="btn btn-sm btn-danger"
+                  @click="$dispatch('open-archive-any-project', { id: {{ row.id }}, name: '{{ row.name|escapejs }}' })"
+                >
+                  Archive
+                </button>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+{% comment %} `request` is passed explicitly for the per-page form's hidden fields. {% endcomment %}
+{% include "partials/pagination.html" with page_obj=page_obj query_params=query_params per_page=per_page allowed_per_page=allowed_per_page elided_page_range=elided_page_range request=request %}
+
+{# --- Archive project (confirm), shared by every row --- #}
+{% url 'projects:archive' 0 as archive_project_url_template %}
+<div
+  class="dialog-backdrop"
+  x-data="{ ...dialog(), archive: { id: null, name: '' } }"
+  x-show="open"
+  x-cloak
+  x-on:open-archive-any-project.window="archive = $event.detail; show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div
+    class="dialog"
+    role="alertdialog"
+    aria-modal="true"
+    aria-labelledby="archive-any-project-title"
+    aria-describedby="archive-any-project-desc"
+  >
+    <h3 id="archive-any-project-title">Archive <span x-text="archive.name"></span>?</h3>
+    <p id="archive-any-project-desc">
+      The project disappears from its members' lists and its test machine is disconnected.
+      Test cases, runs, and results are kept and it can be restored later.
+    </p>
+    <form method="post" :action="'{{ archive_project_url_template }}'.replace('/0/', '/' + archive.id + '/')">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ return_path }}">
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-danger-solid">Archive project</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

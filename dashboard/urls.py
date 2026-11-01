@@ -1,6 +1,12 @@
 from django.urls import URLPattern, path
 
-from dashboard import failure_views, health_views, leaderboard_views, views
+from dashboard import (
+    all_projects_views,
+    failure_views,
+    health_views,
+    leaderboard_views,
+    views,
+)
 
 app_name = "dashboard"
 
@@ -22,4 +28,5 @@ urlpatterns: list[URLPattern] = [
     ),
     path("leaderboard/", leaderboard_views.leaderboard, name="leaderboard"),
     path("insights/machines/", health_views.machine_health, name="machine_health"),
+    path("all-projects/", all_projects_views.all_projects, name="all_projects"),
 ]

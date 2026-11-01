@@ -91,6 +91,7 @@
     </div>
   </div>
   {% else %}
+  {% if project_admin_access %}<p>{% include "partials/badge_admin_access.html" %}</p>{% endif %}
 
   <div class="card">
     <p>Punk Hazard doesn&rsquo;t run tests in the cloud &mdash; it drives a real machine you control, the same way a person would: clicking, typing, and taking screenshots. The <strong>Test Runner</strong> is a small program you install on that machine so Punk Hazard can connect to it.</p>
