@@ -15,10 +15,17 @@ class ThreadRole(StrEnum):
     CASE_HELP = "case_help"
     # A person's turn in a finished run case's result chat: the result-chat tools.
     CASE_RESULT = "case_result"
+    # A person's turn in a claimed Manual run case's discussion: advice, the
+    # KB and ``get_manual_case``; machine work only while the case is paused.
+    MANUAL_CASE = "manual_case"
 
 
 def thread_role(
-    *, auto_fix_turn: bool, help_request_id: int | None, result_case_id: int | None
+    *,
+    auto_fix_turn: bool,
+    help_request_id: int | None,
+    result_case_id: int | None,
+    manual_case_id: int | None = None,
 ) -> ThreadRole:
     if auto_fix_turn:
         return ThreadRole.AUTO_FIX
@@ -26,4 +33,6 @@ def thread_role(
         return ThreadRole.CASE_HELP
     if result_case_id is not None:
         return ThreadRole.CASE_RESULT
+    if manual_case_id is not None:
+        return ThreadRole.MANUAL_CASE
     return ThreadRole.MAIN

@@ -68,6 +68,8 @@ class SetupConversationKind(models.TextChoices):
     CASE_HELP = "case_help", "Help chat"
     # Opened by a person from a finished run case to discuss its result.
     CASE_RESULT = "case_result", "Result chat"
+    # Opened by a person from a claimed Manual run case they are testing.
+    MANUAL_CASE = "manual_case", "Manual case discussion"
 
 
 class SetupFixResult(models.TextChoices):
@@ -129,6 +131,15 @@ class SetupConversation(models.Model):
         blank=True,
         related_name="result_conversations",
     )
+    # Manual case discussions only: the claimed Manual run case discussed (one
+    # active thread per case; read-only once the claim ends).
+    manual_case = models.ForeignKey(
+        TestRunTestCase,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="manual_conversations",
+    )
     # Auto-fix threads only: the agent's last ``report_case_fix`` call.
     fix_result = models.CharField(
         max_length=16, choices=SetupFixResult.choices, blank=True, default=""
@@ -156,6 +167,12 @@ class SetupConversation(models.Model):
                 fields=["result_case"],
                 condition=Q(result_case__isnull=False, archived_at__isnull=True),
                 name="setup_one_result_thread_per_case",
+            ),
+            # One active manual case discussion per run case.
+            models.UniqueConstraint(
+                fields=["manual_case"],
+                condition=Q(manual_case__isnull=False, archived_at__isnull=True),
+                name="setup_one_manual_thread_per_case",
             ),
         ]
 

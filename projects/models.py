@@ -187,19 +187,34 @@ PAUSE_REQUEST_CLEARED: dict[str, object] = {
 # (``TestRunTestCase.manual_claim*``; at most one claimed case per run,
 # enforced under the run lock by ``projects.manual_case_claim_services``) and
 # the `QuerySet.update` values that clear it (submit, release, Reset, Re-run,
-# Stop run).
+# Stop run). The tester's pause (``manual_paused_*``) belongs to the claim and
+# clears with it.
 MANUAL_CLAIM_TOKEN_LENGTH = MANUAL_CLAIM_TOKEN_MAX_CHARS
+MANUAL_PAUSE_FIELDS: tuple[str, ...] = (
+    "manual_paused_at",
+    "manual_paused_by",
+    "manual_paused_label",
+    "manual_paused_via",
+)
+MANUAL_PAUSE_CLEARED: dict[str, object] = {
+    "manual_paused_at": None,
+    "manual_paused_by": None,
+    "manual_paused_label": "",
+    "manual_paused_via": "",
+}
 MANUAL_CLAIM_FIELDS: tuple[str, ...] = (
     "manual_claim_token",
     "manual_claimed_by",
     "manual_claimed_label",
     "manual_claimed_at",
+    *MANUAL_PAUSE_FIELDS,
 )
 MANUAL_CLAIM_CLEARED: dict[str, object] = {
     "manual_claim_token": "",
     "manual_claimed_by": None,
     "manual_claimed_label": "",
     "manual_claimed_at": None,
+    **MANUAL_PAUSE_CLEARED,
 }
 
 
@@ -801,6 +816,23 @@ class TestRunTestCase(models.Model):
     # Server-written actor label ("Ana via Test Runner").
     manual_claimed_label = models.CharField(max_length=255, blank=True, default="")
     manual_claimed_at = models.DateTimeField(null=True, blank=True)
+    # Manual run: the claimed case is paused (the tester's break; set means
+    # paused). Separate from ``pause_requested_*``, which stop the agent.
+    # Cleared with the claim (``MANUAL_CLAIM_CLEARED``).
+    manual_paused_at = models.DateTimeField(null=True, blank=True)
+    manual_paused_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        db_index=False,
+    )
+    # Server-written actor label ("Ana", "Ana via Test Runner").
+    manual_paused_label = models.CharField(max_length=255, blank=True, default="")
+    manual_paused_via = models.CharField(
+        max_length=16, choices=PersonStepChannel.choices, blank=True, default=""
+    )
 
     class Meta:
         unique_together = ("test_run", "test_case")
@@ -1864,3 +1896,29 @@ class ManualStepGuide(models.Model):
 
     def __str__(self) -> str:
         return f"Manual step guide of case #{self.test_run_test_case_id}"
+
+
+class ManualCaseProgress(models.Model):
+    """The Test Runner's latest report of a claimed manual case's step marks.
+
+    Advisory only (the discussion agent and the case page read it); the
+    hand-in never does. Upserted by
+    ``projects.manual_case_progress_services.record_manual_progress`` and
+    fenced by ``claim_token``: a row whose token is not the case's current
+    ``manual_claim_token`` belongs to an earlier claim and is ignored.
+    """
+
+    test_run_test_case = models.OneToOneField(
+        TestRunTestCase,
+        on_delete=models.CASCADE,
+        related_name="manual_progress",
+    )
+    claim_token = models.CharField(max_length=MANUAL_CLAIM_TOKEN_LENGTH)
+    # The step the window showed; null when unknown.
+    current_step = models.PositiveSmallIntegerField(null=True, blank=True)
+    # ``[{"num": int, "outcome": "pass"|"fail", "note": str}]`` by step number.
+    steps = models.JSONField(default=list, blank=True)
+    reported_at = models.DateTimeField()
+
+    def __str__(self) -> str:
+        return f"Manual progress of case #{self.test_run_test_case_id}"

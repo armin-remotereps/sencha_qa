@@ -20,7 +20,14 @@ from controller_client.protocol import (
     ManualCaseVerdictWire,
     ManualShotKind,
 )
-from projects.models import ManualVerdict, RunHelpMode, TestRun
+from projects.models import (
+    ManualVerdict,
+    RunHelpMode,
+    TestRun,
+    TestRunStatus,
+    TestRunTestCase,
+    TestRunTestCaseStatus,
+)
 
 # User-safe refusals of the agent-only paths for a manual run or case.
 MANUAL_RESUME_REFUSED: Final = "A manual case can be resumed only in a Manual run."
@@ -32,8 +39,29 @@ MANUAL_NOTHING_RESUMABLE: Final = (
 MANUAL_RESUME_NOT_MANUAL: Final = "This run is not a Manual run."
 MANUAL_HELP_REFUSED: Final = "Manual runs have no help requests."
 MANUAL_PERSON_STEP_REFUSED: Final = "Manual runs have no person steps."
+# The agent pause path refuses manual cases; they pause from the Manual test
+# card or the Test Runner window (``projects.manual_case_pause_services``).
 MANUAL_PAUSE_REFUSED: Final = (
-    "Manual cases cannot be paused: release the case at the Test Runner instead."
+    "Pause a manual case from its Manual test card or the Test Runner window."
+)
+# Manual pause and discuss (``manual_case_pause_services``,
+# ``machine_setup.services.open_manual_chat``).
+MANUAL_RUN_NOT_RUNNING: Final = "This manual run is not running."
+MANUAL_PAUSE_NOT_CLAIMED: Final = (
+    "Only a case someone is testing can be paused or continued."
+)
+MANUAL_PAUSE_NOT_PAUSED: Final = "The case is not paused."
+MANUAL_PAUSE_AGENT_BUSY: Final = (
+    "The agent is working on the machine. Wait for it to finish or stop it first."
+)
+MANUAL_PAUSE_STALE_CLAIM: Final = (
+    "This case was released or handed in. Refresh the Test Runner."
+)
+MANUAL_DISCUSS_NOT_CLAIMED: Final = (
+    "This case was handed in or released. Use Discuss result after hand-in."
+)
+MANUAL_DISCUSS_MACHINE_NEEDS_PAUSE: Final = (
+    "Pause the case first: the tester is using the machine."
 )
 MANUAL_REDESIGN_REFUSED: Final = (
     "A manual case follows the test case's own steps; its plan cannot be redesigned."
@@ -73,6 +101,17 @@ def is_manual_mode(help_mode: str) -> bool:
 def is_manual_run(run: TestRun) -> bool:
     """The run is in Manual mode now (no agent, no chain)."""
     return is_manual_mode(run.help_mode)
+
+
+def is_claimed_manual_case(test_run: TestRun, pivot: TestRunTestCase) -> bool:
+    """``pivot`` is the claimed IN_PROGRESS case of ``test_run``, a STARTED
+    manual run (loaded fields only, no query)."""
+    return (
+        test_run.status == TestRunStatus.STARTED
+        and is_manual_run(test_run)
+        and pivot.status == TestRunTestCaseStatus.IN_PROGRESS
+        and bool(pivot.manual_claim_token)
+    )
 
 
 def crosses_manual_boundary(old_mode: str, new_mode: str) -> bool:

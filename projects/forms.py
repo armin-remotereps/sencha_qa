@@ -633,10 +633,12 @@ _claim_token_validator = RegexValidator(
 
 
 class RunnerManualCaseActionForm(forms.Form):
-    """A claim or release of a Manual run case sent from the Test Runner window.
+    """A claim, release, pause or continue of a Manual run case sent from the
+    Test Runner window.
 
     Fed from the ``manual_case_action`` message (not a rendered form).
-    ``claim_token`` is required for a release and ignored for a claim.
+    ``claim_token`` is required for every action but a claim, and ignored for
+    a claim.
     """
 
     action = forms.ChoiceField(
@@ -652,11 +654,27 @@ class RunnerManualCaseActionForm(forms.Form):
 
     def clean(self) -> dict[str, Any]:
         cleaned_data = super().clean() or {}
-        if cleaned_data.get("action") != ManualCaseActionKind.RELEASE:
+        if cleaned_data.get("action") == ManualCaseActionKind.CLAIM:
             cleaned_data["claim_token"] = ""
         elif "claim_token" not in self.errors and not cleaned_data.get("claim_token"):
             self.add_error("claim_token", "Missing claim.")
         return cleaned_data
+
+
+class RunnerManualChatSendForm(forms.Form):
+    """A discussion turn about the claimed Manual run case (Test Runner window).
+
+    Fed from the ``manual_chat_send`` message (not a rendered form); the same
+    limit as a web setup message (restated by the protocol).
+    """
+
+    pivot_id = forms.IntegerField(min_value=1, max_value=_MAX_BIGINT)
+    claim_token = _WireTextField(
+        max_length=MANUAL_CLAIM_TOKEN_MAX_CHARS,
+        strip=False,
+        validators=[_claim_token_validator],
+    )
+    text = _WireTextField(max_length=PERSON_CHAT_TEXT_MAX_CHARS, strip=True)
 
 
 class RunnerManualStepQuestionForm(forms.Form):
@@ -745,6 +763,13 @@ class RunnerHelpActionForm(forms.Form):
 class ManualReleaseForm(forms.Form):
     """Release a stuck Manual run claim from the web; ``next`` is where to go
     back to (validated same-host by the view)."""
+
+    next = forms.CharField(required=False, max_length=2000, widget=forms.HiddenInput)
+
+
+class ManualPauseForm(forms.Form):
+    """Pause or continue the claimed Manual run case from the web; ``next`` is
+    where to go back to (validated same-host by the view)."""
 
     next = forms.CharField(required=False, max_length=2000, widget=forms.HiddenInput)
 

@@ -15,7 +15,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.15.0"
+CLIENT_VERSION: Final[str] = "0.16.0"
 
 
 class CloseCode(IntEnum):
@@ -113,6 +113,11 @@ class MessageType(StrEnum):
     MANUAL_CASE_SUBMIT_RESULT = "manual_case_submit_result"
     MANUAL_SCREENSHOT_UPLOAD = "manual_screenshot_upload"
     MANUAL_SCREENSHOT_ACK = "manual_screenshot_ack"
+    # Manual pause and discuss (MANUAL_PAUSE_DISCUSS_V1): runner -> server
+    # with the tester's step marks so far (no reply) and a discussion turn
+    # about the claimed case (answered by ``manual_case_action_result``).
+    MANUAL_CASE_PROGRESS = "manual_case_progress"
+    MANUAL_CHAT_SEND = "manual_chat_send"
 
 
 class ClientCapability(StrEnum):
@@ -179,6 +184,12 @@ class ClientCapability(StrEnum):
     # arrive empty and are ignored). Advertised only together with
     # MANUAL_RUN_V1 (dropped with the window).
     MANUAL_STEP_GUIDE_V1 = "manual_step_guide_v1"
+    # Optional: Pause / Continue of the claimed manual case
+    # (``manual_case_action`` ``pause`` / ``continue``), the tester's marks so
+    # far (``manual_case_progress``), the case's discussion (``active.discussion``,
+    # ``manual_chat_send``) and the pause fields of ``active``. Advertised only
+    # together with MANUAL_RUN_V1 (dropped with the window).
+    MANUAL_PAUSE_DISCUSS_V1 = "manual_pause_discuss_v1"
 
 
 # Capabilities that need the person step window; dropped without it.
@@ -193,6 +204,7 @@ _PERSON_WINDOW_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
         ClientCapability.CASE_PAUSE_V1,
         ClientCapability.MANUAL_RUN_V1,
         ClientCapability.MANUAL_STEP_GUIDE_V1,
+        ClientCapability.MANUAL_PAUSE_DISCUSS_V1,
     }
 )
 
@@ -209,8 +221,8 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
     (``CONTROLLER_PERSON_WINDOW=false``) or Tk is unavailable; the server then
     never sends ``person_step_state`` and the person answers on the web.
     PERSON_STEP_ASSIST_V1, PERSON_STEP_GUIDE_V1, PERSON_STEP_CASE_STEPS_V1, PERSON_CASE_CONTEXT_V1,
-    PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1 and MANUAL_STEP_GUIDE_V1
-    are dropped with it.
+    PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1, MANUAL_STEP_GUIDE_V1 and
+    MANUAL_PAUSE_DISCUSS_V1 are dropped with it.
     """
     if person_window:
         return CLIENT_CAPABILITIES
@@ -227,7 +239,8 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
 # WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1,
 # PERSON_STEP_ASSIST_V1, PERSON_STEP_GUIDE_V1, PERSON_STEP_CASE_STEPS_V1, ARTIFACT_SCAN_V1,
 # PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1,
-# MANUAL_STEP_GUIDE_V1) are checked where they are used instead.
+# MANUAL_STEP_GUIDE_V1, MANUAL_PAUSE_DISCUSS_V1) are checked where they are
+# used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
@@ -2839,6 +2852,11 @@ MANUAL_CASE_SUBMIT_MAX_BYTES: Final[int] = 64 * 1024 + MANUAL_CASE_MAX_STEPS * (
 )
 # Largest raw ``manual_case_action`` message the server reads.
 MANUAL_CASE_ACTION_MAX_BYTES: Final[int] = 4 * 1024
+# Largest raw ``manual_case_progress`` message the server reads (every step
+# with a full note, as for the hand-in).
+MANUAL_CASE_PROGRESS_MAX_BYTES: Final[int] = MANUAL_CASE_SUBMIT_MAX_BYTES
+# Largest raw ``manual_chat_send`` message the server reads.
+MANUAL_CHAT_SEND_MAX_BYTES: Final[int] = 64 * 1024
 # Server-minted claim token (``TestRunTestCase.manual_claim_token``).
 MANUAL_CLAIM_TOKEN_MAX_CHARS: Final[int] = 32
 _MANUAL_CLAIM_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_-]{1,32}")
@@ -2870,6 +2888,29 @@ MANUAL_RUN_STATE_SAFE_BYTES: Final[int] = 3 * _MIB
 assert (
     2 * MANUAL_RUN_STATE_SAFE_BYTES <= MAX_MESSAGE_SIZE
 ), "MANUAL_RUN_STATE_SAFE_BYTES does not fit in MAX_MESSAGE_SIZE"
+# The claimed case's discussion (``active.discussion``,
+# MANUAL_PAUSE_DISCUSS_V1) is added after that budget, so its worst case (every
+# row at its caps, plus the JSON keys, the URL and the blocker) must fit on
+# top of it: in the server's ensure_ascii JSON (twice the estimate, as above)
+# and in the window's IPC line (person_window_ipc).
+_MANUAL_DISCUSSION_ROW_JSON_OVERHEAD_CHARS: Final[int] = 96
+_MANUAL_DISCUSSION_JSON_OVERHEAD_CHARS: Final[int] = 128
+MANUAL_DISCUSSION_SNAPSHOT_MAX_BYTES: Final[int] = (
+    PERSON_DISCUSSION_MAX_MESSAGES
+    * (
+        PERSON_DISCUSSION_MESSAGE_MAX_CHARS
+        + PERSON_STEP_LABEL_MAX_CHARS
+        + _MANUAL_ISO_MAX_CHARS
+        + _MANUAL_DISCUSSION_ROW_JSON_OVERHEAD_CHARS
+    )
+    + PERSON_STEP_URL_MAX_CHARS
+    + PERSON_STEP_RESULT_MESSAGE_MAX_CHARS
+    + _MANUAL_DISCUSSION_JSON_OVERHEAD_CHARS
+) * MANUAL_RUN_STATE_BYTES_PER_CHAR
+assert (
+    2 * (MANUAL_RUN_STATE_SAFE_BYTES + MANUAL_DISCUSSION_SNAPSHOT_MAX_BYTES)
+    <= MAX_MESSAGE_SIZE
+), "MANUAL_DISCUSSION_SNAPSHOT_MAX_BYTES does not fit in MAX_MESSAGE_SIZE"
 # Most steps a manual case's "How to do it" guide covers (MANUAL_STEP_GUIDE_V1;
 # the server setting MANUAL_GUIDE_MAX_STEPS may only lower it), and the share
 # of the snapshot budget its items may take at worst: every item of every
@@ -2897,6 +2938,19 @@ assert (
 class ManualCaseActionKind(StrEnum):
     CLAIM = "claim"
     RELEASE = "release"
+    # MANUAL_PAUSE_DISCUSS_V1: the tester takes a break / goes on testing.
+    PAUSE = "pause"
+    CONTINUE = "continue"
+
+
+# The actions that act on a held claim and must carry its token.
+_MANUAL_CLAIM_TOKEN_ACTIONS: Final[frozenset[ManualCaseActionKind]] = frozenset(
+    {
+        ManualCaseActionKind.RELEASE,
+        ManualCaseActionKind.PAUSE,
+        ManualCaseActionKind.CONTINUE,
+    }
+)
 
 
 class ManualStepOutcome(StrEnum):
@@ -2991,6 +3045,33 @@ class ManualStepPayload:
 
 
 @dataclass(frozen=True)
+class ManualDiscussionPayload:
+    """The claimed case's discussion thread (MANUAL_PAUSE_DISCUSS_V1)."""
+
+    # Absolute discussion URL ("" before it opens or without SITE_URL).
+    thread_url: str
+    # An agent turn is queued or running.
+    turn_live: bool
+    can_send: bool
+    # Why a message cannot be sent now ("" when it can).
+    send_blocker: str
+    # Newest rows, oldest first.
+    messages: tuple[PersonDiscussionMessagePayload, ...]
+
+    def to_wire(self) -> dict[str, object]:
+        return {
+            "thread_url": self.thread_url,
+            "turn_live": self.turn_live,
+            "can_send": self.can_send,
+            "send_blocker": self.send_blocker,
+            "messages": [
+                message.to_wire()
+                for message in self.messages[-PERSON_DISCUSSION_MAX_MESSAGES:]
+            ],
+        }
+
+
+@dataclass(frozen=True)
 class ManualActiveCasePayload:
     """The case this runner holds the claim on."""
 
@@ -3009,6 +3090,17 @@ class ManualActiveCasePayload:
     # The shell the steps' suggested commands are for (MANUAL_STEP_GUIDE_V1);
     # blank without a guide or from an older server.
     shell_label: str = ""
+    # MANUAL_PAUSE_DISCUSS_V1 (defaults from an older server): the case is
+    # paused, by whom ("Ana via Test Runner") and since when (ISO 8601).
+    paused: bool = False
+    paused_by: str = ""
+    paused_at: str = ""
+    can_pause: bool = False
+    can_continue: bool = False
+    # Why Pause / Continue does not apply now (user-safe); "" when it does.
+    pause_blocker: str = ""
+    # None from an older server.
+    discussion: ManualDiscussionPayload | None = None
 
     def to_wire(self) -> dict[str, object]:
         return {
@@ -3024,6 +3116,15 @@ class ManualActiveCasePayload:
             ],
             "can_ask": self.can_ask,
             "shell_label": self.shell_label,
+            "paused": self.paused,
+            "paused_by": self.paused_by,
+            "paused_at": self.paused_at,
+            "can_pause": self.can_pause,
+            "can_continue": self.can_continue,
+            "pause_blocker": self.pause_blocker,
+            "discussion": (
+                self.discussion.to_wire() if self.discussion is not None else None
+            ),
         }
 
 
@@ -3056,8 +3157,43 @@ class ManualRunStateMessage:
 class ManualCaseActionPayload:
     action: ManualCaseActionKind
     pivot_id: int
-    # Release only (the claim being given back); blank for claim.
+    # The held claim (release, pause, continue); blank for claim.
     claim_token: str
+
+
+@dataclass(frozen=True)
+class ManualProgressStepPayload:
+    """One step the tester has marked so far (advisory; no screenshots)."""
+
+    num: int
+    outcome: ManualStepOutcome
+    # Stripped; may be empty (the hand-in, not this report, enforces notes).
+    note: str
+
+    def to_wire(self) -> dict[str, object]:
+        return {"num": self.num, "outcome": self.outcome.value, "note": self.note}
+
+
+@dataclass(frozen=True)
+class ManualCaseProgressPayload:
+    """The tester's marks so far on the claimed case (``manual_case_progress``)."""
+
+    pivot_id: int
+    claim_token: str
+    # The step the window shows now; None when unknown.
+    current_step: int | None
+    # Distinct step numbers, ≤ MANUAL_CASE_MAX_STEPS.
+    steps: tuple[ManualProgressStepPayload, ...]
+
+
+@dataclass(frozen=True)
+class ManualChatSendPayload:
+    """A discussion turn about the claimed case (``manual_chat_send``)."""
+
+    pivot_id: int
+    claim_token: str
+    # Stripped, 1..PERSON_CHAT_TEXT_MAX_CHARS.
+    text: str
 
 
 @dataclass(frozen=True)
@@ -3301,6 +3437,42 @@ def _parse_manual_active(
         shell_label=_extract_text(
             raw, "shell_label", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
         ),
+        paused=_extract_bool(raw, "paused", default=False),
+        paused_by=_extract_text(
+            raw, "paused_by", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
+        ),
+        paused_at=_extract_text(raw, "paused_at", _MANUAL_ISO_MAX_CHARS, truncate=True),
+        can_pause=_extract_bool(raw, "can_pause", default=False),
+        can_continue=_extract_bool(raw, "can_continue", default=False),
+        pause_blocker=_extract_text(
+            raw, "pause_blocker", PERSON_STEP_RESULT_MESSAGE_MAX_CHARS, truncate=True
+        ),
+        discussion=_parse_manual_discussion(
+            _extract_optional_object(raw, "discussion")
+        ),
+    )
+
+
+def _parse_manual_discussion(
+    raw: dict[str, object] | None,
+) -> ManualDiscussionPayload | None:
+    if raw is None:
+        return None
+    return ManualDiscussionPayload(
+        thread_url=_extract_text(
+            raw, "thread_url", PERSON_STEP_URL_MAX_CHARS, truncate=True
+        ),
+        turn_live=_extract_bool(raw, "turn_live", default=False),
+        can_send=_extract_bool(raw, "can_send", default=False),
+        send_blocker=_extract_text(
+            raw, "send_blocker", PERSON_STEP_RESULT_MESSAGE_MAX_CHARS, truncate=True
+        ),
+        messages=tuple(
+            _parse_discussion_message(entry)
+            for entry in _extract_list(raw, "messages")[
+                -PERSON_DISCUSSION_MAX_MESSAGES:
+            ]
+        ),
     )
 
 
@@ -3359,7 +3531,8 @@ def parse_manual_case_action_payload(
 ) -> ManualCaseActionPayload:
     """Validate a ``manual_case_action`` (both sides).
 
-    ``claim_token`` is required for ``release`` and dropped for ``claim``.
+    ``claim_token`` is required for ``release``, ``pause`` and ``continue``
+    and dropped for ``claim``.
     """
     raw_action = data.get("action")
     if not isinstance(raw_action, str):
@@ -3369,7 +3542,7 @@ def parse_manual_case_action_payload(
     except ValueError as e:
         raise ProtocolError(f"Unknown manual case action: {raw_action[:40]!r}") from e
     claim_token = (
-        _extract_claim_token(data) if action is ManualCaseActionKind.RELEASE else ""
+        _extract_claim_token(data) if action in _MANUAL_CLAIM_TOKEN_ACTIONS else ""
     )
     return ManualCaseActionPayload(
         action=action,
@@ -3388,6 +3561,88 @@ def serialize_manual_case_action(
         action=action.action.value,
         pivot_id=action.pivot_id,
         claim_token=action.claim_token,
+    )
+
+
+def _parse_manual_progress_step(raw: object) -> ManualProgressStepPayload:
+    item = _extract_object(raw, "manual progress step")
+    raw_outcome = item.get("outcome")
+    if not isinstance(raw_outcome, str):
+        raise ProtocolError("Missing or invalid 'outcome'")
+    try:
+        outcome = ManualStepOutcome(raw_outcome)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown step outcome: {raw_outcome[:40]!r}") from e
+    return ManualProgressStepPayload(
+        num=_extract_bounded_int(item, "num", MANUAL_CASE_MAX_STEPS),
+        outcome=outcome,
+        note=_extract_text(
+            item, "note", MANUAL_STEP_NOTE_MAX_CHARS, truncate=False
+        ).strip(),
+    )
+
+
+def parse_manual_case_progress_payload(
+    data: Mapping[str, object],
+) -> ManualCaseProgressPayload:
+    """Validate a ``manual_case_progress`` (both sides).
+
+    More than MANUAL_CASE_MAX_STEPS steps, a repeated step number or an
+    over-long note raises ProtocolError.
+    """
+    raw_steps = _extract_list(data, "steps")
+    if len(raw_steps) > MANUAL_CASE_MAX_STEPS:
+        raise ProtocolError(f"More than {MANUAL_CASE_MAX_STEPS} steps")
+    steps = tuple(_parse_manual_progress_step(entry) for entry in raw_steps)
+    if len({step.num for step in steps}) != len(steps):
+        raise ProtocolError("A step is reported twice")
+    return ManualCaseProgressPayload(
+        pivot_id=_extract_bounded_int(data, "pivot_id", _PERSON_STEP_MAX_ID),
+        claim_token=_extract_claim_token(data),
+        current_step=_extract_optional_step_num(data, "current_step"),
+        steps=steps,
+    )
+
+
+def serialize_manual_case_progress(
+    progress: ManualCaseProgressPayload, request_id: str
+) -> str:
+    """A ``manual_case_progress`` message (runner side; no reply)."""
+    return serialize_message(
+        MessageType.MANUAL_CASE_PROGRESS,
+        request_id,
+        pivot_id=progress.pivot_id,
+        claim_token=progress.claim_token,
+        current_step=progress.current_step,
+        steps=[step.to_wire() for step in progress.steps[:MANUAL_CASE_MAX_STEPS]],
+    )
+
+
+def parse_manual_chat_send_payload(
+    data: Mapping[str, object],
+) -> ManualChatSendPayload:
+    """Validate a ``manual_chat_send`` (both sides); empty or over-long text raises."""
+    text = _extract_text(
+        data, "text", PERSON_CHAT_TEXT_MAX_CHARS, truncate=False
+    ).strip()
+    if not text:
+        raise ProtocolError("Missing 'text'")
+    return ManualChatSendPayload(
+        pivot_id=_extract_bounded_int(data, "pivot_id", _PERSON_STEP_MAX_ID),
+        claim_token=_extract_claim_token(data),
+        text=text,
+    )
+
+
+def serialize_manual_chat_send(send: ManualChatSendPayload, request_id: str) -> str:
+    """A ``manual_chat_send`` message (runner side; answered by
+    ``manual_case_action_result`` with the same request_id)."""
+    return serialize_message(
+        MessageType.MANUAL_CHAT_SEND,
+        request_id,
+        pivot_id=send.pivot_id,
+        claim_token=send.claim_token,
+        text=send.text,
     )
 
 

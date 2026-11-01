@@ -70,3 +70,42 @@ def _help_turn_live(help_request_id: int, *, auto_fix: bool) -> bool:
         conversation__help_request_id=help_request_id,
         status__in=LIVE_TURN_STATUSES,
     ).exists()
+
+
+def manual_case_turn_live(pivot_id: int) -> bool:
+    """Whether a turn of the run case's manual discussion is live (not stale).
+
+    Continue of a paused manual case is refused meanwhile: the agent may be
+    using the machine.
+    """
+    return SetupTurn.objects.filter(
+        _not_stale(timezone.now()),
+        conversation__manual_case_id=pivot_id,
+        status__in=LIVE_TURN_STATUSES,
+    ).exists()
+
+
+def manual_run_turn_live(test_run_id: int) -> bool:
+    """Whether a turn of any manual discussion of the run's cases is live (not
+    stale): claiming another case of the run is refused meanwhile."""
+    return SetupTurn.objects.filter(
+        _not_stale(timezone.now()),
+        conversation__manual_case__test_run_id=test_run_id,
+        status__in=LIVE_TURN_STATUSES,
+    ).exists()
+
+
+def live_turn_manual_case_ids(project_id: int, now: datetime) -> set[int | None]:
+    """The ``manual_case`` of the thread of each queued or running, non-stale
+    turn of the project (None for a thread of another kind); one query.
+
+    Empty exactly when ``live_turn_exists`` is false, so one read answers
+    both "is some turn live" and "is this case's discussion turn live".
+    """
+    return set(
+        SetupTurn.objects.filter(
+            _not_stale(now),
+            project_id=project_id,
+            status__in=LIVE_TURN_STATUSES,
+        ).values_list("conversation__manual_case_id", flat=True)
+    )
