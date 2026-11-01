@@ -6,8 +6,9 @@ the screenshots and the AI rewrite for TestRail. Every text the runner sent is
 returned as plain strings for autoescaped templates (never ``|safe``).
 
 Queries: the run panel costs at most two (the claimed case, the page's open
-uploads); the case panel at most two (the current hand-in, the Ask AI
-questions) and reuses the case page's prefetched screenshots.
+uploads); the case panel at most three (the current hand-in, the Ask AI
+questions, the steps' "How to do it" guide) and reuses the case page's
+prefetched screenshots.
 """
 
 from __future__ import annotations
@@ -18,12 +19,18 @@ from datetime import datetime
 from typing import Final, Literal
 
 from agents.checkpoint import checkpoint_from_json, final_step_indices
+from projects.how_to_view import PersonHowToView, how_to_view
 from projects.manual_refinement_services import refined_text_is_current
 from projects.manual_run_policy import (
     MANUAL_TOOL_NAMES,
     is_manual_checkpoint,
     is_manual_run,
     runner_supports_manual,
+)
+from projects.manual_step_guide_read import (
+    ManualGuideView,
+    ManualStepHowToState,
+    load_manual_guide,
 )
 from projects.models import (
     ManualCaseSubmission,
@@ -118,6 +125,14 @@ class ManualStepRow:
     refined_note: str
     duration_seconds: int | None
     shots: tuple[ManualShot, ...]
+    # The AI's "How to do it" for the step (read only; () without a guide).
+    how_to: tuple[PersonHowToView, ...] = ()
+    # "ready" with items, "pending" while being written, else "none".
+    how_to_state: ManualStepHowToState = "none"
+
+    @property
+    def how_to_has_sources(self) -> bool:
+        return any(item.source_label for item in self.how_to)
 
 
 @dataclass(frozen=True)
@@ -157,6 +172,10 @@ class ManualCasePanel:
     steps: tuple[ManualStepRow, ...]
     case_shots: tuple[ManualShot, ...]
     questions: tuple[ManualQuestionRow, ...]
+    # The shell the steps' suggested commands are for ("" without a guide).
+    how_to_shell_label: str = ""
+    # Some step's how-to is still being written ("reload to see it").
+    guide_preparing: bool = False
 
     def questions_payload(self) -> list[dict[str, object]]:
         """Seed of the card's live Ask AI list (``json_script``); the case
@@ -333,6 +352,7 @@ def _step_rows(
     pivot: TestRunTestCase,
     screenshots: Sequence[TestRunScreenshot],
     refined: Mapping[int, str],
+    guide: ManualGuideView | None,
 ) -> tuple[tuple[ManualStepRow, ...], tuple[ManualShot, ...]]:
     by_step, case_shots = _group_shots(screenshots)
     checkpoint = checkpoint_from_json(pivot.execution_checkpoint)
@@ -352,6 +372,7 @@ def _step_rows(
         else:
             outcome, label = "failed", "Failed"
             note, duration = attempt.result.summary, attempt.duration_seconds
+        step_guide = guide.step(num) if guide is not None else None
         rows.append(
             ManualStepRow(
                 num=num,
@@ -363,6 +384,15 @@ def _step_rows(
                 refined_note=refined.get(num, ""),
                 duration_seconds=duration,
                 shots=tuple(by_step.get(num, ())),
+                how_to=(
+                    tuple(
+                        how_to_view(item, pivot.test_run.project_id)
+                        for item in step_guide.how_to
+                    )
+                    if step_guide is not None
+                    else ()
+                ),
+                how_to_state=step_guide.state if step_guide is not None else "none",
             )
         )
     return tuple(rows), tuple(case_shots)
@@ -375,8 +405,8 @@ def get_manual_case_panel(
 ) -> ManualCasePanel | None:
     """The case page's manual card; None unless the case is (or was) manual.
 
-    ``pivot`` has ``test_run`` loaded; ``screenshots`` are the case page's
-    prefetched rows. At most two queries.
+    ``pivot`` has ``test_run`` and ``test_case`` loaded; ``screenshots`` are
+    the case page's prefetched rows. At most three queries.
     """
     run_is_manual = is_manual_run(pivot.test_run)
     if not run_is_manual and not is_manual_checkpoint(pivot.execution_checkpoint):
@@ -385,7 +415,14 @@ def get_manual_case_panel(
     # Shown only while the rewrite still matches the case as it is now.
     is_refined = submission is not None and refined_text_is_current(submission, pivot)
     refined = _refined_step_notes(submission, is_refined)
-    steps, case_shots = _step_rows(pivot, screenshots, refined)
+    # Shown claimed or handed in, while it still matches the case (Q5); no
+    # query before a claim wrote the verbatim steps.
+    guide = (
+        load_manual_guide(pivot)
+        if is_manual_checkpoint(pivot.execution_checkpoint)
+        else None
+    )
+    steps, case_shots = _step_rows(pivot, screenshots, refined, guide)
     is_claimed = bool(pivot.manual_claim_token)
     return ManualCasePanel(
         run_is_manual=run_is_manual,
@@ -413,4 +450,6 @@ def get_manual_case_panel(
         steps=steps,
         case_shots=case_shots,
         questions=_questions(pivot),
+        how_to_shell_label=guide.shell_label if guide is not None else "",
+        guide_preparing=guide is not None and guide.preparing,
     )

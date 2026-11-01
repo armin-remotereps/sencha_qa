@@ -14,6 +14,11 @@
    badge reads manualShotsReceived / manualShotsExpected, and the Ask AI list
    follows the "person-step-questions" window event that scope dispatches.
 
+   Each step's "How to do it" (panel.steps[].how_to, PersonHowToView; shown
+   claimed or handed in while the guide matches the case) sits in a collapsed
+   <details> rendered by _how_to_list.html with panel.how_to_shell_label;
+   panel.guide_preparing adds one "reload to see it" hint (no live refresh).
+
    Release posts to projects:test_run_case_manual_release through
    partials/confirm_dialog.html (dialog id "manual-release"). {% endcomment %}
 <section aria-labelledby="manual-h" class="card card-tone-manual">
@@ -94,6 +99,9 @@
   {% if panel.steps %}
   <h3 class="manual-subhead">Steps</h3>
   <p class="hint">The test case's own steps, as the tester saw them. Each marked step has its screenshot; unmarked steps were not run.</p>
+  {% if panel.guide_preparing %}
+  <p class="hint">A how-to for each step is being prepared; reload to see it.</p>
+  {% endif %}
   <ol class="step-list manual-step-list">
     {% for step in panel.steps %}
     <li class="step-row">
@@ -110,6 +118,12 @@
           {% if step.expected_result %}<span class="pre-wrap">Expected: {{ step.expected_result }}</span>{% endif %}
           {% if step.duration_seconds is not None %}<span>{% if step.expected_result %} · {% endif %}{{ step.duration_seconds }}s</span>{% endif %}
         </div>
+        {% endif %}
+        {% if step.how_to %}
+        <details class="manual-step-howto">
+          <summary>How to do it</summary>
+          {% include "projects/includes/_how_to_list.html" with items=step.how_to shell_label=panel.how_to_shell_label has_sources=step.how_to_has_sources only %}
+        </details>
         {% endif %}
         {% if step.note %}<p class="step-detail pre-wrap{% if step.outcome == 'failed' %} is-error{% endif %}">{{ step.note }}</p>{% endif %}
         {% if step.shots %}

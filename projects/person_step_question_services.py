@@ -28,7 +28,7 @@ from agents.checkpoint import checkpoint_from_json
 from agents.exceptions import AIServiceError
 from agents.services.llm_config import build_llm_config
 from agents.services.person_step_advisor import answer_person_step_question
-from agents.types import PersonStepAdviceContext
+from agents.types import PersonHowToItem, PersonStepAdviceContext
 from auto_tester.celery import app as celery_app
 from controller_client.protocol import PERSON_STEP_STATE_MAX_QUESTIONS
 from projects.advice_context import build_advice_context
@@ -36,6 +36,7 @@ from projects.exceptions import ManualRunError, PersonStepQuestionError
 from projects.manual_advice_mapping import manual_advice_step
 from projects.manual_case_lock import claim_matches, lock_manual_run_case
 from projects.manual_question_push import broadcast_manual_case_questions
+from projects.manual_step_guide_read import load_manual_guide
 from projects.models import (
     PERSON_STEP_ANSWER_MAX_LENGTH,
     PERSON_STEP_QUESTION_MAX_LENGTH,
@@ -413,7 +414,11 @@ def answer_person_step_question_now(question_id: int) -> None:
         def build_context() -> PersonStepAdviceContext:
             return build_advice_context(
                 pivot=pivot,
-                step=manual_advice_step(pivot, manual_step_num),
+                step=manual_advice_step(
+                    pivot,
+                    manual_step_num,
+                    how_to=_manual_how_to(pivot, manual_step_num),
+                ),
                 earlier_steps=(),
                 history=_manual_history(
                     pivot.pk, manual_step_num, before_id=question_id
@@ -460,6 +465,18 @@ def answer_person_step_question_now(question_id: int) -> None:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _manual_how_to(
+    pivot: TestRunTestCase, step_num: int | None
+) -> tuple[PersonHowToItem, ...]:
+    """Step ``step_num``'s guide items for the advisor; () for the whole case
+    or without a guide to show (one query for a step). ``pivot`` has its
+    ``test_case`` and ``execution_checkpoint`` loaded."""
+    if step_num is None:
+        return ()
+    guide = load_manual_guide(pivot)
+    return guide.step(step_num).how_to if guide is not None else ()
 
 
 def _load_questions(step_ids: Sequence[int]) -> dict[int, list[PersonStepQuestion]]:
