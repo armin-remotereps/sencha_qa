@@ -109,7 +109,7 @@ def checkpoint_to_json(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
         if not checkpoint.case_steps_testrail:
             data[_CASE_STEPS_TESTRAIL_KEY] = False
     if checkpoint.person_guide is not None:
-        data[_PERSON_GUIDE_KEY] = _person_guide_to_json(checkpoint.person_guide)
+        data[_PERSON_GUIDE_KEY] = person_guide_to_json(checkpoint.person_guide)
     if checkpoint.manual:
         data[_MANUAL_KEY] = True
     if checkpoint.plan_revisions:
@@ -120,7 +120,7 @@ def checkpoint_to_json(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
     return data
 
 
-def _person_guide_to_json(notes: PersonGuideNotes) -> dict[str, object]:
+def person_guide_to_json(notes: PersonGuideNotes) -> dict[str, object]:
     return {
         "text": notes.text,
         "status": notes.status,
@@ -446,7 +446,7 @@ def _parse(data: object) -> OrchestratorCheckpoint:
         plan_revisions=_parse_revisions(root.get(_PLAN_REVISIONS_KEY)),
         case_step_count=case_step_count,
         case_steps_testrail=root.get(_CASE_STEPS_TESTRAIL_KEY) is not False,
-        person_guide=_parse_person_guide(root.get(_PERSON_GUIDE_KEY)),
+        person_guide=person_guide_from_json(root.get(_PERSON_GUIDE_KEY)),
         # Optional: only a strict JSON true marks a manual case.
         manual=root.get(_MANUAL_KEY) is True,
     )
@@ -643,7 +643,7 @@ def _with_source(item: PersonHowToItem, entry: dict[str, object]) -> PersonHowTo
     )
 
 
-def _parse_person_guide(value: object) -> PersonGuideNotes | None:
+def person_guide_from_json(value: object) -> PersonGuideNotes | None:
     # Absent outside Human in the loop and before guide research existed; a
     # malformed key means "not researched yet", never fatal.
     if not isinstance(value, dict):
