@@ -3,8 +3,9 @@ page list, its by-case grouping, the CSV export, the dashboard widget and the
 bulk actions.
 
 Every query starts from ``failed_case_queryset``: Failed run cases of the given
-(member, non-archived) projects. ``failed_by`` and the review state are only
-meaningful while the case is Failed, which this scope guarantees.
+projects (the caller's scope: member or, for admins, every non-archived one).
+``failed_by`` and the review state are only meaningful while the case is
+Failed, which this scope guarantees.
 """
 
 from __future__ import annotations
@@ -67,7 +68,8 @@ class FailedCaseFilters:
 
     date_from: date | None = None
     date_to: date | None = None
-    project_id: int | None = None
+    # Sorted, distinct; empty means every project of the scope.
+    project_ids: tuple[int, ...] = ()
     run_id: int | None = None
     query: str = ""
     review: str = ""
@@ -106,9 +108,9 @@ def failed_case_queryset(
     """Failed run cases of ``project_ids`` matching ``filters`` (no ordering,
     no column selection; callers shape it).
 
-    ``project_ids`` must already be the user's member, non-archived projects;
-    ``filters.project_id`` and ``filters.run_id`` only narrow that scope, so a
-    forged id can never widen it. Dates are UTC days on ``finished_at``,
+    ``project_ids`` must already be the user's Failures page scope
+    (``failure_scope``); ``filters.project_ids`` and ``filters.run_id`` only
+    narrow that scope, so a forged id can never widen it. Dates are UTC days on ``finished_at``,
     ``date_to`` inclusive, expressed as a half-open range so the
     ``(status, -finished_at)`` index is usable.
     """
@@ -116,8 +118,8 @@ def failed_case_queryset(
         status=TestRunTestCaseStatus.FAILED,
         test_run__project_id__in=list(project_ids),
     )
-    if filters.project_id is not None:
-        queryset = queryset.filter(test_run__project_id=filters.project_id)
+    if filters.project_ids:
+        queryset = queryset.filter(test_run__project_id__in=filters.project_ids)
     if filters.run_id is not None:
         queryset = queryset.filter(test_run_id=filters.run_id)
     if filters.date_from is not None:
@@ -189,8 +191,7 @@ def encode_filters(filters: FailedCaseFilters, *, view: str = "") -> str:
         params.append(("date_from", filters.date_from.isoformat()))
     if filters.date_to is not None:
         params.append(("date_to", filters.date_to.isoformat()))
-    if filters.project_id is not None:
-        params.append(("project", str(filters.project_id)))
+    params.extend(("project", str(project_id)) for project_id in filters.project_ids)
     if filters.run_id is not None:
         params.append(("run", str(filters.run_id)))
     if filters.query:

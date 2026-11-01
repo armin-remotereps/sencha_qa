@@ -1,8 +1,9 @@
 """The non-archived projects a user is a member of: the scope of every
-cross-project page (dashboard, failures, machine health).
+cross-project page (dashboard, machine health; the Failures page for
+non-admins, see ``failure_scope``).
 
-Reads (failures, machine health) use every member project; attention and
-cross-project writes (failures bulk) use only the writable ones.
+Reads (machine health) use every member project; attention and
+cross-project writes use only the writable ones.
 """
 
 from __future__ import annotations

@@ -1,0 +1,30 @@
+{% comment %}
+  Renders a multiple-choice form field as a dropdown of checkboxes: label,
+  a summary button ("All …", the one chosen name, or "N chosen"), hint,
+  errors. Closing the dropdown after a change dispatches
+  `multi-select-changed` (bubbles) so the page can react, e.g. re-submit.
+  Alpine component: `multiSelect` in static/js/punk-hazard.js.
+
+  Context contract:
+    field     — a Django BoundField with a CheckboxSelectMultiple widget
+    all_label — the summary when nothing is chosen, e.g. "All projects"
+{% endcomment %}
+<div class="field{% if field.errors %} has-error{% endif %}">
+  <span class="field-label" id="{{ field.auto_id }}_label">
+    {{ field.label }}
+    {% if not field.field.required %}<span class="optional">(optional)</span>{% endif %}
+  </span>
+  <details class="multi-select" x-data="multiSelect('{{ all_label|escapejs }}')"
+           @toggle="$el.open || closed()" @click.outside="$el.open = false" @keydown.escape="$el.open = false">
+    <summary class="select" aria-labelledby="{{ field.auto_id }}_label" x-text="summary">{{ all_label }}</summary>
+    <div class="multi-select-panel" role="group" aria-labelledby="{{ field.auto_id }}_label" @change="changed()">
+      {% for choice in field %}
+        <label class="checkbox">{{ choice.tag }} <span data-choice-label>{{ choice.choice_label }}</span></label>
+      {% empty %}
+        <p class="muted small">Nothing to choose.</p>
+      {% endfor %}
+    </div>
+  </details>
+  {% if field.help_text %}<p class="hint">{{ field.help_text }}</p>{% endif %}
+  {% for error in field.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+</div>

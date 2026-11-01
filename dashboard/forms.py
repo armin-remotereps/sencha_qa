@@ -1,7 +1,7 @@
 """Forms of the Failures page: filters (GET), bulk actions and presets.
 
-The forms never query: the view passes the user's member project choices
-and the selected project's run choices, so the choices double as
+The forms never query: the view passes the user's Failures project choices
+and the selected projects' run choices, so the choices double as
 authorization.
 """
 
@@ -47,17 +47,17 @@ class FailedCaseFilterForm(forms.Form):
         required=False,
         widget=forms.DateInput(attrs={"type": "date", "class": "input"}),
     )
-    project = forms.TypedChoiceField(
-        label="Project",
+    # Rendered by partials/multi_select_field.html; run choices belong to the
+    # selected projects, so a new selection clears the run
+    # (failureFilters.projectsChanged in static/js/punk-hazard.js).
+    project = forms.TypedMultipleChoiceField(
+        label="Projects",
         required=False,
         coerce=int,
-        empty_value=None,
         choices=(),
-        # Run choices belong to one project: a new project clears the run
-        # (failureFilters.projectChanged in static/js/punk-hazard.js).
-        widget=forms.Select(attrs={"class": "select", "x-on:change": "projectChanged"}),
+        widget=forms.CheckboxSelectMultiple,
         error_messages={
-            "invalid_choice": "That project is not one of your projects; "
+            "invalid_choice": "A selected project is not available to you; "
             "showing all projects."
         },
     )
@@ -70,7 +70,7 @@ class FailedCaseFilterForm(forms.Form):
         widget=forms.Select(attrs={"class": "select"}),
         error_messages={
             "invalid_choice": "That run has no failed case in the chosen "
-            "project; showing all runs."
+            "projects; showing all runs."
         },
     )
     q = forms.CharField(
@@ -114,28 +114,41 @@ class FailedCaseFilterForm(forms.Form):
         super().__init__(data, **kwargs)
         # django-stubs types `self.fields[...]` as the base `Field`; these are
         # the TypedChoiceFields declared above.
-        project_field = cast(forms.TypedChoiceField, self.fields["project"])
+        project_field = cast(forms.TypedMultipleChoiceField, self.fields["project"])
         run_field = cast(forms.TypedChoiceField, self.fields["run"])
-        project_field.choices = [("", "All projects"), *project_choices]
+        project_field.choices = list(project_choices)
         run_field.choices = [("", "All runs"), *run_choices]
         if not run_choices:
             run_field.disabled = True
             run_field.help_text = "Choose a project to filter by run."
 
     @staticmethod
-    def selected_project_id(
-        data: QueryDict | Mapping[str, Any],
-        project_choices: Sequence[tuple[int, str]],
-    ) -> int | None:
-        """The raw ``project`` value when it is one of ``project_choices``
-        (used to load the run choices before the form is built)."""
-        raw = data.get("project", "")
-        try:
-            project_id = _coerce_optional_int(str(raw).strip())
-        except ValueError:
-            return None
+    def scope_project_data(
+        data: QueryDict, project_choices: Sequence[tuple[int, str]]
+    ) -> tuple[QueryDict, list[int], bool]:
+        """``data`` with ``project`` reduced to the ids in ``project_choices``,
+        those ids (sorted, distinct; used to load the run choices before the
+        form is built), and whether any value was left out.
+
+        A stale id (archived project, old preset or link) drops only itself
+        instead of invalidating the whole selection.
+        """
         allowed = {choice_id for choice_id, _ in project_choices}
-        return project_id if project_id in allowed else None
+        selected: set[int] = set()
+        dropped = False
+        for raw_value in data.getlist("project"):
+            try:
+                project_id = _coerce_optional_int(raw_value.strip())
+            except ValueError:
+                project_id = None
+            if project_id in allowed:
+                selected.add(project_id)
+            elif project_id is not None or raw_value.strip():
+                dropped = True
+        project_ids = sorted(selected)
+        scoped = data.copy()
+        scoped.setlist("project", [str(project_id) for project_id in project_ids])
+        return scoped, project_ids, dropped
 
     def clean(self) -> dict[str, Any] | None:
         cleaned = super().clean()
@@ -151,7 +164,7 @@ class FailedCaseFilterForm(forms.Form):
         return FailedCaseFilters(
             date_from=data.get("date_from"),
             date_to=data.get("date_to"),
-            project_id=data.get("project"),
+            project_ids=tuple(sorted(set(data.get("project") or ()))),
             run_id=data.get("run"),
             query=(data.get("q") or "").strip(),
             review=data.get("review") or "",

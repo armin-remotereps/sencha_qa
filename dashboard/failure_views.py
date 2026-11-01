@@ -2,9 +2,10 @@
 actions and saved filter presets.
 
 Thin views: bind the forms with choices from the services, call a service,
-map domain errors to messages. Every query is scoped to the user's member,
-non-archived projects (``member_project_choices``, or with the writable ids
-``member_project_choices_and_writable_ids``), so a project or run id
+map domain errors to messages. Every query is scoped to the user's Failures
+projects (``failure_project_choices``, or with the writable ids
+``failure_project_choices_and_writable_ids``: member, non-archived projects,
+or every non-archived project for an admin), so a project or run id
 from another project is an invalid choice, and the bulk service re-resolves
 every selected id itself, against the writable projects only.
 """
@@ -71,9 +72,9 @@ from dashboard.services.failed_cases import (
     failed_case_run_choices,
     list_failed_cases,
 )
-from dashboard.services.member_projects import (
-    member_project_choices,
-    member_project_choices_and_writable_ids,
+from dashboard.services.failure_scope import (
+    failure_project_choices,
+    failure_project_choices_and_writable_ids,
 )
 from projects.forms import form_error_text
 from projects.models import TestRunTestCase
@@ -82,12 +83,19 @@ from projects.models import TestRunTestCase
 def _bind_filter_form(
     data: QueryDict, project_choices: Sequence[tuple[int, str]]
 ) -> FailedCaseFilterForm:
-    """The validated filter form; run choices only for the selected project."""
+    """The validated filter form; run choices only for the selected projects,
+    and a selected project outside ``project_choices`` left out (reported)."""
     project_ids = [project_id for project_id, _ in project_choices]
-    selected_project = FailedCaseFilterForm.selected_project_id(data, project_choices)
-    run_choices = failed_case_run_choices(project_ids, selected_project)
-    form = FailedCaseFilterForm(project_choices, run_choices, data)
+    scoped, selected_projects, dropped = FailedCaseFilterForm.scope_project_data(
+        data, project_choices
+    )
+    run_choices = failed_case_run_choices(project_ids, selected_projects)
+    form = FailedCaseFilterForm(project_choices, run_choices, scoped)
     form.is_valid()
+    if dropped:
+        form.add_error(
+            None, "A selected project is not available to you; it was left out."
+        )
     return form
 
 
@@ -106,7 +114,7 @@ def _failures_redirect(query: str) -> HttpResponseRedirect:
 @login_required
 @require_safe
 def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
-    project_choices, writable_ids = member_project_choices_and_writable_ids(
+    project_choices, writable_ids = failure_project_choices_and_writable_ids(
         request.user
     )
     project_ids = [project_id for project_id, _ in project_choices]
@@ -168,7 +176,7 @@ def failed_cases(request: AuthenticatedRequest) -> HttpResponse:
 @login_required
 @require_GET
 def failed_cases_export(request: AuthenticatedRequest) -> HttpResponseBase:
-    project_choices = member_project_choices(request.user)
+    project_choices = failure_project_choices(request.user)
     form = _bind_filter_form(request.GET, project_choices)
     if form.errors:
         messages.error(request, form_error_text(form))
@@ -194,9 +202,9 @@ def failed_cases_export(request: AuthenticatedRequest) -> HttpResponseBase:
 @require_POST
 def failed_cases_bulk(request: AuthenticatedRequest) -> HttpResponse:
     form = FailedCaseBulkForm(request.POST)
-    # Filters keep every member project; the action is scoped to the writable
+    # Filters keep every visible project; the action is scoped to the writable
     # ones, so cases of read-only projects count as skipped.
-    project_choices, writable_ids = member_project_choices_and_writable_ids(
+    project_choices, writable_ids = failure_project_choices_and_writable_ids(
         request.user
     )
     return_query = _clean_query(project_choices, request.POST.get("return_query", ""))
@@ -228,7 +236,7 @@ def failed_cases_bulk(request: AuthenticatedRequest) -> HttpResponse:
 def preset_save(request: AuthenticatedRequest) -> HttpResponse:
     form = FailedCasePresetForm(request.POST)
     query = _clean_query(
-        member_project_choices(request.user), request.POST.get("query", "")
+        failure_project_choices(request.user), request.POST.get("query", "")
     )
     if not form.is_valid():
         messages.error(request, form_error_text(form))
@@ -252,7 +260,7 @@ def preset_delete(request: AuthenticatedRequest, preset_id: int) -> HttpResponse
     messages.success(request, "Deleted the saved filter.")
     return _failures_redirect(
         _clean_query(
-            member_project_choices(request.user),
+            failure_project_choices(request.user),
             request.POST.get("return_query", ""),
         )
     )

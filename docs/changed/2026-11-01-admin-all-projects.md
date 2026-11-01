@@ -22,6 +22,6 @@ Admins need to see and control every project, not only those they were invited t
 - No migration, setting, task, socket event or controller change. Deploy: restart web/Daphne and Celery workers.
 
 ## Notes for future changes
-- Superusers are not members: keep notifications, inbox, attention, dashboard, `/failures/`, `/projects/`, runner email matching and the last-writable-member invariant membership-only.
+- Superusers are not members: keep notifications, inbox, attention, dashboard, `/projects/`, runner email matching and the last-writable-member invariant membership-only.
 - Use `has_superuser_project_control`, never `is_superuser` alone, for project access.
 - No audit log or "Admin" actor label (Q3); actions carry the superuser's own name.

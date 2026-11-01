@@ -1,9 +1,9 @@
 {% extends "layouts/app.html" %}
 
-{% comment %} Failures page: every Failed run case in the user's non-archived projects.
+{% comment %} Failures page: every Failed run case in the user's non-archived projects (every non-archived project for an admin).
 
    Context contract (dashboard/failure_views.py::failed_cases):
-     form              — FailedCaseFilterForm (GET; run choices only for the chosen project)
+     form              — FailedCaseFilterForm (GET; run choices only for the chosen projects)
      filters           — FailedCaseFilters (cleaned; invalid fields left out)
      view              — "cases" | "by_case"
      page_obj          — Page[TestRunTestCase] (cases; rows carry `verdict`) or
@@ -49,19 +49,19 @@
 
 {% if not has_projects %}
   {% url 'projects:create' as create_url %}
-  {% include "partials/empty_state.html" with icon="▣" title="No projects yet" body="Failed cases from every project you are a member of are listed here." primary_label="Create a project" primary_url=create_url only %}
+  {% include "partials/empty_state.html" with icon="▣" title="No projects yet" body="Failed cases from every project you can open are listed here." primary_label="Create a project" primary_url=create_url only %}
 {% else %}
 
 {# Section: Filters #}
 <div class="card">
-  <form method="get" action="{% url 'dashboard:failed_cases' %}" role="search" aria-label="Filter failed cases" x-data="failureFilters">
+  <form method="get" action="{% url 'dashboard:failed_cases' %}" role="search" aria-label="Filter failed cases" x-data="failureFilters" @multi-select-changed="projectsChanged">
     {{ form.view }}
     {% for error in form.non_field_errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
     <div class="grid grid-3">
       {% include "partials/form_field.html" with field=form.date_from only %}
       {% include "partials/form_field.html" with field=form.date_to only %}
       {% include "partials/form_field.html" with field=form.q only %}
-      {% include "partials/form_field.html" with field=form.project only %}
+      {% include "partials/multi_select_field.html" with field=form.project all_label="All projects" only %}
       {% include "partials/form_field.html" with field=form.run only %}
       {% include "partials/form_field.html" with field=form.review only %}
       {% include "partials/form_field.html" with field=form.failed_by only %}
@@ -85,7 +85,7 @@
   {% if has_filters %}
     {% include "partials/empty_state.html" with icon="✓" title="No failed cases match" body="No failed case matches the current filters. Try widening the dates or clearing a filter." only %}
   {% else %}
-    {% include "partials/empty_state.html" with icon="✓" title="No failed cases" body="When a run case fails in one of your projects, it is listed here." only %}
+    {% include "partials/empty_state.html" with icon="✓" title="No failed cases" body="When a run case fails in a project you can open, it is listed here." only %}
   {% endif %}
 {% elif view == "by_case" %}
   {% include "dashboard/includes/_failed_case_groups.html" %}

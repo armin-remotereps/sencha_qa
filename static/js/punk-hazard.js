@@ -321,16 +321,53 @@ document.addEventListener("alpine:init", () => {
 
   /**
    * The Failures page filter form (templates/dashboard/failed_cases.html):
-   * run choices belong to one project, so a new project clears the run and
-   * re-submits the form.
+   * run choices belong to the chosen projects, so a new choice clears the run
+   * and re-submits the form. Pressing Apply with the dropdown open and changed
+   * submits twice (button, then the close); the second, with the run cleared,
+   * wins, which is right after a project change.
    */
   Alpine.data("failureFilters", () => ({
-    projectChanged(event) {
-      const form = event.target.form;
+    projectsChanged(event) {
+      const form = event.target.closest("form");
       if (form.elements.run) {
         form.elements.run.value = "";
       }
       form.requestSubmit();
+    },
+  }));
+
+  /**
+   * A dropdown of checkboxes (templates/partials/multi_select_field.html).
+   * The summary shows `allLabel` when nothing is checked, the one checked
+   * label, or "N chosen". Closing it after a change dispatches
+   * `multi-select-changed`.
+   */
+  Alpine.data("multiSelect", (allLabel) => ({
+    summary: allLabel,
+    dirty: false,
+    init() {
+      this.refresh();
+    },
+    refresh() {
+      const checked = this.$root.querySelectorAll("input[type=checkbox]:checked");
+      if (checked.length === 0) {
+        this.summary = allLabel;
+      } else if (checked.length === 1) {
+        const label = checked[0].closest("label").querySelector("[data-choice-label]");
+        this.summary = label ? label.textContent.trim() : "1 chosen";
+      } else {
+        this.summary = `${checked.length} chosen`;
+      }
+    },
+    changed() {
+      this.dirty = true;
+      this.refresh();
+    },
+    closed() {
+      if (this.dirty) {
+        this.dirty = false;
+        this.$dispatch("multi-select-changed");
+      }
     },
   }));
 

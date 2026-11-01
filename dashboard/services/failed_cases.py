@@ -32,12 +32,17 @@ def list_failed_cases(
 
 
 def failed_case_run_choices(
-    project_ids: Sequence[int], project_id: int | None
+    project_ids: Sequence[int], selected_project_ids: Sequence[int]
 ) -> list[tuple[int, str]]:
-    """``(id, label)`` of the project's runs that have a Failed case, newest
-    first, at most ``RUN_CHOICE_LIMIT`` (1 query; none without a project or
-    for a project outside ``project_ids``)."""
-    if project_id is None or project_id not in project_ids:
+    """``(id, label)`` of the selected projects' runs that have a Failed case,
+    newest first, at most ``RUN_CHOICE_LIMIT`` (1 query; none without a
+    selected project inside ``project_ids``). With more than one project the
+    label starts with the project name."""
+    allowed = set(project_ids)
+    selected = [
+        project_id for project_id in selected_project_ids if project_id in allowed
+    ]
+    if not selected:
         return []
     has_failed_case = Exists(
         TestRunTestCase.objects.filter(
@@ -45,8 +50,13 @@ def failed_case_run_choices(
         )
     )
     rows = (
-        TestRun.objects.filter(has_failed_case, project_id=project_id)
+        TestRun.objects.filter(has_failed_case, project_id__in=selected)
         .order_by("-created_at", "-id")
-        .values_list("id", "name")[:RUN_CHOICE_LIMIT]
+        .values_list("id", "name", "project__name")[:RUN_CHOICE_LIMIT]
     )
-    return [(run_id, name or f"Run #{run_id}") for run_id, name in rows]
+    with_project = len(selected) > 1
+    choices: list[tuple[int, str]] = []
+    for run_id, name, project_name in rows:
+        label = name or f"Run #{run_id}"
+        choices.append((run_id, f"{project_name} · {label}" if with_project else label))
+    return choices

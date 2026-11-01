@@ -635,7 +635,8 @@ a:hover {
   margin-bottom: 18px;
 }
 
-.field > label {
+.field > label,
+.field > .field-label {
   display: block;
   font-weight: 600;
   font-size: 0.9rem;
@@ -682,6 +683,47 @@ a:hover {
   background-size: 5px 5px;
   background-repeat: no-repeat;
   padding-right: 34px;
+}
+
+/* Dropdown of checkboxes (partials/multi_select_field.html): the summary
+   looks like a .select, the panel floats like a .menu. */
+.multi-select {
+  position: relative;
+}
+
+.multi-select > summary {
+  display: block;
+  list-style: none;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-select > summary::-webkit-details-marker {
+  display: none;
+}
+
+.multi-select-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 6px);
+  max-height: 280px;
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  z-index: var(--z-menu);
+}
+
+.multi-select-panel .checkbox { margin-bottom: 8px; }
+.multi-select-panel .checkbox:last-child { margin-bottom: 0; }
+
+.field.has-error .multi-select > summary {
+  border-color: var(--danger);
 }
 
 .hint {
