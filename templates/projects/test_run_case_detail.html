@@ -59,7 +59,10 @@
      resume_steps (list[ResumeStepOption]: step_num, description, passed; empty
      when the case has no checkpoint, so it resumes from the start),
      resume_form (CaseResumeForm with the from_step select, or None when
-     resume_steps is empty), resumes (list[TestRunCaseResume], resumed_by
+     resume_steps is empty), resume_is_manual (bool,
+     projects.run_resume_services.is_manual_resume: a Manual run's Cancelled
+     case goes back to the Test Runner's list and starts again from step 1;
+     no step select, mode shown as text), resumes (list[TestRunCaseResume], resumed_by
      loaded; the case's earlier outcomes, oldest first). Each row's `kind` is
      "resume" (Resume, from_step set or None for "from the start") or "rerun"
      (re-run from step 1 on this run via the run page's bulk bar; from_step is
@@ -465,7 +468,11 @@
     <div class="card-header">
       <h2 id="cancelled-h">This case was cancelled</h2>
     </div>
+    {% if resume_is_manual %}
+    <p class="hint">The run stopped before this case was handed in. Resume it to put it back in the Test Runner's list; a tester starts it again from step 1.</p>
+    {% else %}
     <p class="hint">The run stopped before this case finished. Resume it to continue on this run{% if resume_steps %} from the step where it stopped{% endif %}.</p>
+    {% endif %}
     <div class="actions card-actions">
       <button type="button" class="btn btn-primary" @click="$dispatch('open-resume-case')">Resume case</button>
     </div>
@@ -697,7 +704,7 @@
   {% include "partials/confirm_dialog.html" with dialog_id="remove-case" title="Remove this case from the run?" body="The test case itself is not deleted." confirm_label="Remove" action_url=remove_case_url %}
   {% endif %}
 
-  {# Section: Resume case dialog — step select when the case has a checkpoint #}
+  {# Section: Resume case dialog — step select when the case has a checkpoint (none for a manual case) #}
   {% if can_resume %}
   <div
     class="dialog-backdrop"
@@ -716,7 +723,9 @@
       </div>
       <form method="post" action="{% url 'projects:test_run_case_resume' project.id test_run.id pivot.id %}">
         {% csrf_token %}
-        {% if resume_form %}
+        {% if resume_is_manual %}
+        <p>The run stopped before this case was handed in. Resume it to put it back in the Test Runner's list; a tester starts it again from step 1.</p>
+        {% elif resume_form %}
         <div class="field">
           <label class="label" for="{{ resume_form.from_step.id_for_label }}">{{ resume_form.from_step.label }}</label>
           {{ resume_form.from_step }}
@@ -725,7 +734,11 @@
         {% else %}
         <p>No progress was saved for this case, so it starts again from step 1 on this run.</p>
         {% endif %}
+        {% if resume_is_manual %}
+        {% include "projects/includes/_help_mode_select.html" with field_id="resume-case-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode can_change=False only %}
+        {% else %}
         {% include "projects/includes/_help_mode_select.html" with field_id="resume-case-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode can_change=user.is_superuser only %}
+        {% endif %}
         <p>The result stays on this run. A Checked mark on this case is cleared.</p>
         <div class="dialog-actions">
           <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>

@@ -53,8 +53,11 @@
      posting pivot_ids + next to projects:test_run_cases_rerun,
      resume_panel (projects.run_resume_services.ResumePanel: blocked,
      cancelled_started, cancelled_unstarted counts, can_resume, blockers,
-     confirm_body). "Resume run" continues Blocked / Cancelled cases on this
-     run in place; "Re-run blocked" copies them into a new run instead.
+     confirm_body, is_manual). "Resume run" continues Blocked / Cancelled
+     cases on this run in place; "Re-run blocked" copies them into a new run
+     instead. For a Manual run (is_manual) it puts the Cancelled cases back to
+     the Test Runner's list (counted as cancelled_unstarted) and the dialog
+     shows the mode as text: a run cannot switch to or from Manual on Resume.
 
      Need help: help_panel (projects.case_help_services.HelpPanel, or None
      unless the run is "paused"): request (latest CaseHelpRequest, case loaded),
@@ -683,7 +686,11 @@
       <p id="resume-run-desc">{{ resume_panel.confirm_body }}</p>
       <form method="post" action="{{ test_run_resume_url }}">
         {% csrf_token %}
+        {% if resume_panel.is_manual %}
+        {% include "projects/includes/_help_mode_select.html" with field_id="resume-run-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode can_change=False only %}
+        {% else %}
         {% include "projects/includes/_help_mode_select.html" with field_id="resume-run-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode can_change=user.is_superuser only %}
+        {% endif %}
         <div class="dialog-actions">
           <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
           <button type="submit" class="btn btn-primary">Resume run</button>
