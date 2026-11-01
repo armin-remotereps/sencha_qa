@@ -52,7 +52,7 @@ from controller_client.protocol import (
 from notifications.services.site_url import absolute_url
 from projects.case_help_services import HelpPanel, get_help_panel
 from projects.case_pause_services import CasePausePanel, get_case_pause_panel
-from projects.case_step_refs import numbered_case_steps
+from projects.case_text_display import case_text_display
 from projects.models import (
     HelpAutoFixState,
     HelpProposalAction,
@@ -212,6 +212,7 @@ def _build_view(
     pause_panel: CasePausePanel | None,
 ) -> RunnerCaseView:
     test_case = pivot.test_case
+    case_text = case_text_display(test_case)
     test_run = pivot.test_run
     path = reverse(
         "projects:test_run_case_detail",
@@ -228,18 +229,16 @@ def _build_view(
         case_title=test_case.title[:PERSON_STEP_LABEL_MAX_CHARS],
         status_label=pivot.get_status_display()[:PERSON_STEP_LABEL_MAX_CHARS],
         case_url=(absolute_url(path) or "")[:PERSON_STEP_URL_MAX_CHARS],
-        preconditions=test_case.preconditions[:PERSON_CASE_TEXT_MAX_CHARS],
-        steps_text=test_case.steps[:PERSON_CASE_TEXT_MAX_CHARS],
-        expected_text=test_case.expected[:PERSON_CASE_TEXT_MAX_CHARS],
+        preconditions=case_text.preconditions[:PERSON_CASE_TEXT_MAX_CHARS],
+        steps_text=case_text.steps_text[:PERSON_CASE_TEXT_MAX_CHARS],
+        expected_text=case_text.expected_text[:PERSON_CASE_TEXT_MAX_CHARS],
         numbered_steps=tuple(
             PersonCaseStepPayload(
                 num=step.num,
                 text=step.text[:PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS],
                 expected=step.expected[:PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS],
             )
-            for step in numbered_case_steps(test_case)[
-                :PERSON_CASE_NUMBERED_STEPS_MAX_ITEMS
-            ]
+            for step in case_text.numbered_steps[:PERSON_CASE_NUMBERED_STEPS_MAX_ITEMS]
         ),
         log_tail=cut_log_tail(str(getattr(pivot, _LOG_TAIL) or "")),
         pause=_pause_payload(pause_panel) if pause_panel is not None else None,

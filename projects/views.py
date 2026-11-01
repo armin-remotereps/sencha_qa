@@ -64,6 +64,7 @@ from projects.case_plan_revision_services import (
 )
 from projects.case_result_page import get_case_result_panel
 from projects.case_step_progress import case_step_view
+from projects.case_text_display import case_text_display
 from projects.decorators import get_writable_project, project_membership_required
 from projects.exceptions import (
     ApplicationContextVersionNotFoundError,
@@ -1187,6 +1188,7 @@ def test_run_case_detail(
             "project": project,
             "test_run": pivot.test_run,
             "pivot": pivot,
+            "case_text": case_text_display(pivot.test_case),
             "screenshots": screenshots,
             "form": form,
             "can_edit": can_edit,
