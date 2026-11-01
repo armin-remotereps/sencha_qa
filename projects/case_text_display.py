@@ -14,6 +14,7 @@ from projects.case_markup import markup_to_plain
 from projects.case_step_refs import CaseStepText, numbered_case_steps
 from projects.models import TestCase
 
+
 @dataclass(frozen=True)
 class CaseTextDisplay:
     preconditions: str
@@ -40,9 +41,7 @@ def case_text_display(test_case: TestCase) -> CaseTextDisplay:
     numbered = case_steps_for_display(numbered_case_steps(test_case))
     # The parser takes a first section only at the very start of the field, so
     # the field starting with that exact marker means no text comes before it.
-    steps_listed = bool(numbered) and test_case.steps.startswith(
-        f"{numbered[0].num}. "
-    )
+    steps_listed = bool(numbered) and test_case.steps.startswith(f"{numbered[0].num}. ")
     first_expected = next((step.num for step in numbered if step.expected), None)
     return CaseTextDisplay(
         preconditions=markup_to_plain(test_case.preconditions),
@@ -69,4 +68,3 @@ def case_steps_for_display(
         )
         for step in steps
     )
-

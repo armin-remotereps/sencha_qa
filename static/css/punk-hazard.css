@@ -3576,6 +3576,12 @@ ol.person-step-howto + .person-step-howto-source {
   margin: -8px 0 14px;
 }
 
+/* Manual run case card: a step's collapsed "How to do it" under its text. */
+.step-list .manual-step-howto {
+  margin-top: 8px;
+  font-size: 0.9rem;
+}
+
 /* "Covers TestRail steps 3–5": the case steps a person step covers. */
 .person-step-covers {
   margin: 0 0 14px;

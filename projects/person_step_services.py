@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from django.db import transaction
-from django.urls import reverse
 from django.utils import timezone
 
 from agents.checkpoint import (
@@ -34,7 +33,6 @@ from agents.checkpoint import (
 )
 from agents.types import (
     CheckpointPersonStep,
-    PersonHowToItem,
     PersonMarkVerdict,
     PersonReportOutcome,
     PersonStepHandOff,
@@ -46,6 +44,7 @@ from projects.case_result_text import person_label
 from projects.case_retest_marking import RETEST_MARK_FIELDS, apply_retest_mark
 from projects.case_step_refs import CaseStepText, stored_case_steps
 from projects.exceptions import PersonStepError, RunHelpError
+from projects.how_to_view import PersonHowToView, how_to_view
 from projects.manual_run_policy import MANUAL_PERSON_STEP_REFUSED, is_manual_run
 from projects.models import (
     ACTIVE_RUN_STATUSES,
@@ -98,21 +97,6 @@ _ACTIONABLE_STATUSES: tuple[str, ...] = (
     PersonStepStatus.NOT_CONFIRMED,
 )
 _OUTPUT_OMITTED = "\n… output shortened …\n"
-
-
-@dataclass(frozen=True)
-class PersonHowToView:
-    """One "How to do it" item as the case card shows it."""
-
-    text: str
-    # An AI-suggested command for the runner's shell; "" when none.
-    command: str
-    # Server-built ("«Install guide.pdf», page 3" / "Artifacts profile");
-    # "" for general guidance.
-    source_label: str
-    # The knowledge base item (at its page) or the Machine readiness tab;
-    # "" without a source.
-    source_url: str
 
 
 @dataclass(frozen=True)
@@ -251,7 +235,7 @@ def get_person_step_panel(
         blockers = list_wake_blockers(test_run, project)
     not_confirmed = step.status == PersonStepStatus.NOT_CONFIRMED
     how_to = stored_how_to(step.how_to)
-    how_to_views = tuple(_how_to_view(item, project.pk) for item in how_to)
+    how_to_views = tuple(how_to_view(item, project.pk) for item in how_to)
     ask = (
         get_person_step_ask_state(step, run_paused=paused)
         if include_questions
@@ -281,26 +265,6 @@ def get_person_step_panel(
         can_ask=ask.can_ask,
         ask_blocker=ask.ask_blocker,
         has_pending=ask.has_pending,
-    )
-
-
-def _how_to_view(item: PersonHowToItem, project_id: int) -> PersonHowToView:
-    """``item`` with its source link (no query: ids come from the row)."""
-    url = ""
-    if item.source_kind == "kb" and item.source_item_id is not None:
-        url = reverse(
-            "knowledge_base:item",
-            kwargs={"project_id": project_id, "item_id": item.source_item_id},
-        )
-        if item.source_page is not None:
-            url = f"{url}?page={item.source_page}"
-    elif item.source_kind == "profile":
-        url = reverse("machine_readiness:overview", kwargs={"project_id": project_id})
-    return PersonHowToView(
-        text=item.text,
-        command=item.command,
-        source_label=item.source_label if url else "",
-        source_url=url,
     )
 
 

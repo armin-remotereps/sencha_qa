@@ -30,6 +30,8 @@ from agents.services.person_step_prompts import (
     HOW_TO_MAX_ITEMS,
     HOW_TO_TEXT_MAX_CHARS,
     INSTRUCTION_MAX_CHARS,
+    build_case_step_how_to_system_prompt,
+    build_case_step_how_to_user_prompt,
     build_confirm_sub_task,
     build_mark_evidence_sub_task,
     build_prepare_system_prompt,
@@ -147,6 +149,73 @@ def prepare_person_step(
         return hand_off
     # The refs belong to the plan step; the model never writes them.
     return replace(hand_off, case_steps=sub_task.case_steps)
+
+
+def prepare_case_step_how_to(
+    llm: LLMConfig,
+    *,
+    step_text: str,
+    expected_result: str,
+    step_num: int,
+    total_steps: int,
+    task_description: str,
+    system_info: dict[str, object] | None,
+    guide: PersonGuideContext | None,
+    timeout_seconds: float | None = None,
+) -> tuple[PersonHowToItem, ...] | None:
+    """The "How to do it" items of a verbatim test case step (Manual runs).
+
+    One tool-free call with the hand-off's how-to rules; the step text and
+    expected result are never rewritten (the model writes only ``how_to``).
+    Items are validated like a hand-off's: restating the step or its expected
+    result dropped, sources checked against ``guide``, secrets redacted.
+    None when the answer is unusable; an ``AIServiceError`` propagates.
+    ``timeout_seconds`` None means ``OPENAI_REQUEST_TIMEOUT``. No ORM: safe to
+    call from a worker thread.
+    """
+    os_name = get_os_name(system_info)
+    response = send_chat_completion(
+        llm,
+        (
+            ChatMessage(
+                role="system",
+                content=build_case_step_how_to_system_prompt(
+                    os_name=os_name, guide=guide
+                ),
+            ),
+            ChatMessage(
+                role="user",
+                content=build_case_step_how_to_user_prompt(
+                    task_description=task_description,
+                    step_text=step_text,
+                    expected_result=expected_result,
+                    step_num=step_num,
+                    total_steps=total_steps,
+                    guide=guide,
+                ),
+            ),
+        ),
+        timeout_seconds=timeout_seconds,
+    )
+    raw = response.message.content if isinstance(response.message.content, str) else ""
+    data = _json_object(raw)
+    if data is None or not isinstance(data.get("how_to"), list):
+        logger.warning("Case step %d: unusable how-to answer", step_num)
+        return None
+    return _parse_how_to(
+        data.get("how_to"),
+        step_num=step_num,
+        context=_HowToContext(
+            task_description=task_description,
+            restated=(_comparable(step_text), _comparable(expected_result)),
+            allowed_items=(
+                guide.allowed_items
+                if guide is not None and guide.allowed_items is not None
+                else {}
+            ),
+            profile_given=guide is not None and bool(guide.artifacts_profile.strip()),
+        ),
+    )
 
 
 def parse_hand_off(

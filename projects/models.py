@@ -1806,3 +1806,61 @@ class ManualCaseSubmission(models.Model):
             f"Manual submission {self.submission_id} of case "
             f"#{self.test_run_test_case_id}"
         )
+
+
+class ManualGuideState(models.TextChoices):
+    """Where the "How to do it" guide of a claimed Manual run case is."""
+
+    QUEUED = "queued", "Queued"
+    RESEARCHING = "researching", "Researching the knowledge base"
+    WRITING = "writing", "Writing step guides"
+    DONE = "done", "Done"
+    # The claim was gone mid-way; missing steps stay missing.
+    STOPPED = "stopped", "Stopped"
+    # A task-level error; written steps are kept.
+    FAILED = "failed", "Failed"
+    # ``MANUAL_GUIDE_MAX_STEPS`` was 0 when the case was claimed.
+    OFF = "off", "Off"
+
+
+class ManualStepGuide(models.Model):
+    """The AI "How to do it" items of a claimed Manual run case's steps.
+
+    Written only by the guide task (``projects.manual_step_guide_worker``),
+    every write conditional on ``generation``; a claim
+    (``manual_step_guide_services.request_manual_case_guide``) bumps the
+    generation. Never part of the checkpoint, the hand-in or TestRail: the
+    step texts the tester sees stay the checkpoint's verbatim ones.
+    """
+
+    test_run_test_case = models.OneToOneField(
+        TestRunTestCase,
+        on_delete=models.CASCADE,
+        related_name="manual_step_guide",
+    )
+    # sha256 of the case text, the verbatim steps and the runner OS; a guide
+    # whose fingerprint no longer matches is not shown.
+    fingerprint = models.CharField(max_length=64)
+    generation = models.PositiveIntegerField(default=0)
+    state = models.CharField(
+        max_length=16,
+        choices=ManualGuideState.choices,
+        default=ManualGuideState.QUEUED,
+    )
+    # The runner OS name the guide was written for (shell label for display).
+    os_name = models.CharField(max_length=32, blank=True, default="")
+    # Steps to write: min(case steps, ``MANUAL_GUIDE_MAX_STEPS``).
+    step_count = models.PositiveSmallIntegerField(default=0)
+    # The case's knowledge base research notes (``agents.checkpoint``
+    # ``person_guide_to_json`` shape); {} while not researched.
+    research = models.JSONField(default=dict, blank=True)
+    # ``{"<num>": {"state": "ready"|"failed", "how_to": [rows]}}``, rows in
+    # ``person_step_rows.how_to_rows`` shape; a step absent is not written yet.
+    steps = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    # Bumped by every write; the read side treats a guide in progress whose
+    # ``updated_at`` is too old as lost.
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self) -> str:
+        return f"Manual step guide of case #{self.test_run_test_case_id}"

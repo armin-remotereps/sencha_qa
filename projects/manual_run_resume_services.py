@@ -66,9 +66,7 @@ _UPDATE_FIELDS: Final[tuple[str, ...]] = (
 
 def count_manual_resumable(test_run: TestRun) -> int:
     """The run's cases a Manual Resume puts back to Created (1 query)."""
-    return test_run.pivot_entries.filter(
-        status__in=MANUAL_RESUMABLE_STATUSES
-    ).count()
+    return test_run.pivot_entries.filter(status__in=MANUAL_RESUMABLE_STATUSES).count()
 
 
 def build_manual_resume_confirm_body(count: int) -> str:

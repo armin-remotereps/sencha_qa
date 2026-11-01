@@ -190,9 +190,7 @@ class _PlainTextParser(HTMLParser):
             if tag == "pre":
                 self._pre += 1
 
-    def handle_startendtag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         self.handle_starttag(tag, attrs)
         if tag not in ("br", "img", "hr"):
             self.handle_endtag(tag)

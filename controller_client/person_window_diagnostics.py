@@ -6,7 +6,7 @@ whether this Python has tkinter, which Tk it has, which display Tk would use,
 whether a Tk window opens in a separate process the way the runner starts
 it, and whether the window renders a sample step, test case, log and
 discussion, and a sample Manual run (case list, a claimed case with marked
-steps, a thumbnail and upload progress), without errors (in a window that is
+steps, a step's "How to do it", a thumbnail and upload progress), without errors (in a window that is
 never shown). The interactive
 check then shows that sample (a step with "How to do it" items and a sample
 Ask the AI exchange, its test case and log, and a paused case's discussion)
@@ -503,8 +503,24 @@ def _sample_manual_state(claimed: bool) -> ManualWindowState:
                 num=2,
                 text="Open the About dialog.",
                 expected="The title is 'Sample'.",
+                how_to_state="pending",
             ),
-            ManualStepPayload(num=3, text="Close the app."),
+            # The step shown first (the first one not marked): a how-to.
+            ManualStepPayload(
+                num=3,
+                text="Close the app.",
+                how_to=(
+                    PersonHowToPayload(
+                        text="Close the sample app from its window's close button.",
+                        source="«Runner setup guide.pdf», page 3",
+                    ),
+                    PersonHowToPayload(
+                        text="Check that no sample app process is left.",
+                        command=_SAMPLE_COMMAND,
+                    ),
+                ),
+                how_to_state="ready",
+            ),
         ),
         claimed_at="2026-01-01T10:00:00+00:00",
         questions=(
@@ -518,6 +534,7 @@ def _sample_manual_state(claimed: bool) -> ManualWindowState:
             ),
         ),
         can_ask=True,
+        shell_label=_SAMPLE_SHELL,
     )
     draft = ManualDraftView(
         pivot_id=_SAMPLE_MANUAL_PIVOT,
