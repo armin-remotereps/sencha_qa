@@ -1,6 +1,9 @@
 """Use case: a person asks the AI about the step waiting for them (Ask AI).
 
-Human in the loop only. The AI advises (one tool-free LLM call, run by the
+Human in the loop person steps, and (D12) the claimed case of a Manual run
+asked from the Test Runner window (``ask_manual_step_question``; the
+question is anchored on ``manual_case`` and ``manual_step_num``). The AI advises (``agents.services.person_step_advisor``,
+read-only knowledge base look-ups and an answer, run by the
 ``projects.tasks.answer_person_step_question`` task on the ``assist`` queue);
 it never acts on the machine and never changes the step, case or run. The web
 "Your turn" card and the Test Runner window share these rules and the stored
@@ -10,28 +13,29 @@ Q&A (``PersonStepQuestion``); asking is not a test-session activity.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from celery.exceptions import SoftTimeLimitExceeded
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 
+from agents.checkpoint import checkpoint_from_json
 from agents.exceptions import AIServiceError
-from agents.os_shell import get_os_name, shell_label
 from agents.services.llm_config import build_llm_config
 from agents.services.person_step_advisor import answer_person_step_question
-from agents.types import PersonStepAdviceContext, PersonStepHandOff
+from agents.types import PersonStepAdviceContext
 from auto_tester.celery import app as celery_app
 from controller_client.protocol import PERSON_STEP_STATE_MAX_QUESTIONS
-from knowledge_base.exceptions import KnowledgeBaseError
-from knowledge_base.services.related_knowledge import related_knowledge
-from knowledge_base.tool_text import render_excerpts
-from projects.case_step_refs import stored_case_steps
-from projects.case_task_text import build_task_description
-from projects.exceptions import PersonStepQuestionError
+from projects.advice_context import build_advice_context
+from projects.exceptions import ManualRunError, PersonStepQuestionError
+from projects.manual_advice_mapping import manual_advice_step
+from projects.manual_case_lock import claim_matches, lock_manual_run_case
+from projects.manual_question_push import broadcast_manual_case_questions
 from projects.models import (
     PERSON_STEP_ANSWER_MAX_LENGTH,
     PERSON_STEP_QUESTION_MAX_LENGTH,
@@ -40,18 +44,19 @@ from projects.models import (
     PersonStepQuestion,
     PersonStepQuestionStatus,
     PersonStepStatus,
+    Project,
     TestRunStatus,
     TestRunTestCase,
+    TestRunTestCaseStatus,
 )
 from projects.person_step_actor import PersonStepActor
+from projects.person_step_advice_mapping import advice_step, earlier_steps
 from projects.person_step_question_push import broadcast_person_step_questions
 from projects.person_step_question_view import (
     PersonStepQuestionView,
     build_question_view,
 )
-from projects.person_step_rows import stored_hand_off_kind, stored_how_to
 from projects.run_reopen_services import lock_project_and_run
-from projects.services import build_agent_project_context
 
 logger = logging.getLogger(__name__)
 
@@ -65,12 +70,8 @@ QUESTION_THROTTLE_WINDOW_SECONDS = 60
 QUESTIONS_SHOWN_PER_STEP = PERSON_STEP_STATE_MAX_QUESTIONS
 # Shown when the AI call failed (also for a pending question settled as lost).
 QUESTION_FAILED_ANSWER = "The AI could not answer right now. Ask again."
-# Earlier Q&A of the step the advisor sees, and the application context cap.
+# Earlier Q&A of the step the advisor sees.
 _HISTORY_MAX_ITEMS = 6
-_PROJECT_CONTEXT_MAX_LENGTH = 4000
-# Knowledge base excerpts given to the advisor (one query).
-_KNOWLEDGE_EXCERPT_LIMIT = 4
-_KNOWLEDGE_EXCERPT_MAX_CHARS = 6000
 # A pending question older than the LLM timeout plus this is a lost task.
 _STALE_GRACE_SECONDS = 60
 
@@ -87,6 +88,12 @@ _CAP_REACHED = (
     f"This step reached its limit of {PERSON_STEP_QUESTIONS_PER_STEP} questions."
 )
 _PENDING = "The AI is still answering the last question."
+_MANUAL_RUN_NOT_RUNNING = "This manual run is not running."
+_MANUAL_NOT_CLAIMED = "This case is not claimed by the window any more."
+_MANUAL_NO_STEP = "This case has no such step."
+_MANUAL_CAP_REACHED = (
+    f"This case reached its limit of {PERSON_STEP_QUESTIONS_PER_STEP} questions."
+)
 
 # The statuses a person may ask about (the person's turn).
 _ASKABLE_STATUSES: tuple[str, ...] = (
@@ -209,25 +216,8 @@ def ask_person_step_question(
         )
         if len(rows) >= PERSON_STEP_QUESTIONS_PER_STEP:
             raise PersonStepQuestionError(_CAP_REACHED)
-        now = timezone.now()
-        stale_before = _stale_before(now)
-        pending = [
-            (pk, created_at)
-            for pk, status, created_at in rows
-            if status == PersonStepQuestionStatus.PENDING
-        ]
-        if any(created_at >= stale_before for _pk, created_at in pending):
+        if _fresh_pending_else_settle(rows, timezone.now()):
             raise PersonStepQuestionError(_PENDING)
-        if pending:
-            # A lost task: settle it so the step can take a new question.
-            PersonStepQuestion.objects.filter(
-                pk__in=[pk for pk, _created_at in pending],
-                status=PersonStepQuestionStatus.PENDING,
-            ).update(
-                status=PersonStepQuestionStatus.FAILED,
-                answer=QUESTION_FAILED_ANSWER,
-                answered_at=now,
-            )
         created = PersonStepQuestion.objects.create(
             person_step=step,
             round=step.round,
@@ -246,6 +236,116 @@ def ask_person_step_question(
     return created
 
 
+@dataclass(frozen=True)
+class ManualAskState:
+    """The Ask AI part of a claimed manual case (the runner snapshot)."""
+
+    # The newest ``QUESTIONS_SHOWN_PER_STEP`` of the current claim, oldest first.
+    questions: tuple[PersonStepQuestionView, ...]
+    # The cap and the pending rule allow a question now (the claim itself is
+    # the caller's check).
+    can_ask: bool
+
+
+def get_manual_ask_state(pivot_id: int, claimed_at: datetime | None) -> ManualAskState:
+    """The claimed case's Q&A since ``claimed_at`` and whether a question
+    may be asked now (one query; the throttle is not checked)."""
+    rows = list(
+        PersonStepQuestion.objects.filter(manual_case_id=pivot_id)
+        .select_related("asked_by")
+        .order_by("created_at", "pk")
+    )
+    claim_rows = _since_claim(rows, claimed_at)
+    stale_before = _stale_before(timezone.now())
+    fresh_pending = any(
+        row.status == PersonStepQuestionStatus.PENDING
+        and row.created_at >= stale_before
+        for row in rows
+    )
+    return ManualAskState(
+        questions=tuple(
+            build_question_view(row) for row in claim_rows[-QUESTIONS_SHOWN_PER_STEP:]
+        ),
+        can_ask=not fresh_pending and len(claim_rows) < PERSON_STEP_QUESTIONS_PER_STEP,
+    )
+
+
+def ask_manual_step_question(
+    *,
+    project: Project,
+    pivot_id: int,
+    claim_token: str,
+    step_num: int | None,
+    question: str,
+    actor: PersonStepActor,
+) -> None:
+    """Store a ``pending`` question about the claimed manual case and queue
+    its answer (D12).
+
+    The same throttle (shared with person step questions), per-target cap,
+    stale-pending rule, task and advisor as ``ask_person_step_question``. The
+    gate differs: under the project, run and case locks the run must be a
+    running Manual run of ``project``, the case In progress and claimed with
+    ``claim_token``; ``step_num`` (None: the whole case) must be one of its
+    verbatim steps. The cap counts the current claim's questions. Advisory
+    only and not session activity. Raises ``ManualRunError`` (user-safe).
+    """
+    question = question.strip()
+    if not question:
+        raise ManualRunError(_EMPTY_QUESTION)
+    if len(question) > PERSON_STEP_QUESTION_MAX_LENGTH:
+        raise ManualRunError(_TOO_LONG)
+    try:
+        _check_throttle(project.pk)
+    except PersonStepQuestionError as exc:
+        raise ManualRunError(exc.message) from exc
+    with transaction.atomic():
+        test_run, pivot = lock_manual_run_case(project_id=project.pk, pivot_id=pivot_id)
+        if test_run.status != TestRunStatus.STARTED:
+            raise ManualRunError(_MANUAL_RUN_NOT_RUNNING)
+        if pivot.status != TestRunTestCaseStatus.IN_PROGRESS or not claim_matches(
+            pivot, claim_token
+        ):
+            raise ManualRunError(_MANUAL_NOT_CLAIMED)
+        if step_num is not None:
+            checkpoint = checkpoint_from_json(pivot.execution_checkpoint)
+            if checkpoint is None or not 1 <= step_num <= len(checkpoint.plan):
+                raise ManualRunError(_MANUAL_NO_STEP)
+        rows = list(
+            PersonStepQuestion.objects.filter(manual_case_id=pivot.pk).values_list(
+                "pk", "status", "created_at"
+            )
+        )
+        claimed_at = pivot.manual_claimed_at
+        if (
+            sum(
+                1
+                for _pk, _status, created_at in rows
+                if claimed_at is None or created_at >= claimed_at
+            )
+            >= PERSON_STEP_QUESTIONS_PER_STEP
+        ):
+            raise ManualRunError(_MANUAL_CAP_REACHED)
+        # Over every question of the case: one pending per case (constraint),
+        # also one left from an earlier claim.
+        if _fresh_pending_else_settle(rows, timezone.now()):
+            raise ManualRunError(_PENDING)
+        created = PersonStepQuestion.objects.create(
+            manual_case=pivot,
+            manual_step_num=step_num,
+            round=1,
+            question=question,
+            asked_by=actor.user,
+            asked_via=actor.via,
+        )
+        question_id = created.pk
+        project_id = project.pk
+        transaction.on_commit(lambda: _enqueue_answer(question_id))
+        transaction.on_commit(
+            lambda: broadcast_manual_case_questions(pivot_id, project_id)
+        )
+
+
 # ---------------------------------------------------------------------------
 # Answering (the Celery task's body)
 # ---------------------------------------------------------------------------
@@ -254,19 +354,26 @@ def ask_person_step_question(
 def answer_person_step_question_now(question_id: int) -> None:
     """Answer one ``pending`` question (the Celery task's body).
 
-    Idempotent: returns when the question is gone or no longer pending. The
-    LLM call runs outside any transaction; the result is saved with a
-    conditional update (``answered``, or ``failed`` on ``AIServiceError``),
-    then broadcast on commit. Stored even if the step closed meanwhile.
+    Idempotent: returns when the question is gone or no longer pending. One
+    time budget (``PERSON_STEP_QUESTION_TIMEOUT_SECONDS``) starts here and
+    covers building the context and the advisor's calls. The LLM calls run
+    outside any transaction; the result is saved with a conditional update
+    (``answered``, or ``failed`` on any error, also a soft time limit), then
+    broadcast on commit. Stored even if the step closed meanwhile.
     """
+    deadline = time.monotonic() + settings.PERSON_STEP_QUESTION_TIMEOUT_SECONDS
     row = (
         PersonStepQuestion.objects.select_related(
             "person_step__test_run_test_case__test_case",
             "person_step__test_run_test_case__test_run__project",
+            "manual_case__test_case",
+            "manual_case__test_run__project",
         )
         .defer(
             "person_step__test_run_test_case__logs",
             "person_step__test_run_test_case__execution_checkpoint",
+            # The manual case's checkpoint holds its verbatim steps: loaded.
+            "manual_case__logs",
         )
         .filter(pk=question_id)
         .first()
@@ -274,39 +381,80 @@ def answer_person_step_question_now(question_id: int) -> None:
     if row is None or row.status != PersonStepQuestionStatus.PENDING:
         return
     step = row.person_step
-    pivot = step.test_run_test_case
-    project = pivot.test_run.project
-    history = _history(step.pk, before_id=row.pk)
-    context = _advice_context(step, pivot, history, row.question)
+    manual_case = row.manual_case
+    build_context: Callable[[], PersonStepAdviceContext]
+    broadcast: Callable[[], None]
+    if step is not None:
+        pivot = step.test_run_test_case
+        project_id = pivot.test_run.project_id
+        step_id = step.pk
+        person_step = step
+
+        def build_context() -> PersonStepAdviceContext:
+            return build_advice_context(
+                pivot=pivot,
+                step=advice_step(person_step),
+                earlier_steps=earlier_steps(
+                    pivot, before_step_num=person_step.step_num
+                ),
+                history=_history(step_id, before_id=question_id),
+                question=row.question,
+            )
+
+        def broadcast() -> None:
+            broadcast_person_step_questions(pivot.pk, project_id, step_id)
+
+    elif manual_case is not None:
+        # A Manual run question (D12): the claimed case's verbatim step.
+        pivot = manual_case
+        project_id = pivot.test_run.project_id
+        manual_step_num = row.manual_step_num
+
+        def build_context() -> PersonStepAdviceContext:
+            return build_advice_context(
+                pivot=pivot,
+                step=manual_advice_step(pivot, manual_step_num),
+                earlier_steps=(),
+                history=_manual_history(
+                    pivot.pk, manual_step_num, before_id=question_id
+                ),
+                question=row.question,
+            )
+
+        def broadcast() -> None:
+            broadcast_manual_case_questions(pivot.pk, project_id)
+
+    else:
+        return
     status = PersonStepQuestionStatus.ANSWERED
     try:
+        context = build_context()
         answer = answer_person_step_question(
             build_llm_config(),
             context,
             row.question,
-            timeout_seconds=settings.PERSON_STEP_QUESTION_TIMEOUT_SECONDS,
+            deadline=deadline,
+            max_tool_rounds=settings.PERSON_STEP_QUESTION_MAX_TOOL_ROUNDS,
         ).strip()[:PERSON_STEP_ANSWER_MAX_LENGTH]
     except AIServiceError as exc:
         logger.warning("Ask AI question %d not answered: %s", question_id, exc)
         answer = ""
+    except SoftTimeLimitExceeded:
+        # The person can ask again at once.
+        logger.warning("Ask AI question %d hit the time limit", question_id)
+        answer = ""
     except Exception:
-        # Also a soft time limit: the person can ask again at once.
         logger.exception("Ask AI question %d failed", question_id)
         answer = ""
     if not answer:
         status = PersonStepQuestionStatus.FAILED
         answer = QUESTION_FAILED_ANSWER
-    pivot_id = pivot.pk
-    project_id = project.pk
-    step_id = step.pk
     with transaction.atomic():
         updated = PersonStepQuestion.objects.filter(
             pk=question_id, status=PersonStepQuestionStatus.PENDING
         ).update(status=status, answer=answer, answered_at=timezone.now())
         if updated:
-            transaction.on_commit(
-                lambda: broadcast_person_step_questions(pivot_id, project_id, step_id)
-            )
+            transaction.on_commit(broadcast)
 
 
 # ---------------------------------------------------------------------------
@@ -325,7 +473,9 @@ def _load_questions(step_ids: Sequence[int]) -> dict[int, list[PersonStepQuestio
         .order_by("person_step_id", "created_at", "pk")
     )
     for row in rows:
-        grouped.setdefault(row.person_step_id, []).append(row)
+        # Always set here (filtered on it); None only on manual questions.
+        if row.person_step_id is not None:
+            grouped.setdefault(row.person_step_id, []).append(row)
     return grouped
 
 
@@ -352,6 +502,41 @@ def _ask_blocker(
     ):
         return _PENDING
     return ""
+
+
+def _fresh_pending_else_settle(
+    rows: Sequence[tuple[int, str, datetime]], now: datetime
+) -> bool:
+    """True when a ``(pk, status, created_at)`` row is a fresh pending
+    question; otherwise its stale pending ones (lost tasks) are failed so the
+    target can take a new question."""
+    stale_before = _stale_before(now)
+    pending = [
+        (pk, created_at)
+        for pk, status, created_at in rows
+        if status == PersonStepQuestionStatus.PENDING
+    ]
+    if any(created_at >= stale_before for _pk, created_at in pending):
+        return True
+    if pending:
+        PersonStepQuestion.objects.filter(
+            pk__in=[pk for pk, _created_at in pending],
+            status=PersonStepQuestionStatus.PENDING,
+        ).update(
+            status=PersonStepQuestionStatus.FAILED,
+            answer=QUESTION_FAILED_ANSWER,
+            answered_at=now,
+        )
+    return False
+
+
+def _since_claim(
+    rows: Sequence[PersonStepQuestion], claimed_at: datetime | None
+) -> list[PersonStepQuestion]:
+    """The questions asked during the current claim (all without one)."""
+    if claimed_at is None:
+        return list(rows)
+    return [row for row in rows if row.created_at >= claimed_at]
 
 
 def _stale_before(now: datetime) -> datetime:
@@ -403,62 +588,19 @@ def _history(step_id: int, *, before_id: int) -> tuple[tuple[str, str], ...]:
     return tuple((question, answer) for question, answer in rows)
 
 
-def _advice_context(
-    step: CasePersonStep,
-    pivot: TestRunTestCase,
-    history: tuple[tuple[str, str], ...],
-    question: str,
-) -> PersonStepAdviceContext:
-    project = pivot.test_run.project
-    system_info = project.agent_system_info
-    os_name = get_os_name(system_info if isinstance(system_info, dict) else None)
-    project_context = build_agent_project_context(project) or ""
-    return PersonStepAdviceContext(
-        os_name=os_name,
-        shell_label=shell_label(os_name),
-        case_text=build_task_description(pivot.test_case),
-        project_prompt=project_context[:_PROJECT_CONTEXT_MAX_LENGTH],
-        # The checkpoint (with the plan's size) is not loaded here.
-        step_label=_advice_step_label(step),
-        hand_off=PersonStepHandOff(
-            step_num=step.step_num,
-            kind=stored_hand_off_kind(step.kind),
-            instruction=step.instruction,
-            expected_result=step.expected_result,
-            command=step.command,
-            objection=step.agent_objection,
-            how_to=stored_how_to(step.how_to),
-            case_steps=tuple(item.num for item in stored_case_steps(step.case_steps)),
-        ),
-        history=history,
-        knowledge_excerpts=_knowledge_excerpts(
-            project.pk,
-            f"{question}\n{step.instruction}\n{step.expected_result}",
-        ),
-    )
-
-
-def _knowledge_excerpts(project_id: int, text: str) -> str:
-    """The rendered knowledge base excerpts related to ``text``; "" for none.
-
-    A knowledge base problem never keeps the question from being answered.
-    """
-    try:
-        excerpts = related_knowledge(
-            project_id,
-            text,
-            limit=_KNOWLEDGE_EXCERPT_LIMIT,
-            max_chars=_KNOWLEDGE_EXCERPT_MAX_CHARS,
+def _manual_history(
+    pivot_id: int, step_num: int | None, *, before_id: int
+) -> tuple[tuple[str, str], ...]:
+    """The case's earlier answered Q&A about the same step, oldest first."""
+    rows = list(
+        PersonStepQuestion.objects.filter(
+            manual_case_id=pivot_id,
+            manual_step_num=step_num,
+            pk__lt=before_id,
+            status=PersonStepQuestionStatus.ANSWERED,
         )
-    except KnowledgeBaseError as exc:
-        logger.warning("Ask AI knowledge excerpts skipped: %s", exc.message)
-        return ""
-    return render_excerpts(excerpts)
-
-
-def _advice_step_label(step: CasePersonStep) -> str:
-    """The advisor's step label: "Step N", plus " · <case steps label>" when set."""
-    label = f"Step {step.step_num}"
-    if step.case_steps_label:
-        return f"{label} · {step.case_steps_label}"
-    return label
+        .order_by("-pk")
+        .values_list("question", "answer")[:_HISTORY_MAX_ITEMS]
+    )
+    rows.reverse()
+    return tuple((question, answer) for question, answer in rows)

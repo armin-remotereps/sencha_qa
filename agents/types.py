@@ -83,11 +83,57 @@ class PersonStepHandOff:
     case_steps: tuple[int, ...] = ()
 
 
+# Where the step a person asks about comes from: ``plan`` is a Human in the
+# loop person step the agent wrote; ``case`` is a verbatim case step (Manual).
+AdviceStepSource = Literal["plan", "case"]
+# The hand-off kind of a ``plan`` step, or ``case`` for a verbatim case step.
+AdviceStepKind = Literal["interactive", "command", "restore", "case"]
+
+
+@dataclass(frozen=True)
+class AdviceCaseStep:
+    """One numbered test case step the asked-about step covers."""
+
+    num: int
+    text: str
+    # Blank when the case gives no expected result for the step.
+    expected: str = ""
+
+
+@dataclass(frozen=True)
+class AdviceStep:
+    """The step a person asks the Ask AI advisor about, whatever its source."""
+
+    source: AdviceStepSource
+    kind: AdviceStepKind
+    # 1-based plan step (``plan``) or case step (``case``).
+    step_num: int
+    # Shown to the model, e.g. "Plan step 3 · TestRail steps 5–7".
+    label: str
+    instruction: str
+    expected_result: str = ""
+    # The case-stated command of a ``command`` step; empty otherwise.
+    command: str = ""
+    # Why the agent could not confirm the person's last report; empty otherwise.
+    objection: str = ""
+    how_to: tuple[PersonHowToItem, ...] = ()
+    covered_case_steps: tuple[AdviceCaseStep, ...] = ()
+
+
+@dataclass(frozen=True)
+class AdviceEarlierStep:
+    """One line about an earlier step of the case (what was done, how it went)."""
+
+    step_num: int
+    summary: str
+
+
 @dataclass(frozen=True)
 class PersonStepAdviceContext:
     """What the Ask AI advisor knows about the step a person is performing.
 
-    Text only: no screen, no machine access.
+    Text only: no screen, no machine access. Its knowledge base tools read only
+    ``project_id``'s knowledge base.
     """
 
     # ``platform.system()`` of the runner (e.g. "Windows").
@@ -97,9 +143,15 @@ class PersonStepAdviceContext:
     case_text: str
     # The project's application context, capped by the caller.
     project_prompt: str
-    # "Step N of M" or "Step N".
-    step_label: str
-    hand_off: PersonStepHandOff
+    step: AdviceStep
+    project_id: int
+    # Earlier steps of the case, oldest first.
+    earlier_steps: tuple[AdviceEarlierStep, ...] = ()
+    # The project's artifacts profile text, capped by the caller; "" for none.
+    artifacts_profile: str = ""
+    # The knowledge base index (``knowledge_index_text``); "" exactly when the
+    # project has no ready knowledge base item.
+    knowledge_index: str = ""
     # Earlier (question, answer) pairs of this step, oldest first (≤ 6).
     history: tuple[tuple[str, str], ...] = ()
     # Knowledge base excerpts related to the question, rendered by the caller
@@ -515,6 +567,10 @@ class OrchestratorCheckpoint:
     case_step_count: int = 0
     # The case came from TestRail ("TestRail steps 3–5"), else "Case steps".
     case_steps_testrail: bool = True
+    # Manual run: the plan is the case's verbatim steps and every attempt was
+    # recorded from the tester's hand-in (no agent ran). Lets push and
+    # evidence code tell manual cases apart without reading the run.
+    manual: bool = False
 
 
 CheckpointCallback = Callable[[OrchestratorCheckpoint], None]

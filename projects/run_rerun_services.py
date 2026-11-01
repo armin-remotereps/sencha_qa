@@ -21,7 +21,13 @@ from accounts.models import CustomUser
 from projects.case_credit import credit_cases
 from projects.case_retest_marking import clear_retest_mark
 from projects.exceptions import RunRerunError
+from projects.manual_run_policy import (
+    MANUAL_MODE_SWITCH_REFUSED,
+    crosses_manual_boundary,
+)
+from projects.manual_submission_supersede import supersede_manual_submissions
 from projects.models import (
+    MANUAL_CLAIM_CLEARED,
     PAUSE_REQUEST_CLEARED,
     RETEST_CLEARED,
     CaseRestartKind,
@@ -117,6 +123,10 @@ def rerun_test_run_cases(
         )
         if not is_rerun_open(locked_run):
             raise RunRerunError(_NOT_FINISHED)
+        if resolved_help_mode is not None and crosses_manual_boundary(
+            locked_run.help_mode, resolved_help_mode
+        ):
+            raise RunRerunError(MANUAL_MODE_SWITCH_REFUSED)
         blockers = list_reopen_blockers(locked_run, project)
         if blockers:
             raise RunRerunError(blockers[0])
@@ -139,12 +149,6 @@ def rerun_test_run_cases(
             [_snapshot(pivot, user) for pivot in pivots]
         )
 
-        screenshots = TestRunScreenshot.objects.filter(
-            test_run_test_case_id__in=selected_ids
-        )
-        file_names = list(screenshots.values_list("image", flat=True))
-        screenshots.delete()
-
         now = timezone.now()
         # Every execution and Checked/Sent field, as `_reset_in_memory` does.
         TestRunTestCase.objects.filter(pk__in=selected_ids).update(
@@ -165,9 +169,19 @@ def rerun_test_run_cases(
             logs="",
             **RETEST_CLEARED,
             **PAUSE_REQUEST_CLEARED,
+            **MANUAL_CLAIM_CLEARED,
             # update() does not run auto_now.
             updated_at=now,
         )
+        # After the case UPDATE (which locks the cases, as a screenshot upload
+        # does first): a Manual run hand-in is discarded, so its late uploads
+        # are dropped, and an upload that won the lock is deleted below.
+        supersede_manual_submissions(pivot_ids=selected_ids)
+        screenshots = TestRunScreenshot.objects.filter(
+            test_run_test_case_id__in=selected_ids
+        )
+        file_names = list(screenshots.values_list("image", flat=True))
+        screenshots.delete()
         for pivot in pivots:
             _reset_in_memory(pivot, now)
 

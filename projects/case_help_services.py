@@ -63,6 +63,7 @@ from projects.case_plan_revision_services import (
 )
 from projects.case_retest_marking import RETEST_MARK_FIELDS, apply_retest_mark
 from projects.exceptions import RunHelpError
+from projects.manual_run_policy import MANUAL_HELP_REFUSED, is_manual_run
 from projects.models import (
     HELP_NOTE_MAX_LENGTH,
     OPEN_PERSON_STEP_STATUSES,
@@ -840,6 +841,8 @@ def finish_case_auto_fix(*, help_request_id: int, fixed: bool, summary: str) -> 
 
 def _lock_paused_run(test_run_id: int) -> tuple[Project, TestRun]:
     project, test_run = lock_project_and_run(test_run_id)
+    if is_manual_run(test_run):
+        raise RunHelpError(MANUAL_HELP_REFUSED)
     if test_run.status != TestRunStatus.PAUSED:
         raise RunHelpError(_NOT_PAUSED)
     return project, test_run

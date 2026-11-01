@@ -27,6 +27,11 @@ notebook:
 - Discussion: only for a help case. The help request, the chat with the
   agent and a message box, the agent's proposal and plan redesign, and
   Continue (mode, the redesigned plan, note) / Mark failed / Mark blocked.
+- Manual run: only while the project has a Manual run
+  (``person_window_manual``): the run's cases, the claimed case's verbatim
+  steps with Pass / Fail screenshots and notes, the case result and Hand in.
+  While it shows, closing the window minimizes it instead of hiding it (the
+  tester works only here, so it must stay reachable).
 
 Without ``cases`` (an older server) only the Step tab shows, as before. The
 header case is the Discussion's case while that tab is selected, else the
@@ -100,6 +105,11 @@ from controller_client.person_window_ipc import (
     HelpActionEvent,
     HiddenEvent,
     HideCommand,
+    ManualCaptureResultCommand,
+    ManualResultCommand,
+    ManualStateCommand,
+    ManualThumbnailCommand,
+    ManualWindowState,
     PauseEvent,
     QuestionEvent,
     QuestionResultCommand,
@@ -114,6 +124,7 @@ from controller_client.person_window_ipc import (
     decode_command,
     encode_event,
 )
+from controller_client.person_window_manual import ManualBlock, ManualView
 from controller_client.protocol import (
     CASE_PAUSE_MESSAGE_MAX_CHARS,
     PERSON_CHAT_TEXT_MAX_CHARS,
@@ -709,6 +720,27 @@ class PersonWindowApp:
         self._root.clipboard_clear()
         self._root.clipboard_append(text)
 
+    # --- host of the Manual run tab (person_window_manual.ManualHost) -------
+
+    def manual_block(
+        self, parent: "ttk.Frame", *, title: str, max_lines: int
+    ) -> ManualBlock:
+        return _ReadOnlyBlock(self, parent, title=title, max_lines=max_lines)
+
+    def manual_label(
+        self, parent: "tk.Misc", text: str = "", foreground: str = ""
+    ) -> "ttk.Label":
+        return self._label(parent, text, foreground)
+
+    def manual_entry(self, parent: "tk.Misc", *, row: int, height: int) -> "tk.Text":
+        return self._entry_text(parent, row=row, height=height)
+
+    def manual_send(self, event: WindowEvent) -> None:
+        self._writer.send(event)
+
+    def manual_connected(self) -> bool:
+        return self._view.connected
+
     def _label(
         self, parent: "tk.Misc", text: str = "", foreground: str = ""
     ) -> "ttk.Label":
@@ -765,12 +797,19 @@ class PersonWindowApp:
         self._log_tab = ttk.Frame(notebook, padding=12)
         notebook.add(self._log_tab, text="Log")
         self._discussion_page = self._add_page("Discussion")
+        self._manual_page = self._add_page("Manual run")
         self._build_step_tab(self._step_page.frame)
         self._build_case_tab(self._case_page.frame)
         self._build_log_tab(self._log_tab)
         self._build_discussion_tab(self._discussion_page.frame)
+        self._manual = ManualView(self, self._root, self._manual_page.frame)
         self._wrap_header()
-        for tab in (self._case_page.outer, self._log_tab, self._discussion_page.outer):
+        for tab in (
+            self._case_page.outer,
+            self._log_tab,
+            self._discussion_page.outer,
+            self._manual_page.outer,
+        ):
             notebook.hide(tab)
         notebook.bind("<<NotebookTabChanged>>", lambda _event: self._render())
         notebook.bind("<Configure>", self._on_notebook_configure)
@@ -784,6 +823,7 @@ class PersonWindowApp:
             self._case_page.outer,
             self._log_tab,
             self._discussion_page.outer,
+            self._manual_page.outer,
         )
 
     def _add_page(self, text: str) -> _ScrollPage:
@@ -1302,6 +1342,8 @@ class PersonWindowApp:
                 self._view.busy = None
                 self._set_message(message, _OK_COLOR if ok else _ERROR_COLOR)
                 self._render()
+            case QuestionResultCommand(ok=ok, message=message, manual=True):
+                self._manual.on_question_result(ok, message)
             case QuestionResultCommand(ok=ok, message=message):
                 self._on_question_result(ok, message)
             case CaseResultCommand(kind=kind, ok=ok, message=message):
@@ -1311,6 +1353,16 @@ class PersonWindowApp:
                 self._render()
             case QuitCommand():
                 pass
+            case ManualStateCommand(state=state):
+                self._set_manual_state(state)
+            case ManualCaptureResultCommand(
+                seq=seq, ok=ok, message=message, key=key, thumbnail_b64=thumbnail
+            ):
+                self._manual.on_capture_result(seq, ok, message, key, thumbnail)
+            case ManualThumbnailCommand(key=key, thumbnail_b64=thumbnail):
+                self._manual.on_thumbnail(key, thumbnail)
+            case ManualResultCommand(kind=manual_kind, ok=ok, message=message):
+                self._manual.on_result(manual_kind, ok, message)
 
     def _set_state(
         self,
@@ -1337,7 +1389,19 @@ class PersonWindowApp:
             view.help_busy = False
             view.chat_busy = False
         self._pick_tab(frozenset(keys), help_ids)
-        if not steps and not help_ids:
+        if not steps and not help_ids and not self._manual.has_run:
+            self._hide()
+        self._render()
+
+    def _set_manual_state(self, state: ManualWindowState) -> None:
+        previous = self._manual.run_id
+        self._manual.apply_state(state)
+        has_run = self._manual.has_run
+        self._set_tab_visible(self._manual_page.outer, has_run)
+        if has_run and self._manual.run_id != previous and not self._view.steps:
+            # A new manual run: that is where the tester works now.
+            self._select_tab(self._manual_page.outer)
+        if not has_run and not self._view.steps and not self._help_cases():
             self._hide()
         self._render()
 
@@ -1356,7 +1420,13 @@ class PersonWindowApp:
 
     def _show(self) -> None:
         view = self._view
-        if not view.steps and not view.cases and not self._message.cget("text"):
+        manual_run = self._manual.run_id
+        if (
+            not view.steps
+            and not view.cases
+            and manual_run is None
+            and not self._message.cget("text")
+        ):
             return
         root = self._root
         current: set[_RaiseKey] = {("step", *_key(step)) for step in view.steps}
@@ -1364,6 +1434,8 @@ class PersonWindowApp:
             ("help", help_state.help_request_id, 0)
             for _case, help_state in self._help_cases()
         }
+        if manual_run is not None:
+            current.add(("manual", manual_run, 0))
         fresh = current - view.raised
         self._front_app.before_show()
         # Never topmost, never focus_force (see the module docstring).
@@ -1514,6 +1586,7 @@ class PersonWindowApp:
             self._render_discussion(*help_case)
         else:
             view.help_id = None
+        self._manual.render()
         self._update_size_buttons()
 
     def _render_header(
@@ -1528,6 +1601,9 @@ class PersonWindowApp:
         elif step is not None:
             self._title.configure(text=step.case_title)
             sub = step.run_name
+        elif self._manual.has_run:
+            title, sub = self._manual.header()
+            self._title.configure(text=title)
         else:
             self._title.configure(text="Nothing is waiting for you right now.")
             sub = ""
@@ -2133,6 +2209,10 @@ class PersonWindowApp:
             self._render()
 
     def _on_user_close(self) -> None:
+        if self._manual.has_run:
+            # The tester works only in this window during a manual run.
+            self._root.iconify()
+            return
         self._hide(lambda: self._writer.send(ClosedByUserEvent()))
 
     def _note_text(self) -> str | None:

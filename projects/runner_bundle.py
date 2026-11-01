@@ -26,6 +26,7 @@ _PACKAGE_DIR_NAME = "controller_client"
 _EXCLUDE_DIRS = frozenset(
     {
         ".venv",
+        "manual_spool",
         "__pycache__",
         ".pytest_cache",
         ".mypy_cache",

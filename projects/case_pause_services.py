@@ -46,6 +46,7 @@ from projects.case_pause_rows import (
     pause_pending_for,
 )
 from projects.exceptions import CasePauseError
+from projects.manual_run_policy import MANUAL_PAUSE_REFUSED, is_manual_run
 from projects.models import (
     ACTIVE_RUN_STATUSES,
     OPEN_PERSON_STEP_STATUSES,
@@ -152,6 +153,8 @@ def request_case_pause(
         )
         if locked_pivot is None:
             raise CasePauseError(PAUSE_NOT_RUNNING)
+        if is_manual_run(test_run):
+            raise CasePauseError(MANUAL_PAUSE_REFUSED)
         if test_run.status not in ACTIVE_RUN_STATUSES:
             raise CasePauseError(PAUSE_RUN_NOT_ACTIVE)
         if locked_pivot.status == TestRunTestCaseStatus.NEED_HELP:
@@ -379,6 +382,8 @@ def _can_pause(
     """Whether Pause applies now, else the user-safe reason ("" while pending)."""
     if pending:
         return False, ""
+    if is_manual_run(test_run):
+        return False, MANUAL_PAUSE_REFUSED
     if test_run.status not in ACTIVE_RUN_STATUSES:
         return False, PAUSE_RUN_NOT_ACTIVE
     if pivot.status == TestRunTestCaseStatus.NEED_HELP:

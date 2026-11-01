@@ -52,6 +52,11 @@ from projects.case_result_change_services import (
 )
 from projects.case_review_redesign_store import supersede_case_review_drafts
 from projects.exceptions import PlanRevisionError, RunResumeError
+from projects.manual_run_policy import (
+    MANUAL_REDESIGN_REFUSED,
+    is_manual_checkpoint,
+    is_manual_run,
+)
 from projects.models import (
     PLAN_REVISION_REASON_MAX_LENGTH,
     CasePlanRevision,
@@ -176,10 +181,12 @@ def propose_review_plan_revision(
         )
         if test_run_id is None:
             raise PlanRevisionError(_CASE_GONE)
-        lock_project_and_run(test_run_id)
+        _project, test_run = lock_project_and_run(test_run_id)
         pivot = _lock_pivot(pivot_id)
         if pivot is None:
             raise PlanRevisionError(_CASE_GONE)
+        if is_manual_run(test_run) or is_manual_checkpoint(pivot.execution_checkpoint):
+            raise PlanRevisionError(MANUAL_REDESIGN_REFUSED)
         if not is_result_changeable(pivot):
             raise PlanRevisionError(_NOT_CHANGEABLE)
         checkpoint = _current_checkpoint(pivot)
@@ -257,6 +264,8 @@ def rerun_with_redesigned_plan(
         locked = _lock_pivot(pivot.pk)
         if locked is None:
             raise RunResumeError(_CASE_GONE)
+        if is_manual_run(test_run) or is_manual_checkpoint(locked.execution_checkpoint):
+            raise PlanRevisionError(MANUAL_REDESIGN_REFUSED)
         if not is_result_changeable(locked):
             raise PlanRevisionError(_NOT_CHANGEABLE)
         revision = (

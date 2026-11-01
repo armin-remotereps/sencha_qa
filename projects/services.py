@@ -153,9 +153,17 @@ from projects.exceptions import (
     TestRunnerDisconnectedError,
     TestRunnerUnresponsiveError,
 )
+from projects.manual_run_policy import (
+    MANUAL_RUNNER_OUTDATED,
+    is_manual_mode,
+    runner_supports_manual,
+)
+from projects.manual_submission_supersede import supersede_manual_submissions
 from projects.models import (
     ACTIVE_RUN_STATUSES,
     HELP_REQUEST_TEXT_MAX_LENGTH,
+    MANUAL_CLAIM_CLEARED,
+    MANUAL_CLAIM_FIELDS,
     OPEN_PERSON_STEP_STATUSES,
     PAUSE_REQUEST_CLEARED,
     PAUSE_REQUEST_FIELDS,
@@ -940,6 +948,26 @@ def get_run_readiness(
     ``stage0_summary``: the run's stage-0 counts when the caller already
     loaded them (the run page's checklist), so they are not queried twice.
     """
+    help_mode = (
+        test_run.help_mode if test_run is not None else project.default_help_mode
+    )
+    if is_manual_mode(help_mode):
+        # A person performs every step (D11): no visual engine and no machine
+        # preparation, but a Test Runner whose window runs manual tests.
+        manual_state = (
+            MachineState.READY if project.agent_connected else MachineState.DISCONNECTED
+        )
+        return RunReadiness(
+            checks=(
+                _cases_selected_check(test_run, selected_count),
+                _machine_connected_check(project, manual_state),
+                _manual_runner_check(project),
+                _no_active_run_check(project, test_run),
+                _no_machine_setup_check(project),
+                _no_runner_update_check(project),
+                _application_context_check(project),
+            )
+        )
     visual_engine = get_visual_engine_status()
     machine_state = get_machine_state(project, visual_engine)
     checks: tuple[ReadinessCheck, ...] = (
@@ -954,6 +982,33 @@ def get_run_readiness(
     if test_run is not None:
         checks += (_machine_prepared_check(project, test_run, stage0_summary),)
     return RunReadiness(checks=checks)
+
+
+def runner_runs_manual_tests(project: Project) -> bool:
+    """The project's Test Runner is connected and its window runs manual tests
+    (MANUAL_RUN_V1; no query)."""
+    capabilities = project.agent_capabilities
+    return (
+        project.agent_connected
+        and isinstance(capabilities, list)
+        and runner_supports_manual(str(item) for item in capabilities)
+    )
+
+
+def _manual_runner_check(project: Project) -> ReadinessCheck:
+    passed = runner_runs_manual_tests(project)
+    return ReadinessCheck(
+        key="manual_runner",
+        passed=passed,
+        blocking=True,
+        title=(
+            "Test Runner supports manual testing"
+            if passed
+            else "Test Runner cannot run manual tests"
+        ),
+        help="" if passed else MANUAL_RUNNER_OUTDATED,
+        link_url=reverse("projects:environment", args=[project.id]),
+    )
 
 
 # ============================================================================
@@ -2688,6 +2743,15 @@ def reset_test_run(test_run: TestRun) -> None:
         raise ValueError("Wait for the checked results to finish sending to TestRail.")
     # Session rows keep the outcome the reset is about to wipe.
     freeze_session_cases_of_run(test_run.pk)
+    # Manual run: lock the cases (the order of a screenshot upload, case then
+    # hand-in) and discard their hand-ins, so a late upload is dropped instead
+    # of landing on a reset case.
+    list(
+        TestRunTestCase.objects.select_for_update()
+        .filter(test_run_id=test_run.pk)
+        .values_list("id", flat=True)
+    )
+    supersede_manual_submissions(test_run_id=test_run.pk)
     for pivot in test_run.pivot_entries.all():
         for screenshot in pivot.screenshots.all():
             screenshot.image.delete(save=False)
@@ -2711,10 +2775,13 @@ def reset_test_run(test_run: TestRun) -> None:
             setattr(pivot, field, value)
         # A pending pause or a dropped one's message ("Too late to pause").
         clear_pause_request(pivot)
+        for field, value in MANUAL_CLAIM_CLEARED.items():
+            setattr(pivot, field, value)
         pivot.save(
             update_fields=[
                 *RETEST_CLEARED,
                 *PAUSE_REQUEST_FIELDS,
+                *MANUAL_CLAIM_FIELDS,
                 "status",
                 "blocked_reason",
                 "result",
@@ -2818,10 +2885,19 @@ def start_test_run(
     if runner_update_in_progress(test_run.project_id, now):
         raise ValueError(RUNNER_UPDATE_RUNNING_MESSAGE)
 
-    test_run.status = TestRunStatus.STARTED
-    test_run.help_mode = (
+    new_help_mode = (
         locked_help_mode if resolved_help_mode is None else resolved_help_mode
     )
+    manual = is_manual_mode(new_help_mode)
+    if manual and not runner_runs_manual_tests(
+        Project.objects.only("agent_connected", "agent_capabilities").get(
+            pk=test_run.project_id
+        )
+    ):
+        raise ValueError(MANUAL_RUNNER_OUTDATED)
+
+    test_run.status = TestRunStatus.STARTED
+    test_run.help_mode = new_help_mode
     test_run.started_at = timezone.now()
     test_run.finished_at = None
     test_run.execution_generation += 1
@@ -2836,6 +2912,12 @@ def start_test_run(
         ]
     )
     record_case_activity(user=user, pivot_ids=pivot_ids, activity=CaseActivity.START)
+    if manual:
+        # No execution chain: a person performs the cases at the Test Runner
+        # window, which this broadcast nudges to show the run. No credit yet:
+        # each hand-in credits its case to the tester (a resolved member).
+        transaction.on_commit(lambda: broadcast_test_run_status(test_run))
+        return
     credit_cases(user=user, pivot_ids=pivot_ids)
 
     def _enqueue() -> None:
@@ -4520,6 +4602,10 @@ def abort_test_run(
     for pivot in test_run.pivot_entries.filter(status=TestRunTestCaseStatus.CREATED):
         _mark_pivot_cancelled(pivot)
 
+    # Manual run: the claimed case was cancelled above; its claim goes too, so
+    # a late hand-in is dropped. Hand-ins already made keep uploading.
+    test_run.pivot_entries.exclude(manual_claim_token="").update(**MANUAL_CLAIM_CLEARED)
+
     broadcast_test_run_status(test_run)
 
     celery_task_id = test_run.celery_task_id
@@ -4691,6 +4777,8 @@ def _generate_env_content(project: Project) -> str:
         "CONTROLLER_PERSON_EMAIL=\n"
         # Base text size of the person window (10-28; A-/A+ change it per session).
         "# CONTROLLER_PERSON_WINDOW_TEXT_SIZE=14\n"
+        # Disk cap of the Manual run screenshot spool (MB, at least 64).
+        "# CONTROLLER_MANUAL_SPOOL_MAX_MB=2048\n"
     )
 
 

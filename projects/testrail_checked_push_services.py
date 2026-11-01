@@ -48,6 +48,11 @@ from projects.exceptions import (
     NothingToSendError,
     RunNotFinishedError,
 )
+from projects.manual_refinement_services import (
+    ManualCommentParts,
+    load_manual_comment_parts,
+    refresh_manual_refinements,
+)
 from projects.models import (
     CheckedPushSkipReason,
     Project,
@@ -79,6 +84,7 @@ from projects.testrail_mapping import (
 )
 from projects.testrail_results_services import (
     build_testrail_run_url,
+    pivot_comment_header,
     pivot_result_text,
     pivot_step_breakdown,
 )
@@ -90,6 +96,9 @@ from projects.testrail_services import (
 logger = logging.getLogger(__name__)
 
 CHECKED_PUSH_BATCH_SIZE = 100
+# Seconds a send may spend on inline manual rewrites (task soft limit 3600 s);
+# past it the testers' own notes are sent.
+CHECKED_PUSH_MANUAL_REFINE_BUDGET_SECONDS = 900
 CHECKED_PUSH_TASK = "projects.tasks.push_checked_results_to_testrail"
 CHECKED_PUSH_TIMEOUT_MESSAGE = "Timed out; send again to resume."
 CHECKED_PUSH_INTERRUPTED_MESSAGE = (
@@ -595,6 +604,7 @@ def _plan_pivot(
     case_id: int,
     source_run_id: int,
     test_run: TestRun,
+    manual: ManualCommentParts | None,
 ) -> PlannedCheckedResult | None:
     """The planned send for one checked pivot with a source run and a case id.
 
@@ -610,11 +620,15 @@ def _plan_pivot(
         attached = _existing_files(screenshots)
     else:
         attached = screenshots  # the comment is not sent again
+    outcome_label = testrail_outcome_label(status_id)
     comment = build_checked_result_comment(
-        outcome_label=testrail_outcome_label(status_id),
+        outcome_label=outcome_label,
         run_name=test_run.display_name,
-        result_text=pivot_result_text(pivot),
-        step_breakdown=pivot_step_breakdown(pivot),
+        result_text=pivot_result_text(pivot, manual),
+        step_breakdown=pivot_step_breakdown(pivot, manual),
+        header=pivot_comment_header(
+            manual, outcome_label=outcome_label, run_name=test_run.display_name
+        ),
         checked_by_label=_checked_by_label(pivot.checked_by),
         checked_at=pivot.checked_at,
         screenshot_count=len(attached),
@@ -657,6 +671,7 @@ _PLAN_PIVOT_FIELDS = (
     "testrail_source_skip_reason",
     "test_case__id",
     "test_case__testrail_id",
+    "test_case__title",
     "checked_by__id",
     "checked_by__first_name",
     "checked_by__last_name",
@@ -675,7 +690,8 @@ def plan_checked_push(
     *,
     pivot_ids: Sequence[int] | None = None,
 ) -> tuple[list[PlannedCheckedResult], CheckedPushSkips]:
-    """Plan every checked pivot that still has something to send (2 queries).
+    """Plan every checked pivot that still has something to send (2 queries,
+    plus one for the current hand-ins when a planned case is manual).
 
     `pivot_ids` limits the plan to those pivots (a case send); None plans the
     whole run. Pivots an earlier send skipped (`testrail_source_skip_reason`)
@@ -708,6 +724,7 @@ def plan_checked_push(
     planned: list[PlannedCheckedResult] = []
     no_case_pivots: list[TestRunTestCase] = []
     already_sent = no_source = 0
+    to_plan: list[tuple[TestRunTestCase, int, int]] = []
     for pivot in pivots:
         source_run_id = pivot.testrail_source_run_id
         if source_run_id is None:
@@ -720,11 +737,15 @@ def plan_checked_push(
         if case_id is None:
             no_case_pivots.append(pivot)
             continue
+        to_plan.append((pivot, case_id, source_run_id))
+    manual_parts = load_manual_comment_parts([entry[0] for entry in to_plan])
+    for to_send, case_id, source_run_id in to_plan:
         item = _plan_pivot(
-            pivot,
+            to_send,
             case_id=case_id,
             source_run_id=source_run_id,
             test_run=test_run,
+            manual=manual_parts.get(to_send.id),
         )
         if item is not None:
             planned.append(item)
@@ -920,8 +941,20 @@ def push_checked_results(
 
     Raises TestRailError / TestRailNotConfiguredError; the task stamps the run
     as failed. Everything recorded before the error survives, so a re-send
-    resumes without duplicate results or attachments.
+    resumes without duplicate results or attachments. Manual cases get their
+    note rewrite first (``refresh_manual_refinements``; never fails the send).
     """
+    # Only results still to be added send a comment.
+    unsent = test_run.pivot_entries.filter(
+        _CHECKED_Q, _NOT_SKIPPED_Q, testrail_source_result_id__isnull=True
+    )
+    if pivot_ids is not None:
+        unsent = unsent.filter(id__in=list(pivot_ids))
+    refresh_manual_refinements(
+        test_run=test_run,
+        pivot_ids=list(unsent.values_list("id", flat=True)),
+        budget_seconds=CHECKED_PUSH_MANUAL_REFINE_BUDGET_SECONDS,
+    )
     planned, skips = plan_checked_push(test_run, pivot_ids=pivot_ids)
     outcome = CheckedPushOutcome(
         already_sent=skips.already_sent,

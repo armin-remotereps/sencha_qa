@@ -144,6 +144,14 @@
         x-init="applyTo = ($el.querySelector('input[name=apply_to]:checked') || {}).value || ''">
     {% csrf_token %}
     {% include "partials/form_field.html" with field=run_mode_form.help_mode only %}
+    <p class="hint">
+      Attended pauses a run that hits a machine problem and notifies people.
+      Night lets the Machine setup agent try to fix the machine first.
+      Human in the loop: a person performs every step; the agent prepares each
+      step and confirms it. Manual: testers perform every case themselves in
+      the Test Runner window, following the test case's own steps, and decide
+      every result; the AI only rewrites their notes for TestRail.
+    </p>
     <fieldset class="radio-card-stack">
       <legend class="label">{{ run_mode_form.apply_to.label }}</legend>
       {% for value, label in run_mode_form.fields.apply_to.choices %}
@@ -157,9 +165,9 @@
             {% elif value == "drafts" %}
             Runs that have not started yet switch too.
             {% elif value == "open" %}
-            Running and paused runs switch as well. Leaving Human in the loop hands a step waiting for a person back to the agent; a paused run switched to Night may start an auto-fix.
+            Running and paused runs switch as well. Leaving Human in the loop hands a step waiting for a person back to the agent; a paused run switched to Night may start an auto-fix. Runs switch to or from Manual only while they are drafts; others are skipped.
             {% else %}
-            Finished runs switch as well, so a later Resume or Re-run uses this mode.
+            Finished runs switch as well, so a later Resume or Re-run uses this mode. Runs switch to or from Manual only while they are drafts; others are skipped.
             {% endif %}
           </div>
         </div>

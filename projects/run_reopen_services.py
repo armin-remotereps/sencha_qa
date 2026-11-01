@@ -16,6 +16,7 @@ from django.utils import timezone
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from projects.checked_push_limits import is_checked_push_live
 from projects.exceptions import RunHelpError
+from projects.manual_run_policy import MANUAL_RUNNER_OUTDATED, is_manual_run
 from projects.models import (
     ACTIVE_RUN_STATUSES,
     Project,
@@ -38,6 +39,7 @@ from projects.services import (
     finish_test_run,
     get_machine_state,
     queue_test_run_cases,
+    runner_runs_manual_tests,
 )
 from visual_engine.services.pool_status import get_visual_engine_status
 
@@ -52,6 +54,7 @@ _MACHINE_FAILED = (
     "Check the vision workers on the Environment page."
 )
 _VISUAL_ENGINE_OFFLINE = "Start a vision worker."
+_RUNNER_NOT_CONNECTED = "Connect the Test Runner."
 _NOT_PAUSED = "This run is not waiting for help."
 _STILL_NEEDS_HELP = "A case of this run still needs help."
 _WAITING_FOR_PERSON_STEP = "A case of this run is waiting for a person's step."
@@ -119,7 +122,11 @@ def _list_blockers(
         blockers.append(_OTHER_RUN_ACTIVE)
     if include_push:
         blockers.extend(list_testrail_push_blockers(test_run))
-    machine_blocker = _machine_blocker(project)
+    machine_blocker = (
+        _manual_machine_blocker(project)
+        if is_manual_run(test_run)
+        else _machine_blocker(project)
+    )
     if machine_blocker:
         blockers.append(machine_blocker)
     now = timezone.now()
@@ -200,6 +207,12 @@ def reopen_run(
     test_run.execution_generation += 1
     test_run.save(update_fields=update_fields)
 
+    if is_manual_run(test_run):
+        # No execution chain: the cases wait for the tester at the Test
+        # Runner window, which the broadcast nudges.
+        transaction.on_commit(lambda: broadcast_run_and_pivots(test_run, pivots))
+        return
+
     pivot_ids = [pivot.pk for pivot in pivots]
 
     def _enqueue() -> None:
@@ -274,6 +287,16 @@ def _has_other_started_run(project_id: int, test_run_id: int) -> bool:
         .exclude(pk=test_run_id)
         .exists()
     )
+
+
+def _manual_machine_blocker(project: Project) -> str | None:
+    """A manual run needs no visual engine, only a runner that runs manual
+    tests (D11; no query)."""
+    if not project.agent_connected:
+        return _RUNNER_NOT_CONNECTED
+    if not runner_runs_manual_tests(project):
+        return MANUAL_RUNNER_OUTDATED
+    return None
 
 
 def _machine_blocker(project: Project) -> str | None:

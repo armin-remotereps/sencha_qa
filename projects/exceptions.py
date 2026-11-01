@@ -327,3 +327,26 @@ class HelpModeNotAllowedError(Exception):
     def __init__(self) -> None:
         self.message = "Only a superuser can choose or change the run mode."
         super().__init__(self.message)
+
+
+class ManualRunError(Exception):
+    """A Manual run action (claim, release, submit, upload, Ask AI) was
+    refused; ``message`` is safe to show the user and the Test Runner window.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class ManualSubmissionDroppedError(ManualRunError):
+    """The hand-in or screenshot can never be accepted (claim released, case
+    re-run or reset, hand-in superseded or unknown): the runner deletes it
+    from its spool (``drop`` on the wire)."""
+
+
+class ManualShotRejectedError(ManualRunError):
+    """This one screenshot of a hand-in can never be stored (too large, not a
+    valid image of the announced type, not announced, not matching its
+    announcement): the runner deletes that shot only (``drop_shot`` on the
+    wire); the hand-in's other screenshots still upload."""

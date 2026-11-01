@@ -45,6 +45,7 @@ from projects.case_result_text import person_label
 from projects.case_retest_marking import RETEST_MARK_FIELDS, apply_retest_mark
 from projects.case_step_refs import CaseStepText, stored_case_steps
 from projects.exceptions import PersonStepError, RunHelpError
+from projects.manual_run_policy import MANUAL_PERSON_STEP_REFUSED, is_manual_run
 from projects.models import (
     ACTIVE_RUN_STATUSES,
     HELP_NOTE_MAX_LENGTH,
@@ -635,6 +636,8 @@ def hand_back_person_step(test_run: TestRun) -> PersonStepActionResult | None:
 
 def _lock_paused_run(test_run_id: int) -> tuple[Project, TestRun]:
     project, test_run = lock_project_and_run(test_run_id)
+    if is_manual_run(test_run):
+        raise PersonStepError(MANUAL_PERSON_STEP_REFUSED)
     if test_run.status != TestRunStatus.PAUSED:
         raise PersonStepError(_NOT_PAUSED)
     return project, test_run

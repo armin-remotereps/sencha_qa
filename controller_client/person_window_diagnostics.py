@@ -5,7 +5,9 @@ test machine) is a Tk program in its own process. The automatic checks say
 whether this Python has tkinter, which Tk it has, which display Tk would use,
 whether a Tk window opens in a separate process the way the runner starts
 it, and whether the window renders a sample step, test case, log and
-discussion without errors (in a window that is never shown). The interactive
+discussion, and a sample Manual run (case list, a claimed case with marked
+steps, a thumbnail and upload progress), without errors (in a window that is
+never shown). The interactive
 check then shows that sample (a step with "How to do it" items and a sample
 Ask the AI exchange, its test case and log, and a paused case's discussion)
 in the real window, asks whether it is visible, hides it the way the runner does before every agent
@@ -18,6 +20,8 @@ Nothing here talks to the server; the window's buttons are not sent anywhere.
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import os
 import subprocess
 import sys
@@ -27,18 +31,34 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
+from PIL import Image
+
 from controller_client.desktop import get_desktop_backend
 from controller_client.diagnostics import DiagnosticStep
 from controller_client.person_window import PersonWindow, probe_person_window
 from controller_client.person_window_ipc import (
     CaseRequestKind,
+    ManualDraftTexts,
+    ManualDraftView,
+    ManualMarkView,
+    ManualStateCommand,
+    ManualThumbnailCommand,
+    ManualUploadView,
+    ManualWindowState,
     StateCommand,
+    WindowCommand,
     encode_command,
 )
 from controller_client.protocol import (
     CasePauseActionPayload,
     ContinueModeWire,
     DiscussionMessageKind,
+    ManualActiveCasePayload,
+    ManualCaseListItemPayload,
+    ManualCaseVerdictWire,
+    ManualRunInfoPayload,
+    ManualStepOutcome,
+    ManualStepPayload,
     PersonCasePausePayload,
     PersonCaseRole,
     PersonCaseStatePayload,
@@ -165,10 +185,17 @@ def _check_window_renders() -> str:
     # The real window code in a separate process, never shown: renders the
     # sample twice (the second adds a chat row, as a snapshot would) and
     # visits every tab and both text sizes.
-    lines = b"".join(
-        encode_command(StateCommand(steps=steps, questions_enabled=True, cases=cases))
+    commands: list[WindowCommand] = [
+        StateCommand(steps=steps, questions_enabled=True, cases=cases)
         for steps, cases in (_sample_state(), _sample_state(extra_message=True))
+    ]
+    # A manual run: the case list, then a claimed case with a thumbnail.
+    commands.append(ManualStateCommand(state=_sample_manual_state(claimed=False)))
+    commands.append(ManualStateCommand(state=_sample_manual_state(claimed=True)))
+    commands.append(
+        ManualThumbnailCommand(key=_SAMPLE_SHOT_KEY, thumbnail_b64=_sample_thumbnail())
     )
+    lines = b"".join(encode_command(command) for command in commands)
     try:
         completed = subprocess.run(
             [sys.executable, "-m", _APP_MODULE, "--self-check"],
@@ -421,6 +448,102 @@ def _sample_state(
     extra_message: bool = False,
 ) -> tuple[tuple[PersonStepStatePayload, ...], tuple[PersonCaseStatePayload, ...]]:
     return (_sample_step(),), _sample_cases(extra_message)
+
+
+_SAMPLE_MANUAL_PIVOT: Final[int] = 11
+_SAMPLE_CLAIM: Final[str] = "diagnose-claim"
+_SAMPLE_SHOT_KEY: Final[str] = "diagnose-shot-1"
+
+
+def _sample_thumbnail() -> str:
+    image = Image.new("RGB", (160, 100), "#64748b")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def _sample_manual_state(claimed: bool) -> ManualWindowState:
+    """A Manual run as the window shows it (nothing is sent anywhere)."""
+    cases = (
+        ManualCaseListItemPayload(
+            pivot_id=_SAMPLE_MANUAL_PIVOT,
+            title="Sample manual case (nothing is sent to Punk Hazard)",
+            testrail_id="101",
+            status="in_progress" if claimed else "created",
+            claimed_label="diagnose --window" if claimed else "",
+        ),
+        ManualCaseListItemPayload(
+            pivot_id=12,
+            title="Second sample case",
+            testrail_id="",
+            status="created",
+            claimed_label="",
+        ),
+        ManualCaseListItemPayload(
+            pivot_id=13,
+            title="A case already done",
+            testrail_id="103",
+            status="success",
+            claimed_label="",
+        ),
+    )
+    active = ManualActiveCasePayload(
+        pivot_id=_SAMPLE_MANUAL_PIVOT,
+        claim_token=_SAMPLE_CLAIM,
+        title="Sample manual case (nothing is sent to Punk Hazard)",
+        preconditions="The sample app is installed.",
+        steps=(
+            ManualStepPayload(
+                num=1, text="Open the sample app.", expected="The app opens."
+            ),
+            ManualStepPayload(
+                num=2,
+                text="Open the About dialog.",
+                expected="The title is 'Sample'.",
+            ),
+            ManualStepPayload(num=3, text="Close the app."),
+        ),
+        claimed_at="2026-01-01T10:00:00+00:00",
+        questions=(
+            PersonStepQuestionPayload(
+                question_id=2,
+                round=1,
+                status=PersonStepQuestionWireStatus.ANSWERED,
+                question="Where is the About dialog?",
+                answer="Usually in the Help menu. Nothing is sent to Punk Hazard here.",
+                asked_by="diagnose --window",
+            ),
+        ),
+        can_ask=True,
+    )
+    draft = ManualDraftView(
+        pivot_id=_SAMPLE_MANUAL_PIVOT,
+        claim_token=_SAMPLE_CLAIM,
+        marks=(
+            ManualMarkView(
+                step_num=1, outcome=ManualStepOutcome.PASS, key=_SAMPLE_SHOT_KEY
+            ),
+            ManualMarkView(
+                step_num=2, outcome=ManualStepOutcome.FAIL, key="diagnose-shot-2"
+            ),
+        ),
+        case_shot_key="",
+        texts=ManualDraftTexts(
+            notes={2: "The title was 'Example'."},
+            seconds={1: 12, 2: 40},
+            verdict=ManualCaseVerdictWire.FAILED,
+            verdict_note="",
+        ),
+    )
+    return ManualWindowState(
+        run=ManualRunInfoPayload(run_id=1, name="diagnose --window (manual)"),
+        cases=cases,
+        active=active if claimed else None,
+        draft=draft if claimed else None,
+        upload=ManualUploadView(
+            waiting_cases=1, waiting_shots=3, unsent_cases=0, sending=True
+        ),
+    )
 
 
 def _is_yes(answer: str) -> bool:

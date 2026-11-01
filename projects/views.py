@@ -93,6 +93,10 @@ from projects.forms import (
     form_error_text,
 )
 from projects.machine_readiness_ports import build_runner_ports
+from projects.manual_case_display_services import (
+    get_manual_case_panel,
+    get_manual_run_panel,
+)
 from projects.models import (
     PROJECT_PROMPT_MAX_LENGTH,
     RETEST_NOTE_MAX_LENGTH,
@@ -1053,6 +1057,11 @@ def _build_test_run_detail_context(
         "paused_run_blockers": pause.paused_run_blockers,
         # Resume / Re-run dialogs: pre-set to the run's current mode.
         "help_mode_form": RunHelpModeForm(initial={"help_mode": test_run.help_mode}),
+        # Manual run: who holds a case at the Test Runner, open uploads of the
+        # cases on this page, a runner notice (None unless the run is Manual).
+        "manual_panel": get_manual_run_panel(
+            project=project, test_run=test_run, pivot_ids=(p.id for p in cases)
+        ),
         "active_tab": "runs",
         "active_nav": "projects",
     }
@@ -1242,6 +1251,11 @@ def test_run_case_detail(
             "can_mark_retest": is_case_retestable(pivot.test_run, pivot),
             "retest_panel": get_case_retest_panel(pivot.test_run, pivot),
             "retest_note_max": RETEST_NOTE_MAX_LENGTH,
+            # Manual run: the tester's hand-in, claim, uploads and the AI
+            # rewrite for TestRail (None unless the case is or was manual).
+            "manual_result": get_manual_case_panel(
+                pivot=pivot, screenshots=screenshots
+            ),
             "active_tab": "runs",
             "active_nav": "projects",
         },

@@ -74,4 +74,9 @@ def _format_change(help_mode: str, change: ProjectRunModeChange) -> str:
             f"{_count(change.active_skipped, 'run', 'runs')} could not be "
             "switched (finished meanwhile)."
         )
+    if change.manual_skipped:
+        sentences.append(
+            f"{_count(change.manual_skipped, 'run', 'runs')} kept their mode: "
+            "switching to or from Manual applies to drafts only."
+        )
     return " ".join(sentences)

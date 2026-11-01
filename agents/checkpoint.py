@@ -72,6 +72,7 @@ _PLAN_REVISIONS_KEY = "plan_revisions"
 _CASE_STEP_COUNT_KEY = "case_step_count"
 _CASE_STEPS_KEY = "case_steps"
 _CASE_STEPS_TESTRAIL_KEY = "case_steps_testrail"
+_MANUAL_KEY = "manual"
 # Only the newest earlier plans are kept (display and prompt data).
 MAX_PLAN_REVISION_RECORDS = 5
 
@@ -101,6 +102,8 @@ def checkpoint_to_json(checkpoint: OrchestratorCheckpoint) -> dict[str, object]:
         data[_CASE_STEP_COUNT_KEY] = checkpoint.case_step_count
         if not checkpoint.case_steps_testrail:
             data[_CASE_STEPS_TESTRAIL_KEY] = False
+    if checkpoint.manual:
+        data[_MANUAL_KEY] = True
     if checkpoint.plan_revisions:
         data[_PLAN_REVISIONS_KEY] = [
             _revision_to_json(record)
@@ -415,6 +418,8 @@ def _parse(data: object) -> OrchestratorCheckpoint:
         plan_revisions=_parse_revisions(root.get(_PLAN_REVISIONS_KEY)),
         case_step_count=case_step_count,
         case_steps_testrail=root.get(_CASE_STEPS_TESTRAIL_KEY) is not False,
+        # Optional: only a strict JSON true marks a manual case.
+        manual=root.get(_MANUAL_KEY) is True,
     )
 
 

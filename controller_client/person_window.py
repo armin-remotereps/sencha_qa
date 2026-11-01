@@ -30,6 +30,13 @@ before every agent action:
   a discussion message never hide or raise the window (like a question); a
   help resolution hides it like an answer. A closed discussion stays hidden
   until a new help request or a finished turn with a new reply.
+- Manual run (``apply_manual_state``): while the project has a manual run
+  the window wants to be visible (its Manual run tab is where the tester
+  works). Its requests (claim, release, capture, notes, hand-in, thumbnails;
+  ``manual_requests()``) never hide or raise it. A tester screenshot goes
+  through ``hidden_for_capture()``: a hide that must be confirmed by the
+  window's ack (else no screenshot), and the window is shown again at once
+  afterwards, without the agent re-show delays.
 - A dead window process is restarted while a step is open, at most
   ``_MAX_STARTS`` times per ``_START_WINDOW_SECONDS``; then the runner keeps
   working without it (people answer on Punk Hazard).
@@ -60,6 +67,17 @@ from controller_client.person_window_ipc import (
     HelpActionEvent,
     HiddenEvent,
     HideCommand,
+    ManualCaptureEvent,
+    ManualCaptureResultCommand,
+    ManualCaseActionEvent,
+    ManualDraftEvent,
+    ManualResultCommand,
+    ManualResultKind,
+    ManualStateCommand,
+    ManualSubmitEvent,
+    ManualThumbnailCommand,
+    ManualThumbnailRequestEvent,
+    ManualWindowState,
     PauseEvent,
     QuestionEvent,
     QuestionResultCommand,
@@ -139,6 +157,21 @@ _AttentionKey = tuple[str, int, int]
 # A window case request, forwarded to the server by the client.
 PersonCaseRequest = (
     CasePauseActionPayload | PersonChatSendPayload | PersonHelpActionPayload
+)
+# A Manual run request from the window, handled by the client (claim and
+# release go to the server; the rest stays on this machine until a hand-in).
+ManualWindowRequest = (
+    ManualCaseActionEvent
+    | ManualCaptureEvent
+    | ManualDraftEvent
+    | ManualSubmitEvent
+    | ManualThumbnailRequestEvent
+)
+_MANUAL_QUESTION_STALE: Final[str] = (
+    "This case is no longer yours to work on; nothing was asked."
+)
+_MANUAL_QUESTION_UNAVAILABLE: Final[str] = (
+    "Asking the AI is not available for this case right now."
 )
 
 
@@ -281,10 +314,18 @@ class PersonWindow:
         self._last_action_end: float | None = None
         self._reshow: asyncio.TimerHandle | None = None
         self._hide_seq = 0
-        self._hide_waiters: dict[int, asyncio.Future[None]] = {}
+        # True: the window acknowledged the hide; False: it went away first.
+        self._hide_waiters: dict[int, asyncio.Future[bool]] = {}
         self._actions: asyncio.Queue[PersonStepActionPayload] = asyncio.Queue()
         self._questions: asyncio.Queue[PersonStepQuestionAskPayload] = asyncio.Queue()
         self._case_requests: asyncio.Queue[PersonCaseRequest] = asyncio.Queue()
+        # Manual run (MANUAL_RUN_V1): the Manual run tab's content, its
+        # requests, a capture notice the window missed while it restarted,
+        # and a show owed to a capture that ended while the window was down.
+        self._manual: ManualWindowState | None = None
+        self._manual_requests: asyncio.Queue[ManualWindowRequest] = asyncio.Queue()
+        self._manual_notice = ""
+        self._show_after_restart = False
         self._starts: deque[float] = deque()
         self._disabled = False
         self._stopping = False
@@ -327,6 +368,63 @@ class PersonWindow:
             # The window hides itself when nothing is open for the person.
             self._visible = False
         self._sync_visibility()
+        self._ensure_supervisor()
+
+    def apply_manual_state(self, state: ManualWindowState | None) -> None:
+        """The Manual run tab's content (None: no manual run to show)."""
+        if self._disabled or self._stopping:
+            return
+        state = state if state is not None and state.has_run else None
+        if state == self._manual:
+            # Upload progress and snapshots often change nothing shown.
+            return
+        self._manual = state
+        keys = self._attention_keys()
+        self._suppressed &= keys
+        self._shown &= keys
+        self._send(
+            ManualStateCommand(
+                state=state
+                or ManualWindowState(run=None, cases=(), active=None, draft=None)
+            )
+        )
+        if not self._has_content():
+            self._visible = False
+        self._sync_visibility()
+        self._ensure_supervisor()
+
+    async def manual_requests(self) -> AsyncIterator[ManualWindowRequest]:
+        """Every Manual run request from the window, forever."""
+        while True:
+            yield await self._manual_requests.get()
+
+    def show_manual_result(
+        self, kind: ManualResultKind, ok: bool, message: str
+    ) -> None:
+        """The answer to a claim, release or hand-in; never changes visibility."""
+        self._send(ManualResultCommand(kind=kind, ok=ok, message=message))
+
+    def show_capture_result(
+        self, seq: int, ok: bool, message: str, key: str = "", thumbnail_b64: str = ""
+    ) -> None:
+        """The outcome of a capture request.
+
+        A failure the window cannot get now (it is restarting after a hide
+        that timed out) is shown as a notice once it is back.
+        """
+        if not self._ready and not ok:
+            self._manual_notice = message
+            return
+        self._send(
+            ManualCaptureResultCommand(
+                seq=seq, ok=ok, message=message, key=key, thumbnail_b64=thumbnail_b64
+            )
+        )
+
+    def send_thumbnail(self, key: str, thumbnail_b64: str) -> None:
+        self._send(ManualThumbnailCommand(key=key, thumbnail_b64=thumbnail_b64))
+
+    def _ensure_supervisor(self) -> None:
         if self._has_content() and self._supervisor is None:
             self._supervisor = asyncio.get_running_loop().create_task(
                 self._supervise(), name="person-window"
@@ -348,12 +446,17 @@ class PersonWindow:
             self._result_needs_attention = not result.queued
         self._sync_visibility()
 
-    def show_question_result(self, result: PersonStepQuestionResultPayload) -> None:
-        """The server's acknowledgement of the person's last question.
+    def show_question_result(
+        self, result: PersonStepQuestionResultPayload, *, manual: bool = False
+    ) -> None:
+        """The server's acknowledgement of the person's last question
+        (``manual``: a question about the claimed manual case).
 
         Never changes visibility: the window stayed up while the person asked.
         """
-        self._send(QuestionResultCommand(ok=result.ok, message=result.message))
+        self._send(
+            QuestionResultCommand(ok=result.ok, message=result.message, manual=manual)
+        )
 
     async def actions(self) -> AsyncIterator[PersonStepActionPayload]:
         """Every validated answer the person sends, forever."""
@@ -398,19 +501,50 @@ class PersonWindow:
                 self._last_action_end = asyncio.get_running_loop().time()
                 self._sync_visibility()
 
-    async def ensure_hidden(self) -> None:
-        """Hide the window and wait for its ack; no IPC when already hidden."""
-        if not self._visible or not self._ready or self._process is None:
+    @contextlib.asynccontextmanager
+    async def hidden_for_capture(self) -> AsyncIterator[bool]:
+        """Keep the window hidden around one tester screenshot (Manual run).
+
+        Yields whether the hide was confirmed: the window acknowledged it (a
+        hide is always sent, even when the manager thinks the window is
+        hidden), followed by the compositor settle. False when the window is
+        not ready, went away or did not acknowledge in time (it is killed and
+        restarted): the caller then takes no screenshot. Leaving shows the
+        window again at once (no agent re-show delay); holds nest with agent
+        actions.
+        """
+        self._holds += 1
+        self._cancel_reshow()
+        try:
+            confirmed = await self.ensure_hidden(always=True)
+            yield confirmed
+        finally:
+            self._holds -= 1
+            if self._holds == 0:
+                self._show_after_capture()
+
+    async def ensure_hidden(self, *, always: bool = False) -> bool:
+        """Hide the window and wait for its ack; True when the hide was confirmed.
+
+        Without ``always`` there is no IPC when the manager already thinks the
+        window is hidden (or it is not running), and that counts as hidden:
+        the agent path, which ignores the result. With ``always`` a hide is
+        sent whenever the window runs, and only its ack confirms it (the
+        manual capture path).
+        """
+        running = self._ready and self._process is not None
+        if not running or (not self._visible and not always):
             self._visible = False
-            return
+            return not always
         self._visible = False
         self._hide_seq = next_seq(self._hide_seq)
         seq = self._hide_seq
-        ack: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        ack: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         self._hide_waiters[seq] = ack
         self._send(HideCommand(seq=seq))
+        confirmed = False
         try:
-            await asyncio.wait_for(ack, _HIDE_ACK_TIMEOUT_SECONDS)
+            confirmed = await asyncio.wait_for(ack, _HIDE_ACK_TIMEOUT_SECONDS)
         except TimeoutError:
             # A window that cannot confirm it is hidden may still be on screen:
             # never let it reach a screenshot. The supervisor restarts it.
@@ -422,9 +556,13 @@ class PersonWindow:
             process = self._process
             if process is not None:
                 await _kill(process)
+            # Not ready from now on (the supervisor notices the exit later):
+            # replies meant for it wait for the restarted window.
+            self._ready = False
         finally:
             self._hide_waiters.pop(seq, None)
         await asyncio.sleep(_HIDE_SETTLE_SECONDS)
+        return confirmed
 
     async def stop(self) -> None:
         """Close the window process for good (idempotent)."""
@@ -462,7 +600,7 @@ class PersonWindow:
 
     def _has_content(self) -> bool:
         """Something the window shows for the person (not a running case alone)."""
-        return bool(self._steps) or bool(self._help_cases())
+        return bool(self._steps) or bool(self._help_cases()) or self._manual is not None
 
     def _update_reply_marks(self) -> None:
         marks: dict[int, int] = {}
@@ -482,6 +620,9 @@ class PersonWindow:
             ("help", request_id, reply)
             for request_id, reply in self._reply_marks.items()
         )
+        manual = self._manual
+        if manual is not None and manual.run is not None:
+            keys.add(("manual", manual.run.run_id, 0))
         return frozenset(keys)
 
     def _wants_visible(self) -> bool:
@@ -502,7 +643,11 @@ class PersonWindow:
             return
         loop = asyncio.get_running_loop()
         keys = self._attention_keys()
-        if self._last_action_end is not None:
+        if self._show_after_restart:
+            # A tester screenshot ended while the window was down: show it as
+            # soon as it is back, as after any capture.
+            self._show_after_restart = False
+        elif self._last_action_end is not None:
             # Something new for the person: a new step round, a new help
             # request or a finished turn with a new reply, or a server reply
             # about their answer (shown once when nothing is open).
@@ -518,6 +663,18 @@ class PersonWindow:
         if not self._has_content():
             # Nothing open: the reply is shown this once, never re-shown.
             self._result_needs_attention = False
+        self._send(ShowCommand())
+
+    def _show_after_capture(self) -> None:
+        """Show the window at once after a tester screenshot (no agent delay)."""
+        if not self._wants_visible():
+            return
+        if not self._ready:
+            self._show_after_restart = True
+            return
+        self._cancel_reshow()
+        self._visible = True
+        self._shown |= self._attention_keys()
         self._send(ShowCommand())
 
     def _cancel_reshow(self) -> None:
@@ -548,6 +705,7 @@ class PersonWindow:
                     self._disabled = True
                     self._steps = ()
                     self._cases = ()
+                    self._manual = None
                     return
                 try:
                     process = await _spawn_app(
@@ -602,6 +760,15 @@ class PersonWindow:
         self._ready = True
         self._send(ConnectionCommand(connected=self._connected))
         self._send(self._state_command())
+        if self._manual is not None:
+            self._send(ManualStateCommand(state=self._manual))
+        if self._manual_notice:
+            self._send(
+                ManualResultCommand(
+                    kind=ManualResultKind.CAPTURE, ok=False, message=self._manual_notice
+                )
+            )
+            self._manual_notice = ""
         self._sync_visibility()
         while True:
             try:
@@ -619,16 +786,23 @@ class PersonWindow:
                 # window ignores a result for a kind it does not wait for).
                 self._send(ResultCommand(ok=False, message=_REFUSED_INVALID))
                 self._send(QuestionResultCommand(ok=False, message=""))
+                self._send(QuestionResultCommand(ok=False, message="", manual=True))
                 for kind in CaseRequestKind:
                     self._send(
                         CaseResultCommand(kind=kind, ok=False, message=_REFUSED_INVALID)
+                    )
+                for manual_kind in ManualResultKind:
+                    self._send(
+                        ManualResultCommand(
+                            kind=manual_kind, ok=False, message=_REFUSED_INVALID
+                        )
                     )
                 continue
             match event:
                 case HiddenEvent(seq=seq):
                     waiter = self._hide_waiters.pop(seq, None)
                     if waiter is not None and not waiter.done():
-                        waiter.set_result(None)
+                        waiter.set_result(True)
                 case ActionEvent(action=action):
                     self._on_action(action)
                 case QuestionEvent(question=question):
@@ -639,6 +813,15 @@ class PersonWindow:
                     self._on_chat_send(send)
                 case HelpActionEvent(action=help_action):
                     self._on_help_action(help_action)
+                case (
+                    ManualCaseActionEvent()
+                    | ManualCaptureEvent()
+                    | ManualDraftEvent()
+                    | ManualSubmitEvent()
+                    | ManualThumbnailRequestEvent()
+                ):
+                    # Never hides or raises the window; validated by the client.
+                    self._manual_requests.put_nowait(event)
                 case ClosedByUserEvent():
                     self._visible = False
                     self._result_needs_attention = False
@@ -665,6 +848,9 @@ class PersonWindow:
 
     def _on_question(self, question: PersonStepQuestionAskPayload) -> None:
         # The window stays as it is: no hide, no suppression.
+        if question.is_manual:
+            self._on_manual_question(question)
+            return
         keys = {_key(step) for step in self._steps}
         if (question.person_step_id, question.round) not in keys:
             message = _QUESTION_STALE
@@ -675,6 +861,24 @@ class PersonWindow:
             return
         self.show_question_result(
             PersonStepQuestionResultPayload(ok=False, message=message)
+        )
+
+    def _on_manual_question(self, question: PersonStepQuestionAskPayload) -> None:
+        manual = self._manual
+        active = manual.active if manual is not None else None
+        if (
+            active is None
+            or active.pivot_id != question.pivot_id
+            or active.claim_token != question.claim_token
+        ):
+            message = _MANUAL_QUESTION_STALE
+        elif not active.can_ask:
+            message = _MANUAL_QUESTION_UNAVAILABLE
+        else:
+            self._questions.put_nowait(question)
+            return
+        self.show_question_result(
+            PersonStepQuestionResultPayload(ok=False, message=message), manual=True
         )
 
     def _case(self, pivot_id: int) -> PersonCaseStatePayload | None:
@@ -767,6 +971,13 @@ class PersonWindow:
         try:
             data = encode_command(command)
         except ProtocolError as e:
+            if isinstance(command, ManualStateCommand):
+                logger.error(
+                    "The Manual run view is too large for the window (%s); open "
+                    "the run on Punk Hazard",
+                    e,
+                )
+                return
             if not isinstance(command, StateCommand) or not command.cases:
                 logger.error("Could not send to the person-step window: %s", e)
                 return
@@ -790,7 +1001,8 @@ class PersonWindow:
         stdin.write(data)
 
     def _release_hide_waiters(self) -> None:
+        # The window went away before acknowledging: not a confirmed hide.
         for waiter in self._hide_waiters.values():
             if not waiter.done():
-                waiter.set_result(None)
+                waiter.set_result(False)
         self._hide_waiters.clear()

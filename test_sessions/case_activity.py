@@ -18,6 +18,8 @@ class CaseActivity(models.TextChoices):
     PERSON_STEP = "person_step", "Performed a step"
     RESULT_CHANGE = "result_change", "Changed the result"
     RETEST = "retest", "Marked for re-test"
+    # Manual run: the tester handed in a case verdict from the Test Runner.
+    MANUAL_RESULT = "manual_result", "Recorded a manual result"
 
 
 # Actions that throw away the case's current verdict: other sessions' rows for
