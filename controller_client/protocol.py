@@ -12,7 +12,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.12.0"
+CLIENT_VERSION: Final[str] = "0.13.0"
 
 
 class CloseCode(IntEnum):
@@ -148,6 +148,11 @@ class ClientCapability(StrEnum):
     # inventory, answered with ``artifact_scan_result``). Older controllers
     # answer UNKNOWN_COMMAND.
     ARTIFACT_SCAN_V1 = "artifact_scan_v1"
+    # Optional: the window takes up to PERSON_STEP_HOW_TO_MAX_ITEMS (12) how-to
+    # items and shows each item's ``source``; older windows cut the list at 8,
+    # so the server folds a longer guide for them. Advertised only together
+    # with PERSON_STEP_ASSIST_V1 (dropped with the window).
+    PERSON_STEP_GUIDE_V1 = "person_step_guide_v1"
 
 
 # Capabilities that need the person step window; dropped without it.
@@ -155,6 +160,7 @@ _PERSON_WINDOW_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.PERSON_STEPS_V1,
         ClientCapability.PERSON_STEP_ASSIST_V1,
+        ClientCapability.PERSON_STEP_GUIDE_V1,
         ClientCapability.PERSON_STEP_CASE_STEPS_V1,
         ClientCapability.PERSON_CASE_CONTEXT_V1,
         ClientCapability.PERSON_DISCUSSION_V1,
@@ -174,8 +180,9 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
     ``person_window`` is False when the person step window is disabled
     (``CONTROLLER_PERSON_WINDOW=false``) or Tk is unavailable; the server then
     never sends ``person_step_state`` and the person answers on the web.
-    PERSON_STEP_ASSIST_V1, PERSON_STEP_CASE_STEPS_V1, PERSON_CASE_CONTEXT_V1,
-    PERSON_DISCUSSION_V1 and CASE_PAUSE_V1 are dropped with it.
+    PERSON_STEP_ASSIST_V1, PERSON_STEP_GUIDE_V1, PERSON_STEP_CASE_STEPS_V1,
+    PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1 and CASE_PAUSE_V1 are dropped
+    with it.
     """
     if person_window:
         return CLIENT_CAPABILITIES
@@ -190,8 +197,9 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
 # authenticate fine and then silently time out on first use. Optional
 # capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1,
 # WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1,
-# PERSON_STEP_ASSIST_V1, PERSON_STEP_CASE_STEPS_V1, ARTIFACT_SCAN_V1,
-# PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1, CASE_PAUSE_V1) are
+# PERSON_STEP_ASSIST_V1, PERSON_STEP_GUIDE_V1, PERSON_STEP_CASE_STEPS_V1,
+# ARTIFACT_SCAN_V1, PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1,
+# CASE_PAUSE_V1) are
 # checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
@@ -1016,10 +1024,14 @@ PERSON_STEP_MAX_BLOCKERS: Final[int] = 10
 # Longest user-safe ``message`` of a ``person_step_action_result``.
 PERSON_STEP_RESULT_MESSAGE_MAX_CHARS: Final[int] = 1000
 # "How to do it" items of a step (PERSON_STEP_ASSIST_V1); the server's
-# PERSON_STEP_HOW_TO_* caps in projects.models. Cut when parsed.
-PERSON_STEP_HOW_TO_MAX_ITEMS: Final[int] = 8
+# PERSON_STEP_HOW_TO_* caps in projects.models. Cut when parsed. Windows
+# before PERSON_STEP_GUIDE_V1 cut at PERSON_STEP_HOW_TO_LEGACY_MAX_ITEMS.
+PERSON_STEP_HOW_TO_MAX_ITEMS: Final[int] = 12
+PERSON_STEP_HOW_TO_LEGACY_MAX_ITEMS: Final[int] = 8
 PERSON_STEP_HOW_TO_TEXT_MAX_CHARS: Final[int] = 400
 PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS: Final[int] = 500
+# Server-built source label of an item ("«Install guide.pdf», page 3").
+PERSON_STEP_HOW_TO_SOURCE_MAX_CHARS: Final[int] = 200
 # Test case steps a person step covers (PERSON_STEP_CASE_STEPS_V1); the
 # server's PERSON_STEP_CASE_STEPS_* caps in projects.models. Cut when parsed.
 PERSON_STEP_CASE_STEPS_MAX_ITEMS: Final[int] = 15
@@ -1085,9 +1097,12 @@ class PersonHowToPayload:
     text: str
     # One line for the step's shell; blank when the item has none.
     command: str = ""
+    # Where the item's facts came from (server-built label, PERSON_STEP_GUIDE_V1);
+    # blank for general guidance or from an older server.
+    source: str = ""
 
     def to_wire(self) -> dict[str, object]:
-        return {"text": self.text, "command": self.command}
+        return {"text": self.text, "command": self.command, "source": self.source}
 
 
 @dataclass(frozen=True)
@@ -1389,6 +1404,12 @@ def _parse_how_to(raw: object) -> tuple[PersonHowToPayload, ...]:
                     item,
                     "command",
                     PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS,
+                    truncate=True,
+                ),
+                source=_extract_text(
+                    item,
+                    "source",
+                    PERSON_STEP_HOW_TO_SOURCE_MAX_CHARS,
                     truncate=True,
                 ),
             )

@@ -240,7 +240,10 @@ def _sample_step() -> PersonStepStatePayload:
         blockers=(),
         case_url="",
         how_to=(
-            PersonHowToPayload(text=f"Open a terminal: {_SAMPLE_OPEN_SHELL}."),
+            PersonHowToPayload(
+                text=f"Open a terminal: {_SAMPLE_OPEN_SHELL}.",
+                source="«Runner setup guide.pdf», page 2",
+            ),
             PersonHowToPayload(
                 text="Run this command and look for a folder path in its output.",
                 command=_SAMPLE_COMMAND,

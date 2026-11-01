@@ -1677,6 +1677,9 @@ class PersonWindowApp:
         for number, item in enumerate(step.how_to, start=1):
             prefix = "" if number == 1 else "\n"
             segments.append((f"{prefix}{number}. {item.text}", ()))
+            if item.source:
+                source = " ".join(item.source.splitlines())
+                segments.append((f"\n    Source: {source}", ("muted",)))
             if not item.command:
                 continue
             command = " ".join(item.command.splitlines())
