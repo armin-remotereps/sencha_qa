@@ -12,12 +12,16 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import Final, Literal
 
 from django.conf import settings
 
+from agents.how_to_source import PROFILE_SOURCE_LABEL, SOURCE_LABEL_MAX_CHARS
+from agents.json_values import positive_int
 from agents.os_shell import get_os_name
+from agents.secret_redaction import redact_secrets
 from agents.services.llm_client import send_chat_completion
 from agents.services.person_step_prompts import (
     COMMAND_MAX_CHARS,
@@ -45,7 +49,9 @@ from agents.types import (
     CheckpointPersonStep,
     LLMConfig,
     LogCallback,
+    PersonGuideContext,
     PersonHowToItem,
+    PersonHowToSourceKind,
     PersonStepHandOff,
     ScreenshotCallback,
     SubTask,
@@ -82,21 +88,28 @@ def prepare_person_step(
     task_description: str,
     system_info: dict[str, object] | None,
     restore: bool = False,
+    guide: PersonGuideContext | None = None,
 ) -> PersonStepHandOff:
     """The hand-off of ``sub_task`` (or, with ``restore``, of the restore task).
+
+    ``guide`` grounds the "How to do it" in the project's artifacts profile,
+    the case's research notes and knowledge base excerpts (fenced as data);
+    an item may cite only those, and the server builds its source label.
+    Without it the prompt is the ungrounded one.
 
     An unusable answer falls back to the step's own text as an interactive
     step; an ``AIServiceError`` (the provider failed) propagates as a fault.
     """
     os_name = get_os_name(system_info)
     user_prompt = (
-        build_restore_user_prompt(sub_task)
+        build_restore_user_prompt(sub_task, guide=guide)
         if restore
         else build_prepare_user_prompt(
             sub_task,
             task_description=task_description,
             step_num=step_num,
             total_steps=total_steps,
+            guide=guide,
         )
     )
     response = send_chat_completion(
@@ -104,7 +117,9 @@ def prepare_person_step(
         (
             ChatMessage(
                 role="system",
-                content=build_prepare_system_prompt(os_name=os_name, restore=restore),
+                content=build_prepare_system_prompt(
+                    os_name=os_name, restore=restore, guide=guide
+                ),
             ),
             ChatMessage(role="user", content=user_prompt),
         ),
@@ -115,6 +130,12 @@ def prepare_person_step(
         step_num=step_num,
         task_description=task_description,
         restore=restore,
+        allowed_items=(
+            guide.allowed_items
+            if guide is not None and guide.allowed_items is not None
+            else {}
+        ),
+        profile_given=guide is not None and bool(guide.artifacts_profile.strip()),
     )
     if hand_off is None:
         logger.warning(
@@ -129,14 +150,25 @@ def prepare_person_step(
 
 
 def parse_hand_off(
-    raw: str, *, step_num: int, task_description: str, restore: bool
+    raw: str,
+    *,
+    step_num: int,
+    task_description: str,
+    restore: bool,
+    allowed_items: Mapping[int, str] | None = None,
+    profile_given: bool = False,
 ) -> PersonStepHandOff | None:
     """The validated hand-off in a prepare answer; None when it is unusable.
 
     A command the test case does not state as a whole command
     (``_is_explicit_command``) is never handed out: the answer is then
     unusable and the caller falls back to the plan text. ``how_to`` is parsed
-    leniently: bad items are dropped, never the hand-off.
+    leniently: bad items are dropped, never the hand-off. An item's source is
+    kept only when it cites an id of ``allowed_items`` (``kb``) or a given
+    profile (``profile``); an item that only restates the instruction or the
+    expected result is dropped. Obvious secret values the case does not state
+    are redacted everywhere except in a ``kind="command"`` step's command,
+    which stays the case's exact text.
     """
     data = _json_object(raw)
     if data is None:
@@ -164,53 +196,155 @@ def parse_hand_off(
         command = ""
     else:
         return None
+    instruction = cap_text(
+        _redacted(strip_executor_vocabulary(instruction), task_description),
+        INSTRUCTION_MAX_CHARS,
+    )
+    expected = cap_text(
+        _redacted(strip_executor_vocabulary(expected), task_description),
+        EXPECTED_RESULT_MAX_CHARS,
+    )
     return PersonStepHandOff(
         step_num=step_num,
         kind="restore" if restore else ("command" if command else "interactive"),
-        instruction=cap_text(
-            strip_executor_vocabulary(instruction), INSTRUCTION_MAX_CHARS
-        ),
-        expected_result=cap_text(
-            strip_executor_vocabulary(expected), EXPECTED_RESULT_MAX_CHARS
-        ),
+        instruction=instruction,
+        expected_result=expected,
         command=command,
-        how_to=_parse_how_to(data.get("how_to"), step_num=step_num),
+        how_to=_parse_how_to(
+            data.get("how_to"),
+            step_num=step_num,
+            context=_HowToContext(
+                task_description=task_description,
+                restated=(_comparable(instruction), _comparable(expected)),
+                allowed_items=allowed_items or {},
+                profile_given=profile_given,
+            ),
+        ),
     )
 
 
-def _parse_how_to(value: object, *, step_num: int) -> tuple[PersonHowToItem, ...]:
+@dataclass(frozen=True)
+class _HowToContext:
+    """What a how-to item is validated against."""
+
+    task_description: str
+    # The instruction and the expected result, comparable (_comparable).
+    restated: tuple[str, ...]
+    # Knowledge base item ids the model may cite -> names.
+    allowed_items: Mapping[int, str]
+    profile_given: bool
+
+
+def _parse_how_to(
+    value: object, *, step_num: int, context: _HowToContext
+) -> tuple[PersonHowToItem, ...]:
     """The usable "How to do it" items; suggested commands are not checked
     against the case text (only ``kind="command"`` is), only for shape."""
     if not isinstance(value, list):
         return ()
     items: list[PersonHowToItem] = []
-    dropped = 0
+    dropped = restated = 0
     for raw_item in value:
-        item = _how_to_item(raw_item)
+        item = _how_to_item(raw_item, context)
         if item is None:
             dropped += 1
+            continue
+        if (
+            not item.command
+            and not item.source_kind
+            and _restates(item.text, context.restated)
+        ):
+            restated += 1
             continue
         if len(items) < HOW_TO_MAX_ITEMS:
             items.append(item)
     if dropped:
         logger.info("Person step %d: %d how-to item(s) dropped", step_num, dropped)
+    if restated:
+        logger.info(
+            "Person step %d: %d how-to item(s) restating the step dropped",
+            step_num,
+            restated,
+        )
     return tuple(items)
 
 
-def _how_to_item(value: object) -> PersonHowToItem | None:
+def _how_to_item(value: object, context: _HowToContext) -> PersonHowToItem | None:
     if not isinstance(value, dict):
         return None
     text = value.get("text")
     command = value.get("command") or ""
     if not isinstance(text, str) or not isinstance(command, str):
         return None
-    text = cap_text(strip_executor_vocabulary(text), HOW_TO_TEXT_MAX_CHARS)
+    text = cap_text(
+        _redacted(strip_executor_vocabulary(text), context.task_description),
+        HOW_TO_TEXT_MAX_CHARS,
+    )
     command = _unwrap_command(command)
     if not text or len(command) > HOW_TO_COMMAND_MAX_CHARS:
         return None
     if "\n" in command or "\r" in command:
         return None
-    return PersonHowToItem(text=text, command=command)
+    command = _redacted(command, context.task_description)
+    kind, item_id, page, label = _how_to_source(value.get("source"), context)
+    return PersonHowToItem(
+        text=text,
+        command=command,
+        source_kind=kind,
+        source_item_id=item_id,
+        source_page=page,
+        source_label=label,
+    )
+
+
+def _how_to_source(
+    value: object, context: _HowToContext
+) -> tuple[PersonHowToSourceKind, int | None, int | None, str]:
+    """A validated source (kind, item id, page, server-built label); an unknown
+    or malformed source is dropped and the item kept."""
+    if not isinstance(value, dict):
+        return "", None, None, ""
+    kind = value.get("kind")
+    if kind == "profile" and context.profile_given:
+        return "profile", None, None, PROFILE_SOURCE_LABEL
+    if kind != "kb":
+        return "", None, None, ""
+    item_id = positive_int(value.get("item_id"))
+    name = None if item_id is None else context.allowed_items.get(item_id)
+    if item_id is None or name is None:
+        return "", None, None, ""
+    page = positive_int(value.get("page"))
+    label = f"«{' '.join(name.split())}»" + ("" if page is None else f", page {page}")
+    return "kb", item_id, page, cap_text(label, SOURCE_LABEL_MAX_CHARS)
+
+
+def _redacted(text: str, task_description: str) -> str:
+    return redact_secrets(text, known_text=task_description)
+
+
+_NOT_WORD: Final = re.compile(r"[^\w]+")
+# A how-to item contained in the instruction is dropped from this many words.
+_RESTATED_MIN_WORDS: Final = 6
+
+
+def _comparable(text: str) -> str:
+    """Lower-case words only, single-spaced (for the restatement guard)."""
+    return " ".join(_NOT_WORD.sub(" ", text.lower()).split())
+
+
+def _restates(text: str, restated: tuple[str, ...]) -> bool:
+    """Whether ``text`` says nothing beyond the instruction or expected result:
+    equal to one of them, or a run of at least ``_RESTATED_MIN_WORDS`` words
+    contained in one. Short items ("Open Settings") are kept. A cheap net
+    under the prompt rule, not a similarity model."""
+    item = _comparable(text)
+    if not item:
+        return False
+    if item in restated:
+        return True
+    return len(item.split()) >= _RESTATED_MIN_WORDS and any(
+        f" {item} " in f" {other} " for other in restated
+    )
 
 
 def _unwrap_command(command: str) -> str:
