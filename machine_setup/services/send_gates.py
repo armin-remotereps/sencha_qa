@@ -5,9 +5,14 @@ approval that queues a turn) both call ``run_and_update_refusal``; only help,
 result and auto-fix threads add the machine READY gate (Q3: the main chat
 may run with the Test Runner offline).
 
+Only an agent-driven Started run refuses (``run_machine_use``): a Manual
+run's tester is kept out of the agent's way by the call-time
+``run_setup_task`` gate (``setup_tools``) and by claim / Continue refusing
+while a turn is live.
+
 A manual case discussion has its own gates (``manual_thread_send_refusal``):
-its case must still be claimed, its own started manual run does not refuse
-it, and it skips the READY gate (``run_setup_task`` checks at call time).
+its case must still be claimed, and it skips the READY gate
+(``run_setup_task`` checks at call time).
 """
 
 from __future__ import annotations
@@ -23,7 +28,8 @@ from projects.manual_run_policy import (
     MANUAL_DISCUSS_NOT_CLAIMED,
     is_claimed_manual_case,
 )
-from projects.models import Project, TestRun, TestRunStatus, TestRunTestCase
+from projects.models import Project, TestRunTestCase
+from projects.run_machine_use import agent_run_started
 from projects.runner_update_state import (
     RUNNER_UPDATE_RUNNING_MESSAGE,
     runner_update_in_progress,
@@ -32,19 +38,13 @@ from projects.services import MachineState, get_machine_state
 from visual_engine.services.pool_status import get_visual_engine_status
 
 
-def run_and_update_refusal(
-    project: Project, now: datetime, *, own_manual_run_id: int | None = None
-) -> MachineSetupError | None:
-    """A Started run or a Test Runner update refuses a new turn (two queries).
+def run_and_update_refusal(project: Project, now: datetime) -> MachineSetupError | None:
+    """An agent-driven Started run or a Test Runner update refuses a new turn
+    (two queries; a Started Manual run does not).
 
-    ``own_manual_run_id``: a manual case discussion's own started manual run,
-    which does not refuse it (any other started run still does).
     The caller has already resolved the live turn under the project row lock.
     """
-    started = TestRun.objects.filter(project=project, status=TestRunStatus.STARTED)
-    if own_manual_run_id is not None:
-        started = started.exclude(pk=own_manual_run_id)
-    if started.exists():
+    if agent_run_started(project.pk):
         return SetupRunActiveError()
     if runner_update_in_progress(project.pk, now):
         return MachineSetupError(RUNNER_UPDATE_RUNNING_MESSAGE)
@@ -80,23 +80,22 @@ def manual_thread_send_refusal(
     """Every send gate of a manual case discussion but the live-turn one.
 
     Refused (``MANUAL_DISCUSS_NOT_CLAIMED``) once the case is no longer a
-    claimed IN_PROGRESS case of a started manual run of ``project``; the
-    case's own run is exempt from the started-run refusal; no READY gate.
+    claimed IN_PROGRESS case of a started manual run of ``project``; no
+    READY gate (a Started Manual run does not refuse, ``run_machine_use``).
     Three queries. Also read, without sending, by the thread page (the Test
     Runner window, which already knows the claim, uses
     ``run_and_update_refusal`` directly).
     """
-    run_id = claimed_manual_run_id(project, pivot_id)
-    if run_id is None:
+    if not is_claimed_manual_pivot(project, pivot_id):
         return MachineSetupError(MANUAL_DISCUSS_NOT_CLAIMED)
-    return run_and_update_refusal(project, now, own_manual_run_id=run_id)
+    return run_and_update_refusal(project, now)
 
 
-def claimed_manual_run_id(project: Project, pivot_id: int | None) -> int | None:
-    """The run of ``pivot_id`` when it is a claimed IN_PROGRESS case of a
-    started manual run of ``project``; else None (one query)."""
+def is_claimed_manual_pivot(project: Project, pivot_id: int | None) -> bool:
+    """Whether ``pivot_id`` is a claimed IN_PROGRESS case of a started manual
+    run of ``project`` (one query)."""
     if pivot_id is None:
-        return None
+        return False
     pivot = (
         TestRunTestCase.objects.select_related("test_run")
         .only(
@@ -110,6 +109,4 @@ def claimed_manual_run_id(project: Project, pivot_id: int | None) -> int | None:
         .filter(pk=pivot_id, test_run__project=project)
         .first()
     )
-    if pivot is None or not is_claimed_manual_case(pivot.test_run, pivot):
-        return None
-    return pivot.test_run_id
+    return pivot is not None and is_claimed_manual_case(pivot.test_run, pivot)

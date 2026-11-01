@@ -23,6 +23,7 @@ from machine_setup.services.runner_discussion import (
     get_runner_manual_discussion,
     get_runner_send_blocker,
 )
+from projects.manual_run_policy import MANUAL_PAUSE_AGENT_BUSY
 from projects.models import Project
 from projects.runner_case_services import RunnerCaseStep, get_runner_cases
 from projects.runner_manual_state_services import build_manual_run_state
@@ -128,7 +129,12 @@ def get_runner_manual_state(
         or ClientCapability.MANUAL_PAUSE_DISCUSS_V1.value not in capabilities
     ):
         return state
-    discussion = get_runner_manual_discussion(
-        project, state.active.pivot_id, test_run_id=state.run.run_id
-    )
-    return replace(state, active=replace(state.active, discussion=discussion))
+    discussion = get_runner_manual_discussion(project, state.active.pivot_id)
+    active = replace(state.active, discussion=discussion.payload)
+    if discussion.setup_turn_live and active.can_continue:
+        # Same refusal as ``continue_manual_case``: any setup turn may be
+        # using the machine.
+        active = replace(
+            active, can_continue=False, pause_blocker=MANUAL_PAUSE_AGENT_BUSY
+        )
+    return replace(state, active=active)

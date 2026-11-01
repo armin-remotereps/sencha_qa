@@ -121,17 +121,25 @@ def get_runner_discussion(
     )
 
 
+@dataclass(frozen=True)
+class RunnerManualDiscussion:
+    """The window's discussion payload, and whether any setup turn of the
+    project is live (Continue is refused meanwhile, any thread)."""
+
+    payload: ManualDiscussionPayload
+    setup_turn_live: bool
+
+
 def get_runner_manual_discussion(
-    project: Project, pivot_id: int, *, test_run_id: int
-) -> ManualDiscussionPayload:
+    project: Project, pivot_id: int
+) -> RunnerManualDiscussion:
     """The claimed manual case's discussion; no thread yet gives an empty one.
 
-    The caller has proven ``pivot_id`` is the claimed IN_PROGRESS case of
-    ``test_run_id``, the project's STARTED manual run, so the claim is not
-    re-checked. Queries (at most five): the thread, with a thread its newest
-    rows, the project's live turns (this case's turn and the live-turn
-    refusal from one read), and without a live turn the other-run and runner
-    update refusals.
+    The caller has proven ``pivot_id`` is the claimed IN_PROGRESS case of the
+    project's STARTED manual run, so the claim is not re-checked. Queries (at
+    most five): the thread, with a thread its newest rows, the project's live
+    turns (this case's turn and the live-turn refusal from one read), and
+    without a live turn the agent-run and runner update refusals.
     """
     thread = (
         SetupConversation.objects.filter(
@@ -153,16 +161,16 @@ def get_runner_manual_discussion(
     if live_cases:
         refusal = SetupTurnActiveError()
     else:
-        # The case's own run does not refuse its discussion.
-        refusal = run_and_update_refusal(project, now, own_manual_run_id=test_run_id)
+        refusal = run_and_update_refusal(project, now)
     blocker = refusal.message if refusal is not None else ""
-    return ManualDiscussionPayload(
+    payload = ManualDiscussionPayload(
         thread_url=thread_url,
         turn_live=pivot_id in live_cases,
         can_send=not blocker,
         send_blocker=blocker[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
         messages=messages,
     )
+    return RunnerManualDiscussion(payload=payload, setup_turn_live=bool(live_cases))
 
 
 def _thread_url(project_id: int, thread_id: int) -> str:

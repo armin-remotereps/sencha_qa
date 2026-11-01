@@ -3,8 +3,9 @@
 Design (plan D2: ``machine_readiness`` depends only on ``projects.models``,
 the knowledge base services and the agents' LLM client): the runner actions
 (``projects.services.controller_*``), the setup-turn gate
-(``machine_setup.turn_state``) and the runner-update gate
-(``projects.runner_update_state``) are injected as a ``RunnerPorts`` value.
+(``machine_setup.turn_state``), the runner-update gate
+(``projects.runner_update_state``) and the run gates
+(``projects.run_machine_use``) are injected as a ``RunnerPorts`` value.
 The composition root is outside this app: ``projects.machine_readiness_ports
 .build_runner_ports()``, called by the ``projects`` views and Celery tasks
 that scan or check the machine, and by ``machine_setup``'s readiness tools.
@@ -88,6 +89,10 @@ class ProjectGatePort(Protocol):
     def __call__(self, project_id: int, now: datetime) -> bool: ...
 
 
+class ProjectCheckPort(Protocol):
+    def __call__(self, project_id: int) -> bool: ...
+
+
 @dataclass(frozen=True)
 class RunnerPorts:
     """Runner actions and gates, built by ``projects.machine_readiness_ports``."""
@@ -99,6 +104,10 @@ class RunnerPorts:
     live_turn_exists: ProjectGatePort
     # A Test Runner self-update in flight.
     runner_update_in_progress: ProjectGatePort
+    # A Started run that is not Manual (the agent drives the machine).
+    agent_run_started: ProjectCheckPort
+    # A tester performing a claimed, unpaused case of a Started Manual run.
+    manual_tester_on_machine: ProjectCheckPort
 
 
 def advertises(capabilities: object, capability: ClientCapability) -> bool:

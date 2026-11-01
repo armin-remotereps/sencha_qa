@@ -59,9 +59,9 @@ from projects.models import (
     HelpResolution,
     Project,
     TestRun,
-    TestRunStatus,
     TestRunTestCase,
 )
+from projects.run_machine_use import agent_run_started
 from projects.services import MachineState, get_machine_state
 from visual_engine.services.pool_status import get_visual_engine_status
 from visual_engine.types import VisualEngineStatusPayload
@@ -555,9 +555,8 @@ def get_setup_page(
     )
     visual_engine = get_visual_engine_status()
     machine_state = get_machine_state(project, visual_engine)
-    run_active = TestRun.objects.filter(
-        project=project, status=TestRunStatus.STARTED
-    ).exists()
+    # A Started Manual run does not block sends (``run_machine_use``).
+    run_active = agent_run_started(project.pk)
 
     main_chat = kind == SetupConversationKind.CHAT
     blockers: list[str] = []

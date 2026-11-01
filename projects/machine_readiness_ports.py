@@ -17,6 +17,7 @@ from machine_readiness.runner_ports import (
     RunnerPorts,
 )
 from machine_setup.turn_state import live_turn_exists
+from projects.run_machine_use import agent_run_started, manual_tester_on_machine
 from projects.runner_update_state import runner_update_in_progress
 from projects.services import (
     controller_check_app_installed,
@@ -32,6 +33,8 @@ def build_runner_ports() -> RunnerPorts:
         check_app_installed=_check_app_installed,
         live_turn_exists=live_turn_exists,
         runner_update_in_progress=runner_update_in_progress,
+        agent_run_started=agent_run_started,
+        manual_tester_on_machine=manual_tester_on_machine,
     )
 
 

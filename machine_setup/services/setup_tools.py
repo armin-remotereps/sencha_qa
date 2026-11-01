@@ -10,7 +10,10 @@ Sub-agents get the tester's machine tools, reached through
 
 A manual case discussion (``ThreadRole.MANUAL_CASE``) refuses
 ``run_setup_task`` unless its case is paused (the tester is away from the
-machine) and the machine is ready, both checked at call time.
+machine) and the machine is ready, both checked at call time. Every other
+role refuses it while a tester performs a claimed, unpaused manual case
+(``MANUAL_TESTER_ON_MACHINE``), since a Started Manual run no longer refuses
+the send itself.
 
 Main chat gates (plan docs/plan/feat-machine-setup-intake.md, Q1 and Q3):
 while the intake is pending, ``run_setup_task`` and ``scan_artifacts`` return
@@ -109,12 +112,14 @@ from projects.exceptions import (
     BrowserUnavailableError,
     RunnerOutdatedError,
 )
+from projects.manual_run_policy import MANUAL_TESTER_ON_MACHINE
 from projects.models import (
     CONTEXT_CHANGE_SUMMARY_MAX_LENGTH,
     PROJECT_PROMPT_MAX_LENGTH,
     ContextWriteSource,
     Project,
 )
+from projects.run_machine_use import manual_tester_on_machine
 from projects.services import MachineState, connected_machine_state
 from visual_engine.services.pool_status import get_visual_engine_status
 
@@ -677,14 +682,14 @@ def build_setup_dispatcher(
             refusal = _main_chat_gate()
             if refusal is not None:
                 return _tool_error(tool_call, refusal)
-        if (
-            role == ThreadRole.MANUAL_CASE
-            and tool_call.tool_name == RUN_SETUP_TASK_TOOL
-        ):
-            refusal = _manual_case_gate()
-            if refusal is not None:
-                return _tool_error(tool_call, refusal)
         if tool_call.tool_name == RUN_SETUP_TASK_TOOL:
+            if role == ThreadRole.MANUAL_CASE:
+                refusal = _manual_case_gate()
+                if refusal is not None:
+                    return _tool_error(tool_call, refusal)
+            elif manual_tester_on_machine(project_id):
+                # Approved actions too; no attempt is spent (``run_subtask``).
+                return _tool_error(tool_call, MANUAL_TESTER_ON_MACHINE)
             try:
                 request = _parse_setup_task_request(
                     tool_call.arguments, main_chat=main_chat

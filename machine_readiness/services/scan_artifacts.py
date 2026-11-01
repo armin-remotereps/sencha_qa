@@ -248,7 +248,8 @@ def scan_refusal(
 ) -> tuple[ScanAvailability, str | None]:
     """The availability, and why a scan may not start now (or None).
 
-    The runner gates (run Started, setup turn live unless ``during_turn``,
+    The runner gates (agent run Started, manual case being tested, setup
+    turn live unless ``during_turn``,
     runner updating, not connected), then the availability.
     """
     runner = load_runner_info(project_id)

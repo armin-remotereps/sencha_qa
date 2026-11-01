@@ -9,8 +9,8 @@ the case's execution segment, so the paused time never reaches
 
 The Test Runner window pauses its own claim (with the token); a writable
 member pauses or continues from the web (no token; the view authorizes it).
-Continue is refused while a turn of the case's manual discussion is live: the
-agent may be using the machine (``machine_setup.turn_state``, a leaf).
+Continue is refused while any Machine setup turn of the project is live: a
+setup agent may be using the machine (``machine_setup.turn_state``, a leaf).
 
 The pause fields (``MANUAL_PAUSE_FIELDS``) belong to the claim: every path
 that ends a claim (release, hand-in, Stop run, Needs re-test, Re-run, Reset)
@@ -28,7 +28,7 @@ from typing import Final
 from django.db import transaction
 from django.utils import timezone
 
-from machine_setup.turn_state import manual_case_turn_live
+from machine_setup.turn_state import live_turn_exists
 from projects.case_duration_services import (
     CASE_SEGMENT_OPEN_FIELDS,
     close_case_segment,
@@ -145,8 +145,8 @@ def continue_manual_case(
     """Continue the paused claimed case: its clock runs again.
 
     Same callers as ``pause_manual_case``. Raises ``ManualRunError``
-    (user-safe) when the case is not paused, or while a turn of its manual
-    discussion is live.
+    (user-safe) when the case is not paused, or while any Machine setup turn
+    of the project is live.
     """
     _check_web_actor(actor, claim_token)
     with transaction.atomic():
@@ -155,9 +155,10 @@ def continue_manual_case(
         )
         if pivot.manual_paused_at is None:
             raise ManualRunError(MANUAL_PAUSE_NOT_PAUSED)
-        if manual_case_turn_live(pivot.pk):
+        now = timezone.now()
+        if live_turn_exists(project.pk, now):
             raise ManualRunError(MANUAL_PAUSE_AGENT_BUSY)
-        open_case_segment(pivot, timezone.now())
+        open_case_segment(pivot, now)
         for field, value in MANUAL_PAUSE_CLEARED.items():
             setattr(pivot, field, value)
         pivot.save(

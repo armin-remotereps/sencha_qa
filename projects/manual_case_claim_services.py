@@ -25,7 +25,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from agents.checkpoint import checkpoint_to_json
-from machine_setup.turn_state import manual_case_turn_live, manual_run_turn_live
+from machine_setup.turn_state import live_turn_exists, manual_case_turn_live
 from projects.case_duration_services import (
     CASE_SEGMENT_OPEN_FIELDS,
     close_case_segment,
@@ -68,8 +68,8 @@ def claim_manual_case(
 
     Raises ``ManualRunError`` (user-safe) when the case is not one of the
     project's manual run cases, the run is not running, the case is not
-    Created, another case of the run is claimed, or a turn of a manual
-    discussion of the run is live. Records the actor's
+    Created, another case of the run is claimed, or any Machine setup turn
+    of the project is live (it may be using the machine). Records the actor's
     ``CaseActivity.START`` (a member only); no leaderboard credit until the
     hand-in.
     """
@@ -89,8 +89,9 @@ def claim_manual_case(
             .exists()
         ):
             raise ManualRunError(_OTHER_CLAIMED)
-        # The agent of a case's discussion may still be on the machine.
-        if manual_run_turn_live(test_run.pk):
+        # A setup agent (any thread) may be on the machine; the project row
+        # lock serializes this with a setup send.
+        if live_turn_exists(project.pk, timezone.now()):
             raise ManualRunError(MANUAL_PAUSE_AGENT_BUSY)
         now = timezone.now()
         token = secrets.token_urlsafe(_CLAIM_TOKEN_BYTES)

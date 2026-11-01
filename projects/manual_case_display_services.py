@@ -19,9 +19,11 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Final, Literal
 
+from django.utils import timezone
+
 from agents.checkpoint import checkpoint_from_json, final_step_indices
 from machine_setup.models import SetupConversation, SetupConversationKind
-from machine_setup.turn_state import manual_case_turn_live
+from machine_setup.turn_state import live_turn_exists
 from projects.how_to_view import PersonHowToView, how_to_view
 from projects.manual_case_pause_services import (
     ManualPausePanel,
@@ -424,10 +426,12 @@ def _step_rows(
 
 
 def _pause_panel(pivot: TestRunTestCase) -> ManualPausePanel:
-    """The case's pause panel; Continue off while a turn of its manual
-    discussion is live (one query, only when Continue would apply)."""
+    """The case's pause panel; Continue off while any Machine setup turn of
+    the project is live (one query, only when Continue would apply)."""
     panel = get_manual_pause_panel(pivot.test_run, pivot)
-    if panel.can_continue and manual_case_turn_live(pivot.pk):
+    if panel.can_continue and live_turn_exists(
+        pivot.test_run.project_id, timezone.now()
+    ):
         return replace(panel, can_continue=False, blocker=MANUAL_PAUSE_AGENT_BUSY)
     return panel
 

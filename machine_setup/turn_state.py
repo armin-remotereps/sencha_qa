@@ -85,16 +85,6 @@ def manual_case_turn_live(pivot_id: int) -> bool:
     ).exists()
 
 
-def manual_run_turn_live(test_run_id: int) -> bool:
-    """Whether a turn of any manual discussion of the run's cases is live (not
-    stale): claiming another case of the run is refused meanwhile."""
-    return SetupTurn.objects.filter(
-        _not_stale(timezone.now()),
-        conversation__manual_case__test_run_id=test_run_id,
-        status__in=LIVE_TURN_STATUSES,
-    ).exists()
-
-
 def live_turn_manual_case_ids(project_id: int, now: datetime) -> set[int | None]:
     """The ``manual_case`` of the thread of each queued or running, non-stale
     turn of the project (None for a thread of another kind); one query.

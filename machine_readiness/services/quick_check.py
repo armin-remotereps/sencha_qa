@@ -145,9 +145,9 @@ class _Target:
 def ensure_quick_check_allowed(*, project_id: int, ports: RunnerPorts) -> RunnerInfo:
     """The runner, or ``QuickCheckRefusedError`` when a check may not run now.
 
-    Refused while a run is Started, a setup turn is live, the runner is
-    updating, or no runner is connected (``runner_gates``). Four small
-    queries at most.
+    Refused while an agent-driven run is Started, a manual case is being
+    tested, a setup turn is live, the runner is updating, or no runner is
+    connected (``runner_gates``). Five small queries at most.
     """
     runner = load_runner_info(project_id)
     refusal = runner_action_refusal(

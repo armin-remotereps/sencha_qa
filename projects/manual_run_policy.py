@@ -63,6 +63,11 @@ MANUAL_DISCUSS_NOT_CLAIMED: Final = (
 MANUAL_DISCUSS_MACHINE_NEEDS_PAUSE: Final = (
     "Pause the case first: the tester is using the machine."
 )
+# Any setup thread but the case's own discussion (``run_machine_use``).
+MANUAL_TESTER_ON_MACHINE: Final = (
+    "A tester is performing a manual case on this machine. Ask them to pause "
+    "it from the Manual test card or the Test Runner, then try again."
+)
 MANUAL_REDESIGN_REFUSED: Final = (
     "A manual case follows the test case's own steps; its plan cannot be redesigned."
 )

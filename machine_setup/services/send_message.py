@@ -65,8 +65,9 @@ def send_setup_message(
     is no longer claimed (its own started manual run does not refuse it), or ``MachineSetupError`` when the Test
     Runner is being updated or the thread was archived meanwhile, or ``SetupDocumentNotAllowedError`` when ``document``
     targets any thread but the main chat. A stale live turn is closed as
-    ``worker_lost`` first, and stays closed even when the send is refused. A paused (Needs help) run
-    does not block sending; a started one does.
+    ``worker_lost`` first, and stays closed even when the send is refused. A
+    paused (Needs help) run or a started Manual run does not block sending; a
+    started agent-driven run does.
     """
     outcome = _send_locked(
         project=project,
