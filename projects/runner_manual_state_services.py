@@ -8,6 +8,9 @@ so a reconnected runner resumes its uploads. A runner with
 MANUAL_STEP_GUIDE_V1 also gets each step's "How to do it" (one more query),
 unless it would take the snapshot past MANUAL_RUN_STATE_SAFE_BYTES (estimated
 from the text lengths, no extra serialization): then every step reads "none".
+A runner with MANUAL_PAUSE_DISCUSS_V1 also gets the claimed case's pause
+fields and sees it as ``paused`` in the list (no extra query); the case's
+discussion is composed in by ``projects.runner_window_state``.
 A constant number of queries (at most seven), whatever the number of cases.
 """
 
@@ -46,6 +49,7 @@ from controller_client.protocol import (
     PersonStepQuestionPayload,
 )
 from projects.case_markup import markup_to_plain
+from projects.manual_case_pause_services import get_manual_pause_panel
 from projects.manual_case_steps import manual_steps_from_checkpoint
 from projects.manual_case_submit_services import manifest_keys
 from projects.manual_step_guide_read import ManualGuideView, load_manual_guide
@@ -68,6 +72,8 @@ logger = logging.getLogger(__name__)
 # JSON keys and punctuation counted per list entry (case, step, how-to item,
 # question, missing key) in the size estimate.
 _ENTRY_OVERHEAD_CHARS: Final = 64
+# The list status of the claimed case while it is paused (MANUAL_PAUSE_DISCUSS_V1).
+_PAUSED_LIST_STATUS: Final = "paused"
 
 
 def build_manual_run_state(
@@ -81,8 +87,9 @@ def build_manual_run_state(
     runner connection, so the snapshot is the same for every person at it).
     Questions and ``can_ask`` only for a runner that also
     advertised PERSON_STEP_ASSIST_V1; the steps' how-to and ``shell_label``
-    only for one with MANUAL_STEP_GUIDE_V1 (older windows get the snapshot
-    unchanged).
+    only for one with MANUAL_STEP_GUIDE_V1; the pause fields and the
+    ``paused`` list status only for one with MANUAL_PAUSE_DISCUSS_V1 (older
+    windows get the snapshot unchanged).
     """
     run = (
         TestRun.objects.filter(
@@ -90,7 +97,8 @@ def build_manual_run_state(
             help_mode=RunHelpMode.MANUAL,
             status=TestRunStatus.STARTED,
         )
-        .only("id", "name")
+        # Status and mode: the pause panel (both known from the filter).
+        .only("id", "name", "status", "help_mode")
         .order_by("-started_at", "-pk")
         .first()
     )
@@ -99,6 +107,9 @@ def build_manual_run_state(
         return ManualRunStateMessage(
             run=None, cases=(), active=None, pending_uploads=pending
         )
+    pause_discuss = (
+        ClientCapability.MANUAL_PAUSE_DISCUSS_V1.value in runner_capabilities
+    )
     rows = list(
         TestRunTestCase.objects.filter(test_run_id=run.pk)
         .order_by(*RUN_CASE_ORDERING)
@@ -106,6 +117,7 @@ def build_manual_run_state(
             "id",
             "status",
             "manual_claimed_label",
+            "manual_paused_at",
             "test_case__title",
             "test_case__testrail_id",
         )[:MANUAL_RUN_STATE_MAX_CASES]
@@ -115,10 +127,12 @@ def build_manual_run_state(
             pivot_id=pivot_id,
             title=str(title)[:MANUAL_CASE_TITLE_MAX_CHARS],
             testrail_id=str(testrail_id or "")[:MANUAL_TESTRAIL_ID_MAX_CHARS],
-            status=str(status)[:MANUAL_CASE_STATUS_MAX_CHARS],
+            status=_list_status(
+                str(status), paused=pause_discuss and paused_at is not None
+            )[:MANUAL_CASE_STATUS_MAX_CHARS],
             claimed_label=str(label or "")[:PERSON_STEP_LABEL_MAX_CHARS],
         )
-        for pivot_id, status, label, title, testrail_id in rows
+        for pivot_id, status, label, paused_at, title, testrail_id in rows
     )
     guided = ClientCapability.MANUAL_STEP_GUIDE_V1.value in runner_capabilities
     return ManualRunStateMessage(
@@ -128,7 +142,8 @@ def build_manual_run_state(
         ),
         cases=cases,
         active=_active_case(
-            run.pk,
+            run,
+            pause_discuss=pause_discuss,
             assist=ClientCapability.PERSON_STEP_ASSIST_V1.value in runner_capabilities,
             guided=guided,
             other_chars=(
@@ -146,23 +161,40 @@ def build_manual_run_state(
     )
 
 
+def _list_status(status: str, *, paused: bool) -> str:
+    """The list status of a case; ``paused`` only for the claimed case while
+    it is paused (and only for a MANUAL_PAUSE_DISCUSS_V1 window)."""
+    if paused and status == TestRunTestCaseStatus.IN_PROGRESS:
+        return _PAUSED_LIST_STATUS
+    return status
+
+
 def _active_case(
-    test_run_id: int, *, assist: bool, guided: bool, other_chars: int
+    test_run: TestRun,
+    *,
+    pause_discuss: bool,
+    assist: bool,
+    guided: bool,
+    other_chars: int,
 ) -> ManualActiveCasePayload | None:
     """The run's claimed case with its verbatim steps (one query, plus one for
     its questions with ``assist`` and one for its guide with ``guided``, set
-    only for a MANUAL_STEP_GUIDE_V1 runner). ``other_chars``: the estimated
+    only for a MANUAL_STEP_GUIDE_V1 runner; the pause fields with
+    ``pause_discuss`` come from loaded fields). ``other_chars``: the estimated
     size of the rest of the snapshot (case list, pending uploads)."""
     claimed = (
         TestRunTestCase.objects.filter(
-            test_run_id=test_run_id, status=TestRunTestCaseStatus.IN_PROGRESS
+            test_run_id=test_run.pk, status=TestRunTestCaseStatus.IN_PROGRESS
         )
         .exclude(manual_claim_token="")
         .select_related("test_case")
         .only(
             "id",
+            "status",
             "manual_claim_token",
             "manual_claimed_at",
+            "manual_paused_at",
+            "manual_paused_label",
             "execution_checkpoint",
             "test_case__title",
             "test_case__preconditions",
@@ -217,7 +249,7 @@ def _active_case(
             claimed.pk,
         )
         guide = None
-    return ManualActiveCasePayload(
+    active = ManualActiveCasePayload(
         pivot_id=claimed.pk,
         claim_token=claimed.manual_claim_token,
         title=title,
@@ -235,6 +267,18 @@ def _active_case(
         shell_label=(
             guide.shell_label[:PERSON_STEP_LABEL_MAX_CHARS] if guide is not None else ""
         ),
+    )
+    if not pause_discuss:
+        return active
+    panel = get_manual_pause_panel(test_run, claimed)
+    return replace(
+        active,
+        paused=panel.paused,
+        paused_by=panel.paused_label[:PERSON_STEP_LABEL_MAX_CHARS],
+        paused_at=panel.paused_at.isoformat() if panel.paused_at is not None else "",
+        can_pause=panel.can_pause,
+        can_continue=panel.can_continue,
+        pause_blocker=panel.blocker,
     )
 
 

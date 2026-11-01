@@ -6,7 +6,8 @@ the case's verbatim steps as its checkpoint plan (``manual_case_steps``). At
 most one case per run is claimed: checked under the run lock, which every
 claim holds. A release puts the case back to Created and clears the claim and
 the checkpoint; the window releases its own claim (with the token), a
-writable member on the web releases a stuck one (no token).
+writable member on the web releases a stuck one (no token). A claim's pause
+(``manual_case_pause_services``) starts cleared and ends with it.
 
 A claim also (re)starts the case's "How to do it" guide
 (``manual_step_guide_services``; generated on the ``assist`` queue after
@@ -24,6 +25,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from agents.checkpoint import checkpoint_to_json
+from machine_setup.turn_state import manual_case_turn_live, manual_run_turn_live
 from projects.case_duration_services import (
     CASE_SEGMENT_OPEN_FIELDS,
     close_case_segment,
@@ -32,10 +34,12 @@ from projects.case_duration_services import (
 from projects.exceptions import ManualRunError
 from projects.manual_case_lock import claim_matches, lock_manual_run_case
 from projects.manual_case_steps import build_manual_checkpoint
+from projects.manual_run_policy import MANUAL_PAUSE_AGENT_BUSY
 from projects.manual_step_guide_services import request_manual_case_guide
 from projects.models import (
     MANUAL_CLAIM_CLEARED,
     MANUAL_CLAIM_FIELDS,
+    MANUAL_PAUSE_CLEARED,
     Project,
     TestRunStatus,
     TestRunTestCase,
@@ -64,7 +68,8 @@ def claim_manual_case(
 
     Raises ``ManualRunError`` (user-safe) when the case is not one of the
     project's manual run cases, the run is not running, the case is not
-    Created, or another case of the run is claimed. Records the actor's
+    Created, another case of the run is claimed, or a turn of a manual
+    discussion of the run is live. Records the actor's
     ``CaseActivity.START`` (a member only); no leaderboard credit until the
     hand-in.
     """
@@ -84,6 +89,9 @@ def claim_manual_case(
             .exists()
         ):
             raise ManualRunError(_OTHER_CLAIMED)
+        # The agent of a case's discussion may still be on the machine.
+        if manual_run_turn_live(test_run.pk):
+            raise ManualRunError(MANUAL_PAUSE_AGENT_BUSY)
         now = timezone.now()
         token = secrets.token_urlsafe(_CLAIM_TOKEN_BYTES)
         pivot.status = TestRunTestCaseStatus.IN_PROGRESS
@@ -96,6 +104,9 @@ def claim_manual_case(
         pivot.manual_claimed_by = actor.user
         pivot.manual_claimed_label = actor.label()
         pivot.manual_claimed_at = now
+        # A new claim starts unpaused (saved with ``MANUAL_CLAIM_FIELDS``).
+        for field, value in MANUAL_PAUSE_CLEARED.items():
+            setattr(pivot, field, value)
         pivot.execution_checkpoint = checkpoint_to_json(
             build_manual_checkpoint(pivot.test_case)
         )
@@ -132,8 +143,10 @@ def release_manual_case(
     ``claim_token``: the claim the Test Runner window gives back; ``None`` is a
     writable member's force release on the web (the view authorizes it; a
     signed-in ``actor`` is required). The case's earlier time stays in
-    ``active_duration``. Raises ``ManualRunError`` (user-safe) when the case
-    is not claimed (or by another claim). Allowed whatever the run's status,
+    ``active_duration`` (a paused case's segment is already closed; closing
+    again adds nothing), and its pause clears with the claim. Raises ``ManualRunError`` (user-safe) when the case
+    is not claimed (or by another claim), or while a turn of its manual
+    discussion is live. Allowed whatever the run's status,
     so a stuck claim can always be cleared.
     """
     if claim_token is None and actor.user is None:
@@ -146,6 +159,9 @@ def release_manual_case(
             raise ManualRunError(_NOT_CLAIMED)
         if claim_token is not None and not claim_matches(pivot, claim_token):
             raise ManualRunError(_NOT_CLAIMED)
+        # Not while the discussion's agent may be using the machine.
+        if manual_case_turn_live(pivot.pk):
+            raise ManualRunError(MANUAL_PAUSE_AGENT_BUSY)
         now = timezone.now()
         close_case_segment(pivot.pk, now)
         pivot.segment_started_at = None

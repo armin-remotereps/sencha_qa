@@ -8,7 +8,10 @@ into the checkpoint, sets the case status from the verdict
 ``ManualCaseSubmission`` (the upload and AI-rewrite state), credits the case
 to a resolved member, records the session activity and finishes the run when
 no case is left. A replay of the same ``submission_id`` returns the screenshot
-keys still missing without writing anything.
+keys still missing without writing anything. A hand-in while the case is
+paused (``manual_case_pause_services``; e.g. an offline-queued hand-in after a
+web pause) is accepted: the segment close is idempotent and the pause clears
+with the claim (``MANUAL_CLAIM_CLEARED``).
 """
 
 from __future__ import annotations
@@ -27,13 +30,18 @@ from controller_client.protocol import (
     ManualStepOutcome,
     ManualStepResultPayload,
 )
+from machine_setup.turn_state import manual_case_turn_live
 from projects.case_credit import credit_cases
 from projects.case_duration_services import close_case_segment
 from projects.exceptions import ManualRunError, ManualSubmissionDroppedError
 from projects.manual_case_lock import claim_matches, lock_manual_run_case
 from projects.manual_refinement_services import queue_manual_refinement
 from projects.manual_run_finish import finish_manual_run_if_settled
-from projects.manual_run_policy import MANUAL_WIRE_VERDICTS, manual_attempt_id
+from projects.manual_run_policy import (
+    MANUAL_PAUSE_AGENT_BUSY,
+    MANUAL_WIRE_VERDICTS,
+    manual_attempt_id,
+)
 from projects.models import (
     MANUAL_CLAIM_CLEARED,
     MANUAL_CLAIM_FIELDS,
@@ -89,8 +97,9 @@ def submit_manual_case(
     Idempotent on ``payload.submission_id``. Raises
     ``ManualSubmissionDroppedError`` when the hand-in can never be accepted
     (unknown to this project on replay, superseded, claim released or replaced,
-    case no longer In progress) and ``ManualRunError`` for other refusals
-    (run not running, a step the case does not have).
+    case no longer In progress, run not running, a step the case does not
+    have) and ``ManualRunError`` (retryable) while a turn of the case's manual
+    discussion is live.
     """
     submission_uuid = uuid.UUID(payload.submission_id)
     with transaction.atomic():
@@ -122,6 +131,10 @@ def submit_manual_case(
             for shot in payload.shots
         ):
             raise ManualSubmissionDroppedError(_STEP_OUT_OF_RANGE)
+        # Retryable: the runner keeps the hand-in and sends it again once the
+        # discussion's agent is off the machine.
+        if manual_case_turn_live(pivot.pk):
+            raise ManualRunError(MANUAL_PAUSE_AGENT_BUSY)
 
         verdict = MANUAL_WIRE_VERDICTS[payload.verdict]
         now = timezone.now()

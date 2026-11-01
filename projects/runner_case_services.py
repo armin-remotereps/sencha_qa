@@ -7,7 +7,9 @@ person steps, at most ``PERSON_CASE_STATE_MAX_CASES``:
 - the case whose open help request waits for a person: run PAUSED, request
   open, no Night auto-fix running or starting (``discussion`` only);
 - the IN_PROGRESS case of a started run, for the Pause button only
-  (``pause`` only; it never makes the window show).
+  (``pause`` only; it never makes the window show). Never a Manual run's
+  claimed case: it pauses from the window's Manual tab
+  (``manual_case_pause_services``), not through the agent pause.
 
 Every view carries the test case text, the bounded log tail (cut in SQL, so
 the ``logs`` column is never loaded), the pause panel
@@ -57,6 +59,7 @@ from projects.models import (
     HelpAutoFixState,
     HelpProposalAction,
     Project,
+    RunHelpMode,
     TestRunStatus,
     TestRunTestCase,
     TestRunTestCaseStatus,
@@ -123,10 +126,11 @@ def get_runner_cases(
             status=TestRunTestCaseStatus.NEED_HELP,
         )
     if pause:
+        # A Manual run's claimed case is not an agent-run case: no agent Pause.
         match |= Q(
             test_run__status=TestRunStatus.STARTED,
             status=TestRunTestCaseStatus.IN_PROGRESS,
-        )
+        ) & ~Q(test_run__help_mode=RunHelpMode.MANUAL)
     if not step_status and not discussion and not pause:
         return RunnerCases(views=(), project=None)
     pivots = list(
@@ -188,6 +192,7 @@ def _role(pivot: TestRunTestCase, step_status: dict[int, str]) -> PersonCaseRole
     if (
         pivot.status == TestRunTestCaseStatus.IN_PROGRESS
         and pivot.test_run.status == TestRunStatus.STARTED
+        and pivot.test_run.help_mode != RunHelpMode.MANUAL
     ):
         return PersonCaseRole.RUNNING
     return None

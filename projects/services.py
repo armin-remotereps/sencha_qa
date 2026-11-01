@@ -3184,6 +3184,9 @@ class PivotStatusEvent(TypedDict):
     summary: dict[str, int]
     # A person asked to pause the running case (``pause_pending_for``).
     pause_pending: bool
+    # Manual run: the claimed case is paused (the tester's break), and by whom.
+    manual_paused: bool
+    manual_paused_by: str
 
 
 class CaseStatusEvent(TypedDict):
@@ -3199,6 +3202,9 @@ class CaseStatusEvent(TypedDict):
     # The paused case's discussion page once it opened; blank otherwise (only
     # ``broadcast_case_status`` callers that know it fill it).
     discussion_url: str
+    # Manual run: the claimed case is paused (the tester's break), and by whom.
+    manual_paused: bool
+    manual_paused_by: str
 
 
 class CaseStepsEvent(TypedDict):
@@ -3245,8 +3251,15 @@ def _send_pivot_status_to_run(
         "status": pivot.status,
         "summary": summary,
         "pause_pending": pause_pending_for(pivot),
+        "manual_paused": pivot.manual_paused_at is not None,
+        "manual_paused_by": _manual_paused_by(pivot),
     }
     async_to_sync(layer.group_send)(_test_run_group(pivot.test_run_id), event)
+
+
+def _manual_paused_by(pivot: TestRunTestCase) -> str:
+    """Who paused the loaded manual case; blank when it is not paused."""
+    return pivot.manual_paused_label if pivot.manual_paused_at is not None else ""
 
 
 def broadcast_run_and_pivots(
@@ -3304,6 +3317,8 @@ def _broadcast_pivot_status_to_case(
         "pause_pending": pause_pending,
         "pause_requested_by": pivot.pause_requested_label if pause_pending else "",
         "discussion_url": discussion_url,
+        "manual_paused": pivot.manual_paused_at is not None,
+        "manual_paused_by": _manual_paused_by(pivot),
     }
     async_to_sync(layer.group_send)(_test_run_case_group(pivot.id), event)
 
