@@ -8,14 +8,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import IntEnum, StrEnum
-from typing import Final
+from typing import Final, Literal
 
 from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.14.0"
+CLIENT_VERSION: Final[str] = "0.15.0"
 
 
 class CloseCode(IntEnum):
@@ -173,6 +173,12 @@ class ClientCapability(StrEnum):
     # ``person_step_question`` together with PERSON_STEP_ASSIST_V1).
     # Advertised only together with PERSON_STEPS_V1.
     MANUAL_RUN_V1 = "manual_run_v1"
+    # Optional: the "How to do it" of each manual step (``how_to``,
+    # ``how_to_state``) and the active case's ``shell_label`` in
+    # ``manual_run_state``; older windows get today's fields (the new keys
+    # arrive empty and are ignored). Advertised only together with
+    # MANUAL_RUN_V1 (dropped with the window).
+    MANUAL_STEP_GUIDE_V1 = "manual_step_guide_v1"
 
 
 # Capabilities that need the person step window; dropped without it.
@@ -186,6 +192,7 @@ _PERSON_WINDOW_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
         ClientCapability.PERSON_DISCUSSION_V1,
         ClientCapability.CASE_PAUSE_V1,
         ClientCapability.MANUAL_RUN_V1,
+        ClientCapability.MANUAL_STEP_GUIDE_V1,
     }
 )
 
@@ -202,7 +209,8 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
     (``CONTROLLER_PERSON_WINDOW=false``) or Tk is unavailable; the server then
     never sends ``person_step_state`` and the person answers on the web.
     PERSON_STEP_ASSIST_V1, PERSON_STEP_GUIDE_V1, PERSON_STEP_CASE_STEPS_V1, PERSON_CASE_CONTEXT_V1,
-    PERSON_DISCUSSION_V1, CASE_PAUSE_V1 and MANUAL_RUN_V1 are dropped with it.
+    PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1 and MANUAL_STEP_GUIDE_V1
+    are dropped with it.
     """
     if person_window:
         return CLIENT_CAPABILITIES
@@ -218,8 +226,8 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
 # capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1,
 # WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1,
 # PERSON_STEP_ASSIST_V1, PERSON_STEP_GUIDE_V1, PERSON_STEP_CASE_STEPS_V1, ARTIFACT_SCAN_V1,
-# PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1)
-# are checked where they are used instead.
+# PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1,
+# MANUAL_STEP_GUIDE_V1) are checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
@@ -2848,6 +2856,42 @@ MANUAL_CASE_TITLE_MAX_CHARS: Final[int] = 500
 MANUAL_TESTRAIL_ID_MAX_CHARS: Final[int] = 50
 MANUAL_CASE_STATUS_MAX_CHARS: Final[int] = 32
 _MANUAL_ISO_MAX_CHARS: Final[int] = 64
+# Bytes a character takes in the estimate below: any BMP character in the
+# window's UTF-8 IPC line (JSON escapes are rare in case and AI prose).
+MANUAL_RUN_STATE_BYTES_PER_CHAR: Final[int] = 3
+# What the server lets one ``manual_run_state`` reach, estimated from its text
+# lengths times MANUAL_RUN_STATE_BYTES_PER_CHAR; beyond it the steps' how-to
+# is left out. The server's ensure_ascii JSON writes a BMP non-ASCII character
+# as six bytes (twice the estimate), which must still fit the WebSocket cap;
+# characters outside the BMP (twelve bytes) are rare enough in case and AI
+# prose to leave out of the bound. The window's IPC cap is checked against it
+# in person_window_ipc.
+MANUAL_RUN_STATE_SAFE_BYTES: Final[int] = 3 * _MIB
+assert (
+    2 * MANUAL_RUN_STATE_SAFE_BYTES <= MAX_MESSAGE_SIZE
+), "MANUAL_RUN_STATE_SAFE_BYTES does not fit in MAX_MESSAGE_SIZE"
+# Most steps a manual case's "How to do it" guide covers (MANUAL_STEP_GUIDE_V1;
+# the server setting MANUAL_GUIDE_MAX_STEPS may only lower it), and the share
+# of the snapshot budget its items may take at worst: every item of every
+# step at its caps, plus the JSON keys.
+MANUAL_GUIDE_MAX_STEPS_CAP: Final[int] = 30
+MANUAL_GUIDE_SNAPSHOT_MAX_BYTES: Final[int] = 3 * _MIB // 2
+_MANUAL_HOW_TO_ITEM_JSON_OVERHEAD_CHARS: Final[int] = 64
+_MANUAL_HOW_TO_STEP_MAX_CHARS: Final[int] = PERSON_STEP_HOW_TO_MAX_ITEMS * (
+    PERSON_STEP_HOW_TO_TEXT_MAX_CHARS
+    + PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS
+    + PERSON_STEP_HOW_TO_SOURCE_MAX_CHARS
+    + _MANUAL_HOW_TO_ITEM_JSON_OVERHEAD_CHARS
+)
+assert (
+    MANUAL_GUIDE_MAX_STEPS_CAP
+    * _MANUAL_HOW_TO_STEP_MAX_CHARS
+    * MANUAL_RUN_STATE_BYTES_PER_CHAR
+    <= MANUAL_GUIDE_SNAPSHOT_MAX_BYTES
+), "MANUAL_GUIDE_MAX_STEPS_CAP does not fit in MANUAL_GUIDE_SNAPSHOT_MAX_BYTES"
+assert (
+    MANUAL_GUIDE_SNAPSHOT_MAX_BYTES < MANUAL_RUN_STATE_SAFE_BYTES
+), "MANUAL_GUIDE_SNAPSHOT_MAX_BYTES does not fit in MANUAL_RUN_STATE_SAFE_BYTES"
 
 
 class ManualCaseActionKind(StrEnum):
@@ -2915,6 +2959,12 @@ class ManualCaseListItemPayload:
         }
 
 
+# A manual step's "How to do it" (MANUAL_STEP_GUIDE_V1): being written,
+# written (``how_to`` holds the items), or none for this step. "" from an older
+# server or for an unknown value.
+ManualStepHowToState = Literal["", "pending", "ready", "none"]
+
+
 @dataclass(frozen=True)
 class ManualStepPayload:
     """One verbatim test case step (never reworded by the AI)."""
@@ -2923,9 +2973,21 @@ class ManualStepPayload:
     text: str
     # Blank when the case gives no expected result for the step.
     expected: str = ""
+    # The AI's "How to do it" for the step (MANUAL_STEP_GUIDE_V1), shown
+    # beside the verbatim text, never instead of it.
+    how_to: tuple[PersonHowToPayload, ...] = ()
+    how_to_state: ManualStepHowToState = ""
 
     def to_wire(self) -> dict[str, object]:
-        return {"num": self.num, "text": self.text, "expected": self.expected}
+        return {
+            "num": self.num,
+            "text": self.text,
+            "expected": self.expected,
+            "how_to": [
+                item.to_wire() for item in self.how_to[:PERSON_STEP_HOW_TO_MAX_ITEMS]
+            ],
+            "how_to_state": self.how_to_state,
+        }
 
 
 @dataclass(frozen=True)
@@ -2944,6 +3006,9 @@ class ManualActiveCasePayload:
     questions: tuple[PersonStepQuestionPayload, ...] = ()
     # The server takes a manual ``person_step_question`` for this case now.
     can_ask: bool = False
+    # The shell the steps' suggested commands are for (MANUAL_STEP_GUIDE_V1);
+    # blank without a guide or from an older server.
+    shell_label: str = ""
 
     def to_wire(self) -> dict[str, object]:
         return {
@@ -2958,6 +3023,7 @@ class ManualActiveCasePayload:
                 for question in self.questions[-PERSON_STEP_STATE_MAX_QUESTIONS:]
             ],
             "can_ask": self.can_ask,
+            "shell_label": self.shell_label,
         }
 
 
@@ -3195,7 +3261,20 @@ def _parse_manual_step(raw: object) -> ManualStepPayload:
         expected=_extract_text(
             item, "expected", MANUAL_STEP_TEXT_MAX_CHARS, truncate=True
         ),
+        how_to=_parse_how_to(item.get("how_to", [])),
+        how_to_state=_parse_manual_how_to_state(item.get("how_to_state", "")),
     )
+
+
+def _parse_manual_how_to_state(raw: object) -> ManualStepHowToState:
+    # Absent from an older server; an unknown value from a newer one reads "".
+    if raw == "pending":
+        return "pending"
+    if raw == "ready":
+        return "ready"
+    if raw == "none":
+        return "none"
+    return ""
 
 
 def _parse_manual_active(
@@ -3219,6 +3298,9 @@ def _parse_manual_active(
         ),
         questions=_parse_questions(raw.get("questions", [])),
         can_ask=_extract_bool(raw, "can_ask", default=False),
+        shell_label=_extract_text(
+            raw, "shell_label", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
+        ),
     )
 
 

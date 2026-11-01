@@ -21,6 +21,7 @@ from controller_client.protocol import (
     MANUAL_CASE_MAX_STEPS,
     MANUAL_CASE_SUBMIT_MAX_BYTES,
     MANUAL_CLAIM_TOKEN_MAX_CHARS,
+    MANUAL_RUN_STATE_SAFE_BYTES,
     MANUAL_SHOT_KEY_MAX_CHARS,
     MANUAL_STEP_MAX_SECONDS,
     MANUAL_STEP_NOTE_MAX_CHARS,
@@ -59,6 +60,11 @@ from controller_client.protocol import (
 # stays below it; with ``cases`` only pathological escaping goes over, and
 # the runner then sends the snapshot without them (person_window).
 IPC_TO_WINDOW_MAX_BYTES: Final[int] = 4 * 1024 * 1024
+# The server keeps a ``manual_run_state`` (estimated) below this budget by
+# leaving the steps' how-to out; room is left for the window's own fields.
+assert (
+    MANUAL_RUN_STATE_SAFE_BYTES < IPC_TO_WINDOW_MAX_BYTES
+), "MANUAL_RUN_STATE_SAFE_BYTES does not fit in IPC_TO_WINDOW_MAX_BYTES"
 # Largest window -> runner line: one answer (note + output), one question, one
 # pause, discussion message or help resolution, or one manual draft or hand-in
 # (every step note at its cap, fully escaped).

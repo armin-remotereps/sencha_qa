@@ -7,7 +7,8 @@ tester works through a Manual run here:
   preselected; Start claims it (the server answers; the steps then arrive in
   the next snapshot).
 - The claimed case: its title, preconditions and verbatim steps, one step at
-  a time (Previous / Next and a step picker). Each step has Pass and Fail,
+  a time (Previous / Next and a step picker), with the AI's "How to do it"
+  for the shown step when the server prepared one (MANUAL_STEP_GUIDE_V1). Each step has Pass and Fail,
   which take a screenshot with this window hidden (the runner hides it,
   captures and shows it again), a thumbnail with Retake, and a note
   (required for a failed step). Ask the AI about the shown step.
@@ -31,6 +32,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Final, Protocol
 
+from controller_client.person_window_how_to import clear_copy_buttons, render_how_to
 from controller_client.person_window_ipc import (
     ManualCaptureEvent,
     ManualCaseActionEvent,
@@ -58,6 +60,7 @@ from controller_client.protocol import (
     ManualShotKind,
     ManualStepOutcome,
     ManualStepPayload,
+    PersonHowToPayload,
     PersonStepQuestionAskPayload,
     PersonStepQuestionPayload,
     PersonStepQuestionWireStatus,
@@ -84,6 +87,7 @@ _CASE_LIST_ROWS: Final[int] = 8
 _STEP_LINES: Final[int] = 10
 _OVERVIEW_LINES: Final[int] = 8
 _THUMBNAIL_CACHE: Final[int] = 24
+_HOW_TO_PENDING: Final[str] = "Preparing a guide for this step…"
 _ASK_CLOSED: Final[str] = "▸ Ask the AI about this step"
 _ASK_OPEN: Final[str] = "▾ Ask the AI about this step"
 _STATUS_LABELS: Final[dict[str, str]] = {
@@ -104,6 +108,8 @@ _VERDICT_LABELS: Final[dict[ManualCaseVerdictWire, str]] = {
 }
 
 _Segments = tuple[tuple[str, tuple[str, ...]], ...]
+# What the how-to block shows: the items, the state and the shell label.
+_HowToKey = tuple[tuple[PersonHowToPayload, ...], str, str]
 
 
 class ManualBlock(Protocol):
@@ -134,6 +140,8 @@ class ManualHost(Protocol):
     def manual_entry(
         self, parent: "tk.Misc", *, row: int, height: int
     ) -> "tk.Text": ...
+
+    def manual_copy(self, text: str) -> None: ...
 
     def manual_send(self, event: WindowEvent) -> None: ...
 
@@ -207,6 +215,7 @@ class ManualView:
         self._asking = False
         self._ask_open = False
         self._rendered_qa: str | None = None
+        self._rendered_how_to: _HowToKey | None = None
         self._confirm: str | None = None
         self._draft_job: str | None = None
         self._verdict_var = tk.StringVar(master=root, value="")
@@ -296,8 +305,22 @@ class ManualView:
         )
         self._next_button.grid(row=0, column=2, sticky="e")
 
-        self._step_text = host.manual_block(active, title="Step", max_lines=_STEP_LINES)
-        self._step_text.frame.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        # The step and, under it, the AI's how-to for it.
+        step_box = ttk.Frame(active)
+        step_box.columnconfigure(0, weight=1)
+        step_box.grid(row=4, column=0, sticky="ew")
+        self._step_text = host.manual_block(
+            step_box, title="Step", max_lines=_STEP_LINES
+        )
+        self._step_text.frame.grid(row=0, column=0, sticky="ew", pady=(6, 0))
+        self._how_to = host.manual_block(
+            step_box, title="How to do it", max_lines=_STEP_LINES
+        )
+        self._how_to.frame.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        # One Copy button per suggested command (rebuilt with the how-to).
+        self._how_to_copies = ttk.Frame(self._how_to.frame)
+        self._how_to_copies.grid(row=2, column=0, sticky="w", pady=(2, 0))
+        self._how_to.show(False)
         self._expected = host.manual_block(
             active, title="Expected result", max_lines=_STEP_LINES
         )
@@ -489,6 +512,7 @@ class ManualView:
         self._capture = None
         self._asking = False
         self._rendered_qa = None
+        self._rendered_how_to = None
         self._thumbnails.clear()
         self._requested.clear()
         self._notes = dict(texts.notes) if texts is not None else {}
@@ -701,10 +725,41 @@ class ManualView:
             self._step_text.set(step.text)
             self._expected.set(step.expected or "(none given)")
             self._expected.show(True)
+        self._render_how_to(active, step)
         self._render_step_mark(step)
         self._render_ask(active)
         self._render_verdict()
         self._render_confirm()
+
+    def _render_how_to(
+        self, active: ManualActiveCasePayload, step: ManualStepPayload | None
+    ) -> None:
+        """The shown step's how-to; rebuilt only when what it shows changes."""
+        if step is None or step.how_to_state not in ("pending", "ready"):
+            key: _HowToKey = ((), "", "")
+        elif step.how_to_state == "pending":
+            key = ((), "pending", active.shell_label)
+        else:
+            key = (step.how_to, "ready", active.shell_label)
+        if key == self._rendered_how_to:
+            return
+        self._rendered_how_to = key
+        items, state, shell_label = key
+        shell = f" · commands for {shell_label}" if shell_label else ""
+        title = f"How to do it{shell}"
+        if state == "pending":
+            clear_copy_buttons(self._how_to_copies)
+            self._how_to.title.configure(text=title)
+            self._how_to.set_segments(((_HOW_TO_PENDING, ("muted",)),))
+            self._how_to.show(True)
+            return
+        render_how_to(
+            self._how_to,
+            self._how_to_copies,
+            items,
+            title=title,
+            copy=self._host.manual_copy,
+        )
 
     @staticmethod
     def _pick_label(step: ManualStepPayload, total: int) -> str:

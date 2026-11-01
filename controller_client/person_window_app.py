@@ -74,7 +74,6 @@ sizes, and exits 0 when nothing raised (``diagnose --window``).
 
 import argparse
 import ctypes
-import functools
 import io
 import logging
 import os
@@ -91,6 +90,7 @@ from typing import BinaryIO, Final
 
 from controller_client.exceptions import ProtocolError
 from controller_client.person_window_front_app import FrontAppKeeper
+from controller_client.person_window_how_to import render_how_to
 from controller_client.person_window_ipc import (
     IPC_TO_WINDOW_MAX_BYTES,
     TEXT_SIZE_DEFAULT,
@@ -217,7 +217,6 @@ _MUTED_COLOR: Final[str] = "#6b7280"
 # The steps the selected step covers (dark text on amber, readable in dark mode).
 _COVERED_BACKGROUND: Final[str] = "#fde68a"
 _COVERED_FOREGROUND: Final[str] = "#1f2937"
-_SUGGESTED_NOTE: Final[str] = "Suggested by the AI. Check it before you run it."
 _ASK_CLOSED: Final[str] = "▸ Ask the AI"
 _ASK_OPEN: Final[str] = "▾ Ask the AI"
 _TEXT_SIZE_STEP: Final[int] = 2
@@ -734,6 +733,9 @@ class PersonWindowApp:
 
     def manual_entry(self, parent: "tk.Misc", *, row: int, height: int) -> "tk.Text":
         return self._entry_text(parent, row=row, height=height)
+
+    def manual_copy(self, text: str) -> None:
+        self.copy(text)
 
     def manual_send(self, event: WindowEvent) -> None:
         self._writer.send(event)
@@ -1742,32 +1744,14 @@ class PersonWindowApp:
         if step.how_to == view.rendered_how_to:
             return
         view.rendered_how_to = step.how_to
-        for child in self._how_to_copies.winfo_children():
-            child.destroy()
-        if not step.how_to:
-            self._how_to.show(False)
-            return
         shell = f" · commands for {step.shell_label}" if step.shell_label else ""
-        self._how_to.title.configure(text=f"How to do it{shell}")
-        segments: list[tuple[str, tuple[str, ...]]] = []
-        for number, item in enumerate(step.how_to, start=1):
-            prefix = "" if number == 1 else "\n"
-            segments.append((f"{prefix}{number}. {item.text}", ()))
-            if item.source:
-                source = " ".join(item.source.splitlines())
-                segments.append((f"\n    Source: {source}", ("muted",)))
-            if not item.command:
-                continue
-            command = " ".join(item.command.splitlines())
-            segments.append((f"\n    {command}", ("mono",)))
-            segments.append((f"\n    {_SUGGESTED_NOTE}", ("muted",)))
-            ttk.Button(
-                self._how_to_copies,
-                text=f"Copy command {number}",
-                command=functools.partial(self.copy, item.command),
-            ).pack(side="left", padx=(0, 6))
-        self._how_to.set_segments(tuple(segments))
-        self._how_to.show(True)
+        render_how_to(
+            self._how_to,
+            self._how_to_copies,
+            step.how_to,
+            title=f"How to do it{shell}",
+            copy=self.copy,
+        )
 
     def _render_ask(self, step: PersonStepStatePayload) -> None:
         view = self._view
