@@ -13,7 +13,8 @@
     project    — the current Project (agent_connected)
     conversation — the shown thread (SetupConversation) on the thread page,
                  None on the main chat
-    thread_kind — "chat", "auto_fix", "case_help" or "case_result" (page.kind)
+    thread_kind — "chat", "auto_fix", "case_help", "case_result" or
+                 "manual_case" (page.kind)
     help_case_url — help threads only: the case page it was opened for
                  ("" when the case is gone)
     help_panel, help_form, help_turn_blocker — help threads only, while the
@@ -25,6 +26,12 @@
     result_thread — result chats only: ResultThreadHeader (test_run_id,
                  pivot_id, case_title, status, status_label, result_excerpt,
                  run_help_mode) for the static header, else None
+    manual_thread — manual case discussions only: ManualThreadHeader
+                 (test_run_id, pivot_id, case_title, claimed, claimed_label,
+                 paused, paused_label, paused_at) for the static header, else
+                 None. The thread has no machine READY send blocker (machine
+                 work is checked when the agent asks for it); once the case is
+                 handed in or released its sends are refused.
     help_mode_form — result chats only: projects.forms.RunHelpModeForm for
                  the re-run dialog's help mode select, else None
     visual_engine — VisualEngineStatusPayload (state, ready_count,
@@ -164,6 +171,25 @@
       {% else %}
       <p class="subtitle">Opened for a test case that no longer exists</p>
       {% endif %}
+      {% elif thread_kind == "manual_case" %}
+      <h1>Manual case discussion</h1>
+      {% if manual_thread %}
+      <p class="subtitle">
+        {{ manual_thread.case_title }}
+        {% if manual_thread.claimed %}
+        · Tested by {{ manual_thread.claimed_label|default:"a person" }}
+        {% if manual_thread.paused %}
+        <span class="badge badge-warning">Paused</span>
+        <span class="muted small">by {{ manual_thread.paused_label|default:"a person" }} since <time datetime="{{ manual_thread.paused_at|date:'c' }}">{{ manual_thread.paused_at|date:"M j, H:i" }}</time></span>
+        {% endif %}
+        {% else %}
+        · Handed in or released: this discussion is read-only
+        {% endif %}
+        {% if help_case_url %} · <a href="{{ help_case_url }}">Open the test case</a>{% endif %}
+      </p>
+      {% else %}
+      <p class="subtitle">Opened for a test case that no longer exists</p>
+      {% endif %}
       {% elif thread_kind == "auto_fix" or thread_kind == "case_help" %}
       <h1>{% if thread_kind == "case_help" %}Help chat{% else %}Auto-fix thread{% endif %}</h1>
       <p class="subtitle">
@@ -212,7 +238,7 @@
   {% include "machine_setup/includes/_help_panel.html" %}
   {% endif %}
 
-  <section class="chat" aria-label="{% if thread_kind == 'case_help' %}Help chat{% elif thread_kind == 'case_result' %}Result chat{% elif thread_kind == 'auto_fix' %}Auto-fix thread{% else %}Machine setup conversation{% endif %}">
+  <section class="chat" aria-label="{% if thread_kind == 'case_help' %}Help chat{% elif thread_kind == 'case_result' %}Result chat{% elif thread_kind == 'manual_case' %}Manual case discussion{% elif thread_kind == 'auto_fix' %}Auto-fix thread{% else %}Machine setup conversation{% endif %}">
     <p class="chat-connection muted small" x-show="!socketOpen" x-cloak>Live updates paused — reconnecting…</p>
     {% include "machine_setup/includes/_transcript.html" %}
     {% if project_can_write %}
@@ -1242,8 +1268,9 @@ document.addEventListener('alpine:init', () => {
 
     get blockers() {
       const blockers = this.serverBlockers.filter((b) => b !== MACHINE_NOT_READY && b !== TURN_ACTIVE && b !== FINISHING && b !== OTHER_THREAD);
-      // The main chat may run offline (its machine tools say so).
-      if (THREAD_KIND !== 'chat' && this.machineState !== 'ready') blockers.unshift(MACHINE_NOT_READY);
+      // The main chat and a manual case discussion may run offline (their
+      // machine tools say so).
+      if (THREAD_KIND !== 'chat' && THREAD_KIND !== 'manual_case' && this.machineState !== 'ready') blockers.unshift(MACHINE_NOT_READY);
       if (this.turnLive) blockers.unshift(TURN_ACTIVE);
       else if (this.finishingPreviousTurn) blockers.unshift(FINISHING);
       else if (this.otherThreadTurnLive) blockers.unshift(OTHER_THREAD);

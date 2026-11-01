@@ -182,3 +182,24 @@ class OpenResultChatForm(forms.Form):
             }
         ),
     )
+
+
+class OpenManualChatForm(forms.Form):
+    """Open the discussion of a claimed Manual run case, with an optional message."""
+
+    text = forms.CharField(
+        label="Message",
+        max_length=SETUP_MESSAGE_MAX_LENGTH,
+        strip=True,
+        required=False,
+        widget=forms.Textarea(
+            attrs={
+                "class": "textarea",
+                "rows": 3,
+                "placeholder": (
+                    "Optional: what you want to ask about this case. Empty just "
+                    "opens the discussion."
+                ),
+            }
+        ),
+    )

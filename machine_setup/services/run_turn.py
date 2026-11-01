@@ -57,6 +57,7 @@ from machine_setup.services.activity_recorder import (
 from machine_setup.services.auto_fix_settlement import settle_case_auto_fix
 from machine_setup.services.case_help_context import describe_help_status
 from machine_setup.services.case_result_context import describe_result_status
+from machine_setup.services.manual_case_context import describe_manual_status
 from machine_setup.services.run_setup_task import SetupTaskRuntime, run_setup_task
 from machine_setup.services.setup_prompt import build_setup_system_prompt
 from machine_setup.services.setup_tools import (
@@ -173,10 +174,12 @@ class _TurnRunner:
 
         help_request_id = turn.conversation.help_request_id
         result_case_id = turn.conversation.result_case_id
+        manual_case_id = turn.conversation.manual_case_id
         role = thread_role(
             auto_fix_turn=turn.auto_fix,
             help_request_id=help_request_id,
             result_case_id=result_case_id,
+            manual_case_id=manual_case_id,
         )
         content = build_user_turn_content(
             project_id=self.project_id,
@@ -200,11 +203,12 @@ class _TurnRunner:
         system_info = project.agent_system_info or None
         project_prompt = build_agent_project_context(project)
         # Read once per turn (setup_prompt stays ORM-free): the intake gate
-        # of the main chat, the profile of the plan-redesigning chats.
+        # of the main chat, the profile of the case chats.
         pending = role == ThreadRole.MAIN and intake_pending(self.project_id)
         profile_text = (
             artifacts_profile_text(self.project_id)
-            if role in (ThreadRole.CASE_HELP, ThreadRole.CASE_RESULT)
+            if role
+            in (ThreadRole.CASE_HELP, ThreadRole.CASE_RESULT, ThreadRole.MANUAL_CASE)
             else None
         )
         system_prompt = build_setup_system_prompt(
@@ -212,7 +216,9 @@ class _TurnRunner:
             project_prompt=project_prompt,
             max_iterations=settings.MACHINE_SETUP_MAX_ITERATIONS,
             role=role,
-            help_status=_role_status(role, help_request_id, result_case_id),
+            help_status=_role_status(
+                role, help_request_id, result_case_id, manual_case_id
+            ),
             knowledge_index=knowledge_index_text(self.project_id),
             intake_pending=pending,
             artifacts_profile=profile_text,
@@ -263,6 +269,7 @@ class _TurnRunner:
             on_action_proposed=self._on_action_proposed,
             intake_pending=pending,
             should_stop=self._should_stop,
+            manual_case_id=manual_case_id,
         )
         result = run_tool_loop(
             [ChatMessage(role="system", content=system_prompt), *history],
@@ -543,13 +550,19 @@ class _TurnRunner:
 
 
 def _role_status(
-    role: ThreadRole, help_request_id: int | None, result_case_id: int | None
+    role: ThreadRole,
+    help_request_id: int | None,
+    result_case_id: int | None,
+    manual_case_id: int | None,
 ) -> str:
-    """The one-line status the help or result chat prompt shows; one query."""
+    """The one-line status the help, result or manual case chat prompt shows;
+    one query."""
     if role == ThreadRole.CASE_HELP and help_request_id is not None:
         return describe_help_status(help_request_id)
     if role == ThreadRole.CASE_RESULT and result_case_id is not None:
         return describe_result_status(result_case_id)
+    if role == ThreadRole.MANUAL_CASE and manual_case_id is not None:
+        return describe_manual_status(manual_case_id)
     return ""
 
 

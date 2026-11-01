@@ -16,6 +16,7 @@ urlpatterns: list[URLPattern] = [
     path("reset/", views.setup_reset, name="reset"),
     path("help/<int:pivot_id>/", views.help_chat_open, name="help_chat_open"),
     path("result/<int:pivot_id>/", views.result_chat_open, name="result_chat_open"),
+    path("manual/<int:pivot_id>/", views.manual_chat_open, name="manual_chat_open"),
     path(
         "result-changes/<int:change_id>/apply/",
         views.result_change_apply,

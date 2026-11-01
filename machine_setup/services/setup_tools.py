@@ -8,6 +8,10 @@ machine tools.
 Sub-agents get the tester's machine tools, reached through
 ``dispatch_tool_call`` after a cheap "is the runner connected" check.
 
+A manual case discussion (``ThreadRole.MANUAL_CASE``) refuses
+``run_setup_task`` unless its case is paused (the tester is away from the
+machine) and the machine is ready, both checked at call time.
+
 Main chat gates (plan docs/plan/feat-machine-setup-intake.md, Q1 and Q3):
 while the intake is pending, ``run_setup_task`` and ``scan_artifacts`` return
 ``INTAKE_GATE_MESSAGE``; with the machine not ready they return
@@ -61,6 +65,12 @@ from machine_setup.services.main_chat_tools import (
     RunsProposedCallback,
     build_main_chat_handlers,
     main_chat_tool_definitions,
+)
+from machine_setup.services.manual_chat_tools import (
+    ManualToolError,
+    build_manual_chat_handlers,
+    manual_chat_tool_definitions,
+    manual_machine_refusal,
 )
 from machine_setup.services.plan_step_args import PlanStepArgumentError
 from machine_setup.services.readiness_tools import (
@@ -138,7 +148,8 @@ def main_tool_definitions(role: ThreadRole) -> tuple[ToolDefinition, ...]:
 
     The main chat also gets the document and test run tools; an auto-fix turn
     gets ``report_case_fix``; a person's turn in a help thread gets the
-    help-chat tools, and one in a result chat the result-chat tools.
+    help-chat tools, one in a result chat the result-chat tools, and one in
+    a manual case discussion ``get_manual_case`` (no proposal tools).
     """
     main_chat = role == ThreadRole.MAIN
     tools = _project_data_tool_definitions() + (
@@ -154,6 +165,8 @@ def main_tool_definitions(role: ThreadRole) -> tuple[ToolDefinition, ...]:
         tools += help_chat_tool_definitions()
     elif role == ThreadRole.CASE_RESULT:
         tools += result_chat_tool_definitions()
+    elif role == ThreadRole.MANUAL_CASE:
+        tools += manual_chat_tool_definitions()
     return tools
 
 
@@ -449,6 +462,7 @@ def build_setup_dispatcher(
     on_action_proposed: ActionProposedCallback,
     intake_pending: bool,
     should_stop: Callable[[], bool],
+    manual_case_id: int | None = None,
 ) -> ToolDispatcher:
     """The main agent's per-turn dispatcher.
 
@@ -459,7 +473,10 @@ def build_setup_dispatcher(
     auto-fix turn ``report_case_fix`` records its report on
     ``conversation_id``; in a help chat turn the help tools act on
     ``help_request_id``; in a result chat turn the result tools act on
-    ``result_case_id`` and post their cards through the two callbacks.
+    ``result_case_id`` and post their cards through the two callbacks; in a
+    manual case discussion ``get_manual_case`` reads ``manual_case_id``, and
+    ``run_setup_task`` runs only while that case is paused and the machine
+    is ready (checked at call time).
 
     Main chat only: ``intake_pending`` (read once by the turn runner) gates
     ``run_setup_task`` and ``scan_artifacts`` until the profile is saved in
@@ -634,6 +651,10 @@ def build_setup_dispatcher(
                 on_plan_revision_proposed=on_plan_revision_proposed,
             )
         )
+    elif role == ThreadRole.MANUAL_CASE and manual_case_id is not None:
+        project_data_handlers.update(
+            build_manual_chat_handlers(pivot_id=manual_case_id)
+        )
 
     def _main_chat_gate() -> str | None:
         if intake_gate["pending"]:
@@ -642,9 +663,25 @@ def build_setup_dispatcher(
             return MACHINE_GATE_MESSAGE
         return None
 
+    def _manual_case_gate() -> str | None:
+        # The tester's machine: only while the case is paused (they are away).
+        refusal = manual_machine_refusal(manual_case_id)
+        if refusal is not None:
+            return refusal
+        if not _machine_ready(project_id):
+            return MACHINE_GATE_MESSAGE
+        return None
+
     def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
         if main_chat and tool_call.tool_name in _MACHINE_GATED_TOOLS:
             refusal = _main_chat_gate()
+            if refusal is not None:
+                return _tool_error(tool_call, refusal)
+        if (
+            role == ThreadRole.MANUAL_CASE
+            and tool_call.tool_name == RUN_SETUP_TASK_TOOL
+        ):
+            refusal = _manual_case_gate()
             if refusal is not None:
                 return _tool_error(tool_call, refusal)
         if tool_call.tool_name == RUN_SETUP_TASK_TOOL:
@@ -672,6 +709,7 @@ def build_setup_dispatcher(
             HelpToolError,
             KnowledgeToolError,
             MainChatToolError,
+            ManualToolError,
             PlanStepArgumentError,
             ReadinessToolError,
             ResultToolError,

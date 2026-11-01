@@ -9,7 +9,12 @@ opens it), so the turn has the gates, limits and Stop of any web send.
 Identity and scoping follow ``runner_person_step_services``: only the
 connection that owns the project, the case's open request only, and the
 sender named only while the runner's email is an active writable member
-(else "a person at the Test Runner"). Never imported by ``projects``.
+(else "a person at the Test Runner"). Never imported by ``projects``
+services (only by ``runner_window_state`` and the consumer).
+
+Manual runs (MANUAL_PAUSE_DISCUSS_V1): ``get_runner_manual_discussion`` and
+``send_manual_from_runner`` do the same for the claimed case's ``manual_case``
+thread (``open_manual_chat``), with the claim token as the stale-card check.
 """
 
 from __future__ import annotations
@@ -26,14 +31,23 @@ from controller_client.protocol import (
     PERSON_STEP_RESULT_MESSAGE_MAX_CHARS,
     PERSON_STEP_URL_MAX_CHARS,
     DiscussionMessageKind,
+    ManualDiscussionPayload,
     PersonDiscussionMessagePayload,
 )
 from machine_setup.exceptions import MachineSetupError, SetupTurnActiveError
 from machine_setup.models import SetupConversation, SetupMessage, SetupMessageKind
 from machine_setup.services.open_help_chat import open_help_chat
-from machine_setup.services.send_gates import thread_send_refusal
+from machine_setup.services.open_manual_chat import open_manual_chat
+from machine_setup.services.send_gates import (
+    run_and_update_refusal,
+    thread_send_refusal,
+)
 from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
-from machine_setup.turn_state import live_turn_exists, person_turn_live
+from machine_setup.turn_state import (
+    live_turn_exists,
+    live_turn_manual_case_ids,
+    person_turn_live,
+)
 from notifications.services.site_url import absolute_url
 from projects.exceptions import RunHelpError
 from projects.models import Project
@@ -96,11 +110,7 @@ def get_runner_discussion(
     thread_url = ""
     if thread is not None:
         messages = _messages(thread.pk)
-        path = reverse(
-            "machine_setup:thread",
-            kwargs={"project_id": project.pk, "conversation_id": thread.pk},
-        )
-        thread_url = (absolute_url(path) or "")[:PERSON_STEP_URL_MAX_CHARS]
+        thread_url = _thread_url(project.pk, thread.pk)
     blocker = send_blocker
     return RunnerDiscussionView(
         thread_url=thread_url,
@@ -109,6 +119,59 @@ def get_runner_discussion(
         send_blocker=blocker[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
         messages=messages,
     )
+
+
+def get_runner_manual_discussion(
+    project: Project, pivot_id: int, *, test_run_id: int
+) -> ManualDiscussionPayload:
+    """The claimed manual case's discussion; no thread yet gives an empty one.
+
+    The caller has proven ``pivot_id`` is the claimed IN_PROGRESS case of
+    ``test_run_id``, the project's STARTED manual run, so the claim is not
+    re-checked. Queries (at most five): the thread, with a thread its newest
+    rows, the project's live turns (this case's turn and the live-turn
+    refusal from one read), and without a live turn the other-run and runner
+    update refusals.
+    """
+    thread = (
+        SetupConversation.objects.filter(
+            manual_case_id=pivot_id,
+            project=project,
+            archived_at__isnull=True,
+        )
+        .only("id", "project_id")
+        .first()
+    )
+    messages: tuple[PersonDiscussionMessagePayload, ...] = ()
+    thread_url = ""
+    if thread is not None:
+        messages = _messages(thread.pk)
+        thread_url = _thread_url(project.pk, thread.pk)
+    now = timezone.now()
+    live_cases = live_turn_manual_case_ids(project.pk, now)
+    refusal: MachineSetupError | None
+    if live_cases:
+        refusal = SetupTurnActiveError()
+    else:
+        # The case's own run does not refuse its discussion.
+        refusal = run_and_update_refusal(project, now, own_manual_run_id=test_run_id)
+    blocker = refusal.message if refusal is not None else ""
+    return ManualDiscussionPayload(
+        thread_url=thread_url,
+        turn_live=pivot_id in live_cases,
+        can_send=not blocker,
+        send_blocker=blocker[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
+        messages=messages,
+    )
+
+
+def _thread_url(project_id: int, thread_id: int) -> str:
+    """The absolute thread page URL; "" without SITE_URL."""
+    path = reverse(
+        "machine_setup:thread",
+        kwargs={"project_id": project_id, "conversation_id": thread_id},
+    )
+    return (absolute_url(path) or "")[:PERSON_STEP_URL_MAX_CHARS]
 
 
 def get_runner_send_blocker(project: Project) -> str:
@@ -233,3 +296,36 @@ def _check_chat_throttle(project_id: int) -> None:
         window_seconds=RUNNER_CHAT_WINDOW_SECONDS,
     ):
         raise MachineSetupError(_THROTTLED)
+
+
+def send_manual_from_runner(
+    *,
+    project: Project,
+    channel_name: str,
+    person_user_id: int | None,
+    pivot_id: int,
+    claim_token: str,
+    text: str,
+) -> None:
+    """Send a person's discussion turn about the claimed manual case from the
+    Test Runner.
+
+    Opens the case's discussion when it has none. Throttled to
+    ``RUNNER_CHAT_LIMIT`` per minute per project (shared with the help
+    discussion). Raises ``MachineSetupError`` (user-safe) for a lost
+    connection, the throttle, a claim token that is not the case's (released,
+    handed in or re-claimed), or any refusal of the send (a turn is live, ...).
+    """
+    if not owns_project(project.pk, channel_name):
+        raise MachineSetupError(_NOT_OWNER)
+    _check_chat_throttle(project.pk)
+    actor = PersonStepActor.runner(current_member(project.pk, person_user_id))
+    # ``open_manual_chat`` checks the claim and its token under the project,
+    # run and case locks.
+    open_manual_chat(
+        project=project,
+        pivot_id=pivot_id,
+        actor=actor,
+        text=text,
+        claim_token=claim_token,
+    )

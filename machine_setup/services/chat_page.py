@@ -48,10 +48,12 @@ from machine_setup.payloads import (
     message_payload,
     turn_payload,
 )
+from machine_setup.services.send_gates import manual_thread_send_refusal
 from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 from machine_setup.turn_state import is_turn_stale
 from projects.case_help_services import HelpPanel, get_help_panel
 from projects.case_result_text import result_status_label
+from projects.manual_run_policy import is_claimed_manual_case
 from projects.models import (
     HelpAutoFixState,
     HelpResolution,
@@ -72,8 +74,13 @@ HELP_THREAD_LIMIT = 20
 
 # Thread kinds that belong to a help request.
 HELP_THREAD_KINDS = (SetupConversationKind.AUTO_FIX, SetupConversationKind.CASE_HELP)
-# Thread kinds listed beside the main chat: the help threads and result chats.
-CASE_THREAD_KINDS = (*HELP_THREAD_KINDS, SetupConversationKind.CASE_RESULT)
+# Thread kinds listed beside the main chat: the help threads, result chats
+# and manual case discussions.
+CASE_THREAD_KINDS = (
+    *HELP_THREAD_KINDS,
+    SetupConversationKind.CASE_RESULT,
+    SetupConversationKind.MANUAL_CASE,
+)
 # Characters of the result text shown in a result chat's header.
 RESULT_EXCERPT_CHARS = 300
 
@@ -106,6 +113,7 @@ class HelpThread:
     step_num: int | None
     # Auto-fix: "running", "fixed" or "not_fixed". Help chat: "running",
     # "open" or "resolved". Result chat: "running" or the case's status.
+    # Manual case discussion: "running", "testing", "paused" or "resolved".
     state: str
     state_label: str
 
@@ -115,6 +123,8 @@ _THREAD_STATE_LABELS = {
     "fixed": "Fixed",
     "not_fixed": "Not fixed",
     "open": "Needs help",
+    "testing": "Testing",
+    "paused": "Paused",
 }
 
 
@@ -131,6 +141,23 @@ class ResultThreadHeader:
     result_excerpt: str
     # The run's help mode, pre-selected in the re-run dialog.
     run_help_mode: str
+
+
+@dataclass(frozen=True)
+class ManualThreadHeader:
+    """The header of a manual case discussion: the case, the claim and the pause."""
+
+    test_run_id: int
+    pivot_id: int
+    case_title: str
+    # The case is still claimed and IN_PROGRESS in its started manual run
+    # (else the thread is read-only).
+    claimed: bool
+    # Server-written actor labels ("Ana via Test Runner"); "" when not set.
+    claimed_label: str
+    paused: bool
+    paused_label: str
+    paused_at: datetime | None
 
 
 @dataclass(frozen=True)
@@ -165,6 +192,8 @@ class SetupPage:
     # Main chat only: the project has no artifacts profile yet, so machine
     # work waits for the intake (banner with Skip intake). False elsewhere.
     intake_pending: bool = False
+    # Manual case discussions only, while the case exists.
+    manual_thread: ManualThreadHeader | None = None
 
 
 @dataclass(frozen=True)
@@ -220,7 +249,10 @@ def _help_threads(project: Project) -> QuerySet[SetupConversation]:
             archived_at__isnull=True,
         )
         .select_related(
-            "help_request__test_run_test_case__test_case", "result_case__test_case"
+            "help_request__test_run_test_case__test_case",
+            "result_case__test_case",
+            "manual_case__test_case",
+            "manual_case__test_run",
         )
         .only(
             "id",
@@ -240,6 +272,15 @@ def _help_threads(project: Project) -> QuerySet[SetupConversation]:
             "result_case__test_run",
             "result_case__test_case__id",
             "result_case__test_case__title",
+            "manual_case__id",
+            "manual_case__status",
+            "manual_case__manual_claim_token",
+            "manual_case__manual_paused_at",
+            "manual_case__test_run__id",
+            "manual_case__test_run__status",
+            "manual_case__test_run__help_mode",
+            "manual_case__test_case__id",
+            "manual_case__test_case__title",
         )
         .annotate(latest_turn_status=Subquery(latest_turn_status))
     )
@@ -249,6 +290,8 @@ def _thread_from_row(row: SetupConversation) -> HelpThread:
     latest_status: str | None = getattr(row, "latest_turn_status", None)
     if row.kind == SetupConversationKind.CASE_RESULT:
         return _result_thread_from_row(row, latest_status)
+    if row.kind == SetupConversationKind.MANUAL_CASE:
+        return _manual_thread_from_row(row, latest_status)
     request = row.help_request
     state_label = ""
     if latest_status in LIVE_TURN_STATUSES:
@@ -308,6 +351,72 @@ def _result_thread_from_row(
         step_num=None,
         state=state,
         state_label=state_label,
+    )
+
+
+def _manual_thread_from_row(
+    row: SetupConversation, latest_status: str | None
+) -> HelpThread:
+    pivot = row.manual_case
+    if latest_status in LIVE_TURN_STATUSES:
+        state = "running"
+        state_label = _THREAD_STATE_LABELS[state]
+    elif pivot is not None and is_claimed_manual_case(pivot.test_run, pivot):
+        state = "paused" if pivot.manual_paused_at is not None else "testing"
+        state_label = _THREAD_STATE_LABELS[state]
+    else:
+        state = "resolved"
+        state_label = "Closed"
+    return HelpThread(
+        conversation_id=row.pk,
+        kind=row.kind,
+        kind_label=row.get_kind_display(),
+        help_request_id=None,
+        created_at=row.created_at,
+        test_run_id=pivot.test_run_id if pivot is not None else None,
+        pivot_id=pivot.pk if pivot is not None else None,
+        case_title=pivot.test_case.title if pivot is not None else "",
+        step_num=None,
+        state=state,
+        state_label=state_label,
+    )
+
+
+def _manual_thread_header(pivot_id: int | None) -> ManualThreadHeader | None:
+    """The manual case discussion's header; one query (the log is not loaded)."""
+    if pivot_id is None:
+        return None
+    pivot = (
+        TestRunTestCase.objects.select_related("test_case", "test_run")
+        .only(
+            "id",
+            "status",
+            "manual_claim_token",
+            "manual_claimed_label",
+            "manual_paused_at",
+            "manual_paused_label",
+            "test_case__id",
+            "test_case__title",
+            "test_run__id",
+            "test_run__status",
+            "test_run__help_mode",
+        )
+        .filter(pk=pivot_id)
+        .first()
+    )
+    if pivot is None:
+        return None
+    claimed = is_claimed_manual_case(pivot.test_run, pivot)
+    paused = claimed and pivot.manual_paused_at is not None
+    return ManualThreadHeader(
+        test_run_id=pivot.test_run_id,
+        pivot_id=pivot.pk,
+        case_title=pivot.test_case.title,
+        claimed=claimed,
+        claimed_label=pivot.manual_claimed_label if claimed else "",
+        paused=paused,
+        paused_label=pivot.manual_paused_label if paused else "",
+        paused_at=pivot.manual_paused_at if paused else None,
     )
 
 
@@ -378,6 +487,7 @@ def get_setup_page(
     """
     thread: HelpThread | None = None
     result_thread: ResultThreadHeader | None = None
+    manual_thread: ManualThreadHeader | None = None
     if conversation is None:
         kind: str = SetupConversationKind.CHAT
         conversation_id = (
@@ -397,6 +507,8 @@ def get_setup_page(
             thread = _thread_from_row(row) if row is not None else None
         if kind == SetupConversationKind.CASE_RESULT:
             result_thread = _result_thread_header(conversation.result_case_id)
+        if kind == SetupConversationKind.MANUAL_CASE:
+            manual_thread = _manual_thread_header(conversation.manual_case_id)
     live_turn = (
         SetupTurn.objects.filter(project=project, status__in=LIVE_TURN_STATUSES)
         .order_by("-id")
@@ -449,11 +561,20 @@ def get_setup_page(
 
     main_chat = kind == SetupConversationKind.CHAT
     blockers: list[str] = []
-    # Q3: the main chat may run offline; its machine tools say so.
-    if not main_chat and machine_state != MachineState.READY:
-        blockers.append(SetupMachineNotReadyError().message)
-    if run_active:
-        blockers.append(SetupRunActiveError().message)
+    if kind == SetupConversationKind.MANUAL_CASE and conversation is not None:
+        # No READY gate (run_setup_task checks at call time); the case's own
+        # manual run does not block it; refused once the claim ended.
+        refusal = manual_thread_send_refusal(
+            project, timezone.now(), pivot_id=conversation.manual_case_id
+        )
+        if refusal is not None:
+            blockers.append(refusal.message)
+    else:
+        # Q3: the main chat may run offline; its machine tools say so.
+        if not main_chat and machine_state != MachineState.READY:
+            blockers.append(SetupMachineNotReadyError().message)
+        if run_active:
+            blockers.append(SetupRunActiveError().message)
     if other_thread_turn_live:
         blockers.append(OTHER_THREAD_TURN_MESSAGE)
     elif live_turn is not None:
@@ -482,6 +603,7 @@ def get_setup_page(
         ),
         other_thread_turn_live=other_thread_turn_live,
         intake_pending=main_chat and intake_pending(project.pk),
+        manual_thread=manual_thread,
     )
 
 

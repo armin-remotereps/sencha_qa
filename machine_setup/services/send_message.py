@@ -29,7 +29,10 @@ from machine_setup.services.queue_turn import (
     create_user_turn,
     link_knowledge_refs,
 )
-from machine_setup.services.send_gates import thread_send_refusal
+from machine_setup.services.send_gates import (
+    manual_thread_send_refusal,
+    thread_send_refusal,
+)
 from projects.models import PersonStepChannel, Project
 from projects.person_step_actor import PersonStepActor
 
@@ -57,7 +60,9 @@ def send_setup_message(
     an auto-fix thread); ``None`` means the main chat, created when missing.
     Raises ``SetupTurnActiveError``, ``SetupRunActiveError``,
     ``SetupMachineNotReadyError`` (help, result and auto-fix threads only:
-    the main chat may run with the machine offline), or ``MachineSetupError`` when the Test
+    the main chat and a manual case discussion may run with the machine
+    offline), ``MachineSetupError`` for a manual case discussion whose case
+    is no longer claimed (its own started manual run does not refuse it), or ``MachineSetupError`` when the Test
     Runner is being updated or the thread was archived meanwhile, or ``SetupDocumentNotAllowedError`` when ``document``
     targets any thread but the main chat. A stale live turn is closed as
     ``worker_lost`` first, and stays closed even when the send is refused. A paused (Needs help) run
@@ -95,7 +100,17 @@ def _send_locked(
     )
     # The main chat (None, or the chat thread itself) skips the READY gate.
     main_chat = conversation is None or conversation.kind == SetupConversationKind.CHAT
-    refusal = _refusal(locked, timezone.now(), main_chat=main_chat)
+    manual_thread = (
+        conversation is not None
+        and conversation.kind == SetupConversationKind.MANUAL_CASE
+    )
+    refusal = _refusal(
+        locked,
+        timezone.now(),
+        main_chat=main_chat,
+        manual_thread=manual_thread,
+        manual_case_id=conversation.manual_case_id if conversation else None,
+    )
     if refusal is not None:
         # Returned, not raised: a stale turn closed above must still commit.
         return refusal
@@ -135,10 +150,19 @@ def _author_label(actor: PersonStepActor) -> str:
 
 
 def _refusal(
-    project: Project, now: datetime, *, main_chat: bool
+    project: Project,
+    now: datetime,
+    *,
+    main_chat: bool,
+    manual_thread: bool,
+    manual_case_id: int | None,
 ) -> MachineSetupError | None:
     if resolve_live_turn(project_id=project.pk, now=now) is not None:
         return SetupTurnActiveError()
+    if manual_thread:
+        # Under the project row lock, so a claim, release or hand-in (all
+        # lock the project first) cannot change the case meanwhile.
+        return manual_thread_send_refusal(project, now, pivot_id=manual_case_id)
     return thread_send_refusal(project, now, main_chat=main_chat)
 
 

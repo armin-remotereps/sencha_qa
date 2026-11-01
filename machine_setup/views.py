@@ -13,6 +13,7 @@ from knowledge_base.reference_note import MAX_KNOWLEDGE_REFS_PER_MESSAGE
 from machine_setup.exceptions import (
     HelpChatSendRefusedError,
     MachineSetupError,
+    ManualChatSendRefusedError,
     ResultChatSendRefusedError,
     SetupMachineNotReadyError,
     SetupNoActiveTurnError,
@@ -20,6 +21,7 @@ from machine_setup.exceptions import (
 )
 from machine_setup.forms import (
     OpenHelpChatForm,
+    OpenManualChatForm,
     OpenResultChatForm,
     SetupForceStopForm,
     SetupMessageForm,
@@ -46,6 +48,10 @@ from machine_setup.services.document_download import find_document
 from machine_setup.services.force_stop_turn import force_stop_turn
 from machine_setup.services.help_thread_state import help_panel_payload
 from machine_setup.services.open_help_chat import find_help_case, open_help_chat
+from machine_setup.services.open_manual_chat import (
+    find_manual_case,
+    open_manual_chat,
+)
 from machine_setup.services.open_result_chat import (
     find_result_case,
     open_result_chat,
@@ -198,6 +204,8 @@ def _render_chat(
             "help_mode_form": (
                 RunHelpModeForm() if page.result_thread is not None else None
             ),
+            # Manual case discussions: the case, claim and pause header.
+            "manual_thread": page.manual_thread,
             "active_tab": "machine_setup",
             "active_nav": "projects",
         },
@@ -261,6 +269,35 @@ def result_chat_open(
             text=form.cleaned_data["text"],
         )
     except ResultChatSendRefusedError as exc:
+        messages.error(request, exc.message)
+        return _back_to_chat(project, exc.conversation_id)
+    except MachineSetupError as exc:
+        messages.error(request, exc.message)
+        return redirect(case_url)
+    return _back_to_chat(project, thread.pk)
+
+
+@project_membership_required
+@require_POST
+def manual_chat_open(
+    request: AuthenticatedRequest, project: Project, pivot_id: int
+) -> HttpResponse:
+    pivot = find_manual_case(project, pivot_id)
+    if pivot is None:
+        raise Http404("No such test case.")
+    case_url = _case_url(project, pivot.test_run_id, pivot.pk)
+    form = OpenManualChatForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return redirect(case_url)
+    try:
+        thread = open_manual_chat(
+            project=project,
+            pivot_id=pivot.pk,
+            actor=PersonStepActor.web(request.user),
+            text=form.cleaned_data["text"],
+        )
+    except ManualChatSendRefusedError as exc:
         messages.error(request, exc.message)
         return _back_to_chat(project, exc.conversation_id)
     except MachineSetupError as exc:
