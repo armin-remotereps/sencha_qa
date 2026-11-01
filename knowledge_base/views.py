@@ -19,6 +19,7 @@ from knowledge_base.exceptions import (
     KnowledgeItemNotReadyError,
     KnowledgePageOutOfRangeError,
     KnowledgeQueryInvalidError,
+    KnowledgeSearchTimeoutError,
 )
 from knowledge_base.formats import SEVEN_ZIP_DISABLED_MESSAGE, accept_attribute
 from knowledge_base.forms import (
@@ -150,7 +151,7 @@ def knowledge_list(request: AuthenticatedRequest, project: Project) -> HttpRespo
                 exact=search_form.cleaned_data["exact"],
                 tag=active_tag or None,
             )
-        except KnowledgeQueryInvalidError as exc:
+        except (KnowledgeQueryInvalidError, KnowledgeSearchTimeoutError) as exc:
             search_form.add_error("q", exc.message)
 
     tag_facet = list_knowledge_tags(project.id)

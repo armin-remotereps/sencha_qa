@@ -496,6 +496,13 @@ if KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR < KNOWLEDGE_BASE_MAX_FILE_BYTES:
         "KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR must be at least "
         "KNOWLEDGE_BASE_MAX_FILE_BYTES"
     )
+# Postgres cancels a knowledge base search query (agent tool, tab search,
+# related excerpts for guides and Ask AI) past this many milliseconds, per
+# query: a full-text search with no hit and its exact fallback get one each.
+# 0 = no limit.
+KNOWLEDGE_SEARCH_TIMEOUT_MS: int = config(
+    "KNOWLEDGE_SEARCH_TIMEOUT_MS", default=15000, cast=int
+)
 # One whole upload request, as stated on the Knowledge base tab. It must not
 # exceed nginx's client_max_body_size (200M in nginx/server.conf), which is
 # what actually refuses a larger request.

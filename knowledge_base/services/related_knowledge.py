@@ -13,6 +13,7 @@ from django.contrib.postgres.search import SearchQuery, SearchRank
 from django.db.models import F, OrderBy
 
 from knowledge_base.models import KnowledgeChunk
+from knowledge_base.query_timeout import knowledge_search_timeout
 from knowledge_base.search_config import KNOWLEDGE_SEARCH_CONFIG
 from knowledge_base.services.search_knowledge import ready_chunks, top_chunk_ids
 from knowledge_base.types import KnowledgeExcerpt
@@ -66,21 +67,24 @@ def related_knowledge(
         search_query = search_query | SearchQuery(
             token, search_type="plain", config=KNOWLEDGE_SEARCH_CONFIG
         )
-    rank = SearchRank(F("search_vector"), search_query, cover_density=True)
+    # Plain ``ts_rank``: cover density (``ts_rank_cd``) over a 30-term OR on
+    # tens of thousands of matches took minutes on a 221k-chunk project.
+    rank = SearchRank(F("search_vector"), search_query)
     best = top_chunk_ids(
         ready_chunks(project_id).filter(search_vector=search_query).annotate(rank=rank),
         order=[OrderBy(F("rank"), descending=True), OrderBy(F("ordinal"))],
         per_item=CHUNKS_PER_ITEM,
         limit=limit,
     )
-    rows = (
-        KnowledgeChunk.objects.filter(id__in=best)
-        .annotate(rank=rank)
-        .order_by("-rank", "item_id", "ordinal")
-        .values_list(
-            "item_id", "item__name", "item__folder", "location", "page", "text"
+    with knowledge_search_timeout():
+        rows = list(
+            KnowledgeChunk.objects.filter(id__in=best)
+            .annotate(rank=rank)
+            .order_by("-rank", "item_id", "ordinal")
+            .values_list(
+                "item_id", "item__name", "item__folder", "location", "page", "text"
+            )
         )
-    )
     excerpts: list[KnowledgeExcerpt] = []
     budget = max_chars
     for item_id, item_name, item_folder, location, page, chunk_text in rows:
