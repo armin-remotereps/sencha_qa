@@ -137,6 +137,7 @@ from projects.run_resume_services import (
     can_resume_case,
     get_resume_panel,
     get_run_case_for_resume,
+    is_manual_resume,
     list_case_resumes,
     resume_test_run,
     resume_test_run_case,
@@ -1203,6 +1204,8 @@ def test_run_case_detail(
             "testrail_result_url": build_testrail_result_url(pivot, project),
             "can_resume": can_resume,
             "resume_steps": resume_steps,
+            # Manual run: the case goes back to the Test Runner's list.
+            "resume_is_manual": is_manual_resume(pivot),
             "resume_form": (
                 CaseResumeForm(
                     resume_steps, initial={"help_mode": pivot.test_run.help_mode}

@@ -7,6 +7,9 @@ sub-task), or plans from scratch when there is no checkpoint.
 "Started" for a Cancelled case means it has a non-empty
 ``execution_checkpoint``: that, not ``started_at``, decides whether the worker
 continues or plans from scratch.
+
+A Manual run is routed to ``projects.manual_run_resume_services``: its
+Cancelled cases go back to the Test Runner's list and start again from step 1.
 """
 
 from __future__ import annotations
@@ -35,6 +38,12 @@ from projects.manual_run_policy import (
     crosses_manual_boundary,
     is_manual_checkpoint,
     is_manual_run,
+)
+from projects.manual_run_resume_services import (
+    build_manual_resume_confirm_body,
+    can_resume_manual_case,
+    count_manual_resumable,
+    resume_manual_cases,
 )
 from projects.models import (
     Project,
@@ -65,6 +74,7 @@ RESUMABLE_STATUSES: tuple[str, ...] = (
 _NOT_FINISHED = "Only a finished or cancelled run can be resumed."
 _NOTHING_RESUMABLE = "There are no Blocked or Cancelled cases to resume."
 _INVALID_HELP_MODE = "Choose what happens when a case needs help."
+_MANUAL_FROM_STEP = "A manual case always starts again from step 1."
 
 
 @dataclass(frozen=True)
@@ -77,6 +87,8 @@ class ResumePanel:
     can_resume: bool
     blockers: tuple[str, ...]
     confirm_body: str
+    # A Manual run: the dialog shows the mode as text (it cannot change).
+    is_manual: bool = False
 
 
 def get_resume_panel(test_run: TestRun, *, blockers: Sequence[str]) -> ResumePanel:
@@ -84,12 +96,15 @@ def get_resume_panel(test_run: TestRun, *, blockers: Sequence[str]) -> ResumePan
 
     One aggregate over the run's cases. ``blockers`` are the run's
     `list_reopen_blockers` (computed once per page, shared with Re-run).
+    A Manual run counts its Cancelled cases (as ``cancelled_unstarted``).
 
     With resumable cases but a blocker, ``can_resume`` is False and
     ``blockers`` says why (the page shows the button disabled).
     """
-    if test_run.status not in REOPENABLE_RUN_STATUSES or is_manual_run(test_run):
+    if test_run.status not in REOPENABLE_RUN_STATUSES:
         return ResumePanel(0, 0, 0, False, (), "")
+    if is_manual_run(test_run):
+        return _manual_resume_panel(test_run, blockers)
     no_checkpoint = Q(execution_checkpoint={})
     cancelled = Q(status=TestRunTestCaseStatus.CANCELLED)
     counts = test_run.pivot_entries.aggregate(
@@ -115,14 +130,36 @@ def get_resume_panel(test_run: TestRun, *, blockers: Sequence[str]) -> ResumePan
     )
 
 
+def _manual_resume_panel(test_run: TestRun, blockers: Sequence[str]) -> ResumePanel:
+    count = count_manual_resumable(test_run)
+    if not count:
+        return ResumePanel(0, 0, 0, False, (), "", is_manual=True)
+    return ResumePanel(
+        blocked=0,
+        cancelled_started=0,
+        cancelled_unstarted=count,
+        can_resume=not blockers,
+        blockers=tuple(blockers),
+        confirm_body=build_manual_resume_confirm_body(count),
+        is_manual=True,
+    )
+
+
 def can_resume_case(pivot: TestRunTestCase) -> bool:
     """Whether a loaded pivot (with its run) is resumable (no extra query)."""
+    if is_manual_run(pivot.test_run):
+        return can_resume_manual_case(pivot)
     return (
         pivot.status in RESUMABLE_STATUSES
         and pivot.test_run.status in REOPENABLE_RUN_STATUSES
         and not is_manual_run(pivot.test_run)
         and not is_manual_checkpoint(pivot.execution_checkpoint)
     )
+
+
+def is_manual_resume(pivot: TestRunTestCase) -> bool:
+    """Resuming this loaded case (with its run) follows the Manual path."""
+    return is_manual_run(pivot.test_run)
 
 
 def get_run_case_for_resume(
@@ -149,7 +186,15 @@ def resume_test_run(
 
     ``help_mode`` (a ``RunHelpMode`` value) changes the run's mode; ``None``
     keeps it. Only a superuser may change it (``HelpModeNotAllowedError``).
+    A Manual run resumes its Cancelled cases at the Test Runner instead
+    (`resume_manual_cases`) and keeps its mode.
     """
+    # Safe on the unlocked read: a non-draft run never crosses the manual
+    # boundary, and both paths re-check under the lock.
+    if is_manual_run(test_run):
+        return resume_manual_cases(
+            test_run_id=test_run.pk, pivot_id=None, user=user, help_mode=help_mode
+        )
     return _resume_pivots(
         test_run_id=test_run.pk,
         pivot_id=None,
@@ -170,8 +215,19 @@ def resume_test_run_case(
 
     ``from_step`` must lie in 1..the checkpoint's cursor (one past the plan
     when every step ran: only the verdict is built); it is ignored when the
-    case has no checkpoint. ``help_mode`` as in `resume_test_run`.
+    case has no checkpoint. ``help_mode`` as in `resume_test_run`. A case of
+    a Manual run starts again from step 1, so ``from_step`` must be ``None``.
     """
+    if is_manual_run(pivot.test_run):
+        if from_step is not None:
+            raise RunResumeError(_MANUAL_FROM_STEP)
+        resume_manual_cases(
+            test_run_id=pivot.test_run_id,
+            pivot_id=pivot.pk,
+            user=user,
+            help_mode=help_mode,
+        )
+        return
     _resume_pivots(
         test_run_id=pivot.test_run_id,
         pivot_id=pivot.pk,
@@ -196,8 +252,9 @@ def _resume_pivots(
         resolved_help_mode = resolve_help_mode(
             user=user, requested=help_mode, current=test_run.help_mode
         )
-        # A manual case is redone from the Test Runner, never continued; an
-        # agent mode never continues a manual checkpoint either.
+        # A Manual run is resumed by `resume_manual_cases` (routed above; this
+        # re-checks under the lock); an agent mode never continues a manual
+        # checkpoint or crosses into or out of Manual.
         if (
             is_manual_run(test_run)
             or (

@@ -23,9 +23,13 @@ from controller_client.protocol import (
 from projects.models import ManualVerdict, RunHelpMode, TestRun
 
 # User-safe refusals of the agent-only paths for a manual run or case.
-MANUAL_RESUME_REFUSED: Final = (
-    "Manual runs cannot be resumed: start the case again from the Test Runner."
+MANUAL_RESUME_REFUSED: Final = "A manual case can be resumed only in a Manual run."
+# Manual Resume (``projects.manual_run_resume_services``).
+MANUAL_NOTHING_RESUMABLE: Final = (
+    "There are no Cancelled cases to resume. To test a finished case again, "
+    "re-run it."
 )
+MANUAL_RESUME_NOT_MANUAL: Final = "This run is not a Manual run."
 MANUAL_HELP_REFUSED: Final = "Manual runs have no help requests."
 MANUAL_PERSON_STEP_REFUSED: Final = "Manual runs have no person steps."
 MANUAL_PAUSE_REFUSED: Final = (
