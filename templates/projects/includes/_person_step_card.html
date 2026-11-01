@@ -42,6 +42,7 @@
    views read person_step_id and note and ignore the report fields. The
    command sits in <code> and Copy copies its textContent. Model and person
    text is autoescaped, never |safe. {% endcomment %}
+{% load project_extras %}
 {% with step=person_step_panel.step %}
 <section aria-labelledby="person-step-h" class="card card-tone-your-turn">
   <div class="card-header">
@@ -67,9 +68,9 @@
         <ul class="person-step-case-steps">
           {% for case_step in person_step_panel.case_steps %}
             <li>
-              <span class="person-step-case-step-text"><strong>{{ case_step.num }}.</strong> {{ case_step.text }}</span>
+              <span class="person-step-case-step-text"><strong>{{ case_step.num }}.</strong> {{ case_step.text|case_text }}</span>
               {% if case_step.expected %}
-                <span class="person-step-case-step-expected muted small">Expected: {{ case_step.expected }}</span>
+                <span class="person-step-case-step-expected muted small">Expected: {{ case_step.expected|case_text }}</span>
               {% endif %}
             </li>
           {% endfor %}

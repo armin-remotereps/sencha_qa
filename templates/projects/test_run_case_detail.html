@@ -582,26 +582,40 @@
       {% endif %}
       <a class="btn btn-sm btn-ghost" href="{% url 'projects:test_case_list' project.id %}?search={{ pivot.test_case.testrail_id|default:pivot.test_case.title|urlencode }}">Open in Test Cases</a>
     </div>
-    {% if not pivot.test_case.preconditions and not pivot.test_case.steps and not pivot.test_case.expected %}
+    {% if not case_text.preconditions and not case_text.steps_text and not case_text.expected_text %}
     <p class="hint">This test case has no preconditions, steps, or expected result recorded — open it in Test Cases to add them.</p>
     {% endif %}
     <dl class="kv kv-stack">
-      {% if pivot.test_case.preconditions %}
+      {% if case_text.preconditions %}
       <div>
         <dt>Preconditions</dt>
-        <dd class="pre-wrap">{{ pivot.test_case.preconditions }}</dd>
+        <dd class="pre-wrap">{{ case_text.preconditions }}</dd>
       </div>
       {% endif %}
-      {% if pivot.test_case.steps %}
+      {% if case_text.steps_listed %}
       <div>
         <dt>Steps</dt>
-        <dd class="pre-wrap">{{ pivot.test_case.steps }}</dd>
+        <dd>
+          <ol class="case-text-steps">
+            {% for step in case_text.numbered_steps %}
+            <li value="{{ step.num }}">
+              <span class="pre-wrap">{{ step.text }}</span>
+              {% if step.expected %}<span class="case-text-step-expected muted small pre-wrap">Expected: {{ step.expected }}</span>{% endif %}
+            </li>
+            {% endfor %}
+          </ol>
+        </dd>
+      </div>
+      {% elif case_text.steps_text %}
+      <div>
+        <dt>Steps</dt>
+        <dd class="pre-wrap">{{ case_text.steps_text }}</dd>
       </div>
       {% endif %}
-      {% if pivot.test_case.expected %}
+      {% if case_text.expected_text and not case_text.steps_cover_expected %}
       <div>
         <dt>Expected result</dt>
-        <dd class="pre-wrap">{{ pivot.test_case.expected }}</dd>
+        <dd class="pre-wrap">{{ case_text.expected_text }}</dd>
       </div>
       {% endif %}
     </dl>

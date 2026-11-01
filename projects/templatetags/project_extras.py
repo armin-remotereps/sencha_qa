@@ -7,6 +7,7 @@ from typing import Any
 from django import template
 
 from auto_tester.durations import format_duration
+from projects.case_markup import markup_to_plain
 
 register = template.Library()
 
@@ -30,3 +31,9 @@ def get_item(mapping: Mapping[Any, Any] | None, key: Any) -> Any:
 def duration(value: timedelta | None) -> str:
     """Render a duration with :func:`auto_tester.durations.format_duration`."""
     return format_duration(value)
+
+
+@register.filter
+def case_text(value: str | None) -> str:
+    """TestRail case text without HTML tags or Markdown markers (still escaped)."""
+    return markup_to_plain(value or "")

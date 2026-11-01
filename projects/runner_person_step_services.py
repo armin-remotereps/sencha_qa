@@ -66,6 +66,7 @@ from controller_client.protocol import (
 )
 from notifications.services.site_url import absolute_url
 from projects.case_step_refs import CaseStepText, stored_case_steps
+from projects.case_text_display import case_steps_for_display
 from projects.exceptions import PersonStepError, PersonStepQuestionError
 from projects.models import (
     WRITABLE_ROLES,
@@ -395,7 +396,7 @@ def _case_step_payloads(
             text=step.text[:PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS],
             expected=step.expected[:PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS],
         )
-        for step in steps[:PERSON_STEP_CASE_STEPS_MAX_ITEMS]
+        for step in case_steps_for_display(steps[:PERSON_STEP_CASE_STEPS_MAX_ITEMS])
     )
 
 

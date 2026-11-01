@@ -31,6 +31,7 @@ from controller_client.protocol import (
     ManualStepPayload,
     PersonStepQuestionPayload,
 )
+from projects.case_markup import markup_to_plain
 from projects.manual_case_steps import manual_steps_from_checkpoint
 from projects.manual_case_submit_services import manifest_keys
 from projects.models import (
@@ -146,14 +147,14 @@ def _active_case(test_run_id: int, *, assist: bool) -> ManualActiveCasePayload |
         pivot_id=claimed.pk,
         claim_token=claimed.manual_claim_token,
         title=claimed.test_case.title[:MANUAL_CASE_TITLE_MAX_CHARS],
-        preconditions=claimed.test_case.preconditions.strip()[
+        preconditions=markup_to_plain(claimed.test_case.preconditions)[
             :MANUAL_PRECONDITIONS_MAX_CHARS
         ],
         steps=tuple(
             ManualStepPayload(
                 num=step.num,
-                text=step.text[:MANUAL_STEP_TEXT_MAX_CHARS],
-                expected=step.expected[:MANUAL_STEP_TEXT_MAX_CHARS],
+                text=markup_to_plain(step.text)[:MANUAL_STEP_TEXT_MAX_CHARS],
+                expected=markup_to_plain(step.expected)[:MANUAL_STEP_TEXT_MAX_CHARS],
             )
             for step in steps
         ),

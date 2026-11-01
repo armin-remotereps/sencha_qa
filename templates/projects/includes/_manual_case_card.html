@@ -16,6 +16,7 @@
 
    Release posts to projects:test_run_case_manual_release through
    partials/confirm_dialog.html (dialog id "manual-release"). {% endcomment %}
+{% load project_extras %}
 <section aria-labelledby="manual-h" class="card card-tone-manual">
   <div class="card-header">
     <h2 id="manual-h">Manual test</h2>
@@ -100,14 +101,14 @@
       <span class="step-num is-{% if step.outcome == 'passed' %}passed{% elif step.outcome == 'failed' %}failed{% else %}not_run{% endif %}" aria-hidden="true">{{ step.num }}</span>
       <div class="step-body">
         <div class="step-head">
-          <span class="step-title pre-wrap">{{ step.description }}</span>
+          <span class="step-title pre-wrap">{{ step.description|case_text }}</span>
           <span class="step-badges">
             <span class="badge {% if step.outcome == 'passed' %}badge-passed{% elif step.outcome == 'failed' %}badge-failed{% else %}badge-cancelled{% endif %}">{{ step.outcome_label }}</span>
           </span>
         </div>
         {% if step.expected_result or step.duration_seconds is not None %}
         <div class="step-meta">
-          {% if step.expected_result %}<span class="pre-wrap">Expected: {{ step.expected_result }}</span>{% endif %}
+          {% if step.expected_result %}<span class="pre-wrap">Expected: {{ step.expected_result|case_text }}</span>{% endif %}
           {% if step.duration_seconds is not None %}<span>{% if step.expected_result %} · {% endif %}{{ step.duration_seconds }}s</span>{% endif %}
         </div>
         {% endif %}
