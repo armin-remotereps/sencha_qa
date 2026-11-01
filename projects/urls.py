@@ -341,6 +341,16 @@ urlpatterns: list[URLPattern] = [
         name="test_run_case_manual_release",
     ),
     path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/manual/pause/",
+        manual_case_views.test_run_case_manual_pause,
+        name="test_run_case_manual_pause",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/manual/continue/",
+        manual_case_views.test_run_case_manual_continue,
+        name="test_run_case_manual_continue",
+    ),
+    path(
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/resume/",
         views.test_run_case_resume,
         name="test_run_case_resume",

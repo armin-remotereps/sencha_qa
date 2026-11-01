@@ -20,12 +20,32 @@
    panel.guide_preparing adds one "reload to see it" hint (no live refresh).
 
    Release posts to projects:test_run_case_manual_release through
-   partials/confirm_dialog.html (dialog id "manual-release"). {% endcomment %}
+   partials/confirm_dialog.html (dialog id "manual-release").
+
+   Pause and discuss (Manual run only):
+     panel.pause (ManualPausePanel or None): the "Paused by X since HH:MM"
+       badge; Pause posts to projects:test_run_case_manual_pause and
+       Continue testing to projects:test_run_case_manual_continue (writable
+       members only, can_pause / can_continue; else blocker as a hint).
+     panel.discussion_thread_id: "Go to discussion" (machine_setup:thread,
+       also for read-only members); else, for a writable member while
+       panel.can_discuss, "Discuss" opens the "manual-discuss-<pivot.id>"
+       dialog that posts an optional `text` (at most 8000 characters,
+       machine_setup.forms.SETUP_MESSAGE_MAX_LENGTH, hard-coded since the
+       include is rendered with `only`) to machine_setup:manual_chat_open.
+       panel.discuss_blocker explains a read-only thread.
+     panel.progress (ManualProgressView or None): "Progress reported by the
+       Test Runner at …", the marks so far (advisory; the hand-in decides).
+   The page reloads when the case's manual_paused changes (case socket).
+   {% endcomment %}
 {% load project_extras %}
 <section aria-labelledby="manual-h" class="card card-tone-manual">
   <div class="card-header">
     <h2 id="manual-h">Manual test</h2>
     <span class="badge badge-manual">Performed at the Test Runner</span>
+    {% if panel.pause and panel.pause.paused %}
+    <span class="badge badge-warning">Paused by {{ panel.pause.paused_label|default:"a person" }}{% if panel.pause.paused_at %} since <time datetime="{{ panel.pause.paused_at|date:'c' }}">{{ panel.pause.paused_at|date:"H:i" }}</time>{% endif %}</span>
+    {% endif %}
   </div>
 
   {% if panel.is_claimed %}
@@ -42,10 +62,67 @@
         <span class="hint">Only when the tester's Test Runner is gone: the case goes back to Not started and anything they marked is discarded.</span>
       </div>
       {% endif %}
+      {% if panel.pause %}
+      {% if can_write and panel.pause.can_pause %}
+      <form class="actions card-actions" method="post" action="{% url 'projects:test_run_case_manual_pause' project.id test_run.id pivot.id %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-secondary">Pause</button>
+        <span class="hint">Stops the case's clock, for example while you discuss it or the agent checks the machine. The tester can keep their marks.</span>
+      </form>
+      {% elif can_write and panel.pause.can_continue %}
+      <form class="actions card-actions" method="post" action="{% url 'projects:test_run_case_manual_continue' project.id test_run.id pivot.id %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-sm btn-primary">Continue testing</button>
+        <span class="hint">The case's clock runs again and the tester goes on at the Test Runner.</span>
+      </form>
+      {% elif can_write and panel.pause.paused and panel.pause.blocker %}
+      <div class="actions card-actions">
+        <button type="button" class="btn btn-sm btn-primary" disabled aria-disabled="true" aria-describedby="manual-continue-blocker-{{ pivot.id }}">Continue testing</button>
+        <span class="hint" id="manual-continue-blocker-{{ pivot.id }}">{{ panel.pause.blocker }}</span>
+      </div>
+      {% elif can_write and panel.pause.blocker %}
+      <p class="hint">{{ panel.pause.blocker }}</p>
+      {% endif %}
+      {% endif %}
     </div>
   </div>
   {% elif not panel.has_submission %}
   <p class="hint">{% if panel.run_is_manual %}Not performed yet. A tester picks this case in the Test Runner window, marks each step and submits the result.{% else %}No result was handed in for this case.{% endif %}</p>
+  {% endif %}
+
+  {% if panel.discussion_thread_id or can_write and panel.can_discuss %}
+  <div class="actions card-actions">
+    {% if panel.discussion_thread_id %}
+    <a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id panel.discussion_thread_id %}">Go to discussion</a>
+    {% if not panel.can_discuss and panel.discuss_blocker %}<span class="hint">{{ panel.discuss_blocker }}</span>{% endif %}
+    {% else %}
+    <button type="button" class="btn btn-sm btn-secondary" @click="$dispatch('open-manual-discuss-{{ pivot.id }}')">Discuss</button>
+    <span class="hint">Talk to the AI about this case. It looks things up in the knowledge base; it checks the test machine only while the case is paused.</span>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if panel.progress %}
+  <h3 class="manual-subhead">Progress reported by the Test Runner at <time datetime="{{ panel.progress.reported_at|date:'c' }}">{{ panel.progress.reported_at|date:"H:i" }}</time></h3>
+  <p class="hint">The tester's marks so far{% if panel.progress.current_step %}, now at step {{ panel.progress.current_step }}{% endif %}. Nothing is final until they submit the result.</p>
+  {% if panel.progress.steps %}
+  <ol class="step-list manual-step-list">
+    {% for step in panel.progress.steps %}
+    <li class="step-row">
+      <span class="step-num is-{% if step.outcome == 'pass' %}passed{% else %}failed{% endif %}" aria-hidden="true">{{ step.num }}</span>
+      <div class="step-body">
+        <div class="step-head">
+          <span class="step-title">Step {{ step.num }}</span>
+          <span class="step-badges"><span class="badge {% if step.outcome == 'pass' %}badge-passed{% else %}badge-failed{% endif %}">{% if step.outcome == 'pass' %}Pass{% else %}Fail{% endif %}</span></span>
+        </div>
+        {% if step.note %}<p class="step-detail pre-wrap{% if step.outcome != 'pass' %} is-error{% endif %}">{{ step.note }}</p>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% else %}
+  <p class="muted">No step marked yet.</p>
+  {% endif %}
   {% endif %}
 
   {% if panel.has_submission %}
@@ -221,4 +298,37 @@
 {% if can_write and panel.can_release %}
 {% url 'projects:test_run_case_manual_release' project.id test_run.id pivot.id as manual_release_url %}
 {% include "partials/confirm_dialog.html" with dialog_id="manual-release" title="Release this case?" body="The case goes back to Not started and the tester's unsubmitted marks are discarded. Use this only when the Test Runner that picked it is gone; the tester can release it from the window themselves." confirm_label="Release case" confirm_class="btn-danger-solid" action_url=manual_release_url csrf_token=csrf_token only %}
+{% endif %}
+
+{% if can_write and panel.can_discuss and not panel.discussion_thread_id %}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-manual-discuss-{{ pivot.id }}.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="manual-discuss-{{ pivot.id }}-title" aria-describedby="manual-discuss-{{ pivot.id }}-desc">
+    <div class="card-header">
+      <h3 id="manual-discuss-{{ pivot.id }}-title">Discuss this case with the AI?</h3>
+      <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+    </div>
+    <p id="manual-discuss-{{ pivot.id }}-desc">A discussion about this manual case opens. The AI explains and looks things up; it never marks a step or decides the result. It checks the test machine only while the case is paused.</p>
+    <form method="post" action="{% url 'machine_setup:manual_chat_open' project.id pivot.id %}">
+      {% csrf_token %}
+      <div class="field">
+        <label class="label" for="manual-discuss-{{ pivot.id }}-text">Message for the AI <span class="muted">(optional)</span></label>
+        <textarea class="textarea" id="manual-discuss-{{ pivot.id }}-text" name="text" rows="4" maxlength="8000" placeholder="Optional: what you want to ask about this case"></textarea>
+        <p class="hint">Empty opens the discussion without sending anything.</p>
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Discuss</button>
+      </div>
+    </form>
+  </div>
+</div>
 {% endif %}

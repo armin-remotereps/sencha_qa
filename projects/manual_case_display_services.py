@@ -6,23 +6,37 @@ the screenshots and the AI rewrite for TestRail. Every text the runner sent is
 returned as plain strings for autoescaped templates (never ``|safe``).
 
 Queries: the run panel costs at most two (the claimed case, the page's open
-uploads); the case panel at most three (the current hand-in, the Ask AI
-questions, the steps' "How to do it" guide) and reuses the case page's
+uploads); the case panel at most five (the current hand-in, the Ask AI
+questions, the steps' "How to do it" guide, the runner's progress report of a
+claimed case, the case's manual discussion thread) and reuses the case page's
 prefetched screenshots.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Final, Literal
 
 from agents.checkpoint import checkpoint_from_json, final_step_indices
+from machine_setup.models import SetupConversation, SetupConversationKind
+from machine_setup.turn_state import manual_case_turn_live
 from projects.how_to_view import PersonHowToView, how_to_view
+from projects.manual_case_pause_services import (
+    ManualPausePanel,
+    get_manual_pause_panel,
+)
+from projects.manual_case_progress_services import (
+    ManualProgressView,
+    load_manual_progress,
+)
 from projects.manual_refinement_services import refined_text_is_current
 from projects.manual_run_policy import (
+    MANUAL_DISCUSS_NOT_CLAIMED,
+    MANUAL_PAUSE_AGENT_BUSY,
     MANUAL_TOOL_NAMES,
+    is_claimed_manual_case,
     is_manual_checkpoint,
     is_manual_run,
     runner_supports_manual,
@@ -176,6 +190,17 @@ class ManualCasePanel:
     how_to_shell_label: str = ""
     # Some step's how-to is still being written ("reload to see it").
     guide_preparing: bool = False
+    # Pause and discuss (None unless the run is Manual).
+    pause: ManualPausePanel | None = None
+    # The Test Runner's latest marks of the claimed case (advisory; None
+    # without a claim or a report for the current claim).
+    progress: ManualProgressView | None = None
+    # The case's open manual discussion thread (None before one).
+    discussion_thread_id: int | None = None
+    # A new discussion can be opened (Manual run Running, case claimed and in
+    # progress); else discuss_blocker says why ("" when it can).
+    can_discuss: bool = False
+    discuss_blocker: str = ""
 
     def questions_payload(self) -> list[dict[str, object]]:
         """Seed of the card's live Ask AI list (``json_script``); the case
@@ -398,6 +423,15 @@ def _step_rows(
     return tuple(rows), tuple(case_shots)
 
 
+def _pause_panel(pivot: TestRunTestCase) -> ManualPausePanel:
+    """The case's pause panel; Continue off while a turn of its manual
+    discussion is live (one query, only when Continue would apply)."""
+    panel = get_manual_pause_panel(pivot.test_run, pivot)
+    if panel.can_continue and manual_case_turn_live(pivot.pk):
+        return replace(panel, can_continue=False, blocker=MANUAL_PAUSE_AGENT_BUSY)
+    return panel
+
+
 def get_manual_case_panel(
     *,
     pivot: TestRunTestCase,
@@ -406,7 +440,8 @@ def get_manual_case_panel(
     """The case page's manual card; None unless the case is (or was) manual.
 
     ``pivot`` has ``test_run`` and ``test_case`` loaded; ``screenshots`` are
-    the case page's prefetched rows. At most three queries.
+    the case page's prefetched rows. At most six queries (the sixth only
+    while the case is paused).
     """
     run_is_manual = is_manual_run(pivot.test_run)
     if not run_is_manual and not is_manual_checkpoint(pivot.execution_checkpoint):
@@ -424,6 +459,17 @@ def get_manual_case_panel(
     )
     steps, case_shots = _step_rows(pivot, screenshots, refined, guide)
     is_claimed = bool(pivot.manual_claim_token)
+    can_discuss = is_claimed_manual_case(pivot.test_run, pivot)
+    pause = _pause_panel(pivot) if run_is_manual else None
+    discussion_thread_id = (
+        SetupConversation.objects.filter(
+            manual_case_id=pivot.pk,
+            kind=SetupConversationKind.MANUAL_CASE,
+            archived_at__isnull=True,
+        )
+        .values_list("id", flat=True)
+        .first()
+    )
     return ManualCasePanel(
         run_is_manual=run_is_manual,
         is_claimed=is_claimed,
@@ -452,4 +498,10 @@ def get_manual_case_panel(
         questions=_questions(pivot),
         how_to_shell_label=guide.shell_label if guide is not None else "",
         guide_preparing=guide is not None and guide.preparing,
+        pause=pause,
+        # Fenced by the claim token: no report outlives its claim.
+        progress=load_manual_progress(pivot) if is_claimed else None,
+        discussion_thread_id=discussion_thread_id,
+        can_discuss=can_discuss,
+        discuss_blocker="" if can_discuss else MANUAL_DISCUSS_NOT_CLAIMED,
     )

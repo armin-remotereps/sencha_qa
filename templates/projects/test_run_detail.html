@@ -89,8 +89,13 @@
      (claimed case and who has it, runner_notice), and `uploads` (pivot id ->
      ManualUpload, open uploads of the cases on this page, read with
      get_item) for the Reason column's upload badges. A manual case in
-     progress shows pivot.manual_claimed_label. The page reloads once when a
-     case of a manual run changes status (claim, release, submit).
+     progress shows pivot.manual_claimed_label, or "Paused · <label>"
+     (pivot.manual_paused_at / manual_paused_label) while paused; the
+     paused text follows the WS pivot_status manual_paused /
+     manual_paused_by live (pivotManualPaused / pivotManualPausedBy). The
+     page reloads once when a case of a manual run changes status (claim,
+     release, submit). The agent's Pause button is hidden for a Manual run
+     (pause and continue live on the case page's Manual test card).
 
      test_run also carries testrail_source_push_status; testRunLive exposes it
      as `testrailSourcePushStatus` (WS message "testrail_source_push").
@@ -579,7 +584,7 @@
               {% endif %}
             </td>
             <td data-label="Duration">{{ pivot.shown_duration|duration }}</td>
-            <td data-label="Reason" class="muted">{% if manual_panel %}{% with upload=manual_panel.uploads|get_item:pivot.id %}{% if upload %}<span class="badge {% if upload.is_incomplete %}badge-upload-incomplete{% else %}badge-uploading{% endif %}">{% if upload.is_incomplete %}Screenshots incomplete {{ upload.received }}/{{ upload.expected }}{% else %}Uploading screenshots {{ upload.received }}/{{ upload.expected }}{% endif %}</span> {% endif %}{% endwith %}{% endif %}{% if pivot.status == "in_progress" and pivot.manual_claim_token %}<strong>At the Test Runner: {{ pivot.manual_claimed_label|default:"a person at the Test Runner" }}</strong>{% elif pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>{% if help_panel and help_panel.request.fault and help_panel.request.test_run_test_case_id == pivot.id %}{{ help_panel.request.get_fault_display }}{% else %}Needs help{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "awaiting_person" %}<strong>{% if person_step_panel and person_step_panel.step.test_run_test_case_id == pivot.id %}Waiting for a person: {{ person_step_panel.step_label|lower }}{% else %}Waiting for a person{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "needs_retest" %}<strong>Marked by {{ pivot.retest_marked_by.get_full_name|default:pivot.retest_marked_by.email|default:"a removed user" }}</strong>{% if pivot.retest_note %} · {{ pivot.retest_note|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
+            <td data-label="Reason" class="muted">{% if manual_panel %}{% with upload=manual_panel.uploads|get_item:pivot.id %}{% if upload %}<span class="badge {% if upload.is_incomplete %}badge-upload-incomplete{% else %}badge-uploading{% endif %}">{% if upload.is_incomplete %}Screenshots incomplete {{ upload.received }}/{{ upload.expected }}{% else %}Uploading screenshots {{ upload.received }}/{{ upload.expected }}{% endif %}</span> {% endif %}{% endwith %}{% endif %}{% if pivot.status == "in_progress" and pivot.manual_claim_token %}<strong x-show="pivotManualPaused[{{ pivot.id }}]"{% if not pivot.manual_paused_at %} x-cloak{% endif %} x-text="'Paused · ' + (pivotManualPausedBy[{{ pivot.id }}] || 'a person')">Paused · {{ pivot.manual_paused_label|default:"a person" }}</strong><strong x-show="!pivotManualPaused[{{ pivot.id }}]"{% if pivot.manual_paused_at %} x-cloak{% endif %}>At the Test Runner: {{ pivot.manual_claimed_label|default:"a person at the Test Runner" }}</strong>{% elif pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>{% if help_panel and help_panel.request.fault and help_panel.request.test_run_test_case_id == pivot.id %}{{ help_panel.request.get_fault_display }}{% else %}Needs help{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "awaiting_person" %}<strong>{% if person_step_panel and person_step_panel.step.test_run_test_case_id == pivot.id %}Waiting for a person: {{ person_step_panel.step_label|lower }}{% else %}Waiting for a person{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "needs_retest" %}<strong>Marked by {{ pivot.retest_marked_by.get_full_name|default:pivot.retest_marked_by.email|default:"a removed user" }}</strong>{% if pivot.retest_note %} · {{ pivot.retest_note|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
             {% if can_edit and project_can_write %}
             <td data-label="" x-show="testRunStatus === 'waiting'" x-cloak>
               <div class="actions">
@@ -605,8 +610,8 @@
             {% endif %}
             <td data-label="Details">
               <a class="btn btn-sm btn-ghost" href="{% url 'projects:test_run_case_detail' project.id test_run.id pivot.id %}">Logs &amp; screenshots</a>
-              {% if project_can_write and pivot.status == "in_progress" and pivot.pause_requested_generation is None %}
-              {# Pause and discuss the running case; hidden once it stops running. #}
+              {% if project_can_write and not manual_panel and pivot.status == "in_progress" and pivot.pause_requested_generation is None %}
+              {# Pause and discuss the running case; hidden once it stops running. A manual case pauses from its Manual test card instead. #}
               <button type="button" class="btn btn-sm btn-secondary" x-show="(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}') === 'in_progress' && !pivotPausePending[{{ pivot.id }}]" @click="$dispatch('open-pause-case-{{ pivot.id }}')">Pause</button>
               {% include "projects/includes/_case_pause_dialog.html" with project=project test_run=test_run pivot=pivot next=test_run_detail_url csrf_token=csrf_token only %}
               {% endif %}
@@ -915,6 +920,13 @@ document.addEventListener('alpine:init', () => {
     manualReload: null,
     // Pause requested for a running case (hides its Pause button).
     pivotPausePending: {},
+    // Manual run: a claimed case paused (and by whom), for its Reason cell.
+    pivotManualPaused: {
+      {% for pivot in cases %}{% if pivot.manual_paused_at %}{{ pivot.id }}: true,{% endif %}{% endfor %}
+    },
+    pivotManualPausedBy: {
+      {% for pivot in cases %}{% if pivot.manual_paused_at %}{{ pivot.id }}: '{{ pivot.manual_paused_label|escapejs }}',{% endif %}{% endfor %}
+    },
     pivotStatuses: {
       {% for pivot in cases %}
       {{ pivot.id }}: '{{ pivot.status }}'{% if not forloop.last %},{% endif %}
@@ -1037,6 +1049,10 @@ document.addEventListener('alpine:init', () => {
           }
           this.pivotStatuses[data.pivot_id] = data.status;
           this.pivotPausePending[data.pivot_id] = !!data.pause_pending;
+          if (typeof data.manual_paused === 'boolean') {
+            this.pivotManualPaused[data.pivot_id] = data.manual_paused;
+            this.pivotManualPausedBy[data.pivot_id] = data.manual_paused_by || '';
+          }
           this.summary = data.summary;
           return;
         }

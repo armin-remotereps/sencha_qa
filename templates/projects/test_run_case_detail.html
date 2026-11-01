@@ -132,8 +132,15 @@
      to projects:test_run_case_manual_release; the tester's verdict, note,
      per-step outcome, notes and screenshots grouped by step; upload
      progress; the AI rewrite "Prepared for TestRail" next to the original;
-     the case's Ask AI questions). The page reloads when a manual case
-     changes status, and once when its last manual screenshot arrives.
+     the case's Ask AI questions; Pause / Continue testing, which post to
+     projects:test_run_case_manual_pause / _continue, "Discuss" / "Go to
+     discussion" for machine_setup:manual_chat_open / machine_setup:thread,
+     and the runner's progress report: manual_result.pause, .progress,
+     .discussion_thread_id, .can_discuss, .discuss_blocker). The page
+     reloads when a manual case changes status or its WS `manual_paused`
+     flips, and once when its last manual screenshot arrives. The agent's
+     "Pause and discuss" never shows for a manual case (pause_panel.can_pause
+     is False for a Manual run).
 
      Pause and discuss: pause_panel (projects.case_pause_services.CasePausePanel:
      can_pause, pause_pending, pause_requested_by_label, pause_message_state,
@@ -1046,6 +1053,9 @@ document.addEventListener('alpine:init', () => {
     manualUploading: {% if manual_result.upload.is_uploading %}true{% else %}false{% endif %},
     manualShotsReceived: {{ manual_result.upload.received|default:0 }},
     manualShotsExpected: {{ manual_result.upload.expected|default:0 }},
+    // Manual pause (server-rendered badge and buttons): reload when the
+    // case socket's manual_paused differs.
+    manualPaused: {% if manual_result.pause.paused %}true{% else %}false{% endif %},
     // Pause and discuss: a pause is pending (the agent stops at its next
     // action), and who asked. awaitingDiscussion: this page waits for the
     // server to open the discussion, then follows `discussion_url`.
@@ -1262,6 +1272,13 @@ document.addEventListener('alpine:init', () => {
           }
           // A pending pause lost to the verdict: the "Too late to pause"
           // notice is server-rendered.
+          if (this.manual && typeof data.manual_paused === 'boolean' && data.manual_paused !== this.manualPaused) {
+            // Manual: paused or continued (here, elsewhere or at the Test
+            // Runner); the badge and buttons are server-rendered.
+            this.manualPaused = data.manual_paused;
+            window.location.reload();
+            return;
+          }
           if (this.manual && data.status !== this.status) {
             // Manual: claimed, released or submitted at the Test Runner (or
             // by Release here); the manual card is server-rendered.
