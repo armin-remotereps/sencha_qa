@@ -21,6 +21,7 @@ from agents.types import (
     StepDecision,
     SubTaskAttempt,
 )
+from projects.case_markup import markup_to_plain
 from projects.case_step_labels import format_case_steps_label
 from projects.models import TestRunTestCase, TestRunTestCaseStatus
 
@@ -166,6 +167,9 @@ class CaseStepProgress:
     # Plans replaced by help-chat or result-chat redesigns, oldest first (the checkpoint keeps
     # the newest few).
     earlier_plans: tuple[EarlierPlan, ...] = ()
+    # A manual case: its steps are the case's verbatim (TestRail) text, shown
+    # without markup by the payload; the rows themselves stay raw.
+    manual: bool = False
 
 
 @dataclass(frozen=True)
@@ -312,6 +316,7 @@ def build_case_step_progress(
         total=len(rows),
         resumed=any(a.kind == "resume" for a in checkpoint.attempts),
         earlier_plans=tuple(_earlier_plan(record) for record in revisions),
+        manual=checkpoint.manual,
     )
 
 
@@ -555,7 +560,7 @@ def step_progress_payload(
     return StepProgressPayload(
         available=True,
         planning=False,
-        rows=[_row_payload(row) for row in progress.rows],
+        rows=[_row_payload(row, manual=progress.manual) for row in progress.rows],
         current_step=progress.current_step,
         activity_label=_ACTIVITY_LABELS[progress.activity],
         phase_started_at=(
@@ -628,11 +633,14 @@ def _is_planning(progress: CaseStepProgress | None, case_status: str) -> bool:
     return progress is None and case_status == TestRunTestCaseStatus.IN_PROGRESS
 
 
-def _row_payload(row: CaseStepRow) -> StepRowPayload:
+def _row_payload(row: CaseStepRow, *, manual: bool) -> StepRowPayload:
+    description, expected = row.description, row.expected_result
+    if manual:
+        description, expected = markup_to_plain(description), markup_to_plain(expected)
     return StepRowPayload(
         num=row.num,
-        description=_cap(row.description),
-        expected_result=_cap(row.expected_result),
+        description=_cap(description),
+        expected_result=_cap(expected),
         status=row.status.value,
         status_label=row.status_label,
         activity=row.activity.value,

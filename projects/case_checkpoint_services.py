@@ -17,6 +17,7 @@ from agents.checkpoint import (
     checkpoint_to_json,
 )
 from agents.types import CheckpointCallback, OrchestratorCheckpoint
+from projects.manual_run_policy import is_manual_checkpoint
 from projects.models import TestRunTestCase
 
 
@@ -70,8 +71,11 @@ def list_resume_steps(pivot: TestRunTestCase) -> list[ResumeStepOption]:
     """Steps 1..cursor of the loaded pivot's checkpoint (no query).
 
     The last option is the cursor, the default; when every step already ran it
-    is a ``verdict_only`` option one past the last step.
+    is a ``verdict_only`` option one past the last step. A manual case has
+    none: it always starts again from step 1 at the Test Runner.
     """
+    if is_manual_checkpoint(pivot.execution_checkpoint):
+        return []
     checkpoint = load_resume_checkpoint(pivot)
     if checkpoint is None:
         return []

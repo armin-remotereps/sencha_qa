@@ -3609,6 +3609,23 @@ ol.person-step-howto + .person-step-howto-source {
   overflow-wrap: anywhere;
 }
 
+/* Case page "Test case" card: numbered steps of a "Test Case (Steps)" case. */
+.case-text-steps {
+  margin: 0;
+  padding-left: 1.5em;
+  display: grid;
+  gap: 8px;
+}
+
+.case-text-steps li {
+  overflow-wrap: anywhere;
+}
+
+.case-text-step-expected {
+  display: block;
+  margin-top: 2px;
+}
+
 .person-step-suggested {
   margin-top: 6px;
   padding: 8px 10px;

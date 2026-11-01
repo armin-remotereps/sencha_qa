@@ -45,6 +45,7 @@ from controller_client.protocol import (
     PersonHowToPayload,
     PersonStepQuestionPayload,
 )
+from projects.case_markup import markup_to_plain
 from projects.manual_case_steps import manual_steps_from_checkpoint
 from projects.manual_case_submit_services import manifest_keys
 from projects.manual_step_guide_read import ManualGuideView, load_manual_guide
@@ -185,14 +186,14 @@ def _active_case(
         )
         can_ask = ask_state.can_ask
     title = claimed.test_case.title[:MANUAL_CASE_TITLE_MAX_CHARS]
-    preconditions = claimed.test_case.preconditions.strip()[
+    preconditions = markup_to_plain(claimed.test_case.preconditions)[
         :MANUAL_PRECONDITIONS_MAX_CHARS
     ]
     plain_steps = [
         ManualStepPayload(
             num=step.num,
-            text=step.text[:MANUAL_STEP_TEXT_MAX_CHARS],
-            expected=step.expected[:MANUAL_STEP_TEXT_MAX_CHARS],
+            text=markup_to_plain(step.text)[:MANUAL_STEP_TEXT_MAX_CHARS],
+            expected=markup_to_plain(step.expected)[:MANUAL_STEP_TEXT_MAX_CHARS],
         )
         for step in steps
     ]
