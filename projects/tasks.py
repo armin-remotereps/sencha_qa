@@ -64,6 +64,11 @@ from projects.testrail_checked_push_services import (
     push_checked_results,
 )
 from projects.testrail_client import TestRailError
+from projects.testrail_evidence_review_services import (
+    review_checked_evidence,
+    review_task_budget_seconds,
+)
+from projects.testrail_evidence_services import REVIEW_TESTRAIL_EVIDENCE_TASK
 from projects.testrail_mapping import TestRailFieldMapper
 from projects.testrail_results_services import (
     mark_testrail_push_failed,
@@ -456,6 +461,25 @@ def prepare_manual_case_guide(guide_id: int, generation: int) -> None:
 def refine_manual_case_result(submission_pk: int) -> None:
     """Manual run: rewrite a hand-in's notes for TestRail early (``upload``)."""
     refine_manual_submission(submission_pk)
+
+
+@shared_task(
+    name=REVIEW_TESTRAIL_EVIDENCE_TASK,
+    queue="upload",
+    max_retries=0,
+    # Cases not written by the soft limit stay pending: the next send reviews
+    # them inline, and Retry queues them again.
+    soft_time_limit=review_task_budget_seconds() + 60,
+    time_limit=review_task_budget_seconds() + 90,
+)
+def review_testrail_evidence(pivot_ids: list[int]) -> None:
+    """AI review of which screenshots checked cases send to TestRail (``upload``)."""
+    try:
+        review_checked_evidence(pivot_ids)
+    except SoftTimeLimitExceeded:
+        logger.warning(
+            "Screenshot review timed out for cases %s; they stay pending", pivot_ids
+        )
 
 
 @shared_task(

@@ -4,6 +4,11 @@ The source run is the TestRail run a case was imported from with a run link,
 snapshotted on each pivot when it joins a Punk Hazard run. Results are added
 once per execution; the stored result id and attachment counter make a failed
 send resumable without duplicates.
+
+A new result is added only for a case whose screenshot review is ``done`` and
+still current (``testrail_evidence_review_services``); every send reviews the
+cases that are not inline first. Resumes of results already added are never
+blocked by the review.
 """
 
 from __future__ import annotations
@@ -55,6 +60,7 @@ from projects.manual_refinement_services import (
 )
 from projects.models import (
     CheckedPushSkipReason,
+    EvidenceReviewState,
     Project,
     TestRailPushStatus,
     TestRun,
@@ -72,9 +78,15 @@ from projects.testrail_client import (
     TestRailRun,
 )
 from projects.testrail_evidence import OVERLAY_TOOL_NAME
+from projects.testrail_evidence_review_services import refresh_evidence_reviews
+from projects.testrail_evidence_services import (
+    REVIEW_TASK_CHUNK_SIZE,
+    load_case_evidence,
+)
 from projects.testrail_mapping import (
     build_checked_result_comment,
     format_checked_push_confirm_body,
+    format_checked_push_review_note,
     format_checked_push_summary,
     format_testrail_elapsed,
     map_pivot_status_to_testrail,
@@ -99,6 +111,10 @@ CHECKED_PUSH_BATCH_SIZE = 100
 # Seconds a send may spend on inline manual rewrites (task soft limit 3600 s);
 # past it the testers' own notes are sent.
 CHECKED_PUSH_MANUAL_REFINE_BUDGET_SECONDS = 900
+# Seconds a send may spend on inline screenshot reviews; together with the
+# manual rewrites it stays under the task's soft limit (3600 s). Cases not
+# reviewed in time are not sent.
+CHECKED_PUSH_EVIDENCE_REVIEW_BUDGET_SECONDS = 600
 CHECKED_PUSH_TASK = "projects.tasks.push_checked_results_to_testrail"
 CHECKED_PUSH_TIMEOUT_MESSAGE = "Timed out; send again to resume."
 CHECKED_PUSH_INTERRUPTED_MESSAGE = (
@@ -166,9 +182,20 @@ _NOT_SKIPPED_Q = Q(testrail_source_skip_reason="")
 # they wait until unchecked.
 _SKIPPED_Q = _CHECKED_Q & Q(testrail_source_result_id__isnull=True) & ~_NOT_SKIPPED_Q
 # A checked case with a source run whose result has not been added yet.
-_READY_Q = (
+_UNSENT_Q = (
     _SOURCED_CHECKED_Q & _NOT_SKIPPED_Q & Q(testrail_source_result_id__isnull=True)
 )
+# The send gate: only a reviewed case gets a new result (the send re-reviews a
+# case whose stored review no longer matches before it plans).
+_REVIEWED_Q = Q(evidence_review_state=EvidenceReviewState.DONE)
+_READY_Q = _UNSENT_Q & _REVIEWED_Q
+# Unsent cases whose review is waiting or failed: the next send reviews them
+# inline first, so they count as sendable.
+_REVIEW_WAITING_Q = _UNSENT_Q & Q(
+    evidence_review_state__in=(EvidenceReviewState.NONE, EvidenceReviewState.PENDING)
+)
+_REVIEW_FAILED_Q = _UNSENT_Q & Q(evidence_review_state=EvidenceReviewState.FAILED)
+_SENDABLE_Q = _READY_Q | _REVIEW_WAITING_Q | _REVIEW_FAILED_Q
 # A result already added whose screenshots were not all attached (needs
 # `planned_shots`).
 _RESUME_Q = (
@@ -199,7 +226,10 @@ class CheckedPushPanel:
     not) without a source TestRail run, `ready_count` checked cases whose
     result will be added, `resume_count` sent cases with screenshots still to
     attach, `ready_screenshot_count` screenshots the next send attaches,
-    `skipped_count` checked, unsent cases an earlier send could not deliver.
+    `skipped_count` checked, unsent cases an earlier send could not deliver,
+    `review_waiting_count` / `review_failed_count` checked, unsent cases
+    (with a source run, not skipped) whose screenshot review is waiting or
+    failed; the next send reviews them first.
     `source_runs` are the source runs of the run's checked cases.
 
     `status` is the run's send status, except that an interrupted (stale)
@@ -224,6 +254,8 @@ class CheckedPushPanel:
     disabled_reason: str
     resume_count: int = 0
     skipped_count: int = 0
+    review_waiting_count: int = 0
+    review_failed_count: int = 0
 
 
 def _disabled_reason(
@@ -276,6 +308,8 @@ def get_checked_push_panel(test_run: TestRun) -> CheckedPushPanel:
         ready=Count("id", filter=_READY_Q),
         resume=Count("id", filter=_RESUME_Q),
         skipped=Count("id", filter=_SKIPPED_Q),
+        review_waiting=Count("id", filter=_REVIEW_WAITING_Q),
+        review_failed=Count("id", filter=_REVIEW_FAILED_Q),
         ready_shots=Coalesce(Sum("planned_shots", filter=_READY_Q), Value(0)),
         resume_shots=Coalesce(
             Sum(
@@ -288,7 +322,9 @@ def get_checked_push_panel(test_run: TestRun) -> CheckedPushPanel:
     run_rows = (
         pivots.filter(_SOURCED_CHECKED_Q)
         .annotate(
-            pending=ExpressionWrapper(_READY_Q | _RESUME_Q, output_field=BooleanField())
+            pending=ExpressionWrapper(
+                _SENDABLE_Q | _RESUME_Q, output_field=BooleanField()
+            )
         )
         .values_list("testrail_source_run_id", "pending")
         .distinct()
@@ -305,7 +341,9 @@ def get_checked_push_panel(test_run: TestRun) -> CheckedPushPanel:
     ready = int(totals["ready"])
     resume = int(totals["resume"])
     screenshots = int(totals["ready_shots"]) + int(totals["resume_shots"])
-    pending = ready + resume
+    review_waiting = int(totals["review_waiting"])
+    review_failed = int(totals["review_failed"])
+    pending = ready + resume + review_waiting + review_failed
     skipped = int(totals["skipped"])
     now = timezone.now()
     stale = is_checked_push_stale(test_run, now)
@@ -348,8 +386,13 @@ def get_checked_push_panel(test_run: TestRun) -> CheckedPushPanel:
         ),
         pushed_at=test_run.testrail_source_pushed_at,
         confirm_body=(
-            format_checked_push_confirm_body(
-                ready, sorted(pending_run_ids), screenshots
+            _confirm_body(
+                ready=ready,
+                resume=resume,
+                review_waiting=review_waiting,
+                review_failed=review_failed,
+                run_ids=sorted(pending_run_ids),
+                screenshots=screenshots,
             )
             if pending
             else ""
@@ -357,7 +400,26 @@ def get_checked_push_panel(test_run: TestRun) -> CheckedPushPanel:
         disabled_reason=disabled_reason,
         resume_count=resume,
         skipped_count=skipped,
+        review_waiting_count=review_waiting,
+        review_failed_count=review_failed,
     )
+
+
+def _confirm_body(
+    *,
+    ready: int,
+    resume: int,
+    review_waiting: int,
+    review_failed: int,
+    run_ids: list[int],
+    screenshots: int,
+) -> str:
+    """The confirm dialog text, with a note on cases still to be reviewed."""
+    note = format_checked_push_review_note(review_waiting, review_failed)
+    if ready or resume:
+        body = format_checked_push_confirm_body(ready, run_ids, screenshots)
+        return f"{note} {body}" if note else body
+    return f"{note} Results cannot be removed from TestRail afterwards."
 
 
 def get_source_run_url(pivot: TestRunTestCase, project: Project) -> str:
@@ -379,7 +441,7 @@ def get_source_run_url(pivot: TestRunTestCase, project: Project) -> str:
 
 def _has_pending(test_run: TestRun) -> bool:
     pivots = _with_planned_shot_count(test_run.pivot_entries.order_by())
-    return pivots.filter(_READY_Q | _RESUME_Q).exists()
+    return pivots.filter(_SENDABLE_Q | _RESUME_Q).exists()
 
 
 def _stale_push_q(now: datetime) -> Q:
@@ -560,6 +622,7 @@ class CheckedPushOutcome:
     no_source: int = 0
     no_case_id: int = 0
     missing_files: int = 0
+    not_reviewed: int = 0
 
     @property
     def delivered_nothing(self) -> bool:
@@ -578,6 +641,7 @@ class CheckedPushOutcome:
             no_source=self.no_source,
             no_case_id=self.no_case_id,
             missing_files=self.missing_files,
+            not_reviewed=self.not_reviewed,
         )
 
 
@@ -635,6 +699,7 @@ def _plan_pivot(
         screenshot_steps=[
             shot.step_num for shot in attached if shot.step_num is not None
         ],
+        omitted_count=pivot.testrail_evidence_omitted,
     )
     return PlannedCheckedResult(
         pivot=pivot,
@@ -669,6 +734,7 @@ _PLAN_PIVOT_FIELDS = (
     "testrail_source_result_id",
     "testrail_source_attachment_count",
     "testrail_source_skip_reason",
+    "testrail_evidence_omitted",
     "test_case__id",
     "test_case__testrail_id",
     "test_case__title",
@@ -689,16 +755,24 @@ def plan_checked_push(
     test_run: TestRun,
     *,
     pivot_ids: Sequence[int] | None = None,
+    unreviewed_ids: Sequence[int] = (),
 ) -> tuple[list[PlannedCheckedResult], CheckedPushSkips]:
     """Plan every checked pivot that still has something to send (2 queries,
     plus one for the current hand-ins when a planned case is manual).
 
     `pivot_ids` limits the plan to those pivots (a case send); None plans the
     whole run. Pivots an earlier send skipped (`testrail_source_skip_reason`)
-    and pivots unchecked since dispatch are left out. Only the fields the
-    plan reads are loaded (no logs, no test case body).
+    and pivots unchecked since dispatch are left out, and so are unsent
+    pivots with a source run whose screenshot review is not `done`, or is
+    listed in `unreviewed_ids` (done but no longer current); a result
+    already added always resumes. Only the fields the plan reads are loaded
+    (no logs, no test case body).
     """
-    scope = Q(checked_at__isnull=False, testrail_source_skip_reason="")
+    scope = Q(checked_at__isnull=False, testrail_source_skip_reason="") & (
+        Q(testrail_source_result_id__isnull=False)
+        | Q(testrail_source_run_id__isnull=True)
+        | (_REVIEWED_Q & ~Q(id__in=list(unreviewed_ids)))
+    )
     if pivot_ids is not None:
         scope &= Q(id__in=list(pivot_ids))
     pivots = (
@@ -950,16 +1024,25 @@ def push_checked_results(
     )
     if pivot_ids is not None:
         unsent = unsent.filter(id__in=list(pivot_ids))
+    unsent_rows = list(unsent.values_list("id", "testrail_source_run_id"))
+    # Only cases that can be sent are reviewed (no AI call for the others).
+    sourced_ids = [pivot_id for pivot_id, run_id in unsent_rows if run_id is not None]
     refresh_manual_refinements(
         test_run=test_run,
-        pivot_ids=list(unsent.values_list("id", flat=True)),
+        pivot_ids=[pivot_id for pivot_id, _ in unsent_rows],
         budget_seconds=CHECKED_PUSH_MANUAL_REFINE_BUDGET_SECONDS,
     )
-    planned, skips = plan_checked_push(test_run, pivot_ids=pivot_ids)
+    # Right before planning, so a late manual upload during the rewrites is
+    # reviewed (key change) rather than sent on an old review.
+    unreviewed_ids = _review_before_planning(test_run, sourced_ids)
+    planned, skips = plan_checked_push(
+        test_run, pivot_ids=pivot_ids, unreviewed_ids=unreviewed_ids
+    )
     outcome = CheckedPushOutcome(
         already_sent=skips.already_sent,
         no_source=skips.no_source,
         no_case_id=len(skips.no_case_pivots),
+        not_reviewed=len(unreviewed_ids),
     )
     _record_skips(skips.no_case_pivots, CheckedPushSkipReason.NO_CASE_ID)
     if not planned:
@@ -971,16 +1054,44 @@ def push_checked_results(
     return outcome
 
 
+def _review_before_planning(test_run: TestRun, pivot_ids: list[int]) -> list[int]:
+    """Review these unsent cases inline; returns those still without a
+    current ``done`` review (they are not sent this time).
+
+    Their stored review is checked again after the pass (3 queries per chunk), so a
+    case that changed while it was reviewed is never sent on an old review.
+    No skip reason is recorded: the next send or Retry tries again.
+    """
+    if not pivot_ids:
+        return []
+    refresh_evidence_reviews(
+        test_run=test_run,
+        pivot_ids=pivot_ids,
+        budget_seconds=CHECKED_PUSH_EVIDENCE_REVIEW_BUDGET_SECONDS,
+    )
+    not_reviewed: list[int] = []
+    # In chunks, so the parsed checkpoints of a large run are never all held.
+    for start in range(0, len(pivot_ids), REVIEW_TASK_CHUNK_SIZE):
+        chunk = pivot_ids[start : start + REVIEW_TASK_CHUNK_SIZE]
+        not_reviewed.extend(
+            case.pivot_id
+            for case in load_case_evidence(chunk).values()
+            if not case.stored_review_matches
+        )
+    return sorted(not_reviewed)
+
+
 # ============================================================================
 # MARK RESULT (called by the Celery task)
 # ============================================================================
 
 
 def mark_checked_push_succeeded(test_run: TestRun, outcome: CheckedPushOutcome) -> None:
-    """Stamp the outcome; FAILED when nothing went out because runs were unusable."""
+    """Stamp the outcome; FAILED when nothing went out because runs were
+    unusable or screenshot reviews failed."""
     summary = outcome.summary
     failed = outcome.delivered_nothing and bool(
-        outcome.closed_runs or outcome.missing_runs
+        outcome.closed_runs or outcome.missing_runs or outcome.not_reviewed
     )
     test_run.testrail_source_push_summary = summary
     if failed:

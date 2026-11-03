@@ -243,6 +243,9 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     # Manual run: the AI rewrite of a hand-in's notes for TestRail, queued
     # when its screenshots finish uploading (sent by name).
     "projects.tasks.refine_manual_case_result": {"queue": "upload"},
+    # The AI review of which screenshots a checked case sends to TestRail,
+    # queued when cases are checked (sent by name).
+    "projects.tasks.review_testrail_evidence": {"queue": "upload"},
     # Beat sweep: quick, must run while upload is busy with imports.
     "projects.tasks.sweep_stalled_manual_uploads": {"queue": "notify"},
     # An LLM call of tens of seconds on its own small queue: not "notify"
@@ -816,15 +819,30 @@ NTFY_REQUEST_TIMEOUT: int = config("NTFY_REQUEST_TIMEOUT", default=10, cast=int)
 # means notifications carry no click link.
 SITE_URL: str = config("SITE_URL", default="", cast=str)
 
-# "Send checked to TestRail" attaches only the screenshots of the attempts that
-# caused a Failed or Blocked result (projects/testrail_evidence.py): at most
-# this many per failing step, and at most TESTRAIL_EVIDENCE_MAX_SHOTS per case.
+# "Send checked to TestRail" attaches only relevant screenshots of the attempts
+# that caused a Failed or Blocked result (projects/testrail_evidence.py): at
+# most this many per failing step, and at most TESTRAIL_EVIDENCE_MAX_SHOTS per case.
 TESTRAIL_EVIDENCE_SHOTS_PER_STEP: int = config(
     "TESTRAIL_EVIDENCE_SHOTS_PER_STEP", default=3, cast=int
 )
 TESTRAIL_EVIDENCE_MAX_SHOTS: int = config(
     "TESTRAIL_EVIDENCE_MAX_SHOTS", default=10, cast=int
 )
+# An AI review decides which candidate screenshots are attached
+# (projects/testrail_evidence_review_services.py): at most this many candidates
+# per agent case, and seconds per AI call.
+TESTRAIL_EVIDENCE_REVIEW_MAX_IMAGES: int = config(
+    "TESTRAIL_EVIDENCE_REVIEW_MAX_IMAGES", default=8, cast=int
+)
+if TESTRAIL_EVIDENCE_REVIEW_MAX_IMAGES < 1:
+    raise ImproperlyConfigured("TESTRAIL_EVIDENCE_REVIEW_MAX_IMAGES must be 1 or more")
+TESTRAIL_EVIDENCE_REVIEW_TIMEOUT_SECONDS: int = config(
+    "TESTRAIL_EVIDENCE_REVIEW_TIMEOUT_SECONDS", default=90, cast=int
+)
+if TESTRAIL_EVIDENCE_REVIEW_TIMEOUT_SECONDS < 1:
+    raise ImproperlyConfigured(
+        "TESTRAIL_EVIDENCE_REVIEW_TIMEOUT_SECONDS must be 1 or more"
+    )
 
 # Orchestrator (sub-agent architecture)
 ORCHESTRATOR_MAX_SUBTASKS: int = config(

@@ -5047,6 +5047,24 @@ ol.person-step-howto + .person-step-howto-source {
   border-color: rgba(242, 184, 75, 0.35);
 }
 
+/* The AI is reviewing which screenshots of a checked case go to TestRail. */
+.badge-reviewing {
+  color: var(--info);
+  background: var(--info-soft);
+  border-color: rgba(77, 163, 255, 0.35);
+}
+
+.badge-reviewing::before {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* The screenshot review failed; the case is not sent until it succeeds. */
+.badge-review-failed {
+  color: var(--warning);
+  background: var(--warning-soft);
+  border-color: rgba(242, 184, 75, 0.35);
+}
+
 .manual-subhead {
   margin: 18px 0 6px;
   font-size: 0.95rem;
