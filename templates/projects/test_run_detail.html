@@ -103,6 +103,11 @@
      test_run also carries testrail_run_id, testrail_push_status,
      testrail_pushed_at, testrail_push_error, testrail_push_summary.
 
+     Case analysis (non-draft runs only; absent for a Draft): triage_card
+     (run_triage.types.TriageCard, run_triage/includes/_triage_card.html) and
+     triage_badges (dict[pivot id, TriageBadge] for the analysed cases on this
+     page; run_triage/includes/_triage_badge.html in the Result cell).
+
    Access: project_can_write (context processor) gates every write control —
      header actions, the Start form, the bulk bar and selection column, the
      help banner's forms and every dialog. A read-only member keeps the read
@@ -436,6 +441,11 @@
     </div>
   </template>
 
+  {# Section: Case analysis — AI categories and severities (non-draft runs) #}
+  {% if triage_card %}
+  {% include "run_triage/includes/_triage_card.html" with project=project test_run=test_run card=triage_card can_write=project_can_write next=request.get_full_path csrf_token=csrf_token only %}
+  {% endif %}
+
   {% comment %} Section: Case-level results, failures first. runCaseChecks scope (a
      bulkSelect over the page's checkable + uncheckable + re-runnable +
      sendable + re-testable pivots); the Check, Uncheck, Re-run, Send to
@@ -567,6 +577,7 @@
                 :class="pivotBadgeClass(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
                 x-text="pivotBadgeLabel(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
               >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% elif pivot.status == "awaiting_person" %}Your turn{% elif pivot.status == "needs_retest" %}Needs re-test{% endif %}</span>
+              {% if triage_badges %}{% with badge=triage_badges|get_item:pivot.id %}{% if badge %}<div>{% include "run_triage/includes/_triage_badge.html" with badge=badge only %}</div>{% endif %}{% endwith %}{% endif %}
             </td>
             <td data-label="Checked">
               {% if pivot.testrail_source_result_id %}

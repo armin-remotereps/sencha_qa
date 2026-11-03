@@ -15,6 +15,10 @@ role refuses it while a tester performs a claimed, unpaused manual case
 (``MANUAL_TESTER_ON_MACHINE``), since a Started Manual run no longer refuses
 the send itself.
 
+A case analysis (``ThreadRole.RUN_TRIAGE``) has no machine: it gets the
+project data, knowledge base, case evidence and triage tools, never
+``run_setup_task``, which its dispatcher refuses (``NO_MACHINE_MESSAGE``).
+
 Main chat gates (plan docs/plan/feat-machine-setup-intake.md, Q1 and Q3):
 while the intake is pending, ``run_setup_task`` and ``scan_artifacts`` return
 ``INTAKE_GATE_MESSAGE``; with the machine not ready they return
@@ -58,6 +62,7 @@ from machine_setup.services.case_catalog import (
     list_case_preconditions,
     search_cases,
 )
+from machine_setup.services.case_evidence_tools import CaseEvidenceToolError
 from machine_setup.services.help_chat_tools import (
     HelpToolError,
     build_help_chat_handlers,
@@ -91,6 +96,12 @@ from machine_setup.services.result_chat_tools import (
     build_result_chat_handlers,
     result_chat_tool_definitions,
 )
+from machine_setup.services.triage_chat_tools import (
+    TriageToolError,
+    build_triage_chat_handlers,
+    run_gone_handlers,
+    triage_chat_tool_definitions,
+)
 from machine_setup.subtask_types import (
     APPROVAL_ID_ARGUMENT,
     DONE_WHEN_MAX_CHARS,
@@ -105,6 +116,7 @@ from projects.application_context_services import (
     get_application_context,
     write_application_context,
 )
+from projects.case_result_text import person_label
 from projects.controller_reconnect_services import connected_owner
 from projects.exceptions import (
     ApplicationContextConflictError,
@@ -140,6 +152,12 @@ MACHINE_GATE_MESSAGE = (
     "the user to connect the test machine, then try again. Tools that run on "
     "the server still work."
 )
+NO_MACHINE_MESSAGE = (
+    "This thread analyses results; it cannot use the machine. Use the Machine "
+    "setup chat."
+)
+# Names a corrected triage row when the turn has no requester.
+_UNKNOWN_REQUESTER_LABEL = "a person"
 # Main chat tools that need the intake done and the machine ready.
 _MACHINE_GATED_TOOLS = frozenset({RUN_SETUP_TASK_TOOL, SCAN_ARTIFACTS_TOOL})
 
@@ -154,8 +172,16 @@ def main_tool_definitions(role: ThreadRole) -> tuple[ToolDefinition, ...]:
     The main chat also gets the document and test run tools; an auto-fix turn
     gets ``report_case_fix``; a person's turn in a help thread gets the
     help-chat tools, one in a result chat the result-chat tools, and one in
-    a manual case discussion ``get_manual_case`` (no proposal tools).
+    a manual case discussion ``get_manual_case`` (no proposal tools). A case
+    analysis gets the triage and case evidence tools and no
+    ``run_setup_task``.
     """
+    if role == ThreadRole.RUN_TRIAGE:
+        return (
+            _project_data_tool_definitions()
+            + knowledge_tool_definitions()
+            + triage_chat_tool_definitions()
+        )
     main_chat = role == ThreadRole.MAIN
     tools = _project_data_tool_definitions() + (
         _run_setup_task_definition(main_chat=main_chat),
@@ -468,6 +494,7 @@ def build_setup_dispatcher(
     intake_pending: bool,
     should_stop: Callable[[], bool],
     manual_case_id: int | None = None,
+    triage_run_id: int | None = None,
 ) -> ToolDispatcher:
     """The main agent's per-turn dispatcher.
 
@@ -481,7 +508,9 @@ def build_setup_dispatcher(
     ``result_case_id`` and post their cards through the two callbacks; in a
     manual case discussion ``get_manual_case`` reads ``manual_case_id``, and
     ``run_setup_task`` runs only while that case is paused and the machine
-    is ready (checked at call time).
+    is ready (checked at call time). In a case analysis the triage tools act
+    on ``triage_run_id`` (writes gated on ``turn_id`` still running, rows
+    corrected in the name of ``author``) and ``run_setup_task`` is refused.
 
     Main chat only: ``intake_pending`` (read once by the turn runner) gates
     ``run_setup_task`` and ``scan_artifacts`` until the profile is saved in
@@ -493,6 +522,9 @@ def build_setup_dispatcher(
     main_chat = role == ThreadRole.MAIN
     # Cached for the turn: one exists() per turn, released by a save here.
     intake_gate = {"pending": main_chat and intake_pending}
+    # The turn's deadline from the last call's context (the tool loop sets
+    # it), for the case analysis's long tools.
+    turn_deadline: dict[str, float | None] = {"value": None}
 
     def _profile_saved(revision: int, change_summary: str) -> None:
         intake_gate["pending"] = False
@@ -660,6 +692,19 @@ def build_setup_dispatcher(
         project_data_handlers.update(
             build_manual_chat_handlers(pivot_id=manual_case_id)
         )
+    elif role == ThreadRole.RUN_TRIAGE:
+        if triage_run_id is not None and turn_id is not None:
+            project_data_handlers.update(
+                build_triage_chat_handlers(
+                    test_run_id=triage_run_id,
+                    turn_id=turn_id,
+                    requester_label=person_label(author) or _UNKNOWN_REQUESTER_LABEL,
+                    should_stop=should_stop,
+                    turn_deadline=lambda: turn_deadline["value"],
+                )
+            )
+        else:
+            project_data_handlers.update(run_gone_handlers())
 
     def _main_chat_gate() -> str | None:
         if intake_gate["pending"]:
@@ -678,11 +723,14 @@ def build_setup_dispatcher(
         return None
 
     def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
+        turn_deadline["value"] = context.deadline
         if main_chat and tool_call.tool_name in _MACHINE_GATED_TOOLS:
             refusal = _main_chat_gate()
             if refusal is not None:
                 return _tool_error(tool_call, refusal)
         if tool_call.tool_name == RUN_SETUP_TASK_TOOL:
+            if role == ThreadRole.RUN_TRIAGE:
+                return _tool_error(tool_call, NO_MACHINE_MESSAGE)
             if role == ThreadRole.MANUAL_CASE:
                 refusal = _manual_case_gate()
                 if refusal is not None:
@@ -700,6 +748,12 @@ def build_setup_dispatcher(
 
         handler = project_data_handlers.get(tool_call.tool_name)
         if handler is None:
+            if role == ThreadRole.RUN_TRIAGE:
+                return _tool_error(
+                    tool_call,
+                    f"{tool_call.tool_name} is not available to you. "
+                    f"{NO_MACHINE_MESSAGE}",
+                )
             # Also covers a model imitating machine tools from a pre-delegation
             # transcript.
             return _tool_error(
@@ -711,6 +765,7 @@ def build_setup_dispatcher(
             content = handler(tool_call.arguments)
         except (
             _InvalidArgumentError,
+            CaseEvidenceToolError,
             HelpToolError,
             KnowledgeToolError,
             MainChatToolError,
@@ -718,6 +773,7 @@ def build_setup_dispatcher(
             PlanStepArgumentError,
             ReadinessToolError,
             ResultToolError,
+            TriageToolError,
         ) as exc:
             return _tool_error(tool_call, str(exc))
         return ToolResult(

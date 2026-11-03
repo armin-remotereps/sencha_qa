@@ -221,6 +221,8 @@ from projects.testrail_results_services import (
     get_testrail_push_panel,
 )
 from projects.testrail_services import get_testrail_picker_state
+from run_triage.services.badges import triage_badges_for
+from run_triage.services.card import get_triage_card
 from visual_engine.services.pool_status import get_visual_engine_status
 
 PROJECTS_DEFAULT_PER_PAGE = 9
@@ -1087,6 +1089,10 @@ def _build_test_run_detail_context(
         context["start_form"] = TestRunStartForm(
             initial={"help_mode": test_run.help_mode}
         )
+    else:
+        # Case analysis: the card, and a badge per analysed case on this page.
+        context["triage_card"] = get_triage_card(test_run)
+        context["triage_badges"] = triage_badges_for([p.id for p in cases])
     return context
 
 
@@ -1182,6 +1188,12 @@ def test_run_case_detail(
     help_form_initial: dict[str, object] = {"use_plan_revision": False}
     if help_panel is not None:
         help_form_initial["continue_mode"] = help_panel.request.continue_mode
+    # Case analysis badge (none for a Draft run: nothing ran yet).
+    triage_badge = (
+        triage_badges_for([pivot.id]).get(pivot.id)
+        if pivot.test_run.status != TestRunStatus.WAITING
+        else None
+    )
     return render(
         request,
         "projects/test_run_case_detail.html",
@@ -1262,6 +1274,7 @@ def test_run_case_detail(
             "manual_result": get_manual_case_panel(
                 pivot=pivot, screenshots=screenshots
             ),
+            "triage_badge": triage_badge,
             "active_tab": "runs",
             "active_nav": "projects",
         },

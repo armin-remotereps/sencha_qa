@@ -18,6 +18,9 @@ class ThreadRole(StrEnum):
     # A person's turn in a claimed Manual run case's discussion: advice, the
     # KB and ``get_manual_case``; machine work only while the case is paused.
     MANUAL_CASE = "manual_case"
+    # A person's turn in a run's case analysis thread: the triage tools, case
+    # evidence and the KB; never the machine.
+    RUN_TRIAGE = "run_triage"
 
 
 def thread_role(
@@ -26,6 +29,7 @@ def thread_role(
     help_request_id: int | None,
     result_case_id: int | None,
     manual_case_id: int | None = None,
+    triage_run_id: int | None = None,
 ) -> ThreadRole:
     if auto_fix_turn:
         return ThreadRole.AUTO_FIX
@@ -35,4 +39,6 @@ def thread_role(
         return ThreadRole.CASE_RESULT
     if manual_case_id is not None:
         return ThreadRole.MANUAL_CASE
+    if triage_run_id is not None:
+        return ThreadRole.RUN_TRIAGE
     return ThreadRole.MAIN

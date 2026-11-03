@@ -1,0 +1,20 @@
+{% comment %} One case line of the case analysis report.
+
+   Context contract (included `only`):
+     case — run_triage.types.ReportCase. link_url is a TestRail test URL
+            (opened in a new tab) or the run case page path. All text is AI or
+            person written: autoescaped. {% endcomment %}
+<li class="triage-case{% if case.stale %} triage-stale{% endif %}">
+  <span class="badge badge-sev-{{ case.severity }}">{{ case.severity_label }}</span>
+  {% if case.link_url|slice:":4" == "http" %}
+  <a href="{{ case.link_url }}" target="_blank" rel="noopener">{{ case.link_label }}</a>
+  {% else %}
+  <a href="{{ case.link_url }}">{{ case.link_label }}</a>
+  {% endif %}
+  {% if case.link_label != case.title %}<span class="muted">{{ case.title }}</span>{% endif %}
+  <span class="muted small">· {{ case.status_label }}</span>
+  {% if case.untested %}<span class="chip">Untested</span>{% endif %}
+  {% if case.stale %}<span class="chip" title="The case changed since it was analysed">out of date</span>{% endif %}
+  {% if case.corrected_by_label %}<span class="chip">corrected in chat by {{ case.corrected_by_label }}</span>{% endif %}
+  {% if case.finding %}<div class="triage-finding">{{ case.finding }}</div>{% endif %}
+</li>

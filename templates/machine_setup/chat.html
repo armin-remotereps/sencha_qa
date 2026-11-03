@@ -13,8 +13,8 @@
     project    — the current Project (agent_connected)
     conversation — the shown thread (SetupConversation) on the thread page,
                  None on the main chat
-    thread_kind — "chat", "auto_fix", "case_help", "case_result" or
-                 "manual_case" (page.kind)
+    thread_kind — "chat", "auto_fix", "case_help", "case_result",
+                 "manual_case" or "run_triage" (page.kind)
     help_case_url — help threads only: the case page it was opened for
                  ("" when the case is gone)
     help_panel, help_form, help_turn_blocker — help threads only, while the
@@ -23,6 +23,15 @@
     help_state — HelpThreadPayload | None: the panel's initial draft and
                  suggestion (json_script help-initial)
     threads    — list[HelpThread] for the thread list (_threads.html)
+    analysis   — AnalysisSection for the Analysis section
+                 (includes/_analysis_threads.html): the case analysis threads
+                 and, for writable members, the runs an analysis can start for
+    triage_thread — case analysis threads only: TriageThreadHeader
+                 (test_run_id, run_name, run_status, run_status_label,
+                 report_url, status_line) for the header, else None (also
+                 when the run was deleted: the thread is then read-only). The
+                 thread has no machine READY send blocker (it never uses the
+                 machine).
     result_thread — result chats only: ResultThreadHeader (test_run_id,
                  pivot_id, case_title, status, status_label, result_excerpt,
                  run_help_mode) for the static header, else None
@@ -76,7 +85,8 @@
     setup-blocker-texts    — blocker_texts
     setup-blockers         — page.send_blockers (list[str])
     setup-visual-engine    — visual_engine (object)
-    setup-thread-ids       — conversation ids of the listed help threads
+    setup-thread-ids       — conversation ids of the listed case and
+                             analysis threads
     help-initial           — help_state (help threads with a panel only)
     setup-document-max-bytes — document_max_bytes
     setup-document-url     — document_url_template
@@ -190,6 +200,18 @@
       {% else %}
       <p class="subtitle">Opened for a test case that no longer exists</p>
       {% endif %}
+      {% elif thread_kind == "run_triage" %}
+      <h1>Case analysis</h1>
+      {% if triage_thread %}
+      <p class="subtitle">
+        <a href="{% url 'projects:test_run_detail' project_id=project.id test_run_id=triage_thread.test_run_id %}">{{ triage_thread.run_name }}</a>
+        {% include "partials/badge_run_status.html" with status=triage_thread.run_status only %}
+        · <a href="{{ triage_thread.report_url }}">Open the report</a>
+      </p>
+      {% if triage_thread.status_line %}<p class="muted small">{{ triage_thread.status_line }}</p>{% endif %}
+      {% else %}
+      <p class="subtitle">Opened for a run that no longer exists: this chat is read-only</p>
+      {% endif %}
       {% elif thread_kind == "auto_fix" or thread_kind == "case_help" %}
       <h1>{% if thread_kind == "case_help" %}Help chat{% else %}Auto-fix thread{% endif %}</h1>
       <p class="subtitle">
@@ -212,7 +234,8 @@
 
   {% include "partials/project_tabs.html" with project=project active_tab=active_tab only %}
 
-  {% include "machine_setup/includes/_threads.html" with project=project threads=threads conversation=conversation only %}
+  {% include "machine_setup/includes/_threads.html" with project=project threads=threads conversation=conversation has_analysis_threads=analysis.threads only %}
+  {% include "machine_setup/includes/_analysis_threads.html" with project=project analysis=analysis conversation=conversation can_write=project_can_write next_url=request.get_full_path csrf_token=csrf_token only %}
 
   {% if thread_kind == "chat" %}
   {# Section: artifacts intake banner and Machine readiness link (main chat) #}
@@ -238,7 +261,7 @@
   {% include "machine_setup/includes/_help_panel.html" %}
   {% endif %}
 
-  <section class="chat" aria-label="{% if thread_kind == 'case_help' %}Help chat{% elif thread_kind == 'case_result' %}Result chat{% elif thread_kind == 'manual_case' %}Manual case discussion{% elif thread_kind == 'auto_fix' %}Auto-fix thread{% else %}Machine setup conversation{% endif %}">
+  <section class="chat" aria-label="{% if thread_kind == 'case_help' %}Help chat{% elif thread_kind == 'case_result' %}Result chat{% elif thread_kind == 'manual_case' %}Manual case discussion{% elif thread_kind == 'run_triage' %}Case analysis{% elif thread_kind == 'auto_fix' %}Auto-fix thread{% else %}Machine setup conversation{% endif %}">
     <p class="chat-connection muted small" x-show="!socketOpen" x-cloak>Live updates paused — reconnecting…</p>
     {% include "machine_setup/includes/_transcript.html" %}
     {% if project_can_write %}
@@ -1269,8 +1292,8 @@ document.addEventListener('alpine:init', () => {
     get blockers() {
       const blockers = this.serverBlockers.filter((b) => b !== MACHINE_NOT_READY && b !== TURN_ACTIVE && b !== FINISHING && b !== OTHER_THREAD);
       // The main chat and a manual case discussion may run offline (their
-      // machine tools say so).
-      if (THREAD_KIND !== 'chat' && THREAD_KIND !== 'manual_case' && this.machineState !== 'ready') blockers.unshift(MACHINE_NOT_READY);
+      // machine tools say so); a case analysis never uses the machine.
+      if (THREAD_KIND !== 'chat' && THREAD_KIND !== 'manual_case' && THREAD_KIND !== 'run_triage' && this.machineState !== 'ready') blockers.unshift(MACHINE_NOT_READY);
       if (this.turnLive) blockers.unshift(TURN_ACTIVE);
       else if (this.finishingPreviousTurn) blockers.unshift(FINISHING);
       else if (this.otherThreadTurnLive) blockers.unshift(OTHER_THREAD);

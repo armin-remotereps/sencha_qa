@@ -40,6 +40,7 @@ from machine_setup.document_text import AttachedDocumentNote, user_turn_content
 from machine_setup.events import broadcast_message, broadcast_turn
 from machine_setup.models import (
     SetupConversation,
+    SetupConversationKind,
     SetupDocument,
     SetupMessage,
     SetupMessageKind,
@@ -75,6 +76,7 @@ from machine_setup.turn_outcome import (
 )
 from projects.controller_outage_clock import reset_outage_clock
 from projects.services import build_agent_project_context
+from run_triage.services.agent_texts import describe_triage_status
 
 logger = logging.getLogger(__name__)
 
@@ -175,12 +177,18 @@ class _TurnRunner:
         help_request_id = turn.conversation.help_request_id
         result_case_id = turn.conversation.result_case_id
         manual_case_id = turn.conversation.manual_case_id
+        triage_run_id = turn.conversation.triage_run_id
         role = thread_role(
             auto_fix_turn=turn.auto_fix,
             help_request_id=help_request_id,
             result_case_id=result_case_id,
             manual_case_id=manual_case_id,
+            triage_run_id=triage_run_id,
         )
+        if turn.conversation.kind == SetupConversationKind.RUN_TRIAGE:
+            # A deleted run leaves triage_run null: still no machine, never
+            # the main chat's tools.
+            role = ThreadRole.RUN_TRIAGE
         content = build_user_turn_content(
             project_id=self.project_id,
             message_id=user_row["id"],
@@ -217,7 +225,7 @@ class _TurnRunner:
             max_iterations=settings.MACHINE_SETUP_MAX_ITERATIONS,
             role=role,
             help_status=_role_status(
-                role, help_request_id, result_case_id, manual_case_id
+                role, help_request_id, result_case_id, manual_case_id, triage_run_id
             ),
             knowledge_index=knowledge_index_text(self.project_id),
             intake_pending=pending,
@@ -270,6 +278,7 @@ class _TurnRunner:
             intake_pending=pending,
             should_stop=self._should_stop,
             manual_case_id=manual_case_id,
+            triage_run_id=triage_run_id,
         )
         result = run_tool_loop(
             [ChatMessage(role="system", content=system_prompt), *history],
@@ -554,15 +563,20 @@ def _role_status(
     help_request_id: int | None,
     result_case_id: int | None,
     manual_case_id: int | None,
+    triage_run_id: int | None,
 ) -> str:
-    """The one-line status the help, result or manual case chat prompt shows;
-    one query."""
+    """The one-line status the help, result, manual case or case analysis
+    chat prompt shows; one or two queries."""
     if role == ThreadRole.CASE_HELP and help_request_id is not None:
         return describe_help_status(help_request_id)
     if role == ThreadRole.CASE_RESULT and result_case_id is not None:
         return describe_result_status(result_case_id)
     if role == ThreadRole.MANUAL_CASE and manual_case_id is not None:
         return describe_manual_status(manual_case_id)
+    if role == ThreadRole.RUN_TRIAGE:
+        if triage_run_id is None:
+            return "The run of this analysis was deleted."
+        return describe_triage_status(triage_run_id)
     return ""
 
 
