@@ -31,6 +31,7 @@ from controller_client.protocol import (
     MANUAL_RUN_STATE_BYTES_PER_CHAR,
     MANUAL_RUN_STATE_MAX_CASES,
     MANUAL_RUN_STATE_SAFE_BYTES,
+    MANUAL_STEP_MAX_SHOTS,
     MANUAL_STEP_TEXT_MAX_CHARS,
     MANUAL_TESTRAIL_ID_MAX_CHARS,
     PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS,
@@ -267,6 +268,7 @@ def _active_case(
         shell_label=(
             guide.shell_label[:PERSON_STEP_LABEL_MAX_CHARS] if guide is not None else ""
         ),
+        step_max_shots=MANUAL_STEP_MAX_SHOTS,
     )
     if not pause_discuss:
         return active

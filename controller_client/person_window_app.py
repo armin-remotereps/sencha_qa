@@ -33,6 +33,16 @@ notebook:
   While it shows, closing the window minimizes it instead of hiding it (the
   tester works only here, so it must stay reachable).
 
+Manual run shortcuts (Test Runner 0.17.0): ``ManualHotkeys`` registers the
+Pass / Fail combinations system-wide while a case is claimed and not paused
+(``ManualView.shortcuts_wanted``, checked from ``poll``) unless the runner
+passes ``--no-manual-shortcuts``; ``poll`` drains its events into the tab.
+Opening the mark sheet is the one time the window takes the focus, always
+after the tester's own key press or click; after Save or Cancel the app that
+was in front when a system-wide shortcut fired gets it back, unless it was
+this window (Windows ``SetForegroundWindow``, macOS
+``FrontAppKeeper.restore_now``; Linux leaves it to the tester).
+
 Without ``cases`` (an older server) only the Step tab shows, as before. The
 header case is the Discussion's case while that tab is selected, else the
 selected step's case, else the help case, else the running case (which only
@@ -69,10 +79,15 @@ Showing never activates the window where the platform allows it:
 ``--probe`` checks that tkinter imports and a Tk display opens, prints one
 line and exits (0 when usable). ``--self-check`` renders the commands read
 from stdin in a window that is never shown, visits every tab and both text
-sizes, and exits 0 when nothing raised (``diagnose --window``).
+sizes, opens the mark sheet on the claimed sample case, and exits 0 when
+nothing raised (``diagnose --window``). ``--probe-shortcuts`` registers the
+Manual run shortcuts, prints ``<state><TAB><detail>`` and releases them;
+with ``--interactive`` it also waits for the Pass combination (and a Linux
+desktop may ask for permission).
 """
 
 import argparse
+import contextlib
 import ctypes
 import io
 import logging
@@ -88,6 +103,9 @@ from types import TracebackType
 from typing import BinaryIO, Final
 
 from controller_client.exceptions import ProtocolError
+from controller_client.manual_hotkeys import ManualHotkeys, probe_shortcuts
+from controller_client.manual_hotkeys_base import HotkeyState, HotkeyStatus
+from controller_client.manual_hotkeys_x11 import prepare_x11_threads
 from controller_client.person_window_chat import ChatBlock, ChatPanel
 from controller_client.person_window_front_app import FrontAppKeeper
 from controller_client.person_window_how_to import render_how_to
@@ -161,6 +179,14 @@ try:
     from tkinter import ttk
 except ImportError as _e:  # tkinter is an optional part of some Pythons
     _TK_IMPORT_ERROR = _e
+
+if sys.platform == "darwin":
+    try:
+        import AppKit
+    except ImportError:  # pyobjc comes with PyAutoGUI; guard anyway
+        _HAVE_APPKIT = False
+    else:
+        _HAVE_APPKIT = True
 
 logger = logging.getLogger("controller_client.person_window_app")
 
@@ -579,8 +605,8 @@ class _ScrollPage:
     the content does not fit.
     """
 
-    def __init__(self, notebook: "ttk.Notebook") -> None:
-        outer = ttk.Frame(notebook)
+    def __init__(self, parent: "tk.Misc") -> None:
+        outer = ttk.Frame(parent)
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(0, weight=1)
         background = ttk.Style(outer).lookup("TFrame", "background")
@@ -636,6 +662,7 @@ class PersonWindowApp:
         root: "tk.Tk",
         inbox: "queue.Queue[WindowCommand | None]",
         writer: _EventWriter,
+        hotkeys: ManualHotkeys,
         *,
         text_size: int = TEXT_SIZE_DEFAULT,
     ) -> None:
@@ -644,6 +671,15 @@ class PersonWindowApp:
         self._writer = writer
         self._view = _ViewState()
         self._front_app = FrontAppKeeper()
+        self._hotkeys = hotkeys
+        self._hotkeys_wanted = False
+        self._hotkey_status: HotkeyStatus | None = None
+        # Withdrawn at start; only the runner's Show / Hide change it.
+        self._runner_hidden = True
+        # A shortcut opened the mark sheet: give the front back after it.
+        self._restore_focus = False
+        # Windows: the window in front when the shortcut fired.
+        self._previous_hwnd = 0
         self._picker_var = tk.StringVar(master=root)
         self._mode_var = tk.StringVar(master=root)
         self._use_plan_var = tk.BooleanVar(master=root, value=False)
@@ -736,6 +772,67 @@ class PersonWindowApp:
 
     def manual_open_url(self, url: str) -> None:
         self._open_url(url)
+
+    def manual_scroll_area(self, parent: "tk.Misc") -> tuple["ttk.Frame", "ttk.Frame"]:
+        page = _ScrollPage(parent)
+        # The wheel scrolls it like a tab's page.
+        self._pages.append(page)
+        return page.outer, page.frame
+
+    def manual_hidden(self) -> bool:
+        return self._runner_hidden
+
+    def manual_note_foreground(self, from_shortcut: bool) -> None:
+        # A system-wide press while this window is already in front is like
+        # a click: the focus stays here after Save (giving it "back" would
+        # switch to whatever app was recorded at the last show).
+        restore = from_shortcut and not self._window_in_front()
+        self._restore_focus = restore
+        self._previous_hwnd = 0
+        if sys.platform == "win32":
+            if restore:
+                self._previous_hwnd = int(ctypes.windll.user32.GetForegroundWindow())
+
+    def _window_in_front(self) -> bool:
+        """This window (macOS: this process's app) is in front right now."""
+        if sys.platform == "win32":
+            try:
+                frame = int(self._root.wm_frame(), 16)
+            except (ValueError, tk.TclError):
+                return False
+            return int(ctypes.windll.user32.GetForegroundWindow()) == frame
+        if sys.platform == "darwin":
+            if not _HAVE_APPKIT:
+                return False
+            front = AppKit.NSWorkspace.sharedWorkspace().frontmostApplication()
+            return front is not None and front.processIdentifier() == os.getpid()
+        try:
+            return self._root.focus_get() is not None
+        except KeyError:
+            # Focus in a widget tkinter has no name for (a combobox's list):
+            # still this window's.
+            return True
+
+    def manual_focus_sheet(self) -> None:
+        # The one exception to "never takes the focus": the tester's own key
+        # press or click opened the sheet.
+        if sys.platform == "win32":
+            hwnd = int(self._root.wm_frame(), 16)
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
+        elif sys.platform != "darwin":
+            # macOS: showing after the screenshot already activated the app.
+            self._root.focus_force()
+
+    def manual_focus_back(self) -> None:
+        if not self._restore_focus:
+            return
+        self._restore_focus = False
+        if sys.platform == "win32":
+            if self._previous_hwnd:
+                ctypes.windll.user32.SetForegroundWindow(self._previous_hwnd)
+            self._previous_hwnd = 0
+        else:
+            self._front_app.restore_now()
 
     def _label(
         self, parent: "tk.Misc", text: str = "", foreground: str = ""
@@ -1306,7 +1403,22 @@ class PersonWindowApp:
         if self._writer.broken:
             self._root.destroy()
             return
+        for kind in self._hotkeys.drain():
+            self._manual.on_shortcut(kind, system_wide=True)
+        self.sync_hotkeys()
         self._root.after(_POLL_MS, self.poll)
+
+    def sync_hotkeys(self) -> None:
+        """Register the shortcuts while the Manual run tab wants them, and
+        show the backend's status in the tab when it changes."""
+        wanted = self._manual.shortcuts_wanted()
+        if wanted != self._hotkeys_wanted:
+            self._hotkeys_wanted = wanted
+            self._hotkeys.set_wanted(wanted)
+        status = self._hotkeys.status
+        if status != self._hotkey_status:
+            self._hotkey_status = status
+            self._manual.set_shortcut_status(status)
 
     def apply(self, command: WindowCommand) -> None:
         match command:
@@ -1438,6 +1550,7 @@ class PersonWindowApp:
             root.deiconify()
             if fresh:
                 root.lift()
+        self._runner_hidden = False
         # Once per new step round or help request.
         view.raised |= fresh
 
@@ -1456,6 +1569,7 @@ class PersonWindowApp:
         except tk.TclError:
             pass
         self._root.withdraw()
+        self._runner_hidden = True
         # Unmap now, not at the next idle, so the hidden ack is truthful.
         self._root.update_idletasks()
         if not self._front_app.start_restore():
@@ -2580,7 +2694,14 @@ def _self_check(text_size: int) -> int:
 
     root.report_callback_exception = record
     inbox: "queue.Queue[WindowCommand | None]" = queue.Queue()
-    app = PersonWindowApp(root, inbox, _EventWriter(io.BytesIO()), text_size=text_size)
+    # Nothing is registered system-wide while checking.
+    app = PersonWindowApp(
+        root,
+        inbox,
+        _EventWriter(io.BytesIO()),
+        ManualHotkeys(enabled=False),
+        text_size=text_size,
+    )
     tabs: set[str] = set()
     try:
         for line in sys.stdin.buffer.read().splitlines():
@@ -2597,6 +2718,8 @@ def _self_check(text_size: int) -> int:
         app._change_text_size(-1)
         root.update()
         app._refit()
+        if app._manual.preview_sheet():
+            tabs.add("mark sheet")
     except Exception:  # every failure is the check's result
         errors.append(traceback.format_exc())
     root.destroy()
@@ -2608,13 +2731,17 @@ def _self_check(text_size: int) -> int:
     return EXIT_OK
 
 
-def _run(text_size: int) -> int:
+def _run(text_size: int, *, manual_shortcuts: bool) -> int:
     if _TK_IMPORT_ERROR is not None:
         logger.error("tkinter is not installed in this Python: %s", _TK_IMPORT_ERROR)
         return EXIT_NO_TKINTER
     # Events own the real stdout; anything else printed goes to stderr.
     writer = _EventWriter(sys.stdout.buffer)
     sys.stdout = sys.stderr
+    if manual_shortcuts and sys.platform.startswith("linux"):
+        # The X11 shortcut thread shares libX11 with Tk: XInitThreads must
+        # come before Tk opens its display (libX11 older than 1.8).
+        prepare_x11_threads()
     try:
         root = _open_tk()
     except tk.TclError as e:
@@ -2628,10 +2755,63 @@ def _run(text_size: int) -> int:
         daemon=True,
     )
     reader.start()
-    app = PersonWindowApp(root, inbox, writer, text_size=text_size)
-    writer.send(ReadyEvent())
-    root.after(_POLL_MS, app.poll)
-    root.mainloop()
+    # On the Tk thread, after the root exists (the macOS backend registers on
+    # this thread; the Linux portal names the root as its parent window).
+    hotkeys = ManualHotkeys(
+        enabled=manual_shortcuts, x11_window_id=_x11_window_id(root)
+    )
+    try:
+        app = PersonWindowApp(root, inbox, writer, hotkeys, text_size=text_size)
+        app.sync_hotkeys()
+        writer.send(ReadyEvent())
+        root.after(_POLL_MS, app.poll)
+        root.mainloop()
+    finally:
+        hotkeys.close()
+    return EXIT_OK
+
+
+def _x11_window_id(root: "tk.Tk") -> int:
+    """The root's X11 frame id on Linux (Tk is an X client there), else 0."""
+    if not sys.platform.startswith("linux"):
+        return 0
+    try:
+        return int(root.wm_frame(), 16)
+    except (ValueError, tk.TclError):
+        return 0
+
+
+def _shortcut_detail(status: HotkeyStatus) -> str:
+    if status.state is HotkeyState.ACTIVE:
+        keys = " · ".join(
+            f"{kind.value} {trigger}" for kind, trigger in status.triggers.items()
+        )
+        return f"{keys}; {status.reason}" if status.reason else keys
+    return status.reason or status.state.value
+
+
+def _probe_shortcuts(*, interactive: bool) -> int:
+    """Register the Manual run shortcuts, print the result and release them."""
+    if _TK_IMPORT_ERROR is not None:
+        print(f"tkinter is not installed in this Python: {_TK_IMPORT_ERROR}")
+        return EXIT_NO_TKINTER
+    if sys.platform.startswith("linux"):
+        # As in _run: before Tk opens its display.
+        prepare_x11_threads()
+    try:
+        root = _open_tk()
+    except tk.TclError as e:
+        print(f"Tk cannot open a window (no display?): {e}")
+        return EXIT_NO_DISPLAY
+    try:
+        # The press prompt goes to stderr: stdout carries only the result.
+        with contextlib.redirect_stdout(sys.stderr):
+            status = probe_shortcuts(
+                root, interactive=interactive, x11_window_id=_x11_window_id(root)
+            )
+    finally:
+        root.destroy()
+    print(f"{status.state.value}\t{_shortcut_detail(status)}")
     return EXIT_OK
 
 
@@ -2649,12 +2829,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         "window, print the tabs shown and exit (0 when nothing failed)",
     )
     parser.add_argument(
+        "--probe-shortcuts",
+        action="store_true",
+        help="register the Manual run Pass / Fail shortcuts, print "
+        "'<state><TAB><detail>' and release them",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="with --probe-shortcuts, also wait for the Pass shortcut (a Linux "
+        "desktop may show its permission dialog)",
+    )
+    parser.add_argument(
+        "--no-manual-shortcuts",
+        action="store_true",
+        help="do not register the Manual run shortcuts "
+        "(CONTROLLER_MANUAL_SHORTCUTS=false)",
+    )
+    parser.add_argument(
         "--text-size",
         type=int,
         default=TEXT_SIZE_DEFAULT,
         help=f"base text size in points ({TEXT_SIZE_MIN}-{TEXT_SIZE_MAX})",
     )
     args = parser.parse_args(argv)
+    if args.interactive and not args.probe_shortcuts:
+        parser.error("--interactive can only be used with --probe-shortcuts")
     logging.basicConfig(
         level=logging.WARNING,
         stream=sys.stderr,
@@ -2665,7 +2865,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _probe()
     if args.self_check:
         return _self_check(text_size)
-    return _run(text_size)
+    if args.probe_shortcuts:
+        return _probe_shortcuts(interactive=args.interactive)
+    return _run(text_size, manual_shortcuts=not args.no_manual_shortcuts)
 
 
 if __name__ == "__main__":

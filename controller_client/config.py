@@ -93,6 +93,9 @@ class ClientConfig:
     person_email_from_cli: bool = False
     # CONTROLLER_PERSON_WINDOW_TEXT_SIZE, clamped to the window's range.
     person_window_text_size: int = TEXT_SIZE_DEFAULT
+    # CONTROLLER_MANUAL_SHORTCUTS: the Manual run Pass/Fail key combinations;
+    # False starts the window with --no-manual-shortcuts.
+    manual_shortcuts: bool = True
     # CONTROLLER_MANUAL_SPOOL_MAX_MB, at least MIN_SPOOL_MAX_MB.
     manual_spool_max_mb: int = DEFAULT_SPOOL_MAX_MB
     # The CLI overrides this process got, re-passed to the runner a self-update
@@ -278,6 +281,7 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
         person_window_text_size=clamp_text_size(
             _env_int(PERSON_WINDOW_TEXT_SIZE_ENV_NAME, TEXT_SIZE_DEFAULT)
         ),
+        manual_shortcuts=_env_bool("CONTROLLER_MANUAL_SHORTCUTS", True),
         manual_spool_max_mb=max(
             MIN_SPOOL_MAX_MB,
             _env_int(MANUAL_SPOOL_MAX_MB_ENV_NAME, DEFAULT_SPOOL_MAX_MB),

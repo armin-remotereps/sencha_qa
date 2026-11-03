@@ -72,6 +72,8 @@ from controller_client.person_window_ipc import (
     ManualCaseActionEvent,
     ManualChatSendEvent,
     ManualDraftEvent,
+    ManualMarkCommitEvent,
+    ManualMarkDiscardEvent,
     ManualResultCommand,
     ManualResultKind,
     ManualStateCommand,
@@ -166,9 +168,14 @@ ManualWindowRequest = (
     ManualCaseActionEvent
     | ManualCaptureEvent
     | ManualDraftEvent
+    | ManualMarkCommitEvent
+    | ManualMarkDiscardEvent
     | ManualSubmitEvent
     | ManualThumbnailRequestEvent
     | ManualChatSendEvent
+    # A (re)started window process: any open mark sheet is gone, so its
+    # staged screenshots are dropped.
+    | ReadyEvent
 )
 _MANUAL_QUESTION_STALE: Final[str] = (
     "This case is no longer yours to work on; nothing was asked."
@@ -288,9 +295,13 @@ class PersonWindow:
     loop); process start-up happens in a background task.
     """
 
-    def __init__(self, *, text_size: int = TEXT_SIZE_DEFAULT) -> None:
+    def __init__(
+        self, *, text_size: int = TEXT_SIZE_DEFAULT, manual_shortcuts: bool = True
+    ) -> None:
         # Passed to the window process at spawn (CONTROLLER_PERSON_WINDOW_TEXT_SIZE).
         self._text_size = clamp_text_size(text_size)
+        # False passes --no-manual-shortcuts at spawn (CONTROLLER_MANUAL_SHORTCUTS).
+        self._manual_shortcuts = manual_shortcuts
         self._steps: tuple[PersonStepStatePayload, ...] = ()
         self._cases: tuple[PersonCaseStatePayload, ...] = ()
         # Per open help request: the newest agent reply seen while no turn
@@ -713,8 +724,7 @@ class PersonWindow:
                     return
                 try:
                     process = await _spawn_app(
-                        "--text-size",
-                        str(self._text_size),
+                        *self._spawn_args(),
                         stdin=asyncio.subprocess.PIPE,
                         stderr=None,
                         limit=IPC_TO_RUNNER_MAX_BYTES + 1,
@@ -741,6 +751,12 @@ class PersonWindow:
         finally:
             self._supervisor = None
 
+    def _spawn_args(self) -> tuple[str, ...]:
+        args: tuple[str, ...] = ("--text-size", str(self._text_size))
+        if not self._manual_shortcuts:
+            args += ("--no-manual-shortcuts",)
+        return args
+
     async def _serve(self, process: asyncio.subprocess.Process) -> None:
         stdout = process.stdout
         if stdout is None:
@@ -762,6 +778,7 @@ class PersonWindow:
             logger.error("The person-step window did not start")
             return
         self._ready = True
+        self._manual_requests.put_nowait(ready)
         self._send(ConnectionCommand(connected=self._connected))
         self._send(self._state_command())
         if self._manual is not None:
@@ -821,6 +838,8 @@ class PersonWindow:
                     ManualCaseActionEvent()
                     | ManualCaptureEvent()
                     | ManualDraftEvent()
+                    | ManualMarkCommitEvent()
+                    | ManualMarkDiscardEvent()
                     | ManualSubmitEvent()
                     | ManualThumbnailRequestEvent()
                     | ManualChatSendEvent()

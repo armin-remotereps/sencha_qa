@@ -5,6 +5,9 @@ Keeps the server's latest ``manual_run_state`` and the claimed case's draft
 
 - a capture (Pass, Fail, Retake, case screenshot) through ``manual_capture``,
   stored in the draft with a runner-minted key;
+- a mark sheet (Test Runner 0.17.0): its captures are staged in the draft,
+  and Save makes them the step's mark (up to the snapshot's
+  ``step_max_shots``) while Cancel deletes them;
 - the person's notes, verdict and step times, kept in the draft so a window
   or runner restart loses nothing;
 - a hand-in: the ``manual_case_submit`` payload is built from the draft's
@@ -55,11 +58,14 @@ from controller_client.person_window_ipc import (
     ManualDraftEvent,
     ManualDraftTexts,
     ManualDraftView,
+    ManualMarkCommitEvent,
+    ManualMarkDiscardEvent,
     ManualMarkView,
     ManualResultKind,
     ManualSubmitEvent,
     ManualThumbnailRequestEvent,
     ManualWindowState,
+    ReadyEvent,
     manual_pause_discuss_supported,
 )
 from controller_client.protocol import (
@@ -95,6 +101,8 @@ _NO_VERDICT = "Choose Passed, Failed or Blocked for the case."
 _HANDED_IN = "Handed in. The screenshots upload in the background."
 _PAUSED_CAPTURE = "The case is paused: press Continue testing first."
 _PAUSED_SUBMIT = "The case is paused: press Continue testing before you hand it in."
+_PAUSED_MARK = "The case is paused: press Continue testing before you save the step."
+_SHEET_FULL = "This step already has as many screenshots as it can keep."
 # A progress report goes out this long after the last mark or note change.
 PROGRESS_DELAY_SECONDS: Final[float] = 2.0
 # Sends one message on the runner's socket; raises when it is not connected.
@@ -111,6 +119,20 @@ def _outcome_of(kind: ManualShotKind) -> ManualStepOutcome:
     )
 
 
+def _kind_of(outcome: ManualStepOutcome) -> ManualShotKind:
+    return (
+        ManualShotKind.FAIL
+        if outcome is ManualStepOutcome.FAIL
+        else ManualShotKind.PASS
+    )
+
+
+def _shot_count_message(max_shots: int) -> str:
+    if max_shots == 1:
+        return "Keep exactly one screenshot for this step."
+    return f"Keep 1 to {max_shots} screenshots for this step."
+
+
 def build_submit_payload(
     active: ManualActiveCasePayload, draft: ManualDraft, texts: ManualDraftTexts
 ) -> ManualCaseSubmitPayload:
@@ -125,17 +147,24 @@ def build_submit_payload(
         raise ProtocolError(_NO_VERDICT)
     step_nums = {step.num for step in active.steps}
     marks = [(num, draft.marks[num]) for num in sorted(draft.marks) if num in step_nums]
+    for num, mark in marks:
+        # Never more than the server takes (one from an older server).
+        if len(mark) > active.step_max_shots:
+            raise ProtocolError(
+                f"Step {num}: {_shot_count_message(active.step_max_shots)}"
+            )
     steps = tuple(
         ManualStepResultPayload(
             num=num,
-            outcome=_outcome_of(shot.kind),
+            outcome=_outcome_of(mark[0].kind),
             note=texts.notes.get(num, "").strip(),
-            shots=(shot.key,),
+            shots=tuple(shot.key for shot in mark),
             seconds=min(max(texts.seconds.get(num, 0), 0), MANUAL_STEP_MAX_SECONDS),
         )
-        for num, shot in marks
+        for num, mark in marks
     )
-    shots = [shot for _num, shot in marks]
+    # Each announced with its step and the step's kind, in the mark's order.
+    shots = [replace(shot, kind=mark[0].kind) for _num, mark in marks for shot in mark]
     if draft.case_shot is not None:
         shots.append(draft.case_shot)
     payload = ManualCaseSubmitPayload(
@@ -177,10 +206,10 @@ def build_progress_payload(
     steps = tuple(
         ManualProgressStepPayload(
             num=num,
-            outcome=_outcome_of(shot.kind),
+            outcome=_outcome_of(mark[0].kind),
             note=notes.get(num, "").strip()[:MANUAL_STEP_NOTE_MAX_CHARS],
         )
-        for num, shot in sorted(marks.items())
+        for num, mark in sorted(marks.items())
         if num in step_nums
     )[:MANUAL_CASE_MAX_STEPS]
     return ManualCaseProgressPayload(
@@ -196,8 +225,12 @@ def _draft_view(draft: ManualDraft) -> ManualDraftView:
         pivot_id=draft.pivot_id,
         claim_token=draft.claim_token,
         marks=tuple(
-            ManualMarkView(step_num=num, outcome=_outcome_of(shot.kind), key=shot.key)
-            for num, shot in sorted(draft.marks.items())
+            ManualMarkView(
+                step_num=num,
+                outcome=_outcome_of(mark[0].kind),
+                keys=tuple(shot.key for shot in mark),
+            )
+            for num, mark in sorted(draft.marks.items())
         ),
         case_shot_key=draft.case_shot.key if draft.case_shot is not None else "",
         texts=draft.texts,
@@ -349,6 +382,12 @@ class ManualCoordinator:
                 await self._submit(request)
             case ManualThumbnailRequestEvent(key=key):
                 await self._send_thumbnail(key)
+            case ManualMarkCommitEvent():
+                await self._commit_mark(request)
+            case ManualMarkDiscardEvent():
+                await self._discard(request)
+            case ReadyEvent():
+                await self.drop_staged()
             case ManualCaseActionEvent():
                 logger.error("A manual case action reached the coordinator")
 
@@ -386,6 +425,9 @@ class ManualCoordinator:
         if self._uploader.spool_full:
             self._window.show_capture_result(event.seq, False, _SPOOL_FULL)
             return
+        if event.staged and self._sheet_full(active, event.step_num):
+            self._window.show_capture_result(event.seq, False, _SHEET_FULL)
+            return
         try:
             shot = await self._capturer.capture()
         except CaptureAbortedError as e:
@@ -397,6 +439,10 @@ class ManualCoordinator:
             active = self._active_for(event.pivot_id, event.claim_token)
             if active is None:
                 self._window.show_capture_result(event.seq, False, _NOT_YOURS)
+                return
+            # Another capture of the sheet may have landed meanwhile.
+            if event.staged and self._sheet_full(active, event.step_num):
+                self._window.show_capture_result(event.seq, False, _SHEET_FULL)
                 return
             spool_shot = SpoolShot(
                 key=key,
@@ -413,6 +459,7 @@ class ManualCoordinator:
                     spool_shot,
                     shot.data,
                     shot.thumbnail_png,
+                    staged=event.staged,
                 )
             except (SpoolError, OSError) as e:
                 logger.warning("Could not store a manual screenshot: %s", e)
@@ -431,7 +478,103 @@ class ManualCoordinator:
             key=key,
             thumbnail_b64=base64.b64encode(shot.thumbnail_png).decode("ascii"),
         )
+        if not event.staged:
+            # A staged screenshot changes no mark until the sheet is saved.
+            self._schedule_progress()
+        await self._uploader.refresh()
+
+    def _sheet_full(
+        self, active: ManualActiveCasePayload, step_num: int | None
+    ) -> bool:
+        """The step's open mark sheet holds no further screenshot.
+
+        One more than ``step_max_shots`` may be staged, so a Retake on a full
+        sheet can take its new screenshot before the old one is discarded;
+        Save still keeps at most ``step_max_shots``.
+        """
+        draft = self._draft
+        if step_num is None or draft is None or draft.claim_token != active.claim_token:
+            return False
+        return len(draft.staged_for(step_num)) > active.step_max_shots
+
+    async def _commit_mark(self, event: ManualMarkCommitEvent) -> None:
+        """Save a mark sheet; answered with a ``mark`` result."""
+        async with self._lock:
+            active = self._active_for(event.pivot_id, event.claim_token)
+            if active is None:
+                self._window.show_manual_result(
+                    ManualResultKind.MARK, False, _NOT_YOURS
+                )
+                return
+            if active.paused:
+                self._window.show_manual_result(
+                    ManualResultKind.MARK, False, _PAUSED_MARK
+                )
+                return
+            if event.step_num not in {step.num for step in active.steps}:
+                self._window.show_manual_result(ManualResultKind.MARK, False, _NO_STEP)
+                return
+            if not 1 <= len(event.keys) <= active.step_max_shots:
+                self._window.show_manual_result(
+                    ManualResultKind.MARK,
+                    False,
+                    _shot_count_message(active.step_max_shots),
+                )
+                return
+            try:
+                self._draft = await asyncio.to_thread(
+                    self._spool.commit_mark,
+                    self._draft_for(active),
+                    event.step_num,
+                    _kind_of(event.outcome),
+                    event.keys,
+                )
+            except (SpoolError, OSError) as e:
+                logger.warning("Could not save a manual step mark: %s", e)
+                message = (
+                    str(e)
+                    if isinstance(e, SpoolError)
+                    else "The step could not be saved on this machine."
+                )
+                self._window.show_manual_result(ManualResultKind.MARK, False, message)
+                return
+        self._window.show_manual_result(ManualResultKind.MARK, True, "")
         self._schedule_progress()
+        self.push_view()
+        await self._uploader.refresh()
+
+    async def _discard(self, event: ManualMarkDiscardEvent) -> None:
+        """Cancel a mark sheet: its staged screenshots are deleted (no
+        answer; the step stays as it was)."""
+        async with self._lock:
+            draft = self._draft
+            if (
+                draft is None
+                or draft.pivot_id != event.pivot_id
+                or draft.claim_token != event.claim_token
+            ):
+                return
+            try:
+                self._draft = await asyncio.to_thread(
+                    self._spool.discard_staged, draft, event.keys
+                )
+            except (SpoolError, OSError) as e:
+                logger.warning("Could not discard staged manual screenshots: %s", e)
+                return
+        await self._uploader.refresh()
+
+    async def drop_staged(self) -> None:
+        """No mark sheet is open any more (the window process restarted):
+        delete the claimed case's staged screenshots."""
+        async with self._lock:
+            draft = self._draft
+            if draft is None or not draft.staged:
+                return
+            try:
+                self._draft = await asyncio.to_thread(self._spool.drop_staged, draft)
+            except (SpoolError, OSError) as e:
+                logger.warning("Could not drop staged manual screenshots: %s", e)
+                return
         await self._uploader.refresh()
 
     async def _save_texts(self, event: ManualDraftEvent) -> None:

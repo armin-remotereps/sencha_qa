@@ -190,9 +190,13 @@ def _store(
             payload.data, name=f"manual_{payload.key}.{_EXTENSIONS[payload.mime]}"
         ),
         tool_name=MANUAL_SHOT_TOOL_NAMES[kind],
-        # A step shot carries its step's attempt id (one shot per step).
+        # A step shot carries its step's attempt id: named by the step's first
+        # shot (``attempt_key``; hand-ins stored before it had one shot per
+        # step, named by the shot itself).
         attempt_id=(
-            manual_attempt_id(payload.key) if kind is not ManualShotKind.CASE else ""
+            manual_attempt_id(_attempt_key(entry, payload.key))
+            if kind is not ManualShotKind.CASE
+            else ""
         ),
         step_num=raw_step if isinstance(raw_step, int) else None,
         manual_key=payload.key,
@@ -237,6 +241,12 @@ def _check_image(payload: ManualScreenshotUploadPayload) -> str:
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError):
         return _NOT_AN_IMAGE
     return ""
+
+
+def _attempt_key(entry: dict[str, object], key: str) -> str:
+    """The screenshot key naming the attempt of a step shot's manifest entry."""
+    attempt_key = entry.get("attempt_key")
+    return attempt_key if isinstance(attempt_key, str) and attempt_key else key
 
 
 def _manifest_entry(manifest: object, key: str) -> dict[str, object] | None:

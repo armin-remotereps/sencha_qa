@@ -170,7 +170,7 @@ def submit_manual_case(
             submitted_at=now,
             verdict=verdict,
             verdict_note=payload.verdict_note,
-            shot_manifest=[shot.to_wire() for shot in payload.shots],
+            shot_manifest=_stored_manifest(payload),
             shots_expected=shot_count,
             upload_state=(
                 ManualUploadState.UPLOADING
@@ -222,6 +222,22 @@ def manifest_keys(manifest: object) -> list[str]:
     return keys
 
 
+def _stored_manifest(payload: ManualCaseSubmitPayload) -> list[dict[str, object]]:
+    """The hand-in's announced shots as stored, each step shot with the
+    ``attempt_key`` of its step: the step's first screenshot key, which names
+    the step's person attempt (``manual_attempt_id``), so every shot of a step
+    joins that one attempt. The case screenshot gets none."""
+    attempt_keys = {key: step.shots[0] for step in payload.steps for key in step.shots}
+    manifest: list[dict[str, object]] = []
+    for shot in payload.shots:
+        entry = shot.to_wire()
+        attempt_key = attempt_keys.get(shot.key)
+        if attempt_key is not None:
+            entry["attempt_key"] = attempt_key
+        manifest.append(entry)
+    return manifest
+
+
 def _with_manual_attempts(
     checkpoint: OrchestratorCheckpoint, steps: Iterable[ManualStepResultPayload]
 ) -> OrchestratorCheckpoint:
@@ -240,6 +256,8 @@ def _with_manual_attempts(
                 iterations=0,
             ),
             duration_seconds=step.seconds,
+            # Named by the step's first shot; every shot of the step carries
+            # it (``attempt_key`` in the stored manifest).
             attempt_id=manual_attempt_id(step.shots[0]),
             performed_by="person",
         )

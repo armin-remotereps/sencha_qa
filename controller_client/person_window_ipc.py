@@ -26,6 +26,7 @@ from controller_client.protocol import (
     MANUAL_RUN_STATE_SAFE_BYTES,
     MANUAL_SHOT_KEY_MAX_CHARS,
     MANUAL_STEP_MAX_SECONDS,
+    MANUAL_STEP_MAX_SHOTS,
     MANUAL_STEP_NOTE_MAX_CHARS,
     MANUAL_VERDICT_NOTE_MAX_CHARS,
     PERSON_CASE_ACTION_MAX_BYTES,
@@ -139,6 +140,10 @@ class WindowIpcType(StrEnum):
     # Manual pause and discuss (MANUAL_PAUSE_DISCUSS_V1). Pause / Continue
     # travel as MANUAL_CASE_ACTION with the action "pause" / "continue".
     MANUAL_CHAT_SEND = "manual_chat_send"  # window -> runner
+    # Mark sheet (Test Runner 0.17.0): staged screenshots become a step's mark
+    # on Save, or are thrown away on Cancel.
+    MANUAL_MARK_COMMIT = "manual_mark_commit"  # window -> runner
+    MANUAL_MARK_DISCARD = "manual_mark_discard"  # window -> runner
 
 
 class CaseRequestKind(StrEnum):
@@ -160,6 +165,7 @@ class ManualResultKind(StrEnum):
     PAUSE = "pause"
     CONTINUE = "continue"
     CHAT = "chat"
+    MARK = "mark"
 
 
 def manual_pause_discuss_supported(active: ManualActiveCasePayload) -> bool:
@@ -194,11 +200,12 @@ class ManualDraftTexts:
 
 @dataclass(frozen=True)
 class ManualMarkView:
-    """A step the person marked: its outcome and its screenshot."""
+    """A step the person marked: its outcome and its screenshots (1 or more,
+    in the order taken)."""
 
     step_num: int
     outcome: ManualStepOutcome
-    key: str
+    keys: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -441,6 +448,33 @@ class ManualCaptureEvent:
     kind: ManualShotKind
     # None for the case screenshot.
     step_num: int | None
+    # A mark sheet's screenshot: kept apart from the step's mark until a
+    # ``ManualMarkCommitEvent`` saves it (step screenshots only).
+    staged: bool = False
+
+
+@dataclass(frozen=True)
+class ManualMarkCommitEvent:
+    """Save a mark sheet: these staged screenshots (in order) become the
+    step's mark with this outcome, replacing any earlier one.
+
+    Answered with a ``ManualResultCommand`` of kind ``mark``.
+    """
+
+    pivot_id: int
+    claim_token: str
+    step_num: int
+    outcome: ManualStepOutcome
+    keys: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ManualMarkDiscardEvent:
+    """Cancel a mark sheet: throw these staged screenshots away (no reply)."""
+
+    pivot_id: int
+    claim_token: str
+    keys: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -493,6 +527,8 @@ WindowEvent = (
     | ManualSubmitEvent
     | ManualThumbnailRequestEvent
     | ManualChatSendEvent
+    | ManualMarkCommitEvent
+    | ManualMarkDiscardEvent
 )
 
 
@@ -661,7 +697,7 @@ def _manual_state(state: ManualWindowState) -> dict[str, object]:
                     {
                         "step_num": mark.step_num,
                         "outcome": mark.outcome.value,
-                        "key": mark.key,
+                        "keys": list(mark.keys),
                     }
                     for mark in draft.marks
                 ],
@@ -740,6 +776,20 @@ def _shot_key(value: object, *, blank: bool = False) -> str:
     return value
 
 
+def _shot_keys(data: Mapping[str, object], *, minimum: int) -> tuple[str, ...]:
+    """A mark sheet's screenshot keys: distinct, ``minimum`` to
+    MANUAL_STEP_MAX_SHOTS of them."""
+    value = data.get("keys")
+    if not isinstance(value, list) or not (
+        minimum <= len(value) <= MANUAL_STEP_MAX_SHOTS
+    ):
+        raise ProtocolError("Invalid window message: bad 'keys'")
+    keys = tuple(_shot_key(key) for key in value)
+    if len(set(keys)) != len(keys):
+        raise ProtocolError("Invalid window message: repeated screenshot key")
+    return keys
+
+
 def _claim_token(data: Mapping[str, object]) -> str:
     value = data.get("claim_token")
     if not isinstance(value, str) or not _CLAIM_TOKEN_RE.fullmatch(value):
@@ -808,11 +858,17 @@ def _manual_state_from_wire(data: Mapping[str, object]) -> ManualWindowState:
                 outcome = ManualStepOutcome(str(raw_mark.get("outcome")))
             except ValueError as e:
                 raise ProtocolError("Invalid window message: bad outcome") from e
+            raw_keys = raw_mark.get("keys")
+            if (
+                not isinstance(raw_keys, list)
+                or not 1 <= len(raw_keys) <= MANUAL_STEP_MAX_SHOTS
+            ):
+                raise ProtocolError("Invalid window message: bad mark screenshots")
             marks.append(
                 ManualMarkView(
                     step_num=_step_num(raw_mark.get("step_num")),
                     outcome=outcome,
-                    key=_shot_key(raw_mark.get("key")),
+                    keys=tuple(_shot_key(key) for key in raw_keys),
                 )
             )
         draft = ManualDraftView(
@@ -1003,6 +1059,7 @@ def encode_event(event: WindowEvent) -> bytes:
             claim_token=claim_token,
             kind=shot_kind,
             step_num=step_num,
+            staged=staged,
         ):
             payload = {
                 "type": WindowIpcType.MANUAL_CAPTURE.value,
@@ -1011,6 +1068,7 @@ def encode_event(event: WindowEvent) -> bytes:
                 "claim_token": claim_token,
                 "kind": shot_kind.value,
                 "step_num": step_num,
+                "staged": staged,
             }
         case ManualDraftEvent(
             pivot_id=pivot_id,
@@ -1040,6 +1098,30 @@ def encode_event(event: WindowEvent) -> bytes:
                 "pivot_id": chat.pivot_id,
                 "claim_token": chat.claim_token,
                 "text": chat.text,
+            }
+        case ManualMarkCommitEvent(
+            pivot_id=pivot_id,
+            claim_token=claim_token,
+            step_num=step_num,
+            outcome=outcome,
+            keys=keys,
+        ):
+            payload = {
+                "type": WindowIpcType.MANUAL_MARK_COMMIT.value,
+                "pivot_id": pivot_id,
+                "claim_token": claim_token,
+                "step_num": step_num,
+                "outcome": outcome.value,
+                "keys": list(keys),
+            }
+        case ManualMarkDiscardEvent(
+            pivot_id=pivot_id, claim_token=claim_token, keys=keys
+        ):
+            payload = {
+                "type": WindowIpcType.MANUAL_MARK_DISCARD.value,
+                "pivot_id": pivot_id,
+                "claim_token": claim_token,
+                "keys": list(keys),
             }
     return _encode(payload, IPC_TO_RUNNER_MAX_BYTES)
 
@@ -1077,12 +1159,16 @@ def decode_event(line: bytes) -> WindowEvent:
             step_num = _optional_step_num(data, "step_num")
             if (shot_kind is ManualShotKind.CASE) != (step_num is None):
                 raise ProtocolError("Invalid window message: step and kind disagree")
+            staged = data.get("staged", False) is True
+            if staged and step_num is None:
+                raise ProtocolError("Invalid window message: staged case screenshot")
             return ManualCaptureEvent(
                 seq=_seq(data),
                 pivot_id=_int(data, "pivot_id", 1, _MAX_SEQ),
                 claim_token=_claim_token(data),
                 kind=shot_kind,
                 step_num=step_num,
+                staged=staged,
             )
         case WindowIpcType.MANUAL_DRAFT:
             return ManualDraftEvent(
@@ -1101,4 +1187,22 @@ def decode_event(line: bytes) -> WindowEvent:
             return ManualThumbnailRequestEvent(key=_shot_key(data.get("key")))
         case WindowIpcType.MANUAL_CHAT_SEND:
             return ManualChatSendEvent(send=parse_manual_chat_send_payload(data))
+        case WindowIpcType.MANUAL_MARK_COMMIT:
+            try:
+                outcome = ManualStepOutcome(str(data.get("outcome")))
+            except ValueError as e:
+                raise ProtocolError("Invalid window message: bad outcome") from e
+            return ManualMarkCommitEvent(
+                pivot_id=_int(data, "pivot_id", 1, _MAX_SEQ),
+                claim_token=_claim_token(data),
+                step_num=_step_num(data.get("step_num")),
+                outcome=outcome,
+                keys=_shot_keys(data, minimum=1),
+            )
+        case WindowIpcType.MANUAL_MARK_DISCARD:
+            return ManualMarkDiscardEvent(
+                pivot_id=_int(data, "pivot_id", 1, _MAX_SEQ),
+                claim_token=_claim_token(data),
+                keys=_shot_keys(data, minimum=0),
+            )
     raise ProtocolError(f"Not a window event: {kind.value}")

@@ -6,9 +6,11 @@ whether this Python has tkinter, which Tk it has, which display Tk would use,
 whether a Tk window opens in a separate process the way the runner starts
 it, and whether the window renders a sample step, test case, log and
 discussion, and a sample Manual run (case list, a claimed case with marked
-steps, a step's "How to do it", a thumbnail and upload progress, then the
-same case paused with its discussion), without errors (in a window that is
-never shown). The interactive
+steps, a step's "How to do it", thumbnails, the mark sheet and upload
+progress, then the same case paused with its discussion), without errors (in
+a window that is never shown), and whether the Manual run Pass / Fail
+shortcuts register system-wide (with questions: also that a press arrives).
+The interactive
 check then shows that sample (a step with "How to do it" items and a sample
 Ask the AI exchange, its test case and log, and a paused case's discussion)
 in the real window, asks whether it is visible, hides it the way the runner does before every agent
@@ -82,6 +84,8 @@ from controller_client.protocol import (
 
 _PROBE_TIMEOUT_S: Final[float] = 10.0
 _RENDER_TIMEOUT_S: Final[float] = 30.0
+# A pending registration (a desktop dialog, 60 s) plus the key press (20 s).
+_SHORTCUT_PROBE_TIMEOUT_S: Final[float] = 100.0
 _APP_MODULE: Final[str] = "controller_client.person_window_app"
 # ``-m controller_client...`` resolves from the directory holding the package.
 _PACKAGE_PARENT: Final[Path] = Path(__file__).resolve().parent.parent
@@ -195,8 +199,9 @@ def _check_window_renders() -> str:
     # then the same case paused with its discussion (twice: a new row).
     commands.append(ManualStateCommand(state=_sample_manual_state(claimed=False)))
     commands.append(ManualStateCommand(state=_sample_manual_state(claimed=True)))
-    commands.append(
-        ManualThumbnailCommand(key=_SAMPLE_SHOT_KEY, thumbnail_b64=_sample_thumbnail())
+    commands.extend(
+        ManualThumbnailCommand(key=key, thumbnail_b64=_sample_thumbnail())
+        for key in (_SAMPLE_SHOT_KEY, _SAMPLE_SHOT_KEY_2)
     )
     for extra in (False, True):
         commands.append(
@@ -231,13 +236,63 @@ def _check_window_renders() -> str:
     return out
 
 
-def build_window_steps() -> tuple[DiagnosticStep, ...]:
-    """The automatic checks, in order; each later one needs the earlier ones."""
+def _check_shortcuts(interactive: bool) -> str:
+    # The window process registers the Manual run Pass / Fail shortcuts and
+    # releases them. Interactive: it waits for the tester to press Pass (its
+    # prompt comes on stderr, which is the terminal's) and a Linux desktop
+    # may show its permission dialog first. Shortcuts that work only while
+    # the window is focused are a warning: Pass / Fail still work. A probe
+    # that fails or hangs is a warning too, so the later window checks still
+    # run (the window itself works without shortcuts).
+    command = [sys.executable, "-m", _APP_MODULE, "--probe-shortcuts"]
+    if interactive:
+        command.append("--interactive")
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=None if interactive else subprocess.PIPE,
+            text=True,
+            timeout=_SHORTCUT_PROBE_TIMEOUT_S,
+            check=False,
+            cwd=str(_PACKAGE_PARENT),
+        )
+    except subprocess.TimeoutExpired:
+        return (
+            f"WARNING: the shortcut check did not finish within "
+            f"{_SHORTCUT_PROBE_TIMEOUT_S:.0f} s. The Pass / Fail buttons work "
+            "anyway."
+        )
+    lines = completed.stdout.strip().splitlines()
+    last = lines[-1] if lines else ""
+    if completed.returncode != 0 or "\t" not in last:
+        return (
+            f"WARNING: the shortcut check failed (exit code "
+            f"{completed.returncode}): {last or 'no output'}. The Pass / Fail "
+            "buttons work anyway."
+        )
+    state, detail = last.split("\t", 1)
+    if state == "active":
+        return f"system-wide ({detail})"
+    if state == "focus_only":
+        return (
+            f"WARNING: only while the Test Runner window is focused: {detail}. "
+            "The Pass / Fail buttons work anyway."
+        )
+    return f"WARNING: not available ({state}): {detail}"
+
+
+def build_window_steps(*, interactive: bool = False) -> tuple[DiagnosticStep, ...]:
+    """The automatic checks, in order; each later one needs the earlier ones.
+
+    ``interactive``: the shortcut check also waits for a key press.
+    """
     return (
         DiagnosticStep("tkinter and Tk version", _check_tkinter),
         DiagnosticStep("display", _check_display),
         DiagnosticStep("Tk window", _check_window_opens),
         DiagnosticStep("window renders a sample case", _check_window_renders),
+        DiagnosticStep("Manual shortcuts", lambda: _check_shortcuts(interactive)),
     )
 
 
@@ -467,6 +522,7 @@ def _sample_state(
 _SAMPLE_MANUAL_PIVOT: Final[int] = 11
 _SAMPLE_CLAIM: Final[str] = "diagnose-claim"
 _SAMPLE_SHOT_KEY: Final[str] = "diagnose-shot-1"
+_SAMPLE_SHOT_KEY_2: Final[str] = "diagnose-shot-2"
 
 
 def _sample_thumbnail() -> str:
@@ -602,16 +658,23 @@ def _sample_manual_state(
         can_pause=not paused,
         can_continue=paused,
         discussion=_sample_manual_discussion(extra_message) if paused else None,
+        # The mark sheet's "Add screenshot (n of max)".
+        step_max_shots=5,
     )
     draft = ManualDraftView(
         pivot_id=_SAMPLE_MANUAL_PIVOT,
         claim_token=_SAMPLE_CLAIM,
         marks=(
+            # Two screenshots: the step shows half-size thumbnails.
             ManualMarkView(
-                step_num=1, outcome=ManualStepOutcome.PASS, key=_SAMPLE_SHOT_KEY
+                step_num=1,
+                outcome=ManualStepOutcome.PASS,
+                keys=(_SAMPLE_SHOT_KEY, _SAMPLE_SHOT_KEY_2),
             ),
             ManualMarkView(
-                step_num=2, outcome=ManualStepOutcome.FAIL, key="diagnose-shot-2"
+                step_num=2,
+                outcome=ManualStepOutcome.FAIL,
+                keys=("diagnose-shot-3",),
             ),
         ),
         case_shot_key="",

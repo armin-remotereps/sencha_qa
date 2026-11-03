@@ -15,7 +15,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.16.0"
+CLIENT_VERSION: Final[str] = "0.17.0"
 
 
 class CloseCode(IntEnum):
@@ -2831,9 +2831,10 @@ assert (
 ), "MANUAL_SHOT_MAX_BYTES does not fit in MAX_MESSAGE_SIZE"
 # Verbatim steps of one manual case (the server drops steps beyond it).
 MANUAL_CASE_MAX_STEPS: Final[int] = 100
-# Screenshots of one hand-in: one per marked step plus one optional case
-# screenshot (D8).
-MANUAL_STEP_MAX_SHOTS: Final[int] = 1
+# Screenshots of one hand-in: up to MANUAL_STEP_MAX_SHOTS per marked step
+# plus one optional case screenshot (D8). A runner sends more than one per
+# step only when the server's snapshot allows it (``step_max_shots``).
+MANUAL_STEP_MAX_SHOTS: Final[int] = 5
 MANUAL_CASE_SHOT_MAX: Final[int] = 1
 MANUAL_SUBMISSION_MAX_SHOTS: Final[int] = (
     MANUAL_CASE_MAX_STEPS * MANUAL_STEP_MAX_SHOTS + MANUAL_CASE_SHOT_MAX
@@ -2865,6 +2866,14 @@ _MANUAL_CLAIM_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_-]{1,32
 # "m" + key fits ``SubTaskAttempt.attempt_id`` (32 characters).
 MANUAL_SHOT_KEY_MAX_CHARS: Final[int] = 24
 _MANUAL_SHOT_KEY_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_-]{1,24}")
+# Per step: a fully escaped note (six bytes a character), its screenshot keys
+# in ``steps`` and their ``shots`` manifest entries (about 160 bytes each) fit
+# the 16 KiB a step is given.
+assert (
+    MANUAL_STEP_NOTE_MAX_CHARS * 6
+    + MANUAL_STEP_MAX_SHOTS * (MANUAL_SHOT_KEY_MAX_CHARS + 4 + 160)
+    <= 16 * 1024
+), "A step's note and screenshots no longer fit MANUAL_CASE_SUBMIT_MAX_BYTES"
 # Snapshot caps; longer lists are cut, longer texts cut when parsed.
 MANUAL_RUN_STATE_MAX_CASES: Final[int] = 300
 MANUAL_PENDING_UPLOADS_MAX: Final[int] = 50
@@ -3101,6 +3110,9 @@ class ManualActiveCasePayload:
     pause_blocker: str = ""
     # None from an older server.
     discussion: ManualDiscussionPayload | None = None
+    # Screenshots the server takes per marked step (1..MANUAL_STEP_MAX_SHOTS);
+    # 1 from an older server.
+    step_max_shots: int = 1
 
     def to_wire(self) -> dict[str, object]:
         return {
@@ -3125,6 +3137,7 @@ class ManualActiveCasePayload:
             "discussion": (
                 self.discussion.to_wire() if self.discussion is not None else None
             ),
+            "step_max_shots": self.step_max_shots,
         }
 
 
@@ -3450,7 +3463,15 @@ def _parse_manual_active(
         discussion=_parse_manual_discussion(
             _extract_optional_object(raw, "discussion")
         ),
+        step_max_shots=_parse_step_max_shots(raw.get("step_max_shots")),
     )
+
+
+def _parse_step_max_shots(raw: object) -> int:
+    """Clamped to 1..MANUAL_STEP_MAX_SHOTS; 1 when absent or not an int."""
+    if not isinstance(raw, int) or isinstance(raw, bool):
+        return 1
+    return max(1, min(raw, MANUAL_STEP_MAX_SHOTS))
 
 
 def _parse_manual_discussion(
