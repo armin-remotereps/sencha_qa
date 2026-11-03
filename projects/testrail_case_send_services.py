@@ -26,7 +26,7 @@ from projects.models import (
 )
 from projects.run_case_check_services import (
     MANUAL_UPLOADING_MESSAGE,
-    check_locked_pivots,
+    check_locked_cases,
 )
 from projects.testrail_checked_push_services import (
     TESTRAIL_NOT_CONFIGURED_MESSAGE,
@@ -63,11 +63,13 @@ _NOTHING_TO_SEND_MESSAGE = (
 @dataclass(frozen=True)
 class CaseSendOutcome:
     """`sending` cases queued, `checked_now` of them checked by this action,
-    `skipped` selected cases that could not be sent."""
+    `skipped` selected cases that could not be sent, `reviewing` cases
+    checked now whose screenshots the send reviews before sending."""
 
     sending: int
     checked_now: int
     skipped: int
+    reviewing: int = 0
 
 
 def is_case_sendable(pivot: TestRunTestCase) -> bool:
@@ -159,7 +161,7 @@ def start_case_send(
             if not pivots:
                 raise NothingToSendError(MANUAL_UPLOADING_MESSAGE)
             now = timezone.now()
-            checked_now = check_locked_pivots(
+            checked = check_locked_cases(
                 [pivot for pivot in pivots if pivot.checked_at is None],
                 user=user,
                 now=now,
@@ -187,8 +189,9 @@ def start_case_send(
     )
     return CaseSendOutcome(
         sending=len(sendable_ids),
-        checked_now=checked_now,
+        checked_now=checked.changed,
         skipped=len(selected) - len(sendable_ids),
+        reviewing=checked.reviewing,
     )
 
 
@@ -198,4 +201,6 @@ def format_case_send_message(outcome: CaseSendOutcome) -> str:
     message = f"Sending {outcome.sending} {noun} to TestRail…"
     if outcome.skipped:
         message += f" · {outcome.skipped} skipped"
+    if outcome.reviewing:
+        message += ". Screenshots are reviewed before sending."
     return message

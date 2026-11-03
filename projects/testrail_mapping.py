@@ -384,12 +384,15 @@ def build_checked_result_comment(
     screenshot_count: int,
     screenshot_steps: Sequence[int],
     header: str = "",
+    omitted_count: int = 0,
 ) -> str:
     """The 018 result comment plus who checked it and how many screenshots follow.
 
     `screenshot_steps` are the plan steps the attached screenshots were taken
     in (empty when unknown, e.g. untagged screenshots from older runs).
-    `header` as in `build_result_comment`.
+    `omitted_count` is how many screenshots the AI review judged not relevant
+    (`TestRunTestCase.testrail_evidence_omitted`). `header` as in
+    `build_result_comment`.
     """
     paragraphs = [
         build_result_comment(
@@ -401,10 +404,32 @@ def build_checked_result_comment(
         ),
         f"Checked by {checked_by_label} on {checked_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC.",
     ]
+    note = _screenshots_note(screenshot_count, screenshot_steps, omitted_count)
+    if note:
+        paragraphs.append(note)
+    return "\n\n".join(paragraphs)
+
+
+def _screenshots_note(
+    screenshot_count: int, screenshot_steps: Sequence[int], omitted_count: int
+) -> str:
+    """e.g. "2 screenshots attached from step 4 (3 not relevant, not attached).",
+    or the "No screenshot attached" note when the review kept none."""
     if screenshot_count > 0:
         shots = pluralize_count(screenshot_count, "screenshot", "screenshots")
-        paragraphs.append(f"{shots} attached{_steps_note(screenshot_steps)}.")
-    return "\n\n".join(paragraphs)
+        omitted = (
+            f" ({omitted_count} not relevant, not attached)"
+            if omitted_count > 0
+            else ""
+        )
+        return f"{shots} attached{_steps_note(screenshot_steps)}{omitted}."
+    if omitted_count > 0:
+        shots = pluralize_count(omitted_count, "screenshot", "screenshots")
+        return (
+            f"No screenshot attached: none of the {shots} showed relevant "
+            "evidence. Every screenshot is kept with the case in Punk Hazard."
+        )
+    return ""
 
 
 def _steps_note(steps: Sequence[int]) -> str:
@@ -432,6 +457,7 @@ def format_checked_push_summary(
     no_source: int,
     no_case_id: int,
     missing_files: int,
+    not_reviewed: int = 0,
 ) -> str:
     """e.g. "7 results sent to R123, R456 · 18 screenshots · 1 not in R123",
     or "Nothing sent · R7 closed" when nothing went out.
@@ -467,6 +493,10 @@ def format_checked_push_summary(
         parts.append(
             f"{pluralize_count(missing_files, 'screenshot file', 'screenshot files')} missing"
         )
+    if not_reviewed:
+        parts.append(
+            f"{not_reviewed} not sent: screenshots not reviewed (retry the review)"
+        )
     summary = " · ".join(parts)
     if len(summary) <= CHECKED_PUSH_SUMMARY_MAX:
         return summary
@@ -493,6 +523,25 @@ def format_checked_push_confirm_body(
         f"{results} will be added to {runs}{with_shots}. "
         "Results cannot be removed from TestRail afterwards."
     )
+
+
+def format_checked_push_review_note(waiting: int, failed: int) -> str:
+    """The confirm dialog's note on checked cases whose screenshot review is
+    not done; they are reviewed inline before sending ("" for none)."""
+    sentences: list[str] = []
+    if waiting:
+        cases = pluralize_count(waiting, "case is", "cases are")
+        sentences.append(
+            f"{cases} waiting for screenshot review; "
+            f"{'it is' if waiting == 1 else 'they are'} reviewed before sending."
+        )
+    if failed:
+        cases = pluralize_count(failed, "case", "cases")
+        sentences.append(
+            f"The screenshot review of {cases} failed; it is tried again before "
+            "sending."
+        )
+    return " ".join(sentences)
 
 
 def screenshot_attachment_filename(

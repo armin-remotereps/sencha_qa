@@ -4,6 +4,9 @@ A case can be checked once it has a verdict (Passed, Failed, Blocked). It can
 be unchecked until its result has been sent to its source TestRail run. A
 Manual run case cannot be checked while its screenshots are still uploading
 from the Test Runner (its evidence would be frozen without them).
+Checking prepares the AI review of the screenshots the case would attach
+(``testrail_evidence_services``): a case is only sent once that review is
+done, so the check flash says when screenshots are being reviewed.
 Unchecking clears the reason a previous send skipped the case, so checking it
 again puts it back in line for the next send.
 """
@@ -22,7 +25,7 @@ from projects.checked_push_limits import is_checked_push_live
 from projects.exceptions import RunCaseCheckError
 from projects.manual_current_submission import uploading_manual_case_ids
 from projects.models import TestRun, TestRunTestCase, TestRunTestCaseStatus
-from projects.testrail_evidence_services import freeze_testrail_evidence
+from projects.testrail_evidence_services import prepare_testrail_evidence
 
 CHECKABLE_STATUSES: tuple[str, ...] = (
     TestRunTestCaseStatus.SUCCESS,
@@ -31,6 +34,9 @@ CHECKABLE_STATUSES: tuple[str, ...] = (
     TestRunTestCaseStatus.NEEDS_RETEST,
 )
 
+REVIEWING_SCREENSHOTS_MESSAGE = (
+    "Screenshots are being reviewed before they can be sent."
+)
 MANUAL_UPLOADING_MESSAGE = (
     "Screenshots are still uploading from the Test Runner: check these cases "
     "once they have arrived."
@@ -43,10 +49,21 @@ _NOTHING_TO_CHECK_MESSAGE = (
 
 @dataclass(frozen=True)
 class CheckOutcome:
-    """How many selected cases changed, and how many were skipped."""
+    """How many selected cases changed, how many were skipped, and how many
+    checked cases wait for their screenshot review."""
 
     changed: int
     skipped: int
+    reviewing: int = 0
+
+
+@dataclass(frozen=True)
+class LockedCheck:
+    """What ``check_locked_cases`` did: cases checked, and how many of them
+    went ``pending`` for the screenshot review."""
+
+    changed: int
+    reviewing: int
 
 
 def is_checkable(pivot: TestRunTestCase) -> bool:
@@ -83,7 +100,8 @@ def check_run_cases(
 ) -> CheckOutcome:
     """Check the selected cases; raises `RunCaseCheckError` if none changed.
 
-    Also freezes which of their screenshots the next TestRail send attaches.
+    Also prepares the review of which screenshots the next TestRail send
+    attaches (``reviewing`` counts the cases queued for the AI review).
     The cases are locked so a concurrent Apply or Resume cannot change a
     result between the selection and the check.
     """
@@ -95,38 +113,52 @@ def check_run_cases(
     )
     if not pivots:
         raise RunCaseCheckError(_NOTHING_TO_CHECK_MESSAGE)
-    changed = check_locked_pivots(pivots, user=user, now=timezone.now())
-    if changed == 0:
+    checked = check_locked_cases(pivots, user=user, now=timezone.now())
+    if checked.changed == 0:
         # Every eligible case is a manual one still uploading.
         raise RunCaseCheckError(MANUAL_UPLOADING_MESSAGE)
-    return CheckOutcome(changed=changed, skipped=len(selected) - changed)
+    return CheckOutcome(
+        changed=checked.changed,
+        skipped=len(selected) - checked.changed,
+        reviewing=checked.reviewing,
+    )
 
 
 def check_locked_pivots(
     pivots: Sequence[TestRunTestCase], *, user: CustomUser, now: datetime
 ) -> int:
-    """Check pivots the caller locked in its open transaction; returns the count.
+    """``check_locked_cases`` returning only the number of cases checked."""
+    return check_locked_cases(pivots, user=user, now=now).changed
+
+
+def check_locked_cases(
+    pivots: Sequence[TestRunTestCase], *, user: CustomUser, now: datetime
+) -> LockedCheck:
+    """Check pivots the caller locked in its open transaction.
 
     ``pivots`` are unchecked cases with a verdict, loaded with at least ``id``
     and ``status`` under ``select_for_update``. Manual cases whose screenshots
     are still uploading are left unchecked (callers that report them use
-    ``uploading_manual_case_ids`` first). Freezes which of the others'
-    screenshots the next TestRail send attaches, then sets Checked by
-    ``user`` and clears a previous send's skip reason (one UPDATE).
+    ``uploading_manual_case_ids`` first). Prepares the others' screenshot
+    review (query-only; the AI review is queued on commit), then sets
+    Checked by ``user`` and clears a previous send's skip reason (one UPDATE).
     """
     if not pivots:
-        return 0
+        return LockedCheck(changed=0, reviewing=0)
     uploading = uploading_manual_case_ids(pivot.id for pivot in pivots)
     pivots = [pivot for pivot in pivots if pivot.id not in uploading]
     if not pivots:
-        return 0
-    freeze_testrail_evidence(pivots)
-    return TestRunTestCase.objects.filter(id__in=[pivot.id for pivot in pivots]).update(
+        return LockedCheck(changed=0, reviewing=0)
+    reviewing = prepare_testrail_evidence(pivots)
+    changed = TestRunTestCase.objects.filter(
+        id__in=[pivot.id for pivot in pivots]
+    ).update(
         checked_at=now,
         checked_by=user,
         testrail_source_skip_reason="",
         updated_at=now,
     )
+    return LockedCheck(changed=changed, reviewing=reviewing)
 
 
 @transaction.atomic
@@ -166,9 +198,12 @@ def uncheck_run_cases(*, test_run: TestRun, pivot_ids: Sequence[int]) -> CheckOu
 
 
 def format_check_message(outcome: CheckOutcome, *, verb: str) -> str:
-    """User message such as "Checked 4 cases · 1 skipped"."""
+    """User message such as "Checked 4 cases · 1 skipped", plus
+    ``REVIEWING_SCREENSHOTS_MESSAGE`` when a checked case awaits its review."""
     noun = "case" if outcome.changed == 1 else "cases"
     message = f"{verb} {outcome.changed} {noun}"
     if outcome.skipped:
         message += f" · {outcome.skipped} skipped"
+    if outcome.reviewing:
+        message += f". {REVIEWING_SCREENSHOTS_MESSAGE}"
     return message

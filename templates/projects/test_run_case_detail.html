@@ -48,6 +48,9 @@
      into or out of "needs_retest".
      pivot.testrail_source_skip_reason is set when a send could not deliver
      the case (shown via includes/_checked_skip_reason.html).
+     pivot.evidence_review_state / evidence_review_error: the AI screenshot
+     review of a checked, unsent case (includes/_evidence_review_badge.html,
+     "Reviewing screenshots" or "Screenshot review failed" + the reason).
 
      pivot.blocked_reason / pivot.get_blocked_reason_display are set only when
      status is "blocked"; the blocked message itself is pivot.result. The case
@@ -204,6 +207,7 @@
       {% if pivot.testrail_source_skip_reason %}
         {% include "projects/includes/_checked_skip_reason.html" with pivot=pivot only %}
       {% endif %}
+      {% include "projects/includes/_evidence_review_badge.html" with pivot=pivot show_error=True only %}
       {% if pivot.testrail_source_result_id %}
         {% if source_run_url %}
         <a class="badge badge-passed" href="{{ source_run_url }}" target="_blank" rel="noopener">Sent to TestRail R{{ pivot.testrail_source_run_id }}</a>

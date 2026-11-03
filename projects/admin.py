@@ -148,6 +148,8 @@ class TestRunScreenshotInline(admin.TabularInline[TestRunScreenshot, TestRunTest
         "step_num",
         "attempt_id",
         "testrail_evidence",
+        "relevance",
+        "relevance_note",
     )
 
 
@@ -177,6 +179,10 @@ class TestRunTestCaseAdmin(admin.ModelAdmin[TestRunTestCase]):
         "testrail_source_result_id",
         "testrail_source_sent_at",
         "testrail_source_attachment_count",
+        "evidence_review_state",
+        "evidence_review_key",
+        "evidence_review_error",
+        "testrail_evidence_omitted",
         "credited_user",
     )
     inlines = [TestRunScreenshotInline]
