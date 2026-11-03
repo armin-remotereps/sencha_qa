@@ -30,8 +30,10 @@ from machine_setup.services.queue_turn import (
     link_knowledge_refs,
 )
 from machine_setup.services.send_gates import (
+    TRIAGE_RUN_GONE_MESSAGE,
     manual_thread_send_refusal,
     thread_send_refusal,
+    triage_thread_send_refusal,
 )
 from projects.models import PersonStepChannel, Project
 from projects.person_step_actor import PersonStepActor
@@ -60,8 +62,9 @@ def send_setup_message(
     an auto-fix thread); ``None`` means the main chat, created when missing.
     Raises ``SetupTurnActiveError``, ``SetupRunActiveError``,
     ``SetupMachineNotReadyError`` (help, result and auto-fix threads only:
-    the main chat and a manual case discussion may run with the machine
-    offline), ``MachineSetupError`` for a manual case discussion whose case
+    the main chat, a manual case discussion and a case analysis may run with
+    the machine offline), ``MachineSetupError`` for a case analysis whose run
+    was deleted, ``MachineSetupError`` for a manual case discussion whose case
     is no longer claimed (its own started manual run does not refuse it), or ``MachineSetupError`` when the Test
     Runner is being updated or the thread was archived meanwhile, or ``SetupDocumentNotAllowedError`` when ``document``
     targets any thread but the main chat. A stale live turn is closed as
@@ -105,12 +108,18 @@ def _send_locked(
         conversation is not None
         and conversation.kind == SetupConversationKind.MANUAL_CASE
     )
+    triage_thread = (
+        conversation is not None
+        and conversation.kind == SetupConversationKind.RUN_TRIAGE
+    )
     refusal = _refusal(
         locked,
         timezone.now(),
         main_chat=main_chat,
         manual_thread=manual_thread,
         manual_case_id=conversation.manual_case_id if conversation else None,
+        triage_thread=triage_thread,
+        triage_run_id=conversation.triage_run_id if conversation else None,
     )
     if refusal is not None:
         # Returned, not raised: a stale turn closed above must still commit.
@@ -118,6 +127,9 @@ def _send_locked(
     target = _target_conversation(locked, actor, conversation)
     if target is None:
         return MachineSetupError(THREAD_CLOSED_MESSAGE)
+    if target.kind == SetupConversationKind.RUN_TRIAGE and target.triage_run_id is None:
+        # The run was deleted since the caller loaded the thread.
+        return MachineSetupError(TRIAGE_RUN_GONE_MESSAGE)
     if document is not None and target.kind != SetupConversationKind.CHAT:
         return SetupDocumentNotAllowedError()
     try:
@@ -157,9 +169,14 @@ def _refusal(
     main_chat: bool,
     manual_thread: bool,
     manual_case_id: int | None,
+    triage_thread: bool,
+    triage_run_id: int | None,
 ) -> MachineSetupError | None:
     if resolve_live_turn(project_id=project.pk, now=now) is not None:
         return SetupTurnActiveError()
+    if triage_thread:
+        # No READY gate: the analysis never uses the machine.
+        return triage_thread_send_refusal(project, now, triage_run_id=triage_run_id)
     if manual_thread:
         # Under the project row lock, so a claim, release or hand-in (all
         # lock the project first) cannot change the case meanwhile.

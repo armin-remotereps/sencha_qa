@@ -9,6 +9,7 @@ from projects.models import (
     CasePlanRevision,
     CaseResultChange,
     Project,
+    TestRun,
     TestRunTestCase,
 )
 
@@ -70,6 +71,8 @@ class SetupConversationKind(models.TextChoices):
     CASE_RESULT = "case_result", "Result chat"
     # Opened by a person from a claimed Manual run case they are testing.
     MANUAL_CASE = "manual_case", "Manual case discussion"
+    # Opened by a person to analyse a run's cases (category and severity).
+    RUN_TRIAGE = "run_triage", "Case analysis"
 
 
 class SetupFixResult(models.TextChoices):
@@ -140,6 +143,15 @@ class SetupConversation(models.Model):
         blank=True,
         related_name="manual_conversations",
     )
+    # Case analysis threads only: the run whose cases are analysed (one active
+    # thread per run; read-only once the run is gone).
+    triage_run = models.ForeignKey(
+        TestRun,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="triage_conversations",
+    )
     # Auto-fix threads only: the agent's last ``report_case_fix`` call.
     fix_result = models.CharField(
         max_length=16, choices=SetupFixResult.choices, blank=True, default=""
@@ -173,6 +185,12 @@ class SetupConversation(models.Model):
                 fields=["manual_case"],
                 condition=Q(manual_case__isnull=False, archived_at__isnull=True),
                 name="setup_one_manual_thread_per_case",
+            ),
+            # One active case analysis thread per run.
+            models.UniqueConstraint(
+                fields=["triage_run"],
+                condition=Q(triage_run__isnull=False, archived_at__isnull=True),
+                name="setup_one_triage_thread_per_run",
             ),
         ]
 

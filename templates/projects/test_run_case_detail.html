@@ -48,6 +48,9 @@
      into or out of "needs_retest".
      pivot.testrail_source_skip_reason is set when a send could not deliver
      the case (shown via includes/_checked_skip_reason.html).
+     pivot.evidence_review_state / evidence_review_error: the AI screenshot
+     review of a checked, unsent case (includes/_evidence_review_badge.html,
+     "Reviewing screenshots" or "Screenshot review failed" + the reason).
 
      pivot.blocked_reason / pivot.get_blocked_reason_display are set only when
      status is "blocked"; the blocked message itself is pivot.result. The case
@@ -160,7 +163,12 @@
      person-step cards' forms (passed in as can_write) and every dialog. A
      read-only member keeps the result, steps, log, screenshots, history and the
      "Go to result chat" link. user.is_superuser gates the Resume dialog's run
-     mode select. {% endcomment %}
+     mode select.
+
+     triage_badge (run_triage.types.TriageBadge or None; None for a Draft run
+     or a case not analysed): the AI case analysis's severity and category
+     under the title (run_triage/includes/_triage_badge.html), dimmed with
+     "out of date" when the case changed since. {% endcomment %}
 
 {% block title %}{{ pivot.test_case.title }} · {{ test_run.display_name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -190,6 +198,9 @@
           x-text="badgeLabel(status)"
         >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% elif pivot.status == "awaiting_person" %}Your turn{% elif pivot.status == "needs_retest" %}Needs re-test{% endif %}</span>
       </h1>
+      {% if triage_badge %}
+      <p class="triage-case-analysis">{% include "run_triage/includes/_triage_badge.html" with badge=triage_badge only %} <a class="small" href="{% url 'run_triage:report' project.id test_run.id %}">Case analysis</a></p>
+      {% endif %}
       <p class="subtitle">
         Case {{ case_position }} of {{ case_total }} in {{ test_run.display_name }}
         {% if pivot.started_at %} · started <time datetime="{{ pivot.started_at|date:'c' }}">{{ pivot.started_at|date:"M j, H:i" }}</time>{% endif %}
@@ -204,6 +215,7 @@
       {% if pivot.testrail_source_skip_reason %}
         {% include "projects/includes/_checked_skip_reason.html" with pivot=pivot only %}
       {% endif %}
+      {% include "projects/includes/_evidence_review_badge.html" with pivot=pivot show_error=True only %}
       {% if pivot.testrail_source_result_id %}
         {% if source_run_url %}
         <a class="badge badge-passed" href="{{ source_run_url }}" target="_blank" rel="noopener">Sent to TestRail R{{ pivot.testrail_source_run_id }}</a>

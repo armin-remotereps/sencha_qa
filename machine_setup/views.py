@@ -18,11 +18,13 @@ from machine_setup.exceptions import (
     SetupMachineNotReadyError,
     SetupNoActiveTurnError,
     SetupTurnActiveError,
+    TriageChatSendRefusedError,
 )
 from machine_setup.forms import (
     OpenHelpChatForm,
     OpenManualChatForm,
     OpenResultChatForm,
+    OpenTriageChatForm,
     SetupForceStopForm,
     SetupMessageForm,
     SetupThreadForm,
@@ -33,6 +35,7 @@ from machine_setup.services.action_approval_decision import (
     approve_action,
     discard_action,
 )
+from machine_setup.services.analysis_threads import get_analysis_section
 from machine_setup.services.case_auto_fix import settle_stale_auto_fix_turn
 from machine_setup.services.chat_page import (
     OTHER_THREAD_TURN_MESSAGE,
@@ -56,6 +59,7 @@ from machine_setup.services.open_result_chat import (
     find_result_case,
     open_result_chat,
 )
+from machine_setup.services.open_triage_chat import find_triage_run, open_triage_chat
 from machine_setup.services.reset_conversation import reset_conversation
 from machine_setup.services.result_card_decision import (
     ResultCard,
@@ -150,9 +154,11 @@ def _render_chat(
     threads = list_help_threads(project)
     # Only the composer lists them, and read-only members get none.
     access = get_request_project_access(request)
+    can_write = access is not None and access.can_write
+    analysis = get_analysis_section(project, include_startable=can_write)
     knowledge_picker = (
         get_knowledge_picker(project.pk)
-        if access is not None and access.can_write
+        if can_write
         else KnowledgePicker(choices=[], capped=False)
     )
     return render(
@@ -171,7 +177,12 @@ def _render_chat(
             # the page tracks that turn itself.
             "help_turn_blocker": MACHINE_SETUP_RUNNING_MESSAGE,
             "threads": threads,
-            "thread_ids": [thread.conversation_id for thread in threads],
+            # Case analysis threads: the Analysis section.
+            "analysis": analysis,
+            # Every listed thread, so the main chat marks their live rows as
+            # another thread's.
+            "thread_ids": [thread.conversation_id for thread in threads]
+            + [thread.conversation_id for thread in analysis.threads],
             "visual_engine": page.visual_engine,
             "blocker_texts": {
                 "machine_not_ready": SetupMachineNotReadyError.default_message,
@@ -206,6 +217,8 @@ def _render_chat(
             ),
             # Manual case discussions: the case, claim and pause header.
             "manual_thread": page.manual_thread,
+            # Case analysis threads: the run and report header.
+            "triage_thread": page.triage_thread,
             "active_tab": "machine_setup",
             "active_nav": "projects",
         },
@@ -303,6 +316,40 @@ def manual_chat_open(
     except MachineSetupError as exc:
         messages.error(request, exc.message)
         return redirect(case_url)
+    return _back_to_chat(project, thread.pk)
+
+
+@project_membership_required
+@require_POST
+def triage_chat_open(request: AuthenticatedRequest, project: Project) -> HttpResponse:
+    form = OpenTriageChatForm(
+        request.POST,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    )
+    valid = form.is_valid()
+    back_url: str = form.cleaned_data.get("next") or reverse(
+        "machine_setup:chat", kwargs={"project_id": project.id}
+    )
+    if not valid:
+        messages.error(request, form_error_text(form))
+        return redirect(back_url)
+    test_run = find_triage_run(project, form.cleaned_data["test_run_id"])
+    if test_run is None:
+        raise Http404("No such test run.")
+    try:
+        thread = open_triage_chat(
+            project=project,
+            test_run=test_run,
+            user=request.user,
+            text=form.cleaned_data["text"],
+        )
+    except TriageChatSendRefusedError as exc:
+        messages.error(request, exc.message)
+        return _back_to_chat(project, exc.conversation_id)
+    except MachineSetupError as exc:
+        messages.error(request, exc.message)
+        return redirect(back_url)
     return _back_to_chat(project, thread.pk)
 
 

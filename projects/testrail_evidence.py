@@ -1,25 +1,31 @@
-"""Which screenshots of a checked case are sent to TestRail as evidence.
+"""Which screenshots of a checked case go to TestRail as evidence.
 
-Pure: no queries. Every screenshot is tagged with the step attempt that took it
-(``TestRunScreenshot.attempt_id`` = ``SubTaskAttempt.attempt_id``), so the
-attempts that caused the verdict pick their own screenshots:
+Pure: no queries. An AI review (``testrail_evidence_review_services``)
+judges a bounded set of *candidates*; only the ones it judged relevant are
+attached (``select_reviewed_evidence``). Nothing relevant means nothing is
+attached: there is no walk-back to other attempts and no "last shots"
+fallback for unjudged screenshots.
 
-- Passed: none.
-- Failed: the final ``step`` attempt of every step whose final attempt failed;
-  the last ``per_step`` screenshots of each, at most ``max_shots`` in all,
-  keeping the latest steps.
+Agent cases (``agent_review_candidates``): every screenshot is tagged with the
+step attempt that took it (``TestRunScreenshot.attempt_id`` =
+``SubTaskAttempt.attempt_id``), so the attempts that caused the verdict pick
+their own candidates:
+
+- Passed, Needs re-test: none.
+- Failed: the final ``step`` attempt of every step whose final attempt failed.
 - Blocked (a person's decision): the attempt the case stopped on. That is the
   attempt a fault interrupted at the checkpoint cursor (its screenshots are the
   newest and its id was never recorded), else the last failed attempt of any
   kind at the cursor, else the Failed rule's attempts.
-- Fallback, when no causing attempt has a tagged screenshot (legacy data, a
-  fault before the attempt was recorded, a person-made Failed where every step
-  passed, no usable checkpoint): the case's last ``per_step`` screenshots.
+- Every shot of those attempts, keeping the newest ``max_images``. When no
+  causing attempt has a tagged screenshot (legacy data, a fault before the
+  attempt was recorded, a person-made Failed where every step passed, no
+  usable checkpoint), the case's newest ``max_images`` screenshots.
 
-Manual run cases (``select_manual_evidence``) attach every screenshot of
-their current hand-in, Passed included, capped at ``max_shots``: the case
-screenshot and failed steps survive the cap first, then passed steps; the
-chosen ids come back in step order, the case screenshot first (D7).
+Manual run cases (``manual_review_candidates``): every screenshot of their
+current hand-in, Passed included, capped at ``max_shots``: the case
+screenshot and failed steps survive the cap first, then passed steps; they
+come back in step order, the case screenshot first (D7).
 
 Apart from the interrupted attempt at the cursor, an attempt id counts only
 once the attempt is recorded in the checkpoint, so screenshots of truncated or
@@ -28,15 +34,18 @@ earlier-plan attempts never match.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import hashlib
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
 from agents.checkpoint import final_step_indices
-from agents.types import OrchestratorCheckpoint
+from agents.services.evidence_review_prompts import EVIDENCE_REVIEW_PROMPT_VERSION
+from agents.types import OrchestratorCheckpoint, SubTaskAttempt
 from controller_client.protocol import ManualShotKind
 from projects.manual_run_policy import MANUAL_SHOT_TOOL_NAMES
-from projects.models import TestRunTestCaseStatus
+from projects.models import ScreenshotRelevance, TestRunTestCaseStatus
 
 # OmniParser annotated overlays are debugging images, never evidence.
 OVERLAY_TOOL_NAME = "controller_omniparser"
@@ -44,32 +53,87 @@ OVERLAY_TOOL_NAME = "controller_omniparser"
 
 @dataclass(frozen=True)
 class EvidenceShot:
-    """One candidate screenshot (overlays excluded), in ``(created_at, id)`` order."""
+    """One screenshot (overlays excluded), in ``(created_at, id)`` order.
+
+    ``attempt_id`` is "" for untagged and manual screenshots.
+    """
 
     id: int
     attempt_id: str
     step_num: int | None
+    tool_name: str = ""
 
 
-def select_evidence(
+@dataclass(frozen=True)
+class EvidenceSelection:
+    """The screenshots to attach (in candidate order) and how many candidates
+    were judged not relevant (the comment's note)."""
+
+    ids: list[int]
+    omitted: int
+
+
+@dataclass(frozen=True)
+class ManualMark:
+    """A manual step's final mark (``pass``/``fail``) and the tester's note."""
+
+    step_num: int
+    status: str
+    note: str
+
+
+# ============================================================================
+# AGENT CANDIDATES
+# ============================================================================
+
+
+def causing_attempt_ids(
     *,
     status: str,
     checkpoint: OrchestratorCheckpoint | None,
     shots: Sequence[EvidenceShot],
-    per_step: int,
-    max_shots: int,
-) -> list[int]:
-    """Ids of the screenshots to send, in the order of ``shots``."""
+) -> list[str]:
+    """The attempts that caused a Failed or Blocked verdict, in run order."""
     if status == TestRunTestCaseStatus.FAILED:
-        causing = _failed_attempt_ids(checkpoint)
-    elif status == TestRunTestCaseStatus.BLOCKED:
-        causing = _blocked_attempt_ids(checkpoint, shots)
-    else:
+        return _failed_attempt_ids(checkpoint)
+    if status == TestRunTestCaseStatus.BLOCKED:
+        return _blocked_attempt_ids(checkpoint, shots)
+    return []
+
+
+def agent_review_candidates(
+    *,
+    status: str,
+    checkpoint: OrchestratorCheckpoint | None,
+    shots: Sequence[EvidenceShot],
+    max_images: int,
+) -> list[EvidenceShot]:
+    """The screenshots the AI judges for an agent case, in ``shots`` order."""
+    if status not in (TestRunTestCaseStatus.FAILED, TestRunTestCaseStatus.BLOCKED):
         return []
-    selected = _shots_of_attempts(causing, shots, per_step, max_shots)
-    if not selected:
-        selected = _last(list(shots), min(per_step, max_shots))
-    return [shot.id for shot in selected]
+    causing = {
+        attempt_id
+        for attempt_id in causing_attempt_ids(
+            status=status, checkpoint=checkpoint, shots=shots
+        )
+        if attempt_id
+    }
+    of_causing = [shot for shot in shots if shot.attempt_id in causing]
+    return _last(of_causing or list(shots), max_images)
+
+
+def causing_attempts(
+    checkpoint: OrchestratorCheckpoint | None, attempt_ids: Sequence[str]
+) -> list[SubTaskAttempt]:
+    """The recorded attempts among ``attempt_ids``, in ``attempt_ids`` order."""
+    if checkpoint is None:
+        return []
+    by_id = {
+        attempt.attempt_id: attempt
+        for attempt in checkpoint.attempts
+        if attempt.attempt_id
+    }
+    return [by_id[attempt_id] for attempt_id in attempt_ids if attempt_id in by_id]
 
 
 def _failed_attempt_ids(checkpoint: OrchestratorCheckpoint | None) -> list[str]:
@@ -114,28 +178,13 @@ def _interrupted_attempt_id(
     return ""
 
 
-def _shots_of_attempts(
-    attempt_ids: Sequence[str],
-    shots: Sequence[EvidenceShot],
-    per_step: int,
-    max_shots: int,
-) -> list[EvidenceShot]:
-    """The last ``per_step`` shots of each attempt, capped keeping the latest."""
-    by_attempt: dict[str, list[EvidenceShot]] = {}
-    for shot in shots:
-        if shot.attempt_id:
-            by_attempt.setdefault(shot.attempt_id, []).append(shot)
-    picked: list[EvidenceShot] = []
-    for attempt_id in attempt_ids:
-        if attempt_id:
-            picked.extend(_last(by_attempt.get(attempt_id, []), per_step))
-    chosen = {shot.id for shot in _last(picked, max_shots)}
-    return [shot for shot in shots if shot.id in chosen]
-
-
 def _last(items: list[EvidenceShot], count: int) -> list[EvidenceShot]:
     return items[-count:] if count > 0 else []
 
+
+# ============================================================================
+# MANUAL CANDIDATES
+# ============================================================================
 
 # Which manual shots survive the cap first: the case screenshot, then failed
 # steps, then passed steps.
@@ -151,24 +200,14 @@ _MANUAL_EVIDENCE_STATUSES: Final = (
 )
 
 
-@dataclass(frozen=True)
-class ManualEvidenceShot:
-    """One screenshot of a manual case's current hand-in, in ``(created_at,
-    id)`` order."""
+def manual_review_candidates(
+    *, status: str, shots: Sequence[EvidenceShot], max_shots: int
+) -> list[EvidenceShot]:
+    """A manual case's current hand-in shots the AI judges, in step order (the
+    case screenshot first), chosen under the cap by priority.
 
-    id: int
-    tool_name: str
-    step_num: int | None
-
-
-def select_manual_evidence(
-    *, status: str, shots: Sequence[ManualEvidenceShot], max_shots: int
-) -> list[int]:
-    """Ids of a manual case's screenshots to send, in step order (the case
-    screenshot first), chosen under the cap by priority.
-
-    Passed, Failed and Blocked cases send them all up to ``max_shots``; a
-    Needs re-test case sends none (as for every mode).
+    Passed, Failed and Blocked cases: all up to ``max_shots``; a Needs
+    re-test case: none (as for every mode).
     """
     if status not in _MANUAL_EVIDENCE_STATUSES or max_shots <= 0:
         return []
@@ -181,7 +220,6 @@ def select_manual_evidence(
         ),
     )
     chosen = [shot for _, shot in ranked[:max_shots]]
-    # Returned in step order: the case screenshot first, then by step.
     order = {shot.id: index for index, shot in enumerate(shots)}
     chosen.sort(
         key=lambda shot: (
@@ -190,4 +228,72 @@ def select_manual_evidence(
             order[shot.id],
         )
     )
-    return [shot.id for shot in chosen]
+    return chosen
+
+
+# ============================================================================
+# REVIEW KEY AND SELECTION
+# ============================================================================
+
+
+def evidence_review_key(
+    *,
+    status: str,
+    verdict_text: str,
+    candidate_ids: Sequence[int],
+    manual_marks: Sequence[ManualMark] = (),
+) -> str:
+    """SHA-256 of what a review judged: prompt version, status, verdict text,
+    candidate ids in order and, for manual cases, the tester's marks and notes.
+
+    Not the log: it cannot change while the case is checked (every log write
+    reopens the case and clears Checked).
+    """
+    payload = {
+        "v": EVIDENCE_REVIEW_PROMPT_VERSION,
+        "status": status,
+        "verdict": verdict_text,
+        "shots": list(candidate_ids),
+        "marks": [[mark.step_num, mark.status, mark.note] for mark in manual_marks],
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def select_reviewed_evidence(
+    candidates: Sequence[EvidenceShot],
+    relevance: Mapping[int, str],
+    *,
+    manual: bool,
+    per_step: int,
+    max_shots: int,
+) -> EvidenceSelection:
+    """The relevant candidates to attach, from the review's ``relevance``
+    (shot id -> ``ScreenshotRelevance``).
+
+    Agent: at most ``per_step`` per attempt, then ``max_shots``, keeping the
+    latest. Manual: up to ``max_shots`` in the candidates' step order.
+    ``omitted`` counts the candidates not judged relevant.
+    """
+    relevant = [
+        shot
+        for shot in candidates
+        if relevance.get(shot.id) == ScreenshotRelevance.RELEVANT
+    ]
+    omitted = len(candidates) - len(relevant)
+    if manual:
+        kept = relevant[:max_shots] if max_shots > 0 else []
+        return EvidenceSelection(ids=[shot.id for shot in kept], omitted=omitted)
+    by_attempt: dict[str, list[EvidenceShot]] = {}
+    for shot in relevant:
+        by_attempt.setdefault(shot.attempt_id, []).append(shot)
+    picked = {
+        shot.id for group in by_attempt.values() for shot in _last(group, per_step)
+    }
+    capped = {
+        shot.id
+        for shot in _last([shot for shot in relevant if shot.id in picked], max_shots)
+    }
+    return EvidenceSelection(
+        ids=[shot.id for shot in relevant if shot.id in capped], omitted=omitted
+    )

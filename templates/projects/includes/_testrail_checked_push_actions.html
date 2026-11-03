@@ -13,8 +13,33 @@
      testrail_checked_push  — projects.testrail_checked_push_services.CheckedPushPanel
                               (used here: .configured, .has_any_source, .can_send,
                               .ready_count, .resume_count, .confirm_body,
-                              .disabled_reason) {% endcomment %}
+                              .disabled_reason, .review_waiting_count,
+                              .review_failed_count)
+     project_can_write      — the retry button is for writable members only
+
+   Screenshot review: checked, unsent cases wait for the AI to pick the
+   screenshots to attach. Their counts show as badges, in any run status, and
+   a writable member gets "Retry screenshot review (N)" for failed reviews, which posts to
+   projects:testrail_evidence_review_retry through partials/confirm_dialog.html
+   (dialog id "retry-evidence-review"). {% endcomment %}
 {% if testrail_checked_push.configured and testrail_checked_push.has_any_source %}
+  {% if testrail_checked_push.review_waiting_count %}
+    <span class="badge badge-reviewing" title="Checked cases whose screenshots the AI is still reviewing; Send reviews them first.">Reviewing screenshots: {{ testrail_checked_push.review_waiting_count }}</span>
+  {% endif %}
+  {% if testrail_checked_push.review_failed_count %}
+    <span class="badge badge-review-failed" title="Checked cases whose screenshot review failed; they are not sent until a review succeeds.">Screenshot review failed: {{ testrail_checked_push.review_failed_count }}</span>
+  {% endif %}
+  {% if project_can_write and testrail_checked_push.review_failed_count %}
+    <button
+      type="button"
+      class="btn btn-secondary"
+      :disabled="testrailSourcePushStatus === 'pushing'"
+      :title="testrailSourcePushStatus === 'pushing' ? 'A send is in progress' : null"
+      @click="$dispatch('open-retry-evidence-review')"
+    >Retry screenshot review ({{ testrail_checked_push.review_failed_count }})</button>
+    {% url 'projects:testrail_evidence_review_retry' project.id test_run.id as evidence_review_retry_url %}
+    {% include "partials/confirm_dialog.html" with dialog_id="retry-evidence-review" title="Review the screenshots again?" body="The AI reviews the screenshots of the checked cases whose review failed, in the background. Reload the page to see the result." confirm_label="Retry review" confirm_class="btn-primary" action_url=evidence_review_retry_url %}
+  {% endif %}
   {% if testrail_checked_push.can_send %}
     <button
       type="button"
