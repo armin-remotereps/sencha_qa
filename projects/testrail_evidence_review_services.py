@@ -56,9 +56,9 @@ from projects.exceptions import EvidenceReviewError
 from projects.manual_current_submission import current_manual_submissions
 from projects.models import (
     EVIDENCE_REVIEW_ERROR_MAX_LENGTH,
-    ManualCaseSubmission,
     SCREENSHOT_RELEVANCE_NOTE_MAX_LENGTH,
     EvidenceReviewState,
+    ManualCaseSubmission,
     ScreenshotRelevance,
     TestRun,
     TestRunScreenshot,

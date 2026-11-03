@@ -5,7 +5,9 @@ from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.migrations.state import StateApps
 
 
-def _mark_partly_sent_done(apps: StateApps, schema_editor: BaseDatabaseSchemaEditor) -> None:
+def _mark_partly_sent_done(
+    apps: StateApps, schema_editor: BaseDatabaseSchemaEditor
+) -> None:
     # Cases already sent keep resuming their attachments: the review gate only
     # applies to new results.
     TestRunTestCase = apps.get_model("projects", "TestRunTestCase")
@@ -17,38 +19,57 @@ def _mark_partly_sent_done(apps: StateApps, schema_editor: BaseDatabaseSchemaEdi
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('projects', '0055_manual_pause_discuss'),
+        ("projects", "0055_manual_pause_discuss"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='testrunscreenshot',
-            name='relevance',
-            field=models.CharField(blank=True, choices=[('', 'Not judged'), ('relevant', 'Relevant'), ('not_relevant', 'Not relevant')], default='', max_length=16),
+            model_name="testrunscreenshot",
+            name="relevance",
+            field=models.CharField(
+                blank=True,
+                choices=[
+                    ("", "Not judged"),
+                    ("relevant", "Relevant"),
+                    ("not_relevant", "Not relevant"),
+                ],
+                default="",
+                max_length=16,
+            ),
         ),
         migrations.AddField(
-            model_name='testrunscreenshot',
-            name='relevance_note',
-            field=models.CharField(blank=True, default='', max_length=200),
+            model_name="testrunscreenshot",
+            name="relevance_note",
+            field=models.CharField(blank=True, default="", max_length=200),
         ),
         migrations.AddField(
-            model_name='testruntestcase',
-            name='evidence_review_error',
-            field=models.CharField(blank=True, default='', max_length=200),
+            model_name="testruntestcase",
+            name="evidence_review_error",
+            field=models.CharField(blank=True, default="", max_length=200),
         ),
         migrations.AddField(
-            model_name='testruntestcase',
-            name='evidence_review_key',
-            field=models.CharField(blank=True, default='', max_length=64),
+            model_name="testruntestcase",
+            name="evidence_review_key",
+            field=models.CharField(blank=True, default="", max_length=64),
         ),
         migrations.AddField(
-            model_name='testruntestcase',
-            name='evidence_review_state',
-            field=models.CharField(blank=True, choices=[('', 'Not prepared'), ('pending', 'Reviewing screenshots'), ('done', 'Screenshots reviewed'), ('failed', 'Screenshot review failed')], default='', max_length=16),
+            model_name="testruntestcase",
+            name="evidence_review_state",
+            field=models.CharField(
+                blank=True,
+                choices=[
+                    ("", "Not prepared"),
+                    ("pending", "Reviewing screenshots"),
+                    ("done", "Screenshots reviewed"),
+                    ("failed", "Screenshot review failed"),
+                ],
+                default="",
+                max_length=16,
+            ),
         ),
         migrations.AddField(
-            model_name='testruntestcase',
-            name='testrail_evidence_omitted',
+            model_name="testruntestcase",
+            name="testrail_evidence_omitted",
             field=models.PositiveSmallIntegerField(default=0),
         ),
         migrations.RunPython(_mark_partly_sent_done, migrations.RunPython.noop),

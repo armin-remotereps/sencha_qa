@@ -25,4 +25,5 @@ Users want every run case triaged by AI into a category and severity, grouped by
 - Bump `run_triage.taxonomy.TRIAGE_PROMPT_VERSION` when the classifier prompt or taxonomy changes (part of the reuse hash).
 - Accepted deviations: CSV built in memory (bounded by `RUN_TRIAGE_MAX_CASES`, not streamed); manual cases send the tester's own notes (not the TestRail rewrite); `SCREENSHOT_MAX_BYTES` mirrored in `triage_input.py`.
 - Follow-up: machine-free analysis turns that run beside machine turns (Q11).
+- Screenshots sent to the classifier come from `projects.testrail_evidence.agent_review_candidates` / `manual_review_candidates` (the newest shots of the attempts that caused the verdict; adapted after `2026-11-03-testrail-evidence-relevance.md` removed `select_evidence`).
 - Not exercised against a database or a real model (no Postgres locally): strict mypy, `manage.py check`, `makemigrations --check`, SQL compilation and template compilation only.

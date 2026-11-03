@@ -40,9 +40,8 @@ from projects.models import (
 from projects.testrail_evidence import (
     OVERLAY_TOOL_NAME,
     EvidenceShot,
-    ManualEvidenceShot,
-    select_evidence,
-    select_manual_evidence,
+    agent_review_candidates,
+    manual_review_candidates,
 )
 from projects.testrail_results_services import pivot_result_text, pivot_step_breakdown
 from run_triage.case_refs import pivot_ref
@@ -287,7 +286,7 @@ def _select_shots(
     ]
     manual_keys = _current_manual_shot_keys(manual_ids)
     agent_shots: dict[int, list[EvidenceShot]] = {pid: [] for pid in statuses}
-    manual_shots: dict[int, list[ManualEvidenceShot]] = {pid: [] for pid in manual_ids}
+    manual_shots: dict[int, list[EvidenceShot]] = {pid: [] for pid in manual_ids}
     steps: dict[int, int | None] = {}
     rows = (
         TestRunScreenshot.objects.filter(test_run_test_case_id__in=list(statuses))
@@ -307,8 +306,11 @@ def _select_shots(
         if pivot_id in manual_shots:
             if manual_key and manual_key in manual_keys.get(pivot_id, frozenset()):
                 manual_shots[pivot_id].append(
-                    ManualEvidenceShot(
-                        id=shot_id, tool_name=tool_name, step_num=step_num
+                    EvidenceShot(
+                        id=shot_id,
+                        attempt_id="",
+                        step_num=step_num,
+                        tool_name=tool_name,
                     )
                 )
             continue
@@ -318,18 +320,18 @@ def _select_shots(
     chosen: dict[int, tuple[tuple[int, int | None], ...]] = {}
     for pivot_id, status in statuses.items():
         if pivot_id in manual_shots:
-            ids = select_manual_evidence(
+            picked = manual_review_candidates(
                 status=status, shots=manual_shots[pivot_id], max_shots=max_shots
             )
         else:
-            ids = select_evidence(
+            # The newest shots of the attempts that caused the verdict.
+            picked = agent_review_candidates(
                 status=status,
                 checkpoint=checkpoint_from_json(by_id[pivot_id].execution_checkpoint),
                 shots=agent_shots[pivot_id],
-                per_step=1,
-                max_shots=max_shots,
+                max_images=max_shots,
             )
-        chosen[pivot_id] = tuple((shot_id, steps.get(shot_id)) for shot_id in ids)
+        chosen[pivot_id] = tuple((shot.id, steps.get(shot.id)) for shot in picked)
     return chosen
 
 

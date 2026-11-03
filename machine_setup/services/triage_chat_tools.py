@@ -43,14 +43,14 @@ from projects.controller_outage_clock import agent_monotonic
 from run_triage.case_refs import resolve_case_ref
 from run_triage.exceptions import RunTriageError
 from run_triage.services import classify_cases, correct_cases, group_cases
-from run_triage.services.correct_cases import (
-    MAX_CHANGES_PER_CALL,
-    MAX_GROUPS_PER_CATEGORY,
-)
 from run_triage.services.agent_texts import (
     list_triage_cases_text,
     triage_case_text,
     triage_overview_text,
+)
+from run_triage.services.correct_cases import (
+    MAX_CHANGES_PER_CALL,
+    MAX_GROUPS_PER_CATEGORY,
 )
 from run_triage.taxonomy import (
     TRIAGE_FINDING_MAX_LENGTH,
