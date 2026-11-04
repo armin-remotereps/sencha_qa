@@ -18,16 +18,12 @@ before every agent action:
 - A server reply the person must see is shown once when no step is open:
   after that show is hidden (by an agent action or the person) the window
   stays hidden until a new step or round arrives.
-- A question to the AI (``questions()``) never hides the window and never
-  changes when it shows: the person keeps working on the step. Its answer
-  arrives in a later snapshot whose step keys are unchanged, so that snapshot
-  only re-renders the window in place.
 - Window v2 (``cases``): an open help case (role help, with its discussion)
   also makes the window want to be visible, until the person closes it or
   resolves it; a running case alone never does (it only enables Pause). The
   "news" that re-shows after the short delay is a new step round, a new help
   request, or an agent turn that ended with a new reply. Pausing and sending
-  a discussion message never hide or raise the window (like a question); a
+  a discussion message never hide or raise the window; a
   help resolution hides it like an answer. A closed discussion stays hidden
   until a new help request or a finished turn with a new reply.
 - Manual run (``apply_manual_state``): while the project has a manual run
@@ -80,8 +76,6 @@ from controller_client.person_window_ipc import (
     ManualThumbnailRequestEvent,
     ManualWindowState,
     PauseEvent,
-    QuestionEvent,
-    QuestionResultCommand,
     QuitCommand,
     ReadyEvent,
     ResultCommand,
@@ -104,8 +98,6 @@ from controller_client.protocol import (
     PersonHelpPayload,
     PersonStepActionPayload,
     PersonStepActionResultPayload,
-    PersonStepQuestionAskPayload,
-    PersonStepQuestionResultPayload,
     PersonStepStatePayload,
 )
 
@@ -138,10 +130,6 @@ _REFUSED_INVALID: Final[str] = (
     "The window sent an answer the Test Runner could not read. Answer on "
     "Punk Hazard instead."
 )
-_QUESTION_STALE: Final[str] = "This step is no longer waiting; nothing was asked."
-_QUESTION_UNAVAILABLE: Final[str] = (
-    "Asking the AI is not available on this server; ask on Punk Hazard."
-)
 
 _CASE_STALE: Final[str] = "This case changed; look at it again."
 _PAUSE_REFUSED: Final[str] = "This case cannot be paused now."
@@ -169,12 +157,6 @@ ManualWindowRequest = (
     | ManualSubmitEvent
     | ManualThumbnailRequestEvent
     | ManualChatSendEvent
-)
-_MANUAL_QUESTION_STALE: Final[str] = (
-    "This case is no longer yours to work on; nothing was asked."
-)
-_MANUAL_QUESTION_UNAVAILABLE: Final[str] = (
-    "Asking the AI is not available for this case right now."
 )
 
 
@@ -296,8 +278,6 @@ class PersonWindow:
         # Per open help request: the newest agent reply seen while no turn
         # ran (a turn that ends with a newer one is news).
         self._reply_marks: dict[int, int] = {}
-        # The last snapshot said the server takes questions.
-        self._questions_enabled = False
         self._connected = True
         self._process: asyncio.subprocess.Process | None = None
         self._ready = False
@@ -320,7 +300,6 @@ class PersonWindow:
         # True: the window acknowledged the hide; False: it went away first.
         self._hide_waiters: dict[int, asyncio.Future[bool]] = {}
         self._actions: asyncio.Queue[PersonStepActionPayload] = asyncio.Queue()
-        self._questions: asyncio.Queue[PersonStepQuestionAskPayload] = asyncio.Queue()
         self._case_requests: asyncio.Queue[PersonCaseRequest] = asyncio.Queue()
         # Manual run (MANUAL_RUN_V1): the Manual run tab's content, its
         # requests, a capture notice the window missed while it restarted,
@@ -347,20 +326,16 @@ class PersonWindow:
         self,
         steps: Sequence[PersonStepStatePayload],
         *,
-        questions_enabled: bool = False,
         cases: Sequence[PersonCaseStatePayload] = (),
     ) -> None:
         """The latest ``person_step_state`` snapshot (newest first).
 
-        ``questions_enabled``: the server takes ``person_step_question`` from
-        this runner, so the window offers the Ask AI box. ``cases``: the
-        cases behind the steps, open help cases and the running case
-        (PERSON_CASE_CONTEXT_V1; empty from an older server).
+        ``cases``: the cases behind the steps, open help cases and the running
+        case (PERSON_CASE_CONTEXT_V1; empty from an older server).
         """
         if self._disabled or self._stopping:
             return
         self._steps = tuple(steps)
-        self._questions_enabled = questions_enabled
         self._cases = tuple(cases)
         self._update_reply_marks()
         keys = self._attention_keys()
@@ -450,27 +425,10 @@ class PersonWindow:
             self._result_needs_attention = not result.queued
         self._sync_visibility()
 
-    def show_question_result(
-        self, result: PersonStepQuestionResultPayload, *, manual: bool = False
-    ) -> None:
-        """The server's acknowledgement of the person's last question
-        (``manual``: a question about the claimed manual case).
-
-        Never changes visibility: the window stayed up while the person asked.
-        """
-        self._send(
-            QuestionResultCommand(ok=result.ok, message=result.message, manual=manual)
-        )
-
     async def actions(self) -> AsyncIterator[PersonStepActionPayload]:
         """Every validated answer the person sends, forever."""
         while True:
             yield await self._actions.get()
-
-    async def questions(self) -> AsyncIterator[PersonStepQuestionAskPayload]:
-        """Every validated question the person asks the AI, forever."""
-        while True:
-            yield await self._questions.get()
 
     async def case_requests(self) -> AsyncIterator[PersonCaseRequest]:
         """Every validated pause, discussion message and help resolution."""
@@ -789,8 +747,6 @@ class PersonWindow:
                 # Any kind of request may be waiting: release them all (the
                 # window ignores a result for a kind it does not wait for).
                 self._send(ResultCommand(ok=False, message=_REFUSED_INVALID))
-                self._send(QuestionResultCommand(ok=False, message=""))
-                self._send(QuestionResultCommand(ok=False, message="", manual=True))
                 for kind in CaseRequestKind:
                     self._send(
                         CaseResultCommand(kind=kind, ok=False, message=_REFUSED_INVALID)
@@ -809,8 +765,6 @@ class PersonWindow:
                         waiter.set_result(True)
                 case ActionEvent(action=action):
                     self._on_action(action)
-                case QuestionEvent(question=question):
-                    self._on_question(question)
                 case PauseEvent(pause=pause):
                     self._on_pause(pause)
                 case ChatSendEvent(send=send):
@@ -850,41 +804,6 @@ class PersonWindow:
         # case still brings the window back).
         self._suppressed |= {_step_attention(step) for step in self._steps}
         self._actions.put_nowait(action)
-
-    def _on_question(self, question: PersonStepQuestionAskPayload) -> None:
-        # The window stays as it is: no hide, no suppression.
-        if question.is_manual:
-            self._on_manual_question(question)
-            return
-        keys = {_key(step) for step in self._steps}
-        if (question.person_step_id, question.round) not in keys:
-            message = _QUESTION_STALE
-        elif not self._questions_enabled:
-            message = _QUESTION_UNAVAILABLE
-        else:
-            self._questions.put_nowait(question)
-            return
-        self.show_question_result(
-            PersonStepQuestionResultPayload(ok=False, message=message)
-        )
-
-    def _on_manual_question(self, question: PersonStepQuestionAskPayload) -> None:
-        manual = self._manual
-        active = manual.active if manual is not None else None
-        if (
-            active is None
-            or active.pivot_id != question.pivot_id
-            or active.claim_token != question.claim_token
-        ):
-            message = _MANUAL_QUESTION_STALE
-        elif not active.can_ask:
-            message = _MANUAL_QUESTION_UNAVAILABLE
-        else:
-            self._questions.put_nowait(question)
-            return
-        self.show_question_result(
-            PersonStepQuestionResultPayload(ok=False, message=message), manual=True
-        )
 
     def _case(self, pivot_id: int) -> PersonCaseStatePayload | None:
         for case in self._cases:
@@ -960,11 +879,7 @@ class PersonWindow:
         self._case_requests.put_nowait(action)
 
     def _state_command(self) -> StateCommand:
-        return StateCommand(
-            steps=self._steps,
-            questions_enabled=self._questions_enabled,
-            cases=self._cases,
-        )
+        return StateCommand(steps=self._steps, cases=self._cases)
 
     def _send(self, command: WindowCommand) -> None:
         process = self._process
@@ -992,11 +907,7 @@ class PersonWindow:
                 "without the cases",
                 e,
             )
-            self._send(
-                StateCommand(
-                    steps=command.steps, questions_enabled=command.questions_enabled
-                )
-            )
+            self._send(StateCommand(steps=command.steps))
             return
         if stdin.transport.get_write_buffer_size() > _MAX_WRITE_BUFFER_BYTES:
             logger.error("The person-step window stopped reading; closing it")

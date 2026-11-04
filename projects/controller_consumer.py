@@ -20,7 +20,6 @@ from controller_client.protocol import (
     MANUAL_SCREENSHOT_UPLOAD_MAX_BYTES,
     PERSON_CASE_ACTION_MAX_BYTES,
     PERSON_STEP_ACTION_MAX_BYTES,
-    PERSON_STEP_QUESTION_MAX_BYTES,
     CasePauseActionResultPayload,
     ClientCapability,
     CloseCode,
@@ -36,8 +35,6 @@ from controller_client.protocol import (
     PersonHelpActionKind,
     PersonStepActionKind,
     PersonStepActionResultPayload,
-    PersonStepQuestionAskPayload,
-    PersonStepQuestionResultPayload,
     PersonStepStatePayload,
     parse_handshake_capabilities,
     parse_manual_case_progress_payload,
@@ -53,7 +50,6 @@ from controller_client.protocol import (
     serialize_manual_screenshot_ack,
     serialize_person_case_action_result,
     serialize_person_step_action_result,
-    serialize_person_step_question_result,
     serialize_person_step_state,
 )
 from machine_setup.exceptions import MachineSetupError
@@ -112,7 +108,6 @@ from projects.exceptions import (
     ManualShotRejectedError,
     ManualSubmissionDroppedError,
     PersonStepError,
-    PersonStepQuestionError,
     RunHelpError,
 )
 from projects.forms import (
@@ -121,9 +116,7 @@ from projects.forms import (
     RunnerHelpActionForm,
     RunnerManualCaseActionForm,
     RunnerManualChatSendForm,
-    RunnerManualStepQuestionForm,
     RunnerPersonStepActionForm,
-    RunnerPersonStepQuestionForm,
     form_error_text,
 )
 from projects.models import HelpContinueMode, Project
@@ -135,7 +128,6 @@ from projects.runner_help_action_services import (
 )
 from projects.runner_manual_services import (
     act_from_runner,
-    ask_manual_from_runner,
     progress_from_runner,
     submit_from_runner,
     upload_from_runner,
@@ -143,7 +135,6 @@ from projects.runner_manual_services import (
 from projects.runner_person_step_services import (
     RunnerPersonStepAnswer,
     answer_from_runner,
-    ask_from_runner,
     resolve_runner_person,
 )
 from projects.runner_update_progress import (
@@ -170,9 +161,6 @@ _PERSON_STEP_DONE: dict[PersonStepActionKind, str] = {
 _PERSON_STEPS_UNSUPPORTED = "This Test Runner did not offer person steps."
 _PERSON_STEP_TOO_LARGE = "The answer is too long."
 _PERSON_STEP_FAILED = "The answer could not be saved. Answer on Punk Hazard."
-_PERSON_STEP_QUESTION_UNSUPPORTED = "This Test Runner did not offer Ask AI."
-_PERSON_STEP_QUESTION_TOO_LARGE = "The question is too long."
-_PERSON_STEP_QUESTION_FAILED = "The question could not be sent. Ask on Punk Hazard."
 _CASE_ACTION_UNSUPPORTED = "This Test Runner did not offer this action."
 _CASE_ACTION_TOO_LARGE = "The message is too long."
 _CASE_ACTION_FAILED = "That did not work. Try it on Punk Hazard."
@@ -217,11 +205,6 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     _message_builder: ControllerMessageBuilder
     # The runner shows person steps (it advertised PERSON_STEPS_V1).
     _person_steps_enabled: bool
-    # The runner shows how-to lists and Ask AI (PERSON_STEP_ASSIST_V1).
-    _assist_enabled: bool
-    # The runner takes up to 12 how-to items with sources
-    # (PERSON_STEP_GUIDE_V1, only together with PERSON_STEP_ASSIST_V1).
-    _guide_enabled: bool
     # The runner shows the test case steps a step covers
     # (PERSON_STEP_CASE_STEPS_V1).
     _case_steps_enabled: bool
@@ -261,8 +244,6 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self._authenticated = False
         self._project = None
         self._person_steps_enabled = False
-        self._assist_enabled = False
-        self._guide_enabled = False
         self._case_steps_enabled = False
         self._case_context_enabled = False
         self._discussion_enabled = False
@@ -335,10 +316,6 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
         if msg_type == MessageType.PERSON_STEP_ACTION:
             await self._handle_person_step_action(data, raw_length)
-            return
-
-        if msg_type == MessageType.PERSON_STEP_QUESTION:
-            await self._handle_person_step_question(data, raw_length)
             return
 
         if msg_type == MessageType.CASE_PAUSE_ACTION:
@@ -440,16 +417,6 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         )
         self._person_steps_enabled = (
             ClientCapability.PERSON_STEPS_V1.value in capabilities
-        )
-        # Advertised only together with PERSON_STEPS_V1 (the window).
-        self._assist_enabled = (
-            self._person_steps_enabled
-            and ClientCapability.PERSON_STEP_ASSIST_V1.value in capabilities
-        )
-        # Advertised only together with PERSON_STEP_ASSIST_V1.
-        self._guide_enabled = (
-            self._assist_enabled
-            and ClientCapability.PERSON_STEP_GUIDE_V1.value in capabilities
         )
         # Advertised only together with PERSON_STEPS_V1 (the window).
         self._case_steps_enabled = (
@@ -605,8 +572,6 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             state = await sync_to_async(get_runner_window_state)(
                 project_id,
                 RunnerWindowFeatures(
-                    assist=self._assist_enabled,
-                    guide=self._guide_enabled,
                     case_steps=self._case_steps_enabled,
                     case_context=self._case_context_enabled,
                     discussion=self._discussion_enabled,
@@ -623,11 +588,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             return
         self._person_steps_sent = snapshot
         await self.send(
-            text_data=serialize_person_step_state(
-                state.steps,
-                questions_enabled=self._assist_enabled,
-                cases=state.cases,
-            )
+            text_data=serialize_person_step_state(state.steps, cases=state.cases)
         )
 
     async def _push_manual_state(self, *, force: bool = False) -> None:
@@ -821,93 +782,6 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             )
             return _refused(_PERSON_STEP_FAILED)
         return _answered(answer.action, outcome)
-
-    async def _handle_person_step_question(
-        self, data: dict[str, Any], raw_length: int
-    ) -> None:
-        request_id = _echoed_request_id(data)
-        if _is_manual_question(data):
-            result = await self._ask_manual_step(data, raw_length)
-        else:
-            result = await self._ask_person_step(data, raw_length)
-        await self.send(
-            text_data=serialize_person_step_question_result(result, request_id)
-        )
-        if not result.ok:
-            await self._push_person_steps(force=True)
-
-    async def _ask_person_step(
-        self, data: dict[str, Any], raw_length: int
-    ) -> PersonStepQuestionResultPayload:
-        if not self._assist_enabled or self._project is None:
-            return _question_refused(_PERSON_STEP_QUESTION_UNSUPPORTED)
-        if raw_length > PERSON_STEP_QUESTION_MAX_BYTES:
-            return _question_refused(_PERSON_STEP_QUESTION_TOO_LARGE)
-        form = RunnerPersonStepQuestionForm(
-            {
-                field: data.get(field)
-                for field in RunnerPersonStepQuestionForm.base_fields
-            }
-        )
-        if not form.is_valid():
-            return _question_refused(form_error_text(form))
-        question = PersonStepQuestionAskPayload(
-            person_step_id=form.cleaned_data["person_step_id"],
-            round=form.cleaned_data["round"],
-            question=form.cleaned_data["question"],
-        )
-        try:
-            await sync_to_async(ask_from_runner)(
-                project_id=self._project.id,
-                channel_name=self.channel_name,
-                person_id=self._person_user_id,
-                question=question,
-            )
-        except PersonStepQuestionError as exc:
-            return _question_refused(exc.message)
-        except Exception:
-            logger.exception(
-                "Person step question failed for project %s", self._project.id
-            )
-            return _question_refused(_PERSON_STEP_QUESTION_FAILED)
-        # The answer arrives in a later ``person_step_state``.
-        return PersonStepQuestionResultPayload(ok=True, message="")
-
-    async def _ask_manual_step(
-        self, data: dict[str, Any], raw_length: int
-    ) -> PersonStepQuestionResultPayload:
-        """The manual form of ``person_step_question`` (``pivot_id`` set)."""
-        if not (self._manual_enabled and self._assist_enabled) or self._project is None:
-            return _question_refused(_PERSON_STEP_QUESTION_UNSUPPORTED)
-        if raw_length > PERSON_STEP_QUESTION_MAX_BYTES:
-            return _question_refused(_PERSON_STEP_QUESTION_TOO_LARGE)
-        form = RunnerManualStepQuestionForm(
-            {
-                field: data.get(field)
-                for field in RunnerManualStepQuestionForm.base_fields
-            }
-        )
-        if not form.is_valid():
-            return _question_refused(form_error_text(form))
-        try:
-            await database_sync_to_async(ask_manual_from_runner)(
-                project=self._project,
-                channel_name=self.channel_name,
-                person_user_id=self._person_user_id,
-                pivot_id=form.cleaned_data["pivot_id"],
-                claim_token=form.cleaned_data["claim_token"],
-                step_num=form.cleaned_data["step_num"],
-                question=form.cleaned_data["question"],
-            )
-        except (ManualRunError, PersonStepQuestionError) as exc:
-            return _question_refused(exc.message)
-        except Exception:
-            logger.exception(
-                "Manual step question failed for project %s", self._project.id
-            )
-            return _question_refused(_PERSON_STEP_QUESTION_FAILED)
-        # The answer arrives in a later ``manual_run_state``.
-        return PersonStepQuestionResultPayload(ok=True, message="")
 
     async def _handle_manual_case_action(
         self, data: dict[str, Any], raw_length: int
@@ -1303,12 +1177,6 @@ def _echoed_request_id(data: dict[str, Any]) -> str:
     return ""
 
 
-def _is_manual_question(data: dict[str, Any]) -> bool:
-    """The manual form of ``person_step_question``: a positive ``pivot_id``."""
-    pivot_id = data.get("pivot_id")
-    return isinstance(pivot_id, int) and not isinstance(pivot_id, bool) and pivot_id > 0
-
-
 def _peek_submission_id(data: dict[str, Any]) -> str:
     """The message's ``submission_id`` as a normalized UUID, or blank."""
     raw = data.get("submission_id")
@@ -1338,10 +1206,6 @@ def _pause_refused(message: str) -> CasePauseActionResultPayload:
 
 def _case_refused(message: str) -> PersonCaseActionResultPayload:
     return PersonCaseActionResultPayload(ok=False, message=message)
-
-
-def _question_refused(message: str) -> PersonStepQuestionResultPayload:
-    return PersonStepQuestionResultPayload(ok=False, message=message)
 
 
 def _refused(message: str) -> PersonStepActionResultPayload:

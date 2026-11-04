@@ -1,10 +1,10 @@
-"""Plain text the agents get from the knowledge base (tool results, excerpts).
+"""Plain text the agents get from the knowledge base (tool results).
 
 All knowledge base material (item names, descriptions, text, snippets) sits
 inside a ``---`` fence that opens with ``KNOWLEDGE_DATA_NOTE``; hints of ours
 (the next page call, how to read a hit) come after the fence. Data can never
-close the fence: a line of dashes is altered, and ``<<<`` / ``>>>`` runs (the
-advisor's block markers) are shortened.
+close the fence: a line of dashes is altered, and ``<<<`` / ``>>>`` runs
+(prompt block markers) are shortened.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from knowledge_base.folder_tree import ancestor_folders
 from knowledge_base.models import KnowledgeItemStatus
 from knowledge_base.tags import item_path
 from knowledge_base.types import (
-    KnowledgeExcerpt,
     KnowledgeHit,
     KnowledgeInstructionRef,
     KnowledgeItemSummary,
@@ -307,18 +306,3 @@ def render_page(page: KnowledgePage) -> str:
             f"page={page.page + 1})."
         )
     return text + "\nThis is the last page of the item."
-
-
-def render_excerpts(excerpts: Sequence[KnowledgeExcerpt]) -> str:
-    """The advisor's knowledge block body (without its markers); "" when empty."""
-    if not excerpts:
-        return ""
-    blocks = [KNOWLEDGE_DATA_NOTE]
-    for number, excerpt in enumerate(excerpts, start=1):
-        location = f", {one_line(excerpt.location)}" if excerpt.location.strip() else ""
-        blocks.append(
-            f"[{number}] item id={excerpt.item_id} {quoted_name(excerpt.item_name)}"
-            f"{_in_folder(excerpt.item_folder)}, page {excerpt.page}{location}:\n"
-            f"{neutralize(excerpt.text)}"
-        )
-    return "\n\n".join(blocks)

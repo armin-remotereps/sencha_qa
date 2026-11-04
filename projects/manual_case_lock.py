@@ -1,4 +1,4 @@
-"""Lock a Manual run case for a claim, release, hand-in or Ask AI question.
+"""Lock a Manual run case for a claim, release, hand-in or pause.
 
 Shared by the manual services so every one of them takes the same locks in
 the same order as the rest of ``projects``: project, then run

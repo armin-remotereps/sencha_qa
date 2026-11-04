@@ -11,13 +11,7 @@
      can_write   — project_can_write (Release is for writable members)
 
    Must sit inside the case page's testRunCaseLive scope: the uploading
-   badge reads manualShotsReceived / manualShotsExpected, and the Ask AI list
-   follows the "person-step-questions" window event that scope dispatches.
-
-   Each step's "How to do it" (panel.steps[].how_to, PersonHowToView; shown
-   claimed or handed in while the guide matches the case) sits in a collapsed
-   <details> rendered by _how_to_list.html with panel.how_to_shell_label;
-   panel.guide_preparing adds one "reload to see it" hint (no live refresh).
+   badge reads manualShotsReceived / manualShotsExpected.
 
    Release posts to projects:test_run_case_manual_release through
    partials/confirm_dialog.html (dialog id "manual-release").
@@ -177,9 +171,6 @@
   {% if panel.steps %}
   <h3 class="manual-subhead">Steps</h3>
   <p class="hint">The test case's own steps, as the tester saw them. Each marked step has its screenshot; unmarked steps were not run.</p>
-  {% if panel.guide_preparing %}
-  <p class="hint">A how-to for each step is being prepared; reload to see it.</p>
-  {% endif %}
   <ol class="step-list manual-step-list">
     {% for step in panel.steps %}
     <li class="step-row">
@@ -196,12 +187,6 @@
           {% if step.expected_result %}<span class="pre-wrap">Expected: {{ step.expected_result|case_text }}</span>{% endif %}
           {% if step.duration_seconds is not None %}<span>{% if step.expected_result %} · {% endif %}{{ step.duration_seconds }}s</span>{% endif %}
         </div>
-        {% endif %}
-        {% if step.how_to %}
-        <details class="manual-step-howto">
-          <summary>How to do it</summary>
-          {% include "projects/includes/_how_to_list.html" with items=step.how_to shell_label=panel.how_to_shell_label has_sources=step.how_to_has_sources only %}
-        </details>
         {% endif %}
         {% if step.note %}<p class="step-detail pre-wrap{% if step.outcome == 'failed' %} is-error{% endif %}">{{ step.note }}</p>{% endif %}
         {% if step.shots %}
@@ -260,39 +245,6 @@
   <p class="hint">{{ panel.refine_state_label }}. The AI rewrites the notes once every screenshot has arrived; if it fails, the tester's own text is sent.</p>
   {% endif %}
   {% endif %}
-
-  {% comment %} Ask AI questions about this case: seeded from the server and
-     replaced by the case socket's person_step_questions event with
-     person_step_id 0 (re-dispatched on window as "person-step-questions").
-     Text through x-text only. {% endcomment %}
-  {{ panel.questions_payload|json_script:"manual-questions-data" }}
-  <details
-    class="manual-questions"
-    x-data="{
-      questions: JSON.parse(document.getElementById('manual-questions-data').textContent),
-      stepLabels: {},
-      statusLabels: { pending: 'Waiting for the AI', answered: 'Answered', failed: 'Not answered' },
-      init() { this.questions.forEach((q) => { this.stepLabels[q.question_id] = q.step_label; }); },
-      update(detail) {
-        if (!detail || detail.person_step_id !== 0 || !Array.isArray(detail.questions)) return;
-        this.questions = detail.questions;
-      },
-    }"
-    x-show="questions.length > 0"
-    {% if not panel.questions %}x-cloak{% endif %}
-    @person-step-questions.window="update($event.detail)"
-  >
-    <summary x-text="'Questions to the AI (' + questions.length + ')'">Questions to the AI ({{ panel.questions|length }})</summary>
-    <ol>
-      <template x-for="q in questions" :key="q.question_id">
-        <li>
-          <p class="small muted" x-text="[stepLabels[q.question_id], q.asked_by, statusLabels[q.status] || q.status].filter(Boolean).join(' · ')"></p>
-          <p class="pre-wrap"><strong>Q:</strong> <span x-text="q.question"></span></p>
-          <p class="pre-wrap" x-show="q.answer"><strong>A:</strong> <span x-text="q.answer"></span></p>
-        </li>
-      </template>
-    </ol>
-  </details>
 </section>
 
 {% if can_write and panel.can_release %}

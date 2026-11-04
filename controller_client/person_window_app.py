@@ -19,8 +19,8 @@ Layout: a header (case title, run and status, Pause…, A−/A+) above a
 notebook:
 
 - Step: the selected open step (What to do, the test case steps it covers,
-  How to do it, Expected result, command, the one-tap Same as expected /
-  Different… report, Overrule, Mark failed / blocked, Ask the AI).
+  Expected result, command, the one-tap Same as expected / Different…
+  report, Overrule, Mark failed / blocked).
 - Test case: the header case's preconditions, steps (the steps the selected
   step covers tinted) and expected results.
 - Log: the last lines of the case log.
@@ -90,7 +90,6 @@ from typing import BinaryIO, Final
 from controller_client.exceptions import ProtocolError
 from controller_client.person_window_chat import ChatBlock, ChatPanel
 from controller_client.person_window_front_app import FrontAppKeeper
-from controller_client.person_window_how_to import render_how_to
 from controller_client.person_window_ipc import (
     IPC_TO_WINDOW_MAX_BYTES,
     TEXT_SIZE_DEFAULT,
@@ -111,8 +110,6 @@ from controller_client.person_window_ipc import (
     ManualThumbnailCommand,
     ManualWindowState,
     PauseEvent,
-    QuestionEvent,
-    QuestionResultCommand,
     QuitCommand,
     ReadyEvent,
     ResultCommand,
@@ -131,7 +128,6 @@ from controller_client.protocol import (
     PERSON_HELP_NOTE_MAX_CHARS,
     PERSON_STEP_NOTE_MAX_CHARS,
     PERSON_STEP_OUTPUT_MAX_CHARS,
-    PERSON_STEP_QUESTION_MAX_CHARS,
     CasePauseActionPayload,
     ContinueModeWire,
     PersonCaseRole,
@@ -141,13 +137,9 @@ from controller_client.protocol import (
     PersonHelpActionKind,
     PersonHelpActionPayload,
     PersonHelpPayload,
-    PersonHowToPayload,
     PersonPlanDraftPayload,
     PersonStepActionKind,
     PersonStepActionPayload,
-    PersonStepQuestionAskPayload,
-    PersonStepQuestionPayload,
-    PersonStepQuestionWireStatus,
     PersonStepStatePayload,
     PersonStepWireKind,
     PersonStepWireOutcome,
@@ -215,8 +207,6 @@ _MUTED_COLOR: Final[str] = "#6b7280"
 # The steps the selected step covers (dark text on amber, readable in dark mode).
 _COVERED_BACKGROUND: Final[str] = "#fde68a"
 _COVERED_FOREGROUND: Final[str] = "#1f2937"
-_ASK_CLOSED: Final[str] = "▸ Ask the AI"
-_ASK_OPEN: Final[str] = "▾ Ask the AI"
 _TEXT_SIZE_STEP: Final[int] = 2
 _HEADING_FONT: Final[str] = "PunkHazardHeading"
 _BOLD_FONT: Final[str] = "PunkHazardBold"
@@ -262,7 +252,6 @@ class _Draft:
     different: bool = False
     note: str = ""
     output: str = ""
-    question: str = ""
 
 
 @dataclass
@@ -289,16 +278,8 @@ class _ViewState:
     # "Different…" pressed: the note is shown and required.
     different: bool = False
     connected: bool = True
-    # The server takes questions (Ask AI box shown).
-    questions_enabled: bool = False
-    # The "Ask the AI" section is expanded (one switch for every step).
-    ask_open: bool = False
-    # The step whose question is with the server (Ask stays disabled).
-    asking: _StepKey | None = None
-    # What the how-to area and the Q&A box show now (rebuilt only on change).
-    rendered_how_to: tuple[PersonHowToPayload, ...] | None = None
+    # What the case steps block shows now (rebuilt only on change).
     rendered_case_steps: _CaseStepsView | None = None
-    rendered_qa: str | None = None
     # Steps and help requests seen, to pick the tab when something new comes.
     seen_steps: frozenset[_StepKey] = frozenset()
     seen_help: frozenset[int] = frozenset()
@@ -378,31 +359,12 @@ def _set_editable_text(widget: "tk.Text", text: str) -> None:
 
 def _wants_output(step: PersonStepStatePayload) -> bool:
     """A pasted output helps the agent check any step with a command to run."""
-    return step.kind is PersonStepWireKind.COMMAND or any(
-        item.command for item in step.how_to
-    )
+    return step.kind is PersonStepWireKind.COMMAND or bool(step.command)
 
 
 def _line_estimate(text: str, columns: int) -> int:
     """Roughly how many wrapped lines ``text`` takes ``columns`` characters wide."""
     return sum(max(1, -(-len(line) // columns)) for line in (text.split("\n") or [""]))
-
-
-def _has_pending_question(step: PersonStepStatePayload) -> bool:
-    return any(q.status is PersonStepQuestionWireStatus.PENDING for q in step.questions)
-
-
-def _qa_text(questions: tuple[PersonStepQuestionPayload, ...]) -> str:
-    blocks: list[str] = []
-    for q in questions:
-        if q.status is PersonStepQuestionWireStatus.PENDING:
-            answer = "The AI is thinking…"
-        elif q.status is PersonStepQuestionWireStatus.FAILED:
-            answer = f"AI: {q.answer or 'The AI could not answer.'}"
-        else:
-            answer = f"AI: {q.answer}"
-        blocks.append(f"You: {q.question}\n{answer}")
-    return "\n\n".join(blocks)
 
 
 def _help_reason_text(help_state: PersonHelpPayload) -> str:
@@ -725,9 +687,6 @@ class PersonWindowApp:
     def chat_entry(self, parent: "tk.Misc", *, row: int, height: int) -> "tk.Text":
         return self._entry_text(parent, row=row, height=height)
 
-    def manual_copy(self, text: str) -> None:
-        self.copy(text)
-
     def manual_send(self, event: WindowEvent) -> None:
         self._writer.send(event)
 
@@ -913,20 +872,15 @@ class PersonWindowApp:
         )
         self._case_steps.frame.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         self._case_steps.frame.grid_remove()
-        self._how_to = _ReadOnlyBlock(self, body, title="How to do it")
-        self._how_to.frame.grid(row=2, column=0, sticky="ew", pady=(6, 0))
-        # One Copy button per suggested command (rebuilt with the how-to).
-        self._how_to_copies = ttk.Frame(self._how_to.frame)
-        self._how_to_copies.grid(row=2, column=0, sticky="w", pady=(2, 0))
         self._expected = _ReadOnlyBlock(self, body, title="Expected result")
-        self._expected.frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
+        self._expected.frame.grid(row=2, column=0, sticky="ew", pady=(6, 0))
         self._objection = _ReadOnlyBlock(
             self, body, title="The agent could not confirm your report"
         )
         self._objection.title.configure(foreground=_WARN_COLOR)
-        self._objection.frame.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+        self._objection.frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
         self._command = _ReadOnlyBlock(self, body, title="Command", mono=True)
-        self._command.frame.grid(row=5, column=0, sticky="ew", pady=(6, 0))
+        self._command.frame.grid(row=4, column=0, sticky="ew", pady=(6, 0))
 
         self._output_frame = ttk.Frame(body)
         self._output_frame.columnconfigure(0, weight=1)
@@ -934,17 +888,17 @@ class PersonWindowApp:
             row=0, column=0, sticky="w"
         )
         self._output = self._entry_text(self._output_frame, row=1, height=5, mono=True)
-        self._output_frame.grid(row=6, column=0, sticky="ew", pady=(6, 0))
+        self._output_frame.grid(row=5, column=0, sticky="ew", pady=(6, 0))
 
         self._note_frame = ttk.Frame(body)
         self._note_frame.columnconfigure(0, weight=1)
         self._note_label = ttk.Label(self._note_frame, text="Note for the agent")
         self._note_label.grid(row=0, column=0, sticky="w")
         self._note = self._entry_text(self._note_frame, row=1, height=3)
-        self._note_frame.grid(row=7, column=0, sticky="ew", pady=(6, 0))
+        self._note_frame.grid(row=6, column=0, sticky="ew", pady=(6, 0))
 
         buttons = ttk.Frame(body)
-        buttons.grid(row=8, column=0, sticky="w", pady=(10, 0))
+        buttons.grid(row=7, column=0, sticky="w", pady=(10, 0))
         self._buttons = buttons
         first = ttk.Frame(buttons)
         first.pack(anchor="w")
@@ -982,7 +936,7 @@ class PersonWindowApp:
         ttk.Button(
             self._different_frame, text="Cancel", command=self._cancel_different
         ).pack(side="left", padx=(6, 0))
-        self._different_frame.grid(row=8, column=0, sticky="w", pady=(10, 0))
+        self._different_frame.grid(row=7, column=0, sticky="w", pady=(10, 0))
         self._different_frame.grid_remove()
 
         # Shown in place of the buttons while Mark failed / blocked waits for
@@ -1002,12 +956,10 @@ class PersonWindowApp:
         ttk.Button(confirm_buttons, text="Cancel", command=self._cancel_confirm).pack(
             side="left", padx=(6, 0)
         )
-        self._confirm_frame.grid(row=8, column=0, sticky="ew", pady=(10, 0))
+        self._confirm_frame.grid(row=7, column=0, sticky="ew", pady=(10, 0))
         self._confirm_frame.grid_remove()
         self._hint = self._label(body, "", foreground=_MUTED_COLOR)
-        self._hint.grid(row=9, column=0, sticky="w", pady=(4, 0))
-
-        self._build_ask(body, row=10)
+        self._hint.grid(row=8, column=0, sticky="w", pady=(4, 0))
 
         self._message = self._label(frame, "")
         self._message.grid(row=4, column=0, sticky="w", pady=(8, 0))
@@ -1029,41 +981,6 @@ class PersonWindowApp:
             side="right", padx=(0, 6)
         )
         return row
-
-    def _build_ask(self, body: "ttk.Frame", *, row: int) -> None:
-        """The collapsible "Ask the AI" section (only when questions work)."""
-        ask = ttk.Frame(body)
-        ask.columnconfigure(0, weight=1)
-        ask.grid(row=row, column=0, sticky="ew", pady=(10, 0))
-        self._ask_frame = ask
-        self._ask_toggle = ttk.Button(ask, text=_ASK_CLOSED, command=self._toggle_ask)
-        self._ask_toggle.grid(row=0, column=0, sticky="w")
-        content = ttk.Frame(ask)
-        content.columnconfigure(0, weight=1)
-        content.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        self._ask_content = content
-        self._label(
-            content,
-            "The AI only advises: it does not act on this machine or answer "
-            "the step for you.",
-            foreground=_MUTED_COLOR,
-        ).grid(row=0, column=0, sticky="w")
-        self._qa = _ReadOnlyBlock(self, content, title="Questions and answers")
-        self._qa.frame.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        ttk.Label(content, text="Your question").grid(
-            row=2, column=0, sticky="w", pady=(6, 0)
-        )
-        self._question = self._entry_text(content, row=3, height=3)
-        # <<Modified>> fires when the modified flag turns on; re-arm it each time.
-        self._question.bind("<<Modified>>", self._on_question_modified)
-        ask_row = ttk.Frame(content)
-        ask_row.grid(row=4, column=0, sticky="w", pady=(6, 0))
-        self._ask_button = ttk.Button(ask_row, text="Ask", command=self._ask)
-        self._ask_button.pack(side="left")
-        self._ask_status = self._label(content, "")
-        self._ask_status.grid(row=5, column=0, sticky="w", pady=(4, 0))
-        content.grid_remove()
-        ask.grid_remove()
 
     def _build_case_tab(self, frame: "ttk.Frame") -> None:
         self._case_empty = self._label(
@@ -1310,10 +1227,7 @@ class PersonWindowApp:
 
     def apply(self, command: WindowCommand) -> None:
         match command:
-            case StateCommand(
-                steps=steps, questions_enabled=questions_enabled, cases=cases
-            ):
-                self._view.questions_enabled = questions_enabled
+            case StateCommand(steps=steps, cases=cases):
                 self._set_state(steps, cases)
             case ShowCommand():
                 self._show()
@@ -1323,10 +1237,6 @@ class PersonWindowApp:
                 self._view.busy = None
                 self._set_message(message, _OK_COLOR if ok else _ERROR_COLOR)
                 self._render()
-            case QuestionResultCommand(ok=ok, message=message, manual=True):
-                self._manual.on_question_result(ok, message)
-            case QuestionResultCommand(ok=ok, message=message):
-                self._on_question_result(ok, message)
             case CaseResultCommand(kind=kind, ok=ok, message=message):
                 self._on_case_result(kind, ok, message)
             case ConnectionCommand(connected=connected):
@@ -1359,8 +1269,6 @@ class PersonWindowApp:
         keys = {_key(step) for step in steps}
         if view.busy is not None and view.busy not in keys:
             view.busy = None
-        if view.asking is not None and view.asking not in keys:
-            view.asking = None
         view.drafts = {k: d for k, d in view.drafts.items() if k in keys}
         help_ids = frozenset(
             help_state.help_request_id for _case, help_state in self._help_cases()
@@ -1638,7 +1546,6 @@ class PersonWindowApp:
             if key is not None:
                 # A message about another step does not belong to this one.
                 self._set_message("", _OK_COLOR)
-                self._set_ask_status("", _OK_COLOR)
             view.rendered = key
             self._load_draft()
             # A new step or round starts at the top.
@@ -1665,7 +1572,6 @@ class PersonWindowApp:
         self._status.configure(text="\n".join(line for line in status_lines if line))
         self._instruction.set(step.instruction)
         self._render_case_steps(step)
-        self._render_how_to(step)
         self._expected.set(step.expected_result or "(none given)")
         not_confirmed = step.status is PersonStepWireStatus.NOT_CONFIRMED
         if not_confirmed and step.objection:
@@ -1690,7 +1596,6 @@ class PersonWindowApp:
         else:
             self._url_frame.grid_remove()
         self._render_buttons(step, not_confirmed)
-        self._render_ask(step)
 
     def _render_case_steps(self, step: PersonStepStatePayload) -> None:
         view = self._view
@@ -1717,58 +1622,6 @@ class PersonWindowApp:
             # A label alone (the server had no step texts): the heading only.
             block.holder.grid_remove()
         block.show(True)
-
-    def _render_how_to(self, step: PersonStepStatePayload) -> None:
-        view = self._view
-        if step.how_to == view.rendered_how_to:
-            return
-        view.rendered_how_to = step.how_to
-        shell = f" · commands for {step.shell_label}" if step.shell_label else ""
-        render_how_to(
-            self._how_to,
-            self._how_to_copies,
-            step.how_to,
-            title=f"How to do it{shell}",
-            copy=self.copy,
-        )
-
-    def _render_ask(self, step: PersonStepStatePayload) -> None:
-        view = self._view
-        if not view.questions_enabled:
-            self._ask_frame.grid_remove()
-            return
-        self._ask_frame.grid()
-        count = f" ({len(step.questions)})" if step.questions else ""
-        self._ask_toggle.configure(
-            text=(_ASK_OPEN if view.ask_open else _ASK_CLOSED) + count
-        )
-        if not view.ask_open:
-            self._ask_content.grid_remove()
-            return
-        self._ask_content.grid()
-        qa = _qa_text(step.questions) or "No questions yet for this step."
-        if qa != view.rendered_qa:
-            # Only on change, so a snapshot that changes nothing here keeps
-            # the person's scroll position.
-            view.rendered_qa = qa
-            self._qa.set(qa)
-            self._qa.text.see("end")
-        self._update_ask_button(step)
-
-    def _update_ask_button(self, step: PersonStepStatePayload) -> None:
-        view = self._view
-        can_ask = (
-            view.connected
-            and view.asking is None
-            and not _has_pending_question(step)
-            and bool(_editable_text(self._question).strip())
-        )
-        self._ask_button.configure(state="normal" if can_ask else "disabled")
-        if view.asking == _key(step):
-            self._set_ask_status("Sending your question…", _MUTED_COLOR)
-
-    def _set_ask_status(self, text: str, color: str) -> None:
-        self._ask_status.configure(text=text, foreground=color)
 
     def _connection_text(self) -> str:
         return "" if self._view.connected else "Reconnecting to Punk Hazard…"
@@ -1868,7 +1721,6 @@ class PersonWindowApp:
             different=self._view.different,
             note=_editable_text(self._note),
             output=_editable_text(self._output),
-            question=_editable_text(self._question),
         )
 
     def _load_draft(self) -> None:
@@ -1877,9 +1729,6 @@ class PersonWindowApp:
         self._view.different = draft.different
         _set_editable_text(self._note, draft.note)
         _set_editable_text(self._output, draft.output)
-        _set_editable_text(self._question, draft.question)
-        # Another step's Q&A: rewrite the box on the next render.
-        self._view.rendered_qa = None
 
     # --- test case and log tabs -------------------------------------------------
 
@@ -2277,74 +2126,6 @@ class PersonWindowApp:
         # Hide (and give the front back) first: the agent's checks start as
         # soon as the answer lands.
         self._hide(lambda: self._writer.send(event))
-
-    # --- person actions: Ask the AI ---------------------------------------------
-
-    def _toggle_ask(self) -> None:
-        self._view.ask_open = not self._view.ask_open
-        self._view.rendered_qa = None
-        self._render()
-
-    def _on_question_modified(self, _event: "tk.Event[tk.Text]") -> None:
-        self._question.edit_modified(False)
-        step = self._selected()
-        if step is not None and self._view.questions_enabled:
-            self._update_ask_button(step)
-
-    def _ask(self) -> None:
-        view = self._view
-        step = self._selected()
-        if step is None or not view.questions_enabled:
-            return
-        if not view.connected or view.asking is not None:
-            return
-        if _has_pending_question(step):
-            self._set_ask_status(
-                "Wait for the AI to answer your last question.", _WARN_COLOR
-            )
-            return
-        question = _editable_text(self._question).strip()
-        if not question:
-            return
-        if len(question) > PERSON_STEP_QUESTION_MAX_CHARS:
-            self._set_ask_status(
-                f"The question is too long ({len(question)} of "
-                f"{PERSON_STEP_QUESTION_MAX_CHARS} characters).",
-                _ERROR_COLOR,
-            )
-            return
-        view.asking = _key(step)
-        self._render()
-        # The window stays up: the person keeps working while the AI answers.
-        self._writer.send(
-            QuestionEvent(
-                question=PersonStepQuestionAskPayload(
-                    person_step_id=step.person_step_id,
-                    round=step.round,
-                    question=question,
-                )
-            )
-        )
-
-    def _on_question_result(self, ok: bool, message: str) -> None:
-        view = self._view
-        asked = view.asking
-        view.asking = None
-        if ok and asked is not None:
-            # Saved: the question now shows in the Q&A, so clear the field.
-            if asked == view.rendered:
-                _set_editable_text(self._question, "")
-            elif asked in view.drafts:
-                view.drafts[asked].question = ""
-        self._set_ask_status("", _OK_COLOR)
-        if not ok:
-            self._set_ask_status(message, _ERROR_COLOR)
-        elif asked == view.rendered:
-            self._set_ask_status(
-                message or "Asked. The answer shows above when it is ready.",
-                _OK_COLOR,
-            )
-        self._render()
 
     # --- person actions: pause, discussion, help --------------------------------
 

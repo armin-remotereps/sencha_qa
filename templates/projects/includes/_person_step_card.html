@@ -21,22 +21,12 @@
      person_step_form — unbound PersonStepReportForm (outcome radios, note,
                   output; person_step_id is written from the panel's step)
      can_write  — project_can_write; false renders the card read-only (the
-                  step and its state, no report form, no Abort, no ask form)
-     person_step_question_form — unbound PersonStepQuestionForm (question;
-                  person_step_id is written from the panel's step)
-   Panel fields for Ask AI: how_to (PersonHowToView: text, command,
-   source_label, source_url; both "" for general guidance),
-   how_to_has_sources (false: one "general guidance" hint under the list),
-   has_commands (shows the output field), questions (PersonStepQuestionView:
-   question_id, round, status, question, answer, asked_by; oldest first),
-   can_ask, ask_blocker (why asking is refused now), has_pending (a fresh
-   pending question is the only ask blocker).
-   The case page defines the Alpine components personStepAsk (the Q&A list,
-   replaced from the "person_step_questions" socket event via x-text only) and
-   personStepDraft (keeps the half-typed note/output in sessionStorage per
-   step id and round; cleared on submit) and personStepQuestionDraft (keeps
-   the typed question per step id; after a submit it is put back only when
-   the ask view redirected with ?ask=refused, else dropped).
+                  step and its state, no report form, no Abort)
+   Panel field has_commands: the step has a case-stated command, so the
+   report form shows the output field.
+   The case page defines the Alpine component personStepDraft (keeps the
+   half-typed note/output in sessionStorage per step id and round; cleared
+   on submit).
    Report / Overrule / Mark failed / Mark blocked share one form and post to
    their own URL via formaction (the help card convention); the decision
    views read person_step_id and note and ignore the report fields. The
@@ -98,73 +88,6 @@
       <pre class="code-block"><code x-ref="command">{{ step.command }}</code></pre>
       <p class="hint">Check the command before you run it.</p>
     </div>
-  {% endif %}
-
-  {% if person_step_panel.how_to %}
-    <div class="label">How to do it</div>
-    {% include "projects/includes/_how_to_list.html" with items=person_step_panel.how_to shell_label=person_step_panel.shell_label has_sources=person_step_panel.how_to_has_sources only %}
-  {% endif %}
-
-  {% if person_step_panel.is_open or person_step_panel.questions %}
-    {% with questions=person_step_panel.questions %}
-    <section id="person-step-ask" class="person-step-ask" aria-labelledby="person-step-ask-h"
-      x-data="personStepAsk({{ step.id }}, {{ person_step_panel.has_pending|yesno:"true,false" }})"
-      @person-step-questions.window="receive($event.detail)">
-      <h3 id="person-step-ask-h" class="label">Ask the AI about this step</h3>
-      <p class="hint">The AI only advises: it does not touch the test machine or change the step.</p>
-
-      {% comment %} Server-rendered list until the first live update; the
-         live list is built with x-text only (never x-html). {% endcomment %}
-      {% if questions %}
-      <ol class="person-step-qa" x-show="live === null">
-        {% for q in questions %}
-          <li class="person-step-qa-item">
-            <p class="person-step-qa-question">{{ q.question|linebreaksbr }}</p>
-            <p class="muted small">Asked by {{ q.asked_by|default:"a person" }}</p>
-            {% if q.status == "pending" %}
-              <p class="person-step-qa-answer is-pending">The AI is thinking…</p>
-            {% else %}
-              <p class="person-step-qa-answer{% if q.status == "failed" %} is-failed{% endif %}">{{ q.answer|linebreaksbr }}</p>
-            {% endif %}
-          </li>
-        {% endfor %}
-      </ol>
-      {% endif %}
-      <ol class="person-step-qa" x-show="live !== null && live.length > 0" x-cloak>
-        <template x-for="q in (live || [])" :key="q.question_id">
-          <li class="person-step-qa-item">
-            <p class="person-step-qa-question" x-text="q.question"></p>
-            <p class="muted small" x-text="'Asked by ' + (q.asked_by || 'a person')"></p>
-            <p class="person-step-qa-answer" :class="{ 'is-pending': q.status === 'pending', 'is-failed': q.status === 'failed' }" x-text="answerText(q)"></p>
-          </li>
-        </template>
-      </ol>
-
-      {% if can_write %}
-        {% if person_step_panel.can_ask %}
-          <form method="post" action="{% url 'projects:test_run_case_person_ask' project.id test_run.id pivot.id %}"
-            x-data="personStepQuestionDraft('person-step-question:{{ step.id }}')" @input="save()" @submit="markSent()">
-            {% csrf_token %}
-            <input type="hidden" name="person_step_id" value="{{ step.id }}">
-            <div class="field">
-              <label class="label" for="{{ person_step_question_form.question.id_for_label }}">Your question</label>
-              {{ person_step_question_form.question }}
-            </div>
-            <div class="help-actions">
-              <button type="submit" class="btn btn-secondary">Ask</button>
-            </div>
-          </form>
-        {% else %}
-          {% if person_step_panel.ask_blocker %}
-            <p class="hint" x-show="!canAskAgain">{{ person_step_panel.ask_blocker }}</p>
-          {% endif %}
-          <div class="help-actions" x-show="canAskAgain" x-cloak>
-            <button type="button" class="btn btn-sm btn-secondary" @click="window.location.reload()">Ask another question</button>
-          </div>
-        {% endif %}
-      {% endif %}
-    </section>
-    {% endwith %}
   {% endif %}
 
   {% if person_step_panel.confirming %}

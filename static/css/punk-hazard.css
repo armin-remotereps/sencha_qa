@@ -3591,39 +3591,6 @@ details.card[open] > summary,
   font-size: inherit;
 }
 
-/* "How to do it": the AI's numbered advice. A suggested command is dashed
-   and info-tinted so it never reads as the case-stated command above. */
-.person-step-howto {
-  margin: 0 0 14px;
-  padding-left: 22px;
-  display: grid;
-  gap: 10px;
-}
-
-.person-step-howto-text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-/* "Source: «Install guide.pdf», page 3" under a how-to item, or the
-   general-guidance hint under the list. */
-.person-step-howto-source {
-  margin: 4px 0 0;
-  font-size: 0.85em;
-  color: var(--text-muted);
-  overflow-wrap: anywhere;
-}
-
-ol.person-step-howto + .person-step-howto-source {
-  margin: -8px 0 14px;
-}
-
-/* Manual run case card: a step's collapsed "How to do it" under its text. */
-.step-list .manual-step-howto {
-  margin-top: 8px;
-  font-size: 0.9rem;
-}
-
 /* "Covers TestRail steps 3–5": the case steps a person step covers. */
 .person-step-covers {
   margin: 0 0 14px;
@@ -3666,92 +3633,6 @@ ol.person-step-howto + .person-step-howto-source {
 .case-text-step-expected {
   display: block;
   margin-top: 2px;
-}
-
-.person-step-suggested {
-  margin-top: 6px;
-  padding: 8px 10px;
-  border: 1px dashed var(--info);
-  border-radius: var(--radius-sm);
-  background: var(--info-soft);
-}
-
-.person-step-suggested-tag {
-  color: var(--info);
-  font-size: 0.78rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.person-step-suggested .code-block {
-  margin-bottom: 6px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.person-step-suggested code {
-  background: none;
-  border: 0;
-  padding: 0;
-  font-size: inherit;
-}
-
-.person-step-suggested .hint {
-  margin: 0;
-}
-
-/* "Ask the AI about this step": the Q&A list and the ask form. */
-.person-step-ask {
-  margin: 4px 0 16px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
-}
-
-.person-step-qa {
-  list-style: none;
-  margin: 0 0 12px;
-  padding: 0;
-  display: grid;
-  gap: 10px;
-}
-
-.person-step-qa-item {
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface-raised);
-}
-
-.person-step-qa-question,
-.person-step-qa-answer {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.person-step-qa-question {
-  font-weight: 600;
-}
-
-.person-step-qa-item .muted {
-  margin: 2px 0 8px;
-}
-
-.person-step-qa-answer {
-  padding-left: 10px;
-  border-left: 3px solid var(--info);
-}
-
-.person-step-qa-answer.is-pending {
-  color: var(--text-muted);
-  font-style: italic;
-  border-left-color: var(--border-strong);
-}
-
-.person-step-qa-answer.is-failed {
-  color: var(--warning);
-  border-left-color: var(--warning);
 }
 
 .person-step-outcome {
@@ -5082,24 +4963,6 @@ ol.person-step-howto + .person-step-howto-source {
 
 .manual-compare p {
   margin: 0;
-}
-
-.manual-questions {
-  margin-top: 14px;
-}
-
-.manual-questions summary {
-  cursor: pointer;
-  font-weight: 600;
-}
-
-.manual-questions ol {
-  margin: 8px 0 0;
-  padding-left: 18px;
-}
-
-.manual-questions li + li {
-  margin-top: 10px;
 }
 
 @media (max-width: 767px) {

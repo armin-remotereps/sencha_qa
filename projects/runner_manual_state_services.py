@@ -2,41 +2,29 @@
 
 Read side only. The snapshot lists the project's running Manual run with its
 cases (capped, run order), the claimed case with its verbatim steps from the
-checkpoint the claim wrote (and its Ask AI questions), and every hand-in of
-the project still waiting for screenshots, with the keys the server misses,
-so a reconnected runner resumes its uploads. A runner with
-MANUAL_STEP_GUIDE_V1 also gets each step's "How to do it" (one more query),
-unless it would take the snapshot past MANUAL_RUN_STATE_SAFE_BYTES (estimated
-from the text lengths, no extra serialization): then every step reads "none".
-A runner with MANUAL_PAUSE_DISCUSS_V1 also gets the claimed case's pause
-fields and sees it as ``paused`` in the list (no extra query); the case's
-discussion is composed in by ``projects.runner_window_state``.
-A constant number of queries (at most seven), whatever the number of cases.
+checkpoint the claim wrote, and every hand-in of the project still waiting
+for screenshots, with the keys the server misses, so a reconnected runner
+resumes its uploads. A runner with MANUAL_PAUSE_DISCUSS_V1 also gets the
+claimed case's pause fields and sees it as ``paused`` in the list (no extra
+query); the case's discussion is composed in by
+``projects.runner_window_state``.
+A constant number of queries (at most five), whatever the number of cases.
 """
 
 from __future__ import annotations
 
-import logging
-from collections.abc import Iterable, Sequence
 from dataclasses import replace
 from typing import Final
 
 from agents.checkpoint import checkpoint_from_json
-from agents.types import PersonHowToItem
 from controller_client.protocol import (
     MANUAL_CASE_STATUS_MAX_CHARS,
     MANUAL_CASE_TITLE_MAX_CHARS,
     MANUAL_PENDING_UPLOADS_MAX,
     MANUAL_PRECONDITIONS_MAX_CHARS,
-    MANUAL_RUN_STATE_BYTES_PER_CHAR,
     MANUAL_RUN_STATE_MAX_CASES,
-    MANUAL_RUN_STATE_SAFE_BYTES,
     MANUAL_STEP_TEXT_MAX_CHARS,
     MANUAL_TESTRAIL_ID_MAX_CHARS,
-    PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS,
-    PERSON_STEP_HOW_TO_MAX_ITEMS,
-    PERSON_STEP_HOW_TO_SOURCE_MAX_CHARS,
-    PERSON_STEP_HOW_TO_TEXT_MAX_CHARS,
     PERSON_STEP_LABEL_MAX_CHARS,
     ClientCapability,
     ManualActiveCasePayload,
@@ -45,14 +33,11 @@ from controller_client.protocol import (
     ManualRunInfoPayload,
     ManualRunStateMessage,
     ManualStepPayload,
-    PersonHowToPayload,
-    PersonStepQuestionPayload,
 )
 from projects.case_markup import markup_to_plain
 from projects.manual_case_pause_services import get_manual_pause_panel
 from projects.manual_case_steps import manual_steps_from_checkpoint
 from projects.manual_case_submit_services import manifest_keys
-from projects.manual_step_guide_read import ManualGuideView, load_manual_guide
 from projects.models import (
     ManualCaseSubmission,
     ManualUploadState,
@@ -64,14 +49,8 @@ from projects.models import (
     TestRunTestCase,
     TestRunTestCaseStatus,
 )
-from projects.person_step_question_services import get_manual_ask_state
 from projects.run_case_order import RUN_CASE_ORDERING
 
-logger = logging.getLogger(__name__)
-
-# JSON keys and punctuation counted per list entry (case, step, how-to item,
-# question, missing key) in the size estimate.
-_ENTRY_OVERHEAD_CHARS: Final = 64
 # The list status of the claimed case while it is paused (MANUAL_PAUSE_DISCUSS_V1).
 _PAUSED_LIST_STATUS: Final = "paused"
 
@@ -85,11 +64,9 @@ def build_manual_run_state(
     leaves the manual view); ``pending_uploads`` is listed either way. The
     claimed case is the run's one claim (claims belong to the project's one
     runner connection, so the snapshot is the same for every person at it).
-    Questions and ``can_ask`` only for a runner that also
-    advertised PERSON_STEP_ASSIST_V1; the steps' how-to and ``shell_label``
-    only for one with MANUAL_STEP_GUIDE_V1; the pause fields and the
-    ``paused`` list status only for one with MANUAL_PAUSE_DISCUSS_V1 (older
-    windows get the snapshot unchanged).
+    The pause fields and the ``paused`` list status only for a runner that
+    also advertised MANUAL_PAUSE_DISCUSS_V1 (older windows get the snapshot
+    unchanged).
     """
     run = (
         TestRun.objects.filter(
@@ -134,29 +111,13 @@ def build_manual_run_state(
         )
         for pivot_id, status, label, paused_at, title, testrail_id in rows
     )
-    guided = ClientCapability.MANUAL_STEP_GUIDE_V1.value in runner_capabilities
     return ManualRunStateMessage(
         run=ManualRunInfoPayload(
             run_id=run.pk,
             name=(run.name or f"Run #{run.pk}")[:PERSON_STEP_LABEL_MAX_CHARS],
         ),
         cases=cases,
-        active=_active_case(
-            run,
-            pause_discuss=pause_discuss,
-            assist=ClientCapability.PERSON_STEP_ASSIST_V1.value in runner_capabilities,
-            guided=guided,
-            other_chars=(
-                _text_chars(
-                    text
-                    for case in cases
-                    for text in (case.title, case.testrail_id, case.claimed_label)
-                )
-                + _text_chars(key for upload in pending for key in upload.missing)
-                if guided
-                else 0
-            ),
-        ),
+        active=_active_case(run, pause_discuss=pause_discuss),
         pending_uploads=pending,
     )
 
@@ -170,18 +131,10 @@ def _list_status(status: str, *, paused: bool) -> str:
 
 
 def _active_case(
-    test_run: TestRun,
-    *,
-    pause_discuss: bool,
-    assist: bool,
-    guided: bool,
-    other_chars: int,
+    test_run: TestRun, *, pause_discuss: bool
 ) -> ManualActiveCasePayload | None:
-    """The run's claimed case with its verbatim steps (one query, plus one for
-    its questions with ``assist`` and one for its guide with ``guided``, set
-    only for a MANUAL_STEP_GUIDE_V1 runner; the pause fields with
-    ``pause_discuss`` come from loaded fields). ``other_chars``: the estimated
-    size of the rest of the snapshot (case list, pending uploads)."""
+    """The run's claimed case with its verbatim steps (one query; the pause
+    fields with ``pause_discuss`` come from loaded fields)."""
     claimed = (
         TestRunTestCase.objects.filter(
             test_run_id=test_run.pk, status=TestRunTestCaseStatus.IN_PROGRESS
@@ -198,9 +151,6 @@ def _active_case(
             "execution_checkpoint",
             "test_case__title",
             "test_case__preconditions",
-            # The rest of the case text the guide fingerprint covers.
-            "test_case__steps",
-            "test_case__expected",
         )
         .first()
     )
@@ -208,64 +158,25 @@ def _active_case(
         return None
     checkpoint = checkpoint_from_json(claimed.execution_checkpoint)
     steps = manual_steps_from_checkpoint(checkpoint) if checkpoint is not None else ()
-    questions: tuple[PersonStepQuestionPayload, ...] = ()
-    can_ask = False
-    if assist:
-        ask_state = get_manual_ask_state(claimed.pk, claimed.manual_claimed_at)
-        # The window never shows who asked: no member names on the runner socket.
-        questions = tuple(
-            replace(view.to_payload(), asked_by="") for view in ask_state.questions
-        )
-        can_ask = ask_state.can_ask
-    title = claimed.test_case.title[:MANUAL_CASE_TITLE_MAX_CHARS]
-    preconditions = markup_to_plain(claimed.test_case.preconditions)[
-        :MANUAL_PRECONDITIONS_MAX_CHARS
-    ]
-    plain_steps = [
-        ManualStepPayload(
-            num=step.num,
-            text=markup_to_plain(step.text)[:MANUAL_STEP_TEXT_MAX_CHARS],
-            expected=markup_to_plain(step.expected)[:MANUAL_STEP_TEXT_MAX_CHARS],
-        )
-        for step in steps
-    ]
-    guide = load_manual_guide(claimed) if guided else None
-    if guide is not None and not _fits(
-        other_chars
-        + _text_chars((title, preconditions))
-        + _text_chars(
-            text for step in plain_steps for text in (step.text, step.expected)
-        )
-        + _text_chars(
-            text
-            for question in questions
-            for text in (question.question, question.answer)
-        ),
-        guide,
-        step_count=len(plain_steps),
-    ):
-        logger.warning(
-            "Manual case %s: step guide left out of the runner snapshot (too large)",
-            claimed.pk,
-        )
-        guide = None
     active = ManualActiveCasePayload(
         pivot_id=claimed.pk,
         claim_token=claimed.manual_claim_token,
-        title=title,
-        preconditions=preconditions,
+        title=claimed.test_case.title[:MANUAL_CASE_TITLE_MAX_CHARS],
+        preconditions=markup_to_plain(claimed.test_case.preconditions)[
+            :MANUAL_PRECONDITIONS_MAX_CHARS
+        ],
         steps=tuple(
-            _step_payload(payload, guide, guided=guided) for payload in plain_steps
+            ManualStepPayload(
+                num=step.num,
+                text=markup_to_plain(step.text)[:MANUAL_STEP_TEXT_MAX_CHARS],
+                expected=markup_to_plain(step.expected)[:MANUAL_STEP_TEXT_MAX_CHARS],
+            )
+            for step in steps
         ),
         claimed_at=(
             claimed.manual_claimed_at.isoformat()
             if claimed.manual_claimed_at is not None
             else ""
-        ),
-        questions=questions,
-        can_ask=can_ask,
-        shell_label=(
-            guide.shell_label[:PERSON_STEP_LABEL_MAX_CHARS] if guide is not None else ""
         ),
     )
     if not pause_discuss:
@@ -279,61 +190,6 @@ def _active_case(
         can_pause=panel.can_pause,
         can_continue=panel.can_continue,
         pause_blocker=panel.blocker,
-    )
-
-
-def _step_payload(
-    payload: ManualStepPayload, guide: ManualGuideView | None, *, guided: bool
-) -> ManualStepPayload:
-    """``payload`` with its how-to for a guide-capable window (``guided``);
-    unchanged otherwise. No guide to show reads ``none``."""
-    if not guided:
-        return payload
-    if guide is None:
-        return replace(payload, how_to_state="none")
-    step_guide = guide.step(payload.num)
-    return replace(
-        payload,
-        how_to=_how_to_payloads(step_guide.how_to),
-        how_to_state=step_guide.state,
-    )
-
-
-def _text_chars(texts: Iterable[str]) -> int:
-    """Estimated snapshot characters of ``texts``, one list entry each."""
-    return sum(len(text) + _ENTRY_OVERHEAD_CHARS for text in texts)
-
-
-def _fits(base_chars: int, guide: ManualGuideView, *, step_count: int) -> bool:
-    """Whether the snapshot of ``base_chars`` stays within the safe budget
-    with the how-to of its ``step_count`` steps (items at the protocol caps)."""
-    how_to_chars = _text_chars(
-        text
-        for step in guide.steps[:step_count]
-        for item in step.how_to[:PERSON_STEP_HOW_TO_MAX_ITEMS]
-        for text in (
-            item.text[:PERSON_STEP_HOW_TO_TEXT_MAX_CHARS],
-            item.command[:PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS],
-            item.source_label[:PERSON_STEP_HOW_TO_SOURCE_MAX_CHARS],
-        )
-    )
-    return (
-        base_chars + how_to_chars
-    ) * MANUAL_RUN_STATE_BYTES_PER_CHAR <= MANUAL_RUN_STATE_SAFE_BYTES
-
-
-def _how_to_payloads(
-    how_to: Sequence[PersonHowToItem],
-) -> tuple[PersonHowToPayload, ...]:
-    """The items cut to the protocol caps (a guide-capable window takes all 12:
-    no fold, unlike ``runner_person_step_services._how_to_payloads``)."""
-    return tuple(
-        PersonHowToPayload(
-            text=item.text[:PERSON_STEP_HOW_TO_TEXT_MAX_CHARS],
-            command=item.command[:PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS],
-            source=item.source_label[:PERSON_STEP_HOW_TO_SOURCE_MAX_CHARS],
-        )
-        for item in how_to[:PERSON_STEP_HOW_TO_MAX_ITEMS]
     )
 
 

@@ -9,10 +9,6 @@ the checkpoint; the window releases its own claim (with the token), a
 writable member on the web releases a stuck one (no token). A claim's pause
 (``manual_case_pause_services``) starts cleared and ends with it.
 
-A claim also (re)starts the case's "How to do it" guide
-(``manual_step_guide_services``; generated on the ``assist`` queue after
-commit, never awaited).
-
 Every change is broadcast on commit (``broadcast_run_and_pivots``), which also
 nudges the project's Test Runner to re-read its snapshot.
 """
@@ -35,7 +31,6 @@ from projects.exceptions import ManualRunError
 from projects.manual_case_lock import claim_matches, lock_manual_run_case
 from projects.manual_case_steps import build_manual_checkpoint
 from projects.manual_run_policy import MANUAL_PAUSE_AGENT_BUSY
-from projects.manual_step_guide_services import request_manual_case_guide
 from projects.models import (
     MANUAL_CLAIM_CLEARED,
     MANUAL_CLAIM_FIELDS,
@@ -124,7 +119,6 @@ def claim_manual_case(
                 "updated_at",
             ]
         )
-        request_manual_case_guide(pivot=pivot, project_id=project.pk)
         record_case_activity(
             user=actor.user, pivot_ids=[pivot.pk], activity=CaseActivity.START
         )

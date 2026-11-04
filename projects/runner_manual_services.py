@@ -1,13 +1,12 @@
 """The project's Test Runner acts on a Manual run (server-side seam).
 
 The runner window claims and releases a case, hands it in, uploads its
-screenshots and asks the AI about a step (``MANUAL_RUN_V1``); it also pauses
+screenshots (``MANUAL_RUN_V1``); it also pauses
 and continues the claimed case and reports the tester's marks so far
 (``MANUAL_PAUSE_DISCUSS_V1``; the consumer checks the capability). Every rule
 of those actions stays in the manual services (``manual_case_claim_services``,
 ``manual_case_pause_services``, ``manual_case_progress_services``,
-``manual_case_submit_services``, ``manual_screenshot_services``,
-``person_step_question_services.ask_manual_step_question``). This module
+``manual_case_submit_services``, ``manual_screenshot_services``). This module
 applies the rules of ``runner_person_step_services.answer_from_runner``: only
 the connection that owns the project, a throttle, and the person named only
 while the runner's email is an active writable member (else anonymous).
@@ -16,8 +15,7 @@ Throttles: claim, release, pause, continue and hand-in share the per-project
 runner answer throttle (20/min, ``check_answer_throttle``); progress reports
 have their own (``_PROGRESS_LIMIT`` per minute, so they never starve the
 others); screenshot uploads have their
-own per-project budget (``MANUAL_SHOT_RATE_PER_MINUTE``); Ask AI uses the
-shared question throttle inside the question service.
+own per-project budget (``MANUAL_SHOT_RATE_PER_MINUTE``).
 """
 
 from __future__ import annotations
@@ -55,7 +53,6 @@ from projects.manual_screenshot_services import (
 )
 from projects.models import Project
 from projects.person_step_actor import PersonStepActor
-from projects.person_step_question_services import ask_manual_step_question
 
 # The shared helpers of the runner's answers; the answer throttle key and
 # limit must stay the same for every runner answer of a project.
@@ -205,30 +202,3 @@ def upload_from_runner(
             raise ManualShotRejectedError(message) from exc
         reject_manual_shot(project=project, submission_id=ids[0], message=message)
     store_manual_screenshot(project=project, payload=payload)
-
-
-def ask_manual_from_runner(
-    *,
-    project: Project,
-    channel_name: str,
-    person_user_id: int | None,
-    pivot_id: int,
-    claim_token: str,
-    step_num: int | None,
-    question: str,
-) -> None:
-    """Store the window's Ask AI question about the claimed case.
-
-    Throttled by the shared question throttle inside the question service.
-    Raises ``ManualRunError`` (or ``PersonStepQuestionError``; user-safe).
-    """
-    if not owns_project(project.id, channel_name):
-        raise ManualRunError(_NOT_OWNER)
-    ask_manual_step_question(
-        project=project,
-        pivot_id=pivot_id,
-        claim_token=claim_token,
-        step_num=step_num,
-        question=question,
-        actor=_actor(project.id, person_user_id),
-    )

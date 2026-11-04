@@ -6,10 +6,9 @@ the screenshots and the AI rewrite for TestRail. Every text the runner sent is
 returned as plain strings for autoescaped templates (never ``|safe``).
 
 Queries: the run panel costs at most two (the claimed case, the page's open
-uploads); the case panel at most five (the current hand-in, the Ask AI
-questions, the steps' "How to do it" guide, the runner's progress report of a
-claimed case, the case's manual discussion thread) and reuses the case page's
-prefetched screenshots.
+uploads); the case panel at most three (the current hand-in, the runner's
+progress report of a claimed case, the case's manual discussion thread) and
+reuses the case page's prefetched screenshots.
 """
 
 from __future__ import annotations
@@ -24,7 +23,6 @@ from django.utils import timezone
 from agents.checkpoint import checkpoint_from_json, final_step_indices
 from machine_setup.models import SetupConversation, SetupConversationKind
 from machine_setup.turn_state import live_turn_exists
-from projects.how_to_view import PersonHowToView, how_to_view
 from projects.manual_case_pause_services import (
     ManualPausePanel,
     get_manual_pause_panel,
@@ -43,15 +41,9 @@ from projects.manual_run_policy import (
     is_manual_run,
     runner_supports_manual,
 )
-from projects.manual_step_guide_read import (
-    ManualGuideView,
-    ManualStepHowToState,
-    load_manual_guide,
-)
 from projects.models import (
     ManualCaseSubmission,
     ManualUploadState,
-    PersonStepQuestion,
     Project,
     TestRun,
     TestRunScreenshot,
@@ -59,9 +51,6 @@ from projects.models import (
     TestRunTestCase,
     TestRunTestCaseStatus,
 )
-
-# Ask AI questions listed on the case page (newest kept, shown oldest first).
-_QUESTIONS_SHOWN: Final = 20
 
 RUNNER_OFFLINE_NOTICE: Final = (
     "The Test Runner is not connected. Connect it to continue this manual run."
@@ -141,25 +130,6 @@ class ManualStepRow:
     refined_note: str
     duration_seconds: int | None
     shots: tuple[ManualShot, ...]
-    # The AI's "How to do it" for the step (read only; () without a guide).
-    how_to: tuple[PersonHowToView, ...] = ()
-    # "ready" with items, "pending" while being written, else "none".
-    how_to_state: ManualStepHowToState = "none"
-
-    @property
-    def how_to_has_sources(self) -> bool:
-        return any(item.source_label for item in self.how_to)
-
-
-@dataclass(frozen=True)
-class ManualQuestionRow:
-    question_id: int
-    step_label: str
-    question: str
-    answer: str
-    status: str
-    status_label: str
-    created_at: datetime
 
 
 @dataclass(frozen=True)
@@ -187,11 +157,6 @@ class ManualCasePanel:
     refined_summary: str
     steps: tuple[ManualStepRow, ...]
     case_shots: tuple[ManualShot, ...]
-    questions: tuple[ManualQuestionRow, ...]
-    # The shell the steps' suggested commands are for ("" without a guide).
-    how_to_shell_label: str = ""
-    # Some step's how-to is still being written ("reload to see it").
-    guide_preparing: bool = False
     # Pause and discuss (None unless the run is Manual).
     pause: ManualPausePanel | None = None
     # The Test Runner's latest marks of the claimed case (advisory; None
@@ -203,23 +168,6 @@ class ManualCasePanel:
     # progress); else discuss_blocker says why ("" when it can).
     can_discuss: bool = False
     discuss_blocker: str = ""
-
-    def questions_payload(self) -> list[dict[str, object]]:
-        """Seed of the card's live Ask AI list (``json_script``); the case
-        socket's ``person_step_questions`` event (``person_step_id`` 0)
-        replaces it and carries no step number, so the step label is kept
-        per ``question_id``."""
-        return [
-            {
-                "question_id": row.question_id,
-                "step_label": row.step_label,
-                "status": row.status,
-                "question": row.question,
-                "answer": row.answer,
-                "asked_by": "",
-            }
-            for row in self.questions
-        ]
 
     @property
     def has_refined_step_notes(self) -> bool:
@@ -311,37 +259,6 @@ def _current_submission(pivot: TestRunTestCase) -> ManualCaseSubmission | None:
     )
 
 
-def _questions(pivot: TestRunTestCase) -> tuple[ManualQuestionRow, ...]:
-    rows = list(
-        PersonStepQuestion.objects.filter(manual_case=pivot)
-        .only(
-            "manual_step_num",
-            "question",
-            "answer",
-            "status",
-            "created_at",
-        )
-        .order_by("-created_at")[:_QUESTIONS_SHOWN]
-    )
-    rows.reverse()
-    return tuple(
-        ManualQuestionRow(
-            question_id=row.pk,
-            step_label=(
-                f"Step {row.manual_step_num}"
-                if row.manual_step_num is not None
-                else "The whole case"
-            ),
-            question=row.question,
-            answer=row.answer,
-            status=row.status,
-            status_label=row.get_status_display(),
-            created_at=row.created_at,
-        )
-        for row in rows
-    )
-
-
 def _group_shots(
     screenshots: Sequence[TestRunScreenshot],
 ) -> tuple[dict[int, list[ManualShot]], list[ManualShot]]:
@@ -379,7 +296,6 @@ def _step_rows(
     pivot: TestRunTestCase,
     screenshots: Sequence[TestRunScreenshot],
     refined: Mapping[int, str],
-    guide: ManualGuideView | None,
 ) -> tuple[tuple[ManualStepRow, ...], tuple[ManualShot, ...]]:
     by_step, case_shots = _group_shots(screenshots)
     checkpoint = checkpoint_from_json(pivot.execution_checkpoint)
@@ -399,7 +315,6 @@ def _step_rows(
         else:
             outcome, label = "failed", "Failed"
             note, duration = attempt.result.summary, attempt.duration_seconds
-        step_guide = guide.step(num) if guide is not None else None
         rows.append(
             ManualStepRow(
                 num=num,
@@ -411,15 +326,6 @@ def _step_rows(
                 refined_note=refined.get(num, ""),
                 duration_seconds=duration,
                 shots=tuple(by_step.get(num, ())),
-                how_to=(
-                    tuple(
-                        how_to_view(item, pivot.test_run.project_id)
-                        for item in step_guide.how_to
-                    )
-                    if step_guide is not None
-                    else ()
-                ),
-                how_to_state=step_guide.state if step_guide is not None else "none",
             )
         )
     return tuple(rows), tuple(case_shots)
@@ -444,7 +350,7 @@ def get_manual_case_panel(
     """The case page's manual card; None unless the case is (or was) manual.
 
     ``pivot`` has ``test_run`` and ``test_case`` loaded; ``screenshots`` are
-    the case page's prefetched rows. At most six queries (the sixth only
+    the case page's prefetched rows. At most four queries (the fourth only
     while the case is paused).
     """
     run_is_manual = is_manual_run(pivot.test_run)
@@ -454,14 +360,7 @@ def get_manual_case_panel(
     # Shown only while the rewrite still matches the case as it is now.
     is_refined = submission is not None and refined_text_is_current(submission, pivot)
     refined = _refined_step_notes(submission, is_refined)
-    # Shown claimed or handed in, while it still matches the case (Q5); no
-    # query before a claim wrote the verbatim steps.
-    guide = (
-        load_manual_guide(pivot)
-        if is_manual_checkpoint(pivot.execution_checkpoint)
-        else None
-    )
-    steps, case_shots = _step_rows(pivot, screenshots, refined, guide)
+    steps, case_shots = _step_rows(pivot, screenshots, refined)
     is_claimed = bool(pivot.manual_claim_token)
     can_discuss = is_claimed_manual_case(pivot.test_run, pivot)
     pause = _pause_panel(pivot) if run_is_manual else None
@@ -499,9 +398,6 @@ def get_manual_case_panel(
         ),
         steps=steps,
         case_shots=case_shots,
-        questions=_questions(pivot),
-        how_to_shell_label=guide.shell_label if guide is not None else "",
-        guide_preparing=guide is not None and guide.preparing,
         pause=pause,
         # Fenced by the claim token: no report outlives its claim.
         progress=load_manual_progress(pivot) if is_claimed else None,

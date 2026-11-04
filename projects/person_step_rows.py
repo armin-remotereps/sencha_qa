@@ -9,7 +9,7 @@ key. Leaf module: models, ``agents.checkpoint`` and ``agents.os_shell`` only
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
 from typing import Literal
@@ -22,13 +22,11 @@ from agents.checkpoint import (
     read_checkpoint_person_step,
     with_person_step,
 )
-from agents.how_to_source import parse_stored_source
 from agents.os_shell import get_os_name, shell_label
 from agents.types import (
     CheckpointPersonStep,
     HandOffKind,
     OrchestratorCheckpoint,
-    PersonHowToItem,
     PersonStepHandOff,
     SubTaskAttempt,
 )
@@ -37,9 +35,6 @@ from projects.models import (
     PERSON_STEP_AGENT_TEXT_MAX_LENGTH,
     PERSON_STEP_COMMAND_MAX_LENGTH,
     PERSON_STEP_EXPECTED_MAX_LENGTH,
-    PERSON_STEP_HOW_TO_COMMAND_MAX_LENGTH,
-    PERSON_STEP_HOW_TO_MAX_ITEMS,
-    PERSON_STEP_HOW_TO_TEXT_MAX_LENGTH,
     PERSON_STEP_INSTRUCTION_MAX_LENGTH,
     CasePersonStep,
     PersonStepClose,
@@ -59,80 +54,6 @@ def cap_text(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1].rstrip() + "…"
-
-
-def how_to_rows(how_to: Sequence[PersonHowToItem]) -> list[dict[str, object]]:
-    """``CasePersonStep.how_to`` for a hand-off's items, capped again.
-
-    Items without text are dropped; a command keeps its first line only. The
-    source keys are written only for a valid source (``parse_stored_source``); a
-    malformed one is dropped and the item kept.
-    """
-    rows: list[dict[str, object]] = []
-    for item in how_to:
-        text = cap_text(item.text, PERSON_STEP_HOW_TO_TEXT_MAX_LENGTH)
-        if not text:
-            continue
-        command_lines = item.command.strip().splitlines()
-        command = (
-            cap_text(command_lines[0], PERSON_STEP_HOW_TO_COMMAND_MAX_LENGTH)
-            if command_lines
-            else ""
-        )
-        row: dict[str, object] = {"text": text, "command": command}
-        source = parse_stored_source(
-            {
-                "source_kind": item.source_kind,
-                "source_item_id": item.source_item_id,
-                "source_page": item.source_page,
-                "source_label": item.source_label,
-            }
-        )
-        if source is not None:
-            kind, item_id, page, label = source
-            row.update(
-                source_kind=kind,
-                source_item_id=item_id,
-                source_page=page,
-                source_label=label,
-            )
-        rows.append(row)
-        if len(rows) >= PERSON_STEP_HOW_TO_MAX_ITEMS:
-            break
-    return rows
-
-
-def stored_how_to(value: object) -> tuple[PersonHowToItem, ...]:
-    """A row's stored ``how_to`` as items; malformed entries are skipped.
-
-    A malformed source is dropped and its item kept.
-    """
-    if not isinstance(value, list):
-        return ()
-    items: list[PersonHowToItem] = []
-    for entry in value[:PERSON_STEP_HOW_TO_MAX_ITEMS]:
-        if not isinstance(entry, dict):
-            continue
-        text = entry.get("text")
-        command = entry.get("command", "")
-        if not isinstance(text, str) or not text or not isinstance(command, str):
-            continue
-        source = parse_stored_source(entry)
-        if source is None:
-            items.append(PersonHowToItem(text=text, command=command))
-            continue
-        kind, item_id, page, label = source
-        items.append(
-            PersonHowToItem(
-                text=text,
-                command=command,
-                source_kind=kind,
-                source_item_id=item_id,
-                source_page=page,
-                source_label=label,
-            )
-        )
-    return tuple(items)
 
 
 def stored_hand_off_kind(kind: str) -> HandOffKind:
@@ -406,8 +327,8 @@ def open_person_step_row(
 
     A ``reported`` row of the same step means the agent could not confirm the
     report: the row is reused (``not_confirmed``, next round, the objection)
-    and pushed; it keeps its stored ``how_to`` and case steps (the same plan
-    step, and a hand-off rebuilt from the row may have lost them). A ``waiting`` or
+    and pushed; it keeps its stored case steps (the same plan step, and a
+    hand-off rebuilt from the row may have lost them). A ``waiting`` or
     ``not_confirmed`` row of the same step is a re-entry and is kept as it
     is. Any other open row is cancelled and a new row opened, pushed unless
     it plainly follows a step passed in this execution segment
@@ -475,7 +396,6 @@ def open_person_step_row(
         expected_result=expected,
         command=command,
         shell_label=shell_label,
-        how_to=how_to_rows(hand_off.how_to),
         case_steps=case_steps,
         case_steps_label=case_steps_label,
         agent_objection=cap_text(hand_off.objection, PERSON_STEP_AGENT_TEXT_MAX_LENGTH),

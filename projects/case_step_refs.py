@@ -2,7 +2,7 @@
 
 No queries: everything works on an already loaded ``TestCase`` or on stored
 JSON. One formatter for the Test Runner window, the "Your turn" card, the
-Steps card, the Ask AI context and the chat briefs.
+Steps card and the chat briefs.
 
 Only "Test Case (Steps)" cases have reliable numbers: ``flatten_steps`` writes
 their steps (and the expected results of the steps that have one) as

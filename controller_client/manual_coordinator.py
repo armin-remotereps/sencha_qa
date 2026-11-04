@@ -264,16 +264,6 @@ class ManualCoordinator:
             self._schedule_progress()
         self.push_view()
 
-    def can_ask(self, pivot_id: int, claim_token: str) -> bool:
-        """The server takes a manual question for this case now."""
-        active = self._visible_active()
-        return (
-            active is not None
-            and active.pivot_id == pivot_id
-            and active.claim_token == claim_token
-            and active.can_ask
-        )
-
     def paused(self) -> bool:
         """The server shows the claimed case paused."""
         active = self._visible_active()

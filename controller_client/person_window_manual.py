@@ -7,11 +7,10 @@ tester works through a Manual run here:
   preselected; Start claims it (the server answers; the steps then arrive in
   the next snapshot).
 - The claimed case: its title, preconditions and verbatim steps, one step at
-  a time (Previous / Next and a step picker), with the AI's "How to do it"
-  for the shown step when the server prepared one (MANUAL_STEP_GUIDE_V1). Each step has Pass and Fail,
+  a time (Previous / Next and a step picker). Each step has Pass and Fail,
   which take a screenshot with this window hidden (the runner hides it,
   captures and shows it again), a thumbnail with Retake, and a note
-  (required for a failed step). Ask the AI about the shown step.
+  (required for a failed step).
 - The case result: Passed, Failed or Blocked, a note (required for Blocked,
   and for Failed when no step failed), an optional case screenshot and Hand
   in. A verdict that contradicts the steps (Passed with a failed step,
@@ -20,8 +19,8 @@ tester works through a Manual run here:
 - Release gives the case back (inline confirmation; its draft is dropped).
 - Pause / Continue testing (MANUAL_PAUSE_DISCUSS_V1): while the case is
   paused a banner says since when and by whom, and Pass, Fail, Retake, the
-  case screenshot and Hand in are off (the step timer stops too); Release,
-  Ask the AI and Discuss stay on.
+  case screenshot and Hand in are off (the step timer stops too); Release
+  and Discuss stay on.
 - Discuss (MANUAL_PAUSE_DISCUSS_V1): the case's discussion with the agent
   (``person_window_chat``), a message box and "Open on Punk Hazard".
 - Pause and Discuss show only when the server sends their fields, so an
@@ -41,7 +40,6 @@ from dataclasses import dataclass
 from typing import Final, Protocol
 
 from controller_client.person_window_chat import ChatHost, ChatPanel, clock
-from controller_client.person_window_how_to import clear_copy_buttons, render_how_to
 from controller_client.person_window_ipc import (
     ManualCaptureEvent,
     ManualCaseActionEvent,
@@ -53,7 +51,6 @@ from controller_client.person_window_ipc import (
     ManualSubmitEvent,
     ManualThumbnailRequestEvent,
     ManualWindowState,
-    QuestionEvent,
     WindowEvent,
     manual_pause_discuss_supported,
     next_seq,
@@ -63,7 +60,6 @@ from controller_client.protocol import (
     MANUAL_STEP_NOTE_MAX_CHARS,
     MANUAL_VERDICT_NOTE_MAX_CHARS,
     PERSON_CHAT_TEXT_MAX_CHARS,
-    PERSON_STEP_QUESTION_MAX_CHARS,
     ManualActiveCasePayload,
     ManualCaseActionKind,
     ManualCaseActionPayload,
@@ -74,10 +70,6 @@ from controller_client.protocol import (
     ManualShotKind,
     ManualStepOutcome,
     ManualStepPayload,
-    PersonHowToPayload,
-    PersonStepQuestionAskPayload,
-    PersonStepQuestionPayload,
-    PersonStepQuestionWireStatus,
 )
 
 try:
@@ -101,9 +93,6 @@ _CASE_LIST_ROWS: Final[int] = 8
 _STEP_LINES: Final[int] = 10
 _OVERVIEW_LINES: Final[int] = 8
 _THUMBNAIL_CACHE: Final[int] = 24
-_HOW_TO_PENDING: Final[str] = "Preparing a guide for this step…"
-_ASK_CLOSED: Final[str] = "▸ Ask the AI about this step"
-_ASK_OPEN: Final[str] = "▾ Ask the AI about this step"
 _DISCUSS_CLOSED: Final[str] = "▸ Discuss the case with the agent"
 _DISCUSS_OPEN: Final[str] = "▾ Discuss the case with the agent"
 _CHAT_LINES: Final[int] = 12
@@ -130,8 +119,6 @@ _VERDICT_LABELS: Final[dict[ManualCaseVerdictWire, str]] = {
 }
 
 _Segments = tuple[tuple[str, tuple[str, ...]], ...]
-# What the how-to block shows: the items, the state and the shell label.
-_HowToKey = tuple[tuple[PersonHowToPayload, ...], str, str]
 
 
 class ManualBlock(Protocol):
@@ -162,8 +149,6 @@ class ManualHost(ChatHost, Protocol):
     def manual_entry(
         self, parent: "tk.Misc", *, row: int, height: int
     ) -> "tk.Text": ...
-
-    def manual_copy(self, text: str) -> None: ...
 
     def manual_send(self, event: WindowEvent) -> None: ...
 
@@ -205,19 +190,6 @@ def _agent_busy(active: ManualActiveCasePayload) -> bool:
     return active.discussion is not None and active.discussion.turn_live
 
 
-def _qa_text(questions: tuple[PersonStepQuestionPayload, ...]) -> str:
-    blocks: list[str] = []
-    for q in questions:
-        if q.status is PersonStepQuestionWireStatus.PENDING:
-            answer = "The AI is thinking…"
-        elif q.status is PersonStepQuestionWireStatus.FAILED:
-            answer = f"AI: {q.answer or 'The AI could not answer.'}"
-        else:
-            answer = f"AI: {q.answer}"
-        blocks.append(f"You: {q.question}\n{answer}")
-    return "\n\n".join(blocks)
-
-
 class ManualView:
     """The Manual run tab; every method runs on the Tk thread."""
 
@@ -241,14 +213,10 @@ class ManualView:
         self._claim_busy = False
         self._release_busy = False
         self._submit_busy = False
-        self._asking = False
-        self._ask_open = False
         # Pause / Continue and a discussion message with the server.
         self._pause_busy = False
         self._chat_busy = False
         self._discuss_open = False
-        self._rendered_qa: str | None = None
-        self._rendered_how_to: _HowToKey | None = None
         self._confirm: str | None = None
         self._draft_job: str | None = None
         self._verdict_var = tk.StringVar(master=root, value="")
@@ -341,22 +309,8 @@ class ManualView:
         )
         self._next_button.grid(row=0, column=2, sticky="e")
 
-        # The step and, under it, the AI's how-to for it.
-        step_box = ttk.Frame(active)
-        step_box.columnconfigure(0, weight=1)
-        step_box.grid(row=4, column=0, sticky="ew")
-        self._step_text = host.manual_block(
-            step_box, title="Step", max_lines=_STEP_LINES
-        )
-        self._step_text.frame.grid(row=0, column=0, sticky="ew", pady=(6, 0))
-        self._how_to = host.manual_block(
-            step_box, title="How to do it", max_lines=_STEP_LINES
-        )
-        self._how_to.frame.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        # One Copy button per suggested command (rebuilt with the how-to).
-        self._how_to_copies = ttk.Frame(self._how_to.frame)
-        self._how_to_copies.grid(row=2, column=0, sticky="w", pady=(2, 0))
-        self._how_to.show(False)
+        self._step_text = host.manual_block(active, title="Step", max_lines=_STEP_LINES)
+        self._step_text.frame.grid(row=4, column=0, sticky="ew", pady=(6, 0))
         self._expected = host.manual_block(
             active, title="Expected result", max_lines=_STEP_LINES
         )
@@ -391,12 +345,11 @@ class ManualView:
         self._note.bind("<<Modified>>", self._on_note_modified)
         self._capture_status = host.manual_label(active, "")
         self._capture_status.grid(row=11, column=0, sticky="w", pady=(4, 0))
-        self._build_ask(active, row=12)
-        self._build_discuss(active, row=13)
+        self._build_discuss(active, row=12)
 
         verdict = ttk.Frame(active)
         verdict.columnconfigure(0, weight=1)
-        verdict.grid(row=14, column=0, sticky="ew", pady=(14, 0))
+        verdict.grid(row=13, column=0, sticky="ew", pady=(14, 0))
         ttk.Label(verdict, text="Case result", font=_BOLD_FONT).grid(
             row=0, column=0, sticky="w"
         )
@@ -454,10 +407,10 @@ class ManualView:
         ttk.Button(confirm_buttons, text="Cancel", command=self._cancel_confirm).pack(
             side="left", padx=(6, 0)
         )
-        self._confirm_frame.grid(row=15, column=0, sticky="ew", pady=(10, 0))
+        self._confirm_frame.grid(row=14, column=0, sticky="ew", pady=(10, 0))
         self._confirm_frame.grid_remove()
         self._submit_status = host.manual_label(active, "")
-        self._submit_status.grid(row=16, column=0, sticky="w", pady=(4, 0))
+        self._submit_status.grid(row=15, column=0, sticky="w", pady=(4, 0))
 
     def _build_pause(self, head: "ttk.Frame") -> None:
         """Under the title: the paused banner with Continue testing, why
@@ -477,7 +430,7 @@ class ManualView:
         self._host.manual_label(
             self._paused_banner,
             "Pass, Fail, screenshots and Hand in are off until you continue. "
-            "You can still ask the AI, discuss the case or release it.",
+            "You can still discuss the case or release it.",
             foreground=_MUTED_COLOR,
         ).grid(row=1, column=0, sticky="w")
         self._continue_button = ttk.Button(
@@ -529,40 +482,6 @@ class ManualView:
         self._thread_link.grid(row=4, column=0, sticky="w", pady=(6, 0))
         content.grid_remove()
         discuss.grid_remove()
-
-    def _build_ask(self, parent: "ttk.Frame", *, row: int) -> None:
-        ask = ttk.Frame(parent)
-        ask.columnconfigure(0, weight=1)
-        ask.grid(row=row, column=0, sticky="ew", pady=(10, 0))
-        self._ask_frame = ask
-        self._ask_toggle = ttk.Button(ask, text=_ASK_CLOSED, command=self._toggle_ask)
-        self._ask_toggle.grid(row=0, column=0, sticky="w")
-        content = ttk.Frame(ask)
-        content.columnconfigure(0, weight=1)
-        content.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        self._ask_content = content
-        self._host.manual_label(
-            content,
-            "The AI only advises: it does not act on this machine or decide a "
-            "result for you.",
-            foreground=_MUTED_COLOR,
-        ).grid(row=0, column=0, sticky="w")
-        self._qa = self._host.manual_block(
-            content, title="Questions and answers (this case)", max_lines=12
-        )
-        self._qa.frame.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        ttk.Label(content, text="Your question").grid(
-            row=2, column=0, sticky="w", pady=(6, 0)
-        )
-        self._question = self._host.manual_entry(content, row=3, height=3)
-        self._question.bind("<<Modified>>", self._on_question_modified)
-        ask_row = ttk.Frame(content)
-        ask_row.grid(row=4, column=0, sticky="w", pady=(6, 0))
-        self._ask_button = ttk.Button(ask_row, text="Ask", command=self._ask)
-        self._ask_button.pack(side="left")
-        self._ask_status = self._host.manual_label(content, "")
-        self._ask_status.grid(row=5, column=0, sticky="w", pady=(4, 0))
-        content.grid_remove()
 
     # --- what the window asks -----------------------------------------------
 
@@ -635,11 +554,8 @@ class ManualView:
         self._loaded_claim = active.claim_token if active is not None else None
         self._confirm = None
         self._capture = None
-        self._asking = False
         self._pause_busy = False
         self._chat_busy = False
-        self._rendered_qa = None
-        self._rendered_how_to = None
         self._thumbnails.clear()
         self._requested.clear()
         self._notes = dict(texts.notes) if texts is not None else {}
@@ -651,13 +567,11 @@ class ManualView:
         verdict = texts.verdict if texts is not None else None
         self._verdict_var.set(verdict.value if verdict is not None else "")
         _set_text(self._verdict_note, texts.verdict_note if texts is not None else "")
-        _set_text(self._question, "")
         self._chat.set_input("")
         self._chat.set_status("")
         self._pause_status.configure(text="")
         self._capture_status.configure(text="")
         self._submit_status.configure(text="")
-        self._ask_status.configure(text="")
         if active is None:
             # Handed in or released: preselect the next case to do again.
             self._selected_pivot = None
@@ -738,20 +652,6 @@ class ManualView:
             # A capture notice the window missed while it restarted.
             self._capture = None
             self._capture_status.configure(text=message, foreground=color)
-        self.render()
-
-    def on_question_result(self, ok: bool, message: str) -> None:
-        if not self._asking:
-            return
-        self._asking = False
-        if ok:
-            _set_text(self._question, "")
-            self._ask_status.configure(
-                text=message or "Asked. The answer shows above when it is ready.",
-                foreground=_OK_COLOR,
-            )
-        else:
-            self._ask_status.configure(text=message, foreground=_ERROR_COLOR)
         self.render()
 
     # --- rendering --------------------------------------------------------------
@@ -870,9 +770,7 @@ class ManualView:
             self._step_text.set(step.text)
             self._expected.set(step.expected or "(none given)")
             self._expected.show(True)
-        self._render_how_to(active, step)
         self._render_step_mark(step)
-        self._render_ask(active)
         self._render_pause(active)
         self._render_discuss(active)
         self._render_verdict()
@@ -956,36 +854,6 @@ class ManualView:
             can_send=discussion.can_send,
             busy=self._chat_busy,
             send_blocker=discussion.send_blocker,
-        )
-
-    def _render_how_to(
-        self, active: ManualActiveCasePayload, step: ManualStepPayload | None
-    ) -> None:
-        """The shown step's how-to; rebuilt only when what it shows changes."""
-        if step is None or step.how_to_state not in ("pending", "ready"):
-            key: _HowToKey = ((), "", "")
-        elif step.how_to_state == "pending":
-            key = ((), "pending", active.shell_label)
-        else:
-            key = (step.how_to, "ready", active.shell_label)
-        if key == self._rendered_how_to:
-            return
-        self._rendered_how_to = key
-        items, state, shell_label = key
-        shell = f" · commands for {shell_label}" if shell_label else ""
-        title = f"How to do it{shell}"
-        if state == "pending":
-            clear_copy_buttons(self._how_to_copies)
-            self._how_to.title.configure(text=title)
-            self._how_to.set_segments(((_HOW_TO_PENDING, ("muted",)),))
-            self._how_to.show(True)
-            return
-        render_how_to(
-            self._how_to,
-            self._how_to_copies,
-            items,
-            title=title,
-            copy=self._host.manual_copy,
         )
 
     @staticmethod
@@ -1109,44 +977,6 @@ class ManualView:
             self._confirm_button.configure(text="Hand in anyway")
         self._confirm_frame.grid()
 
-    def _render_ask(self, active: ManualActiveCasePayload) -> None:
-        count = f" ({len(active.questions)})" if active.questions else ""
-        self._ask_toggle.configure(
-            text=(_ASK_OPEN if self._ask_open else _ASK_CLOSED) + count
-        )
-        if not self._ask_open:
-            self._ask_content.grid_remove()
-            return
-        self._ask_content.grid()
-        qa = _qa_text(active.questions) or "No questions yet for this case."
-        if qa != self._rendered_qa:
-            self._rendered_qa = qa
-            self._qa.set(qa)
-            self._qa.text.see("end")
-        self._update_ask_button(active)
-
-    def _update_ask_button(self, active: ManualActiveCasePayload) -> None:
-        pending = any(
-            q.status is PersonStepQuestionWireStatus.PENDING for q in active.questions
-        )
-        can_ask = (
-            active.can_ask
-            and self._host.manual_connected()
-            and not self._asking
-            and not pending
-            and bool(_text(self._question).strip())
-        )
-        self._ask_button.configure(state="normal" if can_ask else "disabled")
-        if not active.can_ask:
-            self._ask_status.configure(
-                text="Asking the AI is not available for this case right now.",
-                foreground=_MUTED_COLOR,
-            )
-        elif self._asking:
-            self._ask_status.configure(
-                text="Sending your question…", foreground=_MUTED_COLOR
-            )
-
     # --- thumbnails ---------------------------------------------------------------
 
     def _store_thumbnail(self, key: str, thumbnail_b64: str) -> None:
@@ -1241,12 +1071,6 @@ class ManualView:
         self._confirm = None
         self._schedule_draft()
         self.render()
-
-    def _on_question_modified(self, _event: "tk.Event[tk.Text]") -> None:
-        self._question.edit_modified(False)
-        active = self.state.active if self.state is not None else None
-        if active is not None and self._ask_open:
-            self._update_ask_button(active)
 
     # --- person actions -----------------------------------------------------------
 
@@ -1460,51 +1284,6 @@ class ManualView:
         self._host.manual_send(
             ManualSubmitEvent(
                 pivot_id=active.pivot_id, claim_token=active.claim_token, texts=texts
-            )
-        )
-
-    def _toggle_ask(self) -> None:
-        self._ask_open = not self._ask_open
-        self._rendered_qa = None
-        self.render()
-
-    def _ask(self) -> None:
-        active = self.state.active if self.state is not None else None
-        if active is None or self._asking or not self._host.manual_connected():
-            return
-        if not active.can_ask:
-            return
-        if any(
-            q.status is PersonStepQuestionWireStatus.PENDING for q in active.questions
-        ):
-            self._ask_status.configure(
-                text="Wait for the AI to answer your last question.",
-                foreground=_WARN_COLOR,
-            )
-            return
-        question = _text(self._question).strip()
-        if not question:
-            return
-        if len(question) > PERSON_STEP_QUESTION_MAX_CHARS:
-            self._ask_status.configure(
-                text=f"The question is too long ({len(question)} of "
-                f"{PERSON_STEP_QUESTION_MAX_CHARS} characters).",
-                foreground=_ERROR_COLOR,
-            )
-            return
-        self._asking = True
-        self.render()
-        # The window stays up: the tester keeps working while the AI answers.
-        self._host.manual_send(
-            QuestionEvent(
-                question=PersonStepQuestionAskPayload(
-                    person_step_id=0,
-                    round=0,
-                    question=question,
-                    pivot_id=active.pivot_id,
-                    claim_token=active.claim_token,
-                    step_num=self._step,
-                )
             )
         )
 

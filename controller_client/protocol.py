@@ -8,14 +8,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import IntEnum, StrEnum
-from typing import Final, Literal
+from typing import Final
 
 from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.16.0"
+CLIENT_VERSION: Final[str] = "0.17.0"
 
 
 class CloseCode(IntEnum):
@@ -82,11 +82,8 @@ class MessageType(StrEnum):
     PERSON_STEP_STATE = "person_step_state"
     PERSON_STEP_ACTION = "person_step_action"
     PERSON_STEP_ACTION_RESULT = "person_step_action_result"
-    # Ask AI (PERSON_STEP_ASSIST_V1): runner -> server with a person's question
-    # about an open step, server -> runner with its acknowledgement (same
-    # request_id). The answer itself arrives in the next ``person_step_state``.
-    PERSON_STEP_QUESTION = "person_step_question"
-    PERSON_STEP_QUESTION_RESULT = "person_step_question_result"
+    # Retired in 0.17.0: ``person_step_question`` / ``person_step_question_result``
+    # (Ask AI) may still arrive from runners < 0.17.0; ignored; never reuse.
     # Person window v2: runner -> server with a pause of a case
     # (CASE_PAUSE_V1), a discussion turn or a help resolution
     # (PERSON_DISCUSSION_V1); server -> runner with the outcome (same
@@ -145,10 +142,6 @@ class ClientCapability(StrEnum):
     # ``person_step_action_result`` (the person step window). Advertised only
     # when the window is enabled and Tk works (``advertised_capabilities``).
     PERSON_STEPS_V1 = "person_steps_v1"
-    # Optional: the window renders a step's ``how_to`` items and offers the Ask
-    # AI box (``person_step_question`` / ``person_step_question_result``, the
-    # snapshot's ``questions``). Advertised only together with PERSON_STEPS_V1.
-    PERSON_STEP_ASSIST_V1 = "person_step_assist_v1"
     # Optional: the window renders a step's ``case_steps_label`` and the test
     # case steps it covers (``case_steps``); older windows get the label inside
     # ``step_label``. Advertised only together with PERSON_STEPS_V1.
@@ -167,43 +160,31 @@ class ClientCapability(StrEnum):
     # inventory, answered with ``artifact_scan_result``). Older controllers
     # answer UNKNOWN_COMMAND.
     ARTIFACT_SCAN_V1 = "artifact_scan_v1"
-    # Optional: the window takes up to PERSON_STEP_HOW_TO_MAX_ITEMS (12) how-to
-    # items and shows each item's ``source``; older windows cut the list at 8,
-    # so the server folds a longer guide for them. Advertised only together
-    # with PERSON_STEP_ASSIST_V1 (dropped with the window).
-    PERSON_STEP_GUIDE_V1 = "person_step_guide_v1"
     # Optional: Manual runs in the window (``manual_run_state``,
     # ``manual_case_action``, ``manual_case_submit``,
-    # ``manual_screenshot_upload`` and their results; the manual form of
-    # ``person_step_question`` together with PERSON_STEP_ASSIST_V1).
-    # Advertised only together with PERSON_STEPS_V1.
+    # ``manual_screenshot_upload`` and their results). Advertised only
+    # together with PERSON_STEPS_V1.
     MANUAL_RUN_V1 = "manual_run_v1"
-    # Optional: the "How to do it" of each manual step (``how_to``,
-    # ``how_to_state``) and the active case's ``shell_label`` in
-    # ``manual_run_state``; older windows get today's fields (the new keys
-    # arrive empty and are ignored). Advertised only together with
-    # MANUAL_RUN_V1 (dropped with the window).
-    MANUAL_STEP_GUIDE_V1 = "manual_step_guide_v1"
     # Optional: Pause / Continue of the claimed manual case
     # (``manual_case_action`` ``pause`` / ``continue``), the tester's marks so
     # far (``manual_case_progress``), the case's discussion (``active.discussion``,
     # ``manual_chat_send``) and the pause fields of ``active``. Advertised only
     # together with MANUAL_RUN_V1 (dropped with the window).
     MANUAL_PAUSE_DISCUSS_V1 = "manual_pause_discuss_v1"
+    # Retired in 0.17.0 (How to do it and Ask AI): person_step_assist_v1,
+    # person_step_guide_v1, manual_step_guide_v1 may still arrive from runners
+    # < 0.17.0; ignored; never reuse.
 
 
 # Capabilities that need the person step window; dropped without it.
 _PERSON_WINDOW_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.PERSON_STEPS_V1,
-        ClientCapability.PERSON_STEP_ASSIST_V1,
-        ClientCapability.PERSON_STEP_GUIDE_V1,
         ClientCapability.PERSON_STEP_CASE_STEPS_V1,
         ClientCapability.PERSON_CASE_CONTEXT_V1,
         ClientCapability.PERSON_DISCUSSION_V1,
         ClientCapability.CASE_PAUSE_V1,
         ClientCapability.MANUAL_RUN_V1,
-        ClientCapability.MANUAL_STEP_GUIDE_V1,
         ClientCapability.MANUAL_PAUSE_DISCUSS_V1,
     }
 )
@@ -220,9 +201,9 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
     ``person_window`` is False when the person step window is disabled
     (``CONTROLLER_PERSON_WINDOW=false``) or Tk is unavailable; the server then
     never sends ``person_step_state`` and the person answers on the web.
-    PERSON_STEP_ASSIST_V1, PERSON_STEP_GUIDE_V1, PERSON_STEP_CASE_STEPS_V1, PERSON_CASE_CONTEXT_V1,
-    PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1, MANUAL_STEP_GUIDE_V1 and
-    MANUAL_PAUSE_DISCUSS_V1 are dropped with it.
+    PERSON_STEP_CASE_STEPS_V1, PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1,
+    CASE_PAUSE_V1, MANUAL_RUN_V1 and MANUAL_PAUSE_DISCUSS_V1 are dropped with
+    it.
     """
     if person_window:
         return CLIENT_CAPABILITIES
@@ -237,10 +218,9 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
 # authenticate fine and then silently time out on first use. Optional
 # capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1,
 # WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1,
-# PERSON_STEP_ASSIST_V1, PERSON_STEP_GUIDE_V1, PERSON_STEP_CASE_STEPS_V1, ARTIFACT_SCAN_V1,
-# PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1,
-# MANUAL_STEP_GUIDE_V1, MANUAL_PAUSE_DISCUSS_V1) are checked where they are
-# used instead.
+# PERSON_STEP_CASE_STEPS_V1, ARTIFACT_SCAN_V1, PERSON_CASE_CONTEXT_V1,
+# PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1, MANUAL_PAUSE_DISCUSS_V1)
+# are checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
@@ -1063,28 +1043,12 @@ PERSON_STEP_URL_MAX_CHARS: Final[int] = 2000
 PERSON_STEP_MAX_BLOCKERS: Final[int] = 10
 # Longest user-safe ``message`` of a ``person_step_action_result``.
 PERSON_STEP_RESULT_MESSAGE_MAX_CHARS: Final[int] = 1000
-# "How to do it" items of a step (PERSON_STEP_ASSIST_V1); the server's
-# PERSON_STEP_HOW_TO_* caps in projects.models. Cut when parsed. Windows
-# before PERSON_STEP_GUIDE_V1 cut at PERSON_STEP_HOW_TO_LEGACY_MAX_ITEMS.
-PERSON_STEP_HOW_TO_MAX_ITEMS: Final[int] = 12
-PERSON_STEP_HOW_TO_LEGACY_MAX_ITEMS: Final[int] = 8
-PERSON_STEP_HOW_TO_TEXT_MAX_CHARS: Final[int] = 400
-PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS: Final[int] = 500
-# Server-built source label of an item ("«Install guide.pdf», page 3").
-PERSON_STEP_HOW_TO_SOURCE_MAX_CHARS: Final[int] = 200
 # Test case steps a person step covers (PERSON_STEP_CASE_STEPS_V1); the
 # server's PERSON_STEP_CASE_STEPS_* caps in projects.models. Cut when parsed.
 PERSON_STEP_CASE_STEPS_MAX_ITEMS: Final[int] = 15
 PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS: Final[int] = 1000
 # Any positive step number the server stored; only the type is checked.
 _PERSON_STEP_MAX_CASE_STEP_NUM: Final[int] = 2**31 - 1
-# Ask AI: a question is refused when longer (PERSON_STEP_QUESTION_MAX_LENGTH
-# on the server); a snapshot carries a step's newest questions, oldest first.
-PERSON_STEP_QUESTION_MAX_CHARS: Final[int] = 1000
-PERSON_STEP_ANSWER_MAX_CHARS: Final[int] = 4000
-PERSON_STEP_STATE_MAX_QUESTIONS: Final[int] = 10
-# Largest raw ``person_step_question`` message the server reads.
-PERSON_STEP_QUESTION_MAX_BYTES: Final[int] = 16 * 1024
 # ``CasePersonStep.round`` is a PositiveSmallIntegerField.
 _PERSON_STEP_MAX_ROUND: Final[int] = 32767
 _PERSON_STEP_MAX_ID: Final[int] = 2**63 - 1
@@ -1122,29 +1086,6 @@ class PersonStepWireOutcome(StrEnum):
     DIFFERENT = "different"
 
 
-class PersonStepQuestionWireStatus(StrEnum):
-    """Values of PersonStepQuestionStatus."""
-
-    PENDING = "pending"
-    ANSWERED = "answered"
-    FAILED = "failed"
-
-
-@dataclass(frozen=True)
-class PersonHowToPayload:
-    """One numbered "How to do it" item; ``command`` is an AI suggestion."""
-
-    text: str
-    # One line for the step's shell; blank when the item has none.
-    command: str = ""
-    # Where the item's facts came from (server-built label, PERSON_STEP_GUIDE_V1);
-    # blank for general guidance or from an older server.
-    source: str = ""
-
-    def to_wire(self) -> dict[str, object]:
-        return {"text": self.text, "command": self.command, "source": self.source}
-
-
 @dataclass(frozen=True)
 class PersonCaseStepPayload:
     """One numbered test case (TestRail) step a person step covers."""
@@ -1156,31 +1097,6 @@ class PersonCaseStepPayload:
 
     def to_wire(self) -> dict[str, object]:
         return {"num": self.num, "text": self.text, "expected": self.expected}
-
-
-@dataclass(frozen=True)
-class PersonStepQuestionPayload:
-    """One Ask AI question of a step and its answer, as the window shows it."""
-
-    question_id: int
-    # The step round it was asked in.
-    round: int
-    status: PersonStepQuestionWireStatus
-    question: str
-    # Blank while pending; the user-safe failure text when failed.
-    answer: str
-    # Server-built display label of the asker (never runner-sent text).
-    asked_by: str
-
-    def to_wire(self) -> dict[str, object]:
-        return {
-            "question_id": self.question_id,
-            "round": self.round,
-            "status": self.status.value,
-            "question": self.question,
-            "answer": self.answer,
-            "asked_by": self.asked_by,
-        }
 
 
 @dataclass(frozen=True)
@@ -1207,10 +1123,6 @@ class PersonStepStatePayload:
     blockers: tuple[str, ...]
     # Absolute case page URL; blank when the server has no SITE_URL.
     case_url: str
-    # PERSON_STEP_ASSIST_V1 only; empty from an older server.
-    how_to: tuple[PersonHowToPayload, ...] = ()
-    # The step's newest questions, oldest first (≤ PERSON_STEP_STATE_MAX_QUESTIONS).
-    questions: tuple[PersonStepQuestionPayload, ...] = ()
     # PERSON_STEP_CASE_STEPS_V1 only; empty from an older server or when the
     # case has no numbered steps. "TestRail steps 3–5" / "Case step 2".
     case_steps_label: str = ""
@@ -1236,13 +1148,6 @@ class PersonStepStatePayload:
             "objection": self.objection,
             "blockers": list(self.blockers),
             "case_url": self.case_url,
-            "how_to": [
-                item.to_wire() for item in self.how_to[:PERSON_STEP_HOW_TO_MAX_ITEMS]
-            ],
-            "questions": [
-                question.to_wire()
-                for question in self.questions[-PERSON_STEP_STATE_MAX_QUESTIONS:]
-            ],
             "case_steps_label": self.case_steps_label,
             "case_steps": [
                 step.to_wire()
@@ -1255,9 +1160,6 @@ class PersonStepStatePayload:
 class PersonStepStateMessage:
     # Newest request first; empty means "nothing for you; hide".
     steps: tuple[PersonStepStatePayload, ...]
-    # The server takes ``person_step_question`` from this runner; the window
-    # shows the Ask AI box only then (an older server never sets it).
-    questions_enabled: bool = False
     # PERSON_CASE_CONTEXT_V1 only: the cases behind the steps, an open help
     # request and the running case (≤ PERSON_CASE_STATE_MAX_CASES).
     cases: tuple["PersonCaseStatePayload", ...] = ()
@@ -1283,44 +1185,6 @@ class PersonStepActionResultPayload:
     message: str
     # The run continues now (False: a gate refused; ``message`` says why).
     queued: bool
-
-
-@dataclass(frozen=True)
-class PersonStepQuestionAskPayload:
-    """A person's question to the AI about an open step (``person_step_question``).
-
-    Two forms: a person step question (``person_step_id`` and ``round`` set,
-    ``pivot_id`` 0) or, from a MANUAL_RUN_V1 runner, a question about the
-    claimed case of a Manual run (``pivot_id`` and ``claim_token`` set,
-    ``person_step_id`` and ``round`` 0; ``step_num`` None asks about the case
-    as a whole).
-    """
-
-    # 0 in the manual form.
-    person_step_id: int
-    # The round the window showed; a reopened step refuses an older round.
-    # 0 in the manual form.
-    round: int
-    # Stripped, non-empty, ≤ PERSON_STEP_QUESTION_MAX_CHARS.
-    question: str
-    # Manual form only: the claimed run case and the claim the window holds.
-    pivot_id: int = 0
-    claim_token: str = ""
-    # Manual form only: the verbatim step (1..MANUAL_CASE_MAX_STEPS) or None.
-    step_num: int | None = None
-
-    @property
-    def is_manual(self) -> bool:
-        return self.pivot_id > 0
-
-
-@dataclass(frozen=True)
-class PersonStepQuestionResultPayload:
-    """The acknowledgement of a question; the answer comes in a snapshot."""
-
-    ok: bool
-    # User-safe text to show in the window (why it was refused, or blank).
-    message: str
 
 
 def _extract_bounded_int(data: Mapping[str, object], field: str, maximum: int) -> int:
@@ -1408,8 +1272,6 @@ def _parse_person_step(raw: object) -> PersonStepStatePayload:
         case_url=_extract_text(
             item, "case_url", PERSON_STEP_URL_MAX_CHARS, truncate=True
         ),
-        how_to=_parse_how_to(item.get("how_to", [])),
-        questions=_parse_questions(item.get("questions", [])),
         case_steps_label=_extract_text(
             item, "case_steps_label", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
         ),
@@ -1444,71 +1306,6 @@ def _parse_case_steps(raw: object) -> tuple[PersonCaseStepPayload, ...]:
     return tuple(items)
 
 
-def _parse_how_to(raw: object) -> tuple[PersonHowToPayload, ...]:
-    # Absent from an older server; items beyond the cap dropped, texts cut.
-    if not isinstance(raw, list):
-        raise ProtocolError("Invalid 'how_to': expected a list")
-    items: list[PersonHowToPayload] = []
-    for entry in raw[:PERSON_STEP_HOW_TO_MAX_ITEMS]:
-        if not isinstance(entry, dict):
-            raise ProtocolError("Invalid how-to item: expected an object")
-        item: dict[str, object] = entry
-        items.append(
-            PersonHowToPayload(
-                text=_extract_text(
-                    item, "text", PERSON_STEP_HOW_TO_TEXT_MAX_CHARS, truncate=True
-                ),
-                command=_extract_text(
-                    item,
-                    "command",
-                    PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS,
-                    truncate=True,
-                ),
-                source=_extract_text(
-                    item,
-                    "source",
-                    PERSON_STEP_HOW_TO_SOURCE_MAX_CHARS,
-                    truncate=True,
-                ),
-            )
-        )
-    return tuple(items)
-
-
-def _parse_questions(raw: object) -> tuple[PersonStepQuestionPayload, ...]:
-    # Absent from an older server; oldest first, so the newest are kept.
-    if not isinstance(raw, list):
-        raise ProtocolError("Invalid 'questions': expected a list")
-    return tuple(
-        _parse_question(entry) for entry in raw[-PERSON_STEP_STATE_MAX_QUESTIONS:]
-    )
-
-
-def _parse_question(raw: object) -> PersonStepQuestionPayload:
-    if not isinstance(raw, dict):
-        raise ProtocolError("Invalid question: expected an object")
-    item: dict[str, object] = raw
-    raw_status = _extract_str(item, "status")
-    try:
-        status = PersonStepQuestionWireStatus(raw_status)
-    except ValueError as e:
-        raise ProtocolError(f"Unknown question status: {raw_status[:40]!r}") from e
-    return PersonStepQuestionPayload(
-        question_id=_extract_bounded_int(item, "question_id", _PERSON_STEP_MAX_ID),
-        round=_extract_bounded_int(item, "round", _PERSON_STEP_MAX_ROUND),
-        status=status,
-        question=_extract_text(
-            item, "question", PERSON_STEP_QUESTION_MAX_CHARS, truncate=True
-        ),
-        answer=_extract_text(
-            item, "answer", PERSON_STEP_ANSWER_MAX_CHARS, truncate=True
-        ),
-        asked_by=_extract_text(
-            item, "asked_by", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
-        ),
-    )
-
-
 def parse_person_step_state_payload(
     data: dict[str, object],
 ) -> PersonStepStateMessage:
@@ -1524,7 +1321,6 @@ def parse_person_step_state_payload(
         steps=tuple(
             _parse_person_step(raw) for raw in raw_steps[:PERSON_STEP_STATE_MAX_STEPS]
         ),
-        questions_enabled=_extract_bool(data, "questions_enabled", default=False),
         cases=_parse_cases(data.get("cases", [])),
     )
 
@@ -1532,14 +1328,12 @@ def parse_person_step_state_payload(
 def serialize_person_step_state(
     steps: Sequence[PersonStepStatePayload],
     *,
-    questions_enabled: bool = False,
     cases: Sequence["PersonCaseStatePayload"] | None = None,
 ) -> str:
     """A ``person_step_state`` message (server side; fresh request_id).
 
-    ``questions_enabled`` only for a runner with PERSON_STEP_ASSIST_V1;
-    ``cases`` only for one with PERSON_CASE_CONTEXT_V1 (None: the key is left
-    out, as an older server does).
+    ``cases`` only for a runner with PERSON_CASE_CONTEXT_V1 (None: the key is
+    left out, as an older server does).
     """
     extra: dict[str, object] = {}
     if cases is not None:
@@ -1550,7 +1344,6 @@ def serialize_person_step_state(
         MessageType.PERSON_STEP_STATE,
         None,
         steps=[step.to_wire() for step in steps[:PERSON_STEP_STATE_MAX_STEPS]],
-        questions_enabled=questions_enabled,
         **extra,
     )
 
@@ -1642,86 +1435,6 @@ def serialize_person_step_action_result(
         ok=result.ok,
         message=result.message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
         queued=result.queued,
-    )
-
-
-def parse_person_step_question_payload(
-    data: Mapping[str, object],
-) -> PersonStepQuestionAskPayload:
-    """Validate a ``person_step_question`` (both sides).
-
-    The question is stripped (as the web form does); an empty or over-long
-    question raises ProtocolError (refused, not cut). A message with a
-    non-zero ``pivot_id`` is the manual form: it needs a valid
-    ``claim_token`` and ignores ``person_step_id`` and ``round``.
-    """
-    question = _extract_text(
-        data, "question", PERSON_STEP_QUESTION_MAX_CHARS, truncate=False
-    ).strip()
-    if not question:
-        raise ProtocolError("Missing 'question'")
-    pivot_id = _extract_non_negative_int(data, "pivot_id")
-    if pivot_id:
-        return PersonStepQuestionAskPayload(
-            person_step_id=0,
-            round=0,
-            question=question,
-            pivot_id=pivot_id,
-            claim_token=_extract_claim_token(data),
-            step_num=_extract_optional_step_num(data, "step_num"),
-        )
-    return PersonStepQuestionAskPayload(
-        person_step_id=_extract_bounded_int(
-            data, "person_step_id", _PERSON_STEP_MAX_ID
-        ),
-        round=_extract_bounded_int(data, "round", _PERSON_STEP_MAX_ROUND),
-        question=question,
-    )
-
-
-def serialize_person_step_question(
-    question: PersonStepQuestionAskPayload, request_id: str
-) -> str:
-    """A ``person_step_question`` message (runner side; one request_id per question)."""
-    if question.is_manual:
-        return serialize_message(
-            MessageType.PERSON_STEP_QUESTION,
-            request_id,
-            pivot_id=question.pivot_id,
-            claim_token=question.claim_token,
-            step_num=question.step_num,
-            question=question.question,
-        )
-    return serialize_message(
-        MessageType.PERSON_STEP_QUESTION,
-        request_id,
-        person_step_id=question.person_step_id,
-        round=question.round,
-        question=question.question,
-    )
-
-
-def parse_person_step_question_result_payload(
-    data: dict[str, object],
-) -> PersonStepQuestionResultPayload:
-    """Validate a ``person_step_question_result`` (runner side)."""
-    return PersonStepQuestionResultPayload(
-        ok=_extract_bool(data, "ok"),
-        message=_extract_text(
-            data, "message", PERSON_STEP_RESULT_MESSAGE_MAX_CHARS, truncate=True
-        ),
-    )
-
-
-def serialize_person_step_question_result(
-    result: PersonStepQuestionResultPayload, request_id: str
-) -> str:
-    """A ``person_step_question_result`` (server side; echoes the question's id)."""
-    return serialize_message(
-        MessageType.PERSON_STEP_QUESTION_RESULT,
-        request_id,
-        ok=result.ok,
-        message=result.message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
     )
 
 
@@ -2875,15 +2588,15 @@ MANUAL_TESTRAIL_ID_MAX_CHARS: Final[int] = 50
 MANUAL_CASE_STATUS_MAX_CHARS: Final[int] = 32
 _MANUAL_ISO_MAX_CHARS: Final[int] = 64
 # Bytes a character takes in the estimate below: any BMP character in the
-# window's UTF-8 IPC line (JSON escapes are rare in case and AI prose).
+# window's UTF-8 IPC line (JSON escapes are rare in case text).
 MANUAL_RUN_STATE_BYTES_PER_CHAR: Final[int] = 3
-# What the server lets one ``manual_run_state`` reach, estimated from its text
-# lengths times MANUAL_RUN_STATE_BYTES_PER_CHAR; beyond it the steps' how-to
-# is left out. The server's ensure_ascii JSON writes a BMP non-ASCII character
+# Assumed worst case of one ``manual_run_state`` before its discussion, in
+# text lengths times MANUAL_RUN_STATE_BYTES_PER_CHAR (the server does not
+# measure it). The server's ensure_ascii JSON writes a BMP non-ASCII character
 # as six bytes (twice the estimate), which must still fit the WebSocket cap;
-# characters outside the BMP (twelve bytes) are rare enough in case and AI
-# prose to leave out of the bound. The window's IPC cap is checked against it
-# in person_window_ipc.
+# characters outside the BMP (twelve bytes) are rare enough in case text to
+# leave out of the bound. The window's IPC cap is checked against it in
+# person_window_ipc.
 MANUAL_RUN_STATE_SAFE_BYTES: Final[int] = 3 * _MIB
 assert (
     2 * MANUAL_RUN_STATE_SAFE_BYTES <= MAX_MESSAGE_SIZE
@@ -2911,28 +2624,6 @@ assert (
     2 * (MANUAL_RUN_STATE_SAFE_BYTES + MANUAL_DISCUSSION_SNAPSHOT_MAX_BYTES)
     <= MAX_MESSAGE_SIZE
 ), "MANUAL_DISCUSSION_SNAPSHOT_MAX_BYTES does not fit in MAX_MESSAGE_SIZE"
-# Most steps a manual case's "How to do it" guide covers (MANUAL_STEP_GUIDE_V1;
-# the server setting MANUAL_GUIDE_MAX_STEPS may only lower it), and the share
-# of the snapshot budget its items may take at worst: every item of every
-# step at its caps, plus the JSON keys.
-MANUAL_GUIDE_MAX_STEPS_CAP: Final[int] = 30
-MANUAL_GUIDE_SNAPSHOT_MAX_BYTES: Final[int] = 3 * _MIB // 2
-_MANUAL_HOW_TO_ITEM_JSON_OVERHEAD_CHARS: Final[int] = 64
-_MANUAL_HOW_TO_STEP_MAX_CHARS: Final[int] = PERSON_STEP_HOW_TO_MAX_ITEMS * (
-    PERSON_STEP_HOW_TO_TEXT_MAX_CHARS
-    + PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS
-    + PERSON_STEP_HOW_TO_SOURCE_MAX_CHARS
-    + _MANUAL_HOW_TO_ITEM_JSON_OVERHEAD_CHARS
-)
-assert (
-    MANUAL_GUIDE_MAX_STEPS_CAP
-    * _MANUAL_HOW_TO_STEP_MAX_CHARS
-    * MANUAL_RUN_STATE_BYTES_PER_CHAR
-    <= MANUAL_GUIDE_SNAPSHOT_MAX_BYTES
-), "MANUAL_GUIDE_MAX_STEPS_CAP does not fit in MANUAL_GUIDE_SNAPSHOT_MAX_BYTES"
-assert (
-    MANUAL_GUIDE_SNAPSHOT_MAX_BYTES < MANUAL_RUN_STATE_SAFE_BYTES
-), "MANUAL_GUIDE_SNAPSHOT_MAX_BYTES does not fit in MANUAL_RUN_STATE_SAFE_BYTES"
 
 
 class ManualCaseActionKind(StrEnum):
@@ -3013,12 +2704,6 @@ class ManualCaseListItemPayload:
         }
 
 
-# A manual step's "How to do it" (MANUAL_STEP_GUIDE_V1): being written,
-# written (``how_to`` holds the items), or none for this step. "" from an older
-# server or for an unknown value.
-ManualStepHowToState = Literal["", "pending", "ready", "none"]
-
-
 @dataclass(frozen=True)
 class ManualStepPayload:
     """One verbatim test case step (never reworded by the AI)."""
@@ -3027,20 +2712,12 @@ class ManualStepPayload:
     text: str
     # Blank when the case gives no expected result for the step.
     expected: str = ""
-    # The AI's "How to do it" for the step (MANUAL_STEP_GUIDE_V1), shown
-    # beside the verbatim text, never instead of it.
-    how_to: tuple[PersonHowToPayload, ...] = ()
-    how_to_state: ManualStepHowToState = ""
 
     def to_wire(self) -> dict[str, object]:
         return {
             "num": self.num,
             "text": self.text,
             "expected": self.expected,
-            "how_to": [
-                item.to_wire() for item in self.how_to[:PERSON_STEP_HOW_TO_MAX_ITEMS]
-            ],
-            "how_to_state": self.how_to_state,
         }
 
 
@@ -3082,14 +2759,6 @@ class ManualActiveCasePayload:
     steps: tuple[ManualStepPayload, ...]
     # ISO 8601; blank when unknown.
     claimed_at: str
-    # Ask AI questions about the case, oldest first (same shape as a person
-    # step's; ``round`` is always 1).
-    questions: tuple[PersonStepQuestionPayload, ...] = ()
-    # The server takes a manual ``person_step_question`` for this case now.
-    can_ask: bool = False
-    # The shell the steps' suggested commands are for (MANUAL_STEP_GUIDE_V1);
-    # blank without a guide or from an older server.
-    shell_label: str = ""
     # MANUAL_PAUSE_DISCUSS_V1 (defaults from an older server): the case is
     # paused, by whom ("Ana via Test Runner") and since when (ISO 8601).
     paused: bool = False
@@ -3110,12 +2779,6 @@ class ManualActiveCasePayload:
             "preconditions": self.preconditions,
             "steps": [step.to_wire() for step in self.steps[:MANUAL_CASE_MAX_STEPS]],
             "claimed_at": self.claimed_at,
-            "questions": [
-                question.to_wire()
-                for question in self.questions[-PERSON_STEP_STATE_MAX_QUESTIONS:]
-            ],
-            "can_ask": self.can_ask,
-            "shell_label": self.shell_label,
             "paused": self.paused,
             "paused_by": self.paused_by,
             "paused_at": self.paused_at,
@@ -3397,20 +3060,7 @@ def _parse_manual_step(raw: object) -> ManualStepPayload:
         expected=_extract_text(
             item, "expected", MANUAL_STEP_TEXT_MAX_CHARS, truncate=True
         ),
-        how_to=_parse_how_to(item.get("how_to", [])),
-        how_to_state=_parse_manual_how_to_state(item.get("how_to_state", "")),
     )
-
-
-def _parse_manual_how_to_state(raw: object) -> ManualStepHowToState:
-    # Absent from an older server; an unknown value from a newer one reads "".
-    if raw == "pending":
-        return "pending"
-    if raw == "ready":
-        return "ready"
-    if raw == "none":
-        return "none"
-    return ""
 
 
 def _parse_manual_active(
@@ -3431,11 +3081,6 @@ def _parse_manual_active(
         ),
         claimed_at=_extract_text(
             raw, "claimed_at", _MANUAL_ISO_MAX_CHARS, truncate=True
-        ),
-        questions=_parse_questions(raw.get("questions", [])),
-        can_ask=_extract_bool(raw, "can_ask", default=False),
-        shell_label=_extract_text(
-            raw, "shell_label", PERSON_STEP_LABEL_MAX_CHARS, truncate=True
         ),
         paused=_extract_bool(raw, "paused", default=False),
         paused_by=_extract_text(

@@ -1286,10 +1286,6 @@ PERSON_STEP_EXPECTED_MAX_LENGTH = 1000
 PERSON_STEP_COMMAND_MAX_LENGTH = 2000
 PERSON_STEP_OUTPUT_MAX_LENGTH = 20000
 PERSON_STEP_AGENT_TEXT_MAX_LENGTH = 1000
-# "How to do it" items of a hand-off and the Ask AI questions of a step.
-PERSON_STEP_HOW_TO_MAX_ITEMS = 12
-PERSON_STEP_HOW_TO_TEXT_MAX_LENGTH = 400
-PERSON_STEP_HOW_TO_COMMAND_MAX_LENGTH = 500
 # Test case steps a person step covers. A row keeps every covered step (the
 # plan's own cap, ``agents.case_step_refs.MAX_CASE_STEP_REFS``); the Test
 # Runner gets the first ``controller_client.protocol``
@@ -1297,9 +1293,6 @@ PERSON_STEP_HOW_TO_COMMAND_MAX_LENGTH = 500
 PERSON_STEP_CASE_STEPS_MAX_ITEMS = 50
 PERSON_STEP_CASE_STEP_TEXT_MAX_LENGTH = 1000
 PERSON_STEP_CASE_STEPS_LABEL_MAX_LENGTH = 255
-PERSON_STEP_QUESTION_MAX_LENGTH = 1000
-PERSON_STEP_ANSWER_MAX_LENGTH = 4000
-PERSON_STEP_QUESTIONS_PER_STEP = 20
 
 
 class PersonStepKind(models.TextChoices):
@@ -1380,10 +1373,6 @@ class CasePersonStep(models.Model):
     # Server-derived from the runner's OS (e.g. "Terminal (bash)"); never
     # model-chosen.
     shell_label = models.CharField(max_length=64, blank=True, default="")
-    # Model-written "How to do it" items: a list of ``{"text", "command"}``
-    # (commands are AI suggestions, not case-stated), capped by the
-    # ``PERSON_STEP_HOW_TO_*`` constants; shown escaped.
-    how_to = models.JSONField(default=list, blank=True)
     # The numbered test case steps the plan step covers, as
     # ``[{"num", "text", "expected"}]`` copied from the case when the step was
     # handed out (``projects.case_step_refs.case_step_rows``, capped), and
@@ -1466,111 +1455,6 @@ class CasePersonStep(models.Model):
 
     def __str__(self) -> str:
         return f"Person step #{self.pk} of TRTC #{self.test_run_test_case_id}"
-
-
-class PersonStepQuestionStatus(models.TextChoices):
-    PENDING = "pending", "Waiting for the AI"
-    ANSWERED = "answered", "Answered"
-    FAILED = "failed", "Not answered"
-
-
-class PersonStepQuestion(models.Model):
-    """A person's question to the AI about the step waiting for them.
-
-    Anchored on exactly one of a Human in the loop ``person_step`` or, in a
-    Manual run, a claimed ``manual_case`` (and its verbatim step
-    ``manual_step_num``). Advisory only: answering never changes the step,
-    case or run. At most one ``pending`` question per anchor; a stale pending
-    one is failed lazily.
-    """
-
-    # Null for a Manual run question (``manual_case`` is set instead).
-    person_step = models.ForeignKey(
-        CasePersonStep,
-        on_delete=models.CASCADE,
-        related_name="questions",
-        null=True,
-        blank=True,
-    )
-    # Manual run: the claimed case the question is about; null for a person
-    # step question.
-    manual_case = models.ForeignKey(
-        TestRunTestCase,
-        on_delete=models.CASCADE,
-        related_name="manual_questions",
-        null=True,
-        blank=True,
-        # ``manual_question_case_idx`` leads with it.
-        db_index=False,
-    )
-    # Manual run: the verbatim case step (1-based, the checkpoint plan's
-    # number); null asks about the case as a whole. Always null for a person
-    # step question.
-    manual_step_num = models.PositiveSmallIntegerField(null=True, blank=True)
-    # The step round it was asked in; always 1 for a Manual run question
-    # (the wire format requires a positive round).
-    round = models.PositiveSmallIntegerField()
-    # Person-written and model-written; shown escaped.
-    question = models.TextField(max_length=PERSON_STEP_QUESTION_MAX_LENGTH)
-    answer = models.TextField(
-        max_length=PERSON_STEP_ANSWER_MAX_LENGTH, blank=True, default=""
-    )
-    status = models.CharField(
-        max_length=16,
-        choices=PersonStepQuestionStatus.choices,
-        default=PersonStepQuestionStatus.PENDING,
-    )
-    asked_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="+",
-    )
-    asked_via = models.CharField(max_length=8, choices=PersonStepChannel.choices)
-    created_at = models.DateTimeField(auto_now_add=True)
-    answered_at = models.DateTimeField(null=True, blank=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=["person_step"],
-                condition=models.Q(status=PersonStepQuestionStatus.PENDING),
-                name="person_step_question_one_pending",
-            ),
-            models.UniqueConstraint(
-                fields=["manual_case"],
-                condition=models.Q(status=PersonStepQuestionStatus.PENDING),
-                name="manual_question_one_pending",
-            ),
-            # Exactly one anchor; a step number only on a manual question.
-            models.CheckConstraint(
-                condition=(
-                    models.Q(
-                        person_step__isnull=False,
-                        manual_case__isnull=True,
-                        manual_step_num__isnull=True,
-                    )
-                    | models.Q(person_step__isnull=True, manual_case__isnull=False)
-                ),
-                name="person_step_question_one_anchor",
-            ),
-        ]
-        indexes = [
-            models.Index(
-                fields=["person_step", "created_at"],
-                name="person_step_question_step_idx",
-            ),
-            models.Index(
-                fields=["manual_case", "created_at"],
-                name="manual_question_case_idx",
-            ),
-        ]
-
-    def __str__(self) -> str:
-        if self.manual_case_id is not None:
-            return f"Question #{self.pk} on manual case #{self.manual_case_id}"
-        return f"Question #{self.pk} on person step #{self.person_step_id}"
 
 
 class RunnerUpdateStatus(models.TextChoices):
@@ -1838,64 +1722,6 @@ class ManualCaseSubmission(models.Model):
             f"Manual submission {self.submission_id} of case "
             f"#{self.test_run_test_case_id}"
         )
-
-
-class ManualGuideState(models.TextChoices):
-    """Where the "How to do it" guide of a claimed Manual run case is."""
-
-    QUEUED = "queued", "Queued"
-    RESEARCHING = "researching", "Researching the knowledge base"
-    WRITING = "writing", "Writing step guides"
-    DONE = "done", "Done"
-    # The claim was gone mid-way; missing steps stay missing.
-    STOPPED = "stopped", "Stopped"
-    # A task-level error; written steps are kept.
-    FAILED = "failed", "Failed"
-    # ``MANUAL_GUIDE_MAX_STEPS`` was 0 when the case was claimed.
-    OFF = "off", "Off"
-
-
-class ManualStepGuide(models.Model):
-    """The AI "How to do it" items of a claimed Manual run case's steps.
-
-    Written only by the guide task (``projects.manual_step_guide_worker``),
-    every write conditional on ``generation``; a claim
-    (``manual_step_guide_services.request_manual_case_guide``) bumps the
-    generation. Never part of the checkpoint, the hand-in or TestRail: the
-    step texts the tester sees stay the checkpoint's verbatim ones.
-    """
-
-    test_run_test_case = models.OneToOneField(
-        TestRunTestCase,
-        on_delete=models.CASCADE,
-        related_name="manual_step_guide",
-    )
-    # sha256 of the case text, the verbatim steps and the runner OS; a guide
-    # whose fingerprint no longer matches is not shown.
-    fingerprint = models.CharField(max_length=64)
-    generation = models.PositiveIntegerField(default=0)
-    state = models.CharField(
-        max_length=16,
-        choices=ManualGuideState.choices,
-        default=ManualGuideState.QUEUED,
-    )
-    # The runner OS name the guide was written for (shell label for display).
-    os_name = models.CharField(max_length=32, blank=True, default="")
-    # Steps to write: min(case steps, ``MANUAL_GUIDE_MAX_STEPS``).
-    step_count = models.PositiveSmallIntegerField(default=0)
-    # The case's knowledge base research notes (``agents.checkpoint``
-    # ``person_guide_to_json`` shape); {} while not researched.
-    research = models.JSONField(default=dict, blank=True)
-    # ``{"<num>": {"state": "ready"|"failed", "how_to": [rows]}}``, rows in
-    # ``person_step_rows.how_to_rows`` shape; a step absent is not written yet.
-    steps = models.JSONField(default=dict, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
-    # Bumped by every write; the read side treats a guide in progress whose
-    # ``updated_at`` is too old as lost.
-    updated_at = models.DateTimeField(auto_now=True)
-
-    def __str__(self) -> str:
-        return f"Manual step guide of case #{self.test_run_test_case_id}"
 
 
 class ManualCaseProgress(models.Model):

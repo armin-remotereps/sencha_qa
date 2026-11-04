@@ -50,86 +50,6 @@ HandOffKind = Literal["interactive", "command", "restore"]
 
 
 @dataclass(frozen=True)
-class PersonHowToItem:
-    """One numbered "How to do it" item of a hand-off (model-written).
-
-    ``command`` is an AI suggestion for the runner's shell (one line), never
-    the case-stated command; empty when the item has none.
-    """
-
-    text: str
-    command: str = ""
-    # Where the item's facts came from: a knowledge base item (and page), the
-    # artifacts profile, or "" for general OS knowledge. Validated by the
-    # server; the model never writes the label.
-    source_kind: PersonHowToSourceKind = ""
-    source_item_id: int | None = None
-    source_page: int | None = None
-    # Server-built ("«Install guide.pdf», page 3" or "Artifacts profile").
-    source_label: str = ""
-
-
-PersonHowToSourceKind = Literal["", "kb", "profile"]
-
-
-PersonGuideStatus = Literal["ready", "empty", "failed"]
-
-
-@dataclass(frozen=True)
-class PersonGuideNotes:
-    """Per-case knowledge base research notes for Human in the loop guides.
-
-    Stored in the checkpoint ``person_guide`` key; ``text`` holds numbered
-    facts with their citations, already redacted and capped.
-    """
-
-    text: str
-    status: PersonGuideStatus
-    researched_at: datetime
-    # Research runs so far for this case (a failed one is retried once).
-    attempts: int = 1
-
-
-@dataclass(frozen=True)
-class RelatedKnowledgeText:
-    """Knowledge base excerpts rendered for a prompt, with the cited items."""
-
-    text: str
-    item_names: dict[int, str]
-
-
-@dataclass(frozen=True)
-class PersonGuideSources:
-    """Project material for person-step guides, injected by ``projects``.
-
-    Callables only, so ``agents`` never touches the ORM; each may make queries
-    and the caller memoizes what is per execution.
-    """
-
-    # Fenced-ready artifacts profile text; None when the project has none.
-    artifacts_profile: Callable[[], str | None]
-    # The knowledge base index for a research loop; None when no ready items.
-    knowledge_index: Callable[[], str | None]
-    # Excerpts related to a text ("" text when nothing matched).
-    related: Callable[[str], RelatedKnowledgeText]
-    # Existing, ready knowledge base item ids -> names.
-    resolve_items: Callable[[tuple[int, ...]], dict[int, str]]
-    # The knowledge base item ids the artifacts profile cites (() without one).
-    profile_item_ids: Callable[[], tuple[int, ...]]
-
-
-@dataclass(frozen=True)
-class PersonGuideContext:
-    """The grounding one ``prepare_person_step`` call gets."""
-
-    artifacts_profile: str = ""
-    research_notes: str = ""
-    knowledge_excerpts: str = ""
-    # Item ids the model may cite -> names (for server-built source labels).
-    allowed_items: dict[int, str] | None = None
-
-
-@dataclass(frozen=True)
 class PersonStepHandOff:
     """A step handed to a person instead of a sub-agent (Human in the loop)."""
 
@@ -144,87 +64,8 @@ class PersonStepHandOff:
     # Why the agent could not confirm the person's last report of this step;
     # empty on a first hand-off.
     objection: str = ""
-    # Exact OS-specific steps (open the app, the command, what to look for);
-    # empty when the model wrote none.
-    how_to: tuple[PersonHowToItem, ...] = ()
     # The plan step's ``SubTask.case_steps``; always empty for ``restore``.
     case_steps: tuple[int, ...] = ()
-
-
-# Where the step a person asks about comes from: ``plan`` is a Human in the
-# loop person step the agent wrote; ``case`` is a verbatim case step (Manual).
-AdviceStepSource = Literal["plan", "case"]
-# The hand-off kind of a ``plan`` step, or ``case`` for a verbatim case step.
-AdviceStepKind = Literal["interactive", "command", "restore", "case"]
-
-
-@dataclass(frozen=True)
-class AdviceCaseStep:
-    """One numbered test case step the asked-about step covers."""
-
-    num: int
-    text: str
-    # Blank when the case gives no expected result for the step.
-    expected: str = ""
-
-
-@dataclass(frozen=True)
-class AdviceStep:
-    """The step a person asks the Ask AI advisor about, whatever its source."""
-
-    source: AdviceStepSource
-    kind: AdviceStepKind
-    # 1-based plan step (``plan``) or case step (``case``).
-    step_num: int
-    # Shown to the model, e.g. "Plan step 3 · TestRail steps 5–7".
-    label: str
-    instruction: str
-    expected_result: str = ""
-    # The case-stated command of a ``command`` step; empty otherwise.
-    command: str = ""
-    # Why the agent could not confirm the person's last report; empty otherwise.
-    objection: str = ""
-    how_to: tuple[PersonHowToItem, ...] = ()
-    covered_case_steps: tuple[AdviceCaseStep, ...] = ()
-
-
-@dataclass(frozen=True)
-class AdviceEarlierStep:
-    """One line about an earlier step of the case (what was done, how it went)."""
-
-    step_num: int
-    summary: str
-
-
-@dataclass(frozen=True)
-class PersonStepAdviceContext:
-    """What the Ask AI advisor knows about the step a person is performing.
-
-    Text only: no screen, no machine access. Its knowledge base tools read only
-    ``project_id``'s knowledge base.
-    """
-
-    # ``platform.system()`` of the runner (e.g. "Windows").
-    os_name: str
-    # The runner's shell (``agents.os_shell.shell_label``).
-    shell_label: str
-    case_text: str
-    # The project's application context, capped by the caller.
-    project_prompt: str
-    step: AdviceStep
-    project_id: int
-    # Earlier steps of the case, oldest first.
-    earlier_steps: tuple[AdviceEarlierStep, ...] = ()
-    # The project's artifacts profile text, capped by the caller; "" for none.
-    artifacts_profile: str = ""
-    # The knowledge base index (``knowledge_index_text``); "" exactly when the
-    # project has no ready knowledge base item.
-    knowledge_index: str = ""
-    # Earlier (question, answer) pairs of this step, oldest first (≤ 6).
-    history: tuple[tuple[str, str], ...] = ()
-    # Knowledge base excerpts related to the question, rendered by the caller
-    # (knowledge_base.tool_text.render_excerpts); "" when none.
-    knowledge_excerpts: str = ""
 
 
 @dataclass(frozen=True)
@@ -635,9 +476,6 @@ class OrchestratorCheckpoint:
     case_step_count: int = 0
     # The case came from TestRail ("TestRail steps 3–5"), else "Case steps".
     case_steps_testrail: bool = True
-    # Human in the loop: the case's knowledge base research notes for the
-    # "How to do it" guides, researched once per case; None until then.
-    person_guide: PersonGuideNotes | None = None
     # Manual run: the plan is the case's verbatim steps and every attempt was
     # recorded from the tester's hand-in (no agent ran). Lets push and
     # evidence code tell manual cases apart without reading the run.

@@ -7,7 +7,6 @@ from projects import (
     machine_readiness_views,
     manual_case_views,
     member_views,
-    person_step_question_views,
     person_step_views,
     project_run_mode_views,
     run_case_retest_views,
@@ -399,11 +398,6 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/person-step/block/",
         person_step_views.test_run_case_person_block,
         name="test_run_case_person_block",
-    ),
-    path(
-        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/person-step/ask/",
-        person_step_question_views.test_run_case_person_ask,
-        name="test_run_case_person_ask",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:test_case_id>/edit/",

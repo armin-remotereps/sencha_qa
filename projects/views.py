@@ -81,7 +81,6 @@ from projects.forms import (
     CaseResumeForm,
     ContextRestoreForm,
     HelpReturnForm,
-    PersonStepQuestionForm,
     PersonStepReportForm,
     ProjectForm,
     RunCaseSelectionForm,
@@ -1174,9 +1173,7 @@ def test_run_case_detail(
     resume_steps = list_resume_steps(pivot) if can_resume else []
     step_progress, earlier_plans = case_step_view(pivot)
     result_panel = get_case_result_panel(pivot)
-    person_step_panel = get_person_step_panel(
-        pivot.test_run, project, pivot=pivot, include_questions=True
-    )
+    person_step_panel = get_person_step_panel(pivot.test_run, project, pivot=pivot)
     # Continue keeps the request's stored mode unless the person picks another;
     # the agent's suggestion is shown, never pre-selected.
     help_form_initial: dict[str, object] = {"use_plan_revision": False}
@@ -1224,7 +1221,6 @@ def test_run_case_detail(
             # Human in the loop: the step this case waits on a person for.
             "person_step_panel": person_step_panel,
             "person_step_form": PersonStepReportForm(),
-            "person_step_question_form": PersonStepQuestionForm(),
             # The agent's suggested note is shown, never pre-filled: the
             # Continue note reaches the tester as the person's own words.
             # The draft is only summarised here, so it is not applied by default.

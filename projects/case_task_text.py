@@ -1,7 +1,7 @@
 """The task text of a test case as the agents read it.
 
-A leaf (models only), so the case worker and the Ask AI advisor word the case
-the same way without importing ``projects.services``.
+A leaf (models only), so every reader words the case the same way without
+importing ``projects.services``.
 """
 
 from __future__ import annotations

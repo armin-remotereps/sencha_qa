@@ -312,17 +312,6 @@ class TestRunCaseConsumer(AuthenticatedConsumer):
             text_data=json.dumps({"type": "steps", "steps": event["steps"]})
         )
 
-    async def test_run_case_person_step_questions(self, event: dict[str, Any]) -> None:
-        await self.send(
-            text_data=json.dumps(
-                {
-                    "type": "person_step_questions",
-                    "person_step_id": event["person_step_id"],
-                    "questions": event["questions"],
-                }
-            )
-        )
-
 
 class AgentStatusConsumer(AuthenticatedConsumer):
 

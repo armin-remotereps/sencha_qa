@@ -11,9 +11,6 @@ from django.core.exceptions import ImproperlyConfigured
 
 from auto_tester.encryption_key import validate_fernet_key
 from controller_client.protocol import (
-    MANUAL_GUIDE_MAX_STEPS_CAP,
-)
-from controller_client.protocol import (
     MANUAL_SHOT_MAX_BYTES as PROTOCOL_MANUAL_SHOT_MAX_BYTES,
 )
 from controller_client.protocol import (
@@ -209,14 +206,6 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "projects.tasks.refine_manual_case_result": {"queue": "upload"},
     # Beat sweep: quick, must run while upload is busy with imports.
     "projects.tasks.sweep_stalled_manual_uploads": {"queue": "notify"},
-    # An LLM call of tens of seconds on its own small queue: not "notify"
-    # (kept quick), not "execution" (may be full of long cases), not "upload"
-    # (a long TestRail import would hold a person waiting on an answer).
-    "projects.tasks.answer_person_step_question": {"queue": "assist"},
-    # Manual run "How to do it" guides: short chunks (research, or a few
-    # steps) that re-enqueue themselves, so Ask AI never waits long behind
-    # one (sent by name).
-    "projects.tasks.prepare_manual_case_guide": {"queue": "assist"},
     "machine_setup.tasks.run_setup_turn": {"queue": "execution"},
     "machine_setup.tasks.start_case_auto_fix": {"queue": "execution"},
     # Sent by name from projects (pause and discuss): needs a route entry.
@@ -233,7 +222,9 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "knowledge_base.tasks.expand_knowledge_archive": {"queue": "knowledge"},
     "knowledge_base.tasks.copy_project_knowledge": {"queue": "knowledge"},
     "knowledge_base.tasks.sweep_knowledge_storage": {"queue": "knowledge"},
-    # Short runner round trips, no LLM; a person is waiting on the page.
+    # Short runner round trips, no LLM; a person waits. Own small queue: not
+    # "notify" (kept quick), not "execution" (may be full of long cases), not
+    # "upload" (a long TestRail import would hold the person up).
     # In projects.tasks: projects composes their runner ports (plan D2).
     "projects.tasks.scan_artifacts_task": {"queue": "assist"},
     "projects.tasks.quick_check_task": {"queue": "assist"},
@@ -496,9 +487,8 @@ if KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR < KNOWLEDGE_BASE_MAX_FILE_BYTES:
         "KNOWLEDGE_BASE_UPLOAD_BYTES_PER_HOUR must be at least "
         "KNOWLEDGE_BASE_MAX_FILE_BYTES"
     )
-# Postgres cancels a knowledge base search query (agent tool, tab search,
-# related excerpts for guides and Ask AI) past this many milliseconds, per
-# query: a full-text search with no hit and its exact fallback get one each.
+# Postgres cancels a knowledge base search query (agent tool, tab search)
+# past this many milliseconds, per query: a full-text search with no hit and its exact fallback get one each.
 # 0 = no limit.
 KNOWLEDGE_SEARCH_TIMEOUT_MS: int = config(
     "KNOWLEDGE_SEARCH_TIMEOUT_MS", default=15000, cast=int
@@ -644,31 +634,6 @@ PERSON_EVIDENCE_OUTPUT_MAX_CHARS: int = config(
 # Mark failed / Mark blocked on a person step: the agent records evidence with
 # one read-only check (True) or only takes a screenshot (False).
 PERSON_EVIDENCE_LLM: bool = config("PERSON_EVIDENCE_LLM", default=True, cast=bool)
-# Human in the loop, Ask AI: total time for answering a person's question
-# (knowledge base look-ups and the answer); a question still pending 60 s past
-# it is failed at the next ask.
-PERSON_STEP_QUESTION_TIMEOUT_SECONDS: int = config(
-    "PERSON_STEP_QUESTION_TIMEOUT_SECONDS", default=180, cast=int
-)
-# Knowledge base look-up rounds Ask AI takes before answering (only in projects
-# with ready knowledge base items); 0 keeps a single call without tools.
-PERSON_STEP_QUESTION_MAX_TOOL_ROUNDS: int = config(
-    "PERSON_STEP_QUESTION_MAX_TOOL_ROUNDS", default=3, cast=int
-)
-if PERSON_STEP_QUESTION_MAX_TOOL_ROUNDS < 0:
-    raise ImproperlyConfigured("PERSON_STEP_QUESTION_MAX_TOOL_ROUNDS must be 0 or more")
-# Ask AI reads the knowledge base on every question: leave time for a look-up
-# round besides the 40 s kept for the answer. Keep 60 above the sum of
-# _ANSWER_RESERVE_SECONDS and _MIN_LOOKUP_SECONDS in
-# agents/services/person_step_advisor.py.
-if (
-    PERSON_STEP_QUESTION_MAX_TOOL_ROUNDS > 0
-    and PERSON_STEP_QUESTION_TIMEOUT_SECONDS < 60
-):
-    raise ImproperlyConfigured(
-        "PERSON_STEP_QUESTION_TIMEOUT_SECONDS must be 60 or more while "
-        "PERSON_STEP_QUESTION_MAX_TOOL_ROUNDS is above 0"
-    )
 # Manual run: largest screenshot (raw PNG/JPEG bytes) the server stores from
 # the Test Runner; may only lower the protocol's MANUAL_SHOT_MAX_BYTES (7 MiB).
 # Runners size shots to the protocol limit: lowering it rejects larger ones.
@@ -705,29 +670,6 @@ MANUAL_UPLOAD_STALE_HOURS: int = config(
 )
 if MANUAL_UPLOAD_STALE_HOURS < 1:
     raise ImproperlyConfigured("MANUAL_UPLOAD_STALE_HOURS must be 1 or more")
-# Manual run: steps of a claimed case that get an AI "How to do it" guide
-# (the first N); 0 turns the guides off. At most MANUAL_GUIDE_MAX_STEPS_CAP,
-# so the worst-case guide fits the Test Runner snapshot.
-MANUAL_GUIDE_MAX_STEPS: int = config("MANUAL_GUIDE_MAX_STEPS", default=30, cast=int)
-if not 0 <= MANUAL_GUIDE_MAX_STEPS <= MANUAL_GUIDE_MAX_STEPS_CAP:
-    raise ImproperlyConfigured(
-        f"MANUAL_GUIDE_MAX_STEPS must be between 0 and {MANUAL_GUIDE_MAX_STEPS_CAP}"
-    )
-# Manual run: guide calls run in parallel per chunk (one chunk = one task).
-MANUAL_GUIDE_PARALLEL: int = config("MANUAL_GUIDE_PARALLEL", default=3, cast=int)
-if not 1 <= MANUAL_GUIDE_PARALLEL <= 8:
-    raise ImproperlyConfigured("MANUAL_GUIDE_PARALLEL must be between 1 and 8")
-# Manual run: wall-clock budget of one guide step chunk, from the chunk's start
-# (contexts included) until its steps are stored; each LLM call gets what is
-# left (minus a margin) as its timeout, and steps unfinished at the end are
-# stored failed. The task's soft time limit sits above max(this,
-# PERSON_GUIDE_RESEARCH_TIMEOUT_SECONDS), so the budget, not the signal, ends a
-# chunk. A guide in progress with no write for that max + 60 s is lost.
-MANUAL_GUIDE_CHUNK_TIMEOUT_SECONDS: int = config(
-    "MANUAL_GUIDE_CHUNK_TIMEOUT_SECONDS", default=120, cast=int
-)
-if MANUAL_GUIDE_CHUNK_TIMEOUT_SECONDS < 10:
-    raise ImproperlyConfigured("MANUAL_GUIDE_CHUNK_TIMEOUT_SECONDS must be 10 or more")
 # Test Runner self-update: an update with no outcome after this long counts as
 # expired. It must outlast the runner's own deadline (UPDATE_MAX_SECONDS), or
 # the run/setup gates would reopen while the runner is still installing.
@@ -810,25 +752,6 @@ ORCHESTRATOR_PLAN_TIMEOUT_SECONDS: int = config(
 )
 if ORCHESTRATOR_PLAN_TIMEOUT_SECONDS < 1:
     raise ImproperlyConfigured("ORCHESTRATOR_PLAN_TIMEOUT_SECONDS must be 1 or more")
-# Human in the loop: knowledge base tool rounds of the once-per-case research
-# behind the person steps' "How to do it" guides (only when the project has
-# ready knowledge base items); 0 turns research off (excerpts and the artifacts
-# profile are still used).
-PERSON_GUIDE_RESEARCH_MAX_TOOL_ROUNDS: int = config(
-    "PERSON_GUIDE_RESEARCH_MAX_TOOL_ROUNDS", default=4, cast=int
-)
-if PERSON_GUIDE_RESEARCH_MAX_TOOL_ROUNDS < 0:
-    raise ImproperlyConfigured(
-        "PERSON_GUIDE_RESEARCH_MAX_TOOL_ROUNDS must be 0 or more"
-    )
-# Wall-clock cap of that research loop.
-PERSON_GUIDE_RESEARCH_TIMEOUT_SECONDS: int = config(
-    "PERSON_GUIDE_RESEARCH_TIMEOUT_SECONDS", default=120, cast=int
-)
-if PERSON_GUIDE_RESEARCH_TIMEOUT_SECONDS < 1:
-    raise ImproperlyConfigured(
-        "PERSON_GUIDE_RESEARCH_TIMEOUT_SECONDS must be 1 or more"
-    )
 
 # Sub-Agent
 SUB_AGENT_MAX_ITERATIONS: int = config(

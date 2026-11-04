@@ -40,8 +40,6 @@ from projects.manual_refinement_services import (
     refine_manual_submission,
     sweep_stalled_manual_uploads,
 )
-from projects.manual_step_guide_services import PREPARE_MANUAL_CASE_GUIDE_TASK
-from projects.manual_step_guide_worker import run_manual_guide_chunk
 from projects.models import (
     PROJECT_PROMPT_MAX_LENGTH,
     ContextWriteSource,
@@ -49,10 +47,6 @@ from projects.models import (
     TestCaseUpload,
     TestRun,
     UploadStatus,
-)
-from projects.person_step_question_services import (
-    ANSWER_PERSON_STEP_QUESTION_TASK,
-    answer_person_step_question_now,
 )
 from projects.prompt_refiner import refine_project_prompt
 from projects.services import _agent_status_group, save_project_prompt
@@ -408,41 +402,6 @@ def refine_project_prompt_task(
             project_id,
         )
         _send_prompt_refined(project_id, error="Refinement service unavailable.")
-
-
-@shared_task(
-    name=ANSWER_PERSON_STEP_QUESTION_TASK,
-    max_retries=0,
-    # A lost task is settled lazily: the next ask fails the stale pending row.
-    soft_time_limit=settings.PERSON_STEP_QUESTION_TIMEOUT_SECONDS + 15,
-    time_limit=settings.PERSON_STEP_QUESTION_TIMEOUT_SECONDS + 45,
-)
-def answer_person_step_question(question_id: int) -> None:
-    """Ask AI: answer one person's question about their step (``assist`` queue)."""
-    answer_person_step_question_now(question_id)
-
-
-# One chunk: the research loop or a few parallel step calls. A step chunk ends
-# itself at MANUAL_GUIDE_CHUNK_TIMEOUT_SECONDS (wall clock, unfinished steps
-# stored failed); the limits sit well above it so the budget, not the signal,
-# ends a chunk.
-_MANUAL_GUIDE_CHUNK_SECONDS = max(
-    settings.PERSON_GUIDE_RESEARCH_TIMEOUT_SECONDS,
-    settings.MANUAL_GUIDE_CHUNK_TIMEOUT_SECONDS,
-)
-
-
-@shared_task(
-    name=PREPARE_MANUAL_CASE_GUIDE_TASK,
-    max_retries=0,
-    # A lost chunk reads as stale; the next claim resumes the missing steps.
-    soft_time_limit=_MANUAL_GUIDE_CHUNK_SECONDS + 30,
-    time_limit=_MANUAL_GUIDE_CHUNK_SECONDS + 60,
-)
-def prepare_manual_case_guide(guide_id: int, generation: int) -> None:
-    """Manual run: one chunk of a claimed case's "How to do it" guide
-    (``assist`` queue; re-enqueues the next chunk itself)."""
-    run_manual_guide_chunk(guide_id, generation)
 
 
 @shared_task(

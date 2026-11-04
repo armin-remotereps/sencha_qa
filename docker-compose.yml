@@ -137,7 +137,7 @@ services:
             - "redis"
         extra_hosts:
             - "host.docker.internal:host-gateway"
-        entrypoint: "python -m celery -A auto_tester worker -l INFO -Q assist --concurrency=8"
+        entrypoint: "python -m celery -A auto_tester worker -l INFO -Q assist --concurrency=4"
 
     knowledge-celery:
         hostname: knowledge

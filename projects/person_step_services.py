@@ -44,7 +44,6 @@ from projects.case_result_text import person_label
 from projects.case_retest_marking import RETEST_MARK_FIELDS, apply_retest_mark
 from projects.case_step_refs import CaseStepText, stored_case_steps
 from projects.exceptions import PersonStepError, RunHelpError
-from projects.how_to_view import PersonHowToView, how_to_view
 from projects.manual_run_policy import MANUAL_PERSON_STEP_REFUSED, is_manual_run
 from projects.models import (
     ACTIVE_RUN_STATUSES,
@@ -69,12 +68,7 @@ from projects.person_mark_verdict import (
     write_person_mark_verdict,
 )
 from projects.person_step_actor import PersonStepActor
-from projects.person_step_question_services import (
-    PersonStepAskState,
-    get_person_step_ask_state,
-)
-from projects.person_step_question_view import PersonStepQuestionView
-from projects.person_step_rows import stored_hand_off_kind, stored_how_to
+from projects.person_step_rows import stored_hand_off_kind
 from projects.run_reopen_services import (
     list_wake_blockers,
     lock_project_and_run,
@@ -131,27 +125,13 @@ class PersonStepPanel:
     # The member who reported the step (name, else email); blank before a
     # report and for an anonymous Test Runner report. Never runner-sent text.
     reporter_label: str
-    # The model-written "How to do it" items (commands are AI suggestions),
-    # each with its source link when it has one.
-    how_to: tuple[PersonHowToView, ...]
-    # At least one item names a source; with items but none, the card says
-    # the guidance is general AI advice.
-    how_to_has_sources: bool
     # "TestRail steps 3–5" / "Case step 2"; "" when the step covers none.
     case_steps_label: str
     # The covered case steps with their texts (from the row; no query).
     case_steps: tuple[CaseStepText, ...]
-    # The step has a command to run (case-stated or suggested): the report
-    # form asks for the pasted output.
+    # The step has a case-stated command to run: the report form asks for
+    # the pasted output.
     has_commands: bool
-    # Ask AI: the newest questions of the step, oldest first.
-    questions: tuple[PersonStepQuestionView, ...]
-    # A person may ask the AI about the step now.
-    can_ask: bool
-    # Why not (user-safe); "" when ``can_ask``.
-    ask_blocker: str
-    # A fresh pending question is the only ask blocker (False without questions).
-    has_pending: bool
 
     @property
     def holds_run(self) -> bool:
@@ -186,7 +166,6 @@ def get_person_step_panel(
     *,
     pivot: TestRunTestCase | None = None,
     blockers: Sequence[str] | None = None,
-    include_questions: bool = False,
 ) -> PersonStepPanel | None:
     """The person step panel of an active run; None (no queries) otherwise.
 
@@ -194,9 +173,7 @@ def get_person_step_panel(
     the agent confirms it, which also happens after the run was re-queued).
     One query (with the reporter joined), plus the wake gates while the run
     is PAUSED unless the caller passes them as ``blockers``
-    (``list_wake_blockers``). With ``include_questions`` (the case card; the
-    run banner never shows Ask AI) one more for the step's questions;
-    without, ``questions`` is empty and ``can_ask`` False.
+    (``list_wake_blockers``).
 
     With ``pivot`` (the case page, which already loaded it with its checkpoint
     and test case): only that case's step, attached to ``pivot``, labelled
@@ -234,15 +211,6 @@ def get_person_step_panel(
     elif blockers is None:
         blockers = list_wake_blockers(test_run, project)
     not_confirmed = step.status == PersonStepStatus.NOT_CONFIRMED
-    how_to = stored_how_to(step.how_to)
-    how_to_views = tuple(how_to_view(item, project.pk) for item in how_to)
-    ask = (
-        get_person_step_ask_state(step, run_paused=paused)
-        if include_questions
-        else PersonStepAskState(
-            questions=(), can_ask=False, ask_blocker="", has_pending=False
-        )
-    )
     return PersonStepPanel(
         step=step,
         step_label=step_label,
@@ -256,15 +224,9 @@ def get_person_step_panel(
         runner_can_answer=paused and is_open and _runner_shows_steps(project),
         reported_at_runner=step.reported_via == PersonStepChannel.RUNNER,
         reporter_label=person_label(step.reported_by),
-        how_to=how_to_views,
-        how_to_has_sources=any(item.source_label for item in how_to_views),
         case_steps_label=step.case_steps_label,
         case_steps=stored_case_steps(step.case_steps),
-        has_commands=bool(step.command) or any(item.command for item in how_to),
-        questions=ask.questions,
-        can_ask=ask.can_ask,
-        ask_blocker=ask.ask_blocker,
-        has_pending=ask.has_pending,
+        has_commands=bool(step.command),
     )
 
 
@@ -705,7 +667,6 @@ def _checkpoint_person(
             expected_result=step.expected_result,
             command=step.command,
             objection=step.agent_objection,
-            how_to=stored_how_to(step.how_to),
             case_steps=tuple(item.num for item in stored_case_steps(step.case_steps)),
         ),
         request_id=step.pk,

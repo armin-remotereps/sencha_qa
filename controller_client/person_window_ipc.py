@@ -30,7 +30,6 @@ from controller_client.protocol import (
     MANUAL_VERDICT_NOTE_MAX_CHARS,
     PERSON_CASE_ACTION_MAX_BYTES,
     PERSON_STEP_ACTION_MAX_BYTES,
-    PERSON_STEP_QUESTION_MAX_BYTES,
     PERSON_STEP_RESULT_MESSAGE_MAX_CHARS,
     CasePauseActionPayload,
     ManualActiveCasePayload,
@@ -46,7 +45,6 @@ from controller_client.protocol import (
     PersonChatSendPayload,
     PersonHelpActionPayload,
     PersonStepActionPayload,
-    PersonStepQuestionAskPayload,
     PersonStepStatePayload,
     parse_case_pause_action_payload,
     parse_manual_case_action_payload,
@@ -55,7 +53,6 @@ from controller_client.protocol import (
     parse_person_chat_send_payload,
     parse_person_help_action_payload,
     parse_person_step_action_payload,
-    parse_person_step_question_payload,
     parse_person_step_state_payload,
 )
 
@@ -64,20 +61,18 @@ from controller_client.protocol import (
 # stays below it; with ``cases`` only pathological escaping goes over, and
 # the runner then sends the snapshot without them (person_window).
 IPC_TO_WINDOW_MAX_BYTES: Final[int] = 4 * 1024 * 1024
-# The server keeps a ``manual_run_state`` (estimated) below this budget by
-# leaving the steps' how-to out, then adds the claimed case's discussion (at
-# most MANUAL_DISCUSSION_SNAPSHOT_MAX_BYTES); room is left for the window's
-# own fields.
+# A ``manual_run_state`` is assumed to stay below this budget (the server
+# does not measure it); the server then adds the claimed case's discussion (at most
+# MANUAL_DISCUSSION_SNAPSHOT_MAX_BYTES); room is left for the window's own
+# fields.
 assert (
     MANUAL_RUN_STATE_SAFE_BYTES + MANUAL_DISCUSSION_SNAPSHOT_MAX_BYTES
     < IPC_TO_WINDOW_MAX_BYTES
 ), "MANUAL_RUN_STATE_SAFE_BYTES does not fit in IPC_TO_WINDOW_MAX_BYTES"
-# Largest window -> runner line: one answer (note + output), one question, one
-# pause, discussion message or help resolution, or one manual draft, hand-in
+# Largest window -> runner line: one answer (note + output), one pause, discussion message or help resolution, or one manual draft, hand-in
 # (every step note at its cap, fully escaped) or manual discussion message.
 IPC_TO_RUNNER_MAX_BYTES: Final[int] = max(
     PERSON_STEP_ACTION_MAX_BYTES,
-    PERSON_STEP_QUESTION_MAX_BYTES,
     PERSON_CASE_ACTION_MAX_BYTES,
     MANUAL_CASE_SUBMIT_MAX_BYTES,
     MANUAL_CHAT_SEND_MAX_BYTES,
@@ -112,14 +107,12 @@ class WindowIpcType(StrEnum):
     SHOW = "show"
     HIDE = "hide"
     RESULT = "result"
-    QUESTION_RESULT = "question_result"
     CONNECTION = "connection"
     QUIT = "quit"
     # window -> runner
     READY = "ready"
     HIDDEN = "hidden"
     ACTION = "action"
-    QUESTION = "question"
     CLOSED_BY_USER = "closed_by_user"
     # Person window v2 (cases, discussion, pause)
     CASE_RESULT = "case_result"  # runner -> window
@@ -254,8 +247,6 @@ class StateCommand:
     """Replace the window's steps (newest first); empty hides the window."""
 
     steps: tuple[PersonStepStatePayload, ...]
-    # The server takes questions (PERSON_STEP_ASSIST_V1): show the Ask AI box.
-    questions_enabled: bool = False
     # PERSON_CASE_CONTEXT_V1: the cases behind the steps, an open help case and
     # the running case; empty from an older server (today's Step content only).
     cases: tuple[PersonCaseStatePayload, ...] = ()
@@ -279,20 +270,6 @@ class ResultCommand:
 
     ok: bool
     message: str
-
-
-@dataclass(frozen=True)
-class QuestionResultCommand:
-    """The server's acknowledgement of the person's last question.
-
-    The answer itself arrives later in a ``StateCommand`` (the step's
-    ``questions``) or a ``ManualStateCommand`` (``manual``: a question about
-    the claimed manual case; its own pending slot).
-    """
-
-    ok: bool
-    message: str
-    manual: bool = False
 
 
 @dataclass(frozen=True)
@@ -356,7 +333,6 @@ WindowCommand = (
     | ShowCommand
     | HideCommand
     | ResultCommand
-    | QuestionResultCommand
     | CaseResultCommand
     | ConnectionCommand
     | QuitCommand
@@ -385,13 +361,6 @@ class ActionEvent:
     """The person answered a step; the window has already hidden itself."""
 
     action: PersonStepActionPayload
-
-
-@dataclass(frozen=True)
-class QuestionEvent:
-    """The person asked the AI about a step; the window stays visible."""
-
-    question: PersonStepQuestionAskPayload
 
 
 @dataclass(frozen=True)
@@ -482,7 +451,6 @@ WindowEvent = (
     ReadyEvent
     | HiddenEvent
     | ActionEvent
-    | QuestionEvent
     | ClosedByUserEvent
     | PauseEvent
     | ChatSendEvent
@@ -568,13 +536,10 @@ def next_seq(seq: int) -> int:
 def encode_command(command: WindowCommand) -> bytes:
     payload: dict[str, object]
     match command:
-        case StateCommand(
-            steps=steps, questions_enabled=questions_enabled, cases=cases
-        ):
+        case StateCommand(steps=steps, cases=cases):
             payload = {
                 "type": WindowIpcType.STATE.value,
                 "steps": [step.to_wire() for step in steps],
-                "questions_enabled": questions_enabled,
                 "cases": [case.to_wire() for case in cases],
             }
         case ShowCommand():
@@ -586,13 +551,6 @@ def encode_command(command: WindowCommand) -> bytes:
                 "type": WindowIpcType.RESULT.value,
                 "ok": ok,
                 "message": message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
-            }
-        case QuestionResultCommand(ok=ok, message=message, manual=manual):
-            payload = {
-                "type": WindowIpcType.QUESTION_RESULT.value,
-                "ok": ok,
-                "message": message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
-                "manual": manual,
             }
         case CaseResultCommand(kind=kind, ok=ok, message=message):
             payload = {
@@ -879,23 +837,13 @@ def decode_command(line: bytes) -> WindowCommand:
     match kind:
         case WindowIpcType.STATE:
             state = parse_person_step_state_payload(data)
-            return StateCommand(
-                steps=state.steps,
-                questions_enabled=state.questions_enabled,
-                cases=state.cases,
-            )
+            return StateCommand(steps=state.steps, cases=state.cases)
         case WindowIpcType.SHOW:
             return ShowCommand()
         case WindowIpcType.HIDE:
             return HideCommand(seq=_seq(data))
         case WindowIpcType.RESULT:
             return ResultCommand(ok=_bool(data, "ok"), message=_message(data))
-        case WindowIpcType.QUESTION_RESULT:
-            return QuestionResultCommand(
-                ok=_bool(data, "ok"),
-                message=_message(data),
-                manual=data.get("manual") is True,
-            )
         case WindowIpcType.CASE_RESULT:
             return CaseResultCommand(
                 kind=_request_kind(data), ok=_bool(data, "ok"), message=_message(data)
@@ -944,21 +892,6 @@ def encode_event(event: WindowEvent) -> bytes:
                 "outcome": (action.outcome.value if action.outcome is not None else ""),
                 "note": action.note,
                 "output": action.output,
-            }
-        case QuestionEvent(question=question) if question.is_manual:
-            payload = {
-                "type": WindowIpcType.QUESTION.value,
-                "pivot_id": question.pivot_id,
-                "claim_token": question.claim_token,
-                "step_num": question.step_num,
-                "question": question.question,
-            }
-        case QuestionEvent(question=question):
-            payload = {
-                "type": WindowIpcType.QUESTION.value,
-                "person_step_id": question.person_step_id,
-                "round": question.round,
-                "question": question.question,
             }
         case ClosedByUserEvent():
             payload = {"type": WindowIpcType.CLOSED_BY_USER.value}
@@ -1047,7 +980,7 @@ def encode_event(event: WindowEvent) -> bytes:
 def decode_event(line: bytes) -> WindowEvent:
     """Parse one window -> runner line (runner side); ProtocolError if invalid.
 
-    An action, a question, a pause, a discussion message or a help resolution
+    An action, a pause, a discussion message or a help resolution
     is validated with the shared protocol parser (caps, outcome, note required
     for "different", non-empty texts, known actions and modes), exactly as the
     server will.
@@ -1060,8 +993,6 @@ def decode_event(line: bytes) -> WindowEvent:
             return HiddenEvent(seq=_seq(data))
         case WindowIpcType.ACTION:
             return ActionEvent(action=parse_person_step_action_payload(data))
-        case WindowIpcType.QUESTION:
-            return QuestionEvent(question=parse_person_step_question_payload(data))
         case WindowIpcType.CLOSED_BY_USER:
             return ClosedByUserEvent()
         case WindowIpcType.PAUSE:

@@ -59,18 +59,6 @@ class KnowledgePage:
 
 
 @dataclass(frozen=True)
-class KnowledgeExcerpt:
-    """A whole chunk retrieved server-side (the Ask AI advisor)."""
-
-    item_id: int
-    item_name: str
-    location: str
-    page: int
-    text: str
-    item_folder: str = ""
-
-
-@dataclass(frozen=True)
 class ExtractedSection:
     """One piece of extracted text with where it came from."""
 

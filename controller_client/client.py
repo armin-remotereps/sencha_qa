@@ -100,8 +100,6 @@ from controller_client.protocol import (
     PersonHelpActionPayload,
     PersonStepActionPayload,
     PersonStepActionResultPayload,
-    PersonStepQuestionAskPayload,
-    PersonStepQuestionResultPayload,
     ScreenshotResponsePayload,
     StreamName,
     UpdatePhase,
@@ -132,7 +130,6 @@ from controller_client.protocol import (
     parse_manual_screenshot_ack_payload,
     parse_person_case_action_result_payload,
     parse_person_step_action_result_payload,
-    parse_person_step_question_result_payload,
     parse_person_step_state_payload,
     parse_run_command_payload,
     parse_scan_directory_payload,
@@ -152,7 +149,6 @@ from controller_client.protocol import (
     serialize_person_chat_send,
     serialize_person_help_action,
     serialize_person_step_action,
-    serialize_person_step_question,
 )
 from controller_client.system_info import gather_system_info
 from controller_client.update_runner import (
@@ -180,10 +176,6 @@ _MAX_BACKOFF_EXPONENT: Final[int] = 16
 # How long a person's answer from the window waits for the server's result
 # before the window gets its buttons back.
 PERSON_STEP_ANSWER_TIMEOUT_SECONDS: Final[float] = 30.0
-# The same for a question to the AI (only its acknowledgement; the answer
-# comes later in a snapshot). Its own slot: questions and answers never wait
-# for each other.
-PERSON_STEP_QUESTION_TIMEOUT_SECONDS: Final[float] = 30.0
 # The same for a pause, a discussion message or a help resolution from the
 # window (one slot per kind).
 PERSON_CASE_REQUEST_TIMEOUT_SECONDS: Final[float] = 30.0
@@ -200,7 +192,6 @@ _WINDOW_SAFE_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
         MessageType.PING,
         MessageType.PERSON_STEP_STATE,
         MessageType.PERSON_STEP_ACTION_RESULT,
-        MessageType.PERSON_STEP_QUESTION_RESULT,
         MessageType.CASE_PAUSE_ACTION_RESULT,
         MessageType.PERSON_CASE_ACTION_RESULT,
         # Manual run: snapshots and replies; tester screenshots hide the
@@ -226,20 +217,6 @@ _ANSWER_NOT_CONNECTED: Final[str] = (
 _ANSWER_BUSY: Final[str] = "Your previous answer is still being sent; wait for it."
 _ANSWER_UNREADABLE: Final[str] = (
     "The server's reply could not be read; check Punk Hazard."
-)
-_QUESTION_NO_REPLY: Final[str] = (
-    "No reply from the server; your question may not have been sent."
-)
-_QUESTION_CONNECTION_LOST: Final[str] = (
-    "The connection to Punk Hazard was lost; check whether your question "
-    "appears, else ask again."
-)
-_QUESTION_NOT_CONNECTED: Final[str] = (
-    "Not connected to Punk Hazard; ask again once the Test Runner reconnects."
-)
-_QUESTION_BUSY: Final[str] = "Your previous question is still being sent; wait for it."
-_QUESTION_UNAVAILABLE: Final[str] = (
-    "Asking the AI is not available on this server; ask on Punk Hazard."
 )
 _MANUAL_ACTION_NOUNS: Final[dict[ManualCaseActionKind, str]] = {
     ManualCaseActionKind.CLAIM: "start",
@@ -286,10 +263,6 @@ _R = TypeVar("_R")
 
 def _answer_failed(message: str) -> PersonStepActionResultPayload:
     return PersonStepActionResultPayload(ok=False, message=message, queued=False)
-
-
-def _question_failed(message: str) -> PersonStepQuestionResultPayload:
-    return PersonStepQuestionResultPayload(ok=False, message=message)
 
 
 def _case_request_kind(request: PersonCaseRequest) -> CaseRequestKind:
@@ -399,9 +372,6 @@ class ControllerClient:
         self._handlers[MessageType.PERSON_STEP_ACTION_RESULT] = (
             self._handle_person_step_action_result
         )
-        self._handlers[MessageType.PERSON_STEP_QUESTION_RESULT] = (
-            self._handle_person_step_question_result
-        )
         self._handlers[MessageType.CASE_PAUSE_ACTION_RESULT] = (
             self._handle_case_pause_action_result
         )
@@ -412,11 +382,6 @@ class ControllerClient:
         self._answer_task: asyncio.Task[None] | None = None
         # The one answer waiting for its result: (request_id, its timeout).
         self._pending_answer: tuple[str, asyncio.Task[None]] | None = None
-        # Ask AI (PERSON_STEP_ASSIST_V1): forwards the window's questions, but
-        # only while this session's last snapshot said the server takes them.
-        self._question_task: asyncio.Task[None] | None = None
-        self._pending_question: tuple[str, asyncio.Task[None]] | None = None
-        self._questions_enabled = False
         # Window v2: forwards pauses, discussion messages and help
         # resolutions; one waits for its result per kind.
         self._case_request_task: asyncio.Task[None] | None = None
@@ -436,8 +401,6 @@ class ControllerClient:
         self._pending_manual_action: (
             tuple[str, ManualCaseActionPayload, asyncio.Task[None]] | None
         ) = None
-        # A manual question waits in its own slot (never blocks a step's).
-        self._pending_manual_question: tuple[str, asyncio.Task[None]] | None = None
         # A manual discussion message (MANUAL_PAUSE_DISCUSS_V1), its own slot;
         # answered by manual_case_action_result with its request_id.
         self._pending_manual_chat: tuple[str, asyncio.Task[None]] | None = None
@@ -471,8 +434,6 @@ class ControllerClient:
         window = self._window
         if window is not None and self._answer_task is None:
             self._answer_task = asyncio.create_task(self._forward_answers(window))
-        if window is not None and self._question_task is None:
-            self._question_task = asyncio.create_task(self._forward_questions(window))
         if window is not None and self._case_request_task is None:
             self._case_request_task = asyncio.create_task(
                 self._forward_case_requests(window)
@@ -1524,10 +1485,7 @@ class ControllerClient:
         if self._window is None:
             logger.debug("Ignoring person_step_state: the window is off")
             return
-        self._questions_enabled = state.questions_enabled
-        self._window.apply_state(
-            state.steps, questions_enabled=state.questions_enabled, cases=state.cases
-        )
+        self._window.apply_state(state.steps, cases=state.cases)
 
     async def _handle_person_step_action_result(
         self, request_id: str, data: dict[str, object]
@@ -1597,150 +1555,6 @@ class ControllerClient:
             expiry.cancel()
         if self._window is not None:
             self._window.show_result(result)
-
-    async def _handle_person_step_question_result(
-        self, request_id: str, data: dict[str, object]
-    ) -> None:
-        manual_pending = self._pending_manual_question
-        if manual_pending is not None and manual_pending[0] == request_id:
-            try:
-                manual_result = parse_person_step_question_result_payload(data)
-            except ProtocolError as e:
-                logger.warning("Invalid person_step_question_result: %s", e)
-                manual_result = _question_failed(_ANSWER_UNREADABLE)
-            self._settle_manual_question(request_id, manual_result)
-            return
-        pending = self._pending_question
-        if pending is None or pending[0] != request_id:
-            logger.info(
-                "Ignoring a question result no question waits for (request_id=%s)",
-                request_id,
-            )
-            return
-        try:
-            result = parse_person_step_question_result_payload(data)
-        except ProtocolError as e:
-            logger.warning("Invalid person_step_question_result: %s", e)
-            result = _question_failed(_ANSWER_UNREADABLE)
-        self._settle_question(request_id, result)
-
-    async def _forward_questions(self, window: PersonWindow) -> None:
-        async for question in window.questions():
-            try:
-                if question.is_manual:
-                    await self._send_manual_question(window, question)
-                else:
-                    await self._send_question(window, question)
-            except Exception:
-                logger.exception("Could not send the person's question")
-                window.show_question_result(
-                    _question_failed(_QUESTION_NOT_CONNECTED),
-                    manual=question.is_manual,
-                )
-
-    async def _send_manual_question(
-        self, window: PersonWindow, question: PersonStepQuestionAskPayload
-    ) -> None:
-        """A question about the claimed manual case (its own pending slot)."""
-        manual = self._manual
-        if manual is None or not manual.can_ask(
-            question.pivot_id, question.claim_token
-        ):
-            window.show_question_result(
-                _question_failed(_QUESTION_UNAVAILABLE), manual=True
-            )
-            return
-        if self._pending_manual_question is not None:
-            window.show_question_result(_question_failed(_QUESTION_BUSY), manual=True)
-            return
-        connection = self._connection
-        if connection is None or not self._session_authenticated:
-            window.show_question_result(
-                _question_failed(_QUESTION_NOT_CONNECTED), manual=True
-            )
-            return
-        request_id = str(uuid.uuid4())
-        expiry = asyncio.create_task(self._expire_manual_question(request_id))
-        self._pending_manual_question = (request_id, expiry)
-        logger.info(
-            "Sending the person's question about manual run case %d",
-            question.pivot_id,
-        )
-        try:
-            await connection.send(serialize_person_step_question(question, request_id))
-        except ConnectionClosed:
-            self._settle_manual_question(
-                request_id, _question_failed(_QUESTION_CONNECTION_LOST)
-            )
-
-    async def _expire_manual_question(self, request_id: str) -> None:
-        await asyncio.sleep(PERSON_STEP_QUESTION_TIMEOUT_SECONDS)
-        logger.warning(
-            "No result for the person's manual question (request_id=%s)", request_id
-        )
-        self._settle_manual_question(request_id, _question_failed(_QUESTION_NO_REPLY))
-
-    def _settle_manual_question(
-        self, request_id: str, result: PersonStepQuestionResultPayload
-    ) -> None:
-        pending = self._pending_manual_question
-        if pending is None or pending[0] != request_id:
-            return
-        self._pending_manual_question = None
-        if pending[1] is not asyncio.current_task():
-            pending[1].cancel()
-        if self._window is not None:
-            self._window.show_question_result(result, manual=True)
-
-    async def _send_question(
-        self, window: PersonWindow, question: PersonStepQuestionAskPayload
-    ) -> None:
-        # One question at a time (the window disables Ask meanwhile); an
-        # answer waiting for its result never holds a question back.
-        if not self._questions_enabled:
-            window.show_question_result(_question_failed(_QUESTION_UNAVAILABLE))
-            return
-        if self._pending_question is not None:
-            window.show_question_result(_question_failed(_QUESTION_BUSY))
-            return
-        connection = self._connection
-        if connection is None or not self._session_authenticated:
-            window.show_question_result(_question_failed(_QUESTION_NOT_CONNECTED))
-            return
-        request_id = str(uuid.uuid4())
-        expiry = asyncio.create_task(self._expire_question(request_id))
-        self._pending_question = (request_id, expiry)
-        logger.info(
-            "Sending the person's question for step %d round %d",
-            question.person_step_id,
-            question.round,
-        )
-        try:
-            await connection.send(serialize_person_step_question(question, request_id))
-        except ConnectionClosed:
-            self._settle_question(
-                request_id, _question_failed(_QUESTION_CONNECTION_LOST)
-            )
-
-    async def _expire_question(self, request_id: str) -> None:
-        await asyncio.sleep(PERSON_STEP_QUESTION_TIMEOUT_SECONDS)
-        logger.warning(
-            "No result for the person's question (request_id=%s)", request_id
-        )
-        self._settle_question(request_id, _question_failed(_QUESTION_NO_REPLY))
-
-    def _settle_question(
-        self, request_id: str, result: PersonStepQuestionResultPayload
-    ) -> None:
-        pending = self._pending_question
-        if pending is None or pending[0] != request_id:
-            return
-        self._pending_question = None
-        expiry = pending[1]
-        if expiry is not asyncio.current_task():
-            expiry.cancel()
-        if self._window is not None:
-            self._window.show_question_result(result)
 
     # Window v2: a pause (case_pause_action), a discussion message
     # (person_chat_send) or a help resolution (person_help_action), each
@@ -2183,16 +1997,6 @@ class ControllerClient:
         pending = self._pending_answer
         if pending is not None:
             self._settle_answer(pending[0], _answer_failed(_ANSWER_CONNECTION_LOST))
-        pending_question = self._pending_question
-        if pending_question is not None:
-            self._settle_question(
-                pending_question[0], _question_failed(_QUESTION_CONNECTION_LOST)
-            )
-        pending_manual_question = self._pending_manual_question
-        if pending_manual_question is not None:
-            self._settle_manual_question(
-                pending_manual_question[0], _question_failed(_QUESTION_CONNECTION_LOST)
-            )
         pending_manual = self._pending_manual_action
         if pending_manual is not None:
             self._settle_manual_action(
@@ -2210,8 +2014,6 @@ class ControllerClient:
             self._settle_case_request(
                 kind, request_id, False, self._case_connection_lost(kind)
             )
-        # The next session's first snapshot says again whether it takes them.
-        self._questions_enabled = False
         if self._window is not None:
             self._window.set_connected(False)
 
@@ -2222,7 +2024,6 @@ class ControllerClient:
             return
         for task in (
             self._answer_task,
-            self._question_task,
             self._case_request_task,
             self._manual_request_task,
         ):
@@ -2233,21 +2034,15 @@ class ControllerClient:
         if pending is not None:
             self._pending_answer = None
             pending[1].cancel()
-        pending_question = self._pending_question
-        if pending_question is not None:
-            self._pending_question = None
-            pending_question[1].cancel()
         for _request_id, expiry in self._pending_case.values():
             expiry.cancel()
         self._pending_case.clear()
         for pending_slot in (
-            self._pending_manual_question,
             self._pending_manual_action,
             self._pending_manual_chat,
         ):
             if pending_slot is not None:
                 pending_slot[-1].cancel()
-        self._pending_manual_question = None
         self._pending_manual_action = None
         self._pending_manual_chat = None
         self._manual = None

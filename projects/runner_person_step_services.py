@@ -11,10 +11,6 @@ several queries and went stale while the window stayed open. The window keeps
 Report enabled, and an answer the gates refuse is still saved; its result
 names the blocker ("Saved, but the run cannot continue yet: ...").
 
-Assist (PERSON_STEP_ASSIST_V1): a runner that advertised it gets each step's
-"How to do it" list and its Ask AI questions (``ask_from_runner``); an older
-runner gets the how-to inlined into the instruction text and no questions.
-
 Case steps (PERSON_STEP_CASE_STEPS_V1): a runner that advertised it gets the
 plain "Step N of M" label, the step's ``case_steps_label`` ("TestRail steps
 3–5") and the covered test case steps; an older runner gets the label joined
@@ -30,7 +26,7 @@ whether the email matched.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from django.core.cache import cache
 from django.db.models import Case, CharField, F, Func, IntegerField, Value, When
@@ -38,28 +34,18 @@ from django.db.models.fields.json import KeyTransform
 from django.urls import reverse
 
 from accounts.models import CustomUser
-from agents.services.person_step_prompts import format_how_to_text
-from agents.types import PersonHowToItem
 from controller_client.protocol import (
     PERSON_STEP_CASE_STEP_TEXT_MAX_CHARS,
     PERSON_STEP_CASE_STEPS_MAX_ITEMS,
     PERSON_STEP_COMMAND_MAX_CHARS,
     PERSON_STEP_EXPECTED_MAX_CHARS,
-    PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS,
-    PERSON_STEP_HOW_TO_LEGACY_MAX_ITEMS,
-    PERSON_STEP_HOW_TO_MAX_ITEMS,
-    PERSON_STEP_HOW_TO_SOURCE_MAX_CHARS,
-    PERSON_STEP_HOW_TO_TEXT_MAX_CHARS,
     PERSON_STEP_INSTRUCTION_MAX_CHARS,
     PERSON_STEP_LABEL_MAX_CHARS,
     PERSON_STEP_OBJECTION_MAX_CHARS,
     PERSON_STEP_STATE_MAX_STEPS,
     PERSON_STEP_URL_MAX_CHARS,
     PersonCaseStepPayload,
-    PersonHowToPayload,
     PersonStepActionKind,
-    PersonStepQuestionAskPayload,
-    PersonStepQuestionPayload,
     PersonStepStatePayload,
     PersonStepWireKind,
     PersonStepWireStatus,
@@ -67,11 +53,10 @@ from controller_client.protocol import (
 from notifications.services.site_url import absolute_url
 from projects.case_step_refs import CaseStepText, stored_case_steps
 from projects.case_text_display import case_steps_for_display
-from projects.exceptions import PersonStepError, PersonStepQuestionError
+from projects.exceptions import PersonStepError
 from projects.models import (
     WRITABLE_ROLES,
     CasePersonStep,
-    PersonStepQuestion,
     PersonStepStatus,
     Project,
     TestRunStatus,
@@ -79,11 +64,6 @@ from projects.models import (
     TestRunTestCaseStatus,
 )
 from projects.person_step_actor import PersonStepActor
-from projects.person_step_question_services import (
-    ask_person_step_question,
-    list_person_step_questions,
-)
-from projects.person_step_rows import stored_how_to
 from projects.person_step_services import (
     PersonStepActionResult,
     mark_blocked_person_step,
@@ -99,13 +79,9 @@ RUNNER_ANSWER_WINDOW_SECONDS = 60
 _NOT_OWNER = (
     "This Test Runner is no longer the project's connection. Answer on Punk Hazard."
 )
-_NOT_OWNER_ASK = (
-    "This Test Runner is no longer the project's connection. Ask on Punk Hazard."
-)
 _THROTTLED = "Too many answers from this Test Runner. Wait a minute and try again."
 _STEP_NOT_FOUND = "This step was already answered or is no longer waiting."
 
-_HOW_TO_HEADING = "\n\nHow to do it:\n"
 # Joins the case steps label into ``step_label`` for an older runner.
 _CASE_STEPS_LABEL_SEPARATOR = " · "
 
@@ -125,7 +101,6 @@ _STEP_FIELDS: tuple[str, ...] = (
     "command",
     "shell_label",
     "agent_objection",
-    "how_to",
     "case_steps",
     "case_steps_label",
     "test_run_test_case_id",
@@ -160,10 +135,6 @@ class RunnerPersonStepView:
     blockers: tuple[str, ...]
     # Absolute case page URL; blank without ``SITE_URL``.
     case_url: str
-    # Assist runners only; inlined into ``instruction`` otherwise.
-    how_to: tuple[PersonHowToPayload, ...] = ()
-    # Assist runners only: the step's newest questions, oldest first.
-    questions: tuple[PersonStepQuestionPayload, ...] = ()
     # Case steps runners only ("TestRail steps 3–5"; blank when none).
     case_steps_label: str = ""
     # Case steps runners only: the test case steps the step covers.
@@ -185,8 +156,6 @@ class RunnerPersonStepView:
             objection=self.objection,
             blockers=self.blockers,
             case_url=self.case_url,
-            how_to=self.how_to,
-            questions=self.questions,
             case_steps_label=self.case_steps_label,
             case_steps=self.case_steps,
             pivot_id=self.pivot_id,
@@ -214,20 +183,12 @@ class RunnerPersonStepAnswer:
 
 
 def get_runner_person_steps(
-    project_id: int, *, assist: bool, case_steps: bool, guide: bool
+    project_id: int, *, case_steps: bool
 ) -> tuple[RunnerPersonStepView, ...]:
     """The actionable person steps of the project's paused runs, newest first (≤ 5).
 
     One query: the run's name is joined in and the case's checkpoint is never
     loaded (its plan size is read in the database). No reopen blockers.
-
-    ``assist`` (the runner advertised PERSON_STEP_ASSIST_V1): each step carries
-    its how-to list and its questions (one more query, only when a step is
-    open). Otherwise the how-to is inlined into the instruction text.
-
-    ``guide`` (the runner also advertised PERSON_STEP_GUIDE_V1): the whole
-    how-to list (≤ 12) with sources. Otherwise at most 8 items, a longer guide
-    folded into its 8th. No extra query either way.
 
     ``case_steps`` (the runner advertised PERSON_STEP_CASE_STEPS_V1): each
     step carries its case steps label and covered steps. Otherwise the label
@@ -257,43 +218,16 @@ def get_runner_person_steps(
         .order_by(F("requested_at").desc(), F("id").desc())
         .values(*_STEP_FIELDS, "plan_size")[:PERSON_STEP_STATE_MAX_STEPS]
     )
-    questions: dict[int, tuple[PersonStepQuestionPayload, ...]] = {}
-    if assist and rows:
-        # ``asked_by`` stays blank: the runner window never shows who asked
-        # ("You:"), so member names and emails stay off the runner socket.
-        questions = {
-            step_id: tuple(replace(view.to_payload(), asked_by="") for view in views)
-            for step_id, views in list_person_step_questions(
-                [_as_int(row["id"]) for row in rows]
-            ).items()
-        }
-    return tuple(
-        _build_view(
-            project_id,
-            row,
-            assist=assist,
-            case_steps=case_steps,
-            guide=guide,
-            questions=questions,
-        )
-        for row in rows
-    )
+    return tuple(_build_view(project_id, row, case_steps=case_steps) for row in rows)
 
 
 def _build_view(
     project_id: int,
     row: dict[str, object],
     *,
-    assist: bool,
     case_steps: bool,
-    guide: bool,
-    questions: dict[int, tuple[PersonStepQuestionPayload, ...]],
 ) -> RunnerPersonStepView:
-    person_step_id = _as_int(row["id"])
-    how_to = stored_how_to(row["how_to"])
     instruction = str(row["instruction"])
-    if how_to and not assist:
-        instruction += _HOW_TO_HEADING + format_how_to_text(how_to)
     status = PersonStepWireStatus(str(row["status"]))
     kind = PersonStepWireKind(str(row["kind"]))
     pivot_id = _as_int(row["test_run_test_case_id"])
@@ -326,7 +260,7 @@ def _build_view(
         else ""
     )
     return RunnerPersonStepView(
-        person_step_id=person_step_id,
+        person_step_id=_as_int(row["id"]),
         test_run_id=test_run_id,
         pivot_id=pivot_id,
         round=_as_int(row["round"]),
@@ -344,8 +278,6 @@ def _build_view(
         objection=objection[:PERSON_STEP_OBJECTION_MAX_CHARS],
         blockers=(),
         case_url=(absolute_url(path) or "")[:PERSON_STEP_URL_MAX_CHARS],
-        how_to=_how_to_payloads(how_to, guide=guide) if assist else (),
-        questions=questions.get(person_step_id, ()),
         case_steps_label=(
             case_steps_label[:PERSON_STEP_LABEL_MAX_CHARS] if case_steps else ""
         ),
@@ -355,36 +287,6 @@ def _build_view(
             else ()
         ),
     )
-
-
-def _how_to_payloads(
-    how_to: Sequence[PersonHowToItem], *, guide: bool
-) -> tuple[PersonHowToPayload, ...]:
-    """The how-to items for the window; folded to 8 for a runner without GUIDE_V1.
-
-    An older window would cut a longer list at 8 and silently lose the
-    verification items at the end, so its 8th item names how many more there
-    are and sends the person to the case page (``case_url``) instead.
-    """
-    payloads = tuple(
-        PersonHowToPayload(
-            text=item.text[:PERSON_STEP_HOW_TO_TEXT_MAX_CHARS],
-            command=item.command[:PERSON_STEP_HOW_TO_COMMAND_MAX_CHARS],
-            source=item.source_label[:PERSON_STEP_HOW_TO_SOURCE_MAX_CHARS],
-        )
-        for item in how_to[:PERSON_STEP_HOW_TO_MAX_ITEMS]
-    )
-    limit = PERSON_STEP_HOW_TO_LEGACY_MAX_ITEMS
-    if guide or len(payloads) <= limit:
-        return payloads
-    more = len(payloads) - (limit - 1)
-    fold = PersonHowToPayload(
-        text=(
-            f"This guide has {more} more items, including how to verify: "
-            "open the case page."
-        )
-    )
-    return payloads[: limit - 1] + (fold,)
 
 
 def _case_step_payloads(
@@ -583,40 +485,3 @@ def hit_runner_throttle(key: str, *, limit: int, window_seconds: int) -> bool:
         cache.add(key, 1, timeout=window_seconds)
         attempts = 1
     return attempts <= limit
-
-
-# ---------------------------------------------------------------------------
-# Ask AI
-# ---------------------------------------------------------------------------
-
-
-def ask_from_runner(
-    *,
-    project_id: int,
-    channel_name: str,
-    person_id: int | None,
-    question: PersonStepQuestionAskPayload,
-) -> PersonStepQuestion:
-    """Store the Test Runner's question about one of its project's open steps.
-
-    The same scoping and identity as ``answer_from_runner``: the connection
-    must own the project, the step must be one of the project's, and the
-    asker is ``person_id`` while still an active writable member, else
-    anonymous. Throttled by the shared question throttle (web and runner,
-    inside ``ask_person_step_question``), not the answer throttle. Raises
-    ``PersonStepQuestionError`` (user-safe).
-    """
-    if not owns_project(project_id, channel_name):
-        raise PersonStepQuestionError(_NOT_OWNER_ASK)
-    pivot = _step_pivot(project_id, question.person_step_id)
-    if pivot is None:
-        raise PersonStepQuestionError(_STEP_NOT_FOUND)
-    actor = PersonStepActor.runner(current_member(project_id, person_id))
-    return ask_person_step_question(
-        pivot=pivot,
-        project_id=project_id,
-        actor=actor,
-        person_step_id=question.person_step_id,
-        question=question.question,
-        expected_round=question.round,
-    )

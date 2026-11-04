@@ -12,7 +12,6 @@ from django.http import QueryDict
 from django.utils.text import Truncator
 
 from controller_client.protocol import (
-    MANUAL_CASE_MAX_STEPS,
     MANUAL_CLAIM_TOKEN_MAX_CHARS,
     MAX_VERSION_LENGTH,
     PERSON_CHAT_TEXT_MAX_CHARS,
@@ -25,7 +24,6 @@ from projects.models import (
     HELP_NOTE_MAX_LENGTH,
     PAUSE_MESSAGE_MAX_LENGTH,
     PERSON_STEP_OUTPUT_MAX_LENGTH,
-    PERSON_STEP_QUESTION_MAX_LENGTH,
     PROJECT_PROMPT_MAX_LENGTH,
     RETEST_NOTE_MAX_LENGTH,
     ApplicationPlatform,
@@ -512,28 +510,6 @@ class PersonStepReportForm(forms.Form):
         return cleaned_data
 
 
-class PersonStepQuestionForm(forms.Form):
-    """A person's question to the AI about the step waiting for them."""
-
-    # The open step the card was rendered for; the service refuses a stale id.
-    person_step_id = forms.IntegerField(
-        min_value=1, max_value=_MAX_BIGINT, widget=forms.HiddenInput
-    )
-    question = forms.CharField(
-        label="Ask the AI about this step",
-        max_length=PERSON_STEP_QUESTION_MAX_LENGTH,
-        strip=True,
-        widget=forms.Textarea(
-            attrs={
-                "class": "textarea",
-                "rows": 3,
-                "placeholder": "For example: how do I do this on this machine?",
-            }
-        ),
-        error_messages={"required": "Type a question."},
-    )
-
-
 class PersonStepDecisionForm(forms.Form):
     """Overrule / Mark failed / Mark blocked on a person step, with an optional note."""
 
@@ -612,20 +588,6 @@ class RunnerPersonStepActionForm(forms.Form):
         return cleaned_data
 
 
-class RunnerPersonStepQuestionForm(forms.Form):
-    """A person's question to the AI sent from the Test Runner window.
-
-    Fed from the ``person_step_question`` message (not a rendered form). The
-    same rules as ``PersonStepQuestionForm``; an over-long question is refused,
-    not cut.
-    """
-
-    person_step_id = forms.IntegerField(min_value=1, max_value=_MAX_BIGINT)
-    # The round the window showed; ``CasePersonStep.round`` is a small int.
-    round = forms.IntegerField(min_value=1, max_value=_MAX_SMALLINT)
-    question = _WireTextField(max_length=PERSON_STEP_QUESTION_MAX_LENGTH, strip=True)
-
-
 # A server-minted claim token as the protocol allows it.
 _claim_token_validator = RegexValidator(
     r"\A[A-Za-z0-9_-]+\Z", message="Invalid claim.", code="invalid"
@@ -675,26 +637,6 @@ class RunnerManualChatSendForm(forms.Form):
         validators=[_claim_token_validator],
     )
     text = _WireTextField(max_length=PERSON_CHAT_TEXT_MAX_CHARS, strip=True)
-
-
-class RunnerManualStepQuestionForm(forms.Form):
-    """A question to the AI about the claimed Manual run case (Test Runner window).
-
-    Fed from the manual form of ``person_step_question`` (``pivot_id`` set).
-    The same question rule as ``RunnerPersonStepQuestionForm``; ``step_num``
-    blank asks about the case as a whole.
-    """
-
-    pivot_id = forms.IntegerField(min_value=1, max_value=_MAX_BIGINT)
-    claim_token = _WireTextField(
-        max_length=MANUAL_CLAIM_TOKEN_MAX_CHARS,
-        strip=False,
-        validators=[_claim_token_validator],
-    )
-    step_num = forms.IntegerField(
-        required=False, min_value=1, max_value=MANUAL_CASE_MAX_STEPS
-    )
-    question = _WireTextField(max_length=PERSON_STEP_QUESTION_MAX_LENGTH, strip=True)
 
 
 class RunnerCasePauseForm(forms.Form):

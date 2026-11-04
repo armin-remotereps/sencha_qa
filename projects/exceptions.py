@@ -234,14 +234,6 @@ class PersonStepError(Exception):
         self.message = message
 
 
-class PersonStepQuestionError(Exception):
-    """A question to the AI about a person step is refused; ``message`` is user-safe."""
-
-    def __init__(self, message: str) -> None:
-        super().__init__(message)
-        self.message = message
-
-
 class RunnerUpdateRefusedError(Exception):
     """A Test Runner update cannot be requested now; ``message`` is user-safe."""
 
@@ -330,7 +322,7 @@ class HelpModeNotAllowedError(Exception):
 
 
 class ManualRunError(Exception):
-    """A Manual run action (claim, release, submit, upload, Ask AI) was
+    """A Manual run action (claim, release, pause, submit, upload) was
     refused; ``message`` is safe to show the user and the Test Runner window.
     """
 

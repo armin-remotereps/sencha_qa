@@ -34,11 +34,8 @@ from projects.runner_person_step_services import get_runner_person_steps
 class RunnerWindowFeatures:
     """What the runner advertised (all imply PERSON_STEPS_V1)."""
 
-    assist: bool
+    # PERSON_STEP_CASE_STEPS_V1: the case steps label and covered steps.
     case_steps: bool
-    # PERSON_STEP_GUIDE_V1 (with ``assist``): up to 12 how-to items and their
-    # sources; otherwise a longer guide is folded to 8 items.
-    guide: bool
     # PERSON_CASE_CONTEXT_V1: ``cases`` at all.
     case_context: bool
     # PERSON_DISCUSSION_V1: help cases and their discussion.
@@ -63,12 +60,7 @@ def get_runner_window_state(
     an older runner). Otherwise one more query for the cases, and, only
     while a help case waits for a person, its help panel and discussion.
     """
-    views = get_runner_person_steps(
-        project_id,
-        assist=features.assist,
-        case_steps=features.case_steps,
-        guide=features.guide,
-    )
+    views = get_runner_person_steps(project_id, case_steps=features.case_steps)
     steps = tuple(view.to_payload() for view in views)
     if not features.case_context:
         return RunnerWindowState(steps=steps, cases=None)

@@ -6,13 +6,11 @@ whether this Python has tkinter, which Tk it has, which display Tk would use,
 whether a Tk window opens in a separate process the way the runner starts
 it, and whether the window renders a sample step, test case, log and
 discussion, and a sample Manual run (case list, a claimed case with marked
-steps, a step's "How to do it", a thumbnail and upload progress, then the
-same case paused with its discussion), without errors (in a window that is
-never shown). The interactive
-check then shows that sample (a step with "How to do it" items and a sample
-Ask the AI exchange, its test case and log, and a paused case's discussion)
-in the real window, asks whether it is visible, hides it the way the runner does before every agent
-action, takes one screenshot with the desktop backend and asks the person to
+steps, a thumbnail and upload progress, then the same case paused with its
+discussion), without errors (in a window that is never shown). The
+interactive check then shows that sample (a step, its test case and log, and
+a paused case's discussion) in the real window, asks whether it is visible,
+hides it the way the runner does before every agent action, takes one screenshot with the desktop backend and asks the person to
 confirm the window is not in it.
 
 Nothing here talks to the server; the window's buttons are not sent anywhere.
@@ -68,13 +66,9 @@ from controller_client.protocol import (
     PersonChatSendPayload,
     PersonDiscussionMessagePayload,
     PersonHelpPayload,
-    PersonHowToPayload,
     PersonPlanDraftPayload,
     PersonPlanDraftRowPayload,
     PersonStepActionResultPayload,
-    PersonStepQuestionPayload,
-    PersonStepQuestionResultPayload,
-    PersonStepQuestionWireStatus,
     PersonStepStatePayload,
     PersonStepWireKind,
     PersonStepWireStatus,
@@ -188,7 +182,7 @@ def _check_window_renders() -> str:
     # sample twice (the second adds a chat row, as a snapshot would) and
     # visits every tab and both text sizes.
     commands: list[WindowCommand] = [
-        StateCommand(steps=steps, questions_enabled=True, cases=cases)
+        StateCommand(steps=steps, cases=cases)
         for steps, cases in (_sample_state(), _sample_state(extra_message=True))
     ]
     # A manual run: the case list, then a claimed case with a thumbnail,
@@ -243,12 +237,8 @@ def build_window_steps() -> tuple[DiagnosticStep, ...]:
 
 if sys.platform == "win32":
     _SAMPLE_SHELL: Final[str] = "Command Prompt (cmd.exe)"
-    _SAMPLE_OPEN_SHELL: Final[str] = "press Win+R, type cmd, press Enter"
-    _SAMPLE_COMMAND: Final[str] = "echo %USERPROFILE%"
 else:
     _SAMPLE_SHELL = "Terminal (bash)"
-    _SAMPLE_OPEN_SHELL = "open the Terminal app"
-    _SAMPLE_COMMAND = "echo $HOME"
 
 
 _SAMPLE_STEP_PIVOT: Final[int] = 1
@@ -277,26 +267,6 @@ def _sample_step() -> PersonStepStatePayload:
         objection="",
         blockers=(),
         case_url="",
-        how_to=(
-            PersonHowToPayload(
-                text=f"Open a terminal: {_SAMPLE_OPEN_SHELL}.",
-                source="«Runner setup guide.pdf», page 2",
-            ),
-            PersonHowToPayload(
-                text="Run this command and look for a folder path in its output.",
-                command=_SAMPLE_COMMAND,
-            ),
-        ),
-        questions=(
-            PersonStepQuestionPayload(
-                question_id=1,
-                round=1,
-                status=PersonStepQuestionWireStatus.ANSWERED,
-                question="What should the output look like?",
-                answer="A folder path. Nothing is sent to Punk Hazard here.",
-                asked_by="diagnose --window",
-            ),
-        ),
         case_steps_label="Case steps 2–3",
         case_steps=_SAMPLE_CASE_STEPS[1:3],
     )
@@ -564,38 +534,11 @@ def _sample_manual_state(
                 num=2,
                 text="Open the About dialog.",
                 expected="The title is 'Sample'.",
-                how_to_state="pending",
             ),
-            # The step shown first (the first one not marked): a how-to.
-            ManualStepPayload(
-                num=3,
-                text="Close the app.",
-                how_to=(
-                    PersonHowToPayload(
-                        text="Close the sample app from its window's close button.",
-                        source="«Runner setup guide.pdf», page 3",
-                    ),
-                    PersonHowToPayload(
-                        text="Check that no sample app process is left.",
-                        command=_SAMPLE_COMMAND,
-                    ),
-                ),
-                how_to_state="ready",
-            ),
+            # The step shown first (the first one not marked).
+            ManualStepPayload(num=3, text="Close the app."),
         ),
         claimed_at="2026-01-01T10:00:00+00:00",
-        questions=(
-            PersonStepQuestionPayload(
-                question_id=2,
-                round=1,
-                status=PersonStepQuestionWireStatus.ANSWERED,
-                question="Where is the About dialog?",
-                answer="Usually in the Help menu. Nothing is sent to Punk Hazard here.",
-                asked_by="diagnose --window",
-            ),
-        ),
-        can_ask=True,
-        shell_label=_SAMPLE_SHELL,
         paused=paused,
         paused_by="diagnose --window via Test Runner" if paused else "",
         paused_at="2026-01-01T10:04:00+00:00" if paused else "",
@@ -649,16 +592,6 @@ async def _answer_nothing(window: PersonWindow) -> None:
         )
 
 
-async def _answer_no_questions(window: PersonWindow) -> None:
-    # The sample Ask button gets a reply too, so it comes back.
-    async for _ in window.questions():
-        window.show_question_result(
-            PersonStepQuestionResultPayload(
-                ok=False, message="Diagnose only: nothing was asked."
-            )
-        )
-
-
 async def _answer_no_case_requests(window: PersonWindow) -> None:
     # Pause, Send and the help buttons get a reply too, so they come back.
     async for request in window.case_requests():
@@ -676,12 +609,11 @@ async def _run_window_check(
 ) -> bool:
     window = PersonWindow()
     drain = asyncio.create_task(_answer_nothing(window))
-    drain_questions = asyncio.create_task(_answer_no_questions(window))
     drain_cases = asyncio.create_task(_answer_no_case_requests(window))
     try:
         window.set_connected(True)
         steps, cases = _sample_state()
-        window.apply_state(steps, questions_enabled=True, cases=cases)
+        window.apply_state(steps, cases=cases)
         report(
             "A sample step should now be shown in the Test Runner window, with "
             "the Test case, Log and Discussion tabs."
@@ -723,7 +655,6 @@ async def _run_window_check(
         return True
     finally:
         drain.cancel()
-        drain_questions.cancel()
         drain_cases.cancel()
         await window.stop()
 
