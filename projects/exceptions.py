@@ -133,6 +133,14 @@ class CheckedPushInProgressError(CheckedPushError):
     """A send for this run is already in progress."""
 
 
+class EvidenceReviewError(Exception):
+    """A screenshot review retry was refused; ``message`` is user-safe."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 class RunResumeError(Exception):
     """A run or case cannot be resumed; ``message`` is user-safe."""
 

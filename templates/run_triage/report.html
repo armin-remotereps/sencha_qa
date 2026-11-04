@@ -1,0 +1,156 @@
+{% extends "layouts/project.html" %}
+
+{% comment %} Case analysis report of one run: the AI's categories, groups and per-case
+   findings, with Copy as Markdown and Download CSV.
+
+   Context contract (run_triage.views.report):
+     project, test_run,
+     report     — run_triage.types.TriageReport (counts, turn_live,
+                  categories → groups → sub_groups → cases, ungrouped,
+                  unclassified),
+     markdown   — the report as Markdown (run_triage.markdown_export),
+                  copied from a readonly textarea by the clipboard() component,
+     thread_url — the run's analysis thread page, "" when there is none,
+     card       — run_triage.types.TriageActions (thread_id, analyze_blocker),
+     project_can_write (context processor) — shows Analyze.
+   Every finding, title and note is AI or person written: autoescaped, never
+   |safe. {% endcomment %}
+{% block title %}Case analysis · {{ test_run.display_name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumb_extra %}
+  <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:test_run_list' project.id %}">Runs</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">{{ test_run.display_name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Case analysis</span>
+{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>Case analysis <span class="chip">AI analysis</span></h1>
+    <p class="subtitle">{{ report.run_name }}: cases that did not pass, sorted by cause and severity. AI analysis can be wrong; check the cases before acting on it.</p>
+  </div>
+  <div class="actions">
+    {% if thread_url %}<a class="btn btn-secondary" href="{{ thread_url }}">Discuss in chat</a>{% endif %}
+    {% if project_can_write %}
+    <form method="post" action="{% url 'machine_setup:triage_chat_open' project.id %}">
+      {% csrf_token %}
+      <input type="hidden" name="test_run_id" value="{{ test_run.id }}">
+      <input type="hidden" name="next" value="{{ request.get_full_path }}">
+      <button type="submit" class="btn btn-primary"{% if card.analyze_blocker %} disabled title="{{ card.analyze_blocker }}"{% endif %}>{% if card.thread_id %}Analyze again{% else %}Analyze cases{% endif %}</button>
+    </form>
+    {% endif %}
+    <a class="btn btn-ghost" href="{% url 'run_triage:export_csv' project.id test_run.id %}">Download CSV</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block project_content %}
+<div class="stack">
+  {% if report.turn_live %}
+  <div class="alert alert-info">
+    <p><span class="live-dot" aria-hidden="true"></span> Analysis running in Machine setup. Reload the page to see the latest results.</p>
+  </div>
+  {% endif %}
+  {% if project_can_write and card.analyze_blocker %}
+  <p class="hint">{{ card.analyze_blocker }}</p>
+  {% endif %}
+
+  <section class="card" aria-labelledby="triage-summary-title">
+    <div class="card-header">
+      <h2 id="triage-summary-title">Summary</h2>
+    </div>
+    <ul class="triage-counts">
+      <li>{{ report.analysable_count }} case{{ report.analysable_count|pluralize }} to analyse, {{ report.classified_count }} analysed</li>
+      <li>{{ report.passed_count }} passed (counted only)</li>
+      {% if report.not_finished_count %}<li>{{ report.not_finished_count }} not finished</li>{% endif %}
+      {% if report.stale_count %}<li>{{ report.stale_count }} out of date: the case changed since it was analysed</li>{% endif %}
+      {% if report.unclassified_count %}<li>{{ report.unclassified_count }} unclassified</li>{% endif %}
+    </ul>
+    {% if markdown %}
+    <div x-data="clipboard()">
+      <label class="visually-hidden" for="triage-markdown">The analysis as Markdown</label>
+      <textarea id="triage-markdown" class="textarea code-block triage-markdown" rows="6" readonly x-ref="markdown">{{ markdown }}</textarea>
+      <div class="actions">
+        <button type="button" class="btn btn-sm btn-secondary" @click="copy($refs.markdown.value)">
+          <span x-show="!copied">Copy as Markdown</span>
+          <span x-show="copied" x-cloak>Copied!</span>
+        </button>
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
+  {% for category in report.categories %}
+  <section class="card" aria-labelledby="triage-cat-{{ category.category }}">
+    <div class="card-header">
+      <h2 id="triage-cat-{{ category.category }}">{{ category.number }}. {{ category.label }} ({{ category.count }}, {{ category.critical }} critical){% if category.untested %}, plus {{ category.untested }} Untested{% endif %}</h2>
+    </div>
+    {% if category.note %}<p class="triage-note">{{ category.note|linebreaksbr }}</p>{% endif %}
+
+    {% for group in category.groups %}
+    <div class="triage-group">
+      <h3>{{ group.title }} <span class="muted small">({{ group.case_count }})</span></h3>
+      {% if group.cases %}
+      <ul class="triage-cases">
+        {% for case in group.cases %}{% include "run_triage/includes/_report_case.html" with case=case only %}{% endfor %}
+      </ul>
+      {% endif %}
+      {% for sub in group.sub_groups %}
+      <div class="triage-subgroup">
+        <h4>{{ sub.title }} <span class="muted small">({{ sub.case_count }})</span></h4>
+        <ul class="triage-cases">
+          {% for case in sub.cases %}{% include "run_triage/includes/_report_case.html" with case=case only %}{% endfor %}
+        </ul>
+      </div>
+      {% endfor %}
+    </div>
+    {% endfor %}
+
+    {% if category.ungrouped %}
+    <div class="triage-group">
+      <h3>Other findings <span class="muted small">({{ category.ungrouped|length }})</span></h3>
+      <ul class="triage-cases">
+        {% for case in category.ungrouped %}{% include "run_triage/includes/_report_case.html" with case=case only %}{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </section>
+  {% endfor %}
+
+  {% if report.unclassified %}
+  <section class="card" aria-labelledby="triage-unclassified-title">
+    <div class="card-header">
+      <h2 id="triage-unclassified-title">Not analysed yet ({{ report.unclassified|length }})</h2>
+    </div>
+    <p class="hint">These cases finished after the last analysis, or the analysis could not classify them. Analyze again to include them.</p>
+    <ul class="triage-cases">
+      {% for case in report.unclassified %}
+      <li class="triage-case">
+        {% if case.link_url|slice:":4" == "http" %}
+        <a href="{{ case.link_url }}" target="_blank" rel="noopener">{{ case.link_label }}</a>
+        {% else %}
+        <a href="{{ case.link_url }}">{{ case.link_label }}</a>
+        {% endif %}
+        {% if case.link_label != case.title %}<span class="muted">{{ case.title }}</span>{% endif %}
+        <span class="muted small">· {{ case.status_label }}</span>
+      </li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  {% if not report.categories and not report.unclassified %}
+  <section class="card">
+    {% if report.analysable_count %}
+    {% include "partials/empty_state.html" with icon="▤" title="Not analysed yet" body="Analyze cases asks the AI in Machine setup to sort the cases of this run that did not pass by cause and severity." only %}
+    {% else %}
+    {% include "partials/empty_state.html" with icon="▤" title="Nothing to analyse" body="No case of this run failed, was blocked or needs a re-test." only %}
+    {% endif %}
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

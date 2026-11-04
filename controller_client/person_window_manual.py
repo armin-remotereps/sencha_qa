@@ -7,10 +7,23 @@ tester works through a Manual run here:
   preselected; Start claims it (the server answers; the steps then arrive in
   the next snapshot).
 - The claimed case: its title, preconditions and verbatim steps, one step at
-  a time (Previous / Next and a step picker). Each step has Pass and Fail,
+  a time (Previous / Next and a step picker). Each step has Pass… and Fail…,
   which take a screenshot with this window hidden (the runner hides it,
-  captures and shows it again), a thumbnail with Retake, and a note
-  (required for a failed step).
+  captures and shows it again) and then open the mark sheet
+  (``person_window_mark_sheet``), the step's thumbnails with Edit…, and a
+  note (required for a failed step).
+- Pass / Fail shortcuts (Test Runner 0.17.0): the window's ``ManualHotkeys``
+  (system-wide, else only while the window is focused, through ``bind_all``)
+  call ``on_shortcut``, which does what Pass… / Fail… do for the shown step.
+  The sheet's session (``person_window_mark_session.MarkSession``): Save
+  records the mark (its screenshots were staged by the runner until then)
+  and moves to the next step left to mark; on the last one (or "Stop here"
+  on a Fail) it also hands the case in, and ``AutoClaim`` claims the next
+  case to do once the snapshot shows the hand-in landed. Cancel throws the
+  staged screenshots away and leaves the step as it was. Focus goes back to
+  the app the tester was in when a system-wide shortcut opened the sheet
+  (not when this window was in front). A Save or hand-in the runner never
+  answers is given up after 30 s.
 - The case result: Passed, Failed or Blocked, a note (required for Blocked,
   and for Failed when no step failed), an optional case screenshot and Hand
   in. A verdict that contradicts the steps (Passed with a failed step,
@@ -18,9 +31,9 @@ tester works through a Manual run here:
   is local and instant (the runner spools it); the next case is preselected.
 - Release gives the case back (inline confirmation; its draft is dropped).
 - Pause / Continue testing (MANUAL_PAUSE_DISCUSS_V1): while the case is
-  paused a banner says since when and by whom, and Pass, Fail, Retake, the
-  case screenshot and Hand in are off (the step timer stops too); Release
-  and Discuss stay on.
+  paused a banner says since when and by whom, and Pass, Fail, Edit, the
+  shortcuts, the case screenshot and Hand in are off (the step timer stops
+  too); Release and Discuss stay on.
 - Discuss (MANUAL_PAUSE_DISCUSS_V1): the case's discussion with the agent
   (``person_window_chat``), a message box and "Open on Punk Hazard".
 - Pause and Discuss show only when the server sends their fields, so an
@@ -34,11 +47,19 @@ change, so a restart of either loses nothing. Every text from the server is
 plain Tk text. Like the rest of the window, nothing here opens a dialog.
 """
 
+import sys
 import time
 from collections import OrderedDict
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Final, Protocol
 
+from controller_client.manual_hotkeys_base import (
+    OFF_STATUS,
+    HotkeyKind,
+    HotkeyState,
+    HotkeyStatus,
+)
 from controller_client.person_window_chat import ChatHost, ChatPanel, clock
 from controller_client.person_window_ipc import (
     ManualCaptureEvent,
@@ -55,8 +76,15 @@ from controller_client.person_window_ipc import (
     manual_pause_discuss_supported,
     next_seq,
 )
+from controller_client.person_window_mark_session import (
+    AutoClaim,
+    MarkSession,
+    SessionWindow,
+)
+from controller_client.person_window_mark_sheet import HalfThumbnails
 from controller_client.protocol import (
     MANUAL_STEP_MAX_SECONDS,
+    MANUAL_STEP_MAX_SHOTS,
     MANUAL_STEP_NOTE_MAX_CHARS,
     MANUAL_VERDICT_NOTE_MAX_CHARS,
     PERSON_CHAT_TEXT_MAX_CHARS,
@@ -96,6 +124,18 @@ _THUMBNAIL_CACHE: Final[int] = 24
 _DISCUSS_CLOSED: Final[str] = "▸ Discuss the case with the agent"
 _DISCUSS_OPEN: Final[str] = "▾ Discuss the case with the agent"
 _CHAT_LINES: Final[int] = 12
+# Half-size step thumbnails per row when a step has several screenshots.
+_STEP_SHOT_COLUMNS: Final[int] = 2
+# A hand-in the runner never answers (it dropped the request) is given up
+# after this long, so the tester can hand in again.
+_SUBMIT_TIMEOUT_MS: Final[int] = 30_000
+# The focus-only shortcuts (the window's own key bindings) and the Command
+# key of macOS.
+_SHORTCUT_MODIFIER: Final[str] = "Command" if sys.platform == "darwin" else "Control"
+_SHORTCUT_LETTERS: Final[dict[HotkeyKind, str]] = {
+    HotkeyKind.PASS: "p",
+    HotkeyKind.FAIL: "f",
+}
 # The server refuses Continue while a discussion turn is live (its
 # MANUAL_PAUSE_AGENT_BUSY); the window says so instead of sending.
 _AGENT_BUSY: Final[str] = (
@@ -135,8 +175,9 @@ class ManualBlock(Protocol):
     def show(self, visible: bool) -> None: ...
 
 
-class ManualHost(ChatHost, Protocol):
-    """What the view needs from the window (``PersonWindowApp``)."""
+class ManualHost(ChatHost, SessionWindow, Protocol):
+    """What the view needs from the window (``PersonWindowApp``); the mark
+    sheet's part is ``SessionWindow``."""
 
     def manual_block(
         self, parent: "ttk.Frame", *, title: str, max_lines: int
@@ -156,12 +197,23 @@ class ManualHost(ChatHost, Protocol):
 
     def manual_open_url(self, url: str) -> None: ...
 
+    def manual_hidden(self) -> bool:
+        """The runner hid the window (a capture or an agent action)."""
+        ...
+
 
 @dataclass
 class _Capture:
     seq: int
     kind: ManualShotKind
     step_num: int | None
+    claim_token: str
+    # A mark sheet's screenshot (staged until Save).
+    staged: bool = False
+    # Opens the sheet when it succeeds (Pass… / Fail… / a shortcut).
+    opening: bool = False
+    # Retake in the sheet: the screenshot it replaces.
+    replace: str | None = None
 
 
 def _text(widget: "tk.Text") -> str:
@@ -207,6 +259,7 @@ class ManualView:
         self._marks: dict[int, ManualMarkView] = {}
         self._case_shot_key = ""
         self._thumbnails: OrderedDict[str, tk.PhotoImage] = OrderedDict()
+        self._half = HalfThumbnails()
         self._requested: set[str] = set()
         self._seq = 0
         self._capture: _Capture | None = None
@@ -219,9 +272,22 @@ class ManualView:
         self._discuss_open = False
         self._confirm: str | None = None
         self._draft_job: str | None = None
+        # Gives up a hand-in the runner never answers.
+        self._submit_job: str | None = None
+        self._shortcut_status = OFF_STATUS
+        self._focus_keys_bound = False
         self._verdict_var = tk.StringVar(master=root, value="")
         self._picker_var = tk.StringVar(master=root)
         self._build(frame)
+        # The open mark sheet, and the next case after a hand-in from it.
+        self._auto_claim = AutoClaim(self, root)
+        self._marking = MarkSession(
+            host,
+            self,
+            root,
+            thumbnail=self._half_thumbnail,
+            auto_claim=self._auto_claim,
+        )
 
     # --- layout -------------------------------------------------------------
 
@@ -255,7 +321,7 @@ class ManualView:
         start_row = ttk.Frame(cases)
         start_row.grid(row=2, column=0, sticky="w", pady=(6, 0))
         self._start_button = ttk.Button(
-            start_row, text="Start this case", command=self._start
+            start_row, text="Start this case", command=self._start_clicked
         )
         self._start_button.pack(side="left")
         self._list_status = host.manual_label(cases, "")
@@ -319,26 +385,38 @@ class ManualView:
         self._step_status.grid(row=6, column=0, sticky="w", pady=(6, 0))
         shot_row = ttk.Frame(active)
         shot_row.grid(row=7, column=0, sticky="w", pady=(4, 0))
-        self._step_thumb = ttk.Label(shot_row)
-        self._step_thumb.pack(side="left")
-        self._retake_button = ttk.Button(
-            shot_row, text="Retake", command=self._retake_step
-        )
-        self._retake_button.pack(side="left", padx=(8, 0), anchor="n")
+        # One label per screenshot of the shown step's mark.
+        thumbs = ttk.Frame(shot_row)
+        thumbs.grid(row=0, column=0, sticky="nw")
+        self._step_thumbs = [ttk.Label(thumbs) for _ in range(MANUAL_STEP_MAX_SHOTS)]
+        for index, thumb in enumerate(self._step_thumbs):
+            thumb.grid(
+                row=index // _STEP_SHOT_COLUMNS,
+                column=index % _STEP_SHOT_COLUMNS,
+                sticky="nw",
+                padx=(0, 4),
+                pady=(0, 4),
+            )
+        self._edit_button = ttk.Button(shot_row, text="Edit…", command=self._edit_mark)
+        self._edit_button.grid(row=0, column=1, sticky="nw", padx=(8, 0))
         buttons = ttk.Frame(active)
         buttons.grid(row=8, column=0, sticky="w", pady=(6, 0))
+        button_row = ttk.Frame(buttons)
+        button_row.grid(row=0, column=0, sticky="w")
         self._pass_button = ttk.Button(
-            buttons,
-            text="Pass (screenshot)",
-            command=lambda: self._capture_step(ManualShotKind.PASS),
+            button_row,
+            text="Pass…",
+            command=lambda: self._mark_clicked(ManualShotKind.PASS),
         )
         self._pass_button.pack(side="left")
         self._fail_button = ttk.Button(
-            buttons,
-            text="Fail (screenshot)",
-            command=lambda: self._capture_step(ManualShotKind.FAIL),
+            button_row,
+            text="Fail…",
+            command=lambda: self._mark_clicked(ManualShotKind.FAIL),
         )
         self._fail_button.pack(side="left", padx=(6, 0))
+        self._shortcut_line = host.manual_label(buttons, "", foreground=_MUTED_COLOR)
+        self._shortcut_line.grid(row=1, column=0, sticky="w", pady=(4, 0))
         self._note_label = ttk.Label(active, text="")
         self._note_label.grid(row=9, column=0, sticky="w", pady=(6, 0))
         self._note = host.manual_entry(active, row=10, height=3)
@@ -507,7 +585,7 @@ class ManualView:
     # --- commands from the runner ---------------------------------------------
 
     def apply_state(self, state: ManualWindowState) -> None:
-        self._save_note()
+        self.save_note()
         self.state = state
         active = state.active
         draft = state.draft
@@ -533,6 +611,7 @@ class ManualView:
         if self._claim_busy and active is not None:
             self._claim_busy = False
         self.render()
+        self._auto_claim.on_state(state, self._selected_pivot)
 
     def _sync_step_timer(self, paused: bool) -> None:
         """The step timer stops while the case is paused."""
@@ -551,6 +630,10 @@ class ManualView:
     ) -> None:
         """A newly claimed (or no longer claimed) case: fresh widgets."""
         self._flush_draft()
+        if self._marking.is_open:
+            # The claim ended (or changed): the runner dropped its draft with
+            # the staged screenshots.
+            self._marking.close(focus_back=True)
         self._loaded_claim = active.claim_token if active is not None else None
         self._confirm = None
         self._capture = None
@@ -591,8 +674,20 @@ class ManualView:
         if capture is None or capture.seq != seq:
             return
         self._capture = None
+        if capture.staged:
+            self._marking.on_capture(
+                kind=capture.kind,
+                claim_token=capture.claim_token,
+                opening=capture.opening,
+                replace=capture.replace,
+                ok=ok,
+                message=message,
+                key=key,
+                thumbnail_b64=thumbnail_b64,
+            )
+            return
         if ok:
-            self._store_thumbnail(key, thumbnail_b64)
+            self.store_thumbnail(key, thumbnail_b64)
             self._capture_status.configure(text="")
             if capture.kind is ManualShotKind.FAIL:
                 self._capture_status.configure(
@@ -606,7 +701,7 @@ class ManualView:
 
     def on_thumbnail(self, key: str, thumbnail_b64: str) -> None:
         if thumbnail_b64:
-            self._store_thumbnail(key, thumbnail_b64)
+            self.store_thumbnail(key, thumbnail_b64)
             self.render()
 
     def on_result(self, kind: ManualResultKind, ok: bool, message: str) -> None:
@@ -627,12 +722,27 @@ class ManualView:
             )
         elif kind is ManualResultKind.SUBMIT:
             if not self._submit_busy:
+                # A hand-in confirmed after _SUBMIT_TIMEOUT_MS still landed:
+                # say so (no next case is started then).
+                if ok:
+                    self._submit_status.configure(text="")
+                    self._list_status.configure(
+                        text=message or "Handed in.", foreground=color
+                    )
                 return
-            self._submit_busy = False
-            if ok:
+            self._end_submit()
+            if ok and self._auto_claim.pending:
+                self._list_status.configure(
+                    text="Handed in. Starting the next case…", foreground=color
+                )
+            elif ok:
                 self._list_status.configure(text=message, foreground=color)
             else:
+                self._auto_claim.cancel()
                 self._submit_status.configure(text=message, foreground=color)
+        elif kind is ManualResultKind.MARK:
+            self._marking.on_mark_result(ok, message)
+            return
         elif kind in (ManualResultKind.PAUSE, ManualResultKind.CONTINUE):
             if not self._pause_busy:
                 return
@@ -668,6 +778,8 @@ class ManualView:
             return
         self._active_frame.grid()
         self._render_active(active)
+        capture = self._capture
+        self._marking.render(active, capturing=capture is not None and capture.staged)
 
     def _render_upload(self, state: ManualWindowState) -> None:
         upload = state.upload
@@ -881,44 +993,69 @@ class ManualView:
             segments.append((f"{gap}{symbol} {step.num}. {first_line}", tags))
         self._overview.set_segments(tuple(segments))
 
-    def _render_step_mark(self, step: ManualStepPayload | None) -> None:
-        busy = self._capture is not None
-        can_capture = (
+    def _can_mark(self, step: ManualStepPayload | None) -> bool:
+        """Pass… / Fail… / Edit… and the shortcuts may act on the shown step."""
+        return (
             step is not None
-            and not busy
+            and self._capture is None
+            and not self._marking.is_open
             and not self._submit_busy
             and not self._paused()
             and self.state is not None
             and not self.state.spool_full
         )
+
+    def _render_step_mark(self, step: ManualStepPayload | None) -> None:
+        can_mark = self._can_mark(step)
         mark = self._marks.get(step.num) if step is not None else None
+        keys = mark.keys if mark is not None else ()
+        for index, thumb in enumerate(self._step_thumbs):
+            if index < len(keys):
+                self._show_thumbnail(thumb, keys[index], half=len(keys) > 1)
+            else:
+                thumb.configure(image="")
         if mark is None:
             self._step_status.configure(text="Not marked yet", foreground=_MUTED_COLOR)
             self._note_label.configure(text="Note (optional)")
-            self._retake_button.pack_forget()
-            self._step_thumb.configure(image="")
+            self._edit_button.grid_remove()
         else:
             failed = mark.outcome is ManualStepOutcome.FAIL
+            shots = f" · {len(keys)} screenshots" if len(keys) > 1 else ""
             self._step_status.configure(
-                text="Failed" if failed else "Passed",
+                text=("Failed" if failed else "Passed") + shots,
                 foreground=_ERROR_COLOR if failed else _OK_COLOR,
             )
             self._note_label.configure(
                 text="What went wrong? (required)" if failed else "Note (optional)"
             )
-            self._show_thumbnail(self._step_thumb, mark.key)
-            self._retake_button.pack(side="left", padx=(8, 0), anchor="n")
-            self._retake_button.configure(state="normal" if can_capture else "disabled")
-        for button in (self._pass_button, self._fail_button):
-            button.configure(state="normal" if can_capture else "disabled")
-        if busy and self._capture is not None and self._capture.step_num is not None:
+            self._edit_button.grid()
+            self._edit_button.configure(state="normal" if can_mark else "disabled")
+        triggers = self._shortcut_status.triggers
+        show_keys = self._shortcut_status.state is not HotkeyState.OFF
+        for button, kind, label in (
+            (self._pass_button, HotkeyKind.PASS, "Pass…"),
+            (self._fail_button, HotkeyKind.FAIL, "Fail…"),
+        ):
+            trigger = triggers.get(kind, "") if show_keys else ""
+            button.configure(
+                text=f"{label} ({trigger})" if trigger else label,
+                state="normal" if can_mark else "disabled",
+            )
+        self._shortcut_line.configure(text=self._shortcut_text())
+        capture = self._capture
+        # A screenshot taken in the open sheet shows its progress there.
+        if (
+            capture is not None
+            and capture.step_num is not None
+            and (not capture.staged or capture.opening)
+        ):
             self._capture_status.configure(
                 text="Taking the screenshot…", foreground=_MUTED_COLOR
             )
 
     def _render_verdict(self) -> None:
         verdict = self._verdict()
-        failed_steps = self._failed_steps()
+        failed_steps = self.failed_steps()
         if verdict is ManualCaseVerdictWire.BLOCKED:
             label = "Why is the case blocked? (required)"
         elif verdict is ManualCaseVerdictWire.FAILED and not failed_steps:
@@ -964,7 +1101,7 @@ class ManualView:
             self._confirm_button.configure(text="Release")
         else:
             verdict = self._verdict()
-            failed = self._failed_steps()
+            failed = self.failed_steps()
             if verdict is ManualCaseVerdictWire.PASSED:
                 steps = ", ".join(str(num) for num in failed)
                 text = (
@@ -979,7 +1116,7 @@ class ManualView:
 
     # --- thumbnails ---------------------------------------------------------------
 
-    def _store_thumbnail(self, key: str, thumbnail_b64: str) -> None:
+    def store_thumbnail(self, key: str, thumbnail_b64: str) -> None:
         if not key or not thumbnail_b64:
             return
         try:
@@ -989,17 +1126,29 @@ class ManualView:
         self._thumbnails[key] = image
         self._thumbnails.move_to_end(key)
         while len(self._thumbnails) > _THUMBNAIL_CACHE:
-            self._thumbnails.popitem(last=False)
+            evicted, _image = self._thumbnails.popitem(last=False)
+            # Asked for again when it shows again.
+            self._requested.discard(evicted)
 
-    def _show_thumbnail(self, label: "ttk.Label", key: str) -> None:
+    def _thumbnail(self, key: str) -> "tk.PhotoImage | None":
+        """The thumbnail, else None after asking the runner for it (once)."""
         image = self._thumbnails.get(key)
         if image is not None:
-            label.configure(image=image)
-            return
-        label.configure(image="")
+            return image
         if key not in self._requested:
             self._requested.add(key)
             self._host.manual_send(ManualThumbnailRequestEvent(key=key))
+        return None
+
+    def _half_thumbnail(self, key: str) -> "tk.PhotoImage | None":
+        image = self._thumbnail(key)
+        return self._half.get(key, image) if image is not None else None
+
+    def _show_thumbnail(
+        self, label: "ttk.Label", key: str, *, half: bool = False
+    ) -> None:
+        image = self._half_thumbnail(key) if half else self._thumbnail(key)
+        label.configure(image=image if image is not None else "")
 
     # --- texts ------------------------------------------------------------------
 
@@ -1009,19 +1158,19 @@ class ManualView:
         except ValueError:
             return None
 
-    def _failed_steps(self) -> list[int]:
+    def failed_steps(self) -> list[int]:
         return sorted(
             num
             for num, mark in self._marks.items()
             if mark.outcome is ManualStepOutcome.FAIL
         )
 
-    def _save_note(self) -> None:
+    def save_note(self) -> None:
         if self._step is not None and self._loaded_claim is not None:
             self._notes[self._step] = _text(self._note)
 
-    def _texts(self) -> ManualDraftTexts:
-        self._save_note()
+    def draft_texts(self) -> ManualDraftTexts:
+        self.save_note()
         seconds = dict(self._seconds)
         if self._step is not None and self._step_started is not None:
             seconds[self._step] = seconds.get(self._step, 0.0) + (
@@ -1054,7 +1203,7 @@ class ManualView:
             ManualDraftEvent(
                 pivot_id=active.pivot_id,
                 claim_token=active.claim_token,
-                texts=self._texts(),
+                texts=self.draft_texts(),
                 current_step=self._step,
             )
         )
@@ -1088,11 +1237,16 @@ class ManualView:
             -1,
         )
         if 0 <= index < len(state.cases):
+            self._auto_claim.cancel()
             self._selected_pivot = state.cases[index].pivot_id
             self._list_status.configure(text="")
             self.render()
 
-    def _start(self) -> None:
+    def _start_clicked(self) -> None:
+        self._auto_claim.cancel()
+        self.start_case()
+
+    def start_case(self) -> None:
         state = self.state
         if state is None or state.active is not None or self._selected_pivot is None:
             return
@@ -1111,10 +1265,10 @@ class ManualView:
             )
         )
 
-    def _go_to(self, num: int) -> None:
+    def go_to(self, num: int) -> None:
         if num == self._step:
             return
-        self._save_note()
+        self.save_note()
         now = time.monotonic()
         if self._step is not None and self._step_started is not None:
             self._seconds[self._step] = self._seconds.get(self._step, 0.0) + (
@@ -1135,24 +1289,42 @@ class ManualView:
         nums = [s.num for s in active.steps]
         index = nums.index(self._step) + delta if self._step in nums else 0
         if 0 <= index < len(nums):
-            self._go_to(nums[index])
+            self.go_to(nums[index])
 
     def _on_pick(self, _event: "tk.Event[ttk.Combobox]") -> None:
         active = self.state.active if self.state is not None else None
         index = self._picker.current()
         if active is not None and 0 <= index < len(active.steps):
-            self._go_to(active.steps[index].num)
+            self.go_to(active.steps[index].num)
 
-    def _send_capture(self, kind: ManualShotKind, step_num: int | None) -> None:
+    def _send_capture(
+        self,
+        kind: ManualShotKind,
+        step_num: int | None,
+        *,
+        staged: bool = False,
+        opening: bool = False,
+        replace: str | None = None,
+    ) -> bool:
+        """Ask the runner for a screenshot; False when one cannot start now."""
         active = self.state.active if self.state is not None else None
         if active is None or self._capture is not None or active.paused:
-            return
+            return False
         self._seq = next_seq(self._seq)
-        self._capture = _Capture(seq=self._seq, kind=kind, step_num=step_num)
-        self._confirm = None
-        self._capture_status.configure(
-            text="Taking the screenshot…", foreground=_MUTED_COLOR
+        self._capture = _Capture(
+            seq=self._seq,
+            kind=kind,
+            step_num=step_num,
+            claim_token=active.claim_token,
+            staged=staged,
+            opening=opening,
+            replace=replace,
         )
+        self._confirm = None
+        if not staged or opening:
+            self._capture_status.configure(
+                text="Taking the screenshot…", foreground=_MUTED_COLOR
+            )
         self.render()
         self._host.manual_send(
             ManualCaptureEvent(
@@ -1161,25 +1333,187 @@ class ManualView:
                 claim_token=active.claim_token,
                 kind=kind,
                 step_num=step_num,
+                staged=staged,
             )
         )
-
-    def _capture_step(self, kind: ManualShotKind) -> None:
-        if self._step is not None:
-            self._send_capture(kind, self._step)
-
-    def _retake_step(self) -> None:
-        mark = self._marks.get(self._step) if self._step is not None else None
-        if mark is not None:
-            kind = (
-                ManualShotKind.FAIL
-                if mark.outcome is ManualStepOutcome.FAIL
-                else ManualShotKind.PASS
-            )
-            self._capture_step(kind)
+        return True
 
     def _capture_case(self) -> None:
         self._send_capture(ManualShotKind.CASE, None)
+
+    # --- the mark sheet and the shortcuts -----------------------------------------
+
+    def shortcuts_wanted(self) -> bool:
+        """The shortcuts are registered while a case is claimed and not paused."""
+        active = self.state.active if self.state is not None else None
+        return active is not None and not active.paused
+
+    def set_shortcut_status(self, status: HotkeyStatus) -> None:
+        """The backend's status changed (``PersonWindowApp.poll``)."""
+        self._shortcut_status = status
+        # The window's own bindings stand in while the shortcuts are not
+        # registered system-wide (and not turned off).
+        self._bind_focus_keys(
+            status.state in (HotkeyState.FOCUS_ONLY, HotkeyState.PENDING)
+        )
+        self.render()
+
+    def _bind_focus_keys(self, bound: bool) -> None:
+        if bound == self._focus_keys_bound:
+            return
+        self._focus_keys_bound = bound
+        for kind, letter in _SHORTCUT_LETTERS.items():
+            # Shift may or may not turn the keysym upper case (Caps Lock).
+            for keysym in (letter.upper(), letter):
+                sequence = f"<{_SHORTCUT_MODIFIER}-Shift-KeyPress-{keysym}>"
+                if bound:
+                    self._root.bind_all(sequence, self._focus_key_handler(kind))
+                else:
+                    self._root.unbind_all(sequence)
+
+    def _focus_key_handler(
+        self, kind: HotkeyKind
+    ) -> Callable[["tk.Event[tk.Misc]"], str]:
+        def handler(_event: "tk.Event[tk.Misc]") -> str:
+            # The window has the focus: it keeps it after Save, like a click.
+            self.on_shortcut(kind, system_wide=False)
+            return "break"
+
+        return handler
+
+    def _shortcut_text(self) -> str:
+        status = self._shortcut_status
+        if status.state is HotkeyState.OFF:
+            return ""
+        if status.state is HotkeyState.PENDING:
+            return "Approve the shortcuts in the desktop's dialog…"
+        triggers = status.triggers
+        keys = (
+            f"{triggers.get(HotkeyKind.PASS, '?')} pass · "
+            f"{triggers.get(HotkeyKind.FAIL, '?')} fail"
+        )
+        if status.state is HotkeyState.FOCUS_ONLY:
+            reason = f": {status.reason}" if status.reason else ""
+            return (
+                f"Shortcuts ({keys}) work only while this window is " f"focused{reason}"
+            )
+        text = f"Shortcuts: {keys}"
+        if sys.platform == "darwin":
+            text += " (the P and F keys of a US keyboard layout)"
+        return f"{text}\n{status.reason}" if status.reason else text
+
+    def on_shortcut(self, kind: HotkeyKind, *, system_wide: bool) -> None:
+        """A Pass / Fail shortcut: what Pass… / Fail… do, for the shown step.
+
+        ``system_wide``: from the registered shortcut (any app may be in
+        front), not from the window's own key bindings (it has the focus).
+        Ignored unless a case is claimed and not paused, a step shows, no
+        screenshot is being taken, no sheet is open, the spool has room and
+        the runner has not hidden the window (an agent action or a capture).
+        """
+        active = self.state.active if self.state is not None else None
+        if active is None or self._host.manual_hidden():
+            return
+        if not self._can_mark(self._active_step(active)):
+            if self.state is not None and self.state.spool_full:
+                self._capture_status.configure(
+                    text="The screenshot spool is full: wait for the uploads.",
+                    foreground=_WARN_COLOR,
+                )
+            return
+        self._host.manual_note_foreground(system_wide)
+        shot_kind = (
+            ManualShotKind.PASS if kind is HotkeyKind.PASS else ManualShotKind.FAIL
+        )
+        self._start_sheet_capture(shot_kind)
+
+    def _mark_clicked(self, kind: ManualShotKind) -> None:
+        active = self.state.active if self.state is not None else None
+        if active is None or not self._can_mark(self._active_step(active)):
+            return
+        # The tester is in this window: the focus stays here after Save.
+        self._host.manual_note_foreground(False)
+        self._start_sheet_capture(kind)
+
+    def _start_sheet_capture(self, kind: ManualShotKind) -> None:
+        if self._step is None:
+            return
+        if not self._send_capture(kind, self._step, staged=True, opening=True):
+            self._host.manual_note_foreground(False)
+
+    def _edit_mark(self) -> None:
+        """Edit…: the sheet on the shown step's mark, with no new screenshot."""
+        active = self.state.active if self.state is not None else None
+        step = self._active_step(active) if active is not None else None
+        mark = self._marks.get(step.num) if step is not None else None
+        if active is None or mark is None or not self._can_mark(step):
+            return
+        self._marking.edit(active, mark)
+
+    def preview_sheet(self) -> bool:
+        """``--self-check``: open and close the sheet on the shown step
+        (``MarkSession.preview``). False when no case is claimed."""
+        return self._marking.preview()
+
+    # --- MarkTab / AutoClaimTab (``person_window_mark_session``) -------------------
+
+    def active_case(self) -> ManualActiveCasePayload | None:
+        return self.state.active if self.state is not None else None
+
+    def shown_step(self) -> ManualStepPayload | None:
+        active = self.active_case()
+        return self._active_step(active) if active is not None else None
+
+    def step_marks(self) -> Mapping[int, ManualMarkView]:
+        return self._marks
+
+    def record_mark(self, mark: ManualMarkView) -> None:
+        self._marks[mark.step_num] = mark
+
+    def step_note(self, num: int) -> str:
+        return self._notes.get(num, "")
+
+    def keep_step_note(self, num: int, note: str) -> None:
+        self._notes[num] = note
+        if self._step == num:
+            _set_text(self._note, note)
+            self._note.edit_modified(False)
+        self._schedule_draft()
+
+    def case_note(self) -> str:
+        return _text(self._verdict_note)
+
+    def capture_busy(self) -> bool:
+        return self._capture is not None
+
+    def capture_for_sheet(
+        self, kind: ManualShotKind, step_num: int, *, replace: str | None
+    ) -> bool:
+        return self._send_capture(kind, step_num, staged=True, replace=replace)
+
+    def show_capture_status(self, text: str, color: str) -> None:
+        self._capture_status.configure(text=text, foreground=color)
+
+    def set_case_result(self, verdict: ManualCaseVerdictWire, note: str) -> None:
+        self._verdict_var.set(verdict.value)
+        _set_text(self._verdict_note, note)
+        self._verdict_note.edit_modified(False)
+
+    def show_hand_in_error(self, message: str, step: int | None) -> None:
+        self._submit_status.configure(text=message, foreground=_ERROR_COLOR)
+        if step is not None:
+            self.go_to(step)
+        self._schedule_draft()
+
+    def show_list_status(self, text: str, color: str) -> None:
+        self._list_status.configure(text=text, foreground=color)
+
+    def claim_idle(self) -> bool:
+        return (
+            not self._submit_busy
+            and not self._claim_busy
+            and self._host.manual_connected()
+        )
 
     def _ask_release(self) -> None:
         if self._release_busy or not self._host.manual_connected():
@@ -1187,12 +1521,19 @@ class ManualView:
         self._confirm = "release"
         self.render()
 
-    def _validation_error(self, texts: ManualDraftTexts) -> tuple[str, int | None]:
-        """Why the hand-in cannot go yet (and the step to show), or ("", None)."""
+    def validation_error(
+        self, texts: ManualDraftTexts, failed: list[int] | None = None
+    ) -> tuple[str, int | None]:
+        """Why the hand-in cannot go yet (and the step to show), or ("", None).
+
+        ``failed``: the failed steps to judge by (the mark sheet's, before
+        its mark is saved); the marks by default.
+        """
+        failed_steps = self.failed_steps() if failed is None else failed
         verdict = texts.verdict
         if verdict is None:
             return "Choose Passed, Failed or Blocked for the case.", None
-        for num in self._failed_steps():
+        for num in failed_steps:
             note = texts.notes.get(num, "").strip()
             if not note:
                 return f"Step {num} failed: describe in its note what went wrong.", num
@@ -1213,24 +1554,24 @@ class ManualView:
         if not verdict_note:
             if verdict is ManualCaseVerdictWire.BLOCKED:
                 return "Say in the case note why the case is blocked.", None
-            if verdict is ManualCaseVerdictWire.FAILED and not self._failed_steps():
+            if verdict is ManualCaseVerdictWire.FAILED and not failed_steps:
                 return "No step failed: say in the case note why the case failed.", None
         return "", None
 
     def _ask_submit(self) -> None:
         if self._submit_busy or self._capture is not None or self._paused():
             return
-        texts = self._texts()
-        message, step = self._validation_error(texts)
+        texts = self.draft_texts()
+        message, step = self.validation_error(texts)
         if message:
             self._submit_status.configure(text=message, foreground=_ERROR_COLOR)
             if step is not None:
-                self._go_to(step)
+                self.go_to(step)
                 self._note.focus_set()
             self.render()
             return
         self._submit_status.configure(text="")
-        failed = self._failed_steps()
+        failed = self.failed_steps()
         verdict = texts.verdict
         contradicts = (verdict is ManualCaseVerdictWire.PASSED and bool(failed)) or (
             verdict is ManualCaseVerdictWire.FAILED and not failed
@@ -1239,7 +1580,7 @@ class ManualView:
             self._confirm = "submit"
             self.render()
             return
-        self._submit(texts)
+        self.submit(texts)
 
     def _cancel_confirm(self) -> None:
         self._confirm = None
@@ -1266,26 +1607,51 @@ class ManualView:
                 )
             )
         elif confirm == "submit":
-            texts = self._texts()
-            if self._validation_error(texts)[0]:
+            texts = self.draft_texts()
+            if self.validation_error(texts)[0]:
                 self.render()
                 return
-            self._submit(texts)
+            self.submit(texts)
 
-    def _submit(self, texts: ManualDraftTexts) -> None:
+    def submit(self, texts: ManualDraftTexts) -> bool:
+        """Hand the case in (spooled by the runner); False when it cannot go."""
         active = self.state.active if self.state is not None else None
-        if active is None or active.paused:
-            return
+        if active is None or active.paused or self._submit_busy:
+            return False
         if self._draft_job is not None:
             self._root.after_cancel(self._draft_job)
             self._draft_job = None
         self._submit_busy = True
+        self._submit_job = self._root.after(_SUBMIT_TIMEOUT_MS, self._submit_timeout)
         self.render()
         self._host.manual_send(
             ManualSubmitEvent(
                 pivot_id=active.pivot_id, claim_token=active.claim_token, texts=texts
             )
         )
+        return True
+
+    def _end_submit(self) -> None:
+        self._submit_busy = False
+        if self._submit_job is not None:
+            self._root.after_cancel(self._submit_job)
+            self._submit_job = None
+
+    def _submit_timeout(self) -> None:
+        """The runner never answered the hand-in (it dropped the request):
+        Hand in works again, and no next case is started."""
+        self._submit_job = None
+        if not self._submit_busy:
+            return
+        self._submit_busy = False
+        if self._auto_claim.pending:
+            self._auto_claim.cancel()
+            self._list_status.configure(text="")
+        self._submit_status.configure(
+            text="The Test Runner did not confirm the hand-in. Hand in again.",
+            foreground=_ERROR_COLOR,
+        )
+        self.render()
 
     # --- pause and discuss (MANUAL_PAUSE_DISCUSS_V1) -------------------------------
 

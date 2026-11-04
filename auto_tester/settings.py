@@ -66,6 +66,7 @@ INSTALLED_APPS: list[str] = [
     "test_sessions",
     "knowledge_base",
     "machine_readiness",
+    "run_triage",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -177,6 +178,41 @@ NIGHT_DIGEST_LOOKBACK_HOURS: int = config(
 TEST_SESSION_MAX_HOURS: int = config("TEST_SESSION_MAX_HOURS", default=12, cast=int)
 if TEST_SESSION_MAX_HOURS < 0:
     raise ImproperlyConfigured("TEST_SESSION_MAX_HOURS must be 0 or more")
+
+
+def _bounded_int(name: str, default: int, low: int, high: int) -> int:
+    value: int = config(name, default=default, cast=int)
+    if not low <= value <= high:
+        raise ImproperlyConfigured(f"{name} must be between {low} and {high}")
+    return value
+
+
+# Run case analysis (run_triage): cases per classifier call, parallel calls,
+# classifier calls per classify_run_cases tool call, per-call timeout, the per
+# case text cap, log tail and screenshots sent with each case (0 = no images),
+# their long-edge downscale, the case cap per run and the list page size.
+RUN_TRIAGE_BATCH_SIZE: int = _bounded_int("RUN_TRIAGE_BATCH_SIZE", 8, 1, 25)
+RUN_TRIAGE_PARALLEL: int = _bounded_int("RUN_TRIAGE_PARALLEL", 3, 1, 8)
+RUN_TRIAGE_MAX_CALLS_PER_TOOL_CALL: int = _bounded_int(
+    "RUN_TRIAGE_MAX_CALLS_PER_TOOL_CALL", 6, 1, 30
+)
+RUN_TRIAGE_CALL_TIMEOUT_SECONDS: int = _bounded_int(
+    "RUN_TRIAGE_CALL_TIMEOUT_SECONDS", 180, 30, 1800
+)
+RUN_TRIAGE_CASE_INPUT_MAX_CHARS: int = _bounded_int(
+    "RUN_TRIAGE_CASE_INPUT_MAX_CHARS", 6000, 500, 50000
+)
+RUN_TRIAGE_LOG_TAIL_CHARS: int = _bounded_int(
+    "RUN_TRIAGE_LOG_TAIL_CHARS", 3000, 0, 20000
+)
+RUN_TRIAGE_SHOTS_PER_CASE: int = _bounded_int("RUN_TRIAGE_SHOTS_PER_CASE", 1, 0, 3)
+RUN_TRIAGE_SHOT_MAX_EDGE: int = _bounded_int(
+    "RUN_TRIAGE_SHOT_MAX_EDGE", 1280, 256, 4096
+)
+RUN_TRIAGE_MAX_CASES: int = _bounded_int("RUN_TRIAGE_MAX_CASES", 1000, 1, 10000)
+RUN_TRIAGE_LIST_PAGE_SIZE: int = _bounded_int(
+    "RUN_TRIAGE_LIST_PAGE_SIZE", 150, 10, 1000
+)
 CELERY_BROKER_URL: str = REDIS_URL
 CELERY_RESULT_BACKEND = "django-db"
 CELERY_CACHE_BACKEND = "default"
@@ -204,6 +240,9 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     # Manual run: the AI rewrite of a hand-in's notes for TestRail, queued
     # when its screenshots finish uploading (sent by name).
     "projects.tasks.refine_manual_case_result": {"queue": "upload"},
+    # The AI review of which screenshots a checked case sends to TestRail,
+    # queued when cases are checked (sent by name).
+    "projects.tasks.review_testrail_evidence": {"queue": "upload"},
     # Beat sweep: quick, must run while upload is busy with imports.
     "projects.tasks.sweep_stalled_manual_uploads": {"queue": "notify"},
     "machine_setup.tasks.run_setup_turn": {"queue": "execution"},
@@ -722,15 +761,30 @@ NTFY_REQUEST_TIMEOUT: int = config("NTFY_REQUEST_TIMEOUT", default=10, cast=int)
 # means notifications carry no click link.
 SITE_URL: str = config("SITE_URL", default="", cast=str)
 
-# "Send checked to TestRail" attaches only the screenshots of the attempts that
-# caused a Failed or Blocked result (projects/testrail_evidence.py): at most
-# this many per failing step, and at most TESTRAIL_EVIDENCE_MAX_SHOTS per case.
+# "Send checked to TestRail" attaches only relevant screenshots of the attempts
+# that caused a Failed or Blocked result (projects/testrail_evidence.py): at
+# most this many per failing step, and at most TESTRAIL_EVIDENCE_MAX_SHOTS per case.
 TESTRAIL_EVIDENCE_SHOTS_PER_STEP: int = config(
     "TESTRAIL_EVIDENCE_SHOTS_PER_STEP", default=3, cast=int
 )
 TESTRAIL_EVIDENCE_MAX_SHOTS: int = config(
     "TESTRAIL_EVIDENCE_MAX_SHOTS", default=10, cast=int
 )
+# An AI review decides which candidate screenshots are attached
+# (projects/testrail_evidence_review_services.py): at most this many candidates
+# per agent case, and seconds per AI call.
+TESTRAIL_EVIDENCE_REVIEW_MAX_IMAGES: int = config(
+    "TESTRAIL_EVIDENCE_REVIEW_MAX_IMAGES", default=8, cast=int
+)
+if TESTRAIL_EVIDENCE_REVIEW_MAX_IMAGES < 1:
+    raise ImproperlyConfigured("TESTRAIL_EVIDENCE_REVIEW_MAX_IMAGES must be 1 or more")
+TESTRAIL_EVIDENCE_REVIEW_TIMEOUT_SECONDS: int = config(
+    "TESTRAIL_EVIDENCE_REVIEW_TIMEOUT_SECONDS", default=90, cast=int
+)
+if TESTRAIL_EVIDENCE_REVIEW_TIMEOUT_SECONDS < 1:
+    raise ImproperlyConfigured(
+        "TESTRAIL_EVIDENCE_REVIEW_TIMEOUT_SECONDS must be 1 or more"
+    )
 
 # Orchestrator (sub-agent architecture)
 ORCHESTRATOR_MAX_SUBTASKS: int = config(

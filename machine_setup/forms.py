@@ -5,6 +5,8 @@ from typing import Any
 from django import forms
 from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
+from django.http import QueryDict
+from django.utils.http import url_has_allowed_host_and_scheme
 
 from auto_tester.file_names import sanitize_file_name
 from knowledge_base.reference_note import MAX_KNOWLEDGE_REFS_PER_MESSAGE
@@ -203,3 +205,42 @@ class OpenManualChatForm(forms.Form):
             }
         ),
     )
+
+
+class OpenTriageChatForm(forms.Form):
+    """Open (or re-open) a run's case analysis thread, with an optional message.
+
+    Posted from the run page's Case analysis card and the Machine setup
+    page's "Start an analysis" picker. ``next`` is where a refusal returns
+    to; an unsafe or foreign URL is dropped (cleaned to "").
+    """
+
+    test_run_id = forms.IntegerField(min_value=1)
+    text = forms.CharField(
+        label="Message",
+        max_length=SETUP_MESSAGE_MAX_LENGTH,
+        strip=True,
+        required=False,
+    )
+    next = forms.CharField(required=False, max_length=2000, widget=forms.HiddenInput)
+
+    def __init__(
+        self,
+        data: QueryDict | None = None,
+        *,
+        allowed_hosts: set[str],
+        require_https: bool,
+    ) -> None:
+        super().__init__(data)
+        self._allowed_hosts = allowed_hosts
+        self._require_https = require_https
+
+    def clean_next(self) -> str:
+        next_url: str = self.cleaned_data.get("next") or ""
+        if next_url and url_has_allowed_host_and_scheme(
+            next_url,
+            allowed_hosts=self._allowed_hosts,
+            require_https=self._require_https,
+        ):
+            return next_url
+        return ""

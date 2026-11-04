@@ -17,6 +17,7 @@ from django.db.models import (
     Window,
 )
 from django.db.models.functions import RowNumber
+from django.urls import reverse
 from django.utils import timezone
 
 from knowledge_base.services.list_knowledge_items import list_knowledge_choices
@@ -48,7 +49,11 @@ from machine_setup.payloads import (
     message_payload,
     turn_payload,
 )
-from machine_setup.services.send_gates import manual_thread_send_refusal
+from machine_setup.services.analysis_threads import run_status_label
+from machine_setup.services.send_gates import (
+    TRIAGE_RUN_GONE_MESSAGE,
+    manual_thread_send_refusal,
+)
 from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 from machine_setup.turn_state import is_turn_stale
 from projects.case_help_services import HelpPanel, get_help_panel
@@ -63,6 +68,7 @@ from projects.models import (
 )
 from projects.run_machine_use import agent_run_started
 from projects.services import MachineState, get_machine_state
+from run_triage.services.agent_texts import describe_triage_status
 from visual_engine.services.pool_status import get_visual_engine_status
 from visual_engine.types import VisualEngineStatusPayload
 
@@ -161,10 +167,24 @@ class ManualThreadHeader:
 
 
 @dataclass(frozen=True)
+class TriageThreadHeader:
+    """The header of a case analysis thread: the run and its analysis."""
+
+    test_run_id: int
+    run_name: str
+    run_status: str
+    run_status_label: str
+    # ``run_triage:report`` of the run.
+    report_url: str
+    # One line: analysable, classified and out of date counts.
+    status_line: str
+
+
+@dataclass(frozen=True)
 class SetupPage:
     conversation_id: int | None
     # The shown thread's kind: "chat" (the main chat), "auto_fix",
-    # "case_help" or "case_result".
+    # "case_help", "case_result", "manual_case" or "run_triage".
     kind: str
     # Set when the shown thread is a case thread (auto-fix, help chat or
     # result chat).
@@ -194,6 +214,8 @@ class SetupPage:
     intake_pending: bool = False
     # Manual case discussions only, while the case exists.
     manual_thread: ManualThreadHeader | None = None
+    # Case analysis threads only, while the run exists.
+    triage_thread: TriageThreadHeader | None = None
 
 
 @dataclass(frozen=True)
@@ -454,6 +476,31 @@ def _result_thread_header(pivot_id: int | None) -> ResultThreadHeader | None:
     )
 
 
+def _triage_thread_header(
+    project: Project, test_run_id: int | None
+) -> TriageThreadHeader | None:
+    """The case analysis thread's header; one query plus the status line's."""
+    if test_run_id is None:
+        return None
+    run = (
+        TestRun.objects.filter(pk=test_run_id, project=project)
+        .only("id", "name", "status")
+        .first()
+    )
+    if run is None:
+        return None
+    return TriageThreadHeader(
+        test_run_id=run.pk,
+        run_name=run.display_name,
+        run_status=run.status,
+        run_status_label=run_status_label(run.status),
+        report_url=reverse(
+            "run_triage:report", kwargs={"project_id": project.pk, "run_id": run.pk}
+        ),
+        status_line=describe_triage_status(run.pk),
+    )
+
+
 def get_thread_help_panel(project: Project, thread: HelpThread) -> HelpPanel | None:
     """The help panel of a help thread's run, when its run waits on this request.
 
@@ -488,6 +535,7 @@ def get_setup_page(
     thread: HelpThread | None = None
     result_thread: ResultThreadHeader | None = None
     manual_thread: ManualThreadHeader | None = None
+    triage_thread: TriageThreadHeader | None = None
     if conversation is None:
         kind: str = SetupConversationKind.CHAT
         conversation_id = (
@@ -509,6 +557,8 @@ def get_setup_page(
             result_thread = _result_thread_header(conversation.result_case_id)
         if kind == SetupConversationKind.MANUAL_CASE:
             manual_thread = _manual_thread_header(conversation.manual_case_id)
+        if kind == SetupConversationKind.RUN_TRIAGE:
+            triage_thread = _triage_thread_header(project, conversation.triage_run_id)
     live_turn = (
         SetupTurn.objects.filter(project=project, status__in=LIVE_TURN_STATUSES)
         .order_by("-id")
@@ -568,6 +618,13 @@ def get_setup_page(
         )
         if refusal is not None:
             blockers.append(refusal.message)
+    elif kind == SetupConversationKind.RUN_TRIAGE and conversation is not None:
+        # No READY gate (the analysis never uses the machine); read-only
+        # once the run is gone (``send_gates.triage_thread_send_refusal``).
+        if conversation.triage_run_id is None:
+            blockers.append(TRIAGE_RUN_GONE_MESSAGE)
+        if run_active:
+            blockers.append(SetupRunActiveError().message)
     else:
         # Q3: the main chat may run offline; its machine tools say so.
         if not main_chat and machine_state != MachineState.READY:
@@ -603,6 +660,7 @@ def get_setup_page(
         other_thread_turn_live=other_thread_turn_live,
         intake_pending=main_chat and intake_pending(project.pk),
         manual_thread=manual_thread,
+        triage_thread=triage_thread,
     )
 
 

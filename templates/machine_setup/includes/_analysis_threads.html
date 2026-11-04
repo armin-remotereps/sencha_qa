@@ -1,0 +1,58 @@
+{% comment %}
+  Machine setup page: the Analysis section. The project's case analysis
+  threads (one per run, kind run_triage), newest run first, apart from the
+  per-case threads in _threads.html; then, for writable members, a "Start an
+  analysis" picker of non-draft runs without a thread, posting to
+  machine_setup:triage_chat_open. Server-rendered; a thread opened after the
+  page loaded appears on the next load.
+
+  Context contract:
+    project      — the current Project
+    analysis     — machine_setup.services.analysis_threads.AnalysisSection:
+                   threads (list[AnalysisThread]: conversation_id,
+                   test_run_id, run_name, run_status_label, state_label,
+                   created_at), startable_runs (list[StartableRun]:
+                   test_run_id, run_name, run_status_label; empty for
+                   read-only members), older_run_hint (bool)
+    conversation — the shown SetupConversation, or None for the main chat
+    can_write    — project_can_write: shows the picker
+    next_url     — this page's path, where a refused start returns to
+    csrf_token   — the page's CSRF token (for the picker form)
+{% endcomment %}
+<nav class="card" aria-label="Analysis chats">
+  <div class="card-header">
+    <h3>Analysis</h3>
+  </div>
+  {% if analysis.threads %}
+  <ul class="chat-thread-list">
+    {% for thread in analysis.threads %}
+    <li>
+      <a class="chat-thread-list__item{% if conversation and conversation.pk == thread.conversation_id %} chat-thread-list__item--active{% endif %}"
+         href="{% url 'machine_setup:thread' project_id=project.id conversation_id=thread.conversation_id %}"
+         {% if conversation and conversation.pk == thread.conversation_id %}aria-current="page"{% endif %}>
+        {{ thread.run_name }}{% if thread.run_status_label %} · {{ thread.run_status_label }}{% endif %} · {{ thread.state_label }}
+        <span class="chat-thread-meta">Case analysis · <time datetime="{{ thread.created_at|date:'c' }}">{{ thread.created_at|date:"M j, H:i" }}</time></span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted small">No analysis yet.</p>
+  {% endif %}
+  {% if can_write and analysis.startable_runs %}
+  <form method="post" action="{% url 'machine_setup:triage_chat_open' project_id=project.id %}" class="toolbar">
+    {% csrf_token %}
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <label class="visually-hidden" for="analysis-run">Run to analyse</label>
+    <select class="select select-sm" id="analysis-run" name="test_run_id" required>
+      {% for run in analysis.startable_runs %}
+      <option value="{{ run.test_run_id }}">{{ run.run_name }} · {{ run.run_status_label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-secondary btn-sm">Start an analysis</button>
+  </form>
+  {% endif %}
+  {% if analysis.older_run_hint %}
+  <p class="hint">Older runs: open the analysis from the run page.</p>
+  {% endif %}
+</nav>

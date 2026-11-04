@@ -50,7 +50,7 @@ def _run_input_checks(*, interactive: bool) -> None:
 
 
 def _run_window_checks(*, interactive: bool) -> None:
-    if not run_diagnostics(build_window_steps(), print):
+    if not run_diagnostics(build_window_steps(interactive=interactive), print):
         print(
             "The Test Runner window is off on this machine; Human in the loop "
             "steps can still be answered in Punk Hazard. Fix the problem above "
@@ -100,9 +100,9 @@ def main(argv: list[str] | None = None) -> None:
         "--window",
         action="store_true",
         help=(
-            "check tkinter, the display and the Test Runner window: shows a "
-            "sample step, hides it and takes one screenshot, asking yes/no "
-            "questions"
+            "check tkinter, the display, the Test Runner window and the Manual "
+            "run shortcuts: asks for one shortcut press, shows a sample step, "
+            "hides it and takes one screenshot, asking yes/no questions"
         ),
     )
     parser.add_argument(

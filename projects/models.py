@@ -302,6 +302,31 @@ class CheckedPushSkipReason(models.TextChoices):
     NO_CASE_ID = "no_case_id", "No TestRail case ID"
 
 
+class EvidenceReviewState(models.TextChoices):
+    """The AI review of which screenshots a checked case sends to TestRail.
+
+    Only ``DONE`` (and still current, see ``evidence_review_key``) lets a new
+    TestRail result be added (projects/testrail_evidence_review_services.py).
+    """
+
+    NONE = "", "Not prepared"
+    PENDING = "pending", "Reviewing screenshots"
+    DONE = "done", "Screenshots reviewed"
+    FAILED = "failed", "Screenshot review failed"
+
+
+class ScreenshotRelevance(models.TextChoices):
+    """The AI judgment of one screenshot as TestRail evidence."""
+
+    NONE = "", "Not judged"
+    RELEVANT = "relevant", "Relevant"
+    NOT_RELEVANT = "not_relevant", "Not relevant"
+
+
+EVIDENCE_REVIEW_ERROR_MAX_LENGTH = 200
+SCREENSHOT_RELEVANCE_NOTE_MAX_LENGTH = 200
+
+
 class Tag(models.Model):
     name = models.CharField(max_length=50, unique=True, db_index=True)
 
@@ -772,6 +797,19 @@ class TestRunTestCase(models.Model):
     testrail_source_skip_reason = models.CharField(
         max_length=32, choices=CheckedPushSkipReason.choices, blank=True, default=""
     )
+    # AI review of the screenshots to attach; prepared when the case is
+    # checked. ``evidence_review_key`` hashes the reviewed inputs, so a review
+    # counts only while it matches; the screenshots' ``relevance`` belongs to it.
+    evidence_review_state = models.CharField(
+        max_length=16, choices=EvidenceReviewState.choices, blank=True, default=""
+    )
+    evidence_review_key = models.CharField(max_length=64, blank=True, default="")
+    # User-safe reason for a failed review.
+    evidence_review_error = models.CharField(
+        max_length=EVIDENCE_REVIEW_ERROR_MAX_LENGTH, blank=True, default=""
+    )
+    # Candidate screenshots the review judged not relevant (comment note).
+    testrail_evidence_omitted = models.PositiveSmallIntegerField(default=0)
     # Serialized orchestrator progress (plan, attempts, next step, browser) so a
     # Blocked or Cancelled case can resume in place; {} means plan from scratch.
     execution_checkpoint = models.JSONField(default=dict, blank=True)
@@ -1581,6 +1619,14 @@ class TestRunScreenshot(models.Model):
     # Selected for the next "Send checked to TestRail"; frozen when the case is
     # checked (projects/testrail_evidence_services.py).
     testrail_evidence = models.BooleanField(default=False)
+    # The AI evidence review's judgment; valid only while the case's
+    # ``evidence_review_key`` is the one that wrote it. Admin only.
+    relevance = models.CharField(
+        max_length=16, choices=ScreenshotRelevance.choices, blank=True, default=""
+    )
+    relevance_note = models.CharField(
+        max_length=SCREENSHOT_RELEVANCE_NOTE_MAX_LENGTH, blank=True, default=""
+    )
     # Manual run: the runner-minted shot key (the upload idempotency key; one
     # row per case and key). Blank for every other screenshot.
     manual_key = models.CharField(max_length=64, blank=True, default="")

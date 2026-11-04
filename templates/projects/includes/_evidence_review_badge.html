@@ -1,0 +1,22 @@
+{% comment %} The AI screenshot review of a checked, unsent case with a source TestRail
+   run (the cases "Send checked to TestRail" waits on): "Reviewing
+   screenshots" while not prepared or pending, "Screenshot review failed"
+   when it failed. Renders nothing otherwise (done, unchecked, sent, skipped
+   or no source run). Used by the run detail Reason column, the case detail
+   header and the Manual run card.
+
+   Context contract:
+     pivot      — TestRunTestCase (uses .checked_at, .testrail_source_run_id,
+                  .testrail_source_result_id, .testrail_source_skip_reason,
+                  .evidence_review_state, .evidence_review_error)
+     show_error — truthy: print evidence_review_error after a failed badge
+                  (else it is only the badge's title). Autoescaped, never
+                  |safe: the text is AI output. {% endcomment %}
+{% if pivot.checked_at and pivot.testrail_source_run_id and pivot.testrail_source_result_id is None and not pivot.testrail_source_skip_reason %}
+  {% if pivot.evidence_review_state == "failed" %}
+    <span class="badge badge-review-failed"{% if pivot.evidence_review_error %} title="{{ pivot.evidence_review_error }}"{% endif %}>Screenshot review failed</span>
+    {% if show_error and pivot.evidence_review_error %}<span class="hint">{{ pivot.evidence_review_error }}</span>{% endif %}
+  {% elif pivot.evidence_review_state == "" or pivot.evidence_review_state == "pending" %}
+    <span class="badge badge-reviewing" title="The AI checks which screenshots belong in the TestRail result before it is sent.">Reviewing screenshots</span>
+  {% endif %}
+{% endif %}

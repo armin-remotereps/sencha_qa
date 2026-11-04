@@ -372,3 +372,4 @@ None. The decisions this draft made, and why:
 ## Changelog
 - 2026-11-05: created
 - 2026-11-05: implemented. Review: `assist-celery` concurrency set to 4, not 2 (Scan/Check are I/O bound and hold a worker up to ~90 s while a person waits; 2 would queue a third project). `MANUAL_RUN_STATE_SAFE_BYTES` comments reworded: the server no longer measures the manual snapshot (the guide's `_fits` was the only estimate; the base snapshot was never bounded, so no regression). Not run locally: `sqlmigrate projects 0056` (no local Postgres) and the manual/old-runner smoke checks; do them on deploy.
+- 2026-11-05: merged with origin/main, which had taken `projects/0056_evidence_review` and `CLIENT_VERSION` 0.17.0 (manual run shortcuts): the migration is `0057_remove_howto_and_ask_ai` (depends on 0056_evidence_review) and the runner goes to 0.18.0. Old-runner range is 0.10–0.17.

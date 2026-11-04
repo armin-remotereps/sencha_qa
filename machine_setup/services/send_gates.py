@@ -13,6 +13,9 @@ while a turn is live.
 A manual case discussion has its own gates (``manual_thread_send_refusal``):
 its case must still be claimed, and it skips the READY gate
 (``run_setup_task`` checks at call time).
+
+A case analysis thread (``triage_thread_send_refusal``) needs no machine, so
+it skips the READY gate too; once its run is deleted it is read-only.
 """
 
 from __future__ import annotations
@@ -36,6 +39,10 @@ from projects.runner_update_state import (
 )
 from projects.services import MachineState, get_machine_state
 from visual_engine.services.pool_status import get_visual_engine_status
+
+TRIAGE_RUN_GONE_MESSAGE = (
+    "The run of this analysis was deleted, so this chat is read-only."
+)
 
 
 def run_and_update_refusal(project: Project, now: datetime) -> MachineSetupError | None:
@@ -110,3 +117,17 @@ def is_claimed_manual_pivot(project: Project, pivot_id: int | None) -> bool:
         .first()
     )
     return pivot is not None and is_claimed_manual_case(pivot.test_run, pivot)
+
+
+def triage_thread_send_refusal(
+    project: Project, now: datetime, *, triage_run_id: int | None
+) -> MachineSetupError | None:
+    """Every send gate of a case analysis thread but the live-turn one.
+
+    No READY gate (the analysis never uses the machine); an agent-driven
+    Started run and a Test Runner update still refuse. A thread whose run
+    was deleted is read-only. Two queries.
+    """
+    if triage_run_id is None:
+        return MachineSetupError(TRIAGE_RUN_GONE_MESSAGE)
+    return run_and_update_refusal(project, now)

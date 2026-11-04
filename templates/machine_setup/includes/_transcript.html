@@ -37,7 +37,7 @@
       <template x-if="block.kind === 'row' && block.role === 'user'">
         <div class="chat-msg chat-msg-user">
           <div class="chat-meta">
-            <span x-text="block.message.author_name || (threadKind === 'auto_fix' ? 'Paused test run' : threadKind === 'case_result' ? 'Case brief' : 'You')"></span>
+            <span x-text="block.message.author_name || (threadKind === 'auto_fix' ? 'Paused test run' : threadKind === 'case_result' ? 'Case brief' : threadKind === 'run_triage' ? 'Run brief' : 'You')"></span>
             <time :datetime="block.message.created_at" x-text="formatClock(block.message.created_at)"></time>
           </div>
           <div class="pre-wrap" x-show="block.message.text" x-text="block.message.text"></div>

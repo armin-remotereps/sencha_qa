@@ -30,6 +30,8 @@
        panel.discuss_blocker explains a read-only thread.
      panel.progress (ManualProgressView or None): "Progress reported by the
        Test Runner at …", the marks so far (advisory; the hand-in decides).
+   After a hand-in, includes/_evidence_review_badge.html shows the AI
+   screenshot review of the checked, unsent case (pivot.evidence_review_*).
    The page reloads when the case's manual_paused changes (case socket).
    {% endcomment %}
 {% load project_extras %}
@@ -149,6 +151,7 @@
     </div>
     {% endif %}
   </dl>
+  {% include "projects/includes/_evidence_review_badge.html" with pivot=pivot show_error=True only %}
 
   <h3 class="manual-subhead">Case note</h3>
   {% if panel.verdict_note %}

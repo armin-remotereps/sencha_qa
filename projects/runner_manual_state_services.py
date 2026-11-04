@@ -23,6 +23,7 @@ from controller_client.protocol import (
     MANUAL_PENDING_UPLOADS_MAX,
     MANUAL_PRECONDITIONS_MAX_CHARS,
     MANUAL_RUN_STATE_MAX_CASES,
+    MANUAL_STEP_MAX_SHOTS,
     MANUAL_STEP_TEXT_MAX_CHARS,
     MANUAL_TESTRAIL_ID_MAX_CHARS,
     PERSON_STEP_LABEL_MAX_CHARS,
@@ -178,6 +179,7 @@ def _active_case(
             if claimed.manual_claimed_at is not None
             else ""
         ),
+        step_max_shots=MANUAL_STEP_MAX_SHOTS,
     )
     if not pause_discuss:
         return active

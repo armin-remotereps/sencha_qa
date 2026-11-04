@@ -1,0 +1,11 @@
+{% comment %} A run case's analysis: severity badge + category chip.
+
+   Context contract (included `only`):
+     badge — run_triage.types.TriageBadge (category, category_label, severity,
+             severity_label, stale). A stale badge (the case changed since it
+             was analysed) is dimmed with "out of date". {% endcomment %}
+<span class="triage-badges{% if badge.stale %} triage-stale{% endif %}" title="AI case analysis{% if badge.stale %}: out of date, the case changed since it was analysed{% endif %}">
+  <span class="badge badge-sev-{{ badge.severity }}">{{ badge.severity_label }}</span>
+  <span class="chip">{{ badge.category_label }}</span>
+  {% if badge.stale %}<span class="muted small">out of date</span>{% endif %}
+</span>

@@ -4,8 +4,11 @@
   help), help chats (opened by a person from such a case) and result chats
   (opened by a person from a finished case; state_label is the case's
   result, e.g. "Failed") and manual case discussions (opened from a claimed
-  Manual run case; state_label "Testing", "Paused" or "Closed"). Shown only when there is a case thread. Server-rendered; a thread opened after
-  the page loaded appears on the next load.
+  Manual run case; state_label "Testing", "Paused" or "Closed"). Shown only
+  when there is a case thread or a case analysis thread (listed separately
+  in _analysis_threads.html), so "Main chat" stays reachable from an
+  analysis thread. Server-rendered; a thread opened after the page loaded
+  appears on the next load.
 
   Context contract:
     project    — the current Project
@@ -13,8 +16,9 @@
                  first (conversation_id, kind_label, case_title, step_num,
                  state_label, created_at)
     conversation — the shown SetupConversation, or None for the main chat
+    has_analysis_threads — the Analysis section lists at least one thread
 {% endcomment %}
-{% if threads %}
+{% if threads or has_analysis_threads %}
 <nav class="card" aria-label="Machine setup threads">
   <ul class="chat-thread-list">
     <li>

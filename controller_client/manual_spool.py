@@ -7,8 +7,11 @@ and docker-ignored) and survives a runner restart:
 
 - ``drafts/<claim_token>/``: the claimed case being worked on:
   ``draft.json`` (the marked steps with their screenshots, the optional case
-  screenshot and the person's texts) and the screenshots taken so far,
-  ``<key>.png`` or ``<key>.jpg``, each with a ``<key>.thumb.png``.
+  screenshot, the person's texts and the screenshots of an open mark sheet,
+  "staged" until it is saved) and the screenshots taken so far, ``<key>.png``
+  or ``<key>.jpg``, each with a ``<key>.thumb.png``. Staged screenshots count
+  toward the size cap and are dropped when a draft is loaded (the sheet that
+  took them is gone) and at hand-in.
 - ``outbox/<submission_id>/``: a hand-in: ``manifest.json`` (the
   ``manual_case_submit`` payload and each screenshot's image type) and the
   screenshots still to upload. An empty ``accepted`` file marks a hand-in the
@@ -53,6 +56,7 @@ from controller_client.protocol import (
     MANUAL_CLAIM_TOKEN_MAX_CHARS,
     MANUAL_SHOT_KEY_MAX_CHARS,
     MANUAL_SHOT_MAX_BYTES,
+    MANUAL_STEP_MAX_SHOTS,
     ManualCaseSubmitPayload,
     ManualShotKind,
     ManualShotMime,
@@ -74,7 +78,12 @@ _DRAFT_FILE: Final[str] = "draft.json"
 _MANIFEST_FILE: Final[str] = "manifest.json"
 _ACCEPTED_FILE: Final[str] = "accepted"
 _THUMB_SUFFIX: Final[str] = ".thumb.png"
-_FORMAT_VERSION: Final[int] = 1
+# Draft version 2 (Test Runner 0.17.0): several screenshots per mark and the
+# staged ones; version 1 drafts (one screenshot per mark) are still read.
+_FORMAT_VERSION: Final[int] = 2
+_FORMAT_VERSION_ONE_SHOT: Final[int] = 1
+# Hand-in manifests did not change.
+_MANIFEST_VERSION: Final[int] = 1
 # Largest draft.json / manifest.json read back (both are far smaller).
 _JSON_MAX_BYTES: Final[int] = 4 * 1024 * 1024
 _TITLE_MAX_CHARS: Final[int] = 500
@@ -136,18 +145,28 @@ class ManualDraft:
 
     pivot_id: int
     claim_token: str
-    # Step number -> its screenshot; the kind is the step's outcome.
-    marks: Mapping[int, SpoolShot] = field(default_factory=dict)
+    # Step number -> its screenshots in the order taken (1 or more, all of
+    # the same kind: the step's outcome).
+    marks: Mapping[int, tuple[SpoolShot, ...]] = field(default_factory=dict)
     case_shot: SpoolShot | None = None
     texts: ManualDraftTexts = field(default_factory=ManualDraftTexts)
+    # Step screenshots of an open mark sheet, not part of any mark yet.
+    staged: tuple[SpoolShot, ...] = ()
 
     def shots(self) -> tuple[SpoolShot, ...]:
-        """Every screenshot of the draft: steps in order, then the case one."""
-        ordered = tuple(self.marks[num] for num in sorted(self.marks))
+        """Every screenshot a hand-in may announce: the marks' in step order,
+        then the case one (never the staged ones)."""
+        ordered = tuple(shot for num in sorted(self.marks) for shot in self.marks[num])
         return ordered + ((self.case_shot,) if self.case_shot is not None else ())
 
     def shot(self, key: str) -> SpoolShot | None:
-        return next((shot for shot in self.shots() if shot.key == key), None)
+        """A screenshot of the draft, staged or not."""
+        return next(
+            (shot for shot in self.shots() + self.staged if shot.key == key), None
+        )
+
+    def staged_for(self, step_num: int) -> tuple[SpoolShot, ...]:
+        return tuple(shot for shot in self.staged if shot.step_num == step_num)
 
 
 @dataclass(frozen=True)
@@ -238,38 +257,87 @@ def _shot_from_json(raw: object) -> SpoolShot:
     )
 
 
+def _step_shot_from_json(raw: object, step_num: int | None = None) -> SpoolShot:
+    """A step screenshot (of ``step_num`` when given)."""
+    shot = _shot_from_json(raw)
+    if (
+        shot.step_num is None
+        or shot.kind is ManualShotKind.CASE
+        or (step_num is not None and shot.step_num != step_num)
+    ):
+        raise ValueError("bad step screenshot")
+    return shot
+
+
+def _mark_from_json(raw_num: str, raw: object, version: int) -> tuple[SpoolShot, ...]:
+    if not raw_num.isdigit():
+        raise ValueError("bad mark")
+    num = int(raw_num)
+    if version == _FORMAT_VERSION_ONE_SHOT:
+        return (_step_shot_from_json(raw, num),)
+    if not isinstance(raw, list) or not 1 <= len(raw) <= MANUAL_STEP_MAX_SHOTS:
+        raise ValueError("bad mark")
+    shots = tuple(_step_shot_from_json(item, num) for item in raw)
+    if len({shot.kind for shot in shots}) != 1:
+        raise ValueError("bad mark")
+    return shots
+
+
 def _draft_to_json(draft: ManualDraft) -> dict[str, object]:
     return {
         "version": _FORMAT_VERSION,
         "pivot_id": draft.pivot_id,
         "claim_token": draft.claim_token,
-        "marks": {str(num): shot.to_json() for num, shot in draft.marks.items()},
+        "marks": {
+            str(num): [shot.to_json() for shot in shots]
+            for num, shots in draft.marks.items()
+        },
         "case_shot": draft.case_shot.to_json() if draft.case_shot else None,
         "texts": manual_texts_to_wire(draft.texts),
+        "staged": [shot.to_json() for shot in draft.staged],
     }
 
 
 def _draft_from_json(data: Mapping[str, object], claim_token: str) -> ManualDraft:
+    version = data.get("version")
     pivot_id = data.get("pivot_id")
     raw_marks = data.get("marks")
     raw_texts = data.get("texts")
+    raw_staged = data.get("staged", [])
     if (
-        data.get("claim_token") != claim_token
+        not isinstance(version, int)
+        or isinstance(version, bool)
+        or version not in (_FORMAT_VERSION, _FORMAT_VERSION_ONE_SHOT)
+        or data.get("claim_token") != claim_token
         or not isinstance(pivot_id, int)
         or isinstance(pivot_id, bool)
         or pivot_id < 1
         or not isinstance(raw_marks, dict)
         or not isinstance(raw_texts, dict)
+        or not isinstance(raw_staged, list)
     ):
         raise ValueError("bad draft")
-    marks: dict[int, SpoolShot] = {}
-    for raw_num, raw_shot in raw_marks.items():
-        shot = _shot_from_json(raw_shot)
-        if shot.step_num is None or str(shot.step_num) != raw_num:
-            raise ValueError("bad mark")
-        marks[shot.step_num] = shot
+    marks = {
+        int(raw_num): _mark_from_json(str(raw_num), raw_shots, version)
+        for raw_num, raw_shots in raw_marks.items()
+    }
     raw_case = data.get("case_shot")
     case_shot = _shot_from_json(raw_case) if raw_case is not None else None
+    if case_shot is not None and (
+        case_shot.step_num is not None or case_shot.kind is not ManualShotKind.CASE
+    ):
+        raise ValueError("bad case screenshot")
+    staged = tuple(_step_shot_from_json(raw) for raw in raw_staged)
+    keys = [
+        shot.key
+        for shot in (
+            *(shot for shots in marks.values() for shot in shots),
+            *staged,
+            *((case_shot,) if case_shot is not None else ()),
+        )
+    ]
+    if len(set(keys)) != len(keys):
+        raise ValueError("repeated screenshot key")
     try:
         texts = manual_texts_from_wire(raw_texts)
     except ProtocolError as e:
@@ -280,6 +348,7 @@ def _draft_from_json(data: Mapping[str, object], claim_token: str) -> ManualDraf
         marks=marks,
         case_shot=case_shot,
         texts=texts,
+        staged=staged,
     )
 
 
@@ -388,7 +457,8 @@ class ManualSpool:
 
     def load_draft(self, claim_token: str) -> ManualDraft | None:
         """The stored draft of a claim, or None when there is none (or it is
-        unreadable: its screenshots are then retaken)."""
+        unreadable: its screenshots are then retaken). Its staged screenshots
+        are dropped: the mark sheet that took them is gone."""
         with self._lock:
             path = self._draft_dir(claim_token) / _DRAFT_FILE
             data = _read_json(path)
@@ -400,16 +470,24 @@ class ManualSpool:
                 logger.warning("Ignoring an unreadable manual draft: %s", e)
                 return None
             folder = path.parent
-            # Marks whose file is gone (deleted by hand) are dropped.
-            marks = {
-                num: shot
-                for num, shot in draft.marks.items()
-                if (folder / shot.file_name).is_file()
-            }
+            # Screenshots whose file is gone (deleted by hand) are dropped,
+            # and a mark left without any with them.
+            marks: dict[int, tuple[SpoolShot, ...]] = {}
+            for num, shots in draft.marks.items():
+                kept = tuple(
+                    shot for shot in shots if (folder / shot.file_name).is_file()
+                )
+                if kept:
+                    marks[num] = kept
             case_shot = draft.case_shot
             if case_shot is not None and not (folder / case_shot.file_name).is_file():
                 case_shot = None
-            return replace(draft, marks=marks, case_shot=case_shot)
+            draft = replace(draft, marks=marks, case_shot=case_shot)
+            try:
+                return self._drop_staged(folder, draft)
+            except OSError as e:
+                logger.warning("Could not drop staged manual screenshots: %s", e)
+                return replace(draft, staged=())
 
     def save_draft(self, draft: ManualDraft) -> None:
         with self._lock:
@@ -423,9 +501,18 @@ class ManualSpool:
         shot: SpoolShot,
         data: bytes,
         thumbnail: bytes,
+        *,
+        staged: bool = False,
     ) -> ManualDraft:
-        """Store a screenshot and put it in the draft (replacing the one it
-        retakes); returns the saved draft. SpoolFullError at the cap."""
+        """Store a screenshot and put it in the draft; returns the saved
+        draft. SpoolFullError at the cap.
+
+        A staged step screenshot only joins ``staged`` (``commit_mark`` makes
+        it part of the mark). Otherwise it replaces the case screenshot, or
+        the step's whole mark with this one screenshot.
+        """
+        if staged and shot.step_num is None:
+            raise SpoolError("Only a step screenshot can wait in a mark sheet.")
         with self._lock:
             if self._used_bytes() + len(data) + len(thumbnail) > self._max_bytes:
                 raise SpoolFullError(
@@ -437,18 +524,102 @@ class ManualSpool:
             folder.mkdir(parents=True, exist_ok=True)
             _write_atomic(folder / shot.file_name, data)
             _write_atomic(folder / f"{shot.key}{_THUMB_SUFFIX}", thumbnail)
-            if shot.step_num is None:
-                replaced = draft.case_shot
+            replaced: tuple[SpoolShot, ...]
+            if staged:
+                replaced = ()
+                updated = replace(draft, staged=(*draft.staged, shot))
+            elif shot.step_num is None:
+                replaced = (draft.case_shot,) if draft.case_shot is not None else ()
                 updated = replace(draft, case_shot=shot)
             else:
-                replaced = draft.marks.get(shot.step_num)
+                replaced = draft.marks.get(shot.step_num, ())
                 marks = dict(draft.marks)
-                marks[shot.step_num] = shot
+                marks[shot.step_num] = (shot,)
                 updated = replace(draft, marks=marks)
             _write_json(folder / _DRAFT_FILE, _draft_to_json(updated))
-            if replaced is not None:
-                self._delete_draft_shot(folder, replaced)
+            for old in replaced:
+                self._delete_draft_shot(folder, old)
             return updated
+
+    def commit_mark(
+        self,
+        draft: ManualDraft,
+        step_num: int,
+        kind: ManualShotKind,
+        keys: tuple[str, ...],
+    ) -> ManualDraft:
+        """Save a mark sheet: ``keys`` (in order) become the step's mark of
+        ``kind``; returns the saved draft.
+
+        Each key is staged for the step or already part of its mark (a sheet
+        reopened to edit the mark). The mark's other screenshots and the
+        step's other staged ones are deleted. SpoolError when a key is neither.
+        """
+        if kind is ManualShotKind.CASE or not keys or len(set(keys)) != len(keys):
+            raise SpoolError("Invalid mark.")
+        with self._lock:
+            folder = self._draft_dir(draft.claim_token)
+            available = {
+                shot.key: shot
+                for shot in (
+                    *draft.marks.get(step_num, ()),
+                    *draft.staged_for(step_num),
+                )
+            }
+            if any(key not in available for key in keys):
+                raise SpoolError(
+                    "A screenshot of this step is no longer on this machine; "
+                    "take it again."
+                )
+            chosen = tuple(replace(available[key], kind=kind) for key in keys)
+            marks = dict(draft.marks)
+            marks[step_num] = chosen
+            updated = replace(
+                draft,
+                marks=marks,
+                staged=tuple(
+                    shot for shot in draft.staged if shot.step_num != step_num
+                ),
+            )
+            folder.mkdir(parents=True, exist_ok=True)
+            _write_json(folder / _DRAFT_FILE, _draft_to_json(updated))
+            for key, shot in available.items():
+                if key not in keys:
+                    self._delete_draft_shot(folder, shot)
+            return updated
+
+    def discard_staged(self, draft: ManualDraft, keys: Collection[str]) -> ManualDraft:
+        """Cancel a mark sheet: delete these staged screenshots (keys that
+        are not staged, such as the mark's own, are left alone)."""
+        with self._lock:
+            dropped = tuple(shot for shot in draft.staged if shot.key in keys)
+            if not dropped:
+                return draft
+            folder = self._draft_dir(draft.claim_token)
+            updated = replace(
+                draft,
+                staged=tuple(shot for shot in draft.staged if shot.key not in keys),
+            )
+            if folder.is_dir():
+                _write_json(folder / _DRAFT_FILE, _draft_to_json(updated))
+                for shot in dropped:
+                    self._delete_draft_shot(folder, shot)
+            return updated
+
+    def drop_staged(self, draft: ManualDraft) -> ManualDraft:
+        """Delete every staged screenshot (no mark sheet is open any more)."""
+        with self._lock:
+            return self._drop_staged(self._draft_dir(draft.claim_token), draft)
+
+    def _drop_staged(self, folder: Path, draft: ManualDraft) -> ManualDraft:
+        if not draft.staged:
+            return draft
+        updated = replace(draft, staged=())
+        if folder.is_dir():
+            _write_json(folder / _DRAFT_FILE, _draft_to_json(updated))
+            for shot in draft.staged:
+                self._delete_draft_shot(folder, shot)
+        return updated
 
     def remove_case_shot(self, draft: ManualDraft) -> ManualDraft:
         with self._lock:
@@ -508,8 +679,11 @@ class ManualSpool:
                         "retake it."
                     )
             target = self._submission_dir(payload.submission_id)
+            # An open mark sheet's screenshots are not part of the hand-in.
+            for staged in draft.staged:
+                self._delete_draft_shot(folder, staged)
             manifest: dict[str, object] = {
-                "version": _FORMAT_VERSION,
+                "version": _MANIFEST_VERSION,
                 "submission_id": payload.submission_id,
                 "pivot_id": payload.pivot_id,
                 "claim_token": payload.claim_token,

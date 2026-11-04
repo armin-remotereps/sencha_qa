@@ -1,0 +1,60 @@
+{% comment %} The run page's "Case analysis" card (non-draft runs).
+
+   Context contract (included `only`):
+     project, test_run, csrf_token,
+     card      — run_triage.types.TriageCard (analysable_count,
+                 classified_count, stale_count, unclassified_count,
+                 categories: CategoryCount(category, label, count, critical,
+                 untested), thread_id, turn_live, analyze_blocker),
+     can_write — project_can_write: shows Analyze cases / Analyze again and
+                 Open chat,
+     next      — this page's path, where a refused Analyze comes back to.
+   Analyze posts test_run_id + next to machine_setup:triage_chat_open; it is
+   disabled with the reason when card.analyze_blocker is non-empty. Open
+   analysis and Download CSV are shown to every member. {% endcomment %}
+<section class="card triage-card" id="case-analysis" aria-labelledby="case-analysis-title">
+  <div class="card-header">
+    <h2 id="case-analysis-title">Case analysis <span class="chip">AI analysis</span></h2>
+  </div>
+
+  {% if card.turn_live %}
+  <p class="hint"><span class="live-dot" aria-hidden="true"></span> Analysis running in Machine setup.</p>
+  {% endif %}
+
+  {% if card.categories %}
+  <ul class="triage-counts">
+    {% for row in card.categories %}
+    <li><strong>{{ row.label }}</strong> ({{ row.count }}, {{ row.critical }} critical){% if row.untested %}, plus {{ row.untested }} Untested{% endif %}</li>
+    {% endfor %}
+  </ul>
+  {% elif card.analysable_count %}
+  <p class="hint">{{ card.analysable_count }} case{{ card.analysable_count|pluralize }} can be analysed: the AI sorts the cases that did not pass by cause and severity.</p>
+  {% else %}
+  <p class="hint">No finished case to analyse yet.</p>
+  {% endif %}
+
+  {% if card.stale_count or card.unclassified_count %}
+  <p class="hint">
+    {% if card.stale_count %}{{ card.stale_count }} out of date{% endif %}{% if card.stale_count and card.unclassified_count %} · {% endif %}{% if card.unclassified_count %}{{ card.unclassified_count }} unclassified{% endif %}
+  </p>
+  {% endif %}
+
+  <div class="actions">
+    {% if can_write %}
+    <form method="post" action="{% url 'machine_setup:triage_chat_open' project.id %}">
+      {% csrf_token %}
+      <input type="hidden" name="test_run_id" value="{{ test_run.id }}">
+      <input type="hidden" name="next" value="{{ next }}">
+      <button type="submit" class="btn btn-sm btn-primary"{% if card.analyze_blocker %} disabled{% endif %}>{% if card.thread_id %}Analyze again{% else %}Analyze cases{% endif %}</button>
+    </form>
+    {% if card.thread_id %}
+    <a class="btn btn-sm btn-secondary" href="{% url 'machine_setup:thread' project.id card.thread_id %}">Open chat</a>
+    {% endif %}
+    {% endif %}
+    <a class="btn btn-sm btn-secondary" href="{% url 'run_triage:report' project.id test_run.id %}">Open analysis</a>
+    <a class="btn btn-sm btn-ghost" href="{% url 'run_triage:export_csv' project.id test_run.id %}">Download CSV</a>
+  </div>
+  {% if can_write and card.analyze_blocker %}
+  <p class="hint">{{ card.analyze_blocker }}</p>
+  {% endif %}
+</section>

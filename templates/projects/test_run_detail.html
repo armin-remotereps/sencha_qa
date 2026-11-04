@@ -103,6 +103,11 @@
      test_run also carries testrail_run_id, testrail_push_status,
      testrail_pushed_at, testrail_push_error, testrail_push_summary.
 
+     Case analysis (non-draft runs only; absent for a Draft): triage_card
+     (run_triage.types.TriageCard, run_triage/includes/_triage_card.html) and
+     triage_badges (dict[pivot id, TriageBadge] for the analysed cases on this
+     page; run_triage/includes/_triage_badge.html in the Result cell).
+
    Access: project_can_write (context processor) gates every write control —
      header actions, the Start form, the bulk bar and selection column, the
      help banner's forms and every dialog. A read-only member keeps the read
@@ -436,6 +441,11 @@
     </div>
   </template>
 
+  {# Section: Case analysis — AI categories and severities (non-draft runs) #}
+  {% if triage_card %}
+  {% include "run_triage/includes/_triage_card.html" with project=project test_run=test_run card=triage_card can_write=project_can_write next=request.get_full_path csrf_token=csrf_token only %}
+  {% endif %}
+
   {% comment %} Section: Case-level results, failures first. runCaseChecks scope (a
      bulkSelect over the page's checkable + uncheckable + re-runnable +
      sendable + re-testable pivots); the Check, Uncheck, Re-run, Send to
@@ -567,6 +577,7 @@
                 :class="pivotBadgeClass(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
                 x-text="pivotBadgeLabel(pivotStatuses[{{ pivot.id }}] || '{{ pivot.status }}')"
               >{% if pivot.status == "created" %}Not started{% elif pivot.status == "in_progress" %}Running{% elif pivot.status == "success" %}Passed{% elif pivot.status == "failed" %}Failed{% elif pivot.status == "blocked" %}Blocked{% elif pivot.status == "cancelled" %}Cancelled{% elif pivot.status == "need_help" %}Need help{% elif pivot.status == "awaiting_person" %}Your turn{% elif pivot.status == "needs_retest" %}Needs re-test{% endif %}</span>
+              {% if triage_badges %}{% with badge=triage_badges|get_item:pivot.id %}{% if badge %}<div>{% include "run_triage/includes/_triage_badge.html" with badge=badge only %}</div>{% endif %}{% endwith %}{% endif %}
             </td>
             <td data-label="Checked">
               {% if pivot.testrail_source_result_id %}
@@ -584,7 +595,7 @@
               {% endif %}
             </td>
             <td data-label="Duration">{{ pivot.shown_duration|duration }}</td>
-            <td data-label="Reason" class="muted">{% if manual_panel %}{% with upload=manual_panel.uploads|get_item:pivot.id %}{% if upload %}<span class="badge {% if upload.is_incomplete %}badge-upload-incomplete{% else %}badge-uploading{% endif %}">{% if upload.is_incomplete %}Screenshots incomplete {{ upload.received }}/{{ upload.expected }}{% else %}Uploading screenshots {{ upload.received }}/{{ upload.expected }}{% endif %}</span> {% endif %}{% endwith %}{% endif %}{% if pivot.status == "in_progress" and pivot.manual_claim_token %}<strong x-show="pivotManualPaused[{{ pivot.id }}]"{% if not pivot.manual_paused_at %} x-cloak{% endif %} x-text="'Paused · ' + (pivotManualPausedBy[{{ pivot.id }}] || 'a person')">Paused · {{ pivot.manual_paused_label|default:"a person" }}</strong><strong x-show="!pivotManualPaused[{{ pivot.id }}]"{% if pivot.manual_paused_at %} x-cloak{% endif %}>At the Test Runner: {{ pivot.manual_claimed_label|default:"a person at the Test Runner" }}</strong>{% elif pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>{% if help_panel and help_panel.request.fault and help_panel.request.test_run_test_case_id == pivot.id %}{{ help_panel.request.get_fault_display }}{% else %}Needs help{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "awaiting_person" %}<strong>{% if person_step_panel and person_step_panel.step.test_run_test_case_id == pivot.id %}Waiting for a person: {{ person_step_panel.step_label|lower }}{% else %}Waiting for a person{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "needs_retest" %}<strong>Marked by {{ pivot.retest_marked_by.get_full_name|default:pivot.retest_marked_by.email|default:"a removed user" }}</strong>{% if pivot.retest_note %} · {{ pivot.retest_note|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
+            <td data-label="Reason" class="muted">{% if manual_panel %}{% with upload=manual_panel.uploads|get_item:pivot.id %}{% if upload %}<span class="badge {% if upload.is_incomplete %}badge-upload-incomplete{% else %}badge-uploading{% endif %}">{% if upload.is_incomplete %}Screenshots incomplete {{ upload.received }}/{{ upload.expected }}{% else %}Uploading screenshots {{ upload.received }}/{{ upload.expected }}{% endif %}</span> {% endif %}{% endwith %}{% endif %}{% include "projects/includes/_evidence_review_badge.html" with pivot=pivot show_error=False only %}{% if pivot.status == "in_progress" and pivot.manual_claim_token %}<strong x-show="pivotManualPaused[{{ pivot.id }}]"{% if not pivot.manual_paused_at %} x-cloak{% endif %} x-text="'Paused · ' + (pivotManualPausedBy[{{ pivot.id }}] || 'a person')">Paused · {{ pivot.manual_paused_label|default:"a person" }}</strong><strong x-show="!pivotManualPaused[{{ pivot.id }}]"{% if pivot.manual_paused_at %} x-cloak{% endif %}>At the Test Runner: {{ pivot.manual_claimed_label|default:"a person at the Test Runner" }}</strong>{% elif pivot.status == "failed" %}{{ pivot.result|truncatechars:120 }}{% elif pivot.status == "blocked" %}<strong>{{ pivot.get_blocked_reason_display|default:"Blocked" }}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "need_help" %}<strong>{% if help_panel and help_panel.request.fault and help_panel.request.test_run_test_case_id == pivot.id %}{{ help_panel.request.get_fault_display }}{% else %}Needs help{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "awaiting_person" %}<strong>{% if person_step_panel and person_step_panel.step.test_run_test_case_id == pivot.id %}Waiting for a person: {{ person_step_panel.step_label|lower }}{% else %}Waiting for a person{% endif %}</strong>{% if pivot.result %} · {{ pivot.result|truncatechars:120 }}{% endif %}{% elif pivot.status == "needs_retest" %}<strong>Marked by {{ pivot.retest_marked_by.get_full_name|default:pivot.retest_marked_by.email|default:"a removed user" }}</strong>{% if pivot.retest_note %} · {{ pivot.retest_note|truncatechars:120 }}{% endif %}{% else %}—{% endif %}</td>
             {% if can_edit and project_can_write %}
             <td data-label="" x-show="testRunStatus === 'waiting'" x-cloak>
               <div class="actions">

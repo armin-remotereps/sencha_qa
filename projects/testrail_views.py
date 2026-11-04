@@ -11,6 +11,7 @@ from accounts.types import AuthenticatedRequest
 from projects.decorators import project_membership_required
 from projects.exceptions import (
     CheckedPushError,
+    EvidenceReviewError,
     TestCaseRefreshError,
     TestRailRunImportError,
 )
@@ -42,6 +43,7 @@ from projects.testrail_case_send_services import (
 )
 from projects.testrail_checked_push_services import start_checked_push
 from projects.testrail_client import TestRailError, TestRailProject, TestRailSuite
+from projects.testrail_evidence_review_services import retry_evidence_reviews
 from projects.testrail_results_services import (
     set_testrail_target,
     start_testrail_results_push,
@@ -518,6 +520,25 @@ def testrail_send_checked(
         messages.error(request, exc.message)
         return _redirect_to_run(project, test_run)
     messages.info(request, "Sending checked results to TestRail…")
+    return _redirect_to_run(project, test_run)
+
+
+@project_membership_required
+@require_POST
+def testrail_evidence_review_retry(
+    request: AuthenticatedRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    """Queue the screenshot review again for checked cases waiting or failed."""
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    try:
+        queued = retry_evidence_reviews(test_run=test_run)
+    except EvidenceReviewError as exc:
+        messages.error(request, exc.message)
+        return _redirect_to_run(project, test_run)
+    noun = "case" if queued == 1 else "cases"
+    messages.info(request, f"Reviewing screenshots of {queued} {noun}…")
     return _redirect_to_run(project, test_run)
 
 

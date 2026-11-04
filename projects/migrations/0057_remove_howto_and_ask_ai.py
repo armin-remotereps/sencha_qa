@@ -9,7 +9,7 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("projects", "0055_manual_pause_discuss"),
+        ("projects", "0056_evidence_review"),
     ]
 
     operations = [

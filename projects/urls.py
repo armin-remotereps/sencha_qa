@@ -279,6 +279,11 @@ urlpatterns: list[URLPattern] = [
         name="testrail_send_checked",
     ),
     path(
+        "<int:project_id>/test-runs/<int:test_run_id>/testrail/review-screenshots/",
+        testrail_views.testrail_evidence_review_retry,
+        name="testrail_evidence_review_retry",
+    ),
+    path(
         "<int:project_id>/test-runs/<int:test_run_id>/cases/send-testrail/",
         testrail_views.test_run_cases_send_testrail,
         name="test_run_cases_send_testrail",

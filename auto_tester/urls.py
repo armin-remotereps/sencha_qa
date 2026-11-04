@@ -24,6 +24,10 @@ urlpatterns: list[URLResolver | URLPattern] = [
         "projects/<int:project_id>/machine-readiness/",
         include("machine_readiness.urls"),
     ),
+    path(
+        "projects/<int:project_id>/test-runs/<int:run_id>/triage/",
+        include("run_triage.urls"),
+    ),
     path("admin/", admin.site.urls),
 ]
 

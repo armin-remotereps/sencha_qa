@@ -79,6 +79,11 @@ if sys.platform == "darwin":
             self._deadline = time.monotonic() + RESTORE_TIMEOUT_SECONDS
             return True
 
+        def restore_now(self) -> None:
+            """Give the front back without waiting (after the mark sheet a
+            shortcut opened); the window stays shown."""
+            self.start_restore()
+
         def restored(self) -> bool:
             """True once the recorded app is front, or the wait timed out.
 
@@ -112,6 +117,9 @@ else:
 
         def start_restore(self) -> bool:
             return False
+
+        def restore_now(self) -> None:
+            return None
 
         def restored(self) -> bool:
             return True
