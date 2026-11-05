@@ -1,44 +1,61 @@
 """The person window's "Manual run" tab (MANUAL_RUN_V1).
 
 Runs inside the window process (``person_window_app``) on the Tk thread. The
-tester works through a Manual run here:
+tab is a fixed case bar over sub-tabs. The case bar never scrolls, so what the
+tester uses all the time is reachable from every sub-tab:
+
+- the upload line (what still waits to be sent);
+- while a case is claimed: its title with Pause / Continue testing and
+  Release case, the paused banner, then ◀ Previous, the step picker, Next ▶,
+  Pass…, Fail… and Hand in…, and one status area (the screenshot, the
+  hand-in and the inline confirmation of a release or a contradicting
+  hand-in).
+
+The sub-tabs (each its own scroll page; hidden rather than disabled):
 
 - Cases: the run's cases with their status; the next case to do is
   preselected; Start claims it (the server answers; the steps then arrive in
-  the next snapshot).
-- The claimed case: its title, preconditions and verbatim steps, one step at
-  a time (Previous / Next and a step picker). Each step has Pass… and Fail…,
-  which take a screenshot with this window hidden (the runner hides it,
-  captures and shows it again) and then open the mark sheet
-  (``person_window_mark_sheet``), the step's thumbnails with Edit…, and a
-  note (required for a failed step).
-- Pass / Fail shortcuts (Test Runner 0.17.0): the window's ``ManualHotkeys``
-  (system-wide, else only while the window is focused, through ``bind_all``)
-  call ``on_shortcut``, which does what Pass… / Fail… do for the shown step.
-  The sheet's session (``person_window_mark_session.MarkSession``): Save
-  records the mark (its screenshots were staged by the runner until then)
-  and moves to the next step left to mark; on the last one (or "Stop here"
-  on a Fail) it also hands the case in, and ``AutoClaim`` claims the next
-  case to do once the snapshot shows the hand-in landed. Cancel throws the
-  staged screenshots away and leaves the step as it was. Focus goes back to
-  the app the tester was in when a system-wide shortcut opened the sheet
-  (not when this window was in front). A Save or hand-in the runner never
-  answers is given up after 30 s.
-- The case result: Passed, Failed or Blocked, a note (required for Blocked,
-  and for Failed when no step failed), an optional case screenshot and Hand
-  in. A verdict that contradicts the steps (Passed with a failed step,
-  Failed with no failed step) asks for an inline confirmation first. Hand in
-  is local and instant (the runner spools it); the next case is preselected.
-- Release gives the case back (inline confirmation; its draft is dropped).
-- Pause / Continue testing (MANUAL_PAUSE_DISCUSS_V1): while the case is
-  paused a banner says since when and by whom, and Pass, Fail, Edit, the
-  shortcuts, the case screenshot and Hand in are off (the step timer stops
-  too); Release and Discuss stay on.
-- Discuss (MANUAL_PAUSE_DISCUSS_V1): the case's discussion with the agent
-  (``person_window_chat``), a message box and "Open on Punk Hazard".
-- Pause and Discuss show only when the server sends their fields, so an
-  older server leaves the tab as it was.
-- The upload line says what still waits to be sent.
+  the next snapshot). The only sub-tab while no case is claimed.
+- Preconditions & steps: the claimed case's preconditions and its steps with
+  the shown step highlighted and the Pass / Fail marks so far.
+- Current step: the shown step's text and expected result, its mark, the
+  step's thumbnails with Edit…, the shortcut line and the step's note
+  (required for a failed step).
+- Discuss (MANUAL_PAUSE_DISCUSS_V1, only when the server sends it): the
+  case's discussion with the agent (``person_window_chat``), a message box
+  and "Open on Punk Hazard". Its title carries the message count and "…"
+  while the agent answers.
+- Result: Passed, Failed or Blocked, a note (required for Blocked, and for
+  Failed when no step failed) and an optional case screenshot.
+
+A new claim selects Current step, the end of a claim selects Cases, and a
+hand-in that cannot go selects the sub-tab where the tester fixes it (the
+failing step's note, else Result). Otherwise the tester's choice stays.
+
+Pass… and Fail… take a screenshot with this window hidden (the runner hides
+it, captures and shows it again) and then open the mark sheet
+(``person_window_mark_sheet``), placed over the whole window whatever sub-tab
+shows. Pass / Fail shortcuts (Test Runner 0.17.0): the window's
+``ManualHotkeys`` (system-wide, else only while the window is focused,
+through ``bind_all``) call ``on_shortcut``, which does what Pass… / Fail… do
+for the shown step. The sheet's session
+(``person_window_mark_session.MarkSession``): Save records the mark (its
+screenshots were staged by the runner until then) and moves to the next step
+left to mark; on the last one (or "Stop here" on a Fail) it also hands the
+case in, and ``AutoClaim`` claims the next case to do once the snapshot shows
+the hand-in landed. Cancel throws the staged screenshots away and leaves the
+step as it was. Focus goes back to the app the tester was in when a
+system-wide shortcut opened the sheet (not when this window was in front). A
+Save or hand-in the runner never answers is given up after 30 s.
+
+Hand in… is local and instant (the runner spools it); a verdict that
+contradicts the steps (Passed with a failed step, Failed with no failed step)
+asks for an inline confirmation first. Release gives the case back (inline
+confirmation; its draft is dropped). While the case is paused
+(MANUAL_PAUSE_DISCUSS_V1) the banner says since when and by whom, and Pass,
+Fail, Edit, the shortcuts, the case screenshot and Hand in are off (the step
+timer stops too); Release and Discuss stay on. Pause and Discuss show only
+when the server sends their fields, so an older server leaves them out.
 
 Marks (a step's outcome and screenshot) belong to the runner, which keeps
 them in its spool; what the person types (notes, the verdict, the step
@@ -82,6 +99,17 @@ from controller_client.person_window_mark_session import (
     SessionWindow,
 )
 from controller_client.person_window_mark_sheet import HalfThumbnails
+from controller_client.person_window_scroll import HEADER_ALLOWANCE, SectionPage
+from controller_client.person_window_theme import (
+    BOLD_FONT,
+    ERROR,
+    HEADING_FONT,
+    HIGHLIGHT_BG,
+    MUTED,
+    OK,
+    TEXT,
+    WARN,
+)
 from controller_client.protocol import (
     MANUAL_STEP_MAX_SECONDS,
     MANUAL_STEP_MAX_SHOTS,
@@ -106,23 +134,16 @@ try:
 except ImportError:  # the window process reports a missing tkinter itself
     pass
 
-# Same palette as person_window_app.
-_WARN_COLOR: Final[str] = "#b45309"
-_ERROR_COLOR: Final[str] = "#b91c1c"
-_OK_COLOR: Final[str] = "#15803d"
-_MUTED_COLOR: Final[str] = "#6b7280"
-_CURRENT_BACKGROUND: Final[str] = "#fde68a"
-_CURRENT_FOREGROUND: Final[str] = "#1f2937"
-_HEADING_FONT: Final[str] = "PunkHazardHeading"
-_BOLD_FONT: Final[str] = "PunkHazardBold"
 # Notes and the verdict reach the runner this long after the last change.
 _DRAFT_DELAY_MS: Final[int] = 800
 _CASE_LIST_ROWS: Final[int] = 8
 _STEP_LINES: Final[int] = 10
-_OVERVIEW_LINES: Final[int] = 8
+_OVERVIEW_LINES: Final[int] = 20
 _THUMBNAIL_CACHE: Final[int] = 24
-_DISCUSS_CLOSED: Final[str] = "▸ Discuss the case with the agent"
-_DISCUSS_OPEN: Final[str] = "▾ Discuss the case with the agent"
+# The sub-notebook's tab row, left above a sub-page besides the header
+# (HEADER_ALLOWANCE) and the case bar.
+_SUBTAB_ALLOWANCE: Final[int] = 34
+_DISCUSS_TITLE: Final[str] = "Discuss"
 _CHAT_LINES: Final[int] = 12
 # Half-size step thumbnails per row when a step has several screenshots.
 _STEP_SHOT_COLUMNS: Final[int] = 2
@@ -269,7 +290,8 @@ class ManualView:
         # Pause / Continue and a discussion message with the server.
         self._pause_busy = False
         self._chat_busy = False
-        self._discuss_open = False
+        # Pause applies to the claimed case (the server sends its fields).
+        self._pause_shown = False
         self._confirm: str | None = None
         self._draft_job: str | None = None
         # Gives up a hand-in the runner never answers.
@@ -292,18 +314,192 @@ class ManualView:
     # --- layout -------------------------------------------------------------
 
     def _build(self, frame: "ttk.Frame") -> None:
+        """The case bar over the sub-notebook, in the plain tab ``frame``."""
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+        bar = ttk.Frame(frame, padding=(12, 10, 12, 4))
+        bar.columnconfigure(0, weight=1)
+        bar.grid(row=0, column=0, sticky="ew")
+        self._bar = bar
+        notebook = ttk.Notebook(frame)
+        notebook.grid(row=1, column=0, sticky="nsew", padx=6, pady=(4, 6))
+        self._subtabs = notebook
+        self._cases_page = self._add_subtab("Cases")
+        self._steps_page = self._add_subtab("Preconditions & steps")
+        self._current_page = self._add_subtab("Current step")
+        self._discuss_page = self._add_subtab(_DISCUSS_TITLE)
+        self._result_page = self._add_subtab("Result")
+        # Shown sub-tabs (the rest are hidden with ``notebook.hide``).
+        self._shown_subtabs: set[str] = {
+            str(page.outer) for page in self._subtab_pages()
+        }
+        # The sub-tab the next render selects (a claim started or ended).
+        self._want_subtab: SectionPage | None = None
+        # The Discuss sub-tab's title as last set.
+        self._discuss_title = _DISCUSS_TITLE
+        notebook.bind("<<NotebookTabChanged>>", self._on_subtab_changed)
+        self._build_bar(bar)
+        bar.bind("<Configure>", self._on_bar_configure, add="+")
+        self._build_cases(self._cases_page.frame)
+        self._build_steps(self._steps_page.frame)
+        self._build_current(self._current_page.frame)
+        self._build_discuss(self._discuss_page.frame)
+        self._build_result(self._result_page.frame)
+        self._show_subtabs((self._cases_page,))
+
+    def _add_subtab(self, text: str) -> SectionPage:
+        page = self._host.manual_scroll_area(
+            self._subtabs, allowance=self._page_allowance
+        )
+        self._subtabs.add(page.outer, text=text)
+        return page
+
+    def _page_allowance(self) -> int:
+        """Screen height a sub-page leaves for the header, the case bar and
+        the sub-tabs' row, so a long sub-page scrolls instead of pushing the
+        window off the screen."""
+        # A removed bar keeps its last requested height: it counts as 0.
+        bar = self._bar.winfo_reqheight() if self._bar.winfo_manager() else 0
+        return HEADER_ALLOWANCE + bar + _SUBTAB_ALLOWANCE
+
+    def _on_bar_configure(self, _event: "tk.Event[ttk.Frame] | None") -> None:
+        # The bar's height is in every sub-page's allowance.
+        for page in self._subtab_pages():
+            page.refit_height()
+
+    def _subtab_pages(self) -> tuple[SectionPage, ...]:
+        return (
+            self._cases_page,
+            self._steps_page,
+            self._current_page,
+            self._discuss_page,
+            self._result_page,
+        )
+
+    def _build_bar(self, bar: "ttk.Frame") -> None:
         host = self._host
-        self._upload = host.manual_label(frame, "", foreground=_MUTED_COLOR)
+        self._upload = host.manual_label(bar, "", foreground=MUTED)
         self._upload.grid(row=0, column=0, sticky="w")
 
-        cases = ttk.Frame(frame)
-        cases.columnconfigure(0, weight=1)
-        cases.grid(row=1, column=0, sticky="ew", pady=(6, 0))
-        self._cases_frame = cases
-        ttk.Label(cases, text="Cases of this run", font=_BOLD_FONT).grid(
+        # The claimed case: title, Pause / Release and the paused banner.
+        head = ttk.Frame(bar)
+        head.columnconfigure(0, weight=1)
+        head.grid(row=1, column=0, sticky="ew")
+        self._head_frame = head
+        self._case_title = host.manual_label(head, "")
+        self._case_title.configure(font=HEADING_FONT)
+        self._case_title.grid(row=0, column=0, sticky="w")
+        self._pause_button = ttk.Button(head, text="Pause", command=self._pause)
+        self._pause_button.grid(row=0, column=1, sticky="ne", padx=(8, 0))
+        self._release_button = ttk.Button(
+            head, text="Release case", command=self._ask_release
+        )
+        self._release_button.grid(row=0, column=2, sticky="ne", padx=(8, 0))
+        self._build_pause(head)
+
+        # The action row: step navigation, then Pass… / Fail… / Hand in….
+        actions = ttk.Frame(bar)
+        actions.columnconfigure(1, weight=1)
+        actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        self._actions_frame = actions
+        self._prev_button = ttk.Button(
+            actions, text="◀ Previous", command=lambda: self._move(-1)
+        )
+        self._prev_button.grid(row=0, column=0, sticky="w")
+        self._picker = ttk.Combobox(
+            actions, state="readonly", textvariable=self._picker_var
+        )
+        self._picker.grid(row=0, column=1, sticky="ew", padx=6)
+        self._picker.bind("<<ComboboxSelected>>", self._on_pick)
+        self._next_button = ttk.Button(
+            actions, text="Next ▶", command=lambda: self._move(1)
+        )
+        self._next_button.grid(row=0, column=2, sticky="e")
+        button_row = ttk.Frame(actions)
+        button_row.grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        self._pass_button = ttk.Button(
+            button_row,
+            text="Pass…",
+            command=lambda: self._mark_clicked(ManualShotKind.PASS),
+        )
+        self._pass_button.pack(side="left")
+        self._fail_button = ttk.Button(
+            button_row,
+            text="Fail…",
+            command=lambda: self._mark_clicked(ManualShotKind.FAIL),
+        )
+        self._fail_button.pack(side="left", padx=(6, 0))
+        # The one hand-in path (validation, confirmation, submit).
+        self._submit_button = ttk.Button(
+            button_row, text="Hand in…", command=self._ask_submit
+        )
+        self._submit_button.pack(side="left", padx=(18, 0))
+
+        # One status area for the bar's buttons, whatever sub-tab shows.
+        status = ttk.Frame(bar)
+        status.columnconfigure(0, weight=1)
+        status.grid(row=3, column=0, sticky="ew")
+        status.grid_remove()
+        self._status_frame = status
+        self._capture_status = host.manual_label(status, "")
+        self._capture_status.grid(row=0, column=0, sticky="w", pady=(4, 0))
+        self._submit_status = host.manual_label(status, "")
+        self._submit_status.grid(row=1, column=0, sticky="w", pady=(4, 0))
+        # Inline confirmation (release or a contradicting hand-in).
+        self._confirm_frame = ttk.Frame(status)
+        self._confirm_frame.columnconfigure(0, weight=1)
+        self._confirm_label = host.manual_label(
+            self._confirm_frame, "", foreground=WARN
+        )
+        self._confirm_label.grid(row=0, column=0, sticky="w")
+        confirm_buttons = ttk.Frame(self._confirm_frame)
+        confirm_buttons.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self._confirm_button = ttk.Button(
+            confirm_buttons, text="", command=self._confirm_decision
+        )
+        self._confirm_button.pack(side="left")
+        ttk.Button(confirm_buttons, text="Cancel", command=self._cancel_confirm).pack(
+            side="left", padx=(6, 0)
+        )
+        self._confirm_frame.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        self._confirm_frame.grid_remove()
+
+    def _build_pause(self, head: "ttk.Frame") -> None:
+        """Under the title: the paused banner with Continue testing, why
+        Pause / Continue does not apply now, and the last reply."""
+        pause = ttk.Frame(head)
+        pause.columnconfigure(0, weight=1)
+        pause.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(4, 0))
+        self._pause_frame = pause
+        self._paused_banner = ttk.Frame(pause)
+        self._paused_banner.columnconfigure(0, weight=1)
+        self._paused_banner.grid(row=0, column=0, sticky="ew")
+        self._paused_label = self._host.manual_label(
+            self._paused_banner, "", foreground=WARN
+        )
+        self._paused_label.configure(font=BOLD_FONT)
+        self._paused_label.grid(row=0, column=0, sticky="w")
+        self._host.manual_label(
+            self._paused_banner,
+            "Pass, Fail, screenshots and Hand in are off until you continue. "
+            "You can still discuss the case or release it.",
+            foreground=MUTED,
+        ).grid(row=1, column=0, sticky="w")
+        self._continue_button = ttk.Button(
+            self._paused_banner, text="Continue testing", command=self._continue
+        )
+        self._continue_button.grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self._pause_blocker = self._host.manual_label(pause, "", foreground=MUTED)
+        self._pause_blocker.grid(row=1, column=0, sticky="w")
+        self._pause_status = self._host.manual_label(pause, "")
+        self._pause_status.grid(row=2, column=0, sticky="w")
+        pause.grid_remove()
+
+    def _build_cases(self, page: "ttk.Frame") -> None:
+        ttk.Label(page, text="Cases of this run", font=BOLD_FONT).grid(
             row=0, column=0, sticky="w"
         )
-        holder = ttk.Frame(cases)
+        holder = ttk.Frame(page)
         holder.columnconfigure(0, weight=1)
         holder.grid(row=1, column=0, sticky="ew", pady=(2, 0))
         self._case_list = tk.Listbox(
@@ -318,73 +514,43 @@ class ManualView:
         self._case_list.grid(row=0, column=0, sticky="ew")
         scroll.grid(row=0, column=1, sticky="ns")
         self._case_list.bind("<<ListboxSelect>>", self._on_case_select)
-        start_row = ttk.Frame(cases)
+        start_row = ttk.Frame(page)
         start_row.grid(row=2, column=0, sticky="w", pady=(6, 0))
         self._start_button = ttk.Button(
             start_row, text="Start this case", command=self._start_clicked
         )
         self._start_button.pack(side="left")
-        self._list_status = host.manual_label(cases, "")
+        self._list_status = self._host.manual_label(page, "")
         self._list_status.grid(row=3, column=0, sticky="w", pady=(4, 0))
 
-        active = ttk.Frame(frame)
-        active.columnconfigure(0, weight=1)
-        active.grid(row=2, column=0, sticky="ew", pady=(10, 0))
-        self._active_frame = active
-        head = ttk.Frame(active)
-        head.columnconfigure(0, weight=1)
-        head.grid(row=0, column=0, sticky="ew")
-        self._case_title = host.manual_label(head, "")
-        self._case_title.configure(font=_HEADING_FONT)
-        self._case_title.grid(row=0, column=0, sticky="w")
-        self._pause_button = ttk.Button(head, text="Pause", command=self._pause)
-        self._pause_button.grid(row=0, column=1, sticky="ne", padx=(8, 0))
-        self._release_button = ttk.Button(
-            head, text="Release case", command=self._ask_release
-        )
-        self._release_button.grid(row=0, column=2, sticky="ne", padx=(8, 0))
-        self._build_pause(head)
+    def _build_steps(self, page: "ttk.Frame") -> None:
+        host = self._host
         self._preconditions = host.manual_block(
-            active, title="Preconditions", max_lines=_STEP_LINES
+            page, title="Preconditions", max_lines=_STEP_LINES
         )
-        self._preconditions.frame.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        self._preconditions.frame.grid(row=0, column=0, sticky="ew")
         self._overview = host.manual_block(
-            active, title="Steps", max_lines=_OVERVIEW_LINES
+            page, title="Steps", max_lines=_OVERVIEW_LINES
         )
         self._overview.text.tag_configure(
-            "current", background=_CURRENT_BACKGROUND, foreground=_CURRENT_FOREGROUND
+            "current", background=HIGHLIGHT_BG, foreground=TEXT
         )
-        self._overview.text.tag_configure("failed", foreground=_ERROR_COLOR)
-        self._overview.text.tag_configure("passed", foreground=_OK_COLOR)
-        self._overview.frame.grid(row=2, column=0, sticky="ew", pady=(6, 0))
+        self._overview.text.tag_configure("failed", foreground=ERROR)
+        self._overview.text.tag_configure("passed", foreground=OK)
+        self._overview.frame.grid(row=1, column=0, sticky="ew", pady=(6, 0))
 
-        nav = ttk.Frame(active)
-        nav.columnconfigure(1, weight=1)
-        nav.grid(row=3, column=0, sticky="ew", pady=(8, 0))
-        self._prev_button = ttk.Button(
-            nav, text="◀ Previous", command=lambda: self._move(-1)
-        )
-        self._prev_button.grid(row=0, column=0, sticky="w")
-        self._picker = ttk.Combobox(
-            nav, state="readonly", textvariable=self._picker_var
-        )
-        self._picker.grid(row=0, column=1, sticky="ew", padx=6)
-        self._picker.bind("<<ComboboxSelected>>", self._on_pick)
-        self._next_button = ttk.Button(
-            nav, text="Next ▶", command=lambda: self._move(1)
-        )
-        self._next_button.grid(row=0, column=2, sticky="e")
-
-        self._step_text = host.manual_block(active, title="Step", max_lines=_STEP_LINES)
-        self._step_text.frame.grid(row=4, column=0, sticky="ew", pady=(6, 0))
+    def _build_current(self, page: "ttk.Frame") -> None:
+        host = self._host
+        self._step_text = host.manual_block(page, title="Step", max_lines=_STEP_LINES)
+        self._step_text.frame.grid(row=0, column=0, sticky="ew")
         self._expected = host.manual_block(
-            active, title="Expected result", max_lines=_STEP_LINES
+            page, title="Expected result", max_lines=_STEP_LINES
         )
-        self._expected.frame.grid(row=5, column=0, sticky="ew", pady=(6, 0))
-        self._step_status = host.manual_label(active, "")
-        self._step_status.grid(row=6, column=0, sticky="w", pady=(6, 0))
-        shot_row = ttk.Frame(active)
-        shot_row.grid(row=7, column=0, sticky="w", pady=(4, 0))
+        self._expected.frame.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        self._step_status = host.manual_label(page, "")
+        self._step_status.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        shot_row = ttk.Frame(page)
+        shot_row.grid(row=3, column=0, sticky="w", pady=(4, 0))
         # One label per screenshot of the shown step's mark.
         thumbs = ttk.Frame(shot_row)
         thumbs.grid(row=0, column=0, sticky="nw")
@@ -399,39 +565,43 @@ class ManualView:
             )
         self._edit_button = ttk.Button(shot_row, text="Edit…", command=self._edit_mark)
         self._edit_button.grid(row=0, column=1, sticky="nw", padx=(8, 0))
-        buttons = ttk.Frame(active)
-        buttons.grid(row=8, column=0, sticky="w", pady=(6, 0))
-        button_row = ttk.Frame(buttons)
-        button_row.grid(row=0, column=0, sticky="w")
-        self._pass_button = ttk.Button(
-            button_row,
-            text="Pass…",
-            command=lambda: self._mark_clicked(ManualShotKind.PASS),
-        )
-        self._pass_button.pack(side="left")
-        self._fail_button = ttk.Button(
-            button_row,
-            text="Fail…",
-            command=lambda: self._mark_clicked(ManualShotKind.FAIL),
-        )
-        self._fail_button.pack(side="left", padx=(6, 0))
-        self._shortcut_line = host.manual_label(buttons, "", foreground=_MUTED_COLOR)
-        self._shortcut_line.grid(row=1, column=0, sticky="w", pady=(4, 0))
-        self._note_label = ttk.Label(active, text="")
-        self._note_label.grid(row=9, column=0, sticky="w", pady=(6, 0))
-        self._note = host.manual_entry(active, row=10, height=3)
+        self._shortcut_line = host.manual_label(page, "", foreground=MUTED)
+        self._shortcut_line.grid(row=4, column=0, sticky="w", pady=(4, 0))
+        self._note_label = ttk.Label(page, text="")
+        self._note_label.grid(row=5, column=0, sticky="w", pady=(6, 0))
+        self._note = host.manual_entry(page, row=6, height=3)
         self._note.bind("<<Modified>>", self._on_note_modified)
-        self._capture_status = host.manual_label(active, "")
-        self._capture_status.grid(row=11, column=0, sticky="w", pady=(4, 0))
-        self._build_discuss(active, row=12)
 
-        verdict = ttk.Frame(active)
-        verdict.columnconfigure(0, weight=1)
-        verdict.grid(row=13, column=0, sticky="ew", pady=(14, 0))
-        ttk.Label(verdict, text="Case result", font=_BOLD_FONT).grid(
+    def _build_discuss(self, page: "ttk.Frame") -> None:
+        self._host.manual_label(
+            page,
+            "The agent knows this case, its steps, the marks so far and the "
+            "knowledge base. It advises only: it does not mark steps or decide "
+            "the result.",
+            foreground=MUTED,
+        ).grid(row=0, column=0, sticky="w")
+        # Rows 1 (chat), 2 (answering) and 3 (message box).
+        self._chat = ChatPanel(
+            self._host,
+            page,
+            row=1,
+            title="Discussion with the agent (this case)",
+            lines=_CHAT_LINES,
+            on_send=self._send_chat,
+            on_input=self._on_chat_input,
+            working_text="The agent is answering…",
+        )
+        self._thread_link = ttk.Button(
+            page, text="Open on Punk Hazard", command=self._open_thread
+        )
+        self._thread_link.grid(row=4, column=0, sticky="w", pady=(6, 0))
+
+    def _build_result(self, page: "ttk.Frame") -> None:
+        host = self._host
+        ttk.Label(page, text="Case result", font=BOLD_FONT).grid(
             row=0, column=0, sticky="w"
         )
-        choices = ttk.Frame(verdict)
+        choices = ttk.Frame(page)
         choices.grid(row=1, column=0, sticky="w", pady=(2, 0))
         for verdict_value, label in _VERDICT_LABELS.items():
             ttk.Radiobutton(
@@ -441,11 +611,11 @@ class ManualView:
                 variable=self._verdict_var,
                 command=self._on_verdict,
             ).pack(side="left", padx=(0, 10))
-        self._verdict_note_label = ttk.Label(verdict, text="")
+        self._verdict_note_label = ttk.Label(page, text="")
         self._verdict_note_label.grid(row=2, column=0, sticky="w", pady=(6, 0))
-        self._verdict_note = host.manual_entry(verdict, row=3, height=3)
+        self._verdict_note = host.manual_entry(page, row=3, height=3)
         self._verdict_note.bind("<<Modified>>", self._on_verdict_note_modified)
-        case_shot = ttk.Frame(verdict)
+        case_shot = ttk.Frame(page)
         case_shot.grid(row=4, column=0, sticky="w", pady=(6, 0))
         self._case_thumb = ttk.Label(case_shot)
         self._case_thumb.pack(side="left")
@@ -455,111 +625,108 @@ class ManualView:
             command=self._capture_case,
         )
         self._case_shot_button.pack(side="left", padx=(8, 0), anchor="n")
-        submit_row = ttk.Frame(verdict)
-        submit_row.grid(row=5, column=0, sticky="w", pady=(10, 0))
-        self._submit_button = ttk.Button(
-            submit_row, text="Hand in", command=self._ask_submit
-        )
-        self._submit_button.pack(side="left")
         self._submit_hint = host.manual_label(
-            verdict,
+            page,
             "Steps you did not mark are reported as not run. Screenshots upload "
-            "after you hand in.",
-            foreground=_MUTED_COLOR,
+            "after you hand in. Hand in… is in the bar above.",
+            foreground=MUTED,
         )
-        self._submit_hint.grid(row=6, column=0, sticky="w", pady=(4, 0))
+        self._submit_hint.grid(row=5, column=0, sticky="w", pady=(8, 0))
 
-        # Inline confirmation (release or a contradicting hand-in).
-        self._confirm_frame = ttk.Frame(active)
-        self._confirm_frame.columnconfigure(0, weight=1)
-        self._confirm_label = host.manual_label(
-            self._confirm_frame, "", foreground=_WARN_COLOR
-        )
-        self._confirm_label.grid(row=0, column=0, sticky="w")
-        confirm_buttons = ttk.Frame(self._confirm_frame)
-        confirm_buttons.grid(row=1, column=0, sticky="w", pady=(6, 0))
-        self._confirm_button = ttk.Button(
-            confirm_buttons, text="", command=self._confirm_decision
-        )
-        self._confirm_button.pack(side="left")
-        ttk.Button(confirm_buttons, text="Cancel", command=self._cancel_confirm).pack(
-            side="left", padx=(6, 0)
-        )
-        self._confirm_frame.grid(row=14, column=0, sticky="ew", pady=(10, 0))
-        self._confirm_frame.grid_remove()
-        self._submit_status = host.manual_label(active, "")
-        self._submit_status.grid(row=15, column=0, sticky="w", pady=(4, 0))
+    # --- sub-tabs -------------------------------------------------------------
 
-    def _build_pause(self, head: "ttk.Frame") -> None:
-        """Under the title: the paused banner with Continue testing, why
-        Pause / Continue does not apply now, and the last reply."""
-        pause = ttk.Frame(head)
-        pause.columnconfigure(0, weight=1)
-        pause.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(4, 0))
-        self._pause_frame = pause
-        self._paused_banner = ttk.Frame(pause)
-        self._paused_banner.columnconfigure(0, weight=1)
-        self._paused_banner.grid(row=0, column=0, sticky="ew")
-        self._paused_label = self._host.manual_label(
-            self._paused_banner, "", foreground=_WARN_COLOR
+    def subtab_frames(self) -> tuple["ttk.Frame", ...]:
+        """The shown sub-tabs' pages (``outer``), in tab order (``--self-check``
+        selects each with ``select_subtab``)."""
+        return tuple(
+            page.outer
+            for page in (
+                self._cases_page,
+                self._steps_page,
+                self._current_page,
+                self._discuss_page,
+                self._result_page,
+            )
+            if str(page.outer) in self._shown_subtabs
         )
-        self._paused_label.configure(font=_BOLD_FONT)
-        self._paused_label.grid(row=0, column=0, sticky="w")
-        self._host.manual_label(
-            self._paused_banner,
-            "Pass, Fail, screenshots and Hand in are off until you continue. "
-            "You can still discuss the case or release it.",
-            foreground=_MUTED_COLOR,
-        ).grid(row=1, column=0, sticky="w")
-        self._continue_button = ttk.Button(
-            self._paused_banner, text="Continue testing", command=self._continue
-        )
-        self._continue_button.grid(row=2, column=0, sticky="w", pady=(4, 0))
-        self._pause_blocker = self._host.manual_label(
-            pause, "", foreground=_MUTED_COLOR
-        )
-        self._pause_blocker.grid(row=1, column=0, sticky="w")
-        self._pause_status = self._host.manual_label(pause, "")
-        self._pause_status.grid(row=2, column=0, sticky="w")
-        pause.grid_remove()
 
-    def _build_discuss(self, parent: "ttk.Frame", *, row: int) -> None:
-        discuss = ttk.Frame(parent)
-        discuss.columnconfigure(0, weight=1)
-        discuss.grid(row=row, column=0, sticky="ew", pady=(10, 0))
-        self._discuss_frame = discuss
-        self._discuss_toggle = ttk.Button(
-            discuss, text=_DISCUSS_CLOSED, command=self._toggle_discuss
-        )
-        self._discuss_toggle.grid(row=0, column=0, sticky="w")
-        content = ttk.Frame(discuss)
-        content.columnconfigure(0, weight=1)
-        content.grid(row=1, column=0, sticky="ew", pady=(4, 0))
-        self._discuss_content = content
-        self._host.manual_label(
-            content,
-            "The agent knows this case, its steps, the marks so far and the "
-            "knowledge base. It advises only: it does not mark steps or decide "
-            "the result.",
-            foreground=_MUTED_COLOR,
-        ).grid(row=0, column=0, sticky="w")
-        # Rows 1 (chat), 2 (answering) and 3 (message box).
-        self._chat = ChatPanel(
-            self._host,
-            content,
-            row=1,
-            title="Discussion with the agent (this case)",
-            lines=_CHAT_LINES,
-            on_send=self._send_chat,
-            on_input=self._on_chat_input,
-            working_text="The agent is answering…",
-        )
-        self._thread_link = ttk.Button(
-            content, text="Open on Punk Hazard", command=self._open_thread
-        )
-        self._thread_link.grid(row=4, column=0, sticky="w", pady=(6, 0))
-        content.grid_remove()
-        discuss.grid_remove()
+    def select_subtab(self, frame: "ttk.Frame") -> None:
+        """Select a shown sub-tab (one of ``subtab_frames``); never takes the
+        focus."""
+        if str(frame) in self._shown_subtabs:
+            self._subtabs.select(frame)
+
+    def _select(self, page: SectionPage) -> None:
+        if str(page.outer) in self._shown_subtabs:
+            self._subtabs.select(page.outer)
+
+    def _show_subtabs(self, shown: tuple[SectionPage, ...]) -> None:
+        """Show exactly ``shown``; select the wanted sub-tab, else keep the
+        tester's choice unless it is hidden now (Current step, else Cases)."""
+        notebook = self._subtabs
+        names = {str(page.outer) for page in shown}
+        for page in shown:
+            if str(page.outer) not in self._shown_subtabs:
+                # Restored at its earlier position with its options.
+                notebook.add(page.outer)
+        selected = notebook.select()
+        want = self._want_subtab
+        self._want_subtab = None
+        if want is not None and str(want.outer) in names:
+            notebook.select(want.outer)
+        elif str(selected) not in names:
+            fallback = (
+                self._current_page
+                if str(self._current_page.outer) in names
+                else self._cases_page
+            )
+            notebook.select(fallback.outer)
+        for page in self._subtab_pages():
+            if str(page.outer) not in names and str(page.outer) in self._shown_subtabs:
+                notebook.hide(page.outer)
+        self._shown_subtabs = names
+
+    def _on_subtab_changed(self, _event: "tk.Event[ttk.Notebook]") -> None:
+        # What opening the old Discuss toggle did: the latest message shows.
+        if str(self._subtabs.select()) == str(self._discuss_page.outer):
+            self._chat.block.text.see("end")
+
+    def _sync_status_rows(self) -> None:
+        """A status line of the bar takes room only while it says something
+        (and a frame left with nothing shown is removed too: Tk keeps the
+        size of a frame whose last child is removed)."""
+        upload = self._sync_status_row(self._upload)
+        capture = self._sync_status_row(self._capture_status)
+        submit = self._sync_status_row(self._submit_status)
+        pause_blocker = self._sync_status_row(self._pause_blocker)
+        pause_status = self._sync_status_row(self._pause_status)
+        claimed = self.active_case() is not None
+        status = claimed and (capture or submit or self._confirm is not None)
+        pause = self._pause_shown and (self._paused() or pause_blocker or pause_status)
+        bar = claimed or upload
+        bar_was_shown = bool(self._bar.winfo_manager())
+        for frame, visible in (
+            (self._status_frame, status),
+            (self._pause_frame, pause),
+            (self._bar, bar),
+        ):
+            if visible:
+                frame.grid()
+            else:
+                frame.grid_remove()
+        if bar != bar_was_shown:
+            # Removing or restoring the bar sends no <Configure>.
+            self._on_bar_configure(None)
+
+    @staticmethod
+    def _sync_status_row(label: "ttk.Label") -> bool:
+        """Show ``label`` only while it says something; whether it does."""
+        says = bool(str(label.cget("text")))
+        if says:
+            label.grid()
+        else:
+            label.grid_remove()
+        return says
 
     # --- what the window asks -----------------------------------------------
 
@@ -658,6 +825,9 @@ class ManualView:
         if active is None:
             # Handed in or released: preselect the next case to do again.
             self._selected_pivot = None
+            self._want_subtab = self._cases_page
+        else:
+            self._want_subtab = self._current_page
         if active is None or not active.steps:
             self._step = None
         else:
@@ -692,11 +862,11 @@ class ManualView:
             if capture.kind is ManualShotKind.FAIL:
                 self._capture_status.configure(
                     text="Describe in the note what went wrong.",
-                    foreground=_WARN_COLOR,
+                    foreground=WARN,
                 )
                 self._note.focus_set()
         else:
-            self._capture_status.configure(text=message, foreground=_ERROR_COLOR)
+            self._capture_status.configure(text=message, foreground=ERROR)
         self.render()
 
     def on_thumbnail(self, key: str, thumbnail_b64: str) -> None:
@@ -705,7 +875,7 @@ class ManualView:
             self.render()
 
     def on_result(self, kind: ManualResultKind, ok: bool, message: str) -> None:
-        color = _OK_COLOR if ok else _ERROR_COLOR
+        color = OK if ok else ERROR
         if kind is ManualResultKind.CLAIM:
             if not self._claim_busy:
                 return
@@ -774,10 +944,23 @@ class ManualView:
         self._render_cases(state)
         active = state.active
         if active is None:
-            self._active_frame.grid_remove()
+            for row in (self._head_frame, self._actions_frame):
+                row.grid_remove()
+            self._show_subtabs((self._cases_page,))
+            self._sync_status_rows()
             return
-        self._active_frame.grid()
+        for row in (self._head_frame, self._actions_frame):
+            row.grid()
+        shown: tuple[SectionPage, ...] = (
+            self._cases_page,
+            self._steps_page,
+            self._current_page,
+        )
+        if active.discussion is not None:
+            shown += (self._discuss_page,)
+        self._show_subtabs(shown + (self._result_page,))
         self._render_active(active)
+        self._sync_status_rows()
         capture = self._capture
         self._marking.render(active, capturing=capture is not None and capture.staged)
 
@@ -803,7 +986,7 @@ class ManualView:
             parts.append(upload.message)
         warn = state.spool_full or bool(upload.message)
         self._upload.configure(
-            text="\n".join(parts), foreground=_WARN_COLOR if warn else _MUTED_COLOR
+            text="\n".join(parts), foreground=WARN if warn else MUTED
         )
 
     def _render_cases(self, state: ManualWindowState) -> None:
@@ -846,9 +1029,7 @@ class ManualView:
             state="normal" if can_start else "disabled",
         )
         if not cases:
-            self._list_status.configure(
-                text="This run has no cases.", foreground=_MUTED_COLOR
-            )
+            self._list_status.configure(text="This run has no cases.", foreground=MUTED)
 
     def _active_step(self, active: ManualActiveCasePayload) -> ManualStepPayload | None:
         return next((s for s in active.steps if s.num == self._step), None)
@@ -893,11 +1074,10 @@ class ManualView:
         return active is not None and active.paused
 
     def _render_pause(self, active: ManualActiveCasePayload) -> None:
-        if not manual_pause_discuss_supported(active):
+        self._pause_shown = manual_pause_discuss_supported(active)
+        if not self._pause_shown:
             self._pause_button.grid_remove()
-            self._pause_frame.grid_remove()
             return
-        self._pause_frame.grid()
         connected = self._host.manual_connected()
         if active.paused:
             self._pause_button.grid_remove()
@@ -937,17 +1117,15 @@ class ManualView:
     def _render_discuss(self, active: ManualActiveCasePayload) -> None:
         discussion = active.discussion
         if discussion is None:
-            self._discuss_frame.grid_remove()
+            # The sub-tab is hidden (an older server sends no discussion).
             return
-        self._discuss_frame.grid()
         count = f" ({len(discussion.messages)})" if discussion.messages else ""
-        live = " · the agent is answering…" if discussion.turn_live else ""
-        self._discuss_toggle.configure(
-            text=(_DISCUSS_OPEN if self._discuss_open else _DISCUSS_CLOSED)
-            + count
-            + live
-        )
-        # Rendered while closed too: only new rows are appended.
+        live = " …" if discussion.turn_live else ""
+        title = f"{_DISCUSS_TITLE}{count}{live}"
+        if title != self._discuss_title:
+            self._discuss_title = title
+            self._subtabs.tab(self._discuss_page.outer, text=title)
+        # Rendered while another sub-tab shows too: only new rows are appended.
         self._chat.render_rows(active.claim_token, discussion.messages)
         self._chat.set_working(discussion.turn_live)
         self._render_chat_send(discussion)
@@ -955,10 +1133,6 @@ class ManualView:
             self._thread_link.grid()
         else:
             self._thread_link.grid_remove()
-        if self._discuss_open:
-            self._discuss_content.grid()
-        else:
-            self._discuss_content.grid_remove()
 
     def _render_chat_send(self, discussion: ManualDiscussionPayload) -> None:
         self._chat.render_send(
@@ -1015,7 +1189,7 @@ class ManualView:
             else:
                 thumb.configure(image="")
         if mark is None:
-            self._step_status.configure(text="Not marked yet", foreground=_MUTED_COLOR)
+            self._step_status.configure(text="Not marked yet", foreground=MUTED)
             self._note_label.configure(text="Note (optional)")
             self._edit_button.grid_remove()
         else:
@@ -1023,7 +1197,7 @@ class ManualView:
             shots = f" · {len(keys)} screenshots" if len(keys) > 1 else ""
             self._step_status.configure(
                 text=("Failed" if failed else "Passed") + shots,
-                foreground=_ERROR_COLOR if failed else _OK_COLOR,
+                foreground=ERROR if failed else OK,
             )
             self._note_label.configure(
                 text="What went wrong? (required)" if failed else "Note (optional)"
@@ -1050,7 +1224,7 @@ class ManualView:
             and (not capture.staged or capture.opening)
         ):
             self._capture_status.configure(
-                text="Taking the screenshot…", foreground=_MUTED_COLOR
+                text="Taking the screenshot…", foreground=MUTED
             )
 
     def _render_verdict(self) -> None:
@@ -1076,8 +1250,10 @@ class ManualView:
             state="disabled" if busy or full or paused else "normal"
         )
         self._submit_button.configure(
-            text="Handing in…" if self._submit_busy else "Hand in",
-            state="disabled" if busy or paused or verdict is None else "normal",
+            text="Handing in…" if self._submit_busy else "Hand in…",
+            # Enabled without a verdict: the click says what is missing and
+            # opens the Result sub-tab where the verdict is chosen.
+            state="disabled" if busy or paused else "normal",
         )
         self._release_button.configure(
             state=(
@@ -1323,7 +1499,7 @@ class ManualView:
         self._confirm = None
         if not staged or opening:
             self._capture_status.configure(
-                text="Taking the screenshot…", foreground=_MUTED_COLOR
+                text="Taking the screenshot…", foreground=MUTED
             )
         self.render()
         self._host.manual_send(
@@ -1418,8 +1594,9 @@ class ManualView:
             if self.state is not None and self.state.spool_full:
                 self._capture_status.configure(
                     text="The screenshot spool is full: wait for the uploads.",
-                    foreground=_WARN_COLOR,
+                    foreground=WARN,
                 )
+                self._sync_status_rows()
             return
         self._host.manual_note_foreground(system_wide)
         shot_kind = (
@@ -1493,6 +1670,7 @@ class ManualView:
 
     def show_capture_status(self, text: str, color: str) -> None:
         self._capture_status.configure(text=text, foreground=color)
+        self._sync_status_rows()
 
     def set_case_result(self, verdict: ManualCaseVerdictWire, note: str) -> None:
         self._verdict_var.set(verdict.value)
@@ -1500,9 +1678,11 @@ class ManualView:
         self._verdict_note.edit_modified(False)
 
     def show_hand_in_error(self, message: str, step: int | None) -> None:
-        self._submit_status.configure(text=message, foreground=_ERROR_COLOR)
+        self._submit_status.configure(text=message, foreground=ERROR)
+        self._select_for_error(step)
         if step is not None:
             self.go_to(step)
+        self._sync_status_rows()
         self._schedule_draft()
 
     def show_list_status(self, text: str, color: str) -> None:
@@ -1564,7 +1744,8 @@ class ManualView:
         texts = self.draft_texts()
         message, step = self.validation_error(texts)
         if message:
-            self._submit_status.configure(text=message, foreground=_ERROR_COLOR)
+            self._submit_status.configure(text=message, foreground=ERROR)
+            self._select_for_error(step)
             if step is not None:
                 self.go_to(step)
                 self._note.focus_set()
@@ -1581,6 +1762,11 @@ class ManualView:
             self.render()
             return
         self.submit(texts)
+
+    def _select_for_error(self, step: int | None) -> None:
+        """A hand-in that cannot go: the sub-tab where the tester fixes it
+        (the step's note, else the case result)."""
+        self._select(self._current_page if step is not None else self._result_page)
 
     def _cancel_confirm(self) -> None:
         self._confirm = None
@@ -1649,7 +1835,7 @@ class ManualView:
             self._list_status.configure(text="")
         self._submit_status.configure(
             text="The Test Runner did not confirm the hand-in. Hand in again.",
-            foreground=_ERROR_COLOR,
+            foreground=ERROR,
         )
         self.render()
 
@@ -1689,12 +1875,6 @@ class ManualView:
     def _continue(self) -> None:
         self._send_pause_action(ManualCaseActionKind.CONTINUE)
 
-    def _toggle_discuss(self) -> None:
-        self._discuss_open = not self._discuss_open
-        self.render()
-        if self._discuss_open:
-            self._chat.block.text.see("end")
-
     def _on_chat_input(self) -> None:
         active = self.state.active if self.state is not None else None
         if active is not None and active.discussion is not None:
@@ -1715,7 +1895,7 @@ class ManualView:
             self._chat.set_status(
                 f"The message is too long ({len(text)} of "
                 f"{PERSON_CHAT_TEXT_MAX_CHARS} characters).",
-                _ERROR_COLOR,
+                ERROR,
             )
             return
         # Notes typed so far reach the runner first (it reports the marks

@@ -44,6 +44,7 @@ from controller_client.person_window_mark_sheet import (
     SheetHost,
     SheetView,
 )
+from controller_client.person_window_theme import ERROR, MUTED, WARN
 from controller_client.protocol import (
     MANUAL_STEP_NOTE_MAX_CHARS,
     ManualActiveCasePayload,
@@ -58,10 +59,6 @@ try:
 except ImportError:  # the window process reports a missing tkinter itself
     pass
 
-# Same palette as person_window_app.
-_WARN_COLOR: Final[str] = "#b45309"
-_ERROR_COLOR: Final[str] = "#b91c1c"
-_MUTED_COLOR: Final[str] = "#6b7280"
 # After a hand-in from the sheet, the next case is claimed once the snapshot
 # shows the hand-in landed; the window stops waiting after this long.
 AUTO_CLAIM_WAIT_MS: Final[int] = 120_000
@@ -183,7 +180,7 @@ class _SheetSession:
     hand_in: HandIn | None = None
     outcome: ManualStepOutcome = ManualStepOutcome.PASS
     status: str = ""
-    status_color: str = _MUTED_COLOR
+    status_color: str = MUTED
 
 
 class AutoClaim:
@@ -205,7 +202,7 @@ class AutoClaim:
         self.cancel()
         self._pivot_id = pivot_id
         self._job = self._root.after(AUTO_CLAIM_WAIT_MS, self._timeout)
-        self._tab.show_list_status("Handed in. Starting the next case…", _MUTED_COLOR)
+        self._tab.show_list_status("Handed in. Starting the next case…", MUTED)
 
     def cancel(self) -> None:
         self._pivot_id = None
@@ -221,7 +218,7 @@ class AutoClaim:
         self._tab.show_list_status(
             "The next case did not start on its own: press Start this case "
             "when the case you handed in shows its result.",
-            _WARN_COLOR,
+            WARN,
         )
 
     def on_state(self, state: ManualWindowState, selected_pivot: int | None) -> None:
@@ -250,7 +247,7 @@ class AutoClaim:
             or selected.claimed_label
             or selected.pivot_id in submitted
         ):
-            self._tab.show_list_status("No case left to do in this run.", _MUTED_COLOR)
+            self._tab.show_list_status("No case left to do in this run.", MUTED)
             return
         self._tab.start_case()
 
@@ -321,17 +318,17 @@ class MarkSession:
         current = active is not None and active.claim_token == claim_token
         if not ok:
             if session is not None:
-                session.status, session.status_color = message, _ERROR_COLOR
+                session.status, session.status_color = message, ERROR
             else:
                 # No screenshot, no sheet: nothing took the focus.
                 self._window.manual_note_foreground(False)
-                self._tab.show_capture_status(message, _ERROR_COLOR)
+                self._tab.show_capture_status(message, ERROR)
             self._tab.render()
             return
         self._tab.store_thumbnail(key, thumbnail_b64)
         if session is None:
             if opening and current and active is not None:
-                self._tab.show_capture_status("", _MUTED_COLOR)
+                self._tab.show_capture_status("", MUTED)
                 outcome = (
                     ManualStepOutcome.FAIL
                     if kind is ManualShotKind.FAIL
@@ -538,7 +535,7 @@ class MarkSession:
         )
         message, _step = self._tab.validation_error(texts, failed)
         if message:
-            session.status, session.status_color = message, _ERROR_COLOR
+            session.status, session.status_color = message, ERROR
             self._tab.render()
             return False
         contradicts = (
@@ -573,7 +570,7 @@ class MarkSession:
         session.save_timed_out = True
         session.status, session.status_color = (
             "The Test Runner did not confirm the mark yet. Save again.",
-            _ERROR_COLOR,
+            ERROR,
         )
         self._tab.render()
 
@@ -592,7 +589,7 @@ class MarkSession:
         if not ok:
             session.status, session.status_color = (
                 message or "The mark was not saved.",
-                _ERROR_COLOR,
+                ERROR,
             )
             self._tab.render()
             return
@@ -610,7 +607,7 @@ class MarkSession:
             self.close(focus_back=False)
             if current is not None:
                 self._tab.set_case_result(current.verdict, current.note)
-                self._tab.show_hand_in_error("Step saved. Hand in from the tab.", None)
+                self._tab.show_hand_in_error("Step saved. Hand in from the bar.", None)
             self._tab.render()
             return
         self.close(focus_back=False)

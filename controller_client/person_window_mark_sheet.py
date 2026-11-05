@@ -28,6 +28,14 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Final, Protocol
 
+from controller_client.person_window_scroll import SectionPage
+from controller_client.person_window_theme import (
+    BOLD_FONT,
+    ERROR,
+    HEADING_FONT,
+    MUTED,
+    WARN,
+)
 from controller_client.protocol import (
     MANUAL_STEP_NOTE_MAX_CHARS,
     ManualCaseVerdictWire,
@@ -40,12 +48,6 @@ try:
 except ImportError:  # the window process reports a missing tkinter itself
     pass
 
-# Same palette as person_window_app.
-_WARN_COLOR: Final[str] = "#b45309"
-_ERROR_COLOR: Final[str] = "#b91c1c"
-_MUTED_COLOR: Final[str] = "#6b7280"
-_HEADING_FONT: Final[str] = "PunkHazardHeading"
-_BOLD_FONT: Final[str] = "PunkHazardBold"
 # Shots per row of the sheet (half-size thumbnails).
 _SHOT_COLUMNS: Final[int] = 3
 _HALF_CACHE: Final[int] = 24
@@ -73,8 +75,13 @@ class SheetHost(Protocol):
         self, parent: "tk.Misc", *, row: int, height: int
     ) -> "tk.Text": ...
 
-    def manual_scroll_area(self, parent: "tk.Misc") -> tuple["ttk.Frame", "ttk.Frame"]:
-        """A scrollable area (outer frame, content frame) in ``parent``."""
+    def manual_scroll_area(
+        self, parent: "tk.Misc", allowance: int | Callable[[], int] = ...
+    ) -> SectionPage:
+        """A scrollable page in ``parent`` (grid its ``outer``, build into its
+        ``frame``); sections added to it get the page's rail. ``allowance``:
+        pixels of screen height the page leaves for what is above it (a
+        callable is asked each time)."""
         ...
 
 
@@ -184,14 +191,15 @@ class MarkSheet:
         outer.columnconfigure(0, weight=1)
         outer.rowconfigure(0, weight=1)
         self._outer = outer
-        scroll_outer, body = host.manual_scroll_area(outer)
-        scroll_outer.grid(row=0, column=0, sticky="nsew")
+        page = host.manual_scroll_area(outer)
+        page.outer.grid(row=0, column=0, sticky="nsew")
+        body = page.frame
         body.columnconfigure(0, weight=1)
 
         self._title = host.manual_label(body, "")
-        self._title.configure(font=_HEADING_FONT)
+        self._title.configure(font=HEADING_FONT)
         self._title.grid(row=0, column=0, sticky="w")
-        self._step_line = host.manual_label(body, "", foreground=_MUTED_COLOR)
+        self._step_line = host.manual_label(body, "", foreground=MUTED)
         self._step_line.grid(row=1, column=0, sticky="w", pady=(2, 0))
         choice = ttk.Frame(body)
         choice.grid(row=2, column=0, sticky="w", pady=(8, 0))
@@ -207,9 +215,8 @@ class MarkSheet:
                 command=self._on_outcome,
             ).pack(side="left", padx=(0, 12))
 
-        ttk.Label(body, text="Screenshots", font=_BOLD_FONT).grid(
-            row=3, column=0, sticky="w", pady=(10, 0)
-        )
+        shots_label = ttk.Label(body, text="Screenshots", font=BOLD_FONT)
+        shots_label.grid(row=3, column=0, sticky="w", pady=(10, 0))
         self._shots = ttk.Frame(body)
         self._shots.grid(row=4, column=0, sticky="w", pady=(4, 0))
         self._add_button = ttk.Button(body, text="", command=self._on_add)
@@ -242,6 +249,11 @@ class MarkSheet:
             buttons, text="Cancel (Esc)", command=self._cancel
         )
         self._cancel_button.pack(side="left", padx=(6, 0))
+        page.add_section("Step", self._title)
+        page.add_section("Shots", shots_label)
+        page.add_section("Note", self._note_label)
+        page.add_section("Hand in", self._hand_in_frame)
+        page.add_section("Save", buttons)
 
     def _build_hand_in(self, body: "ttk.Frame", *, row: int) -> None:
         frame = ttk.Frame(body)
@@ -249,7 +261,7 @@ class MarkSheet:
         frame.grid(row=row, column=0, sticky="ew", pady=(10, 0))
         self._hand_in_frame = frame
         self._last_label = self._host.manual_label(
-            frame, "This is the last step left to mark.", foreground=_MUTED_COLOR
+            frame, "This is the last step left to mark.", foreground=MUTED
         )
         self._last_label.grid(row=0, column=0, sticky="w")
         self._start_next_check = ttk.Checkbutton(
@@ -504,23 +516,23 @@ class MarkSheet:
             state="disabled" if view is not None and view.saving else "normal"
         )
         if self._confirming:
-            status, color = self._confirming, _WARN_COLOR
+            status, color = self._confirming, WARN
         elif view is not None and view.capturing:
-            status, color = "Taking the screenshot…", _MUTED_COLOR
+            status, color = "Taking the screenshot…", MUTED
         elif view is not None and view.status:
             status, color = view.status, view.status_color
         elif view is not None and view.blocker:
-            status, color = view.blocker, _WARN_COLOR
+            status, color = view.blocker, WARN
         elif len(note) > MANUAL_STEP_NOTE_MAX_CHARS:
             status, color = (
                 f"The note is too long ({len(note)} of "
                 f"{MANUAL_STEP_NOTE_MAX_CHARS} characters).",
-                _ERROR_COLOR,
+                ERROR,
             )
         elif failed and not note:
-            status, color = "Describe in the note what went wrong.", _WARN_COLOR
+            status, color = "Describe in the note what went wrong.", WARN
         else:
-            status, color = "", _MUTED_COLOR
+            status, color = "", MUTED
         self._status.configure(text=status, foreground=color)
 
     def _prefill_verdict(self) -> None:
