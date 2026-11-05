@@ -16,7 +16,9 @@ Confirm / Cancel), and Pause… opens an inline panel: the window opens no
 other window or dialog, so hiding it hides everything it shows.
 
 Layout: a header (case title, run and status, Pause…, A−/A+) above a
-notebook:
+notebook. The window is always dark (``person_window_theme``). The Step, Test
+case and Discussion pages have a section rail on their right that jumps the
+page to a section (``person_window_scroll``):
 
 - Step: the selected open step (What to do, the test case steps it covers,
   Expected result, command, the one-tap Same as expected / Different…
@@ -53,11 +55,12 @@ case title and run name.
 Every block of text is a read-only ``tk.Text`` (selectable, copyable, key
 presses other than copy, select-all and moving the cursor are dropped) with
 its own Copy button (``_ReadOnlyBlock``). The named fonts TkDefaultFont,
-TkTextFont and TkFixedFont (and two derived ones) are scaled together by
-A−/A+ from the base size the runner passes (``--text-size``), for this
-session only. Long texts are rendered once per change: the log is replaced
-only when its tail changes, the chat appends new rows by message id and is
-re-rendered only when an earlier row changed or rows were dropped.
+TkTextFont and TkFixedFont (and the derived ones named in
+``person_window_theme``) are scaled together by A−/A+ from the base size the
+runner passes (``--text-size``), for this session only. Long texts are
+rendered once per change: the log is replaced only when its tail changes, the
+chat appends new rows by message id and is re-rendered only when an earlier
+row changed or rows were dropped.
 
 Showing never activates the window where the platform allows it:
 
@@ -140,6 +143,29 @@ from controller_client.person_window_ipc import (
     encode_event,
 )
 from controller_client.person_window_manual import ManualBlock, ManualView
+from controller_client.person_window_scroll import (
+    HEADER_ALLOWANCE,
+    PAGE_WIDTH,
+    ScrollPage,
+    SectionPage,
+)
+from controller_client.person_window_theme import (
+    BOLD_FONT,
+    BOLD_ITALIC_FONT,
+    BORDER,
+    CYAN,
+    ERROR,
+    HEADING_FONT,
+    HIGHLIGHT_BG,
+    ITALIC_FONT,
+    MUTED,
+    OK,
+    PAGE,
+    SUBHEADING_FONT,
+    TEXT,
+    WARN,
+    apply_dark_theme,
+)
 from controller_client.protocol import (
     CASE_PAUSE_MESSAGE_MAX_CHARS,
     PERSON_CHAT_TEXT_MAX_CHARS,
@@ -194,18 +220,16 @@ _POLL_MS: Final[int] = 50
 _RESTORE_POLL_MS: Final[int] = 10
 _READ_CHUNK_BYTES: Final[int] = 64 * 1024
 _TITLE: Final[str] = "Test Runner: your step"
-# The pages' default width (the window is about 80 px wider) and the minimum.
-_PAGE_WIDTH: Final[int] = 560
+# The window's minimum size (the pages' default width is PAGE_WIDTH).
 _MIN_WIDTH: Final[int] = 520
 _MIN_HEIGHT: Final[int] = 360
-# Room left for the title bar, menu bar and taskbar when the content is tall,
-# plus the header and the notebook's tabs above a page.
-_SCREEN_MARGIN: Final[int] = 160
-_HEADER_ALLOWANCE: Final[int] = 150
-# Width of padding and scrollbars beside a page's text (wrap estimates).
+# Width of padding and scrollbars beside a page's text (wrap estimates); a
+# page with a section rail adds the rail's width.
 _TEXT_INSET_PX: Final[int] = 70
-# Page scrolling: one wheel step, a Windows wheel notch and its steps.
-_WHEEL_STEP_PX: Final[int] = 20
+# A notebook inside a tab's page (the Manual run tab's sub-tabs): its border,
+# tab padding and grid padding narrow the text by about this much.
+_NESTED_NOTEBOOK_INSET_PX: Final[int] = 20
+# Page scrolling: a Windows wheel notch and its steps.
 _WHEEL_DELTA: Final[int] = 120
 _WHEEL_NOTCH_STEPS: Final[int] = 3
 _SHIFT_MASK: Final[int] = 0x1
@@ -226,16 +250,10 @@ _EDIT_EVENTS: Final[tuple[str, ...]] = (
     "<<Undo>>",
     "<<Redo>>",
 )
-_WARN_COLOR: Final[str] = "#b45309"
-_ERROR_COLOR: Final[str] = "#b91c1c"
-_OK_COLOR: Final[str] = "#15803d"
-_MUTED_COLOR: Final[str] = "#6b7280"
-# The steps the selected step covers (dark text on amber, readable in dark mode).
-_COVERED_BACKGROUND: Final[str] = "#fde68a"
-_COVERED_FOREGROUND: Final[str] = "#1f2937"
 _TEXT_SIZE_STEP: Final[int] = 2
-_HEADING_FONT: Final[str] = "PunkHazardHeading"
-_BOLD_FONT: Final[str] = "PunkHazardBold"
+# Inner padding of the text boxes.
+_TEXT_PADX: Final[int] = 4
+_TEXT_PADY: Final[int] = 3
 # Most lines a block grows to before it scrolls.
 _BLOCK_LINES: Final[int] = 12
 _CASE_STEPS_MAX_LINES: Final[int] = 10
@@ -243,6 +261,8 @@ _CASE_TAB_STEPS_LINES: Final[int] = 30
 _CHAT_LINES: Final[int] = 14
 _LOG_LINES: Final[int] = 20
 _REFIT_DELAY_MS: Final[int] = 150
+# One debounced section-rail refresh for every page.
+_SECTION_REFRESH_DELAY_MS: Final[int] = 100
 _MODE_LABELS: Final[dict[ContinueModeWire, str]] = {
     ContinueModeWire.CURRENT_SCREEN: "Continue on the current screen",
     ContinueModeWire.RESTORE: "Restore the earlier steps, then continue",
@@ -481,6 +501,7 @@ class _ReadOnlyBlock:
         fixed_lines: int = 0,
     ) -> None:
         self._app = app
+        self._parent = parent
         self._mono = mono
         self._max_lines = max_lines
         self._fixed_lines = fixed_lines
@@ -509,8 +530,15 @@ class _ReadOnlyBlock:
             width=1,
             wrap="char" if mono else "word",
             font="TkFixedFont" if mono else "TkTextFont",
-            borderwidth=1,
-            relief="solid",
+            borderwidth=0,
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            highlightcolor=CYAN,
+            background=PAGE,
+            foreground=TEXT,
+            padx=_TEXT_PADX,
+            pady=_TEXT_PADY,
             undo=False,
             takefocus=False,
         )
@@ -519,9 +547,9 @@ class _ReadOnlyBlock:
         text.grid(row=0, column=0, sticky="nsew")
         scroll.grid(row=0, column=1, sticky="ns")
         _make_readonly(text)
-        text.tag_configure("muted", foreground=_MUTED_COLOR)
+        text.tag_configure("muted", foreground=MUTED)
         text.tag_configure("mono", font="TkFixedFont")
-        text.tag_configure("warn", foreground=_WARN_COLOR)
+        text.tag_configure("warn", foreground=WARN)
         self.frame = frame
         self.text = text
         app.register_block(self)
@@ -545,7 +573,7 @@ class _ReadOnlyBlock:
     def fit(self) -> None:
         if self._fixed_lines or self._segments is None:
             return
-        columns = self._app.columns(self._mono)
+        columns = self._app.columns(self._mono, self._parent)
         lines = _line_estimate(_segments_text(self._segments), columns)
         self.text.configure(height=max(1, min(lines, self._max_lines)))
 
@@ -557,63 +585,6 @@ class _ReadOnlyBlock:
             self.frame.grid()
         else:
             self.frame.grid_remove()
-
-
-class _ScrollPage:
-    """A vertically scrollable page of the notebook.
-
-    The page asks for its content's height up to the screen's, so a long page
-    scrolls instead of growing off the screen. The scrollbar shows only when
-    the content does not fit.
-    """
-
-    def __init__(self, parent: "tk.Misc") -> None:
-        outer = ttk.Frame(parent)
-        outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(0, weight=1)
-        background = ttk.Style(outer).lookup("TFrame", "background")
-        canvas = tk.Canvas(
-            outer,
-            borderwidth=0,
-            highlightthickness=0,
-            yscrollincrement=_WHEEL_STEP_PX,
-            width=_PAGE_WIDTH,
-        )
-        if background:
-            canvas.configure(background=background)
-        scroll = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=self._on_canvas_scroll)
-        canvas.grid(row=0, column=0, sticky="nsew")
-        scroll.grid(row=0, column=1, sticky="ns")
-        frame = ttk.Frame(canvas, padding=12)
-        frame.columnconfigure(0, weight=1)
-        item = canvas.create_window(0, 0, window=frame, anchor="nw")
-        frame.bind("<Configure>", self._on_content_configure)
-        canvas.bind(
-            "<Configure>", lambda event: canvas.itemconfigure(item, width=event.width)
-        )
-        self.outer = outer
-        self.canvas = canvas
-        self.scrollbar = scroll
-        self.frame = frame
-
-    def _on_content_configure(self, _event: "tk.Event[ttk.Frame]") -> None:
-        canvas = self.canvas
-        frame = self.frame
-        canvas.configure(scrollregion=canvas.bbox("all"))
-        max_height = canvas.winfo_screenheight() - _SCREEN_MARGIN - _HEADER_ALLOWANCE
-        canvas.configure(
-            width=max(_PAGE_WIDTH, frame.winfo_reqwidth()),
-            height=min(frame.winfo_reqheight(), max_height),
-        )
-
-    def _on_canvas_scroll(self, first: float | str, last: float | str) -> None:
-        # Tk passes the fractions as strings.
-        self.scrollbar.set(first, last)
-        if float(first) <= 0.0 and float(last) >= 1.0:
-            self.scrollbar.grid_remove()
-        else:
-            self.scrollbar.grid()
 
 
 class PersonWindowApp:
@@ -652,8 +623,9 @@ class PersonWindowApp:
         self._blocks: list[_ReadOnlyBlock] = []
         # Labels whose wraplength follows the window width.
         self._wrapped: list[ttk.Label] = []
-        self._pages: list[_ScrollPage] = []
+        self._pages: list[ScrollPage] = []
         self._refit_job: str | None = None
+        self._section_refresh_job: str | None = None
         self._width = 0
         self._text_size = clamp_text_size(text_size)
         self._fonts = [
@@ -662,10 +634,23 @@ class PersonWindowApp:
         ]
         family = self._fonts[0].actual("family")
         self._heading_font = tkfont.Font(
-            root=root, name=_HEADING_FONT, family=family, weight="bold"
+            root=root, name=HEADING_FONT, family=family, weight="bold"
         )
         self._bold_font = tkfont.Font(
-            root=root, name=_BOLD_FONT, family=family, weight="bold"
+            root=root, name=BOLD_FONT, family=family, weight="bold"
+        )
+        self._subheading_font = tkfont.Font(
+            root=root, name=SUBHEADING_FONT, family=family, weight="bold"
+        )
+        self._italic_font = tkfont.Font(
+            root=root, name=ITALIC_FONT, family=family, slant="italic"
+        )
+        self._bold_italic_font = tkfont.Font(
+            root=root,
+            name=BOLD_ITALIC_FONT,
+            family=family,
+            weight="bold",
+            slant="italic",
         )
         self._apply_text_size()
         self._build()
@@ -681,13 +666,32 @@ class PersonWindowApp:
     def register_block(self, block: _ReadOnlyBlock) -> None:
         self._blocks.append(block)
 
-    def columns(self, mono: bool) -> int:
-        """Characters per line of a page's text box (wrap estimate)."""
+    def columns(self, mono: bool, widget: "tk.Misc") -> int:
+        """Characters per line of a text box in ``widget``'s page (wrap
+        estimate)."""
+        char = self._fonts[2 if mono else 1].measure("0") or 8
+        return max(20, self._text_width(widget) // char)
+
+    def _text_width(self, widget: "tk.Misc") -> int:
+        """Width left for text on ``widget``'s page: the notebook's width less
+        padding, scrollbars, nested notebooks and the page's section rail."""
         width = self._notebook.winfo_width()
         if width <= 1:
-            width = _PAGE_WIDTH + 40
-        char = self._fonts[2 if mono else 1].measure("0") or 8
-        return max(20, (width - _TEXT_INSET_PX) // char)
+            width = PAGE_WIDTH + 40
+        page = self._page_of(widget)
+        rail = page.rail_width() if page is not None else 0
+        return width - _TEXT_INSET_PX - self._nested_inset(widget) - rail
+
+    def _nested_inset(self, widget: "tk.Misc") -> int:
+        """Width taken by notebooks between ``widget`` and the main one."""
+        main = str(self._notebook)
+        inset = 0
+        current: tk.Misc | None = widget.master
+        while current is not None and str(current) != main:
+            if current.winfo_class() == "TNotebook":
+                inset += _NESTED_NOTEBOOK_INSET_PX
+            current = current.master
+        return inset
 
     def copy(self, text: str) -> None:
         self._root.clipboard_clear()
@@ -723,6 +727,10 @@ class PersonWindowApp:
     def chat_entry(self, parent: "tk.Misc", *, row: int, height: int) -> "tk.Text":
         return self._entry_text(parent, row=row, height=height)
 
+    def chat_open_url(self, url: str) -> None:
+        # http/https only (``_open_url`` refuses anything else).
+        self._open_url(url)
+
     def manual_send(self, event: WindowEvent) -> None:
         self._writer.send(event)
 
@@ -732,11 +740,13 @@ class PersonWindowApp:
     def manual_open_url(self, url: str) -> None:
         self._open_url(url)
 
-    def manual_scroll_area(self, parent: "tk.Misc") -> tuple["ttk.Frame", "ttk.Frame"]:
-        page = _ScrollPage(parent)
+    def manual_scroll_area(
+        self,
+        parent: "tk.Misc",
+        allowance: int | Callable[[], int] = HEADER_ALLOWANCE,
+    ) -> SectionPage:
         # The wheel scrolls it like a tab's page.
-        self._pages.append(page)
-        return page.outer, page.frame
+        return self._new_page(parent, allowance=allowance)
 
     def manual_hidden(self) -> bool:
         return self._runner_hidden
@@ -798,7 +808,7 @@ class PersonWindowApp:
     ) -> "ttk.Label":
         """A short label that wraps at the window width."""
         label = ttk.Label(
-            parent, text=text, wraplength=_PAGE_WIDTH - 40, foreground=foreground
+            parent, text=text, wraplength=PAGE_WIDTH - 40, foreground=foreground
         )
         self._wrapped.append(label)
         return label
@@ -820,8 +830,16 @@ class PersonWindowApp:
             width=1,
             wrap="char" if mono else "word",
             font="TkFixedFont" if mono else "TkTextFont",
-            borderwidth=1,
-            relief="solid",
+            borderwidth=0,
+            relief="flat",
+            highlightthickness=1,
+            highlightbackground=BORDER,
+            highlightcolor=CYAN,
+            background=PAGE,
+            foreground=TEXT,
+            insertbackground=TEXT,
+            padx=_TEXT_PADX,
+            pady=_TEXT_PADY,
             undo=True,
         )
         scroll = ttk.Scrollbar(holder, orient="vertical", command=widget.yview)
@@ -849,18 +867,22 @@ class PersonWindowApp:
         self._log_tab = ttk.Frame(notebook, padding=12)
         notebook.add(self._log_tab, text="Log")
         self._discussion_page = self._add_page("Discussion")
-        self._manual_page = self._add_page("Manual run")
+        # A plain frame: the Manual run view brings its own case bar and
+        # scrolling sub-tabs.
+        self._manual_tab = ttk.Frame(notebook)
+        notebook.add(self._manual_tab, text="Manual run")
         self._build_step_tab(self._step_page.frame)
         self._build_case_tab(self._case_page.frame)
         self._build_log_tab(self._log_tab)
         self._build_discussion_tab(self._discussion_page.frame)
-        self._manual = ManualView(self, self._root, self._manual_page.frame)
+        self._manual = ManualView(self, self._root, self._manual_tab)
+        self._add_sections()
         self._wrap_header()
         for tab in (
             self._case_page.outer,
             self._log_tab,
             self._discussion_page.outer,
-            self._manual_page.outer,
+            self._manual_tab,
         ):
             notebook.hide(tab)
         notebook.bind("<<NotebookTabChanged>>", lambda _event: self._render())
@@ -869,18 +891,64 @@ class PersonWindowApp:
         root.bind_all("<Button-4>", self._on_wheel, add="+")
         root.bind_all("<Button-5>", self._on_wheel, add="+")
 
+    def _add_sections(self) -> None:
+        """The section rails of the Step, Test case and Discussion tabs."""
+        step = self._step_page
+        step.add_section("Step", self._picker_frame, self._step_label)
+        step.add_section("What to do", self._instruction.frame)
+        step.add_section("Case steps", self._case_steps.frame)
+        step.add_section("Expected", self._expected.frame)
+        step.add_section("Objection", self._objection.frame)
+        step.add_section("Command", self._command.frame)
+        step.add_section("Output", self._output_frame)
+        step.add_section("Note", self._note_frame)
+        step.add_section(
+            "Actions", self._buttons, self._different_frame, self._confirm_frame
+        )
+        step.add_section("Link", self._url_frame)
+        case = self._case_page
+        case.add_section("Preconditions", self._preconditions.frame)
+        case.add_section("Steps", self._case_tab_steps.frame)
+        case.add_section("Expected", self._case_expected.frame)
+        discussion = self._discussion_page
+        discussion.add_section("Reason", self._help_reason.frame)
+        discussion.add_section("Chat", self._chat.block.frame)
+        discussion.add_section("Message", self._chat.message_frame)
+        discussion.add_section("Proposal", self._proposal.frame)
+        discussion.add_section("Plan", self._plan.frame)
+        discussion.add_section("Decide", self._resolve)
+        discussion.add_section("Link", self._thread_url_frame)
+
+    def pages(self) -> tuple[ScrollPage, ...]:
+        """Every scroll page (tabs and the mark sheet's), for the self-check."""
+        return tuple(self._pages)
+
     def tab_frames(self) -> tuple["ttk.Frame", ...]:
         return (
             self._step_page.outer,
             self._case_page.outer,
             self._log_tab,
             self._discussion_page.outer,
-            self._manual_page.outer,
+            self._manual_tab,
         )
 
-    def _add_page(self, text: str) -> _ScrollPage:
-        page = _ScrollPage(self._notebook)
+    def _add_page(self, text: str) -> ScrollPage:
+        page = self._new_page(self._notebook)
         self._notebook.add(page.outer, text=text)
+        return page
+
+    def _new_page(
+        self,
+        parent: "tk.Misc",
+        allowance: int | Callable[[], int] = HEADER_ALLOWANCE,
+    ) -> ScrollPage:
+        """A scroll page the wheel and the section refresh know about."""
+        page = ScrollPage(
+            parent,
+            request_refresh=self._schedule_section_refresh,
+            allowance=allowance,
+            on_rail_resize=self._rewrap,
+        )
         self._pages.append(page)
         return page
 
@@ -889,11 +957,11 @@ class PersonWindowApp:
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(0, weight=1)
         # Beside the buttons: wrapped narrower than the pages' labels.
-        self._title = ttk.Label(header, font=_HEADING_FONT)
+        self._title = ttk.Label(header, font=HEADING_FONT)
         self._title.grid(row=0, column=0, sticky="w")
         self._subtitle = ttk.Label(header)
         self._subtitle.grid(row=1, column=0, sticky="w")
-        self._header_status = ttk.Label(header, foreground=_WARN_COLOR)
+        self._header_status = ttk.Label(header, foreground=WARN)
         self._header_status.grid(row=2, column=0, sticky="w")
         self._header_labels = (self._title, self._subtitle, self._header_status)
         buttons = ttk.Frame(header)
@@ -922,7 +990,7 @@ class PersonWindowApp:
             panel,
             "What do you want to discuss? (optional; sent to the agent once "
             "the case has stopped)",
-            foreground=_MUTED_COLOR,
+            foreground=MUTED,
         )
         self._pause_label.grid(row=1, column=0, sticky="w")
         self._pause_text = self._entry_text(panel, row=2, height=3)
@@ -953,7 +1021,7 @@ class PersonWindowApp:
 
         self._step_label = self._label(frame, "")
         self._step_label.grid(row=1, column=0, sticky="w")
-        self._status = self._label(frame, "", foreground=_WARN_COLOR)
+        self._status = self._label(frame, "", foreground=WARN)
         self._status.grid(row=2, column=0, sticky="w")
 
         body = ttk.Frame(frame)
@@ -974,7 +1042,7 @@ class PersonWindowApp:
         self._objection = _ReadOnlyBlock(
             self, body, title="The agent could not confirm your report"
         )
-        self._objection.title.configure(foreground=_WARN_COLOR)
+        self._objection.title.configure(foreground=WARN)
         self._objection.frame.grid(row=3, column=0, sticky="ew", pady=(6, 0))
         self._command = _ReadOnlyBlock(self, body, title="Command", mono=True)
         self._command.frame.grid(row=4, column=0, sticky="ew", pady=(6, 0))
@@ -1040,9 +1108,7 @@ class PersonWindowApp:
         # its confirmation (no separate dialog: see the module docstring).
         self._confirm_frame = ttk.Frame(body)
         self._confirm_frame.columnconfigure(0, weight=1)
-        self._confirm_label = self._label(
-            self._confirm_frame, "", foreground=_WARN_COLOR
-        )
+        self._confirm_label = self._label(self._confirm_frame, "", foreground=WARN)
         self._confirm_label.grid(row=0, column=0, sticky="w")
         confirm_buttons = ttk.Frame(self._confirm_frame)
         confirm_buttons.grid(row=1, column=0, sticky="w", pady=(6, 0))
@@ -1055,7 +1121,7 @@ class PersonWindowApp:
         )
         self._confirm_frame.grid(row=7, column=0, sticky="ew", pady=(10, 0))
         self._confirm_frame.grid_remove()
-        self._hint = self._label(body, "", foreground=_MUTED_COLOR)
+        self._hint = self._label(body, "", foreground=MUTED)
         self._hint.grid(row=8, column=0, sticky="w", pady=(4, 0))
 
         self._message = self._label(frame, "")
@@ -1091,8 +1157,8 @@ class PersonWindowApp:
         )
         self._case_tab_steps.text.tag_configure(
             "covered",
-            background=_COVERED_BACKGROUND,
-            foreground=_COVERED_FOREGROUND,
+            background=HIGHLIGHT_BG,
+            foreground=TEXT,
         )
         self._case_tab_steps.frame.grid(row=2, column=0, sticky="ew", pady=(6, 0))
         self._case_expected = _ReadOnlyBlock(self, frame, title="Expected results")
@@ -1133,7 +1199,8 @@ class PersonWindowApp:
         resolve = ttk.Frame(frame)
         resolve.columnconfigure(0, weight=1)
         resolve.grid(row=6, column=0, sticky="ew", pady=(10, 0))
-        ttk.Label(resolve, text="How should the case go on?", font=_BOLD_FONT).grid(
+        self._resolve = resolve
+        ttk.Label(resolve, text="How should the case go on?", font=BOLD_FONT).grid(
             row=0, column=0, sticky="w"
         )
         # Rebuilt only when the choices change (_render_modes).
@@ -1146,13 +1213,13 @@ class PersonWindowApp:
             command=self._render,
         )
         self._use_plan.grid(row=2, column=0, sticky="w", pady=(4, 0))
-        self._use_plan_reason = self._label(resolve, "", foreground=_MUTED_COLOR)
+        self._use_plan_reason = self._label(resolve, "", foreground=MUTED)
         self._use_plan_reason.grid(row=3, column=0, sticky="w")
         ttk.Label(resolve, text="Note (optional)").grid(
             row=4, column=0, sticky="w", pady=(6, 0)
         )
         self._help_note = self._entry_text(resolve, row=5, height=3)
-        self._help_blockers = self._label(resolve, "", foreground=_WARN_COLOR)
+        self._help_blockers = self._label(resolve, "", foreground=WARN)
         self._help_blockers.grid(row=6, column=0, sticky="w")
         self._help_buttons = ttk.Frame(resolve)
         self._help_buttons.grid(row=7, column=0, sticky="w", pady=(6, 0))
@@ -1174,7 +1241,7 @@ class PersonWindowApp:
         self._help_block_button.pack(side="left", padx=(6, 0))
         self._help_confirm_frame = ttk.Frame(resolve)
         self._help_confirm_label = self._label(
-            self._help_confirm_frame, "", foreground=_WARN_COLOR
+            self._help_confirm_frame, "", foreground=WARN
         )
         self._help_confirm_label.pack(anchor="w")
         help_confirm_buttons = ttk.Frame(self._help_confirm_frame)
@@ -1203,7 +1270,10 @@ class PersonWindowApp:
         for font in self._fonts:
             font.configure(size=size)
         self._heading_font.configure(size=size + 3)
+        self._subheading_font.configure(size=size + 1)
         self._bold_font.configure(size=size)
+        self._italic_font.configure(size=size)
+        self._bold_italic_font.configure(size=size)
 
     def _change_text_size(self, direction: int) -> None:
         size = clamp_text_size(self._text_size + direction * _TEXT_SIZE_STEP)
@@ -1227,16 +1297,20 @@ class PersonWindowApp:
         if event.width == self._width:
             return
         self._width = event.width
-        wrap = max(200, event.width - _TEXT_INSET_PX)
+        self._rewrap()
+
+    def _rewrap(self) -> None:
+        """Wrap the labels at their page's text width (the notebook's width
+        or a page's rail changed)."""
         for label in self._wrapped:
-            label.configure(wraplength=wrap)
+            label.configure(wraplength=max(200, self._text_width(label)))
         self._wrap_header()
         self._schedule_refit()
 
     def _wrap_header(self) -> None:
         width = self._notebook.winfo_width()
         if width <= 1:
-            width = _PAGE_WIDTH + 40
+            width = PAGE_WIDTH + 40
         wrap = max(160, width - self._header_buttons.winfo_reqwidth() - 30)
         for label in self._header_labels:
             label.configure(wraplength=wrap)
@@ -1250,15 +1324,36 @@ class PersonWindowApp:
         self._refit_job = None
         for block in self._blocks:
             block.fit()
+        self._schedule_section_refresh()
+
+    def _schedule_section_refresh(self) -> None:
+        """One debounced refresh of every page's rail (pages ask through
+        ``ScrollPage.schedule_refresh``)."""
+        if self._section_refresh_job is None:
+            self._section_refresh_job = self._root.after(
+                _SECTION_REFRESH_DELAY_MS, self._refresh_sections
+            )
+
+    def _refresh_sections(self) -> None:
+        self._section_refresh_job = None
+        # Settle the layout once for all pages.
+        self._root.update_idletasks()
+        for page in self._pages:
+            page.refresh_sections(settle=False)
 
     # --- scrolling ------------------------------------------------------------
 
-    def _page_of(self, widget: "tk.Misc") -> _ScrollPage | None:
+    def _page_of(self, widget: "tk.Misc") -> ScrollPage | None:
+        """The innermost page holding ``widget`` (its rail included)."""
         path = str(widget)
+        found: ScrollPage | None = None
+        found_length = -1
         for page in self._pages:
-            if path.startswith(str(page.canvas)):
-                return page
-        return None
+            outer = str(page.outer)
+            inside = path == outer or path.startswith(outer + ".")
+            if inside and len(outer) > found_length:
+                found, found_length = page, len(outer)
+        return found
 
     def _on_wheel(self, event: "tk.Event[tk.Misc]") -> None:
         widget = event.widget
@@ -1283,7 +1378,7 @@ class PersonWindowApp:
 
     def _scroll_page(
         self,
-        page: _ScrollPage,
+        page: ScrollPage,
         event: "tk.Event[tk.Misc] | tk.Event[ttk.Combobox]",
     ) -> None:
         # Shift+wheel is a horizontal swipe (macOS trackpads): no vertical scroll.
@@ -1347,7 +1442,7 @@ class PersonWindowApp:
                 self._hide(lambda: self._writer.send(HiddenEvent(seq=seq)))
             case ResultCommand(ok=ok, message=message):
                 self._view.busy = None
-                self._set_message(message, _OK_COLOR if ok else _ERROR_COLOR)
+                self._set_message(message, OK if ok else ERROR)
                 self._render()
             case CaseResultCommand(kind=kind, ok=ok, message=message):
                 self._on_case_result(kind, ok, message)
@@ -1398,10 +1493,10 @@ class PersonWindowApp:
         previous = self._manual.run_id
         self._manual.apply_state(state)
         has_run = self._manual.has_run
-        self._set_tab_visible(self._manual_page.outer, has_run)
+        self._set_tab_visible(self._manual_tab, has_run)
         if has_run and self._manual.run_id != previous and not self._view.steps:
             # A new manual run: that is where the tester works now.
-            self._select_tab(self._manual_page.outer)
+            self._select_tab(self._manual_tab)
         if not has_run and not self._view.steps and not self._help_cases():
             self._hide()
         self._render()
@@ -1591,6 +1686,9 @@ class PersonWindowApp:
             view.help_id = None
         self._manual.render()
         self._update_size_buttons()
+        # Visibility can change without a size change (frames swapped in
+        # one grid row): the rails follow.
+        self._schedule_section_refresh()
 
     def _render_header(
         self,
@@ -1659,7 +1757,7 @@ class PersonWindowApp:
             self._save_draft()
             if key is not None:
                 # A message about another step does not belong to this one.
-                self._set_message("", _OK_COLOR)
+                self._set_message("", OK)
             view.rendered = key
             self._load_draft()
             # A new step or round starts at the top.
@@ -2062,9 +2160,7 @@ class PersonWindowApp:
             self._help_confirm_frame.grid_remove()
             self._help_buttons.grid()
         if view.help_busy:
-            self._help_status.configure(
-                text="Sending your decision…", foreground=_MUTED_COLOR
-            )
+            self._help_status.configure(text="Sending your decision…", foreground=MUTED)
 
     def _save_help_draft(self) -> None:
         view = self._view
@@ -2107,7 +2203,7 @@ class PersonWindowApp:
             self._set_message(
                 f"The note is too long ({len(note)} of "
                 f"{PERSON_STEP_NOTE_MAX_CHARS} characters).",
-                _ERROR_COLOR,
+                ERROR,
             )
             return None
         return note
@@ -2121,7 +2217,7 @@ class PersonWindowApp:
                 f"The output is too long ({len(output)} of "
                 f"{PERSON_STEP_OUTPUT_MAX_CHARS} characters). Paste the "
                 "relevant part.",
-                _ERROR_COLOR,
+                ERROR,
             )
             return None
         return output
@@ -2160,7 +2256,7 @@ class PersonWindowApp:
         if step is None or note is None:
             return
         if not note:
-            self._set_message("Describe in the note what was different.", _ERROR_COLOR)
+            self._set_message("Describe in the note what was different.", ERROR)
             return
         output = self._output_text(step)
         if output is None:
@@ -2225,7 +2321,7 @@ class PersonWindowApp:
             return
         view.busy = _key(step)
         view.different = False
-        self._set_message("", _OK_COLOR)
+        self._set_message("", OK)
         self._render()
         event = ActionEvent(
             action=PersonStepActionPayload(
@@ -2266,7 +2362,7 @@ class PersonWindowApp:
             self._pause_status.configure(
                 text=f"The message is too long ({len(message)} of "
                 f"{CASE_PAUSE_MESSAGE_MAX_CHARS} characters).",
-                foreground=_ERROR_COLOR,
+                foreground=ERROR,
             )
             return
         view.pause_busy = True
@@ -2298,7 +2394,7 @@ class PersonWindowApp:
             self._chat.set_status(
                 f"The message is too long ({len(text)} of "
                 f"{PERSON_CHAT_TEXT_MAX_CHARS} characters).",
-                _ERROR_COLOR,
+                ERROR,
             )
             return
         view.chat_busy = True
@@ -2321,7 +2417,7 @@ class PersonWindowApp:
             self._help_status.configure(
                 text=f"The note is too long ({len(note)} of "
                 f"{PERSON_HELP_NOTE_MAX_CHARS} characters).",
-                foreground=_ERROR_COLOR,
+                foreground=ERROR,
             )
             return None
         return note
@@ -2401,7 +2497,7 @@ class PersonWindowApp:
 
     def _on_case_result(self, kind: CaseRequestKind, ok: bool, message: str) -> None:
         view = self._view
-        color = _OK_COLOR if ok else _ERROR_COLOR
+        color = OK if ok else ERROR
         if kind is CaseRequestKind.PAUSE:
             if not view.pause_busy:
                 return
@@ -2434,6 +2530,8 @@ class PersonWindowApp:
 
 def _open_tk() -> "tk.Tk":
     root = tk.Tk(className="TestRunner")
+    # Before any widget, so every widget and the first map are dark.
+    apply_dark_theme(root)
     root.withdraw()
     # Create the (hidden) native frame now, so the first show is an ordinary
     # non-activating show rather than Tk's first map, which focuses it.
@@ -2495,6 +2593,16 @@ def _self_check(text_size: int) -> int:
                 app._notebook.select(tab)
                 root.update()
                 tabs.add(str(app._notebook.tab(tab, "text")))
+            for subtab in app._manual.subtab_frames():
+                app._manual.select_subtab(subtab)
+                root.update()
+        # Every page's section rail: refresh and jump to each shown section.
+        for page in app.pages():
+            page.refresh_sections()
+            for label in page.shown_sections():
+                if not page.scroll_to(label):
+                    errors.append(f"section {label!r} could not be scrolled to")
+            root.update()
         app._change_text_size(1)
         app._change_text_size(-1)
         root.update()

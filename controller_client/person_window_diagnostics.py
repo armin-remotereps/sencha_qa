@@ -369,8 +369,19 @@ def _sample_messages(extra: bool) -> tuple[PersonDiscussionMessagePayload, ...]:
             message_id=3,
             kind=DiscussionMessageKind.ASSISTANT,
             author="",
-            text="The dialog is a sample. I suggest continuing on the current "
-            "screen with the redesigned plan below.",
+            text="## What I found\n"
+            "The dialog is a **sample**; nothing is wrong with the *case*.\n\n"
+            "- Continue on the current screen\n"
+            "  - with the redesigned plan below\n"
+            "  - keep `snake_case_name` as typed\n"
+            "- Check [the case page](https://example.com/cases/1)\n\n"
+            "```\n"
+            "open_app('Sample')\n"
+            "```\n\n"
+            "> Quoted: the expected title is 'Sample'.\n\n"
+            "---\n"
+            "1. First\n"
+            "2. Second",
             created_at="2026-01-01T10:01:00+00:00",
         ),
     ]
@@ -524,8 +535,13 @@ def _sample_manual_discussion(extra: bool) -> ManualDiscussionPayload:
             message_id=13,
             kind=DiscussionMessageKind.ASSISTANT,
             author="",
-            text="This is a sample answer; nothing is sent to Punk Hazard. The "
-            "case expects 'Sample', so step 2 failing is right.",
+            text="### Sample answer\n"
+            "Nothing is sent to Punk Hazard. The case expects **'Sample'**, "
+            "so step 2 *failing* is right.\n\n"
+            "| Step | Expected |\n"
+            "| 2    | Sample   |\n\n"
+            "- Mark step 2 `Fail`\n"
+            "- See https://example.com/manual for the guide",
             created_at="2026-01-01T10:05:40+00:00",
         ),
     ]
