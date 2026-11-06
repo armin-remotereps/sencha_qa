@@ -28,6 +28,7 @@ from projects.models import (
     TestRunTestCaseStatus,
 )
 from projects.run_case_order import RUN_CASE_ORDERING
+from projects.runner_target import DEVICE_NOT_READY_MESSAGE, device_offline
 from projects.runner_update_state import (
     RUNNER_UPDATE_RUNNING_MESSAGE,
     runner_update_in_progress,
@@ -296,6 +297,8 @@ def _manual_machine_blocker(project: Project) -> str | None:
         return _RUNNER_NOT_CONNECTED
     if not runner_runs_manual_tests(project):
         return MANUAL_RUNNER_OUTDATED
+    if device_offline(project):
+        return DEVICE_NOT_READY_MESSAGE
     return None
 
 
@@ -303,6 +306,9 @@ def _machine_blocker(project: Project) -> str | None:
     state = get_machine_state(project, get_visual_engine_status())
     if state == MachineState.READY:
         return None
+    if device_offline(project):
+        # DEVICE_OFFLINE, or STARTING while the phone's session is created.
+        return DEVICE_NOT_READY_MESSAGE
     if state == MachineState.FAILED:
         return _MACHINE_FAILED
     if state == MachineState.VISUAL_ENGINE_OFFLINE:

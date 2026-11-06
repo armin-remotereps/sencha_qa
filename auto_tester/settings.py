@@ -720,6 +720,13 @@ if RUNNER_UPDATE_TIMEOUT_SECONDS < UPDATE_MAX_SECONDS + 60:
         "RUNNER_UPDATE_TIMEOUT_SECONDS must be at least "
         f"{UPDATE_MAX_SECONDS + 60} (the Test Runner's update deadline plus 60 s)"
     )
+# Phone or tablet Test Runner: a device status older than this reads as
+# disconnected. The runner reports every 30 s; keep at least 3x that.
+RUNNER_DEVICE_STALE_SECONDS: int = config(
+    "RUNNER_DEVICE_STALE_SECONDS", default=90, cast=int
+)
+if RUNNER_DEVICE_STALE_SECONDS < 1:
+    raise ImproperlyConfigured("RUNNER_DEVICE_STALE_SECONDS must be 1 or more")
 
 # Visual engine (remote vision workers running OmniParser)
 # Shared secret every vision worker sends in its handshake. Empty rejects all.

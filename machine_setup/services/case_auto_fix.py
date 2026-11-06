@@ -34,6 +34,7 @@ from machine_setup.services.queue_turn import broadcast_and_enqueue, create_turn
 from machine_setup.turn_state import is_turn_stale
 from projects.case_help_services import finish_case_auto_fix
 from projects.models import (
+    BlockedReason,
     CaseHelpRequest,
     HelpAutoFixState,
     HelpResolution,
@@ -42,7 +43,11 @@ from projects.models import (
     TestRunStatus,
 )
 from projects.runner_update_state import runner_update_in_progress
-from projects.services import MachineState, get_machine_state
+from projects.services import (
+    MachineState,
+    connected_machine_state,
+    get_machine_state,
+)
 from visual_engine.services.pool_status import get_visual_engine_status
 
 logger = logging.getLogger(__name__)
@@ -95,7 +100,7 @@ def _start_locked(help_request_id: int) -> str | None:
     # Lock order of every run write: project row, then run row.
     project = (
         Project.objects.select_for_update()
-        .only("id", "agent_connected")
+        .only("id", "agent_connected", "agent_device_state", "agent_device_reported_at")
         .get(pk=run.project_id)
     )
     run_status = (
@@ -119,7 +124,7 @@ def _start_locked(help_request_id: int) -> str | None:
         return _TURN_LIVE_REASON
     if runner_update_in_progress(project.pk, now):
         return _RUNNER_UPDATING_REASON
-    if get_machine_state(project, get_visual_engine_status()) != MachineState.READY:
+    if not _machine_ready_for_auto_fix(project, request):
         return _MACHINE_NOT_READY_REASON
 
     brief = build_help_brief(request, audience="auto_fix")
@@ -140,6 +145,20 @@ def _start_locked(help_request_id: int) -> str | None:
     )
     transaction.on_commit(lambda: _enqueue(turn, message))
     return None
+
+
+def _machine_ready_for_auto_fix(project: Project, request: CaseHelpRequest) -> bool:
+    """READY, or, for a disconnected phone or tablet, the runner connected and
+    the visual engine ready: the auto-fix may reconnect the device through the
+    runner computer's shell (``adb reconnect``, booting the emulator)."""
+    engine = get_visual_engine_status()
+    if get_machine_state(project, engine) == MachineState.READY:
+        return True
+    return (
+        request.fault == BlockedReason.DEVICE_DISCONNECTED
+        and project.agent_connected
+        and connected_machine_state(engine) == MachineState.READY
+    )
 
 
 def _enqueue(turn: SetupTurn, message: SetupMessage) -> None:

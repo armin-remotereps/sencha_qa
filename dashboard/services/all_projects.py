@@ -44,11 +44,13 @@ from projects.models import (
     Project,
     ProjectMembership,
     ProjectRole,
+    RunnerDeviceState,
     TestCase,
     TestRun,
 )
 from projects.project_access import has_superuser_project_control
-from projects.services import get_latest_runs_by_project
+from projects.runner_target import device_offline
+from projects.services import MachineState, get_latest_runs_by_project
 
 
 @dataclass(frozen=True)
@@ -77,6 +79,9 @@ class AllProjectsRow:
     viewer_is_member: bool
     runner_connected: bool
     runner_version: str
+    # "" unless a phone runner's device holds the badge: "starting" or
+    # "device_offline" (``MachineState`` values).
+    device_machine_state: str
     last_connected_at: datetime | None
     latest_run: AllProjectsLatestRun | None
 
@@ -166,6 +171,8 @@ def list_all_projects(
             "created_at",
             "agent_connected",
             "agent_client_version",
+            "agent_device_state",
+            "agent_device_reported_at",
             "last_connected_at",
         )
         .annotate(
@@ -234,9 +241,18 @@ def _to_row(project: Project, run: TestRun | None) -> AllProjectsRow:
         viewer_is_member=bool(project.viewer_role),  # type: ignore[attr-defined]  # annotate() field
         runner_connected=project.agent_connected,
         runner_version=project.agent_client_version,
+        device_machine_state=_device_machine_state(project),
         last_connected_at=project.last_connected_at,
         latest_run=None if run is None else _to_latest_run(run),
     )
+
+
+def _device_machine_state(project: Project) -> str:
+    if not device_offline(project):
+        return ""
+    if project.agent_device_state == RunnerDeviceState.STARTING:
+        return MachineState.STARTING.value
+    return MachineState.DEVICE_OFFLINE.value
 
 
 def _to_latest_run(run: TestRun) -> AllProjectsLatestRun:

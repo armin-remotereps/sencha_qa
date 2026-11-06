@@ -163,6 +163,43 @@ class InspectPathsActionEvent(BaseActionEvent):
     allow_network: bool
 
 
+# Phone or tablet target (MOBILE_DEVICE_V1). Coordinates are screenshot pixels.
+
+
+class SwipeActionEvent(BaseActionEvent):
+    direction: str
+    distance: float
+    duration: float
+    x: NotRequired[int]
+    y: NotRequired[int]
+
+
+class LongPressActionEvent(BaseActionEvent):
+    x: int
+    y: int
+    duration: float
+
+
+class PressButtonActionEvent(BaseActionEvent):
+    button: str
+
+
+class RotateDeviceActionEvent(BaseActionEvent):
+    orientation: str
+
+
+class HideKeyboardActionEvent(BaseActionEvent):
+    pass
+
+
+class OpenUrlActionEvent(BaseActionEvent):
+    url: str
+
+
+class InstallAppActionEvent(BaseActionEvent):
+    path: str
+
+
 class UpdateRunnerEvent(TypedDict):
     """Channel-layer event ``controller.update_runner``.
 
@@ -212,6 +249,13 @@ class ActionTypeRegistry:
         "controller.scan_directory": MessageType.SCAN_DIRECTORY,
         "controller.inspect_paths": MessageType.INSPECT_PATHS,
         "controller.update_runner": MessageType.UPDATE_RUNNER,
+        "controller.swipe": MessageType.SWIPE,
+        "controller.long_press": MessageType.LONG_PRESS,
+        "controller.press_button": MessageType.PRESS_BUTTON,
+        "controller.rotate_device": MessageType.ROTATE_DEVICE,
+        "controller.hide_keyboard": MessageType.HIDE_KEYBOARD,
+        "controller.open_url": MessageType.OPEN_URL,
+        "controller.install_app": MessageType.INSTALL_APP,
     }
 
     _PAYLOAD_KEYS: Final[dict[str, tuple[str, ...]]] = {
@@ -265,6 +309,13 @@ class ActionTypeRegistry:
             "archive_sha256",
             "archive_size",
         ),
+        "controller.swipe": ("direction", "distance", "duration", "x", "y"),
+        "controller.long_press": ("x", "y", "duration"),
+        "controller.press_button": ("button",),
+        "controller.rotate_device": ("orientation",),
+        "controller.hide_keyboard": (),
+        "controller.open_url": ("url",),
+        "controller.install_app": ("path",),
     }
 
     @classmethod

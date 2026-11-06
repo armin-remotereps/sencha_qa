@@ -73,6 +73,7 @@ from controller_client.protocol import (
     ClientCapability,
     ErrorCode,
     ScrollDirection,
+    is_mobile_target,
     parse_inspect_paths_result,
     parse_scan_directory_result,
 )
@@ -150,6 +151,7 @@ from projects.exceptions import (
     ControllerActionError,
     ControllerNotConnectedError,
     ControllerReconnectTimeoutError,
+    DeviceDisconnectedError,
     TestRunnerDisconnectedError,
     TestRunnerUnresponsiveError,
 )
@@ -187,6 +189,7 @@ from projects.models import (
     Project,
     ProjectMembership,
     RunHelpMode,
+    RunnerDeviceState,
     Tag,
     TestCase,
     TestCaseData,
@@ -220,6 +223,7 @@ from projects.run_finished_notifications import notify_run_finished
 from projects.run_help_mode_policy import resolve_help_mode
 from projects.runner_bundle import build_runner_archive
 from projects.runner_person_step_push import nudge_runner_person_steps
+from projects.runner_target import DEVICE_NOT_READY_MESSAGE, device_offline
 from projects.runner_update_state import (
     RUNNER_UPDATE_RUNNING_MESSAGE,
     runner_update_in_progress,
@@ -518,6 +522,9 @@ class MachineState(StrEnum):
     READY = "ready"
     FAILED = "failed"
     VISUAL_ENGINE_OFFLINE = "offline"
+    # A phone or tablet runner is connected but its device is not READY, or
+    # its last device status is stale (``RUNNER_DEVICE_STALE_SECONDS``).
+    DEVICE_OFFLINE = "device_offline"
 
 
 _MACHINE_STATE_BY_ENGINE_STATE: Final[dict[VisualEngineState, MachineState]] = {
@@ -540,13 +547,20 @@ def connected_machine_state(visual_engine: VisualEngineStatus) -> MachineState:
 def get_machine_state(
     project: Project, visual_engine: VisualEngineStatus
 ) -> MachineState:
-    """Derive one machine badge state from `agent_connected` and the visual engine.
+    """Derive one machine badge state from `agent_connected`, the phone or
+    tablet a phone runner drives, and the visual engine.
 
     The engine status is passed in so pages rendering many projects read it
-    once (`get_visual_engine_status`) rather than once per project.
+    once (`get_visual_engine_status`) rather than once per project. No query:
+    reads `agent_connected`, `agent_device_state` and
+    `agent_device_reported_at`, which callers using `.only()` must load.
     """
     if not project.agent_connected:
         return MachineState.DISCONNECTED
+    if device_offline(project):
+        if project.agent_device_state == RunnerDeviceState.STARTING:
+            return MachineState.STARTING
+        return MachineState.DEVICE_OFFLINE
     return connected_machine_state(visual_engine)
 
 
@@ -750,10 +764,19 @@ def _cases_selected_check(
 def _machine_connected_check(
     project: Project, machine_state: MachineState
 ) -> ReadinessCheck:
-    passed = machine_state != MachineState.DISCONNECTED
+    # A phone runner's device not READY reads DEVICE_OFFLINE, or STARTING
+    # while its session is created (the engine starting passes this check).
+    device_not_ready = machine_state in (
+        MachineState.DEVICE_OFFLINE,
+        MachineState.STARTING,
+    ) and device_offline(project)
+    passed = machine_state != MachineState.DISCONNECTED and not device_not_ready
     if passed:
         title = "Test machine connected"
         help_text = ""
+    elif device_not_ready:
+        title = "Phone or tablet not connected"
+        help_text = DEVICE_NOT_READY_MESSAGE
     else:
         title = "Test machine not connected"
         help_text = "Runs need a connected test machine to execute steps."
@@ -996,17 +1019,25 @@ def runner_runs_manual_tests(project: Project) -> bool:
 
 
 def _manual_runner_check(project: Project) -> ReadinessCheck:
-    passed = runner_runs_manual_tests(project)
+    supported = runner_runs_manual_tests(project)
+    # A phone runner's tester works on the device: it must be connected.
+    device_not_ready = supported and device_offline(project)
+    passed = supported and not device_not_ready
+    if passed:
+        title = "Test Runner supports manual testing"
+        help_text = ""
+    elif device_not_ready:
+        title = "Phone or tablet not connected"
+        help_text = DEVICE_NOT_READY_MESSAGE
+    else:
+        title = "Test Runner cannot run manual tests"
+        help_text = MANUAL_RUNNER_OUTDATED
     return ReadinessCheck(
         key="manual_runner",
         passed=passed,
         blocking=True,
-        title=(
-            "Test Runner supports manual testing"
-            if passed
-            else "Test Runner cannot run manual tests"
-        ),
-        help="" if passed else MANUAL_RUNNER_OUTDATED,
+        title=title,
+        help=help_text,
         link_url=reverse("projects:environment", args=[project.id]),
     )
 
@@ -1134,8 +1165,16 @@ def claim_agent_connection(
 
     The newest authenticated connection always wins. Returns the channel name
     of the connection it replaced (so the caller can close it), or "" when
-    there was none.
+    there was none. A phone or tablet runner (``target`` in ``system_info``
+    and MOBILE_DEVICE_V1; the consumer drops the device keys otherwise)
+    starts with the device ``starting`` until its first ``device_status``;
+    any other runner has a blank device state.
     """
+    phone = (
+        is_mobile_target(system_info)
+        and ClientCapability.MOBILE_DEVICE_V1.value in capabilities
+    )
+    now = timezone.now()
     with transaction.atomic():
         previous_channel_name = (
             Project.objects.select_for_update()
@@ -1149,6 +1188,11 @@ def claim_agent_connection(
             agent_system_info=system_info,
             agent_client_version=client_version,
             agent_capabilities=list(capabilities),
+            agent_device_state=(
+                RunnerDeviceState.STARTING if phone else RunnerDeviceState.NONE
+            ),
+            agent_device_detail="",
+            agent_device_reported_at=now if phone else None,
         )
     project.refresh_from_db()
     if previous_channel_name == channel_name:
@@ -1180,6 +1224,9 @@ class _DisconnectedAgentFields(TypedDict):
     agent_system_info: dict[str, object]
     agent_client_version: str
     agent_capabilities: list[str]
+    agent_device_state: str
+    agent_device_detail: str
+    agent_device_reported_at: datetime | None
     last_connected_at: datetime
 
 
@@ -1190,6 +1237,9 @@ def _disconnected_agent_fields() -> _DisconnectedAgentFields:
         "agent_system_info": {},
         "agent_client_version": "",
         "agent_capabilities": [],
+        "agent_device_state": RunnerDeviceState.NONE.value,
+        "agent_device_detail": "",
+        "agent_device_reported_at": None,
         "last_connected_at": timezone.now(),
     }
 
@@ -1201,6 +1251,10 @@ class AgentStatusEvent(TypedDict):
     agent_client_version: str
     agent_capabilities: list[str]
     last_connected_at: str | None
+    # The phone or tablet of a phone runner (blank / None for a desktop one).
+    agent_device_state: str
+    agent_device_detail: str
+    agent_device_reported_at: str | None
 
 
 def _agent_status_group(project_id: int) -> str:
@@ -1216,6 +1270,13 @@ def _build_agent_status_event(project: Project) -> AgentStatusEvent:
         "agent_capabilities": project.agent_capabilities,
         "last_connected_at": (
             project.last_connected_at.isoformat() if project.last_connected_at else None
+        ),
+        "agent_device_state": project.agent_device_state,
+        "agent_device_detail": project.agent_device_detail,
+        "agent_device_reported_at": (
+            project.agent_device_reported_at.isoformat()
+            if project.agent_device_reported_at
+            else None
         ),
     }
 
@@ -1302,6 +1363,12 @@ _BROWSER_NOT_INSTALLED_MESSAGE = (
     "`playwright install firefox webkit` in the Test Runner venv), or run "
     "`python -m controller_client.diagnose --browsers` there."
 )
+# Fixed server text: shown in the UI, to the agents and in TestRail.
+_DEVICE_DISCONNECTED_MESSAGE = "The phone or tablet is disconnected or still starting."
+_TARGET_MISMATCH_MESSAGE = (
+    "The Test Runner refused this action: it does not apply to what the "
+    "runner drives (a desktop action on a phone or tablet, or the reverse)."
+)
 
 
 def _raise_for_error_reply(reply: dict[str, Any], event_type: str) -> None:
@@ -1328,6 +1395,13 @@ def _raise_for_error_reply(reply: dict[str, Any], event_type: str) -> None:
         # The runner's text can carry local paths; it stays in the server log.
         logger.warning("Controller could not launch a browser: %s", message)
         raise BrowserUnavailableError(_BROWSER_NOT_INSTALLED_MESSAGE, detail=message)
+    if code == ErrorCode.DEVICE_DISCONNECTED:
+        # The runner's text can name the device; it stays in the server log.
+        logger.warning("Controller reports the device disconnected: %s", message)
+        raise DeviceDisconnectedError(_DEVICE_DISCONNECTED_MESSAGE)
+    if code == ErrorCode.TARGET_MISMATCH:
+        logger.warning("Controller refused %s for its target: %s", event_type, message)
+        raise ControllerActionError(_TARGET_MISMATCH_MESSAGE)
     raise ControllerActionError(message)
 
 
@@ -1465,6 +1539,27 @@ def _dispatch_controller_action(
     )
 
 
+def dispatch_controller_action(
+    project_id: int,
+    event_type: str,
+    reply_timeout: float,
+    *,
+    resend_on_reconnect: bool = True,
+    runner_local: bool = False,
+    **payload: Any,
+) -> dict[str, Any]:
+    """Public alias of ``_dispatch_controller_action`` for controller action
+    modules outside this legacy module (``controller_mobile_actions``)."""
+    return _dispatch_controller_action(
+        project_id,
+        event_type,
+        reply_timeout,
+        resend_on_reconnect=resend_on_reconnect,
+        runner_local=runner_local,
+        **payload,
+    )
+
+
 def _send_controller_action_once(
     layer: Any,
     project_id: int,
@@ -1519,6 +1614,11 @@ def _build_action_result(reply: dict[str, Any]) -> ActionResult:
         message=reply.get("message", ""),
         duration_ms=reply.get("duration_ms", 0.0),
     )
+
+
+def build_action_result(reply: dict[str, Any]) -> ActionResult:
+    """Public alias of ``_build_action_result`` (``controller_mobile_actions``)."""
+    return _build_action_result(reply)
 
 
 def controller_click(
@@ -2889,12 +2989,17 @@ def start_test_run(
         locked_help_mode if resolved_help_mode is None else resolved_help_mode
     )
     manual = is_manual_mode(new_help_mode)
-    if manual and not runner_runs_manual_tests(
-        Project.objects.only("agent_connected", "agent_capabilities").get(
-            pk=test_run.project_id
-        )
-    ):
-        raise ValueError(MANUAL_RUNNER_OUTDATED)
+    if manual:
+        runner = Project.objects.only(
+            "agent_connected",
+            "agent_capabilities",
+            "agent_device_state",
+            "agent_device_reported_at",
+        ).get(pk=test_run.project_id)
+        if not runner_runs_manual_tests(runner):
+            raise ValueError(MANUAL_RUNNER_OUTDATED)
+        if device_offline(runner):
+            raise ValueError(DEVICE_NOT_READY_MESSAGE)
 
     test_run.status = TestRunStatus.STARTED
     test_run.help_mode = new_help_mode

@@ -99,7 +99,7 @@ def _send_locked(
     # and a run start cannot both pass their "nothing else is live" checks.
     locked = (
         Project.objects.select_for_update()
-        .only("id", "agent_connected")
+        .only("id", "agent_connected", "agent_device_state", "agent_device_reported_at")
         .get(pk=project.pk)
     )
     # The main chat (None, or the chat thread itself) skips the READY gate.

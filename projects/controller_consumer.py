@@ -20,6 +20,14 @@ from controller_client.protocol import (
     MANUAL_SCREENSHOT_UPLOAD_MAX_BYTES,
     PERSON_CASE_ACTION_MAX_BYTES,
     PERSON_STEP_ACTION_MAX_BYTES,
+    SYSTEM_INFO_DEVICE_ID,
+    SYSTEM_INFO_DEVICE_KIND,
+    SYSTEM_INFO_DEVICE_MODEL,
+    SYSTEM_INFO_DEVICE_NAME,
+    SYSTEM_INFO_DEVICE_OS_VERSION,
+    SYSTEM_INFO_DEVICE_PLATFORM,
+    SYSTEM_INFO_DEVICE_SCALE,
+    SYSTEM_INFO_TARGET,
     CasePauseActionResultPayload,
     ClientCapability,
     CloseCode,
@@ -36,6 +44,8 @@ from controller_client.protocol import (
     PersonStepActionKind,
     PersonStepActionResultPayload,
     PersonStepStatePayload,
+    is_mobile_target,
+    parse_device_status_payload,
     parse_handshake_capabilities,
     parse_manual_case_progress_payload,
     parse_manual_case_submit_payload,
@@ -86,16 +96,23 @@ from projects.controller_protocol import (
     ControllerMessageBuilder,
     DoubleClickActionEvent,
     DragActionEvent,
+    HideKeyboardActionEvent,
     HoverActionEvent,
     InspectPathsActionEvent,
+    InstallAppActionEvent,
     KeyPressActionEvent,
     LaunchAppActionEvent,
+    LongPressActionEvent,
+    OpenUrlActionEvent,
+    PressButtonActionEvent,
+    RotateDeviceActionEvent,
     RunCommandActionEvent,
     ScanDirectoryActionEvent,
     ScreenshotActionEvent,
     ScrollActionEvent,
     SendInputActionEvent,
     StartInteractiveCmdActionEvent,
+    SwipeActionEvent,
     TerminateInteractiveCmdActionEvent,
     TypeTextActionEvent,
     UpdateRunnerEvent,
@@ -122,6 +139,10 @@ from projects.forms import (
 from projects.models import HelpContinueMode, Project
 from projects.person_step_services import PersonStepActionResult
 from projects.runner_case_pause_services import pause_from_runner
+from projects.runner_device_status_services import (
+    broadcast_device_status,
+    record_device_status,
+)
 from projects.runner_help_action_services import (
     RunnerHelpAction,
     resolve_help_from_runner,
@@ -195,6 +216,23 @@ _PUSH_COALESCE_SECONDS = 1.0
 _MAX_REQUEST_ID_LENGTH = 128
 # Longest raw ``submission_id`` read back for a refused hand-in.
 _MAX_SUBMISSION_ID_LENGTH = 64
+# A phone runner's ``device_status`` closer than this to the last one taken
+# is ignored (the runner sends one per change and one per 30 s).
+_DEVICE_STATUS_MIN_INTERVAL_SECONDS = 1.0
+# ``system_info`` keys stored only for a runner that advertised
+# MOBILE_DEVICE_V1 (D4): without it the runner is a desktop runner.
+_DEVICE_SYSTEM_INFO_KEYS: frozenset[str] = frozenset(
+    {
+        SYSTEM_INFO_TARGET,
+        SYSTEM_INFO_DEVICE_PLATFORM,
+        SYSTEM_INFO_DEVICE_KIND,
+        SYSTEM_INFO_DEVICE_MODEL,
+        SYSTEM_INFO_DEVICE_NAME,
+        SYSTEM_INFO_DEVICE_OS_VERSION,
+        SYSTEM_INFO_DEVICE_ID,
+        SYSTEM_INFO_DEVICE_SCALE,
+    }
+)
 
 
 class ControllerConsumer(AsyncWebsocketConsumer):
@@ -239,6 +277,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     _trailing_push: asyncio.Task[None] | None
     # Serialises snapshot pushes, so an older snapshot is never sent last.
     _push_lock: asyncio.Lock
+    # The runner drives a phone or tablet (``target`` + MOBILE_DEVICE_V1).
+    _mobile_target: bool
+    # Loop time of the last ``device_status`` taken; None before the first.
+    _last_device_status_at: float | None
 
     async def connect(self) -> None:
         self._authenticated = False
@@ -257,6 +299,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self._last_push_at = 0.0
         self._trailing_push = None
         self._push_lock = asyncio.Lock()
+        self._mobile_target = False
+        self._last_device_status_at = None
         self._reply_tracker = ReplyTracker(self.channel_layer)
         self._authenticator = ControllerAuthenticator()
         self._message_builder = ControllerMessageBuilder(ActionTypeRegistry())
@@ -312,6 +356,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
         if msg_type == MessageType.UPDATE_STATUS:
             await self._handle_update_status(data)
+            return
+
+        if msg_type == MessageType.DEVICE_STATUS:
+            await self._handle_device_status(data)
             return
 
         if msg_type == MessageType.PERSON_STEP_ACTION:
@@ -378,6 +426,38 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await sync_to_async(record_runner_update_status)(
             self._project.id, status.update_id, status.phase, status.detail
         )
+
+    async def _handle_device_status(self, data: dict[str, Any]) -> None:
+        """Store a phone runner's device status; broadcast only a change.
+
+        Ignored from a desktop runner and when closer than
+        ``_DEVICE_STATUS_MIN_INTERVAL_SECONDS`` to the last one taken (only
+        authenticated messages reach here).
+        """
+        if self._project is None or not self._mobile_target:
+            return
+        now = asyncio.get_running_loop().time()
+        if (
+            self._last_device_status_at is not None
+            and now - self._last_device_status_at < _DEVICE_STATUS_MIN_INTERVAL_SECONDS
+        ):
+            return
+        try:
+            status = parse_device_status_payload(data)
+        except ProtocolError as exc:
+            logger.warning(
+                "Ignoring malformed device_status for project %s: %s",
+                self._project.id,
+                exc,
+            )
+            return
+        self._last_device_status_at = now
+        project_id = self._project.id
+        changed = await sync_to_async(record_device_status)(
+            project_id, self.channel_name, status.state, status.detail
+        )
+        if changed:
+            await sync_to_async(broadcast_device_status)(project_id)
 
     async def _handle_handshake(self, data: dict[str, Any], request_id: str) -> None:
         api_key: str = data.get("api_key", "")
@@ -446,6 +526,20 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             and ClientCapability.MANUAL_PAUSE_DISCUSS_V1.value in capabilities
         )
         self._capabilities = frozenset(capabilities)
+        # D4: a phone runner sends ``target`` and advertises MOBILE_DEVICE_V1;
+        # without the capability its device keys are dropped, so every
+        # reader of the stored system info sees a desktop runner.
+        self._mobile_target = (
+            isinstance(system_info, dict)
+            and ClientCapability.MOBILE_DEVICE_V1.value in capabilities
+            and is_mobile_target(system_info)
+        )
+        if not self._mobile_target and isinstance(system_info, dict):
+            system_info = {
+                key: value
+                for key, value in system_info.items()
+                if key not in _DEVICE_SYSTEM_INFO_KEYS
+            }
         await self._establish_authenticated_connection(
             result.project,
             system_info,
@@ -1136,6 +1230,27 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await self._forward_action(event)
 
     async def controller_inspect_paths(self, event: InspectPathsActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_swipe(self, event: SwipeActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_long_press(self, event: LongPressActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_press_button(self, event: PressButtonActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_rotate_device(self, event: RotateDeviceActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_hide_keyboard(self, event: HideKeyboardActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_open_url(self, event: OpenUrlActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_install_app(self, event: InstallAppActionEvent) -> None:
         await self._forward_action(event)
 
     async def controller_update_runner(self, event: UpdateRunnerEvent) -> None:

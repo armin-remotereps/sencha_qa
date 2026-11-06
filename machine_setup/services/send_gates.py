@@ -33,6 +33,7 @@ from projects.manual_run_policy import (
 )
 from projects.models import Project, TestRunTestCase
 from projects.run_machine_use import agent_run_started
+from projects.runner_target import DEVICE_NOT_READY_MESSAGE, device_offline
 from projects.runner_update_state import (
     RUNNER_UPDATE_RUNNING_MESSAGE,
     runner_update_in_progress,
@@ -75,10 +76,14 @@ def thread_send_refusal(
 
 def machine_not_ready_refusal(project: Project) -> MachineSetupError | None:
     """Help, result and auto-fix threads: the runner connected and the visual
-    engine ready (``project.agent_connected`` must be fresh; one query)."""
-    if get_machine_state(project, get_visual_engine_status()) != MachineState.READY:
-        return SetupMachineNotReadyError()
-    return None
+    engine ready, and on a phone runner the device READY
+    (``project.agent_connected`` and the device fields must be fresh; one
+    query)."""
+    if get_machine_state(project, get_visual_engine_status()) == MachineState.READY:
+        return None
+    if device_offline(project):
+        return SetupMachineNotReadyError(DEVICE_NOT_READY_MESSAGE)
+    return SetupMachineNotReadyError()
 
 
 def manual_thread_send_refusal(

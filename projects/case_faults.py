@@ -15,6 +15,7 @@ from agents.types import OrchestratorCheckpoint
 from projects.exceptions import (
     BrowserUnavailableError,
     ControllerReconnectTimeoutError,
+    DeviceDisconnectedError,
     RunnerOutdatedError,
     TestRunnerDisconnectedError,
     TestRunnerUnresponsiveError,
@@ -32,6 +33,8 @@ RESUME_STATE_LOST_PREFIX = (
 # bases (``ResumeStateLostError`` is an ``InfrastructureError``).
 _REASON_BY_TYPE: tuple[tuple[type[BaseException], BlockedReason], ...] = (
     (ResumeStateLostError, BlockedReason.RESUME_STATE_LOST),
+    # A TestRunnerUnavailableError: before every runner fault.
+    (DeviceDisconnectedError, BlockedReason.DEVICE_DISCONNECTED),
     (ControllerReconnectTimeoutError, BlockedReason.RUNNER_DISCONNECTED),
     (TestRunnerDisconnectedError, BlockedReason.RUNNER_DISCONNECTED),
     (TestRunnerUnresponsiveError, BlockedReason.RUNNER_UNRESPONSIVE),
@@ -50,6 +53,11 @@ _ASK_BY_REASON: dict[BlockedReason, str] = {
     BlockedReason.RUNNER_UNRESPONSIVE: (
         "Check that the Test Runner on the test machine is running and "
         "responding, then Continue."
+    ),
+    BlockedReason.DEVICE_DISCONNECTED: (
+        "Reconnect the phone or tablet (cable, Wi-Fi debugging, or start the "
+        "emulator) and check the Test Runner shows it as connected, then "
+        "Continue."
     ),
     BlockedReason.VISUAL_ENGINE: (
         "Start or check a vision worker (Advanced diagnostics on the "
@@ -80,7 +88,8 @@ _ASK_BY_REASON: dict[BlockedReason, str] = {
 # Faults after which the machine may have restarted, so the earlier steps'
 # state has to be restored before the step runs again. Runner outdated is
 # fixed by updating the Test Runner, whose handover closes the browsers and
-# apps the old runner opened.
+# apps the old runner opened. A disconnected phone or tablet is not one: it
+# keeps its screen when a cable drops, so Continue goes on from it.
 _RESTORE_FAULTS = frozenset(
     {
         BlockedReason.RUNNER_DISCONNECTED,
