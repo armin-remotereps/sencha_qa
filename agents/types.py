@@ -6,7 +6,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Literal, Protocol
 
-from controller_client.protocol import DEFAULT_BROWSER, BrowserName
+from controller_client.protocol import DEFAULT_BROWSER, BrowserName, RunnerTarget
 
 
 class ToolCategory(Enum):
@@ -510,6 +510,9 @@ class ToolContext:
     on_log: LogCallback | None = None
     cancellation_check: CancellationCheck | None = None
     deadline: float | None = None
+    # What the runner drives (handshake ``system_info``): picks the tool set the
+    # model sees and ``dispatch_tool_call`` accepts.
+    runner_target: RunnerTarget = RunnerTarget.DESKTOP
 
 
 ToolDispatcher = Callable[[ToolCall, ToolContext], ToolResult]

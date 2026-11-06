@@ -22,7 +22,7 @@ from agents.checkpoint import (
     read_checkpoint_person_step,
     with_person_step,
 )
-from agents.os_shell import get_os_name, shell_label
+from agents.os_shell import runner_shell_label
 from agents.types import (
     CheckpointPersonStep,
     HandOffKind,
@@ -69,7 +69,8 @@ def command_shell_label(kind: HandOffKind, system_info: object) -> str:
     if kind != "command":
         return ""
     info = system_info if isinstance(system_info, dict) else None
-    return shell_label(get_os_name(info))
+    # A phone runner's commands run on the host computer.
+    return runner_shell_label(info)
 
 
 def _settle_row(

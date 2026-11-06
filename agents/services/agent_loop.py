@@ -18,7 +18,8 @@ from agents.services.prompt_parts import (
     build_tool_guidelines,
     build_tool_taxonomy,
 )
-from agents.services.tool_registry import dispatch_tool_call, get_all_tool_definitions
+from agents.services.tool_definitions import tool_definitions_for
+from agents.services.tool_registry import dispatch_tool_call
 from agents.types import (
     AgentCancelledError,
     AgentConfig,
@@ -34,6 +35,7 @@ from agents.types import (
     ToolDispatcher,
     TranscriptCallback,
 )
+from controller_client.protocol import is_mobile_target, parse_runner_target
 from projects.controller_outage_clock import agent_monotonic
 
 logger = logging.getLogger(__name__)
@@ -66,7 +68,7 @@ def build_system_prompt(
     ]
     if project_prompt:
         sections.append(build_project_context(project_prompt))
-    sections.append(_build_task_section(task_description))
+    sections.append(_build_task_section(task_description, system_info=system_info))
     return "\n\n".join(sections)
 
 
@@ -78,13 +80,26 @@ def _build_role_description(
         [
             build_agent_persona(system_info=system_info),
             build_qa_rules(),
-            build_tool_taxonomy(),
+            build_tool_taxonomy(system_info=system_info),
             build_environment_context(system_info=system_info),
         ]
     )
 
 
-def _build_task_section(task_description: str) -> str:
+def _build_task_section(
+    task_description: str, *, system_info: dict[str, object] | None = None
+) -> str:
+    if is_mobile_target(system_info or {}):
+        return (
+            "IMPORTANT:\n"
+            "- Everything on the phone is done with the phone tools: take_screenshot "
+            "to look, click to tap, type_text, scroll and swipe\n"
+            "- Use open_url for web pages and deep links; there are no browser tools\n"
+            "- Use execute_command for shell operations on the Test Runner computer\n"
+            "- Always check tool output and use screenshots to verify results\n"
+            "- If a tool fails, try to diagnose and fix the issue\n\n"
+            f"YOUR TASK:\n{task_description}"
+        )
     return (
         "IMPORTANT:\n"
         "- For web tasks, use browser_navigate to open URLs — no need to launch a browser manually\n"
@@ -132,6 +147,7 @@ def run_agent(
         on_screenshot=config.on_screenshot,
         on_log=config.on_log,
         cancellation_check=config.cancellation_check,
+        runner_target=parse_runner_target(system_info or {}),
     )
     return _run_agent_loop(
         task_description,
@@ -168,7 +184,9 @@ def _run_agent_loop(
         context,
         config=config,
         tool_definitions=(
-            get_all_tool_definitions() if tool_definitions is None else tool_definitions
+            tool_definitions_for(context.runner_target)
+            if tool_definitions is None
+            else tool_definitions
         ),
         dispatch=dispatch_tool_call if dispatch is None else dispatch,
     )

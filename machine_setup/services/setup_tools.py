@@ -31,7 +31,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from accounts.models import CustomUser
-from agents.services.tool_registry import dispatch_tool_call, get_all_tool_definitions
+from agents.services.tool_definitions import tool_definitions_for
+from agents.services.tool_registry import dispatch_tool_call
 from agents.types import (
     ToolCall,
     ToolCategory,
@@ -41,6 +42,7 @@ from agents.types import (
     ToolParameter,
     ToolResult,
 )
+from controller_client.protocol import RunnerTarget
 from knowledge_base.exceptions import KnowledgeToolError
 from knowledge_base.services.agent_tools import (
     build_knowledge_handlers,
@@ -201,9 +203,9 @@ def main_tool_definitions(role: ThreadRole) -> tuple[ToolDefinition, ...]:
     return tools
 
 
-def machine_tool_definitions() -> tuple[ToolDefinition, ...]:
-    """A setup sub-agent's tools: the tester's machine tools."""
-    return get_all_tool_definitions()
+def machine_tool_definitions(target: RunnerTarget) -> tuple[ToolDefinition, ...]:
+    """A setup sub-agent's tools: the tester's machine tools for ``target``."""
+    return tool_definitions_for(target)
 
 
 def _run_setup_task_definition(*, main_chat: bool) -> ToolDefinition:

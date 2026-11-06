@@ -4,9 +4,16 @@ import dataclasses
 import logging
 from collections.abc import Callable
 
-from agents.services import tools_controller, tools_search, tools_utility
+from agents.services import tools_controller, tools_mobile, tools_search, tools_utility
+from agents.services.tool_definitions import (
+    MOBILE_KEYS,
+)
 from agents.services.tool_definitions import (
     get_all_tool_definitions as get_all_tool_definitions,
+)
+from agents.services.tool_definitions import (
+    tool_definitions_for,
+    tool_names_for,
 )
 from agents.types import (
     ToolCall,
@@ -15,11 +22,25 @@ from agents.types import (
     ToolDispatcher,
     ToolResult,
 )
+from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
+    DEFAULT_LONG_PRESS_SECONDS,
     DEFAULT_SCROLL_AMOUNT,
+    DEFAULT_SWIPE_DISTANCE,
+    DEFAULT_SWIPE_DURATION,
+    LONG_PRESS_MAX_SECONDS,
+    LONG_PRESS_MIN_SECONDS,
     MAX_SCROLL_AMOUNT,
+    SWIPE_MAX_DISTANCE,
+    SWIPE_MAX_DURATION,
+    SWIPE_MIN_DISTANCE,
+    SWIPE_MIN_DURATION,
     BrowserName,
+    DeviceOrientation,
+    MobileButton,
+    RunnerTarget,
     ScrollDirection,
+    validate_open_url,
 )
 from knowledge_base.services.agent_tools import (
     READ_KNOWLEDGE_TOOL,
@@ -66,6 +87,31 @@ def _read_point(arguments: dict[str, object]) -> tuple[int | None, int | None]:
     return x, y
 
 
+def _strict_number(name: str, raw: object, minimum: float, maximum: float) -> float:
+    """Read a JSON number within [minimum, maximum]; never bool or str."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise _InvalidArgumentError(f"{name} must be a number, got {raw!r}.")
+    value = float(raw)
+    if not minimum <= value <= maximum:
+        raise _InvalidArgumentError(
+            f"{name} must be between {minimum:g} and {maximum:g}."
+        )
+    return value
+
+
+def _optional_number(
+    arguments: dict[str, object],
+    name: str,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    raw = arguments.get(name)
+    if raw is None:
+        return default
+    return _strict_number(name, raw, minimum, maximum)
+
+
 def dispatch_tool_call(tool_call: ToolCall, context: ToolContext) -> ToolResult:
     handler = _TOOL_HANDLERS.get(tool_call.tool_name)
     if handler is None:
@@ -74,15 +120,34 @@ def dispatch_tool_call(tool_call: ToolCall, context: ToolContext) -> ToolResult:
             content=f"Unknown tool: {tool_call.tool_name}",
             is_error=True,
         )
+    # Enforced here, not only by the definitions the model is shown: a desktop
+    # tool never reaches a phone runner, nor a phone tool a desktop runner.
+    if tool_call.tool_name not in tool_names_for(context.runner_target):
+        device = (
+            "a desktop computer"
+            if context.runner_target == RunnerTarget.DESKTOP
+            else "a phone or tablet"
+        )
+        return ToolResult(
+            tool_call_id=tool_call.tool_call_id,
+            content=(
+                f"Tool not available: {tool_call.tool_name} does not exist when the "
+                f"Test Runner drives {device}. Use only the tools you were given."
+            ),
+            is_error=True,
+        )
 
     result = handler(context, tool_call.arguments)
     return dataclasses.replace(result, tool_call_id=tool_call.tool_call_id)
 
 
-def tool_definitions_named(names: frozenset[str]) -> tuple[ToolDefinition, ...]:
+def tool_definitions_named(
+    names: frozenset[str], target: RunnerTarget = RunnerTarget.DESKTOP
+) -> tuple[ToolDefinition, ...]:
+    """The definitions of ``names`` that exist for ``target`` (with its wording)."""
     return tuple(
         definition
-        for definition in get_all_tool_definitions()
+        for definition in tool_definitions_for(target)
         if definition.name in names
     )
 
@@ -251,6 +316,19 @@ def _handle_type_text(context: ToolContext, arguments: dict[str, object]) -> Too
 
 def _handle_key_press(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     keys = str(arguments.get("keys", ""))
+    if context.runner_target == RunnerTarget.ANDROID:
+        key = keys.strip().lower()
+        if key not in MOBILE_KEYS:
+            return ToolResult(
+                tool_call_id="",
+                content=(
+                    f"key_press on an Android device takes one of: "
+                    f"{', '.join(MOBILE_KEYS)}. Use press_button for back, home and "
+                    "the other device buttons."
+                ),
+                is_error=True,
+            )
+        keys = key
     return tools_controller.key_press(context.project_id, keys=keys)
 
 
@@ -461,6 +539,143 @@ def _handle_browser_take_screenshot(
     )
 
 
+def _handle_long_press(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    description = str(arguments.get("description", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    try:
+        duration = _optional_number(
+            arguments,
+            "duration",
+            DEFAULT_LONG_PRESS_SECONDS,
+            LONG_PRESS_MIN_SECONDS,
+            LONG_PRESS_MAX_SECONDS,
+        )
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
+    return tools_mobile.long_press(
+        context.project_id,
+        description=description,
+        duration=duration,
+        expected_result=_read_expected_result(arguments),
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
+    )
+
+
+def _handle_swipe(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    try:
+        direction = ScrollDirection(str(arguments.get("direction", "")))
+    except ValueError:
+        allowed = ", ".join(d.value for d in ScrollDirection)
+        return ToolResult(
+            tool_call_id="",
+            content=f"direction must be one of: {allowed}.",
+            is_error=True,
+        )
+    try:
+        x, y = _read_point(arguments)
+        distance = _optional_number(
+            arguments,
+            "distance",
+            DEFAULT_SWIPE_DISTANCE,
+            SWIPE_MIN_DISTANCE,
+            SWIPE_MAX_DISTANCE,
+        )
+        duration = _optional_number(
+            arguments,
+            "duration",
+            DEFAULT_SWIPE_DURATION,
+            SWIPE_MIN_DURATION,
+            SWIPE_MAX_DURATION,
+        )
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
+    return tools_mobile.swipe(
+        context.project_id,
+        direction=direction,
+        x=x,
+        y=y,
+        distance=distance,
+        duration=duration,
+        expected_result=_read_expected_result(arguments),
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
+    )
+
+
+def _handle_press_button(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    try:
+        button = MobileButton(str(arguments.get("button", "")))
+    except ValueError:
+        allowed = ", ".join(b.value for b in MobileButton)
+        return ToolResult(
+            tool_call_id="", content=f"button must be one of: {allowed}.", is_error=True
+        )
+    return tools_mobile.press_button(context.project_id, button=button)
+
+
+def _handle_rotate_device(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    try:
+        orientation = DeviceOrientation(str(arguments.get("orientation", "")))
+    except ValueError:
+        allowed = ", ".join(o.value for o in DeviceOrientation)
+        return ToolResult(
+            tool_call_id="",
+            content=f"orientation must be one of: {allowed}.",
+            is_error=True,
+        )
+    return tools_mobile.rotate_device(
+        context.project_id,
+        orientation=orientation,
+        expected_result=_read_expected_result(arguments),
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
+    )
+
+
+def _handle_hide_keyboard(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    return tools_mobile.hide_keyboard(context.project_id)
+
+
+def _handle_open_url(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    try:
+        url = validate_open_url(str(arguments.get("url", "")))
+    except ProtocolError as error:
+        return ToolResult(tool_call_id="", content=str(error), is_error=True)
+    return tools_mobile.open_url(context.project_id, url=url)
+
+
+def _handle_install_app(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    path = str(arguments.get("path", "")).strip()
+    if not path:
+        return ToolResult(
+            tool_call_id="",
+            content="path must be the absolute path of the build on the Test Runner "
+            "computer.",
+            is_error=True,
+        )
+    return tools_mobile.install_app(context.project_id, path=path)
+
+
 def _handle_web_search(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
@@ -518,6 +733,13 @@ _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "close_app": _handle_close_app,
     "close_tab": _handle_close_tab,
     "check_app_installed": _handle_check_app_installed,
+    "long_press": _handle_long_press,
+    "swipe": _handle_swipe,
+    "press_button": _handle_press_button,
+    "rotate_device": _handle_rotate_device,
+    "hide_keyboard": _handle_hide_keyboard,
+    "open_url": _handle_open_url,
+    "install_app": _handle_install_app,
     "browser_navigate": _handle_browser_navigate,
     "browser_click": _handle_browser_click,
     "browser_double_click": _handle_browser_double_click,

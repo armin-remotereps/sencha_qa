@@ -60,9 +60,16 @@ EVIDENCE_PROMPT_MAX_CHARS: Final = 1500
 # The agent's observation in an evidence block.
 _EVIDENCE_OBSERVATION_MAX_CHARS: Final = 1000
 
+# Phone tool names that are also the plain word a person is told on a phone
+# ("swipe up"); never stripped from person-facing text.
+_PERSON_WORDS: Final = frozenset({"swipe"})
 _TOOL_NAMES: Final = tuple(
     sorted(
-        (definition.name for definition in get_all_tool_definitions()),
+        (
+            definition.name
+            for definition in get_all_tool_definitions()
+            if definition.name not in _PERSON_WORDS
+        ),
         key=len,
         reverse=True,
     )
@@ -104,12 +111,22 @@ def head_and_tail(text: str, limit: int) -> str:
     return f"{text[:half]}\n… [output shortened] …\n{text[-half:]}"
 
 
-def build_prepare_system_prompt(*, os_name: str, restore: bool) -> str:
-    shell = shell_label(os_name)
+def _machine_phrase(device: str | None) -> str:
+    """Where the person works: the test machine, or the phone under test."""
+    return "the test machine" if device is None else f"the phone (the {device})"
+
+
+def build_prepare_system_prompt(
+    *, os_name: str, restore: bool, device: str | None = None
+) -> str:
+    """``device``: the noun of the phone a phone runner drives (e.g. "Android
+    phone"); None for a desktop runner, whose prompt is unchanged."""
+    shell = shell_label(os_name, on_runner_computer=device is not None)
     if restore:
         kind_rule = (
             '- "kind" is always "restore" and "command" is always "". Ask the '
-            "person to check that the test machine is still in the state the listed "
+            f"person to check that {_machine_phrase(device)} is still in the state "
+            "the listed "
             "steps left it in and to redo by hand only what is no longer in effect; "
             "never ask them to judge the application.\n"
         )
@@ -127,14 +144,31 @@ def build_prepare_system_prompt(*, os_name: str, restore: bool) -> str:
             '- Otherwise "kind" is "interactive" and "command" is "".\n'
         )
         kinds = '"interactive" or "command"'
+    if device is None:
+        where = (
+            "who performs it by hand on the test machine. The plan step was written "
+            "for an automated executor; the person never sees it. The test machine "
+            f"runs {os_name}; its shell is {shell}.\n\n"
+        )
+        name_rule = "Name the application or window to use."
+    else:
+        where = (
+            f"who performs it by hand on the phone (the {device}) the test runs on. "
+            "The plan step was written for an automated executor; the person never "
+            "sees it. Commands run on the Test Runner computer the phone is "
+            f"connected to ({os_name}), in {shell_label(os_name)}.\n\n"
+        )
+        name_rule = (
+            "Say it happens on the phone and name the app or screen to use; use "
+            "phone words (tap, swipe, press Home), never window, mouse or keyboard "
+            "shortcut words."
+        )
     return (
         "You turn one step of an automated test plan into an instruction for a PERSON "
-        "who performs it by hand on the test machine. The plan step was written for "
-        "an automated executor; the person never sees it. The test machine runs "
-        f"{os_name}; its shell is {shell}.\n\n"
+        f"{where}"
         "RULES:\n"
-        "- Write plain, short, imperative sentences a tester can follow. Name the "
-        "application or window to use. Keep every value (URL, text to type, file "
+        f"- Write plain, short, imperative sentences a tester can follow. {name_rule} "
+        "Keep every value (URL, text to type, file "
         "path, menu name) exactly as given.\n"
         "- The instruction must be self-sufficient: the person sees nothing else. "
         "Give in words the navigation the test case or the plan step states (menu "
@@ -205,9 +239,15 @@ def _fence(text: str) -> str:
 
 
 def build_confirm_sub_task(
-    person: CheckpointPersonStep, *, os_name: str, timeout_seconds: int
+    person: CheckpointPersonStep,
+    *,
+    os_name: str,
+    timeout_seconds: int,
+    device: str | None = None,
 ) -> SubTask:
-    """The read-only check of a person's report, as a restricted sub-task."""
+    """The read-only check of a person's report, as a restricted sub-task.
+
+    ``device``: as in ``build_prepare_system_prompt``."""
     command_step = _has_command(person.hand_off)
     outcome = (
         "the step went as expected"
@@ -238,10 +278,11 @@ def build_confirm_sub_task(
         else ""
     )
     description = (
-        "VERIFY ONLY. A person performed this test step by hand on the test machine "
+        "VERIFY ONLY. A person performed this test step by hand on "
+        f"{_machine_phrase(device)} "
         "and reported how it went. Check whether the expected result is in effect "
         "now. You never perform, redo, fix or continue the step yourself.\n\n"
-        f"{_fenced_step_and_report(person, os_name, f'Outcome: {outcome}')}"
+        f"{_fenced_step_and_report(person, os_name, f'Outcome: {outcome}', device)}"
         "RULES:\n"
         f"{how}"
         f"{_READ_ONLY_RULES}"
@@ -268,9 +309,11 @@ def build_mark_evidence_sub_task(
     verdict: str,
     os_name: str,
     timeout_seconds: int,
+    device: str | None = None,
 ) -> SubTask:
     """Record evidence of a step a person marked ``verdict`` ("failed" /
-    "blocked"); the agent does not judge, the person's decision stands."""
+    "blocked"); the agent does not judge, the person's decision stands.
+    ``device``: as in ``build_prepare_system_prompt``."""
     check = (
         "- Then run at most one read-only check command that shows the state "
         "the step left (e.g. the command's own read-only form or a version or "
@@ -280,10 +323,11 @@ def build_mark_evidence_sub_task(
     )
     description = (
         "RECORD EVIDENCE ONLY. A person was performing this test step by hand on "
-        f"the test machine and marked the test case {verdict.upper()} at this "
+        f"{_machine_phrase(device)} and marked the test case {verdict.upper()} at "
+        "this "
         "step. Their decision is final: you do not judge it, and you never "
         "perform, redo, fix or continue the step.\n\n"
-        f"{_fenced_step_and_report(person, os_name, f'Decision: marked {verdict}')}"
+        f"{_fenced_step_and_report(person, os_name, f'Decision: marked {verdict}', device)}"
         "RULES:\n"
         "- First take a screenshot (take_screenshot with a question about the "
         "expected result and anything that looks wrong).\n"
@@ -318,13 +362,16 @@ def _has_command(hand_off: PersonStepHandOff) -> bool:
 
 
 def _fenced_step_and_report(
-    person: CheckpointPersonStep, os_name: str, outcome_line: str
+    person: CheckpointPersonStep,
+    os_name: str,
+    outcome_line: str,
+    device: str | None = None,
 ) -> str:
     """The step and the person's report, each fenced as data."""
     hand_off = person.hand_off
+    shell = shell_label(os_name, on_runner_computer=device is not None)
     command_line = (
-        f"Command the person ran in {shell_label(os_name)}:\n"
-        f"{_fence(hand_off.command)}\n"
+        f"Command the person ran in {shell}:\n" f"{_fence(hand_off.command)}\n"
         if hand_off.kind == "command" and hand_off.command
         else ""
     )

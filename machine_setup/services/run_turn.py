@@ -31,6 +31,7 @@ from agents.types import (
     ToolContext,
     ToolResult,
 )
+from controller_client.protocol import parse_runner_target
 from knowledge_base.reference_note import knowledge_reference_note
 from knowledge_base.services.find_knowledge_items import find_knowledge_items
 from knowledge_base.services.knowledge_index import knowledge_index_text
@@ -259,6 +260,7 @@ class _TurnRunner:
             on_screenshot=self.recorder.on_screenshot,
             on_log=_log_tool_debug,
             cancellation_check=self._should_stop,
+            runner_target=parse_runner_target(system_info or {}),
         )
         dispatch = build_setup_dispatcher(
             project=project,

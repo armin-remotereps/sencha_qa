@@ -34,6 +34,7 @@ from agents.types import (
     ToolContext,
     ToolResult,
 )
+from controller_client.protocol import parse_runner_target
 from machine_setup.exceptions import ActionApprovalUnusableError, SetupRunnerLostError
 from machine_setup.models import SetupMessage
 from machine_setup.services.action_approval_decision import (
@@ -154,6 +155,7 @@ def run_setup_task(
         on_screenshot=recorder.on_screenshot,
         cancellation_check=runtime.cancellation_check,
     )
+    runner_target = parse_runner_target(runtime.system_info or {})
     sub_context = ToolContext(
         project_id=runtime.project_id,
         # Shared with the main loop so a browser picked here stays picked.
@@ -163,6 +165,7 @@ def run_setup_task(
         on_screenshot=recorder.on_screenshot,
         on_log=_log_tool_debug,
         cancellation_check=runtime.cancellation_check,
+        runner_target=runner_target,
     )
     logger.info(
         "Setup turn %s: sub-task %s started (budget %s s, read_only=%s, "
@@ -190,7 +193,7 @@ def run_setup_task(
         ],
         sub_context,
         config=config,
-        tool_definitions=machine_tool_definitions(),
+        tool_definitions=machine_tool_definitions(runner_target),
         dispatch=recorder.wrap(build_machine_dispatcher(runtime.project_id)),
         on_transcript=on_transcript,
     )
