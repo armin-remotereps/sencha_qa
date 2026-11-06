@@ -9,6 +9,9 @@ channels~=4.3.2
 daphne~=4.2.1
 autobahn~=26.10.2
 channels-redis~=4.3.0
+# redis-py 8 breaks channels-redis: an idle channel-layer receive raises
+# "Timeout reading from redis" after 5 s, dropping every idle WebSocket.
+redis~=6.4.0
 mypy~=1.19.1
 django-stubs~=5.2.9
 celery-types~=0.22.0
