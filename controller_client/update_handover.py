@@ -6,6 +6,9 @@ Linux: its own session (no SIGHUP from the old terminal), stdin from
 /dev/null and output to ``logs/runner-start.log``; the environment (DISPLAY,
 WAYLAND_DISPLAY, DBUS_SESSION_BUS_ADDRESS, XDG_*) is inherited.
 
+On a phone target the old runner first quits its Appium session and its
+managed Appium server, so the new runner can claim the device.
+
 The new runner writes a marker file once the server accepted its handshake,
 so the old runner learns about the handover even if its own socket dropped
 before the server could tell it it was superseded.
@@ -23,6 +26,7 @@ from typing import Final
 import psutil
 
 from controller_client.exceptions import UpdateError
+from controller_client.target import get_mobile_device
 from controller_client.update_installer import subprocess_environment
 from controller_client.update_layout import PACKAGE_DIR_NAME
 
@@ -70,6 +74,7 @@ def spawn_new_runner(
     new_python: Path, new_root: Path, args: Sequence[str]
 ) -> SpawnedRunner:
     """Start ``<new_python> -m controller_client.main *args`` in ``new_root``."""
+    _release_mobile_device()
     command = [str(new_python), "-m", "controller_client.main", *args]
     log_dir = logs_dir(new_root)
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -101,6 +106,15 @@ def spawn_new_runner(
         ) from e
     logger.info("Started the new Test Runner (pid %d) in %s", process.pid, new_root)
     return SpawnedRunner(pid=process.pid, create_time=create_time, log_path=log_path)
+
+
+def _release_mobile_device() -> None:
+    """Quit the phone's session and the managed Appium (never raises)."""
+    device = get_mobile_device()
+    if device is None:
+        return
+    logger.info("Releasing the device for the new Test Runner")
+    device.stop()
 
 
 if sys.platform == "win32":

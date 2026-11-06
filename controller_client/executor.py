@@ -223,6 +223,32 @@ def execute_key_press(payload: KeyPressPayload) -> ActionResultPayload:
     )
 
 
+# Exported to every command on a phone target (Q1): the shell runs on the
+# host, so `adb -s "$RUNNER_DEVICE_ID" ...` / `xcrun simctl ... "$RUNNER_DEVICE_ID"`
+# reach the device under test.
+DEVICE_ID_ENV_NAME = "RUNNER_DEVICE_ID"
+DEVICE_PLATFORM_ENV_NAME = "RUNNER_DEVICE_PLATFORM"
+
+
+def device_env() -> dict[str, str]:
+    """The device variables for a child process; empty on a desktop target."""
+    device = get_mobile_device()
+    if device is None:
+        return {}
+    return {
+        DEVICE_ID_ENV_NAME: device.device_info().device_id,
+        DEVICE_PLATFORM_ENV_NAME: device.target.value,
+    }
+
+
+def child_env() -> dict[str, str] | None:
+    """A child's environment: None (inherit, as before) on a desktop target."""
+    extra = device_env()
+    if not extra:
+        return None
+    return {**os.environ, **extra}
+
+
 def _is_background_command(command: str) -> bool:
     stripped = command.rstrip()
     return stripped.endswith("&") and not stripped.endswith("&&")
@@ -240,6 +266,7 @@ def _execute_background_command(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
+            env=child_env(),
         )
         process_tracker.register(proc.pid)
     except Exception as e:
@@ -272,6 +299,7 @@ def execute_command(
             encoding=SHELL_OUTPUT_ENCODING,
             errors="replace",
             timeout=_NON_INTERACTIVE_TIMEOUT_SECONDS,
+            env=child_env(),
         )
     except subprocess.TimeoutExpired:
         duration_ms = (time.monotonic() - start) * 1000
@@ -318,7 +346,7 @@ def execute_command_streaming(
     if _is_background_command(payload.command):
         return _execute_background_command(payload.command, process_tracker)
 
-    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    env = {**os.environ, "PYTHONUNBUFFERED": "1", **device_env()}
     start = time.monotonic()
     try:
         process = subprocess.Popen(
@@ -402,7 +430,7 @@ def execute_start_interactive_cmd(
 ) -> InteractiveOutputPayload:
     try:
         session = session_manager.start_session(payload.command, timeout)
-        output = session.start(process_tracker)
+        output = session.start(process_tracker, env=child_env())
     except Exception as e:
         raise ExecutionError(f"Start interactive command failed: {e}") from e
     return InteractiveOutputPayload(

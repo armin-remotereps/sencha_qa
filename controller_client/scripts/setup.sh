@@ -201,3 +201,28 @@ echo "To check which browsers the Test Runner can launch:"
 echo "  controller_client/.venv/bin/python -m controller_client.diagnose --browsers"
 echo "To check the Test Runner window (Human in the loop steps):"
 echo "  controller_client/.venv/bin/python -m controller_client.diagnose --window"
+
+# Phone and tablet target (CONTROLLER_TARGET=android or ios in .env): the
+# Test Runner drives the device through Appium. These are OS-level tools this
+# script never installs; it only lists them.
+RUNNER_TARGET="${CONTROLLER_TARGET:-}"
+if [[ -z "$RUNNER_TARGET" ]] && [[ -f "$PROJECT_DIR/.env" ]]; then
+    RUNNER_TARGET=$(grep -E '^[[:space:]]*CONTROLLER_TARGET=' "$PROJECT_DIR/.env" | tail -n 1 | cut -d= -f2- | tr -d '[:space:]"'"'" || true)
+fi
+RUNNER_TARGET=$(echo "$RUNNER_TARGET" | tr '[:upper:]' '[:lower:]')
+if [[ "$RUNNER_TARGET" == "android" || "$RUNNER_TARGET" == "ios" ]]; then
+    echo "This Test Runner drives a phone or tablet (CONTROLLER_TARGET=$RUNNER_TARGET). Install yourself:"
+    echo "  - Node.js 22.22.2 or newer (or 24.15+): https://nodejs.org"
+    echo "  - Appium 3: npm i -g appium@3"
+    if [[ "$RUNNER_TARGET" == "android" ]]; then
+        echo "  - its Android driver: appium driver install uiautomator2"
+        echo "  - Android platform-tools (adb) on PATH, and ANDROID_HOME set (Android Studio or the SDK command-line tools)"
+        echo "  - on the phone: Developer options > USB debugging on, then accept this computer's key"
+    else
+        echo "  - its iOS driver: appium driver install xcuitest"
+        echo "  - Xcode with its command-line tools (xcode-select --install), on this Mac"
+        echo "  - iPhone/iPad: trust this Mac, turn on Developer Mode, and set CONTROLLER_IOS_TEAM_ID in .env"
+    fi
+    echo "Then pick the device (CONTROLLER_DEVICE; the first interactive start asks) and check it with:"
+    echo "  controller_client/.venv/bin/python -m controller_client.diagnose --mobile"
+fi

@@ -134,3 +134,28 @@ Write-Host "To check which browsers the Test Runner can launch:"
 Write-Host "  controller_client\.venv\Scripts\python -m controller_client.diagnose --browsers"
 Write-Host "To check the Test Runner window (Human in the loop steps):"
 Write-Host "  controller_client\.venv\Scripts\python -m controller_client.diagnose --window"
+
+# Phone and tablet target (CONTROLLER_TARGET=android in .env): the Test
+# Runner drives the device through Appium. These are OS-level tools this
+# script never installs; it only lists them.
+$RunnerTarget = $env:CONTROLLER_TARGET
+$EnvFile = Join-Path $ProjectDir ".env"
+if (-not $RunnerTarget -and (Test-Path -LiteralPath $EnvFile -PathType Leaf)) {
+    $TargetLine = Get-Content -LiteralPath $EnvFile | Where-Object { $_ -match '^\s*CONTROLLER_TARGET=' } | Select-Object -Last 1
+    if ($TargetLine) { $RunnerTarget = ($TargetLine -split '=', 2)[1].Trim().Trim('"', "'") }
+}
+if ($RunnerTarget) { $RunnerTarget = $RunnerTarget.ToLowerInvariant() }
+if ($RunnerTarget -eq "android") {
+    Write-Host ""
+    Write-Host "This Test Runner drives an Android phone or tablet (CONTROLLER_TARGET=android). Install yourself:"
+    Write-Host "  - Node.js 22.22.2 or newer (or 24.15+): https://nodejs.org"
+    Write-Host "  - Appium 3: npm i -g appium@3"
+    Write-Host "  - its Android driver: appium driver install uiautomator2"
+    Write-Host "  - Android platform-tools (adb) on PATH, and ANDROID_HOME set (Android Studio or the SDK command-line tools)"
+    Write-Host "  - on the phone: Developer options > USB debugging on, then accept this computer's key"
+    Write-Host "Then pick the device (CONTROLLER_DEVICE; the first interactive start asks) and check it with:"
+    Write-Host "  controller_client\.venv\Scripts\python -m controller_client.diagnose --mobile"
+} elseif ($RunnerTarget -eq "ios") {
+    Write-Host ""
+    Write-Host "CONTROLLER_TARGET=ios needs a Mac with Xcode: iPhones, iPads and the iOS Simulator cannot be driven from Windows." -ForegroundColor Yellow
+}

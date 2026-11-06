@@ -17,8 +17,13 @@ from websockets.uri import parse_proxy
 
 from controller_client.exceptions import ProtocolError
 from controller_client.manual_spool import DEFAULT_SPOOL_MAX_MB, MIN_SPOOL_MAX_MB
+from controller_client.mobile_settings import MobileSettings
 from controller_client.person_window_ipc import TEXT_SIZE_DEFAULT, clamp_text_size
-from controller_client.protocol import normalize_person_email
+from controller_client.protocol import (
+    MOBILE_TARGETS,
+    RunnerTarget,
+    normalize_person_email,
+)
 
 # Folder the server's cleanup_environment action empties between test cases.
 # Overridable so the controller can live in ~/Downloads without wiping itself.
@@ -38,6 +43,16 @@ MANUAL_SPOOL_MAX_MB_ENV_NAME: Final[str] = "CONTROLLER_MANUAL_SPOOL_MAX_MB"
 # https URL, optional user:pass@). Empty = the system proxy settings, as before.
 # .env only: a command line is visible to every local user.
 PROXY_ENV_NAME: Final[str] = "CONTROLLER_PROXY"
+# What this runner drives: desktop (the host), android or ios (one phone,
+# tablet, emulator or simulator attached to the host, through Appium).
+TARGET_ENV_NAME: Final[str] = "CONTROLLER_TARGET"
+# Serial (Android) or UDID (iOS) of the device; empty = the only one connected
+# (an interactive start asks and saves it).
+DEVICE_ENV_NAME: Final[str] = "CONTROLLER_DEVICE"
+DEFAULT_APPIUM_COMMAND: Final[str] = "appium"
+DEFAULT_IOS_SIGNING_ID: Final[str] = "Apple Development"
+# Where the managed Appium server writes its log.
+MOBILE_LOG_DIR: Final[Path] = Path(__file__).resolve().parent / "logs"
 # The runner's own .env (the one a self-update copies to the new install).
 RUNNER_ENV_FILE: Final[Path] = Path(__file__).resolve().parent / ".env"
 
@@ -113,6 +128,9 @@ class ClientConfig:
     # Validated CONTROLLER_PROXY; None = system proxy settings. May hold
     # credentials, so it is kept out of repr; log proxy_display instead.
     proxy: str | None = field(default=None, repr=False)
+    # The phone or tablet target (CONTROLLER_TARGET android/ios); None on the
+    # desktop target.
+    mobile: MobileSettings | None = None
 
     @property
     def proxy_display(self) -> str:
@@ -194,6 +212,48 @@ def _env_proxy() -> tuple[str | None, str | None]:
     return raw, None
 
 
+def load_mobile_settings() -> tuple[MobileSettings | None, str | None]:
+    """The phone target from .env/the environment, and why it is invalid.
+
+    ``(None, None)`` on the desktop target (CONTROLLER_TARGET unset or
+    ``desktop``). An iOS target needs a macOS host with Xcode, whether the
+    device is an iPhone/iPad or a simulator.
+    """
+    raw = _env_str(TARGET_ENV_NAME, RunnerTarget.DESKTOP.value).strip().lower()
+    try:
+        target = RunnerTarget(raw or RunnerTarget.DESKTOP.value)
+    except ValueError:
+        choices = ", ".join(t.value for t in RunnerTarget)
+        return None, f"{TARGET_ENV_NAME}={raw!r} is unknown; use one of {choices}"
+    if target not in MOBILE_TARGETS:
+        return None, None
+    if target is RunnerTarget.IOS and sys.platform != "darwin":
+        return None, (
+            f"{TARGET_ENV_NAME}=ios needs a macOS host with Xcode: iPhones, "
+            "iPads and the iOS Simulator are driven from a Mac only"
+        )
+    return (
+        MobileSettings(
+            target=target,
+            device_id=_env_str(DEVICE_ENV_NAME, "").strip(),
+            appium_url=_env_str("CONTROLLER_APPIUM_URL", "").strip(),
+            appium_command=(
+                _env_str("CONTROLLER_APPIUM_COMMAND", DEFAULT_APPIUM_COMMAND).strip()
+                or DEFAULT_APPIUM_COMMAND
+            ),
+            ios_team_id=_env_str("CONTROLLER_IOS_TEAM_ID", "").strip(),
+            ios_signing_id=(
+                _env_str("CONTROLLER_IOS_SIGNING_ID", DEFAULT_IOS_SIGNING_ID).strip()
+                or DEFAULT_IOS_SIGNING_ID
+            ),
+            ios_wda_bundle_id=_env_str("CONTROLLER_IOS_WDA_BUNDLE_ID", "").strip(),
+            ios_preinstalled_wda=_env_bool("CONTROLLER_IOS_PREINSTALLED_WDA", False),
+            log_dir=MOBILE_LOG_DIR,
+        ),
+        None,
+    )
+
+
 def _uuid_arg(value: str) -> str:
     try:
         return str(uuid.UUID(value))
@@ -249,6 +309,9 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
     proxy, proxy_problem = _env_proxy()
     if proxy_problem is not None:
         parser.error(proxy_problem)
+    mobile, mobile_problem = load_mobile_settings()
+    if mobile_problem is not None:
+        parser.error(mobile_problem)
 
     return ClientConfig(
         host=args.host or _env_str("CONTROLLER_HOST", "localhost"),
@@ -294,6 +357,7 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
         remove_old_install=args.remove_old_install,
         log_file=args.log_file,
         proxy=proxy,
+        mobile=mobile,
     )
 
 
