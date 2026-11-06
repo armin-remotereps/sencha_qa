@@ -18,7 +18,12 @@ from typing import Final
 
 from appium.webdriver.webdriver import WebDriver
 from PIL import Image, UnidentifiedImageError
-from selenium.common.exceptions import WebDriverException
+from selenium.common.exceptions import (
+    InvalidSessionIdException,
+    NoSuchDriverException,
+    WebDriverException,
+)
+from urllib3.exceptions import HTTPError as Urllib3HTTPError
 
 from controller_client import mobile_gestures as gestures
 from controller_client.diagnostics import DiagnosticStep
@@ -396,25 +401,31 @@ class MobileBackend:
         reaches the server before its cleanup timeout; apps left when the
         budget runs short are reported, not closed."""
         app_ids = self._policy.take_launched()
-        return self._session.call(lambda driver: self._cleanup(driver, app_ids))
-
-    def _cleanup(self, driver: WebDriver, app_ids: list[str]) -> list[str]:
+        # Set before the call: the lock wait and an inline session recreate
+        # (which runs the operation again) spend the same budget.
         deadline = time.monotonic() + CLEANUP_BUDGET_SECONDS
+        return self._session.call(
+            lambda driver: self._cleanup(driver, app_ids, deadline)
+        )
+
+    def _cleanup(
+        self, driver: WebDriver, app_ids: list[str], deadline: float
+    ) -> list[str]:
         lines: list[str] = []
         for app_id in app_ids:
             if not _request_fits(deadline):
                 lines.append(f"Left {app_id} open (no time left)")
                 continue
             lines.append(self._cleanup_app(driver, app_id))
-        if _request_fits(deadline):
+        # Hiding the keyboard and going home are two requests each.
+        if _request_fits(deadline, requests=2):
             try:
                 if _hide_keyboard(driver):
                     lines.append("Hid the keyboard")
-            except WebDriverException as exc:
-                lines.append(
-                    f"Could not hide the keyboard: {bounded(str(exc.msg or exc))}"
-                )
-        if _request_fits(deadline):
+            except _CLEANUP_STEP_ERRORS as exc:
+                _reraise_session_loss(exc)
+                lines.append(f"Could not hide the keyboard: {_step_error(exc)}")
+        if _request_fits(deadline, requests=2):
             self._go_home(driver)
             lines.append("Went to the home screen")
         return lines
@@ -514,8 +525,9 @@ class MobileBackend:
             return f"Left {app_id} open (never closed)"
         try:
             return _terminate(driver, app_id)
-        except WebDriverException as exc:
-            return f"Could not close {app_id}: {bounded(str(exc.msg or exc))}"
+        except _CLEANUP_STEP_ERRORS as exc:
+            _reraise_session_loss(exc)
+            return f"Could not close {app_id}: {_step_error(exc)}"
 
     def _go_home(self, driver: WebDriver) -> None:
         self._platform.press_button(driver, MobileButton.HOME)
@@ -536,10 +548,27 @@ def _hide_keyboard(driver: WebDriver) -> bool:
     return True
 
 
-def _request_fits(deadline: float) -> bool:
-    """Whether one more device request (at most COMMAND_HTTP_TIMEOUT_SECONDS)
-    finishes before ``deadline``."""
-    return time.monotonic() + COMMAND_HTTP_TIMEOUT_SECONDS <= deadline
+# One cleanup step failing (driver error, read timeout, socket error) is a
+# line; a lost session is re-raised so the session recreates it.
+_CLEANUP_STEP_ERRORS: Final = (WebDriverException, Urllib3HTTPError, OSError)
+
+
+def _request_fits(deadline: float, requests: int = 1) -> bool:
+    """Whether ``requests`` more device requests (each at most
+    COMMAND_HTTP_TIMEOUT_SECONDS) finish before ``deadline``."""
+    return time.monotonic() + requests * COMMAND_HTTP_TIMEOUT_SECONDS <= deadline
+
+
+def _step_error(exc: Exception) -> str:
+    if isinstance(exc, WebDriverException):
+        return bounded(str(exc.msg or exc))
+    return bounded(str(exc) or type(exc).__name__)
+
+
+def _reraise_session_loss(exc: Exception) -> None:
+    """A lost session must reach the session's recreate path, not a line."""
+    if isinstance(exc, (InvalidSessionIdException, NoSuchDriverException)):
+        raise exc
 
 
 def _terminate(driver: WebDriver, app_id: str) -> str:

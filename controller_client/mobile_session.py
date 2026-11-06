@@ -54,8 +54,10 @@ _SESSION_CREATE_HTTP_TIMEOUT_SECONDS: Final[int] = 900
 # would read as "Test Runner stopped responding".
 _ACTION_BUDGET_SECONDS: Final[float] = 24.0
 _INSTALL_BUDGET_SECONDS: Final[float] = 270.0
-# Per device request: two requests (resolve an app, then act) fit one
-# action's budget.
+# Per device request. Two requests (resolve an app by id, then act) fit one
+# action's budget; resolving a visible name can take one or two more, so on
+# a degraded device such an action may answer late (the server then reports
+# the runner unresponsive and the case asks for help).
 COMMAND_HTTP_TIMEOUT_SECONDS: Final[int] = 11
 _COMMAND_HTTP_TIMEOUT_SECONDS: Final[int] = COMMAND_HTTP_TIMEOUT_SECONDS
 # Device cleanup runs in one call and stops starting requests that would not
@@ -64,7 +66,9 @@ CLEANUP_BUDGET_SECONDS: Final[float] = 22.0
 # After a read timeout the device is looked up within what is left of the
 # budget, keeping this margin for the reply.
 _LOOKUP_MARGIN_SECONDS: Final[float] = 0.5
-_MIN_LOOKUP_SECONDS: Final[float] = 1.0
+# devicectl needs a few seconds; a shorter lookup would time out and read a
+# connected phone as gone.
+_MIN_LOOKUP_SECONDS: Final[float] = 5.0
 INSTALL_HTTP_TIMEOUT_SECONDS: Final[int] = 240
 # A session lost mid-action is recreated inline only within the budget left;
 # otherwise the device monitor restarts it with the full creation timeout.
@@ -264,6 +268,15 @@ class MobileSession:
     def _recreate_locked(self, deadline: float) -> WebDriver:
         """A new session within the budget left; DeviceDisconnectedError (the
         device monitor then restarts it) when that is not possible."""
+        # Set before the old session is quit (an HTTP call), so the device
+        # monitor never sees "no session" and starts a second one.
+        self._recreating = True
+        try:
+            return self._recreate(deadline)
+        finally:
+            self._recreating = False
+
+    def _recreate(self, deadline: float) -> WebDriver:
         old, self._driver = self._driver, None
         self._config = None
         if old is not None:
@@ -271,7 +284,6 @@ class MobileSession:
         seconds = min(_RECREATE_HTTP_TIMEOUT_SECONDS, int(deadline - time.monotonic()))
         if not self._server_url or seconds < _MIN_PHASE_SECONDS:
             raise DeviceDisconnectedError(_NO_SESSION)
-        self._recreating = True
         try:
             driver, config = self._create(self._server_url, seconds)
         except ExecutionError as exc:
@@ -279,8 +291,6 @@ class MobileSession:
                 "The phone's session was lost and could not be recreated "
                 f"(the Test Runner keeps trying): {exc}"
             ) from exc
-        finally:
-            self._recreating = False
         self._driver, self._config = driver, config
         return driver
 
