@@ -5,12 +5,9 @@ import subprocess
 import threading
 import time
 from collections.abc import Callable
-from typing import Final
 
 from PIL import Image
 
-from controller_client.desktop import get_desktop_backend
-from controller_client.desktop_backend import DesktopBackend
 from controller_client.exceptions import ExecutionError
 from controller_client.input_guard import ensure_input_not_blocked
 from controller_client.interactive_session import InteractiveSessionManager
@@ -37,13 +34,20 @@ from controller_client.protocol import (
 )
 from controller_client.screen_capture import capture_screen
 from controller_client.shell_encoding import SHELL_OUTPUT_ENCODING
+from controller_client.target import get_mobile_device, get_target_backend
 
-_DESKTOP: Final[DesktopBackend] = get_desktop_backend()
+
+def _guard_input() -> None:
+    # Windows UIPI concerns host input only; a phone target's input goes to
+    # the device.
+    if get_mobile_device() is None:
+        ensure_input_not_blocked()
 
 
 def to_input(x: int, y: int) -> tuple[int, int]:
     """Map a point from the latest screenshot into the backend's input space."""
-    spaces = ScreenSpaces(_DESKTOP.capture_size(), _DESKTOP.input_size())
+    backend = get_target_backend()
+    spaces = ScreenSpaces(backend.capture_size(), backend.input_size())
     return map_to_input(x, y, spaces)
 
 
@@ -55,11 +59,11 @@ def _point(x: int, y: int, input_x: int, input_y: int) -> str:
 
 
 def execute_click(payload: ClickPayload) -> ActionResultPayload:
-    ensure_input_not_blocked()
+    _guard_input()
     start = time.monotonic()
     x, y = to_input(payload.x, payload.y)
     try:
-        _DESKTOP.click(x, y, payload.button)
+        get_target_backend().click(x, y, payload.button)
     except ExecutionError:
         raise
     except Exception as e:
@@ -76,11 +80,11 @@ def execute_click(payload: ClickPayload) -> ActionResultPayload:
 
 
 def execute_double_click(payload: DoubleClickPayload) -> ActionResultPayload:
-    ensure_input_not_blocked()
+    _guard_input()
     start = time.monotonic()
     x, y = to_input(payload.x, payload.y)
     try:
-        _DESKTOP.double_click(x, y)
+        get_target_backend().double_click(x, y)
     except ExecutionError:
         raise
     except Exception as e:
@@ -94,11 +98,11 @@ def execute_double_click(payload: DoubleClickPayload) -> ActionResultPayload:
 
 
 def execute_hover(payload: HoverPayload) -> ActionResultPayload:
-    ensure_input_not_blocked()
+    _guard_input()
     start = time.monotonic()
     x, y = to_input(payload.x, payload.y)
     try:
-        _DESKTOP.move_to(x, y)
+        get_target_backend().move_to(x, y)
     except ExecutionError:
         raise
     except Exception as e:
@@ -112,12 +116,12 @@ def execute_hover(payload: HoverPayload) -> ActionResultPayload:
 
 
 def execute_drag(payload: DragPayload) -> ActionResultPayload:
-    ensure_input_not_blocked()
+    _guard_input()
     start = time.monotonic()
     start_x, start_y = to_input(payload.start_x, payload.start_y)
     end_x, end_y = to_input(payload.end_x, payload.end_y)
     try:
-        _DESKTOP.drag(
+        get_target_backend().drag(
             start_x,
             start_y,
             end_x,
@@ -142,7 +146,7 @@ def execute_drag(payload: DragPayload) -> ActionResultPayload:
 
 def execute_scroll(payload: ScrollPayload) -> ActionResultPayload:
     # Windows UIPI drops wheel events too.
-    ensure_input_not_blocked()
+    _guard_input()
     start = time.monotonic()
     if payload.x is not None and payload.y is not None:
         x, y = to_input(payload.x, payload.y)
@@ -153,7 +157,7 @@ def execute_scroll(payload: ScrollPayload) -> ActionResultPayload:
         input_x = input_y = None
         where = "at the pointer"
     try:
-        _DESKTOP.scroll(payload.direction, payload.amount, input_x, input_y)
+        get_target_backend().scroll(payload.direction, payload.amount, input_x, input_y)
     except ExecutionError:
         raise
     except Exception as e:
@@ -168,10 +172,10 @@ def execute_scroll(payload: ScrollPayload) -> ActionResultPayload:
 
 
 def execute_type_text(payload: TypeTextPayload) -> ActionResultPayload:
-    ensure_input_not_blocked()
+    _guard_input()
     start = time.monotonic()
     try:
-        _DESKTOP.type_text(payload.text, payload.interval)
+        get_target_backend().type_text(payload.text, payload.interval)
     except ExecutionError:
         raise
     except Exception as e:
@@ -194,19 +198,19 @@ def _normalize_key(key: str, *, in_combination: bool) -> str:
     # A lone uppercase letter means shift+letter to the backend; inside a
     # combination "cmd+N" means Cmd+N, so lowercase it there.
     name = key.lower() if len(key) > 1 or in_combination else key
-    resolved = _DESKTOP.resolve_key(name)
+    resolved = get_target_backend().resolve_key(name)
     if resolved is None:
         raise ExecutionError(f"Unknown key: {key!r}")
     return resolved
 
 
 def execute_key_press(payload: KeyPressPayload) -> ActionResultPayload:
-    ensure_input_not_blocked()
+    _guard_input()
     start = time.monotonic()
     parts = [k.strip() for k in payload.keys.split("+")]
     keys = [_normalize_key(k, in_combination=len(parts) > 1) for k in parts]
     try:
-        _DESKTOP.press_keys(keys)
+        get_target_backend().press_keys(keys)
     except ExecutionError:
         raise
     except Exception as e:
