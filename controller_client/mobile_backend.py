@@ -261,6 +261,7 @@ class MobileBackend:
             self._starting = True
             self._attempted = True
             self._failure = ""
+        self._session.mark_starting(True)
         try:
             self._start_session()
         except DeviceDisconnectedError:
@@ -270,21 +271,33 @@ class MobileBackend:
             with self._state_lock:
                 self._failure = _detail(str(exc))
         finally:
+            self._session.mark_starting(False)
             with self._state_lock:
                 self._starting = False
 
     def stop(self) -> None:
-        """Release the device for good (exit or self-update); never raises."""
+        """Release the device (exit or self-update) until ``reacquire``;
+        never raises. A start running meanwhile tears down what it made."""
         with self._state_lock:
             self._released = True
         self._session.close()
         self._server.stop()
 
+    def reacquire(self) -> None:
+        """Undo ``stop``: the device monitor starts a new session."""
+        with self._state_lock:
+            if not self._released:
+                return
+            self._released = False
+            self._failure = ""
+            self._needs_restart = True
+        logger.info("The device is ours again; the session restarts")
+
     def status(self) -> DeviceStatusPayload:
         with self._state_lock:
             if self._released:
                 return DeviceStatusPayload(DeviceState.DISCONNECTED, _RELEASED)
-        found = find_device(self.target, self._device.device_id)
+        found = self._find_self()
         if found is None or found.state is DeviceState.DISCONNECTED:
             with self._state_lock:
                 self._needs_restart = self._attempted
@@ -336,7 +349,7 @@ class MobileBackend:
         self._session.call(lambda driver: self._platform.open_url(driver, url))
 
     def install_app(self, path: str) -> str:
-        return self._session.call(
+        return self._session.call_install(
             lambda driver: self._platform.install_app(driver, path)
         )
 
@@ -384,8 +397,12 @@ class MobileBackend:
 
     # --- helpers ----------------------------------------------------------
 
+    def _find_self(self) -> DiscoveredDevice | None:
+        device = self._device
+        return find_device(self.target, device.device_id, device.kind)
+
     def _start_session(self) -> None:
-        found = find_device(self.target, self._device.device_id)
+        found = self._find_self()
         if found is None or found.state is DeviceState.DISCONNECTED:
             raise DeviceDisconnectedError(
                 f"{self._device.name} ({self._device.device_id}) is not connected"
@@ -393,7 +410,9 @@ class MobileBackend:
         if found.state is DeviceState.UNAUTHORIZED:
             raise ExecutionError(_UNAUTHORIZED_HINTS[self.target])
         url = self._settings.appium_url or self._server.start()
+        self._abort_if_released()
         self._session.open(url)
+        self._abort_if_released()
         with self._state_lock:
             self._needs_restart = False
         try:
@@ -403,10 +422,18 @@ class MobileBackend:
             # session failure.
             logger.warning("First screenshot of the phone failed: %s", exc)
 
+    def _abort_if_released(self) -> None:
+        """Undo this start's work when ``stop`` ran meanwhile."""
+        with self._state_lock:
+            released = self._released
+        if released:
+            self._session.close()
+            self._server.stop()
+            raise DeviceDisconnectedError(_RELEASED)
+
     def _session_status(self) -> DeviceStatusPayload:
         with self._state_lock:
-            starting = self._starting or self._session.opening
-            if starting or not self._attempted:
+            if self._starting or not self._attempted:
                 return DeviceStatusPayload(DeviceState.STARTING, _NOT_STARTED)
             if self._failure:
                 return DeviceStatusPayload(DeviceState.UNAVAILABLE, self._failure)
@@ -418,7 +445,18 @@ class MobileBackend:
         png = driver.get_screenshot_as_png()
         with Image.open(io.BytesIO(png)) as probe:
             capture = probe.size
-        return png, self._platform.input_size(driver, capture)
+        return png, self._input_for(driver, capture)
+
+    def _input_for(
+        self, driver: WebDriver, capture: tuple[int, int]
+    ) -> tuple[int, int]:
+        """The input size, asked again only when the screenshot size changed
+        (``rotate`` clears it too)."""
+        with self._state_lock:
+            known_capture, known_input = self._capture, self._input
+        if known_capture == capture and known_input is not None:
+            return known_input
+        return self._platform.input_size(driver, capture)
 
     def _scale(self) -> str:
         capture, input_size = self._capture, self._input

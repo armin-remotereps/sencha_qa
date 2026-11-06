@@ -7,7 +7,9 @@ Linux: its own session (no SIGHUP from the old terminal), stdin from
 WAYLAND_DISPLAY, DBUS_SESSION_BUS_ADDRESS, XDG_*) is inherited.
 
 On a phone target the old runner first quits its Appium session and its
-managed Appium server, so the new runner can claim the device.
+managed Appium server (``release_mobile_device``), so the new runner can
+claim the device; when the update fails after that, ``reacquire_mobile_device``
+gives it back to the old runner.
 
 The new runner writes a marker file once the server accepted its handshake,
 so the old runner learns about the handover even if its own socket dropped
@@ -73,8 +75,9 @@ def is_handed_over(install_root: Path, update_id: str) -> bool:
 def spawn_new_runner(
     new_python: Path, new_root: Path, args: Sequence[str]
 ) -> SpawnedRunner:
-    """Start ``<new_python> -m controller_client.main *args`` in ``new_root``."""
-    _release_mobile_device()
+    """Start ``<new_python> -m controller_client.main *args`` in ``new_root``.
+
+    The caller releases the phone first (``release_mobile_device``)."""
     command = [str(new_python), "-m", "controller_client.main", *args]
     log_dir = logs_dir(new_root)
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -108,13 +111,23 @@ def spawn_new_runner(
     return SpawnedRunner(pid=process.pid, create_time=create_time, log_path=log_path)
 
 
-def _release_mobile_device() -> None:
+def release_mobile_device() -> None:
     """Quit the phone's session and the managed Appium (never raises)."""
     device = get_mobile_device()
     if device is None:
         return
     logger.info("Releasing the device for the new Test Runner")
     device.stop()
+
+
+def reacquire_mobile_device() -> None:
+    """Take the phone back after a failed handover (never raises): the
+    device monitor starts a new session."""
+    device = get_mobile_device()
+    if device is None:
+        return
+    logger.info("The update failed; taking the device back")
+    device.reacquire()
 
 
 if sys.platform == "win32":

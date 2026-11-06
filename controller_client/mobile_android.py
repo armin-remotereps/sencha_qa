@@ -49,7 +49,8 @@ _APK_SUFFIXES: Final[frozenset[str]] = frozenset({".apk"})
 _VIEW_ACTION: Final[str] = "android.intent.action.VIEW"
 _SERVER_LAUNCH_TIMEOUT_MS: Final[int] = 120_000
 _ADB_EXEC_TIMEOUT_MS: Final[int] = 60_000
-_INSTALL_TIMEOUT_MS: Final[int] = 120_000
+# Under the runner's install HTTP timeout (mobile_session, 240 s).
+_INSTALL_TIMEOUT_MS: Final[int] = 230_000
 # Used when the driver cannot list installed apps.
 _WELL_KNOWN_APPS: Final[dict[str, str]] = {
     "com.android.chrome": "Chrome",

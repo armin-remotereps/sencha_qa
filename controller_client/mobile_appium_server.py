@@ -2,8 +2,10 @@
 
 Started with ``CONTROLLER_APPIUM_COMMAND`` (``appium``) on a free local port,
 never with ``--relaxed-security``, so ``adb shell`` and the like stay off.
-Its output goes to a log file under the runner's log folder. Nothing is ever
-installed: a missing Node.js, Appium or driver is reported with the commands
+Its output goes to ``appium.log`` under the runner's log folder, rotated at
+every start (one previous file kept as ``appium.log.1``), at ``info`` level so
+request bodies (typed text, possibly test passwords) are not logged. Nothing
+is ever installed: a missing Node.js, Appium or driver is reported with the commands
 the person runs.
 """
 
@@ -39,6 +41,10 @@ _STATUS_TIMEOUT_SECONDS: Final[float] = 3.0
 _STOP_TIMEOUT_SECONDS: Final[float] = 10.0
 _TOOL_TIMEOUT_SECONDS: Final[float] = 60.0
 _LOG_TAIL_CHARS: Final[int] = 600
+APPIUM_LOG_NAME: Final[str] = "appium.log"
+_PREVIOUS_LOG_SUFFIX: Final[str] = ".1"
+# "info" leaves out the debug lines that carry request bodies.
+_APPIUM_LOG_LEVEL: Final[str] = "info"
 _MAX_STATUS_BYTES: Final[int] = 64 * 1024
 
 # appium-xcuitest-driver 13 needs ^22.22.2 || ^24.15.0 || >=26; Appium 3 itself
@@ -242,12 +248,13 @@ class ManagedAppiumServer:
             LOCAL_HOST,
             "--port",
             str(port),
+            "--log-level",
+            _APPIUM_LOG_LEVEL,
             "--log-no-colors",
             "--log-timestamp",
         ]
-        self._log_dir.mkdir(parents=True, exist_ok=True)
-        self._log_path = self._log_dir / f"appium-{port}.log"
-        self._log_file = self._log_path.open("ab")
+        self._log_path = _rotated_log(self._log_dir)
+        self._log_file = self._log_path.open("wb")
         logger.info(
             "Starting Appium on %s:%d (log %s)", LOCAL_HOST, port, self._log_path
         )
@@ -319,6 +326,19 @@ class ManagedAppiumServer:
             except OSError:
                 pass
             self._log_file = None
+
+
+def _rotated_log(log_dir: Path) -> Path:
+    """``<log_dir>/appium.log``, the previous one moved to ``appium.log.1``."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    path = log_dir / APPIUM_LOG_NAME
+    try:
+        if path.exists():
+            path.replace(path.with_name(APPIUM_LOG_NAME + _PREVIOUS_LOG_SUFFIX))
+    except OSError as exc:
+        # Opening with "wb" truncates it instead.
+        logger.warning("Could not keep the previous Appium log: %s", exc)
+    return path
 
 
 def _terminate_tree(process: subprocess.Popen[bytes]) -> None:

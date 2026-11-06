@@ -43,6 +43,11 @@ class MobileDevice(Protocol):
         """Quit the session and release the device; never raises."""
         ...
 
+    def reacquire(self) -> None:
+        """Undo ``stop`` (a self-update that did not hand over): the device
+        monitor then starts a new session; never raises."""
+        ...
+
     def status(self) -> DeviceStatusPayload:
         """The current device state without using the session; never raises."""
         ...

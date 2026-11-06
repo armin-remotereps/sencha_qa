@@ -90,17 +90,20 @@ def discover_devices(target: RunnerTarget) -> list[DiscoveredDevice]:
     return []
 
 
-def find_device(target: RunnerTarget, device_id: str) -> DiscoveredDevice | None:
+def find_device(
+    target: RunnerTarget, device_id: str, kind: DeviceKind | None = None
+) -> DiscoveredDevice | None:
     """The device with ``device_id``, or None; never raises.
 
     Cheaper than ``discover_devices`` (no per-device ``getprop``), so the
-    device monitor can call it every few seconds.
+    device monitor can call it every few seconds. A known iOS ``kind`` runs
+    only its lister (simctl for a simulator, devicectl for a real device).
     """
     try:
         if target is RunnerTarget.ANDROID:
             candidates = _android_devices(with_details=False)
         elif target is RunnerTarget.IOS:
-            candidates = _ios_simulators() + _ios_real_devices()
+            candidates = _ios_candidates(kind)
         else:
             return None
     except Exception:
@@ -110,6 +113,14 @@ def find_device(target: RunnerTarget, device_id: str) -> DiscoveredDevice | None
         if device.device_id == device_id:
             return device
     return None
+
+
+def _ios_candidates(kind: DeviceKind | None) -> list[DiscoveredDevice]:
+    if kind is DeviceKind.SIMULATOR:
+        return _ios_simulators()
+    if kind is DeviceKind.PHYSICAL:
+        return _ios_real_devices()
+    return _ios_simulators() + _ios_real_devices()
 
 
 def describe_missing_tools(target: RunnerTarget) -> str | None:

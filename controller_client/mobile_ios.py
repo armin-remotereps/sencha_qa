@@ -128,6 +128,7 @@ class IosPlatform:
     def input_size(
         self, driver: WebDriver, capture: tuple[int, int]
     ) -> tuple[int, int]:
+        # The backend reuses the answer while the screenshot size is unchanged.
         size = driver.get_window_size()
         width, height = size.get("width"), size.get("height")
         if isinstance(width, (int, float)) and isinstance(height, (int, float)):
