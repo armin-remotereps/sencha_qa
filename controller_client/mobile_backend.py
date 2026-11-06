@@ -413,8 +413,13 @@ class MobileBackend:
     ) -> list[str]:
         # Home first (two requests): it also dismisses the keyboard and
         # records the launcher as protected before any app is closed.
-        self._go_home(driver)
-        lines = ["Went to the home screen"]
+        try:
+            self._go_home(driver)
+            lines = ["Went to the home screen"]
+        except _CLEANUP_STEP_ERRORS as exc:
+            # Still close the launched apps: they are not offered again.
+            _reraise_session_loss(exc)
+            lines = [f"Could not go to the home screen: {_step_error(exc)}"]
         for app_id in app_ids:
             if not _request_fits(deadline):
                 lines.append(f"Left {app_id} open (no time left)")

@@ -187,8 +187,8 @@ def execute_device_check_app_installed(
 def execute_device_cleanup(host: ActionResultPayload) -> ActionResultPayload:
     """Add the device cleanup to the host cleanup's result (Q5a).
 
-    Terminates the apps launched since the last cleanup, hides the keyboard
-    and goes home. A failure is reported in the message and fails the
+    Goes home (which dismisses the keyboard), then terminates the apps
+    launched since the last cleanup while time remains. A failure is reported in the message and fails the
     cleanup, like a host step; a device that is gone still raises.
     """
     device = _device()
