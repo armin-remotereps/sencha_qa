@@ -3758,8 +3758,19 @@ OPEN_URL_MAX_CHARS: Final[int] = PERSON_STEP_URL_MAX_CHARS
 _URL_SCHEME_RE: Final[re.Pattern[str]] = re.compile(r"([A-Za-z][A-Za-z0-9+.-]{0,31}):")
 # Schemes that run code or read local files in the device's browser.
 _REFUSED_URL_SCHEMES: Final[frozenset[str]] = frozenset(
-    # ``intent:`` starts arbitrary Android activities; launch_app covers apps.
-    {"javascript", "file", "data", "vbscript", "content", "blob", "about", "intent"}
+    # ``intent:`` / ``android-app:`` start arbitrary Android activities;
+    # launch_app covers apps.
+    {
+        "javascript",
+        "file",
+        "data",
+        "vbscript",
+        "content",
+        "blob",
+        "about",
+        "intent",
+        "android-app",
+    }
 )
 
 

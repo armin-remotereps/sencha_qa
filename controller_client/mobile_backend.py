@@ -12,11 +12,13 @@ from __future__ import annotations
 import io
 import logging
 import threading
+import time
 from collections.abc import Sequence
 from typing import Final
 
 from appium.webdriver.webdriver import WebDriver
 from PIL import Image, UnidentifiedImageError
+from selenium.common.exceptions import WebDriverException
 
 from controller_client import mobile_gestures as gestures
 from controller_client.diagnostics import DiagnosticStep
@@ -30,7 +32,12 @@ from controller_client.mobile_appium_server import ManagedAppiumServer
 from controller_client.mobile_checks import device_steps, prerequisite_steps
 from controller_client.mobile_discovery import DiscoveredDevice, find_device
 from controller_client.mobile_platform import MobilePlatform
-from controller_client.mobile_session import MobileSession, bounded
+from controller_client.mobile_session import (
+    CLEANUP_BUDGET_SECONDS,
+    COMMAND_HTTP_TIMEOUT_SECONDS,
+    MobileSession,
+    bounded,
+)
 from controller_client.mobile_settings import MobileSettings
 from controller_client.protocol import (
     DEFAULT_SWIPE_DURATION,
@@ -364,16 +371,18 @@ class MobileBackend:
         return app_id
 
     def close_app(self, app: str, force: bool) -> str:
-        # ``force`` changes nothing: a phone app is always terminated.
-        app_id = self._session.call(
-            lambda driver: self._platform.resolve_app(driver, app)
-        )
-        if self._policy.is_protected(app_id):
-            raise ExecutionError(
-                f"{app_id} is the home screen or part of the test automation "
-                "and is never closed; press home instead"
-            )
-        message = self._session.call(lambda driver: _terminate(driver, app_id))
+        # ``force`` changes nothing: a phone app is always terminated. One
+        # call, so resolving and terminating share one time budget.
+        def operation(driver: WebDriver) -> tuple[str, str]:
+            app_id = self._platform.resolve_app(driver, app)
+            if self._policy.is_protected(app_id):
+                raise ExecutionError(
+                    f"{app_id} is the home screen or part of the test automation "
+                    "and is never closed; press home instead"
+                )
+            return app_id, _terminate(driver, app_id)
+
+        app_id, message = self._session.call(operation)
         self._policy.note_closed(app_id)
         return message
 
@@ -383,16 +392,31 @@ class MobileBackend:
         )
 
     def cleanup(self) -> list[str]:
-        lines = [self._cleanup_app(app_id) for app_id in self._policy.take_launched()]
-        try:
-            if self.hide_keyboard():
-                lines.append("Hid the keyboard")
-        except DeviceDisconnectedError:
-            raise
-        except ExecutionError as exc:
-            lines.append(f"Could not hide the keyboard: {exc}")
-        self._session.call(self._go_home)
-        lines.append("Went to the home screen")
+        """One call: every request fits the call's budget, so the reply
+        reaches the server before its cleanup timeout; apps left when the
+        budget runs short are reported, not closed."""
+        app_ids = self._policy.take_launched()
+        return self._session.call(lambda driver: self._cleanup(driver, app_ids))
+
+    def _cleanup(self, driver: WebDriver, app_ids: list[str]) -> list[str]:
+        deadline = time.monotonic() + CLEANUP_BUDGET_SECONDS
+        lines: list[str] = []
+        for app_id in app_ids:
+            if not _request_fits(deadline):
+                lines.append(f"Left {app_id} open (no time left)")
+                continue
+            lines.append(self._cleanup_app(driver, app_id))
+        if _request_fits(deadline):
+            try:
+                if _hide_keyboard(driver):
+                    lines.append("Hid the keyboard")
+            except WebDriverException as exc:
+                lines.append(
+                    f"Could not hide the keyboard: {bounded(str(exc.msg or exc))}"
+                )
+        if _request_fits(deadline):
+            self._go_home(driver)
+            lines.append("Went to the home screen")
         return lines
 
     # --- helpers ----------------------------------------------------------
@@ -415,6 +439,8 @@ class MobileBackend:
         self._abort_if_released()
         with self._state_lock:
             self._needs_restart = False
+        # The session is up: let the first screenshot (and agent actions) in.
+        self._session.mark_starting(False)
         try:
             self.screenshot()
         except ExecutionError as exc:
@@ -433,7 +459,7 @@ class MobileBackend:
 
     def _session_status(self) -> DeviceStatusPayload:
         with self._state_lock:
-            if self._starting or not self._attempted:
+            if self._starting or not self._attempted or self._session.recreating:
                 return DeviceStatusPayload(DeviceState.STARTING, _NOT_STARTED)
             if self._failure:
                 return DeviceStatusPayload(DeviceState.UNAVAILABLE, self._failure)
@@ -483,15 +509,13 @@ class MobileBackend:
         )
         return start, end
 
-    def _cleanup_app(self, app_id: str) -> str:
+    def _cleanup_app(self, driver: WebDriver, app_id: str) -> str:
         if self._policy.is_protected(app_id):
             return f"Left {app_id} open (never closed)"
         try:
-            return self._session.call(lambda driver: _terminate(driver, app_id))
-        except DeviceDisconnectedError:
-            raise
-        except ExecutionError as exc:
-            return f"Could not close {app_id}: {exc}"
+            return _terminate(driver, app_id)
+        except WebDriverException as exc:
+            return f"Could not close {app_id}: {bounded(str(exc.msg or exc))}"
 
     def _go_home(self, driver: WebDriver) -> None:
         self._platform.press_button(driver, MobileButton.HOME)
@@ -510,6 +534,12 @@ def _hide_keyboard(driver: WebDriver) -> bool:
         return False
     driver.hide_keyboard()
     return True
+
+
+def _request_fits(deadline: float) -> bool:
+    """Whether one more device request (at most COMMAND_HTTP_TIMEOUT_SECONDS)
+    finishes before ``deadline``."""
+    return time.monotonic() + COMMAND_HTTP_TIMEOUT_SECONDS <= deadline
 
 
 def _terminate(driver: WebDriver, app_id: str) -> str:

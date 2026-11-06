@@ -91,19 +91,26 @@ def discover_devices(target: RunnerTarget) -> list[DiscoveredDevice]:
 
 
 def find_device(
-    target: RunnerTarget, device_id: str, kind: DeviceKind | None = None
+    target: RunnerTarget,
+    device_id: str,
+    kind: DeviceKind | None = None,
+    timeout: float | None = None,
 ) -> DiscoveredDevice | None:
     """The device with ``device_id``, or None; never raises.
 
     Cheaper than ``discover_devices`` (no per-device ``getprop``), so the
     device monitor can call it every few seconds. A known iOS ``kind`` runs
     only its lister (simctl for a simulator, devicectl for a real device).
+    ``timeout`` caps each listing command (default: the module's limits), so
+    a caller with a deadline is never held past it.
     """
     try:
         if target is RunnerTarget.ANDROID:
-            candidates = _android_devices(with_details=False)
+            candidates = _android_devices(
+                with_details=False, timeout=timeout or _ADB_TIMEOUT_SECONDS
+            )
         elif target is RunnerTarget.IOS:
-            candidates = _ios_candidates(kind)
+            candidates = _ios_candidates(kind, timeout or _XCRUN_TIMEOUT_SECONDS)
         else:
             return None
     except Exception:
@@ -115,12 +122,12 @@ def find_device(
     return None
 
 
-def _ios_candidates(kind: DeviceKind | None) -> list[DiscoveredDevice]:
+def _ios_candidates(kind: DeviceKind | None, timeout: float) -> list[DiscoveredDevice]:
     if kind is DeviceKind.SIMULATOR:
-        return _ios_simulators()
+        return _ios_simulators(timeout)
     if kind is DeviceKind.PHYSICAL:
-        return _ios_real_devices()
-    return _ios_simulators() + _ios_real_devices()
+        return _ios_real_devices(timeout)
+    return _ios_simulators(timeout) + _ios_real_devices(timeout)
 
 
 def describe_missing_tools(target: RunnerTarget) -> str | None:
@@ -161,11 +168,13 @@ def _adb_path() -> str | None:
     return shutil.which("adb")
 
 
-def _android_devices(*, with_details: bool) -> list[DiscoveredDevice]:
+def _android_devices(
+    *, with_details: bool, timeout: float = _ADB_TIMEOUT_SECONDS
+) -> list[DiscoveredDevice]:
     adb = _adb_path()
     if adb is None:
         return []
-    output = _run([adb, "devices", "-l"], _ADB_TIMEOUT_SECONDS)
+    output = _run([adb, "devices", "-l"], timeout)
     if output is None:
         return []
     devices: list[DiscoveredDevice] = []
@@ -237,12 +246,10 @@ def _xcrun_finds(tool: str) -> bool:
     return _run(["xcrun", "--find", tool], _XCRUN_TIMEOUT_SECONDS) is not None
 
 
-def _ios_simulators() -> list[DiscoveredDevice]:
+def _ios_simulators(timeout: float = _XCRUN_TIMEOUT_SECONDS) -> list[DiscoveredDevice]:
     if sys.platform != "darwin" or shutil.which("xcrun") is None:
         return []
-    output = _run(
-        ["xcrun", "simctl", "list", "devices", "booted", "-j"], _XCRUN_TIMEOUT_SECONDS
-    )
+    output = _run(["xcrun", "simctl", "list", "devices", "booted", "-j"], timeout)
     if output is None:
         return []
     try:
@@ -293,7 +300,9 @@ def _parse_simulator(entry: object, version: str) -> DiscoveredDevice | None:
     )
 
 
-def _ios_real_devices() -> list[DiscoveredDevice]:
+def _ios_real_devices(
+    timeout: float = _XCRUN_TIMEOUT_SECONDS,
+) -> list[DiscoveredDevice]:
     if sys.platform != "darwin" or shutil.which("xcrun") is None:
         return []
     with tempfile.TemporaryDirectory(prefix="ph-devicectl-") as folder:
@@ -308,7 +317,7 @@ def _ios_real_devices() -> list[DiscoveredDevice]:
                 "--json-output",
                 str(json_path),
             ],
-            _XCRUN_TIMEOUT_SECONDS,
+            timeout,
         )
         if output is None or not json_path.is_file():
             return []

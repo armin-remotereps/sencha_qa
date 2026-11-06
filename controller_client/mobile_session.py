@@ -54,7 +54,17 @@ _SESSION_CREATE_HTTP_TIMEOUT_SECONDS: Final[int] = 900
 # would read as "Test Runner stopped responding".
 _ACTION_BUDGET_SECONDS: Final[float] = 24.0
 _INSTALL_BUDGET_SECONDS: Final[float] = 270.0
-_COMMAND_HTTP_TIMEOUT_SECONDS: Final[int] = 20
+# Per device request: two requests (resolve an app, then act) fit one
+# action's budget.
+COMMAND_HTTP_TIMEOUT_SECONDS: Final[int] = 11
+_COMMAND_HTTP_TIMEOUT_SECONDS: Final[int] = COMMAND_HTTP_TIMEOUT_SECONDS
+# Device cleanup runs in one call and stops starting requests that would not
+# finish within this (under the action budget).
+CLEANUP_BUDGET_SECONDS: Final[float] = 22.0
+# After a read timeout the device is looked up within what is left of the
+# budget, keeping this margin for the reply.
+_LOOKUP_MARGIN_SECONDS: Final[float] = 0.5
+_MIN_LOOKUP_SECONDS: Final[float] = 1.0
 INSTALL_HTTP_TIMEOUT_SECONDS: Final[int] = 240
 # A session lost mid-action is recreated inline only within the budget left;
 # otherwise the device monitor restarts it with the full creation timeout.
@@ -157,10 +167,17 @@ class MobileSession:
         self._config: AppiumClientConfig | None = None
         self._server_url = ""
         self._starting = False
+        self._recreating = False
 
     @property
     def active(self) -> bool:
         return self._driver is not None
+
+    @property
+    def recreating(self) -> bool:
+        """An action is recreating a lost session inline; the device monitor
+        must not start another one meanwhile."""
+        return self._recreating
 
     def mark_starting(self, starting: bool) -> None:
         """Set while the backend (re)starts Appium and the session: calls
@@ -221,7 +238,7 @@ class MobileSession:
         except ExecutionError:
             raise
         except _CALL_ERRORS as exc:
-            raise self._translate(exc, limits) from exc
+            raise self._translate(exc, limits, deadline) from exc
         driver = self._recreate_locked(deadline)
         self._apply_timeout(limits.http_timeout_seconds, deadline)
         try:
@@ -229,7 +246,7 @@ class MobileSession:
         except ExecutionError:
             raise
         except _CALL_ERRORS as exc:
-            raise self._translate(exc, limits) from exc
+            raise self._translate(exc, limits, deadline) from exc
 
     def _require_driver(self) -> WebDriver:
         if self._driver is not None:
@@ -254,6 +271,7 @@ class MobileSession:
         seconds = min(_RECREATE_HTTP_TIMEOUT_SECONDS, int(deadline - time.monotonic()))
         if not self._server_url or seconds < _MIN_PHASE_SECONDS:
             raise DeviceDisconnectedError(_NO_SESSION)
+        self._recreating = True
         try:
             driver, config = self._create(self._server_url, seconds)
         except ExecutionError as exc:
@@ -261,25 +279,36 @@ class MobileSession:
                 "The phone's session was lost and could not be recreated "
                 f"(the Test Runner keeps trying): {exc}"
             ) from exc
+        finally:
+            self._recreating = False
         self._driver, self._config = driver, config
         return driver
 
-    def _translate(self, exc: Exception, limits: _CallLimits) -> ExecutionError:
+    def _translate(
+        self, exc: Exception, limits: _CallLimits, deadline: float
+    ) -> ExecutionError:
         if _is_read_timeout(exc):
-            return self._timeout_error(limits)
+            return self._timeout_error(limits, deadline)
         text = bounded(_error_text(exc))
         if _is_device_gone(exc):
             return DeviceDisconnectedError(f"The phone is not reachable: {text}")
         return ExecutionError(text)
 
-    def _timeout_error(self, limits: _CallLimits) -> ExecutionError:
+    def _timeout_error(self, limits: _CallLimits, deadline: float) -> ExecutionError:
         if limits.timeout_is_failure:
             return ExecutionError(
                 "Installing the app did not finish within "
                 f"{limits.http_timeout_seconds} s"
             )
+        # The lookup must fit the budget too, so the reply still reaches the
+        # server before its own timeout.
+        lookup_seconds = deadline - time.monotonic() - _LOOKUP_MARGIN_SECONDS
+        if lookup_seconds < _MIN_LOOKUP_SECONDS:
+            return ExecutionError("The phone did not answer in time; try again")
         device = self._device
-        found = find_device(device.target, device.device_id, device.kind)
+        found = find_device(
+            device.target, device.device_id, device.kind, timeout=lookup_seconds
+        )
         if found is None or found.state is DeviceState.DISCONNECTED:
             return DeviceDisconnectedError(
                 "The phone did not answer and is no longer connected"

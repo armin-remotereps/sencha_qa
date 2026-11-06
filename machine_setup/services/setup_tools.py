@@ -798,15 +798,17 @@ def build_machine_dispatcher(project_id: int) -> ToolDispatcher:
             raise SetupRunnerLostError("The Test Runner is not connected.")
         try:
             return dispatch_tool_call(tool_call, context)
-        except DeviceDisconnectedError:
+        except DeviceDisconnectedError as exc:
             # In a run this pauses the case for help; here reconnecting the
             # phone (adb reconnect, booting the emulator) may be the job.
             return _tool_error(
                 tool_call,
-                "The phone or tablet is disconnected or still starting. Use "
+                f"{exc} If the phone or tablet is disconnected (not just "
+                "starting: then wait and try again), use "
                 "execute_command on the Test Runner computer to reconnect it "
-                '(adb -s "$RUNNER_DEVICE_ID" reconnect, boot the emulator or '
-                "simulator), then wait for it and try again.",
+                "(adb for Android, xcrun simctl / devicectl for iOS, addressing "
+                "the device by RUNNER_DEVICE_ID as the shell rules say; or boot "
+                "the emulator or simulator), then wait for it and try again.",
             )
         except BrowserUnavailableError as exc:
             # In a run this pauses the case for help; here installing the browser is often
