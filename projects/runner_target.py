@@ -49,6 +49,23 @@ def _target_of(system_info: object) -> RunnerTarget:
     return parse_runner_target(system_info)
 
 
+# ``projects.services.MachineState`` values a phone's device may impose.
+DEVICE_MACHINE_STATE_STARTING: Final = "starting"
+DEVICE_MACHINE_STATE_OFFLINE: Final = "device_offline"
+
+
+def device_machine_state(project: Project) -> str | None:
+    """The machine badge state a connected phone runner's device imposes, or
+    None when the device does not hold the badge (desktop, not connected, or
+    READY and fresh). The one rule ``get_machine_state``, the project tables
+    and the all-projects page share (no query)."""
+    if not device_offline(project):
+        return None
+    if project.agent_device_state == RunnerDeviceState.STARTING:
+        return DEVICE_MACHINE_STATE_STARTING
+    return DEVICE_MACHINE_STATE_OFFLINE
+
+
 def device_offline(project: Project) -> bool:
     """A connected phone runner whose device is not READY, or whose last
     device status is older than ``RUNNER_DEVICE_STALE_SECONDS`` (no query).

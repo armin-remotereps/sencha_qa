@@ -31,6 +31,7 @@ from controller_client.protocol import (
     CasePauseActionResultPayload,
     ClientCapability,
     CloseCode,
+    DeviceState,
     ErrorCode,
     ManualCaseActionKind,
     ManualCaseActionResultPayload,
@@ -281,6 +282,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     _mobile_target: bool
     # Loop time of the last ``device_status`` taken; None before the first.
     _last_device_status_at: float | None
+    _last_device_status: tuple[DeviceState, str] | None
 
     async def connect(self) -> None:
         self._authenticated = False
@@ -301,6 +303,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self._push_lock = asyncio.Lock()
         self._mobile_target = False
         self._last_device_status_at = None
+        self._last_device_status = None
         self._reply_tracker = ReplyTracker(self.channel_layer)
         self._authenticator = ControllerAuthenticator()
         self._message_builder = ControllerMessageBuilder(ActionTypeRegistry())
@@ -430,28 +433,33 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     async def _handle_device_status(self, data: dict[str, Any]) -> None:
         """Store a phone runner's device status; broadcast only a change.
 
-        Ignored from a desktop runner and when closer than
-        ``_DEVICE_STATUS_MIN_INTERVAL_SECONDS`` to the last one taken (only
+        Ignored from a desktop runner, and a repeat of the last status (or a
+        malformed one) closer than ``_DEVICE_STATUS_MIN_INTERVAL_SECONDS`` to
+        the previous message; a real change always goes through (only
         authenticated messages reach here).
         """
         if self._project is None or not self._mobile_target:
             return
         now = asyncio.get_running_loop().time()
-        if (
+        recent = (
             self._last_device_status_at is not None
             and now - self._last_device_status_at < _DEVICE_STATUS_MIN_INTERVAL_SECONDS
-        ):
-            return
+        )
+        self._last_device_status_at = now
         try:
             status = parse_device_status_payload(data)
         except ProtocolError as exc:
-            logger.warning(
-                "Ignoring malformed device_status for project %s: %s",
-                self._project.id,
-                exc,
-            )
+            if not recent:
+                logger.warning(
+                    "Ignoring malformed device_status for project %s: %s",
+                    self._project.id,
+                    exc,
+                )
             return
-        self._last_device_status_at = now
+        key = (status.state, status.detail)
+        if recent and key == self._last_device_status:
+            return
+        self._last_device_status = key
         project_id = self._project.id
         changed = await sync_to_async(record_device_status)(
             project_id, self.channel_name, status.state, status.detail

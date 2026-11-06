@@ -124,6 +124,7 @@ from projects.exceptions import (
     ApplicationContextConflictError,
     ApplicationContextError,
     BrowserUnavailableError,
+    DeviceDisconnectedError,
     RunnerOutdatedError,
 )
 from projects.manual_run_policy import MANUAL_TESTER_ON_MACHINE
@@ -797,6 +798,16 @@ def build_machine_dispatcher(project_id: int) -> ToolDispatcher:
             raise SetupRunnerLostError("The Test Runner is not connected.")
         try:
             return dispatch_tool_call(tool_call, context)
+        except DeviceDisconnectedError:
+            # In a run this pauses the case for help; here reconnecting the
+            # phone (adb reconnect, booting the emulator) may be the job.
+            return _tool_error(
+                tool_call,
+                "The phone or tablet is disconnected or still starting. Use "
+                "execute_command on the Test Runner computer to reconnect it "
+                '(adb -s "$RUNNER_DEVICE_ID" reconnect, boot the emulator or '
+                "simulator), then wait for it and try again.",
+            )
         except BrowserUnavailableError as exc:
             # In a run this pauses the case for help; here installing the browser is often
             # exactly the job, so the agent gets to react.

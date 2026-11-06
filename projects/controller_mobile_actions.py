@@ -10,7 +10,7 @@ the case as unresponsive rather than letting the agent judge the app.
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import Final
 
 from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
@@ -48,19 +48,28 @@ def controller_swipe(
     ``x``/``y`` are sent only when given: the message builder skips keys the
     event lacks.
     """
-    # Any: a dict[str, int] splat would also have to fit the bool keyword
-    # runner_local of dispatch_controller_action, which mypy rejects.
-    point: dict[str, Any] = {} if x is None or y is None else {"x": x, "y": y}
-    reply = dispatch_controller_action(
-        project_id,
-        "controller.swipe",
-        timeout,
-        runner_local=True,
-        direction=direction.value,
-        distance=distance,
-        duration=duration,
-        **point,
-    )
+    if x is None or y is None:
+        reply = dispatch_controller_action(
+            project_id,
+            "controller.swipe",
+            timeout,
+            runner_local=True,
+            direction=direction.value,
+            distance=distance,
+            duration=duration,
+        )
+    else:
+        reply = dispatch_controller_action(
+            project_id,
+            "controller.swipe",
+            timeout,
+            runner_local=True,
+            direction=direction.value,
+            distance=distance,
+            duration=duration,
+            x=x,
+            y=y,
+        )
     return build_action_result(reply)
 
 

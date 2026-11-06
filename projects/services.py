@@ -223,7 +223,11 @@ from projects.run_finished_notifications import notify_run_finished
 from projects.run_help_mode_policy import resolve_help_mode
 from projects.runner_bundle import build_runner_archive
 from projects.runner_person_step_push import nudge_runner_person_steps
-from projects.runner_target import DEVICE_NOT_READY_MESSAGE, device_offline
+from projects.runner_target import (
+    DEVICE_NOT_READY_MESSAGE,
+    device_machine_state,
+    device_offline,
+)
 from projects.runner_update_state import (
     RUNNER_UPDATE_RUNNING_MESSAGE,
     runner_update_in_progress,
@@ -557,10 +561,9 @@ def get_machine_state(
     """
     if not project.agent_connected:
         return MachineState.DISCONNECTED
-    if device_offline(project):
-        if project.agent_device_state == RunnerDeviceState.STARTING:
-            return MachineState.STARTING
-        return MachineState.DEVICE_OFFLINE
+    device_state = device_machine_state(project)
+    if device_state is not None:
+        return MachineState(device_state)
     return connected_machine_state(visual_engine)
 
 

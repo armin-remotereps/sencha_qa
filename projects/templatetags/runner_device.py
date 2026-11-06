@@ -20,15 +20,13 @@ from controller_client.protocol import (
     RunnerTarget,
     parse_device_info,
 )
-from projects.models import Project, RunnerDeviceState
-from projects.runner_target import device_offline, project_runner_target
+from projects.models import Project
+from projects.runner_target import device_machine_state, project_runner_target
 
 register = template.Library()
 
 # Values of ``projects.services.MachineState`` (not imported: a template
 # library stays a leaf of the legacy services module).
-_MACHINE_STATE_DEVICE_OFFLINE = "device_offline"
-_MACHINE_STATE_STARTING = "starting"
 _MACHINE_STATE_DISCONNECTED = "disconnected"
 
 
@@ -44,11 +42,7 @@ def project_machine_state(project: Project, connected_machine_state: str) -> str
     """
     if not project.agent_connected:
         return _MACHINE_STATE_DISCONNECTED
-    if device_offline(project):
-        if project.agent_device_state == RunnerDeviceState.STARTING:
-            return _MACHINE_STATE_STARTING
-        return _MACHINE_STATE_DEVICE_OFFLINE
-    return connected_machine_state
+    return device_machine_state(project) or connected_machine_state
 
 
 @register.simple_tag
