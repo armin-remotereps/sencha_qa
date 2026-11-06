@@ -1,4 +1,5 @@
 {% extends "layouts/project.html" %}
+{% load runner_device %}
 
 {% comment %}
   Machine setup — a chat with the setup agent that brings the test machine to
@@ -955,6 +956,10 @@ document.addEventListener('alpine:init', () => {
     readinessNote: '',
     finishingPreviousTurn: {{ page.finishing_previous_turn|yesno:'true,false' }},
     agentConnected: {{ project.agent_connected|yesno:'true,false' }},
+    // Phone runners only (blank on a desktop runner); see punkHazard.deviceMachineState.
+    deviceState: '{{ project.agent_device_state|escapejs }}',
+    deviceReportedAt: '{{ project.agent_device_reported_at|date:"c" }}' || null,
+    deviceStaleSeconds: {% runner_device_stale_seconds %},
     visualEngine: readJson('setup-visual-engine') || {},
     draft: '',
     submitting: false,
@@ -1044,6 +1049,8 @@ document.addEventListener('alpine:init', () => {
         this.setFinishingTurn(data.finishing_turn || null);
         this.otherThreadTurnLive = !!data.other_thread_turn_live;
         this.agentConnected = !!data.agent_connected;
+        this.deviceState = data.agent_device_state || '';
+        this.deviceReportedAt = data.agent_device_reported_at || null;
         if (data.visual_engine) this.visualEngine = data.visual_engine;
         if (data.help) this.$dispatch('help-state', data.help);
         this.intakePending = !!data.intake_pending;
@@ -1076,6 +1083,8 @@ document.addEventListener('alpine:init', () => {
         this.setTurn(null);
       } else if (data.type === 'agent_status') {
         this.agentConnected = !!data.agent_connected;
+        this.deviceState = data.agent_device_state || '';
+        this.deviceReportedAt = data.agent_device_reported_at || null;
         if (data.visual_engine) this.visualEngine = data.visual_engine;
       } else if (data.type === 'visual_engine') {
         this.visualEngine = data.visual_engine || {};
@@ -1261,11 +1270,14 @@ document.addEventListener('alpine:init', () => {
 
     get machineState() {
       if (!this.agentConnected) return 'disconnected';
+      // A blank deviceState is a desktop runner; the server sets it for phones only.
+      const device = window.punkHazard.deviceMachineState(!!this.deviceState, this.deviceState, this.deviceReportedAt, this.deviceStaleSeconds, this.clock);
+      if (device) return device;
       return { ready: 'ready', starting: 'starting', failed: 'failed', offline: 'offline' }[this.visualEngine.state] || 'starting';
     },
 
     get machineBadgeClass() {
-      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed', offline: 'warning' }[this.machineState];
+      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed', offline: 'warning', device_offline: 'disconnected' }[this.machineState];
     },
 
     get machineBadgeLabel() {
@@ -1275,6 +1287,7 @@ document.addEventListener('alpine:init', () => {
         ready: 'Connected',
         failed: 'Visual engine failed',
         offline: 'Visual engine offline',
+        device_offline: 'Phone disconnected',
       }[this.machineState];
     },
 

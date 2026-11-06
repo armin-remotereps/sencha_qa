@@ -1,4 +1,5 @@
 {% extends "layouts/project.html" %}
+{% load runner_device %}
 
 {% comment %} Machine readiness tab: the artifacts profile (with provenance and version
    history), then the inventory of the base directory and the gap report.
@@ -17,7 +18,9 @@
      runner_os      — the runner's OS label ("Windows", ...), "" when unknown
      scan_available — a scan can be queued now
      scan_reason    — why not ("" when available)
-     gap_report     — GapReport of the whole project (machine_readiness.services.gap_report)
+     gap_report     — GapReport of the whole project (machine_readiness.services.gap_report);
+                      on a phone Test Runner its runner_host is "<host>#<device id>"
+                      and the device label (runner_device library) follows it
      project_can_write (context processor) — false hides Edit, Skip intake and Restore
 
    Blocks "readiness_inventory" and "readiness_gaps" hold the scan and the
@@ -248,7 +251,7 @@
       {% if gap_report.gap_count %}<span class="card-header-count">{{ gap_report.gap_count }}</span>{% endif %}
     </div>
     <p class="hint">
-      {{ gap_report.present_count }} of {{ gap_report.requirement_count }} stage-0 requirement{{ gap_report.requirement_count|pluralize }} present{% if gap_report.runner_host %} on <span class="mr-path">{{ gap_report.runner_host }}</span>{% endif %}.
+      {{ gap_report.present_count }} of {{ gap_report.requirement_count }} stage-0 requirement{{ gap_report.requirement_count|pluralize }} present{% if gap_report.runner_host %} on <span class="mr-path">{{ gap_report.runner_host }}</span>{% with device_label=project|runner_device_label %}{% if device_label %} with the {{ device_label }}{% endif %}{% endwith %}{% endif %}.
       {% if gap_report.unanalysed_cases %}{{ gap_report.unanalysed_cases }} case{{ gap_report.unanalysed_cases|pluralize }} not analysed yet — see <a href="{% url 'machine_readiness:requirements' project_id=project.id %}">Requirements</a>.{% endif %}
     </p>
 
