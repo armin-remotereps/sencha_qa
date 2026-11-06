@@ -1,6 +1,6 @@
 # feat: Phone and tablet testing through the Test Runner (Android, iOS, iPadOS)
 
-Status: In progress
+Status: Done
 Created: 2026-11-06
 Request: Let Punk Hazard test apps on Android phones, iPhones and iPads with the
 existing Test Runner (`controller_client/`), using one source tree and no separate
@@ -760,3 +760,13 @@ Resolved 2026-11-06: the user accepted every recommendation and assumption below
   9.0.1, xcuitest 13.0.7, Appium-Python-Client 6.1.5, pymobiledevice3 11.50.0
   (GPL-3.0-or-later).
 - 2026-11-06: open questions Q1-Q9 resolved as recommended (user). Status In progress.
+- 2026-11-06: implemented (Phases 1-4) on branch claude/phone-testing-controller-8b3228. Phase 0 spike and the manual device checks not run: this machine has no Android SDK, Appium, full Xcode or Docker (`verify_server_image.sh` not run either).
+- 2026-11-06: deviations: extra runner modules `mobile_platform.py`, `mobile_gestures.py`, `mobile_apps.py`, `mobile_checks.py` (import cycles, typed W3C actions); `mobile_factory.py` builds the backend so `target.py` imports no Appium; selenium pinned `~=4.51.0` (4.52 needs a newer certifi than our pin); detached start waits 60 s for `CONTROLLER_DEVICE`; `intent:` URLs refused too; person-step text keeps the word "swipe".
+- 2026-11-06: review fixes: device_status throttle drops only repeats; `reacquire()` after a failed self-update and no start after release; runner timeouts under the server reply timeouts; iOS discovery by kind; fixed Appium log at `--log-level info`; iOS window size cached; Night auto-fix gets a tool error (not a lost turn) for a disconnected phone; one badge rule `runner_target.device_machine_state`; no `Any` in phone actions.
+- 2026-11-06: rejected review nit: moving app lifecycle onto the target backend to remove the `get_mobile_device()` branches in `client.py` would force desktop backends to grow phone semantics; the branches stay local to the handlers.
+- 2026-11-06: second review fixes: first screenshot allowed once the session is up; `close_app` and the device cleanup each run in one call (cleanup stops starting requests that would not fit); per-request device timeout 11 s so two requests fit the 24 s budget; the post-timeout device lookup is bounded by the budget left; status reads STARTING while an action recreates the session inline (no second start from the monitor); the auto-fix tool error keeps the server's reason and no shell-specific command; `android-app:` refused too.
+- 2026-11-06: rejected: a rate floor for changing device statuses (verifier, Low). Only the authenticated owner connection of the project can send them, each write is one conditional UPDATE, and a floor would drop real changes again.
+- 2026-11-06: third review fixes: the cleanup deadline is set before the session call (lock wait and an inline recreate share it); keyboard and home steps budget two requests; a cleanup step's read timeout or socket error is a line, a lost session is re-raised for the recreate; `recreating` is set before the old session is quit; the post-timeout lookup needs at least 5 s, else "did not answer in time".
+- 2026-11-06: accepted (documented in `mobile_session.py`): resolving an app by visible name can take three or four requests, so on a degraded device such an action may answer after the server's 30 s and read as "Test Runner stopped responding" (Need help, restore). The auto-fix tool error carries the server's fixed text, not the runner's reason (by design: runner text stays in the log).
+- 2026-11-06: fourth verification fix: with the deadline set before the call, the two-request keyboard/home steps could never fit. Device cleanup now goes home first (always; it also dismisses the keyboard and records the launcher), then closes the launched apps while one more request fits; the cleanup budget equals the 24 s action budget. Host cleanup runs before it in the same reply, so a slow host cleanup plus a slow phone can still pass the server's 30 s (accepted).
+- 2026-11-06: final cleanup fixes: a failed home press is a line and the launched apps are still closed; the launcher is recorded only when that request still fits the deadline. Accepted: the 30 s server wait covers the host cleanup and the device cleanup (up to 24 s) together.
