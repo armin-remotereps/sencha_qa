@@ -81,6 +81,13 @@ class TestRunnerUnresponsiveError(TestRunnerUnavailableError):
     """A runner-local action got no reply while the runner still held the connection."""
 
 
+class DeviceDisconnectedError(TestRunnerUnavailableError):
+    """The phone or tablet a phone Test Runner drives is gone or still starting.
+
+    The message is fixed server text, shown in the UI and pushed to TestRail.
+    """
+
+
 class BrowserUnavailableError(InfrastructureError):
     """The browser a case asked for cannot be driven on the test machine.
 
