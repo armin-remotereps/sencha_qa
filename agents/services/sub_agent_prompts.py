@@ -10,7 +10,11 @@ from agents.services.prompt_parts import (
     build_tool_guidelines,
     build_tool_taxonomy,
 )
-from controller_client.protocol import BROWSER_DISPLAY_NAMES, BrowserName
+from controller_client.protocol import (
+    BROWSER_DISPLAY_NAMES,
+    BrowserName,
+    is_mobile_target,
+)
 
 
 def build_sub_agent_system_prompt(
@@ -35,11 +39,15 @@ def build_sub_agent_system_prompt(
             _build_sub_agent_persona(system_info=system_info),
             build_qa_rules(),
             build_environment_obstacle_rules(),
-            build_tool_taxonomy(),
+            build_tool_taxonomy(system_info=system_info),
             build_environment_context(system_info=system_info),
             build_tool_guidelines(system_info=system_info),
             _build_knowledge_base_section(),
-            _build_current_browser_section(current_browser),
+        ]
+        # A phone has no browser_* tools to keep a browser for.
+        if not is_mobile_target(system_info or {}):
+            sections.append(_build_current_browser_section(current_browser))
+        sections += [
             _build_time_budget_section(
                 timeout_seconds, final_turn_on_timeout=final_turn_on_timeout
             ),
@@ -50,7 +58,7 @@ def build_sub_agent_system_prompt(
         # key_press tools a restricted sub-task cannot call.
         sections = [
             _build_sub_agent_persona(system_info=system_info),
-            _build_restricted_tools_section(tool_names),
+            _build_restricted_tools_section(tool_names, system_info=system_info),
             _build_time_budget_section(
                 timeout_seconds, final_turn_on_timeout=final_turn_on_timeout
             ),
@@ -74,11 +82,13 @@ def _build_sub_agent_persona(
     )
 
 
-def _build_restricted_tools_section(tool_names: frozenset[str]) -> str:
+def _build_restricted_tools_section(
+    tool_names: frozenset[str], *, system_info: dict[str, object] | None
+) -> str:
     return (
         f"TOOLS:\nYou may use only these tools: {', '.join(sorted(tool_names))}. "
         "Any other tool is refused.\n\n"
-        f"{build_app_lifecycle_rules()}"
+        f"{build_app_lifecycle_rules(system_info=system_info)}"
     )
 
 

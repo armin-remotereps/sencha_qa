@@ -2,7 +2,11 @@
 
    Context contract:
      machine_state — "disconnected" | "starting" | "ready" | "failed" | "offline"
-     ("offline" = runner connected but no vision worker is) {% endcomment %}
+     | "device_offline"
+     ("offline" = runner connected but no vision worker is; "device_offline" =
+     a phone Test Runner is connected but its phone or tablet is not ready)
+     A page listing projects passes a row's state through the
+     runner_device library's project_machine_state filter. {% endcomment %}
 {% if machine_state == "disconnected" %}
   <span class="badge badge-disconnected">Not connected</span>
 {% elif machine_state == "starting" %}
@@ -13,4 +17,6 @@
   <span class="badge badge-failed">Visual engine failed</span>
 {% elif machine_state == "offline" %}
   <span class="badge badge-warning">Visual engine offline</span>
+{% elif machine_state == "device_offline" %}
+  <span class="badge badge-disconnected">Phone disconnected</span>
 {% endif %}

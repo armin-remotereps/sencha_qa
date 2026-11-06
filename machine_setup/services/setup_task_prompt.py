@@ -12,6 +12,8 @@ from agents.services.prompt_parts import (
     build_browser_tool_examples,
     build_desktop_tool_examples,
     build_environment_context,
+    build_mobile_tool_examples,
+    build_mobile_tool_selection_rules,
     build_project_context,
     build_retry_limits,
     build_search_tool_examples,
@@ -20,7 +22,11 @@ from agents.services.prompt_parts import (
     build_tool_taxonomy,
     build_utility_tool_examples,
 )
-from controller_client.protocol import BROWSER_DISPLAY_NAMES, BrowserName
+from controller_client.protocol import (
+    BROWSER_DISPLAY_NAMES,
+    BrowserName,
+    is_mobile_target,
+)
 
 
 def build_setup_task_system_prompt(
@@ -38,6 +44,19 @@ def build_setup_task_system_prompt(
     and auto-fix threads keep their rules). ``approved_action``: the
     server-built text of the one approved action this sub-task may carry
     out; None reads "none"."""
+    phone = is_mobile_target(system_info or {})
+    tool_examples = (
+        [
+            build_mobile_tool_examples(system_info=system_info),
+            build_mobile_tool_selection_rules(),
+        ]
+        if phone
+        else [
+            build_desktop_tool_examples(),
+            build_browser_tool_examples(),
+            build_tool_selection_rules(),
+        ]
+    )
     sections = [
         build_agent_persona(
             system_info=system_info,
@@ -47,22 +66,24 @@ def build_setup_task_system_prompt(
                 "report exactly what you did and found"
             ),
         ),
-        build_tool_taxonomy(),
+        build_tool_taxonomy(system_info=system_info),
         build_environment_context(system_info=system_info),
         "TOOL USAGE:",
-        build_desktop_tool_examples(),
-        build_browser_tool_examples(),
-        build_tool_selection_rules(),
+        *tool_examples,
         build_search_tool_examples(),
-        build_utility_tool_examples(),
+        build_utility_tool_examples(system_info=system_info),
         build_shell_rules(system_info=system_info),
         build_retry_limits(),
         _build_knowledge_base_section(),
-        _build_current_browser_section(current_browser),
+    ]
+    # A phone has no browser_* tools to keep a browser for.
+    if not phone:
+        sections.append(_build_current_browser_section(current_browser))
+    sections.append(
         _build_budget_section(
             timeout_seconds=timeout_seconds, max_iterations=max_iterations
-        ),
-    ]
+        )
+    )
     if project_prompt:
         sections.append(
             build_project_context(

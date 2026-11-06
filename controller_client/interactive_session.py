@@ -4,6 +4,7 @@ import logging
 import sys
 import time
 import uuid
+from collections.abc import Mapping
 from typing import Protocol
 
 from controller_client.exceptions import ExecutionError
@@ -55,9 +56,11 @@ class InteractiveSession:
         self,
         process_tracker: ProcessTracker,
         read_timeout: float = _DEFAULT_READ_TIMEOUT,
+        env: Mapping[str, str] | None = None,
     ) -> str:
+        """Start the command; ``env`` None inherits the runner's environment."""
         self._start_time = time.monotonic()
-        self._process = _ShellProcess(self._command, process_tracker, read_timeout)
+        self._process = _ShellProcess(self._command, process_tracker, read_timeout, env)
         return self._process.read(read_timeout)
 
     def send_input(self, text: str, read_timeout: float = _DEFAULT_READ_TIMEOUT) -> str:

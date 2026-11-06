@@ -2,10 +2,15 @@ import argparse
 import sys
 
 from controller_client.browser_diagnostics import build_browser_steps
-from controller_client.config import setup_logging
+from controller_client.config import (
+    TARGET_ENV_NAME,
+    load_mobile_settings,
+    setup_logging,
+)
 from controller_client.desktop import get_desktop_backend
 from controller_client.diagnostics import run_diagnostics
 from controller_client.input_diagnostics import format_summary, run_input_checks
+from controller_client.mobile_diagnostics import mobile_diagnostic_steps
 from controller_client.person_window_diagnostics import (
     build_window_steps,
     run_window_check,
@@ -62,6 +67,25 @@ def _run_window_checks(*, interactive: bool) -> None:
     print("All window checks passed.")
 
 
+def _run_mobile_checks(*, interactive: bool) -> None:
+    settings, problem = load_mobile_settings()
+    if problem is not None:
+        print(f"{problem}. Fix it in controller_client/.env and re-run.")
+        sys.exit(1)
+    if settings is None:
+        print(
+            f"{TARGET_ENV_NAME} is desktop: set {TARGET_ENV_NAME}=android or "
+            f"{TARGET_ENV_NAME}=ios in controller_client/.env to check a phone "
+            "or tablet."
+        )
+        sys.exit(1)
+    if run_diagnostics(mobile_diagnostic_steps(settings, interactive), print):
+        print("All phone checks passed.")
+        return
+    print("Phone checks failed; fix the problem above and re-run.")
+    sys.exit(1)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m controller_client.diagnose",
@@ -72,7 +96,8 @@ def main(argv: list[str] | None = None) -> None:
             "With --input, check the pointer mapping, scroll direction and "
             "modifier release live, ending with a summary to copy and paste. "
             "With --window, check the Test Runner window where a person "
-            "answers Human in the loop steps."
+            "answers Human in the loop steps. "
+            "With --mobile, check the phone or tablet set in CONTROLLER_TARGET."
         ),
     )
     mode = parser.add_mutually_exclusive_group()
@@ -105,17 +130,29 @@ def main(argv: list[str] | None = None) -> None:
             "hides it and takes one screenshot, asking yes/no questions"
         ),
     )
+    mode.add_argument(
+        "--mobile",
+        action="store_true",
+        help=(
+            "check Node, Appium and its driver, the platform tools, the device "
+            "(CONTROLLER_TARGET / CONTROLLER_DEVICE), a session and a "
+            "screenshot; asks before a test tap at the screen centre"
+        ),
+    )
     parser.add_argument(
         "--no-interactive",
         action="store_true",
         help=(
-            "with --input or --window, run only the automatic checks " "(no questions)"
+            "with --input, --window or --mobile, run only the automatic checks "
+            "(no questions)"
         ),
     )
     parser.add_argument("--log-level", type=str, default="INFO")
     args = parser.parse_args(argv)
-    if args.no_interactive and not (args.input or args.window):
-        parser.error("--no-interactive can only be used with --input or --window")
+    if args.no_interactive and not (args.input or args.window or args.mobile):
+        parser.error(
+            "--no-interactive can only be used with --input, --window or --mobile"
+        )
     setup_logging(args.log_level)
 
     if args.input:
@@ -124,6 +161,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.window:
         _run_window_checks(interactive=not args.no_interactive)
+        return
+
+    if args.mobile:
+        _run_mobile_checks(interactive=not args.no_interactive)
         return
 
     if args.browsers is not None:

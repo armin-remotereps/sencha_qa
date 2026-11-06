@@ -17,6 +17,7 @@ from datetime import datetime
 
 from django.db.models import Count
 
+from controller_client.protocol import parse_device_info
 from machine_readiness.models import (
     HOST_MAX_LENGTH,
     PreconditionAnalysis,
@@ -84,18 +85,29 @@ def normalise_host(host: str) -> str:
 
 
 def runner_host(system_info: object) -> str | None:
-    """The connected runner's hostname from ``Project.agent_system_info``.
+    """The connected runner's identity from ``Project.agent_system_info``.
 
-    None when no runner is connected (the field is cleared on disconnect) or
-    it reported no hostname: statuses are then shown as stored. The one
-    definition every reader (gap report, scan, quick check, views) uses.
+    The hostname, and on a phone or tablet runner ``"<host>#<device_id>"``,
+    so a status recorded on another phone on the same host reads unknown
+    (docs/plan/feat-mobile-device-runner.md, Q5d). None when no runner is
+    connected (the field is cleared on disconnect) or it reported no
+    hostname: statuses are then shown as stored. The one definition every
+    reader (gap report, scan, quick check, views) uses.
     """
     if not isinstance(system_info, Mapping):
         return None
-    host = system_info.get("hostname")
-    if not isinstance(host, str):
+    raw_host = system_info.get("hostname")
+    if not isinstance(raw_host, str):
         return None
-    return normalise_host(host) or None
+    host = normalise_host(raw_host)
+    if not host:
+        return None
+    device = parse_device_info(system_info)
+    if device is None or not device.device_id:
+        return host
+    suffix = f"#{device.device_id}"
+    # Keep the whole device id: the host part gives way to fit HOST_MAX_LENGTH.
+    return host[: HOST_MAX_LENGTH - len(suffix)] + suffix
 
 
 def host_mismatch(checked_host: str, current_host: str | None) -> bool:

@@ -148,4 +148,29 @@ echo   controller_client\.venv\Scripts\python -m controller_client.diagnose --br
 echo To check the Test Runner window ^(Human in the loop steps^):
 echo   controller_client\.venv\Scripts\python -m controller_client.diagnose --window
 
+:: Phone and tablet target (CONTROLLER_TARGET=android in .env): the Test
+:: Runner drives the device through Appium. These are OS-level tools this
+:: script never installs; it only lists them.
+set "RUNNER_TARGET=%CONTROLLER_TARGET%"
+if not defined RUNNER_TARGET if exist "%PROJECT_DIR%\.env" (
+    for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%PROJECT_DIR%\.env") do (
+        if /I "%%A"=="CONTROLLER_TARGET" set "RUNNER_TARGET=%%B"
+    )
+)
+if /I "%RUNNER_TARGET%"=="android" (
+    echo.
+    echo This Test Runner drives an Android phone or tablet ^(CONTROLLER_TARGET=android^). Install yourself:
+    echo   - Node.js 22.22.2 or newer ^(or 24.15+^): https://nodejs.org
+    echo   - Appium 3: npm i -g appium@3
+    echo   - its Android driver: appium driver install uiautomator2
+    echo   - Android platform-tools ^(adb^) on PATH, and ANDROID_HOME set
+    echo   - on the phone: Developer options ^> USB debugging on, then accept this computer's key
+    echo Then pick the device ^(CONTROLLER_DEVICE; the first interactive start asks^) and check it with:
+    echo   controller_client\.venv\Scripts\python -m controller_client.diagnose --mobile
+)
+if /I "%RUNNER_TARGET%"=="ios" (
+    echo.
+    echo CONTROLLER_TARGET=ios needs a Mac with Xcode: iPhones, iPads and the iOS Simulator cannot be driven from Windows.
+)
+
 endlocal

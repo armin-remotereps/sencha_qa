@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from typing import IO, Final
 
 from controller_client.exceptions import ExecutionError
@@ -35,7 +36,11 @@ if sys.platform == "win32":
         """
 
         def __init__(
-            self, command: str, process_tracker: ProcessTracker, read_timeout: float
+            self,
+            command: str,
+            process_tracker: ProcessTracker,
+            read_timeout: float,
+            env: Mapping[str, str] | None = None,
         ) -> None:
             # A string, not a list: list2cmdline would backslash-escape inner
             # quotes, which cmd does not understand. /s strips just the outer pair.
@@ -46,6 +51,7 @@ if sys.platform == "win32":
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 bufsize=0,
+                env=env,
                 creationflags=subprocess.CREATE_NO_WINDOW
                 | subprocess.CREATE_NEW_PROCESS_GROUP,
             )

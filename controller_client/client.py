@@ -42,9 +42,11 @@ from controller_client.exceptions import (
     BrowserElementNotFoundError,
     BrowserNotInstalledError,
     ConnectionTerminatedError,
+    DeviceDisconnectedError,
     ExecutionError,
     HandshakeError,
     ProtocolError,
+    TargetMismatchError,
     UnknownMessageTypeError,
     UpdateError,
 )
@@ -68,6 +70,19 @@ from controller_client.manual_capture import ManualCapturer
 from controller_client.manual_coordinator import ManualCoordinator
 from controller_client.manual_spool import ManualSpool
 from controller_client.manual_uploader import ManualUploader
+from controller_client.mobile_executor import (
+    execute_device_check_app_installed,
+    execute_device_cleanup,
+    execute_device_close_app,
+    execute_device_launch_app,
+    execute_hide_keyboard,
+    execute_install_app,
+    execute_long_press,
+    execute_open_url,
+    execute_press_button,
+    execute_rotate_device,
+    execute_swipe,
+)
 from controller_client.person_window import (
     ManualWindowRequest,
     PersonCaseRequest,
@@ -90,6 +105,7 @@ from controller_client.protocol import (
     CasePauseActionPayload,
     CloseCode,
     CommandResultPayload,
+    DeviceStatusPayload,
     ErrorCode,
     InteractiveOutputPayload,
     ManualCaseActionKind,
@@ -122,20 +138,26 @@ from controller_client.protocol import (
     parse_handshake_ack_payload,
     parse_hover_payload,
     parse_inspect_paths_payload,
+    parse_install_app_payload,
     parse_key_press_payload,
     parse_launch_app_payload,
+    parse_long_press_payload,
     parse_manual_case_action_result_payload,
     parse_manual_case_submit_result_payload,
     parse_manual_run_state_payload,
     parse_manual_screenshot_ack_payload,
+    parse_open_url_payload,
     parse_person_case_action_result_payload,
     parse_person_step_action_result_payload,
     parse_person_step_state_payload,
+    parse_press_button_payload,
+    parse_rotate_device_payload,
     parse_run_command_payload,
     parse_scan_directory_payload,
     parse_scroll_payload,
     parse_send_input_payload,
     parse_start_interactive_cmd_payload,
+    parse_swipe_payload,
     parse_terminate_interactive_cmd_payload,
     parse_type_text_payload,
     parse_wait_for_command_payload,
@@ -143,6 +165,7 @@ from controller_client.protocol import (
     peek_update_id,
     scan_directory_result_to_json,
     serialize_case_pause_action,
+    serialize_device_status,
     serialize_manual_case_action,
     serialize_manual_chat_send,
     serialize_message,
@@ -151,6 +174,7 @@ from controller_client.protocol import (
     serialize_person_step_action,
 )
 from controller_client.system_info import gather_system_info
+from controller_client.target import get_mobile_device
 from controller_client.update_runner import (
     RunnerUpdate,
     finish_update_as_new_runner,
@@ -204,6 +228,38 @@ _WINDOW_SAFE_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
         # Read-only file system inventory; nothing on screen changes.
         MessageType.SCAN_DIRECTORY,
         MessageType.INSPECT_PATHS,
+    }
+)
+# Desktop-only messages, answered TARGET_MISMATCH on a phone target: there is
+# no hover on a phone, and the DOM browser tools drive a host browser (Q2).
+_DESKTOP_ONLY_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
+    {
+        MessageType.HOVER,
+        MessageType.CLOSE_TAB,
+        MessageType.BROWSER_NAVIGATE,
+        MessageType.BROWSER_CLICK,
+        MessageType.BROWSER_DOUBLE_CLICK,
+        MessageType.BROWSER_TYPE,
+        MessageType.BROWSER_HOVER,
+        MessageType.BROWSER_GET_ELEMENTS,
+        MessageType.BROWSER_GET_PAGE_CONTENT,
+        MessageType.BROWSER_GET_URL,
+        MessageType.BROWSER_TAKE_SCREENSHOT,
+        MessageType.BROWSER_DOWNLOAD,
+        MessageType.BROWSER_LIST_DOWNLOADS,
+    }
+)
+# Phone-only messages (MOBILE_DEVICE_V1), answered TARGET_MISMATCH on a
+# desktop target.
+_PHONE_ONLY_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
+    {
+        MessageType.SWIPE,
+        MessageType.LONG_PRESS,
+        MessageType.PRESS_BUTTON,
+        MessageType.ROTATE_DEVICE,
+        MessageType.HIDE_KEYBOARD,
+        MessageType.OPEN_URL,
+        MessageType.INSTALL_APP,
     }
 )
 _ANSWER_NO_REPLY: Final[str] = "No answer from the server; check Punk Hazard."
@@ -285,6 +341,25 @@ def _serialize_case_request(request: PersonCaseRequest, request_id: str) -> str:
             return serialize_person_help_action(request, request_id)
 
 
+def _error_code(exc: Exception, fallback: ErrorCode) -> ErrorCode:
+    """Map an action failure to the error code the server acts on."""
+    if isinstance(exc, DeviceDisconnectedError):
+        return ErrorCode.DEVICE_DISCONNECTED
+    if isinstance(exc, TargetMismatchError):
+        return ErrorCode.TARGET_MISMATCH
+    return fallback
+
+
+def _target_mismatch(message_type: MessageType) -> str | None:
+    """Why ``message_type`` cannot run on this runner's target, or None."""
+    on_phone = get_mobile_device() is not None
+    if on_phone and message_type in _DESKTOP_ONLY_MESSAGE_TYPES:
+        return f"{message_type.value} is not available on a phone or tablet target"
+    if not on_phone and message_type in _PHONE_ONLY_MESSAGE_TYPES:
+        return f"{message_type.value} needs a phone or tablet target"
+    return None
+
+
 def _browser_error_code(exc: Exception, fallback: ErrorCode) -> ErrorCode:
     """Map a browser action failure to the error code the server acts on."""
     if isinstance(exc, BrowserNotInstalledError):
@@ -346,7 +421,17 @@ class ControllerClient:
             MessageType.CLEANUP_ENVIRONMENT: self._handle_cleanup_environment,
             MessageType.SCAN_DIRECTORY: self._handle_scan_directory,
             MessageType.INSPECT_PATHS: self._handle_inspect_paths,
+            # Phone and tablet target (MOBILE_DEVICE_V1).
+            MessageType.SWIPE: self._handle_swipe,
+            MessageType.LONG_PRESS: self._handle_long_press,
+            MessageType.PRESS_BUTTON: self._handle_press_button,
+            MessageType.ROTATE_DEVICE: self._handle_rotate_device,
+            MessageType.HIDE_KEYBOARD: self._handle_hide_keyboard,
+            MessageType.OPEN_URL: self._handle_open_url,
+            MessageType.INSTALL_APP: self._handle_install_app,
         }
+        # The latest device_status, re-sent after every accepted handshake.
+        self._last_device_status: DeviceStatusPayload | None = None
         # Self-update (SELF_UPDATE_V1).
         self._handlers[MessageType.UPDATE_RUNNER] = self._handle_update_runner
         # The accepted update (its workflow lives in update_runner) and the
@@ -626,7 +711,8 @@ class ControllerClient:
             "capabilities": [
                 capability.value
                 for capability in advertised_capabilities(
-                    person_window=self._window is not None
+                    person_window=self._window is not None,
+                    mobile=get_mobile_device() is not None,
                 )
             ],
             "system_info": system_info.to_dict(),
@@ -747,8 +833,13 @@ class ControllerClient:
     ) -> None:
         """Run a handler without letting its failure drop the connection.
 
-        Agent actions run with the person step window hidden.
+        Agent actions run with the person step window hidden. A message the
+        target cannot run is answered TARGET_MISMATCH without running it.
         """
+        mismatch = _target_mismatch(message_type)
+        if mismatch is not None:
+            await self._send_error(request_id, ErrorCode.TARGET_MISMATCH, mismatch)
+            return
         try:
             async with self._window_hidden(message_type):
                 await handler(request_id, data)
@@ -761,17 +852,24 @@ class ControllerClient:
             logger.exception(
                 "Handler for %s failed (request_id=%s)", message_type, request_id
             )
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     @contextlib.asynccontextmanager
     async def _window_hidden(self, message_type: MessageType) -> AsyncIterator[None]:
         """Hide the person step window for an agent action, if one could show.
 
         The window re-shows itself later (rules in person_window). A failure to hide
-        never stops the action (it is logged).
+        never stops the action (it is logged). On a phone target the agent
+        sees the phone's screen, so the window on the host stays up (D8).
         """
         window = self._window
-        if window is None or message_type in _WINDOW_SAFE_MESSAGE_TYPES:
+        if (
+            window is None
+            or message_type in _WINDOW_SAFE_MESSAGE_TYPES
+            or get_mobile_device() is not None
+        ):
             yield
             return
         hold = window.hidden_for_action()
@@ -846,7 +944,9 @@ class ControllerClient:
             result = await asyncio.to_thread(execute_click, payload)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_double_click(
         self, request_id: str, data: dict[str, object]
@@ -856,7 +956,9 @@ class ControllerClient:
             result = await asyncio.to_thread(execute_double_click, payload)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_hover(self, request_id: str, data: dict[str, object]) -> None:
         payload = parse_hover_payload(data)
@@ -864,7 +966,9 @@ class ControllerClient:
             result = await asyncio.to_thread(execute_hover, payload)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_drag(self, request_id: str, data: dict[str, object]) -> None:
         payload = parse_drag_payload(data)
@@ -872,7 +976,9 @@ class ControllerClient:
             result = await asyncio.to_thread(execute_drag, payload)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_scroll(self, request_id: str, data: dict[str, object]) -> None:
         payload = parse_scroll_payload(data)
@@ -880,7 +986,9 @@ class ControllerClient:
             result = await asyncio.to_thread(execute_scroll, payload)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_type_text(self, request_id: str, data: dict[str, object]) -> None:
         payload = parse_type_text_payload(data)
@@ -888,7 +996,9 @@ class ControllerClient:
             result = await asyncio.to_thread(execute_type_text, payload)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_key_press(self, request_id: str, data: dict[str, object]) -> None:
         payload = parse_key_press_payload(data)
@@ -896,7 +1006,9 @@ class ControllerClient:
             result = await asyncio.to_thread(execute_key_press, payload)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_screenshot(
         self, request_id: str, data: dict[str, object]
@@ -905,7 +1017,9 @@ class ControllerClient:
             result = await asyncio.to_thread(execute_screenshot)
             await self._send_screenshot_response(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.SCREENSHOT_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.SCREENSHOT_FAILED), str(e)
+            )
 
     async def _handle_run_command(
         self, request_id: str, data: dict[str, object]
@@ -940,7 +1054,9 @@ class ControllerClient:
             )
             await self._send_command_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     @staticmethod
     async def _send_command_output_line(
@@ -1121,7 +1237,9 @@ class ControllerClient:
             )
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_start_interactive_cmd(
         self, request_id: str, data: dict[str, object]
@@ -1137,7 +1255,9 @@ class ControllerClient:
             )
             await self._send_interactive_output(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_send_input(
         self, request_id: str, data: dict[str, object]
@@ -1149,7 +1269,9 @@ class ControllerClient:
             )
             await self._send_interactive_output(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_wait_for_command(
         self, request_id: str, data: dict[str, object]
@@ -1161,7 +1283,9 @@ class ControllerClient:
             )
             await self._send_interactive_output(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_terminate_interactive_cmd(
         self, request_id: str, data: dict[str, object]
@@ -1173,27 +1297,41 @@ class ControllerClient:
             )
             await self._send_interactive_output(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_launch_app(
         self, request_id: str, data: dict[str, object]
     ) -> None:
         payload = parse_launch_app_payload(data)
         try:
-            result = await asyncio.to_thread(
-                execute_launch_app, payload, self._process_tracker
-            )
+            if get_mobile_device() is not None:
+                result = await asyncio.to_thread(execute_device_launch_app, payload)
+            else:
+                result = await asyncio.to_thread(
+                    execute_launch_app, payload, self._process_tracker
+                )
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_close_app(self, request_id: str, data: dict[str, object]) -> None:
         payload = parse_close_app_payload(data)
+        close = (
+            execute_device_close_app
+            if get_mobile_device() is not None
+            else execute_close_app
+        )
         try:
-            result = await asyncio.to_thread(execute_close_app, payload)
+            result = await asyncio.to_thread(close, payload)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_close_tab(self, request_id: str, data: dict[str, object]) -> None:
         payload = parse_close_tab_payload(data)
@@ -1201,17 +1339,26 @@ class ControllerClient:
             result = await asyncio.to_thread(execute_close_tab, payload)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_check_app_installed(
         self, request_id: str, data: dict[str, object]
     ) -> None:
         payload = parse_check_app_installed_payload(data)
+        check = (
+            execute_device_check_app_installed
+            if get_mobile_device() is not None
+            else execute_check_app_installed
+        )
         try:
-            result = await asyncio.to_thread(execute_check_app_installed, payload)
+            result = await asyncio.to_thread(check, payload)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
 
     async def _handle_scan_directory(
         self, request_id: str, data: dict[str, object]
@@ -1258,9 +1405,97 @@ class ControllerClient:
                 self._process_tracker,
                 Path(self._config.cleanup_dir).expanduser(),
             )
+            if get_mobile_device() is not None:
+                # After the host: the device's apps, keyboard and home screen.
+                result = await asyncio.to_thread(execute_device_cleanup, result)
             await self._send_action_result(request_id, result)
         except ExecutionError as e:
-            await self._send_error(request_id, ErrorCode.EXECUTION_FAILED, str(e))
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
+
+    # --- Phone and tablet target (MOBILE_DEVICE_V1) -----------------------
+
+    async def _run_device_action(
+        self, request_id: str, action: Callable[[], ActionResultPayload]
+    ) -> None:
+        try:
+            result = await asyncio.to_thread(action)
+            await self._send_action_result(request_id, result)
+        except ExecutionError as e:
+            await self._send_error(
+                request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
+            )
+
+    async def _handle_swipe(self, request_id: str, data: dict[str, object]) -> None:
+        payload = parse_swipe_payload(data)
+        await self._run_device_action(
+            request_id, functools.partial(execute_swipe, payload)
+        )
+
+    async def _handle_long_press(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_long_press_payload(data)
+        await self._run_device_action(
+            request_id, functools.partial(execute_long_press, payload)
+        )
+
+    async def _handle_press_button(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_press_button_payload(data)
+        await self._run_device_action(
+            request_id, functools.partial(execute_press_button, payload)
+        )
+
+    async def _handle_rotate_device(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_rotate_device_payload(data)
+        await self._run_device_action(
+            request_id, functools.partial(execute_rotate_device, payload)
+        )
+
+    async def _handle_hide_keyboard(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        await self._run_device_action(request_id, execute_hide_keyboard)
+
+    async def _handle_open_url(self, request_id: str, data: dict[str, object]) -> None:
+        payload = parse_open_url_payload(data)
+        await self._run_device_action(
+            request_id, functools.partial(execute_open_url, payload)
+        )
+
+    async def _handle_install_app(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        payload = parse_install_app_payload(data)
+        await self._run_device_action(
+            request_id, functools.partial(execute_install_app, payload)
+        )
+
+    async def send_device_status(self, status: DeviceStatusPayload) -> None:
+        """Report the device's state (the device monitor's callback).
+
+        Sent only on an accepted session; the latest is kept and re-sent
+        right after every accepted handshake.
+        """
+        self._last_device_status = status
+        await self._try_send_device_status()
+
+    async def _try_send_device_status(self) -> None:
+        status = self._last_device_status
+        connection = self._connection
+        # Before the handshake is accepted the server closes the socket on
+        # any other message.
+        if status is None or connection is None or not self._session_authenticated:
+            return
+        try:
+            await connection.send(serialize_device_status(status))
+        except ConnectionClosed:
+            pass
 
     async def _send_interactive_output(
         self, request_id: str, result: InteractiveOutputPayload
@@ -1449,6 +1684,7 @@ class ControllerClient:
 
     async def _after_handshake(self) -> None:
         self._manual_uploader.attach(self._send_manual_upload)
+        await self._try_send_device_status()
         if self._update_status_unsent or self._update_in_flight() is not None:
             self._update_status_unsent = not await self._try_send_update_status(
                 self._last_update_status

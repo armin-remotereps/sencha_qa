@@ -19,6 +19,10 @@ Every capture runs hide → confirmed ack → settle → capture → show (plan 
 Captures are serialized by one lock, so a double click yields one shot at a
 time; while an agent action holds the window, a capture waits for it
 (holds nest).
+
+On a phone target (plan D8) the shot is the phone's screen, so the window on
+the host is never in it: no hide, ack or settle, the capture comes straight
+from the target backend.
 """
 
 from __future__ import annotations
@@ -41,6 +45,7 @@ from controller_client.protocol import (
     ManualShotMime,
 )
 from controller_client.screen_capture import capture_screen
+from controller_client.target import get_mobile_device
 
 logger = logging.getLogger(__name__)
 
@@ -136,20 +141,24 @@ class ManualCapturer:
     async def capture(self) -> EncodedShot:
         """One screenshot; CaptureAbortedError when none was taken."""
         async with self._lock:
-            async with self._window.hidden_for_capture() as confirmed:
-                if not confirmed:
-                    logger.warning(
-                        "Manual screenshot aborted: the window did not confirm "
-                        "it was hidden"
-                    )
-                    raise CaptureAbortedError(HIDE_FAILED_MESSAGE)
-                await asyncio.sleep(EXTRA_SETTLE_SECONDS)
-                try:
-                    image = await asyncio.to_thread(self._grab)
-                except Exception as e:  # any backend failure aborts the capture
-                    logger.warning("Manual screenshot failed: %s", e, exc_info=True)
-                    raise CaptureAbortedError(
-                        f"The screen could not be captured: {e}"
-                    ) from e
+            if get_mobile_device() is not None:
+                image = await self._grab_image()
+            else:
+                async with self._window.hidden_for_capture() as confirmed:
+                    if not confirmed:
+                        logger.warning(
+                            "Manual screenshot aborted: the window did not "
+                            "confirm it was hidden"
+                        )
+                        raise CaptureAbortedError(HIDE_FAILED_MESSAGE)
+                    await asyncio.sleep(EXTRA_SETTLE_SECONDS)
+                    image = await self._grab_image()
             # Shown again already; encoding a large screen takes a moment.
             return await asyncio.to_thread(encode_shot, image)
+
+    async def _grab_image(self) -> Image.Image:
+        try:
+            return await asyncio.to_thread(self._grab)
+        except Exception as e:  # any backend failure aborts the capture
+            logger.warning("Manual screenshot failed: %s", e, exc_info=True)
+            raise CaptureAbortedError(f"The screen could not be captured: {e}") from e

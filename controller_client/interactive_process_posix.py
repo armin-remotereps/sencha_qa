@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Mapping
 
 from controller_client.process_tracker import ProcessTracker
 
@@ -11,7 +12,11 @@ if sys.platform != "win32":
         """A ``/bin/bash -c`` command on a PTY, driven by pexpect."""
 
         def __init__(
-            self, command: str, process_tracker: ProcessTracker, read_timeout: float
+            self,
+            command: str,
+            process_tracker: ProcessTracker,
+            read_timeout: float,
+            env: Mapping[str, str] | None = None,
         ) -> None:
             self._child: pexpect.spawn[str] = pexpect.spawn(
                 "/bin/bash",
@@ -19,6 +24,7 @@ if sys.platform != "win32":
                 encoding="utf-8",
                 codec_errors="replace",
                 timeout=read_timeout,
+                env=None if env is None else dict(env),
             )
             if self._child.pid is not None:
                 process_tracker.register(self._child.pid)

@@ -4268,6 +4268,18 @@ details.card[open] > summary,
   white-space: pre-wrap;
 }
 
+/* Phone or tablet Test Runner (Connection card): the serial / UDID and the
+   runner-reported device status detail. */
+.runner-device-id {
+  font-family: var(--mono);
+  overflow-wrap: anywhere;
+}
+
+.runner-device-detail {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 /* --------------------------------------------------------------------------
    Leaderboard (templates/dashboard/leaderboard.html + includes): podium with
    #1 in the middle and taller on wide screens, medals, rank movement chips,

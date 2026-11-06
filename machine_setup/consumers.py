@@ -92,6 +92,12 @@ class MachineSetupConsumer(AuthenticatedConsumer):
                     "finishing_conversation_id": page.finishing_conversation_id,
                     "finishing_turn": page.finishing_turn,
                     "agent_connected": project.agent_connected,
+                    "agent_device_state": project.agent_device_state,
+                    "agent_device_reported_at": (
+                        project.agent_device_reported_at.isoformat()
+                        if project.agent_device_reported_at is not None
+                        else None
+                    ),
                     "visual_engine": page.visual_engine,
                     "help": help_state,
                     "intake_pending": page.intake_pending,
@@ -188,6 +194,8 @@ class MachineSetupConsumer(AuthenticatedConsumer):
                 {
                     "type": "agent_status",
                     "agent_connected": event["agent_connected"],
+                    "agent_device_state": event.get("agent_device_state", ""),
+                    "agent_device_reported_at": event.get("agent_device_reported_at"),
                 }
             )
         )

@@ -31,7 +31,8 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from accounts.models import CustomUser
-from agents.services.tool_registry import dispatch_tool_call, get_all_tool_definitions
+from agents.services.tool_definitions import tool_definitions_for
+from agents.services.tool_registry import dispatch_tool_call
 from agents.types import (
     ToolCall,
     ToolCategory,
@@ -41,6 +42,7 @@ from agents.types import (
     ToolParameter,
     ToolResult,
 )
+from controller_client.protocol import RunnerTarget
 from knowledge_base.exceptions import KnowledgeToolError
 from knowledge_base.services.agent_tools import (
     build_knowledge_handlers,
@@ -122,6 +124,7 @@ from projects.exceptions import (
     ApplicationContextConflictError,
     ApplicationContextError,
     BrowserUnavailableError,
+    DeviceDisconnectedError,
     RunnerOutdatedError,
 )
 from projects.manual_run_policy import MANUAL_TESTER_ON_MACHINE
@@ -201,9 +204,9 @@ def main_tool_definitions(role: ThreadRole) -> tuple[ToolDefinition, ...]:
     return tools
 
 
-def machine_tool_definitions() -> tuple[ToolDefinition, ...]:
-    """A setup sub-agent's tools: the tester's machine tools."""
-    return get_all_tool_definitions()
+def machine_tool_definitions(target: RunnerTarget) -> tuple[ToolDefinition, ...]:
+    """A setup sub-agent's tools: the tester's machine tools for ``target``."""
+    return tool_definitions_for(target)
 
 
 def _run_setup_task_definition(*, main_chat: bool) -> ToolDefinition:
@@ -795,6 +798,18 @@ def build_machine_dispatcher(project_id: int) -> ToolDispatcher:
             raise SetupRunnerLostError("The Test Runner is not connected.")
         try:
             return dispatch_tool_call(tool_call, context)
+        except DeviceDisconnectedError as exc:
+            # In a run this pauses the case for help; here reconnecting the
+            # phone (adb reconnect, booting the emulator) may be the job.
+            return _tool_error(
+                tool_call,
+                f"{exc} If the phone or tablet is disconnected (not just "
+                "starting: then wait and try again), use "
+                "execute_command on the Test Runner computer to reconnect it "
+                "(adb for Android, xcrun simctl / devicectl for iOS, addressing "
+                "the device by RUNNER_DEVICE_ID as the shell rules say; or boot "
+                "the emulator or simulator), then wait for it and try again.",
+            )
         except BrowserUnavailableError as exc:
             # In a run this pauses the case for help; here installing the browser is often
             # exactly the job, so the agent gets to react.

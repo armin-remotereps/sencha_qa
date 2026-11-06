@@ -22,4 +22,9 @@ mypy~=1.15.0
 black~=25.1.0
 isort~=6.0.1
 pexpect~=4.9.0
+# Drives phones and tablets through a local Appium 3 server (CONTROLLER_TARGET).
+Appium-Python-Client~=6.1.5
+# Pinned explicitly: the mobile backend catches its WebDriver exceptions. 4.52
+# needs certifi>=2026.10.23, above the certifi pin.
+selenium~=4.51.0
 types-pexpect~=4.9.0.20260127

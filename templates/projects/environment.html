@@ -1,4 +1,5 @@
 {% extends "layouts/project.html" %}
+{% load runner_device %}
 
 {% comment %}
   Environment page: test machine connection state, download/setup
@@ -24,6 +25,13 @@
                     section, the connection key card and the connection
                     card's actions (read-only member: machine status only)
 
+  A phone or tablet Test Runner (agent_system_info.target android / ios
+  with mobile_device_v1, docs/plan/feat-mobile-device-runner.md) adds the
+  device to the Connection card: environmentLive().device (label, deviceId)
+  and deviceState / deviceDetail / deviceReportedAt, seeded from
+  Project.agent_device_* and kept live over agent_status
+  (agent_device_state, agent_device_detail, agent_device_reported_at).
+
   The whole page body runs inside the environmentLive() Alpine scope so
   partials/advanced_diagnostics.html (which reads clientVersion,
   capabilities, visualEngine, systemInfo from an ancestor scope) works
@@ -46,6 +54,7 @@
 {{ project.agent_capabilities|json_script:"env-capabilities" }}
 {{ visual_engine|json_script:"env-visual-engine" }}
 {{ runner_update.payload|json_script:"env-runner-update" }}
+{{ project.agent_device_detail|json_script:"env-device-detail" }}
 <div x-data="environmentLive()">
   {% include "projects/includes/_environment_connection.html" with project=project runner_update=runner_update %}
   {% include "projects/includes/_environment_visual_engine_failure.html" only %}
@@ -86,12 +95,20 @@ document.addEventListener('alpine:init', () => {
     // RunnerUpdatePayload (projects/runner_update_offer.py). Runner-provided
     // text (detail, versions) is only ever bound with x-text, never x-html.
     runnerUpdate: JSON.parse(document.getElementById('env-runner-update').textContent),
+    // Phone or tablet runner: RunnerDeviceState value, runner-provided detail
+    // (x-text only) and the ISO time of its last status.
+    deviceState: '{{ project.agent_device_state|escapejs }}',
+    deviceDetail: JSON.parse(document.getElementById('env-device-detail').textContent),
+    deviceReportedAt: '{{ project.agent_device_reported_at|date:"c" }}' || null,
+    deviceStaleSeconds: {% runner_device_stale_seconds %},
     now: Date.now(),
     ws: null,
 
     init() {
-      // Elapsed timer for an in-flight Test Runner update.
+      // Elapsed timer for an in-flight Test Runner update; otherwise a slow
+      // clock so a device status that goes stale shows without a message.
       setInterval(() => { if (this.updateInFlight) this.now = Date.now(); }, 1000);
+      setInterval(() => { if (!this.updateInFlight) this.now = Date.now(); }, 10000);
       this.ws = new WebSocket(window.punkHazard.wsUrl('/ws/projects/{{ project.id }}/agent-status/'));
       this.ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
@@ -101,6 +118,10 @@ document.addEventListener('alpine:init', () => {
           this.lastConnectedAt = data.last_connected_at || this.lastConnectedAt;
           this.clientVersion = data.agent_client_version || '';
           this.capabilities = data.agent_capabilities || [];
+          this.deviceState = data.agent_device_state || '';
+          this.deviceDetail = data.agent_device_detail || '';
+          this.deviceReportedAt = data.agent_device_reported_at || null;
+          this.now = Date.now();
           if (data.visual_engine) this.visualEngine = data.visual_engine;
         } else if (data.type === 'visual_engine') {
           this.visualEngine = data.visual_engine;
@@ -112,21 +133,47 @@ document.addEventListener('alpine:init', () => {
 
     get machineState() {
       if (!this.agentConnected) return 'disconnected';
+      if (this.deviceMachineState) return this.deviceMachineState;
       return { ready: 'ready', starting: 'starting', failed: 'failed', offline: 'offline' }[this.visualEngine.state] || 'starting';
     },
 
     get machineBadgeClass() {
-      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed', offline: 'warning' }[this.machineState];
+      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed', offline: 'warning', device_offline: 'disconnected' }[this.machineState];
     },
 
     get machineBadgeLabel() {
+      if (this.deviceMachineState === 'starting') return 'Phone starting';
       return {
         disconnected: 'Not connected',
         starting: 'Visual engine starting',
         ready: 'Test machine connected',
         failed: 'Visual engine failed',
         offline: 'Visual engine offline',
+        device_offline: 'Phone disconnected',
       }[this.machineState];
+    },
+
+    // Phone or tablet runner (null on a desktop runner).
+    get device() {
+      return window.punkHazard.runnerDevice(this.systemInfo, this.capabilities);
+    },
+
+    get deviceMachineState() {
+      return window.punkHazard.deviceMachineState(this.device, this.deviceState, this.deviceReportedAt, this.deviceStaleSeconds, this.now);
+    },
+
+    get deviceStale() {
+      return window.punkHazard.deviceStale(this.deviceState, this.deviceReportedAt, this.deviceStaleSeconds, this.now);
+    },
+
+    get deviceStatusClass() {
+      if (this.deviceStale) return 'disconnected';
+      return { ready: 'connected', starting: 'starting', disconnected: 'disconnected', unauthorized: 'warning', unavailable: 'failed' }[this.deviceState] || 'disconnected';
+    },
+
+    get deviceStatusLabel() {
+      if (this.deviceStale) return 'Disconnected';
+      return { ready: 'Connected', starting: 'Starting', disconnected: 'Disconnected', unauthorized: 'Not authorised', unavailable: 'Unavailable' }[this.deviceState] || 'Disconnected';
     },
 
     // Visual engine card (_environment_visual_engine.html) — engine-wide,

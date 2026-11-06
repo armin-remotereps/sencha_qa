@@ -1,4 +1,5 @@
 {% extends "layouts/app.html" %}
+{% load runner_device %}
 
 {% comment %} Onboarding wizard, step 4: connect a test machine.
 
@@ -9,7 +10,9 @@
    the agent-status WS — same fields/shape as the connection-status
    component in the old templates/projects/detail.html (L10-45), and the
    scope partials/advanced_diagnostics.html expects (see that partial's
-   docstring).
+   docstring). A phone or tablet runner (docs/plan/feat-mobile-device-runner.md)
+   adds deviceState / deviceReportedAt from Project.agent_device_* and the
+   agent_status keys agent_device_state / agent_device_reported_at.
    project_can_write (context processor): a read-only member gets a notice
    instead of the step's forms and actions. {% endcomment %}
 
@@ -42,8 +45,13 @@
     clientVersion: '{{ project.agent_client_version|escapejs }}',
     capabilities: JSON.parse(document.getElementById('agent-capabilities').textContent),
     visualEngine: JSON.parse(document.getElementById('visual-engine-status').textContent),
+    deviceState: '{{ project.agent_device_state|escapejs }}',
+    deviceReportedAt: '{{ project.agent_device_reported_at|date:'c' }}' || null,
+    deviceStaleSeconds: {% runner_device_stale_seconds %},
+    now: Date.now(),
 
     init() {
+      setInterval(() => { this.now = Date.now(); }, 10000);
       const ws = new WebSocket(punkHazard.wsUrl('/ws/projects/{{ project.id }}/agent-status/'));
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
@@ -57,22 +65,36 @@
         this.lastConnectedAt = data.last_connected_at || '';
         this.clientVersion = data.agent_client_version || '';
         this.capabilities = data.agent_capabilities || [];
+        this.deviceState = data.agent_device_state || '';
+        this.deviceReportedAt = data.agent_device_reported_at || null;
+        this.now = Date.now();
         if (data.visual_engine) this.visualEngine = data.visual_engine;
       };
     },
 
     get machineState() {
       if (!this.agentConnected) return 'disconnected';
+      if (this.deviceMachineState) return this.deviceMachineState;
       return { ready: 'ready', starting: 'starting', failed: 'failed', offline: 'offline' }[this.visualEngine.state] || 'starting';
     },
 
     get machineStatusText() {
+      if (this.deviceMachineState === 'starting') return ' is connected — connecting to the phone or tablet.';
       return {
         ready: ' is connected and ready.',
         starting: ' is connected — visual engine starting.',
         failed: ' is connected — visual engine failed.',
         offline: ' is connected — visual engine offline (no vision worker connected).',
+        device_offline: ' is connected — the phone or tablet is not ready.',
       }[this.machineState] || '';
+    },
+
+    get device() {
+      return window.punkHazard.runnerDevice(this.systemInfo, this.capabilities);
+    },
+
+    get deviceMachineState() {
+      return window.punkHazard.deviceMachineState(this.device, this.deviceState, this.deviceReportedAt, this.deviceStaleSeconds, this.now);
     },
   }"
 >

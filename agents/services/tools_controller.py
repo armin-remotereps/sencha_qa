@@ -74,7 +74,7 @@ from projects.services import (
 COMMAND_LOG_PREFIX = "$ "
 
 
-def _ensure_action_succeeded(result: ActionResult) -> None:
+def ensure_action_succeeded(result: ActionResult) -> None:
     """Surface a controller-reported failure instead of claiming the action ran.
 
     The controller answers input actions with either an action_result carrying
@@ -219,7 +219,7 @@ def capture_screenshot(project_id: int, *, on_screenshot: ScreenshotCallback) ->
 
 
 _AttemptFunc = Callable[[VerificationBudget], ToolResult | None]
-_PressFunc = Callable[[int, int], ActionResult]
+PressFunc = Callable[[int, int], ActionResult]
 
 
 def _run_verified_action(
@@ -290,14 +290,14 @@ def _before_image_if_confirming(project_id: int, expected_result: str) -> str:
     return take_before_screenshot(project_id) if expected_result else ""
 
 
-def _verified_click(
+def verified_click(
     project_id: int,
     *,
     tool_name: str,
     description: str,
     vision_config: LLMConfig,
     expected_result: str,
-    press: _PressFunc,
+    press: PressFunc,
     verb: str,
     success_verb: str,
     default_expectation: Callable[[str], str],
@@ -319,7 +319,7 @@ def _verified_click(
         )
         x, y = element.center_x, element.center_y
         before_image = take_before_screenshot(project_id)
-        _ensure_action_succeeded(press(x, y))
+        ensure_action_succeeded(press(x, y))
         return _confirm_or_finish(
             project_id,
             vision_config,
@@ -355,7 +355,7 @@ def click(
     def _press(x: int, y: int) -> ActionResult:
         return controller_click(project_id, x, y)
 
-    return _verified_click(
+    return verified_click(
         project_id,
         tool_name="click",
         description=description,
@@ -390,7 +390,7 @@ def double_click(
         # double-click; it runs before any screen parse is spent.
         ensure_runner_supports_double_click(project_id)
 
-    return _verified_click(
+    return verified_click(
         project_id,
         tool_name="double_click",
         description=description,
@@ -432,7 +432,7 @@ def click_at(
         )
         budget.raise_if_cancelled()
         if not expected_result:
-            _ensure_action_succeeded(controller_click(project_id, x, y))
+            ensure_action_succeeded(controller_click(project_id, x, y))
             return ToolResult(
                 tool_call_id="", content=f"{success_message}.", is_error=False
             )
@@ -444,7 +444,7 @@ def click_at(
                 is_error=True,
             )
         before_image = take_before_screenshot(project_id)
-        _ensure_action_succeeded(controller_click(project_id, x, y))
+        ensure_action_succeeded(controller_click(project_id, x, y))
         verdict = confirm_action(
             project_id,
             vision_config,
@@ -506,7 +506,7 @@ def scroll(
             return ToolResult(
                 tool_call_id="", content=_SCROLL_OUTDATED_MESSAGE, is_error=True
             )
-        _ensure_action_succeeded(controller_scroll(project_id, direction, amount, x, y))
+        ensure_action_succeeded(controller_scroll(project_id, direction, amount, x, y))
         notches = "notch" if amount == 1 else "notches"
         where = "at the pointer" if x is None or y is None else f"at ({x}, {y})"
         return ToolResult(
@@ -523,7 +523,7 @@ def scroll(
 
 def type_text(project_id: int, *, text: str) -> ToolResult:
     def _do() -> ToolResult:
-        _ensure_action_succeeded(controller_type_text(project_id, text))
+        ensure_action_succeeded(controller_type_text(project_id, text))
         return ToolResult(
             tool_call_id="", content=f"Typed text: {text}", is_error=False
         )
@@ -533,7 +533,7 @@ def type_text(project_id: int, *, text: str) -> ToolResult:
 
 def key_press(project_id: int, *, keys: str) -> ToolResult:
     def _do() -> ToolResult:
-        _ensure_action_succeeded(controller_key_press(project_id, keys))
+        ensure_action_succeeded(controller_key_press(project_id, keys))
         return ToolResult(
             tool_call_id="", content=f"Pressed keys: {keys}", is_error=False
         )
@@ -557,7 +557,7 @@ def hover(
         )
         x, y = element.center_x, element.center_y
         before_image = _before_image_if_confirming(project_id, expected_result)
-        _ensure_action_succeeded(controller_hover(project_id, x, y))
+        ensure_action_succeeded(controller_hover(project_id, x, y))
         return _confirm_or_finish(
             project_id,
             vision_config,
@@ -604,7 +604,7 @@ def drag(
         )
         sx, sy, ex, ey = start.center_x, start.center_y, end.center_x, end.center_y
         before_image = _before_image_if_confirming(project_id, expected_result)
-        _ensure_action_succeeded(controller_drag(project_id, sx, sy, ex, ey))
+        ensure_action_succeeded(controller_drag(project_id, sx, sy, ex, ey))
         return _confirm_or_finish(
             project_id,
             vision_config,

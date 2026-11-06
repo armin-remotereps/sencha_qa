@@ -44,6 +44,8 @@ from controller_client.update_handover import (
     is_handed_over,
     is_running,
     mark_connected,
+    reacquire_mobile_device,
+    release_mobile_device,
     spawn_new_runner,
     terminate_runner,
 )
@@ -119,6 +121,9 @@ class RunnerUpdate:
         # unless the new runner was already started from it).
         self._new_root: Path | None = None
         self._spawned: SpawnedRunner | None = None
+        # Set once the phone was released for the new runner; a failure after
+        # that takes it back.
+        self._device_released = False
         self.handover: Handover | None = None
 
     @property
@@ -178,6 +183,8 @@ class RunnerUpdate:
             cli_email,
         )
         new_python = await install(layout, Path(sys.executable), self._on_phase)
+        self._device_released = True
+        await asyncio.to_thread(release_mobile_device)
         spawned = await asyncio.to_thread(
             spawn_new_runner, new_python, layout.new_root, self._new_runner_args()
         )
@@ -282,6 +289,9 @@ class RunnerUpdate:
         if self._spawned is None and self._new_root is not None:
             await asyncio.to_thread(shutil.rmtree, self._new_root, True)
         self.handover = None
+        if self._device_released:
+            self._device_released = False
+            await asyncio.to_thread(reacquire_mobile_device)
         await self._status(UpdatePhase.FAILED, detail)
 
 

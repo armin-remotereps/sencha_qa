@@ -67,3 +67,14 @@ class UpdateError(ControllerError):
     The message is plain text for the ``update_status`` ``failed`` detail; the
     old runner keeps running.
     """
+
+
+class DeviceDisconnectedError(ExecutionError):
+    """The phone or tablet is gone (unplugged, emulator stopped, session lost)
+    or its Appium session is still starting; answered with
+    ``ErrorCode.DEVICE_DISCONNECTED``."""
+
+
+class TargetMismatchError(ExecutionError):
+    """A desktop-only message on a phone target, or a phone message on a
+    desktop target; answered with ``ErrorCode.TARGET_MISMATCH``."""

@@ -15,7 +15,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.18.1"
+CLIENT_VERSION: Final[str] = "0.19.0"
 
 
 class CloseCode(IntEnum):
@@ -115,6 +115,18 @@ class MessageType(StrEnum):
     # about the claimed case (answered by ``manual_case_action_result``).
     MANUAL_CASE_PROGRESS = "manual_case_progress"
     MANUAL_CHAT_SEND = "manual_chat_send"
+    # Phone or tablet target (MOBILE_DEVICE_V1): server -> runner gestures and
+    # app actions, answered by ``action_result`` / ``error``; runner -> server
+    # ``device_status`` (no reply) on every change and every
+    # DEVICE_STATUS_INTERVAL_SECONDS.
+    SWIPE = "swipe"
+    LONG_PRESS = "long_press"
+    PRESS_BUTTON = "press_button"
+    ROTATE_DEVICE = "rotate_device"
+    HIDE_KEYBOARD = "hide_keyboard"
+    OPEN_URL = "open_url"
+    INSTALL_APP = "install_app"
+    DEVICE_STATUS = "device_status"
 
 
 class ClientCapability(StrEnum):
@@ -171,6 +183,10 @@ class ClientCapability(StrEnum):
     # ``manual_chat_send``) and the pause fields of ``active``. Advertised only
     # together with MANUAL_RUN_V1 (dropped with the window).
     MANUAL_PAUSE_DISCUSS_V1 = "manual_pause_discuss_v1"
+    # Optional: the runner drives a phone or tablet (``system_info.target`` is
+    # ``android`` or ``ios``), answers the phone messages above and reports
+    # ``device_status``. Advertised only on a phone target.
+    MOBILE_DEVICE_V1 = "mobile_device_v1"
     # Retired in 0.18.0 (How to do it and Ask AI): person_step_assist_v1,
     # person_step_guide_v1, manual_step_guide_v1 may still arrive from runners
     # < 0.18.0; ignored; never reuse.
@@ -195,7 +211,9 @@ _PERSON_WINDOW_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
 CLIENT_CAPABILITIES: Final[tuple[ClientCapability, ...]] = tuple(ClientCapability)
 
 
-def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]:
+def advertised_capabilities(
+    person_window: bool, mobile: bool = False
+) -> tuple[ClientCapability, ...]:
     """The capabilities to send in the handshake.
 
     ``person_window`` is False when the person step window is disabled
@@ -203,14 +221,14 @@ def advertised_capabilities(person_window: bool) -> tuple[ClientCapability, ...]
     never sends ``person_step_state`` and the person answers on the web.
     PERSON_STEP_CASE_STEPS_V1, PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1,
     CASE_PAUSE_V1, MANUAL_RUN_V1 and MANUAL_PAUSE_DISCUSS_V1 are dropped with
-    it.
+    it. ``mobile`` is True only on a phone target; MOBILE_DEVICE_V1 is
+    dropped otherwise.
     """
-    if person_window:
-        return CLIENT_CAPABILITIES
     return tuple(
         capability
         for capability in CLIENT_CAPABILITIES
-        if capability not in _PERSON_WINDOW_CAPABILITIES
+        if (person_window or capability not in _PERSON_WINDOW_CAPABILITIES)
+        and (mobile or capability is not ClientCapability.MOBILE_DEVICE_V1)
     )
 
 
@@ -292,6 +310,12 @@ class ErrorCode(StrEnum):
     CONTROLLER_DISCONNECTED = "CONTROLLER_DISCONNECTED"
     # The requested browser is not installed on the controller machine.
     BROWSER_NOT_INSTALLED = "BROWSER_NOT_INSTALLED"
+    # The phone or tablet the runner drives is gone (unplugged, emulator
+    # stopped, Appium session lost) or still starting.
+    DEVICE_DISCONNECTED = "DEVICE_DISCONNECTED"
+    # A desktop-only message on a phone target, or a phone message on a
+    # desktop target.
+    TARGET_MISMATCH = "TARGET_MISMATCH"
 
 
 @dataclass(frozen=True)
@@ -3648,4 +3672,368 @@ def serialize_manual_screenshot_ack(
         drop=ack.drop,
         message=ack.message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
         drop_shot=ack.drop_shot,
+    )
+
+
+# --- Phone and tablet target (MOBILE_DEVICE_V1) -----------------------------
+#
+# The runner keeps running on a host computer and drives one phone, tablet,
+# emulator or simulator (``CONTROLLER_TARGET``). ``system_info.os`` stays the
+# host OS; the keys below describe the device. Coordinates are screenshot
+# pixels, as for every desktop pointer action.
+
+
+class RunnerTarget(StrEnum):
+    DESKTOP = "desktop"
+    ANDROID = "android"
+    IOS = "ios"
+
+
+MOBILE_TARGETS: Final[frozenset[RunnerTarget]] = frozenset(
+    {RunnerTarget.ANDROID, RunnerTarget.IOS}
+)
+
+
+class DeviceKind(StrEnum):
+    PHYSICAL = "physical"
+    EMULATOR = "emulator"
+    SIMULATOR = "simulator"
+
+
+class DeviceState(StrEnum):
+    READY = "ready"
+    # The Appium session is being created (a first WebDriverAgent build takes
+    # minutes).
+    STARTING = "starting"
+    DISCONNECTED = "disconnected"
+    # USB debugging not authorised, or the iPhone does not trust the host.
+    UNAUTHORIZED = "unauthorized"
+    # Appium or the session failed; ``detail`` says why.
+    UNAVAILABLE = "unavailable"
+
+
+class MobileButton(StrEnum):
+    BACK = "back"
+    HOME = "home"
+    APP_SWITCH = "app_switch"
+    VOLUME_UP = "volume_up"
+    VOLUME_DOWN = "volume_down"
+    POWER = "power"
+
+
+class DeviceOrientation(StrEnum):
+    PORTRAIT = "portrait"
+    LANDSCAPE = "landscape"
+
+
+# The runner sends ``device_status`` on every change and at least this often.
+DEVICE_STATUS_INTERVAL_SECONDS: Final[int] = 30
+DEVICE_STATUS_DETAIL_MAX_CHARS: Final[int] = 500
+# Longest value of one device key in ``system_info``; longer values are dropped.
+DEVICE_INFO_VALUE_MAX_CHARS: Final[int] = 100
+
+# ``system_info`` keys of a phone target. ``screen_width`` / ``screen_height``
+# are then the device's screenshot pixels in portrait.
+SYSTEM_INFO_TARGET: Final[str] = "target"
+SYSTEM_INFO_DEVICE_PLATFORM: Final[str] = "device_platform"
+SYSTEM_INFO_DEVICE_KIND: Final[str] = "device_kind"
+SYSTEM_INFO_DEVICE_MODEL: Final[str] = "device_model"
+SYSTEM_INFO_DEVICE_NAME: Final[str] = "device_name"
+SYSTEM_INFO_DEVICE_OS_VERSION: Final[str] = "device_os_version"
+SYSTEM_INFO_DEVICE_ID: Final[str] = "device_id"
+SYSTEM_INFO_DEVICE_SCALE: Final[str] = "device_scale"
+
+# Swipe length as a share of the screen's side along the swipe.
+SWIPE_MIN_DISTANCE: Final[float] = 0.1
+SWIPE_MAX_DISTANCE: Final[float] = 0.9
+DEFAULT_SWIPE_DISTANCE: Final[float] = 0.5
+SWIPE_MIN_DURATION: Final[float] = 0.05
+SWIPE_MAX_DURATION: Final[float] = 5.0
+DEFAULT_SWIPE_DURATION: Final[float] = 0.4
+LONG_PRESS_MIN_SECONDS: Final[float] = 0.5
+LONG_PRESS_MAX_SECONDS: Final[float] = 10.0
+DEFAULT_LONG_PRESS_SECONDS: Final[float] = 1.0
+OPEN_URL_MAX_CHARS: Final[int] = PERSON_STEP_URL_MAX_CHARS
+
+_URL_SCHEME_RE: Final[re.Pattern[str]] = re.compile(r"([A-Za-z][A-Za-z0-9+.-]{0,31}):")
+# Schemes that run code or read local files in the device's browser.
+_REFUSED_URL_SCHEMES: Final[frozenset[str]] = frozenset(
+    # ``intent:`` / ``android-app:`` start arbitrary Android activities;
+    # launch_app covers apps.
+    {
+        "javascript",
+        "file",
+        "data",
+        "vbscript",
+        "content",
+        "blob",
+        "about",
+        "intent",
+        "android-app",
+    }
+)
+
+
+@dataclass(frozen=True)
+class DeviceInfoPayload:
+    """The device a phone runner drives, as reported in ``system_info``."""
+
+    target: RunnerTarget
+    platform: str
+    kind: str
+    model: str
+    name: str
+    os_version: str
+    device_id: str
+    scale: str
+
+
+@dataclass(frozen=True)
+class SwipePayload:
+    # The finger's direction: ``up`` moves the finger up, which scrolls the
+    # content down (reveals what is below).
+    direction: ScrollDirection
+    # Start point in screenshot pixels; both None: the centre of the screen.
+    x: int | None
+    y: int | None
+    # SWIPE_MIN_DISTANCE..SWIPE_MAX_DISTANCE of the screen's side.
+    distance: float
+    duration: float
+
+
+@dataclass(frozen=True)
+class LongPressPayload:
+    x: int
+    y: int
+    duration: float
+
+
+@dataclass(frozen=True)
+class PressButtonPayload:
+    button: MobileButton
+
+
+@dataclass(frozen=True)
+class RotateDevicePayload:
+    orientation: DeviceOrientation
+
+
+@dataclass(frozen=True)
+class OpenUrlPayload:
+    url: str
+
+
+@dataclass(frozen=True)
+class InstallAppPayload:
+    # An absolute path on the runner host: ``.apk`` (Android), a simulator
+    # ``.app`` or a device-signed ``.ipa`` (iOS). Network paths are refused.
+    path: str
+
+
+@dataclass(frozen=True)
+class DeviceStatusPayload:
+    state: DeviceState
+    detail: str
+
+
+def parse_runner_target(system_info: Mapping[str, object]) -> RunnerTarget:
+    """The target of a runner from its handshake ``system_info``.
+
+    Every runner older than 0.19.0 and every desktop runner sends no
+    ``target`` key and reads ``desktop``; so does an unknown value.
+    """
+    raw = system_info.get(SYSTEM_INFO_TARGET)
+    if not isinstance(raw, str):
+        return RunnerTarget.DESKTOP
+    try:
+        return RunnerTarget(raw)
+    except ValueError:
+        return RunnerTarget.DESKTOP
+
+
+def is_mobile_target(system_info: Mapping[str, object]) -> bool:
+    return parse_runner_target(system_info) in MOBILE_TARGETS
+
+
+def _device_value(system_info: Mapping[str, object], key: str) -> str:
+    value = system_info.get(key)
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return ""
+    text = str(value).strip()
+    if len(text) > DEVICE_INFO_VALUE_MAX_CHARS or not text.isprintable():
+        return ""
+    return text
+
+
+def parse_device_info(system_info: Mapping[str, object]) -> DeviceInfoPayload | None:
+    """The device of a phone runner, or None for a desktop runner.
+
+    The one definition every server reader uses. Values longer than
+    DEVICE_INFO_VALUE_MAX_CHARS or with control characters read empty.
+    """
+    target = parse_runner_target(system_info)
+    if target not in MOBILE_TARGETS:
+        return None
+    return DeviceInfoPayload(
+        target=target,
+        platform=_device_value(system_info, SYSTEM_INFO_DEVICE_PLATFORM),
+        kind=_device_value(system_info, SYSTEM_INFO_DEVICE_KIND),
+        model=_device_value(system_info, SYSTEM_INFO_DEVICE_MODEL),
+        name=_device_value(system_info, SYSTEM_INFO_DEVICE_NAME),
+        os_version=_device_value(system_info, SYSTEM_INFO_DEVICE_OS_VERSION),
+        device_id=_device_value(system_info, SYSTEM_INFO_DEVICE_ID),
+        scale=_device_value(system_info, SYSTEM_INFO_DEVICE_SCALE),
+    )
+
+
+def device_info_to_system_info(info: DeviceInfoPayload) -> dict[str, str]:
+    """The ``system_info`` keys of a phone runner (runner side)."""
+    values = {
+        SYSTEM_INFO_TARGET: info.target.value,
+        SYSTEM_INFO_DEVICE_PLATFORM: info.platform,
+        SYSTEM_INFO_DEVICE_KIND: info.kind,
+        SYSTEM_INFO_DEVICE_MODEL: info.model,
+        SYSTEM_INFO_DEVICE_NAME: info.name,
+        SYSTEM_INFO_DEVICE_OS_VERSION: info.os_version,
+        SYSTEM_INFO_DEVICE_ID: info.device_id,
+        SYSTEM_INFO_DEVICE_SCALE: info.scale,
+    }
+    return {
+        key: value[:DEVICE_INFO_VALUE_MAX_CHARS]
+        for key, value in values.items()
+        if key == SYSTEM_INFO_TARGET or value
+    }
+
+
+def _extract_bounded_number(
+    data: dict[str, object],
+    field: str,
+    default: float,
+    minimum: float,
+    maximum: float,
+) -> float:
+    value = data.get(field, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ProtocolError(f"Missing or invalid '{field}'")
+    number = float(value)
+    if not minimum <= number <= maximum:
+        raise ProtocolError(f"Invalid '{field}': expected {minimum} to {maximum}")
+    return number
+
+
+def parse_swipe_payload(data: dict[str, object]) -> SwipePayload:
+    raw_direction = _extract_str(data, "direction")
+    try:
+        direction = ScrollDirection(raw_direction)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown swipe direction: {raw_direction}") from e
+    x = _extract_optional_int(data, "x")
+    y = _extract_optional_int(data, "y")
+    if (x is None) != (y is None):
+        raise ProtocolError("'x' and 'y' must both be given or both be omitted")
+    return SwipePayload(
+        direction=direction,
+        x=x,
+        y=y,
+        distance=_extract_bounded_number(
+            data,
+            "distance",
+            DEFAULT_SWIPE_DISTANCE,
+            SWIPE_MIN_DISTANCE,
+            SWIPE_MAX_DISTANCE,
+        ),
+        duration=_extract_bounded_number(
+            data,
+            "duration",
+            DEFAULT_SWIPE_DURATION,
+            SWIPE_MIN_DURATION,
+            SWIPE_MAX_DURATION,
+        ),
+    )
+
+
+def parse_long_press_payload(data: dict[str, object]) -> LongPressPayload:
+    return LongPressPayload(
+        x=_extract_int(data, "x"),
+        y=_extract_int(data, "y"),
+        duration=_extract_bounded_number(
+            data,
+            "duration",
+            DEFAULT_LONG_PRESS_SECONDS,
+            LONG_PRESS_MIN_SECONDS,
+            LONG_PRESS_MAX_SECONDS,
+        ),
+    )
+
+
+def parse_press_button_payload(data: dict[str, object]) -> PressButtonPayload:
+    raw = _extract_str(data, "button")
+    try:
+        return PressButtonPayload(button=MobileButton(raw))
+    except ValueError as e:
+        raise ProtocolError(f"Unknown button: {raw}") from e
+
+
+def parse_rotate_device_payload(data: dict[str, object]) -> RotateDevicePayload:
+    raw = _extract_str(data, "orientation")
+    try:
+        return RotateDevicePayload(orientation=DeviceOrientation(raw))
+    except ValueError as e:
+        raise ProtocolError(f"Unknown orientation: {raw}") from e
+
+
+def validate_open_url(url: str) -> str:
+    """``url`` stripped, or ProtocolError when the device must not open it.
+
+    http(s) and custom app schemes (deep links) pass; schemes that run code
+    or read local files (``javascript:``, ``file:``, ``data:``, ...) do not.
+    """
+    text = url.strip()
+    if not text or len(text) > OPEN_URL_MAX_CHARS:
+        raise ProtocolError("Invalid 'url': empty or too long")
+    if any(not ch.isprintable() or ch.isspace() for ch in text):
+        raise ProtocolError("Invalid 'url': contains spaces or control characters")
+    match = _URL_SCHEME_RE.match(text)
+    if match is None:
+        raise ProtocolError("Invalid 'url': it needs a scheme such as https://")
+    if match.group(1).lower() in _REFUSED_URL_SCHEMES:
+        raise ProtocolError(f"Invalid 'url': the {match.group(1)}: scheme is refused")
+    return text
+
+
+def parse_open_url_payload(data: dict[str, object]) -> OpenUrlPayload:
+    return OpenUrlPayload(url=validate_open_url(_extract_str(data, "url")))
+
+
+def parse_install_app_payload(data: dict[str, object]) -> InstallAppPayload:
+    path = _extract_path(data, "path")
+    if is_network_path(path):
+        raise ProtocolError("Invalid 'path': network paths are refused")
+    return InstallAppPayload(path=path)
+
+
+def parse_device_status_payload(data: Mapping[str, object]) -> DeviceStatusPayload:
+    """Validate a ``device_status`` (server side); ``detail`` is truncated."""
+    raw = data.get("state")
+    if not isinstance(raw, str):
+        raise ProtocolError("Missing or invalid 'state'")
+    try:
+        state = DeviceState(raw)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown device state: {raw}") from e
+    detail = data.get("detail", "")
+    if not isinstance(detail, str):
+        raise ProtocolError("Invalid 'detail'")
+    cleaned = "".join(ch for ch in detail if ch.isprintable() or ch in "\n\t")
+    return DeviceStatusPayload(
+        state=state, detail=cleaned.strip()[:DEVICE_STATUS_DETAIL_MAX_CHARS]
+    )
+
+
+def serialize_device_status(status: DeviceStatusPayload) -> str:
+    """A ``device_status`` (runner side)."""
+    return serialize_message(
+        MessageType.DEVICE_STATUS,
+        state=status.state.value,
+        detail=status.detail[:DEVICE_STATUS_DETAIL_MAX_CHARS],
     )

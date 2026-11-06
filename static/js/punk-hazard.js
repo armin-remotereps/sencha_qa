@@ -491,4 +491,54 @@ window.punkHazard = {
     const scheme = location.protocol === "https:" ? "wss://" : "ws://";
     return scheme + location.host + path;
   },
+
+  /**
+   * The phone or tablet a Test Runner drives, from its `agent_system_info`
+   * and `agent_capabilities` (docs/plan/feat-mobile-device-runner.md, D4):
+   * `{ label, deviceId }`, or null for a desktop runner. Mirrors
+   * `controller_client.protocol.parse_device_info` and the
+   * `runner_device_label` template filter (projects/templatetags/
+   * runner_device.py). Runner-provided: bind with x-text only.
+   */
+  runnerDevice(systemInfo, capabilities) {
+    const info = systemInfo || {};
+    if (info.target !== "android" && info.target !== "ios") return null;
+    if (!Array.isArray(capabilities) || !capabilities.includes("mobile_device_v1")) return null;
+    const value = (key) => {
+      const raw = info[key];
+      if (typeof raw !== "string" && typeof raw !== "number") return "";
+      const text = String(raw).trim();
+      return text.length > 100 ? "" : text;
+    };
+    const platform = value("device_platform");
+    const osVersion = value("device_os_version");
+    const noun = platform === "iPadOS" ? "iPad" : info.target === "ios" ? "iPhone" : "Android phone";
+    const osName = platform || (info.target === "ios" ? "iOS" : "Android");
+    const kind = { physical: "real device", emulator: "emulator", simulator: "simulator" }[value("device_kind")] || "";
+    const parts = [noun, value("device_model") || value("device_name"), osVersion ? osName + " " + osVersion : "", kind];
+    return { label: parts.filter(Boolean).join(" · "), deviceId: value("device_id") };
+  },
+
+  /**
+   * Whether a phone runner's device holds the machine badge (D6), as
+   * `projects.services.get_machine_state` / `projects.runner_target.
+   * device_offline` decide: "" (it does not), "starting" (its session is
+   * being created) or "device_offline" (any other state, or READY with no
+   * status within `staleSeconds`). `now` is a reactive clock in ms so a
+   * status that goes stale updates the badge.
+   */
+  deviceMachineState(device, state, reportedAt, staleSeconds, now) {
+    if (!device || !state) return "";
+    if (state === "starting") return "starting";
+    if (state !== "ready") return "device_offline";
+    return this.deviceStale(state, reportedAt, staleSeconds, now) ? "device_offline" : "";
+  },
+
+  // READY, but its last status is missing or older than `staleSeconds`.
+  deviceStale(state, reportedAt, staleSeconds, now) {
+    if (state !== "ready") return false;
+    if (!reportedAt) return true;
+    const reported = new Date(reportedAt).getTime();
+    return Number.isNaN(reported) || now - reported > staleSeconds * 1000;
+  },
 };

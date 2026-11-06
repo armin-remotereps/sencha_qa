@@ -2,7 +2,7 @@ import platform
 import socket
 from dataclasses import dataclass
 
-from controller_client.desktop import get_desktop_backend
+from controller_client.target import get_target_backend
 
 
 @dataclass(frozen=True)
@@ -42,7 +42,7 @@ def _normalize_architecture(arch: str) -> str:
 
 
 def gather_system_info() -> SystemInfo:
-    backend = get_desktop_backend()
+    backend = get_target_backend()
     width, height = backend.screen_size()
     return SystemInfo(
         os=platform.system(),

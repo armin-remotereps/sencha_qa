@@ -12,7 +12,10 @@
                     canUpdate / updateInFlight / updateOutcome.
     project_can_write — inherited (included without `only`); false hides
                     Update Test Runner, Disconnect and their dialogs
-  Runner-provided text (versions, failure detail) is bound with x-text only.
+  A phone or tablet runner adds Target, Device ID and Device status rows
+  (environmentLive().device, deviceStatusLabel, deviceDetail).
+  Runner-provided text (versions, device strings, failure detail) is bound
+  with x-text only.
 {% endcomment %}
 <section aria-labelledby="connection-h" class="card">
   <div class="card-header">
@@ -41,6 +44,24 @@
       <dt>Operating system</dt>
       <dd x-text="osLabel"></dd>
     </div>
+    <template x-if="device">
+      <div>
+        <dt>Target</dt>
+        <dd x-text="device.label"></dd>
+      </div>
+    </template>
+    <template x-if="device">
+      <div>
+        <dt>Device ID</dt>
+        <dd class="runner-device-id" x-text="device.deviceId || '—'"></dd>
+      </div>
+    </template>
+    <template x-if="device && agentConnected">
+      <div>
+        <dt>Device status</dt>
+        <dd><span class="badge" :class="'badge-' + deviceStatusClass" x-text="deviceStatusLabel"></span></dd>
+      </div>
+    </template>
     <div>
       <dt>Test Runner version</dt>
       <dd>
@@ -54,6 +75,24 @@
       </dd>
     </div>
   </dl>
+
+  <div class="alert alert-warning" role="status" x-show="device && agentConnected && deviceMachineState === 'device_offline'" x-cloak>
+    <span class="alert-icon" aria-hidden="true">⚠</span>
+    <div>
+      <strong x-text="deviceStale ? 'The Test Runner has not reported the phone or tablet for a while.' : 'The phone or tablet is not ready.'"></strong>
+      <p class="runner-device-detail" x-show="deviceDetail && !deviceStale" x-text="deviceDetail"></p>
+      <p>Runs, resumes and Machine setup wait until it is connected again. Check the cable or Wi-Fi debugging, unlock the device and accept any trust or debugging prompt, or start the emulator or simulator.</p>
+    </div>
+  </div>
+
+  <div class="alert alert-info" role="status" x-show="device && agentConnected && deviceMachineState === 'starting'" x-cloak>
+    <span class="alert-icon" aria-hidden="true"><span class="live-dot"></span></span>
+    <div>
+      <strong>The Test Runner is connecting to the phone or tablet.</strong>
+      <p class="runner-device-detail" x-show="deviceDetail" x-text="deviceDetail"></p>
+      <p>The first connection to an iPhone or iPad can take several minutes.</p>
+    </div>
+  </div>
 
   <div class="alert alert-info" role="status" x-show="updateInFlight" x-cloak>
     <span class="alert-icon" aria-hidden="true"><span class="live-dot"></span></span>

@@ -257,11 +257,27 @@ class BlockedReason(models.TextChoices):
         "Could not restore the state to resume",
     )
     INTERNAL_ERROR = "internal_error", "Internal error"
+    # The phone or tablet a phone Test Runner drives dropped off.
+    DEVICE_DISCONNECTED = "device_disconnected", "Phone or tablet disconnected"
     HELP_SKIPPED = "help_skipped", "Marked blocked by a person"
     PERSON_REVIEW = "person_review", "Marked blocked by a person after review"
     # Manual run: the tester's Blocked case verdict from the Test Runner
     # window (``result`` holds the tester's required note).
     MANUAL_VERDICT = "manual_verdict", "Marked blocked by the tester"
+
+
+class RunnerDeviceState(models.TextChoices):
+    """Live state of the phone or tablet a phone Test Runner drives.
+
+    Mirrors ``controller_client.protocol.DeviceState``; blank: no phone target.
+    """
+
+    NONE = "", "No phone or tablet"
+    READY = "ready", "Connected"
+    STARTING = "starting", "Starting"
+    DISCONNECTED = "disconnected", "Disconnected"
+    UNAUTHORIZED = "unauthorized", "Not authorised"
+    UNAVAILABLE = "unavailable", "Unavailable"
 
 
 class FailedBy(models.TextChoices):
@@ -381,6 +397,12 @@ class Project(models.Model):
     agent_system_info = models.JSONField(default=dict, blank=True)
     agent_client_version = models.CharField(max_length=32, blank=True, default="")
     agent_capabilities = models.JSONField(default=list, blank=True)
+    # Phone runners only (``device_status``); cleared with the connection.
+    agent_device_state = models.CharField(
+        max_length=16, choices=RunnerDeviceState.choices, blank=True, default=""
+    )
+    agent_device_detail = models.CharField(max_length=500, blank=True, default="")
+    agent_device_reported_at = models.DateTimeField(null=True, blank=True)
     last_connected_at = models.DateTimeField(null=True, blank=True)
     project_prompt = models.TextField(blank=True, default="")
     # Bumped on every write; the setup agent's write is conditional on it.

@@ -8,6 +8,7 @@ from agents.attempt_digest import build_attempt_digest
 from agents.services.agent_loop import _run_agent_loop
 from agents.services.llm_config import build_llm_config
 from agents.services.sub_agent_prompts import build_sub_agent_system_prompt
+from agents.services.tool_definitions import tool_names_for
 from agents.services.tool_registry import (
     allowlisted_dispatcher,
     tool_definitions_named,
@@ -21,6 +22,7 @@ from agents.types import (
     SubTaskResult,
     ToolContext,
 )
+from controller_client.protocol import parse_runner_target
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +48,10 @@ def run_sub_agent(
     tool_names: frozenset[str] | None = None,
 ) -> SubTaskResult:
     """Run one sub-task; ``tool_names`` limits the tools it may see and call."""
+    runner_target = parse_runner_target(system_info or {})
+    if tool_names is not None:
+        # Only the allowlisted tools that exist on this runner's target.
+        tool_names = tool_names & tool_names_for(runner_target)
     system_prompt = build_sub_agent_system_prompt(
         sub_task.description,
         sub_task.expected_result,
@@ -68,6 +74,8 @@ def run_sub_agent(
         on_screenshot=config.on_screenshot,
         on_log=config.on_log,
         cancellation_check=config.cancellation_check,
+        # The phone or desktop tool set, from the runner's handshake.
+        runner_target=runner_target,
     )
 
     task_description = (
@@ -81,7 +89,9 @@ def run_sub_agent(
         config=config,
         system_prompt=system_prompt,
         tool_definitions=(
-            None if tool_names is None else tool_definitions_named(tool_names)
+            None
+            if tool_names is None
+            else tool_definitions_named(tool_names, context.runner_target)
         ),
         dispatch=None if tool_names is None else allowlisted_dispatcher(tool_names),
     )

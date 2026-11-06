@@ -18,6 +18,7 @@ from typing import Final, Literal
 from django.conf import settings
 
 from agents.os_shell import get_os_name
+from agents.runner_device import runner_device
 from agents.secret_redaction import redact_secrets
 from agents.services.llm_client import send_chat_completion
 from agents.services.person_step_prompts import (
@@ -70,6 +71,12 @@ _QUOTED_SPAN: Final = re.compile(
 _LINE_PREFIX: Final = re.compile(r"^(?:[-*\u2022]|\d+[.)]|[$>])\s+")
 
 
+def _device_noun(system_info: dict[str, object] | None) -> str | None:
+    """The phone a phone runner drives ("Android phone", "iPhone", ...)."""
+    device = runner_device(system_info)
+    return None if device is None else device.noun
+
+
 def prepare_person_step(
     llm: LLMConfig,
     sub_task: SubTask,
@@ -101,7 +108,11 @@ def prepare_person_step(
         (
             ChatMessage(
                 role="system",
-                content=build_prepare_system_prompt(os_name=os_name, restore=restore),
+                content=build_prepare_system_prompt(
+                    os_name=os_name,
+                    restore=restore,
+                    device=_device_noun(system_info),
+                ),
             ),
             ChatMessage(role="user", content=user_prompt),
         ),
@@ -261,7 +272,10 @@ def confirm_person_step(
     """
     timeout_seconds: int = settings.PERSON_STEP_CONFIRM_TIMEOUT_SECONDS
     sub_task = build_confirm_sub_task(
-        person, os_name=get_os_name(system_info), timeout_seconds=timeout_seconds
+        person,
+        os_name=get_os_name(system_info),
+        timeout_seconds=timeout_seconds,
+        device=_device_noun(system_info),
     )
     return _run_check(
         sub_task,
@@ -308,6 +322,7 @@ def record_mark_evidence(
         verdict=verdict,
         os_name=get_os_name(system_info),
         timeout_seconds=timeout_seconds,
+        device=_device_noun(system_info),
     )
     return _run_check(
         sub_task,

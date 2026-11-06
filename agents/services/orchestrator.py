@@ -180,6 +180,7 @@ def run_orchestrator(
             knowledge_index=knowledge_index,
             artifacts_profile=artifacts_profile,
             cancellation_check=cancellation_check,
+            system_info=system_info,
         )
     else:
         sub_tasks = resume.plan
@@ -1090,6 +1091,7 @@ def _plan_sub_tasks(
     knowledge_index: str | None = None,
     artifacts_profile: str | None = None,
     cancellation_check: CancellationCheck | None = None,
+    system_info: dict[str, object] | None = None,
 ) -> tuple[SubTask, ...]:
     knowledge_tools = (
         knowledge_index is not None and settings.ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS > 0
@@ -1102,6 +1104,7 @@ def _plan_sub_tasks(
         knowledge_index=knowledge_index,
         knowledge_tools=knowledge_tools,
         artifacts_profile=artifacts_profile,
+        system_info=system_info,
     )
     messages = (
         ChatMessage(role="system", content=system_prompt),

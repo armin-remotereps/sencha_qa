@@ -341,6 +341,13 @@ class AgentStatusConsumer(AuthenticatedConsumer):
                 "last_connected_at": (
                     p.last_connected_at.isoformat() if p.last_connected_at else None
                 ),
+                "agent_device_state": p.agent_device_state,
+                "agent_device_detail": p.agent_device_detail,
+                "agent_device_reported_at": (
+                    p.agent_device_reported_at.isoformat()
+                    if p.agent_device_reported_at
+                    else None
+                ),
             }
             return state, get_runner_update_offer(p).payload
 
@@ -371,6 +378,9 @@ class AgentStatusConsumer(AuthenticatedConsumer):
                     "agent_client_version": event["agent_client_version"],
                     "agent_capabilities": event["agent_capabilities"],
                     "last_connected_at": event["last_connected_at"],
+                    "agent_device_state": event.get("agent_device_state", ""),
+                    "agent_device_detail": event.get("agent_device_detail", ""),
+                    "agent_device_reported_at": event.get("agent_device_reported_at"),
                 }
             )
         )
