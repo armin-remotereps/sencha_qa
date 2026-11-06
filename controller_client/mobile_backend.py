@@ -414,7 +414,7 @@ class MobileBackend:
         # Home first (two requests): it also dismisses the keyboard and
         # records the launcher as protected before any app is closed.
         try:
-            self._go_home(driver)
+            self._go_home(driver, deadline)
             lines = ["Went to the home screen"]
         except _CLEANUP_STEP_ERRORS as exc:
             # Still close the launched apps: they are not offered again.
@@ -526,8 +526,10 @@ class MobileBackend:
             _reraise_session_loss(exc)
             return f"Could not close {app_id}: {_step_error(exc)}"
 
-    def _go_home(self, driver: WebDriver) -> None:
+    def _go_home(self, driver: WebDriver, deadline: float) -> None:
         self._platform.press_button(driver, MobileButton.HOME)
+        if not _request_fits(deadline):
+            return
         # Whatever is in front now is the launcher: never close it.
         launcher = self._platform.current_app(driver)
         if launcher is not None:
