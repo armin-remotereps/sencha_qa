@@ -60,9 +60,11 @@ _INSTALL_BUDGET_SECONDS: Final[float] = 270.0
 # the runner unresponsive and the case asks for help).
 COMMAND_HTTP_TIMEOUT_SECONDS: Final[int] = 11
 _COMMAND_HTTP_TIMEOUT_SECONDS: Final[int] = COMMAND_HTTP_TIMEOUT_SECONDS
-# Device cleanup runs in one call and stops starting requests that would not
-# finish within this (under the action budget).
-CLEANUP_BUDGET_SECONDS: Final[float] = 22.0
+# Device cleanup runs in one call: home (two requests, always), then one
+# request per app while it still finishes within this. Equal to the action
+# budget and set just before the call, so it never outlasts the call's own
+# deadline.
+CLEANUP_BUDGET_SECONDS: Final[float] = _ACTION_BUDGET_SECONDS
 # After a read timeout the device is looked up within what is left of the
 # budget, keeping this margin for the reply.
 _LOOKUP_MARGIN_SECONDS: Final[float] = 0.5

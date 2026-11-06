@@ -411,23 +411,15 @@ class MobileBackend:
     def _cleanup(
         self, driver: WebDriver, app_ids: list[str], deadline: float
     ) -> list[str]:
-        lines: list[str] = []
+        # Home first (two requests): it also dismisses the keyboard and
+        # records the launcher as protected before any app is closed.
+        self._go_home(driver)
+        lines = ["Went to the home screen"]
         for app_id in app_ids:
             if not _request_fits(deadline):
                 lines.append(f"Left {app_id} open (no time left)")
                 continue
             lines.append(self._cleanup_app(driver, app_id))
-        # Hiding the keyboard and going home are two requests each.
-        if _request_fits(deadline, requests=2):
-            try:
-                if _hide_keyboard(driver):
-                    lines.append("Hid the keyboard")
-            except _CLEANUP_STEP_ERRORS as exc:
-                _reraise_session_loss(exc)
-                lines.append(f"Could not hide the keyboard: {_step_error(exc)}")
-        if _request_fits(deadline, requests=2):
-            self._go_home(driver)
-            lines.append("Went to the home screen")
         return lines
 
     # --- helpers ----------------------------------------------------------
@@ -553,10 +545,10 @@ def _hide_keyboard(driver: WebDriver) -> bool:
 _CLEANUP_STEP_ERRORS: Final = (WebDriverException, Urllib3HTTPError, OSError)
 
 
-def _request_fits(deadline: float, requests: int = 1) -> bool:
-    """Whether ``requests`` more device requests (each at most
-    COMMAND_HTTP_TIMEOUT_SECONDS) finish before ``deadline``."""
-    return time.monotonic() + requests * COMMAND_HTTP_TIMEOUT_SECONDS <= deadline
+def _request_fits(deadline: float) -> bool:
+    """Whether one more device request (at most COMMAND_HTTP_TIMEOUT_SECONDS)
+    finishes before ``deadline``."""
+    return time.monotonic() + COMMAND_HTTP_TIMEOUT_SECONDS <= deadline
 
 
 def _step_error(exc: Exception) -> str:
