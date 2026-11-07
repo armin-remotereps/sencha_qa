@@ -12,12 +12,14 @@ from django.http import QueryDict
 from django.utils.text import Truncator
 
 from controller_client.protocol import (
+    CAPTURE_ALLOWED_PROCESSES_MAX,
     MANUAL_CLAIM_TOKEN_MAX_CHARS,
     MAX_VERSION_LENGTH,
     PERSON_CHAT_TEXT_MAX_CHARS,
     ManualCaseActionKind,
     PersonHelpActionKind,
     PersonStepActionKind,
+    normalize_process_name,
 )
 from projects.case_checkpoint_services import ResumeStepOption
 from projects.models import (
@@ -391,6 +393,72 @@ class ProjectRunModeForm(forms.Form):
 
     def clean_apply_to(self) -> ProjectRunModeScope:
         return ProjectRunModeScope(self.cleaned_data["apply_to"])
+
+
+# Longest textarea accepted: the cap times a generous line length.
+_CAPTURE_APPS_MAX_CHARS = CAPTURE_ALLOWED_PROCESSES_MAX * 300
+
+
+class ProjectCaptureAppsForm(forms.Form):
+    """Settings "Screenshot capture": the applications that may be captured.
+
+    ``cleaned_data["apps"]`` is the list of non-blank lines, stripped and in
+    order; ``project_capture_apps_services`` normalizes and de-duplicates them.
+    """
+
+    apps = forms.CharField(
+        label="Allowed applications",
+        required=False,
+        strip=True,
+        max_length=_CAPTURE_APPS_MAX_CHARS,
+        widget=forms.Textarea(
+            attrs={
+                "class": "textarea",
+                "rows": 6,
+                "spellcheck": "false",
+                "autocapitalize": "off",
+                "autocomplete": "off",
+            }
+        ),
+        error_messages={
+            "max_length": "The list is too long.",
+        },
+    )
+
+    def clean_apps(self) -> list[str]:
+        text: str = self.cleaned_data["apps"]
+        lines: list[str] = []
+        errors: list[forms.ValidationError] = []
+        names: set[str] = set()
+        for number, raw in enumerate(text.splitlines(), start=1):
+            line = raw.strip()
+            if not line:
+                continue
+            lines.append(line)
+            name = normalize_process_name(line)
+            if name is None:
+                errors.append(
+                    forms.ValidationError(
+                        "Line %(number)s: %(line)s is not a valid application "
+                        "name. Use letters, digits, spaces and . _ + - only.",
+                        params={
+                            "number": number,
+                            "line": Truncator(line).chars(60),
+                        },
+                    )
+                )
+            else:
+                names.add(name)
+        if len(names) > CAPTURE_ALLOWED_PROCESSES_MAX:
+            errors.append(
+                forms.ValidationError(
+                    f"List at most {CAPTURE_ALLOWED_PROCESSES_MAX} applications "
+                    f"(you listed {len(names)})."
+                )
+            )
+        if errors:
+            raise forms.ValidationError(errors)
+        return lines
 
 
 class CaseHelpResolutionForm(forms.Form):

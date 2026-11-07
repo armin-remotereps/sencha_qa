@@ -24,7 +24,6 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import logging
-import os
 import threading
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
@@ -34,6 +33,7 @@ from dbus_fast import BusType, Message, MessageType, Variant
 from dbus_fast.aio import MessageBus
 
 from controller_client.exceptions import DesktopSessionError
+from controller_client.session_bus import session_bus_address
 
 logger = logging.getLogger(__name__)
 
@@ -155,20 +155,11 @@ class _Session:
 
 
 def _session_bus_address() -> str:
-    """The session bus address, also when only ``XDG_RUNTIME_DIR`` is set.
-
-    dbus-fast reads ``DBUS_SESSION_BUS_ADDRESS`` and otherwise falls back to
-    X11 autolaunch files, which do not exist on Wayland. systemd user sessions
-    always put the bus at ``$XDG_RUNTIME_DIR/bus``.
-    """
-    address = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
-    if address:
+    """The session bus address (``session_bus.session_bus_address``), or
+    ``DesktopSessionError`` when there is none."""
+    address = session_bus_address()
+    if address is not None:
         return address
-    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "")
-    if runtime_dir:
-        socket_path = os.path.join(runtime_dir, "bus")
-        if os.path.exists(socket_path):
-            return f"unix:path={socket_path}"
     raise DesktopSessionError(
         "Neither DBUS_SESSION_BUS_ADDRESS nor XDG_RUNTIME_DIR/bus is available. "
         + _NO_SESSION_BUS

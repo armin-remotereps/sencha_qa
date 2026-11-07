@@ -98,6 +98,10 @@ class MobileDevice(Protocol):
         """The installed app's id matching ``app``, or None."""
         ...
 
+    def foreground_app(self) -> str | None:
+        """The id of the app in front (package or bundle id), or None."""
+        ...
+
     def cleanup(self) -> list[str]:
         """Terminate the apps launched since the last cleanup, hide the
         keyboard and go home; returns one line per thing done."""

@@ -18,7 +18,8 @@ below in the same transaction):
 3. ``submit_manual_case`` (the neutral tester; it copies the claim's source
    onto the hand-in), then ``store_manual_screenshot`` for every shot from
    the staged bytes (``image_checked``: each image was fully checked when it
-   was staged; key, hash and size are still matched), then the claim's
+   was staged; key, hash and size are still matched; the staged
+   ``capture_source`` is carried over), then the claim's
    staging rows are deleted. The hand-in therefore commits complete, never
    "uploading"; an unexpected shot refusal rolls the whole hand-in back
    (retryable), and the files already written are deleted, since a rollback
@@ -119,7 +120,7 @@ def hand_in(call: McpCall, request: HandInRequest) -> HandInResponse:
             wire, shot_rows = _wire_submit(request, submission_id)
             payload = parse_manual_case_submit_payload(wire)
             submit_manual_case(project=call.project, payload=payload, actor=call.actor)
-            for row_id, key, mime, sha256 in shot_rows:
+            for row_id, key, mime, sha256, capture_source in shot_rows:
                 # One image in memory at a time.
                 data = bytes(
                     McpStagedShot.objects.filter(pk=row_id)
@@ -136,6 +137,7 @@ def hand_in(call: McpCall, request: HandInRequest) -> HandInResponse:
                         data=data,
                     ),
                     image_checked=True,
+                    capture_source=capture_source,
                 )
                 if stored_name:
                     stored_names.append(stored_name)
@@ -187,9 +189,9 @@ def _delete_files(names: list[str]) -> None:
 
 def _wire_submit(
     request: HandInRequest, submission_id: str
-) -> tuple[dict[str, object], list[tuple[int, str, str, str]]]:
+) -> tuple[dict[str, object], list[tuple[int, str, str, str, str]]]:
     """The ``manual_case_submit`` dict and the shots to store (row id, key,
-    mime, sha256), in manifest order (three queries)."""
+    mime, sha256, capture source), in manifest order (three queries)."""
     marks = list(
         McpStepMark.objects.filter(
             pivot_id=request.pivot_id, claim_token=request.claim_token
@@ -202,21 +204,30 @@ def _wire_submit(
             pivot_id=request.pivot_id, claim_token=request.claim_token
         )
         .order_by("created_at", "pk")
-        .values_list("id", "shot_key", "mime", "sha256", "size", "step_num", "kind")
+        .values_list(
+            "id",
+            "shot_key",
+            "mime",
+            "sha256",
+            "size",
+            "step_num",
+            "kind",
+            "capture_source",
+        )
     )
-    by_step: defaultdict[int, list[tuple[int, str, str, str, int, str]]] = defaultdict(
-        list
+    by_step: defaultdict[int, list[tuple[int, str, str, str, int, str, str]]] = (
+        defaultdict(list)
     )
-    unbound: dict[str, tuple[int, str, str, str, int]] = {}
-    for row_id, key, mime, sha256, size, step_num, kind in staged:
+    unbound: dict[str, tuple[int, str, str, str, int, str]] = {}
+    for row_id, key, mime, sha256, size, step_num, kind, source in staged:
         if step_num is None:
-            unbound[key] = (row_id, key, mime, sha256, size)
+            unbound[key] = (row_id, key, mime, sha256, size, source)
         else:
-            by_step[step_num].append((row_id, key, mime, sha256, size, kind))
+            by_step[step_num].append((row_id, key, mime, sha256, size, kind, source))
 
     steps: list[dict[str, object]] = []
     manifest: list[dict[str, object]] = []
-    to_store: list[tuple[int, str, str, str]] = []
+    to_store: list[tuple[int, str, str, str, str]] = []
     for num, outcome, note, seconds in marks:
         shots = by_step.get(num, [])
         if not shots:
@@ -226,11 +237,11 @@ def _wire_submit(
                 "num": num,
                 "outcome": outcome,
                 "note": note,
-                "shots": [key for _rid, key, _m, _s, _z, _k in shots],
+                "shots": [key for _rid, key, _m, _s, _z, _k, _c in shots],
                 "seconds": seconds,
             }
         )
-        for row_id, key, mime, sha256, size, kind in shots:
+        for row_id, key, mime, sha256, size, kind, source in shots:
             manifest.append(
                 {
                     "key": key,
@@ -240,12 +251,12 @@ def _wire_submit(
                     "size": size,
                 }
             )
-            to_store.append((row_id, key, mime, sha256))
+            to_store.append((row_id, key, mime, sha256, source))
     if request.case_shot_id:
         case_shot = unbound.get(request.case_shot_id)
         if case_shot is None:
             raise McpToolError(_UNKNOWN_CASE_SHOT)
-        row_id, key, mime, sha256, size = case_shot
+        row_id, key, mime, sha256, size, source = case_shot
         manifest.append(
             {
                 "key": key,
@@ -255,7 +266,7 @@ def _wire_submit(
                 "size": size,
             }
         )
-        to_store.append((row_id, key, mime, sha256))
+        to_store.append((row_id, key, mime, sha256, source))
     wire: dict[str, object] = {
         "submission_id": submission_id,
         "pivot_id": request.pivot_id,

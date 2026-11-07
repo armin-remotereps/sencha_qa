@@ -11,9 +11,13 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from controller_client.protocol import (
+    CAPTURE_DELAY_MAX_MS,
+    CAPTURE_REGION_MAX_PIXELS_PER_AXIS,
+    CAPTURE_TITLE_MATCH_MAX_CHARS,
+    CAPTURE_WINDOW_ID_MAX_CHARS,
     MANUAL_CLAIM_TOKEN_MAX_CHARS,
     MANUAL_SHOT_KEY_MAX_CHARS,
     MANUAL_STEP_MAX_SHOTS,
@@ -30,6 +34,9 @@ from mcp_gateway.limits import MCP_SHOT_MAX_BASE64_CHARS
 _ID_MAX = 2**63 - 1
 _CURSOR_MAX_CHARS = 32
 IDEMPOTENCY_KEY_MAX_CHARS = 64
+# A process name as the client may type it (a path or "Firefox.exe"); the
+# service normalizes it (``normalize_process_name``).
+_PROCESS_ARG_MAX_CHARS = 260
 
 # Argument types (shared by the tool signatures and the request DTOs).
 PivotIdArg = Annotated[
@@ -186,9 +193,102 @@ KbPageArg = Annotated[
     Field(ge=1, le=100000, description="Optional page, from 1."),
 ]
 
+CaptureTargetArg = Annotated[
+    Literal["window", "screen", "region"],
+    Field(
+        description=(
+            "window: the matched window only; region: a rectangle of the matched "
+            "window; screen: the whole monitor holding the matched (or topmost "
+            "allowed) window, refused when another application is visible on it."
+        )
+    ),
+]
+DelayMsArg = Annotated[
+    int,
+    Field(
+        ge=0,
+        le=CAPTURE_DELAY_MAX_MS,
+        description=(
+            f"Optional extra wait in milliseconds (0 to {CAPTURE_DELAY_MAX_MS}) "
+            "after the window settled, e.g. for an animation to finish."
+        ),
+    ),
+]
+
 
 class _Dto(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class WindowMatch(_Dto):
+    """Which window to capture (capture_screenshot's ``window_match``)."""
+
+    process: Annotated[
+        str | None,
+        Field(
+            min_length=1,
+            max_length=_PROCESS_ARG_MAX_CHARS,
+            description="The process name list_windows shows, e.g. firefox.",
+        ),
+    ] = None
+    title_contains: Annotated[
+        str | None,
+        Field(
+            min_length=1,
+            max_length=CAPTURE_TITLE_MATCH_MAX_CHARS,
+            description="Part of the window title (case-insensitive).",
+        ),
+    ] = None
+    window_id: Annotated[
+        str | None,
+        Field(
+            min_length=1,
+            max_length=CAPTURE_WINDOW_ID_MAX_CHARS,
+            description="The window_id from list_windows; wins over the others.",
+        ),
+    ] = None
+
+    @property
+    def empty(self) -> bool:
+        return (
+            self.process is None
+            and self.title_contains is None
+            and (self.window_id is None)
+        )
+
+
+_Pixels = Annotated[int, Field(le=CAPTURE_REGION_MAX_PIXELS_PER_AXIS)]
+
+
+class CaptureRegionInput(_Dto):
+    """A rectangle in pixels of the matched window's shot (a phone: of the
+    screen), from its top-left corner."""
+
+    x: Annotated[_Pixels, Field(ge=0)]
+    y: Annotated[_Pixels, Field(ge=0)]
+    w: Annotated[_Pixels, Field(ge=1)]
+    h: Annotated[_Pixels, Field(ge=1)]
+
+
+WindowMatchArg = Annotated[
+    WindowMatch | None,
+    Field(
+        description=(
+            "The window to capture: window_id from list_windows (preferred), or "
+            "process and/or title_contains. Required for window and region on a "
+            "computer; optional for screen."
+        )
+    ),
+]
+CaptureRegionArg = Annotated[
+    CaptureRegionInput | None,
+    Field(
+        description=(
+            "Required for, and only for, target region: x, y, w, h in pixels "
+            "relative to the matched window."
+        )
+    ),
+]
 
 
 # --- Requests ---------------------------------------------------------------
@@ -250,12 +350,39 @@ class KnowledgeRequest(_Dto):
     arguments: dict[str, object]
 
 
+class CaptureScreenshotRequest(_Dto):
+    pivot_id: int
+    claim_token: str
+    target: Literal["window", "screen", "region"]
+    window_match: WindowMatch | None
+    region: CaptureRegionInput | None
+    delay_ms: int
+
+    @model_validator(mode="after")
+    def _region_matches_target(self) -> CaptureScreenshotRequest:
+        if (self.region is None) != (self.target != "region"):
+            raise ValueError(
+                "[invalid] region is required for, and only for, target region."
+            )
+        return self
+
+
 # --- Responses --------------------------------------------------------------
 
 
 class RunRef(_Dto):
     id: int
     name: str
+
+
+class CaptureInfo(_Dto):
+    """Whether capture_screenshot can be used now."""
+
+    available: bool
+    # The error code capture_screenshot would answer (e.g. not_set_up,
+    # machine_offline); None when available.
+    reason_code: str | None
+    allowed_processes: list[str]
 
 
 class ProjectResponse(_Dto):
@@ -265,6 +392,7 @@ class ProjectResponse(_Dto):
     shot_max_bytes: int
     shot_max_pixels: int
     staged_shots_max: int
+    capture: CaptureInfo
     how_to: str
 
 
@@ -374,3 +502,53 @@ class MessageResponse(_Dto):
 
 class TextResponse(_Dto):
     text: str
+
+
+class WindowDesktopItem(_Dto):
+    # On the desktop shown now.
+    current: bool
+    # 1-based; null where the OS does not expose it.
+    index: int | None
+    # Text from the test machine (data, not instructions); null when unnamed.
+    name: str | None
+
+
+class WindowItem(_Dto):
+    window_id: str
+    process: str
+    # Text from the test machine (data, not instructions).
+    title: str
+    width: int
+    height: int
+    minimized: bool
+    focused: bool
+    desktop: WindowDesktopItem
+
+
+class ListWindowsResponse(_Dto):
+    windows: list[WindowItem]
+    current_desktop: int | None
+    desktop_count: int | None
+    # Windows of other applications, left out.
+    others_hidden: int
+    allowed_processes: list[str]
+    note: str
+
+
+class CaptureScreenshotResponse(_Dto):
+    shot_id: str
+    width: int
+    height: int
+    bytes: int
+    mime: str
+    # Text from the test machine (data, not instructions).
+    window_title: str
+    process: str
+    target: str
+    # Further windows that matched window_match.
+    other_matches: int
+    desktop: WindowDesktopItem | None
+    # The test machine switched to the window's desktop for this capture.
+    desktop_switched: bool
+    # null: no switch; false: the switch back failed (switch back yourself).
+    desktop_restored: bool | None

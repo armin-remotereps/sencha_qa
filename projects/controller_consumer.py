@@ -28,6 +28,8 @@ from controller_client.protocol import (
     SYSTEM_INFO_DEVICE_PLATFORM,
     SYSTEM_INFO_DEVICE_SCALE,
     SYSTEM_INFO_TARGET,
+    WINDOW_CAPTURE_RESULT_MAX_BYTES,
+    WINDOW_LIST_RESULT_MAX_BYTES,
     CasePauseActionResultPayload,
     ClientCapability,
     CloseCode,
@@ -89,6 +91,7 @@ from projects.controller_protocol import (
     BrowserNavigateActionEvent,
     BrowserTakeScreenshotActionEvent,
     BrowserTypeActionEvent,
+    CaptureWindowActionEvent,
     CheckAppInstalledActionEvent,
     CleanupEnvironmentActionEvent,
     ClickActionEvent,
@@ -103,6 +106,7 @@ from projects.controller_protocol import (
     InstallAppActionEvent,
     KeyPressActionEvent,
     LaunchAppActionEvent,
+    ListWindowsActionEvent,
     LongPressActionEvent,
     OpenUrlActionEvent,
     PressButtonActionEvent,
@@ -395,6 +399,13 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
         if msg_type == MessageType.MANUAL_CHAT_SEND:
             await self._handle_manual_chat_send(data, raw_length)
+            return
+
+        if msg_type in (
+            MessageType.WINDOW_LIST_RESULT,
+            MessageType.WINDOW_CAPTURE_RESULT,
+        ):
+            await self._handle_window_result(msg_type, request_id, data, raw_length)
             return
 
         handlers = {
@@ -1113,6 +1124,41 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             )
         )
 
+    async def _handle_window_result(
+        self,
+        msg_type: str,
+        request_id: str,
+        data: dict[str, Any],
+        raw_length: int,
+    ) -> None:
+        """Route a window list / capture reply to its waiter.
+
+        A raw message over its cap is not forwarded: the waiter gets an error
+        reply (``ControllerActionError``) instead of the oversized result.
+        """
+        cap = (
+            WINDOW_LIST_RESULT_MAX_BYTES
+            if msg_type == MessageType.WINDOW_LIST_RESULT
+            else WINDOW_CAPTURE_RESULT_MAX_BYTES
+        )
+        if raw_length > cap:
+            logger.warning(
+                "Refusing oversized %s (%d bytes) for project %s",
+                msg_type,
+                raw_length,
+                self._project.id if self._project is not None else None,
+            )
+            await self._reply_tracker.send_error(
+                request_id,
+                {
+                    "code": ErrorCode.INVALID_MESSAGE,
+                    "message": f"The {msg_type} reply is too large",
+                    "details": "",
+                },
+            )
+            return
+        await self._reply_tracker.send_window_result(request_id, data)
+
     async def _forward_action(self, event: BaseActionEvent) -> None:
         request_id: str = event.get("request_id") or str(uuid.uuid4())
         reply_channel: str = event.get("reply_channel", "")
@@ -1238,6 +1284,12 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await self._forward_action(event)
 
     async def controller_inspect_paths(self, event: InspectPathsActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_list_windows(self, event: ListWindowsActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_capture_window(self, event: CaptureWindowActionEvent) -> None:
         await self._forward_action(event)
 
     async def controller_swipe(self, event: SwipeActionEvent) -> None:

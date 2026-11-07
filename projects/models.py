@@ -347,6 +347,18 @@ class ScreenshotRelevance(models.TextChoices):
     NOT_RELEVANT = "not_relevant", "Not relevant"
 
 
+class ScreenshotCaptureSource(models.TextChoices):
+    """Where a screenshot was captured.
+
+    Internal. Never render a value that is not ``runner``.
+    """
+
+    NONE = "", "Unknown or other"
+    # Captured on the test machine by the Test Runner (the runner window's
+    # tester shots and MCP runner captures alike, so they cannot be told apart).
+    RUNNER = "runner", "Captured on the test machine"
+
+
 EVIDENCE_REVIEW_ERROR_MAX_LENGTH = 200
 SCREENSHOT_RELEVANCE_NOTE_MAX_LENGTH = 200
 
@@ -447,6 +459,11 @@ class Project(models.Model):
         choices=RunHelpMode.choices,
         default=RunHelpMode.HUMAN_IN_THE_LOOP,
     )
+    # Process names whose windows the Test Runner may capture for manual runs
+    # (``controller_client.protocol.normalize_process_name`` form, at most
+    # ``CAPTURE_ALLOWED_PROCESSES_MAX``); empty: runner capture is off.
+    # Written only by ``project_capture_apps_services``.
+    capture_allowed_processes = models.JSONField(default=list, blank=True)
 
     def __str__(self) -> str:
         return self.name
@@ -1670,6 +1687,13 @@ class TestRunScreenshot(models.Model):
     # Manual run: the runner-minted shot key (the upload idempotency key; one
     # row per case and key). Blank for every other screenshot.
     manual_key = models.CharField(max_length=64, blank=True, default="")
+    # Internal. Never render a value that is not ``runner``.
+    capture_source = models.CharField(
+        max_length=16,
+        choices=ScreenshotCaptureSource.choices,
+        blank=True,
+        default=ScreenshotCaptureSource.NONE,
+    )
 
     class Meta:
         ordering = ["created_at"]

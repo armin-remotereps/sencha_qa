@@ -12,6 +12,11 @@ class McpToolError(Exception):
         self.message = message
 
 
+class DecodeSlotTimeout(Exception):
+    """No image decode slot came free before the caller's deadline; nothing
+    was staged."""
+
+
 class OAuthError(Exception):
     """Base of the OAuth domain errors; ``message`` is safe to show."""
 

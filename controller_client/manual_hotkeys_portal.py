@@ -43,6 +43,7 @@ from controller_client.manual_hotkeys_base import (
     default_triggers,
     focus_only,
 )
+from controller_client.session_bus import session_bus_address
 from controller_client.update_layout import (
     RUNNING_PACKAGE_DIR,
     base_for_install_root,
@@ -103,20 +104,6 @@ class _PortalError(Exception):
         super().__init__(reason)
         self.reason = reason
         self.sticky = sticky
-
-
-def _session_bus_address() -> str | None:
-    # dbus-fast falls back to X11 autolaunch files, absent on Wayland; systemd
-    # user sessions always put the bus at $XDG_RUNTIME_DIR/bus.
-    address = os.environ.get("DBUS_SESSION_BUS_ADDRESS", "")
-    if address:
-        return address
-    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "")
-    if runtime_dir:
-        socket_path = os.path.join(runtime_dir, "bus")
-        if os.path.exists(socket_path):
-            return f"unix:path={socket_path}"
-    return None
 
 
 def _desktop_entry_text() -> str:
@@ -388,7 +375,7 @@ class PortalHotkeys:
         if bus is not None and bus.connected:
             return bus
         self._drop_bus()
-        address = _session_bus_address()
+        address = session_bus_address()
         if address is None:
             raise _PortalError("No desktop session bus was found", sticky=True)
         bus = MessageBus(bus_address=address, bus_type=BusType.SESSION)

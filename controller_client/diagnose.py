@@ -1,7 +1,12 @@
 import argparse
+import asyncio
+import os
 import sys
+import tempfile
 
 from controller_client.browser_diagnostics import build_browser_steps
+from controller_client.capture_platform import detect_capture_platform
+from controller_client.capture_session import interactive_session_problem
 from controller_client.config import (
     TARGET_ENV_NAME,
     load_mobile_settings,
@@ -15,7 +20,23 @@ from controller_client.person_window_diagnostics import (
     build_window_steps,
     run_window_check,
 )
-from controller_client.protocol import BrowserName
+from controller_client.protocol import (
+    MANUAL_SHOT_MAX_BYTES,
+    MANUAL_SHOT_MAX_PIXELS,
+    BrowserName,
+    CaptureStatus,
+    CaptureTarget,
+    CaptureWindowPayload,
+    ManualShotMime,
+)
+from controller_client.window_capture import WindowCaptureService
+from controller_client.window_capture_policy import build_deny_rules, is_denied
+from controller_client.window_inventory import platform_capture
+from controller_client.window_model import (
+    CaptureUnavailableError,
+    DesktopInfo,
+    DesktopWindow,
+)
 
 _ALL_BROWSERS = "all"
 
@@ -86,6 +107,110 @@ def _run_mobile_checks(*, interactive: bool) -> None:
     sys.exit(1)
 
 
+def _describe_desktop(window: DesktopWindow) -> str:
+    desktop = window.desktop
+    where = "current" if desktop.current else "other"
+    index = "?" if desktop.index is None else str(desktop.index)
+    name = f" ({desktop.name})" if desktop.name else ""
+    return f"{index}{name}, {where}"
+
+
+def _print_desktops(info: DesktopInfo) -> None:
+    current = "unknown" if info.current is None else str(info.current)
+    count = "unknown" if info.count is None else str(info.count)
+    print(f"Desktops: current {current} of {count}")
+    for index, name in enumerate(info.names, start=1):
+        print(f"  desktop {index}: {name or '(unnamed)'}")
+
+
+def _capture_failed(what: str, status: CaptureStatus, detail: str) -> None:
+    print(f"[FAIL] {what}: {status.value}" + (f": {detail}" if detail else ""))
+    sys.exit(1)
+
+
+def _run_capture_checks() -> None:
+    """Session check, platform path, every window (process, size, desktop,
+    state; no titles) and one test capture of the focused window (or the
+    topmost one the Test Runner may capture) into a temp file; never
+    uploads."""
+    print(f"Capture path: {detect_capture_platform().value}")
+    problem = interactive_session_problem()
+    if problem is not None:
+        _capture_failed("Session", *problem)
+    print("[ok] Session: interactive")
+    try:
+        parts = platform_capture()
+        info, windows = parts.inventory.list_windows()
+        deny = build_deny_rules(windows)
+    except CaptureUnavailableError as e:
+        _capture_failed("Window list", e.status, e.detail)
+        return
+    print(f"[ok] Window list: {len(windows)} windows")
+    _print_desktops(info)
+    for window in windows:
+        flags = [
+            flag
+            for flag, on in (
+                ("minimised", window.minimized),
+                ("focused", window.focused),
+                ("overlay", not window.capturable),
+                ("not drawn", not window.drawn),
+                ("never captured", is_denied(window, deny) or window.app_cloaked),
+            )
+            if on
+        ]
+        print(
+            f"  id {window.window_id}: process {window.process or '(unknown)'}, "
+            f"{window.rect.width}x{window.rect.height}, desktop "
+            f"{_describe_desktop(window)}" + (f", {', '.join(flags)}" if flags else "")
+        )
+    candidates = [
+        w
+        for w in windows
+        if w.capturable
+        and w.pid is not None
+        and w.desktop.current
+        and not w.minimized
+        and not w.app_cloaked
+        and not is_denied(w, deny)
+    ]
+    if not candidates:
+        print(
+            "[FAIL] Test capture: no window on this desktop may be captured "
+            "(terminals, the system shell and the Test Runner never are); open "
+            "an application window and re-run."
+        )
+        sys.exit(1)
+    pick = next((w for w in candidates if w.focused), candidates[0])
+    payload = CaptureWindowPayload(
+        target=CaptureTarget.WINDOW,
+        process=None,
+        title_contains=None,
+        window_id=pick.window_id,
+        region=None,
+        delay_ms=0,
+        allowed=(pick.process,),
+        max_bytes=MANUAL_SHOT_MAX_BYTES,
+        max_pixels=MANUAL_SHOT_MAX_PIXELS,
+        switch_desktop=False,
+    )
+    result = asyncio.run(WindowCaptureService(None).capture(payload))
+    if result.status is not CaptureStatus.OK:
+        _capture_failed("Test capture", result.status, result.detail)
+    suffix = ".png" if result.mime is ManualShotMime.PNG else ".jpg"
+    fd, path = tempfile.mkstemp(prefix="test-runner-capture-", suffix=suffix)
+    with os.fdopen(fd, "wb") as file:
+        file.write(result.data)
+    print(
+        f"[ok] Test capture: {pick.process}, {result.width}x{result.height}, "
+        f"saved to {path} (not uploaded)"
+    )
+    print(
+        "All capture checks passed. Allowlist the process names shown above "
+        "in the project's Settings."
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m controller_client.diagnose",
@@ -97,7 +222,8 @@ def main(argv: list[str] | None = None) -> None:
             "modifier release live, ending with a summary to copy and paste. "
             "With --window, check the Test Runner window where a person "
             "answers Human in the loop steps. "
-            "With --mobile, check the phone or tablet set in CONTROLLER_TARGET."
+            "With --mobile, check the phone or tablet set in CONTROLLER_TARGET. "
+            "With --capture, check window listing and capture for screenshots."
         ),
     )
     mode = parser.add_mutually_exclusive_group()
@@ -139,6 +265,15 @@ def main(argv: list[str] | None = None) -> None:
             "screenshot; asks before a test tap at the screen centre"
         ),
     )
+    mode.add_argument(
+        "--capture",
+        action="store_true",
+        help=(
+            "check the session, list every window with its process, size and "
+            "desktop, and save one test capture of the focused window to a "
+            "temp file (never uploaded)"
+        ),
+    )
     parser.add_argument(
         "--no-interactive",
         action="store_true",
@@ -165,6 +300,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.mobile:
         _run_mobile_checks(interactive=not args.no_interactive)
+        return
+
+    if args.capture:
+        _run_capture_checks()
         return
 
     if args.browsers is not None:

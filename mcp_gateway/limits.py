@@ -23,6 +23,36 @@ MCP_STAGED_BYTES_MAX: Final[int] = 100 * 1024 * 1024
 # is refused before any decoding.
 MCP_SHOT_MAX_BASE64_CHARS: Final[int] = 4 * -(-settings.MANUAL_SHOT_MAX_BYTES // 3)
 
+# --- Runner capture (list_windows, capture_screenshot;
+# docs/plan/feat-mcp-runner-capture.md) ---
+# list_windows calls per project and minute (capture_screenshot counts
+# against the screenshot budget shared with add_screenshot).
+MCP_MACHINE_RATE_PER_MINUTE: Final[int] = 30
+# Longest wait for the test machine's capture reply. The runner's own
+# budgets add up to about 34 s in the worst case (hide 2 s, desktop switch
+# 6 s, settle 0.5 s, delay_ms 5 s, freshness 3 s, grab and encode 6 s,
+# switch back 6 s, plus the screen lock), plus the upload of at most
+# MANUAL_SHOT_MAX_BYTES; 45 s leaves room for the decode before the deadline.
+MCP_CAPTURE_REPLY_TIMEOUT_SECONDS: Final[int] = 45
+# A capture call gives up (``[machine_busy]``, nothing staged) when it cannot
+# get a decode slot this long after it started: under a 60 s client timeout,
+# so a staged shot always reaches the client with its shot_id.
+MCP_CAPTURE_DEADLINE_SECONDS: Final[int] = 55
+# Test machine round trips (list_windows, capture_screenshot) waiting at
+# once in one gateway process: each holds a worker thread for up to the
+# reply timeout, so more are refused (``[machine_busy]``) instead of queued.
+MCP_MACHINE_ROUND_TRIPS_MAX: Final[int] = 8
+MCP_LIST_WINDOWS_TIMEOUT_SECONDS: Final[int] = 10
+# One capture per project at a time (cache lock); outlives the reply wait.
+MCP_CAPTURE_LOCK_SECONDS: Final[int] = 60
+# Socket timeouts of the capture lock's Redis client: an unreachable Redis
+# must not hold a worker thread past the call budget.
+MCP_CAPTURE_LOCK_REDIS_TIMEOUT_SECONDS: Final[float] = 2.0
+# The preview returned as image content (never stored).
+MCP_CAPTURE_PREVIEW_MAX_EDGE: Final[int] = 1280
+MCP_CAPTURE_PREVIEW_MAX_BYTES: Final[int] = 400 * 1024
+MCP_CAPTURE_PREVIEW_JPEG_QUALITY: Final[int] = 70
+
 # --- OAuth 2.1 (mcp_gateway/oauth_*; docs/plan/feat-mcp-oauth.md) ---
 MCP_OAUTH_ACCESS_TTL_SECONDS: Final[int] = 3600
 # Rotating: an active connection lives on, an idle one dies after this.

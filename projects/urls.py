@@ -8,6 +8,7 @@ from projects import (
     manual_case_views,
     member_views,
     person_step_views,
+    project_capture_apps_views,
     project_run_mode_views,
     run_case_retest_views,
     runner_update_views,
@@ -84,6 +85,11 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/settings/run-mode/",
         project_run_mode_views.settings_run_mode,
         name="settings_run_mode",
+    ),
+    path(
+        "<int:project_id>/settings/capture-apps/",
+        project_capture_apps_views.settings_capture_apps,
+        name="settings_capture_apps",
     ),
     path("<int:project_id>/leave/", member_views.project_leave, name="leave"),
     path(

@@ -163,6 +163,29 @@ class InspectPathsActionEvent(BaseActionEvent):
     allow_network: bool
 
 
+# Window listing and capture (WINDOW_CAPTURE_V1). The fields are exactly what
+# ``serialize_list_windows_payload`` / ``serialize_capture_window_payload``
+# produce; coordinates are screenshot pixels.
+
+
+class ListWindowsActionEvent(BaseActionEvent):
+    allowed: list[str]
+
+
+class CaptureWindowActionEvent(BaseActionEvent):
+    target: str
+    process: str | None
+    title_contains: str | None
+    window_id: str | None
+    # {"x", "y", "w", "h"} for target ``region``; None otherwise.
+    region: dict[str, int] | None
+    delay_ms: int
+    allowed: list[str]
+    max_bytes: int
+    max_pixels: int
+    switch_desktop: bool
+
+
 # Phone or tablet target (MOBILE_DEVICE_V1). Coordinates are screenshot pixels.
 
 
@@ -248,6 +271,8 @@ class ActionTypeRegistry:
         "controller.cleanup_environment": MessageType.CLEANUP_ENVIRONMENT,
         "controller.scan_directory": MessageType.SCAN_DIRECTORY,
         "controller.inspect_paths": MessageType.INSPECT_PATHS,
+        "controller.list_windows": MessageType.LIST_WINDOWS,
+        "controller.capture_window": MessageType.CAPTURE_WINDOW,
         "controller.update_runner": MessageType.UPDATE_RUNNER,
         "controller.swipe": MessageType.SWIPE,
         "controller.long_press": MessageType.LONG_PRESS,
@@ -302,6 +327,19 @@ class ActionTypeRegistry:
             "allow_network",
         ),
         "controller.inspect_paths": ("paths", "allow_network"),
+        "controller.list_windows": ("allowed",),
+        "controller.capture_window": (
+            "target",
+            "process",
+            "title_contains",
+            "window_id",
+            "region",
+            "delay_ms",
+            "allowed",
+            "max_bytes",
+            "max_pixels",
+            "switch_desktop",
+        ),
         "controller.update_runner": (
             "update_id",
             "target_version",

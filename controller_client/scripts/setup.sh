@@ -62,8 +62,24 @@ esac
 # system Python (and so the venv) tkinter for the Test Runner window, where a
 # person can answer Human in the loop steps.
 LINUX_PACKAGES=(gstreamer1.0-tools gstreamer1.0-pipewire gstreamer1.0-plugins-base gstreamer1.0-plugins-good python3-tk)
+# Window capture (server capture requests) outside GNOME (Wayland or Xorg): on X11 it reads
+# windows through libX11 and the Composite extension; on Sway and Hyprland it
+# lists windows with swaymsg / hyprctl (part of the compositor) and grabs
+# with grim. GNOME (Wayland and Xorg) uses the bundled capture extension (installed below).
+LINUX_X11_CAPTURE_PACKAGES=(libx11-6 libxcomposite1)
+LINUX_WLROOTS_CAPTURE_PACKAGES=(grim)
+IS_WLROOTS_SESSION=""
+if [[ -n "${SWAYSOCK:-}" ]] || [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]]; then
+    IS_WLROOTS_SESSION="yes"
+fi
 if [[ "$(uname -s)" == "Linux" ]]; then
     echo "[1/6] Installing system dependencies..."
+    if [[ "${XDG_SESSION_TYPE:-}" == "x11" ]]; then
+        LINUX_PACKAGES+=("${LINUX_X11_CAPTURE_PACKAGES[@]}")
+    fi
+    if [[ -n "$IS_WLROOTS_SESSION" ]]; then
+        LINUX_PACKAGES+=("${LINUX_WLROOTS_CAPTURE_PACKAGES[@]}")
+    fi
     if command -v apt-get &> /dev/null; then
         MISSING_PACKAGES=()
         for package in "${LINUX_PACKAGES[@]}"; do
@@ -85,6 +101,20 @@ if [[ "$(uname -s)" == "Linux" ]]; then
         echo "  WARNING: this session is '${XDG_SESSION_TYPE:-unknown}' with desktop '${XDG_CURRENT_DESKTOP:-unknown}'."
         echo "           The Test Runner on Linux needs Ubuntu's default GNOME on Wayland session."
         echo "           Log in to 'Ubuntu' (not 'Ubuntu on Xorg') and run the Test Runner from that session."
+        echo "           (Manual runs and window capture also work on X11, Sway and Hyprland.)"
+    fi
+    echo "  Window capture needs, by session type:"
+    echo "    X11: ${LINUX_X11_CAPTURE_PACKAGES[*]} (usually present)"
+    echo "    Sway or Hyprland: ${LINUX_WLROOTS_CAPTURE_PACKAGES[*]}, plus swaymsg (sway) or hyprctl (hyprland) on PATH"
+    echo "    GNOME (Wayland or Xorg): the gnome-extensions tool (package gnome-shell) and the bundled capture extension"
+    if [[ -n "${SWAYSOCK:-}" ]] && ! command -v swaymsg &> /dev/null; then
+        echo "  WARNING: swaymsg is not on PATH; window capture on Sway needs it (it ships with sway)."
+    fi
+    if [[ -n "${HYPRLAND_INSTANCE_SIGNATURE:-}" ]] && ! command -v hyprctl &> /dev/null; then
+        echo "  WARNING: hyprctl is not on PATH; window capture on Hyprland needs it (it ships with hyprland)."
+    fi
+    if [[ -n "$IS_WLROOTS_SESSION" ]] && ! command -v grim &> /dev/null; then
+        echo "  WARNING: grim is not on PATH; window capture on Sway and Hyprland needs it."
     fi
 else
     echo "[1/6] System dependencies check skipped (not Linux)."
@@ -149,6 +179,56 @@ if ! "$PROJECT_DIR/.venv/bin/python" -c "import tkinter" &> /dev/null; then
         echo "           delete $PROJECT_DIR/.venv and re-run this script with --python pointing at it."
     fi
     echo "           Check it afterwards with: controller_client/.venv/bin/python -m controller_client.diagnose --window"
+fi
+
+# Window capture on GNOME (Wayland and Xorg): GNOME keeps window lists and
+# screenshots for its own callers on Wayland, and draws its notifications and
+# dialogs inside the Shell on both, so a small bundled Shell extension does the
+# capture for the Test Runner. Installed on any GNOME session. GNOME loads a new
+# or updated extension only at the next login. The self-update re-installs it.
+GNOME_HELPER_UUID="test-runner-capture@punk-hazard"
+if [[ "$(uname -s)" == "Linux" ]] && [[ "${XDG_CURRENT_DESKTOP:-}" == *GNOME* ]]; then
+    echo "Installing the Test Runner capture extension for GNOME..."
+    if command -v gnome-extensions &> /dev/null; then
+        PACK_DIR="$(mktemp -d)"
+        if gnome-extensions pack "$PROJECT_DIR/gnome_capture_helper" --force --out-dir="$PACK_DIR" > /dev/null \
+            && gnome-extensions install --force "$PACK_DIR/$GNOME_HELPER_UUID.shell-extension.zip"; then
+            if ! gnome-extensions enable "$GNOME_HELPER_UUID" &> /dev/null; then
+                # GNOME on Wayland knows a new extension only after the next
+                # login; mark it enabled for then.
+                if ! "$PYTHON_BIN" - "$GNOME_HELPER_UUID" <<'PY'
+import ast
+import subprocess
+import sys
+
+uuid = sys.argv[1]
+key = ["org.gnome.shell", "enabled-extensions"]
+raw = subprocess.run(
+    ["gsettings", "get", *key], capture_output=True, text=True, check=True
+).stdout.strip()
+if raw.startswith("@as"):
+    raw = raw[3:].strip()
+items = [str(item) for item in ast.literal_eval(raw)]
+if uuid not in items:
+    items.append(uuid)
+    subprocess.run(["gsettings", "set", *key, str(items)], check=True)
+PY
+                then
+                    echo "  WARNING: could not enable it; run after logging in again: gnome-extensions enable $GNOME_HELPER_UUID"
+                fi
+            fi
+            if [[ "$(gsettings get org.gnome.shell disable-user-extensions 2> /dev/null || true)" == "true" ]]; then
+                echo "  WARNING: GNOME user extensions are turned off; turn them on in the Extensions app"
+                echo "           (or: gsettings set org.gnome.shell disable-user-extensions false)."
+            fi
+            echo "  Installed. Log out and back in once so GNOME loads it."
+        else
+            echo "  WARNING: the capture extension could not be installed; window capture will report it missing."
+        fi
+        rm -rf "$PACK_DIR"
+    else
+        echo "  WARNING: gnome-extensions is not on PATH (package gnome-shell); window capture will report the extension missing."
+    fi
 fi
 
 echo ""

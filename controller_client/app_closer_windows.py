@@ -39,79 +39,44 @@ from controller_client.app_close_policy import (
 from controller_client.app_discovery import MATCH_THRESHOLD
 from controller_client.executor import execute_key_press
 from controller_client.protocol import KeyPressPayload
+from controller_client.shell_processes import (
+    WINDOWS_OS_SHELL_EXES,
+    WINDOWS_TABBED_TERMINAL_EXES,
+    WINDOWS_TERMINAL_HOST_EXES,
+)
 
 if sys.platform == "win32":
     import ctypes
     from ctypes import wintypes
 
+    # The read-only enumeration primitives are shared with the window capture.
+    from controller_client.win32_windows import is_app_frame as _is_app_frame
+    from controller_client.win32_windows import is_cloaked as _is_cloaked
+    from controller_client.win32_windows import process_exe as _process_exe
+    from controller_client.win32_windows import top_level_hwnds as _top_level_hwnds
+    from controller_client.win32_windows import window_pid as _window_pid
+    from controller_client.win32_windows import window_title as _window_title
+
     _WM_CLOSE: Final[int] = 0x0010
-    _GW_OWNER: Final[int] = 4
-    _GWL_EXSTYLE: Final[int] = -20
-    _WS_EX_TOOLWINDOW: Final[int] = 0x00000080
-    _DWMWA_CLOAKED: Final[int] = 14
-    _TITLE_MAX_CHARS: Final[int] = 512
 
     _SHARED_HOST_EXES: Final[frozenset[str]] = frozenset({"applicationframehost.exe"})
-    _OS_SHELL_EXES: Final[frozenset[str]] = frozenset(
-        {
-            "explorer.exe",
-            "shellexperiencehost.exe",
-            "startmenuexperiencehost.exe",
-            "searchhost.exe",
-            "searchapp.exe",
-            "textinputhost.exe",
-            "lockapp.exe",
-            "dwm.exe",
-            "csrss.exe",
-            "winlogon.exe",
-        }
-    )
+    # The shell and terminal lists are shared with the window capture.
+    _OS_SHELL_EXES: Final[frozenset[str]] = WINDOWS_OS_SHELL_EXES
     # Terminals whose tabs close with ctrl+shift+w rather than ctrl+w.
-    _TABBED_TERMINAL_EXES: Final[frozenset[str]] = frozenset({"windowsterminal.exe"})
+    _TABBED_TERMINAL_EXES: Final[frozenset[str]] = WINDOWS_TABBED_TERMINAL_EXES
     # Terminal hosts that may hold the runner's console without being its
-    # ancestor: Windows 11 hands a console started from Explorer or a shortcut
-    # to Windows Terminal, and GetConsoleWindow() then returns a pseudo-window.
-    # While the runner has a console, these are treated as hosting it.
-    _TERMINAL_HOST_EXES: Final[frozenset[str]] = frozenset(
-        {
-            "windowsterminal.exe",
-            "openconsole.exe",
-            "wezterm-gui.exe",
-            "alacritty.exe",
-            "tabby.exe",
-            "hyper.exe",
-            "conemu.exe",
-            "conemu64.exe",
-            "mintty.exe",
-            "warp.exe",
-        }
-    )
+    # ancestor (see shell_processes.WINDOWS_TERMINAL_HOST_EXES).
+    _TERMINAL_HOST_EXES: Final[frozenset[str]] = WINDOWS_TERMINAL_HOST_EXES
     # "Document - App", "Page — Browser": the app name is the last part.
     _TITLE_SEPARATOR: Final[re.Pattern[str]] = re.compile(r"\s[-–—]\s")
 
     _user32 = ctypes.WinDLL("user32", use_last_error=True)
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    _dwmapi = ctypes.WinDLL("dwmapi")
 
-    _WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-
-    _user32.EnumWindows.argtypes = [_WNDENUMPROC, wintypes.LPARAM]
-    _user32.EnumWindows.restype = wintypes.BOOL
     _user32.IsWindow.argtypes = [wintypes.HWND]
     _user32.IsWindow.restype = wintypes.BOOL
     _user32.IsWindowVisible.argtypes = [wintypes.HWND]
     _user32.IsWindowVisible.restype = wintypes.BOOL
-    _user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
-    _user32.GetWindow.restype = wintypes.HWND
-    _user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
-    _user32.GetWindowLongW.restype = wintypes.LONG
-    _user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-    _user32.GetWindowTextW.restype = ctypes.c_int
-    _user32.GetWindowThreadProcessId.argtypes = [
-        wintypes.HWND,
-        ctypes.POINTER(wintypes.DWORD),
-    ]
-    _user32.GetWindowThreadProcessId.restype = wintypes.DWORD
     _user32.GetForegroundWindow.argtypes = []
     _user32.GetForegroundWindow.restype = wintypes.HWND
     _user32.PostMessageW.argtypes = [
@@ -123,13 +88,6 @@ if sys.platform == "win32":
     _user32.PostMessageW.restype = wintypes.BOOL
     _kernel32.GetConsoleWindow.argtypes = []
     _kernel32.GetConsoleWindow.restype = wintypes.HWND
-    _dwmapi.DwmGetWindowAttribute.argtypes = [
-        wintypes.HWND,
-        wintypes.DWORD,
-        ctypes.c_void_p,
-        wintypes.DWORD,
-    ]
-    _dwmapi.DwmGetWindowAttribute.restype = ctypes.c_long
 
     @dataclass(frozen=True)
     class _Window:
@@ -161,51 +119,9 @@ if sys.platform == "win32":
         def shared_host(self) -> bool:
             return self.windows[0].shared_host
 
-    def _window_title(hwnd: int) -> str:
-        buffer = ctypes.create_unicode_buffer(_TITLE_MAX_CHARS)
-        _user32.GetWindowTextW(hwnd, buffer, _TITLE_MAX_CHARS)
-        return buffer.value
-
-    def _window_pid(hwnd: int) -> int:
-        pid = wintypes.DWORD(0)
-        _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        return int(pid.value)
-
-    def _is_cloaked(hwnd: int) -> bool:
-        # Suspended UWP apps keep visible-but-cloaked windows nobody can see.
-        cloaked = wintypes.DWORD(0)
-        result = _dwmapi.DwmGetWindowAttribute(
-            hwnd, _DWMWA_CLOAKED, ctypes.byref(cloaked), ctypes.sizeof(cloaked)
-        )
-        return result == 0 and cloaked.value != 0
-
     def _is_app_window(hwnd: int) -> bool:
-        if not _user32.IsWindowVisible(hwnd):
-            return False
-        if _user32.GetWindow(hwnd, _GW_OWNER):
-            return False
-        if _user32.GetWindowLongW(hwnd, _GWL_EXSTYLE) & _WS_EX_TOOLWINDOW:
-            return False
-        return not _is_cloaked(hwnd)
-
-    def _process_exe(pid: int, cache: dict[int, tuple[str, str]]) -> tuple[str, str]:
-        cached = cache.get(pid)
-        if cached is not None:
-            return cached
-        exe_path = ""
-        exe_name = ""
-        try:
-            process = psutil.Process(pid)
-            exe_name = process.name().lower()
-            try:
-                exe_path = process.exe()
-            except psutil.AccessDenied:
-                # Elevated processes still expose their name.
-                exe_path = process.name()
-        except psutil.Error:
-            pass
-        cache[pid] = (exe_path, exe_name)
-        return exe_path, exe_name
+        # Every cloaked window is left out (other desktop, suspended UWP app).
+        return _is_app_frame(hwnd) and not _is_cloaked(hwnd)
 
     def _describe(hwnd: int, cache: dict[int, tuple[str, str]]) -> _Window:
         pid = _window_pid(hwnd)
@@ -219,14 +135,7 @@ if sys.platform == "win32":
         )
 
     def _app_windows() -> list[_Window]:
-        hwnds: list[int] = []
-
-        def collect(hwnd: int | None, _lparam: int) -> bool:
-            if hwnd:
-                hwnds.append(hwnd)
-            return True
-
-        _user32.EnumWindows(_WNDENUMPROC(collect), 0)
+        hwnds = _top_level_hwnds()
         cache: dict[int, tuple[str, str]] = {}
         windows: list[_Window] = []
         for hwnd in hwnds:

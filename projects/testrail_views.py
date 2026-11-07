@@ -16,6 +16,7 @@ from projects.exceptions import (
     TestRailRunImportError,
 )
 from projects.forms import (
+    ProjectCaptureAppsForm,
     ProjectMemberInviteForm,
     ProjectMemberRoleForm,
     ProjectRunModeForm,
@@ -78,6 +79,7 @@ def render_project_settings(
     testrail_form: TestRailSettingsForm | None = None,
     invite_form: ProjectMemberInviteForm | None = None,
     run_mode_form: ProjectRunModeForm | None = None,
+    capture_apps_form: ProjectCaptureAppsForm | None = None,
 ) -> HttpResponse:
     """Render the Settings tab; a card whose form is not given gets a fresh one."""
     if testrail_form is None:
@@ -90,6 +92,11 @@ def render_project_settings(
     if run_mode_form is None:
         run_mode_form = ProjectRunModeForm(
             initial={"help_mode": project.default_help_mode}
+        )
+    capture_apps: list[str] = list(project.capture_allowed_processes)
+    if capture_apps_form is None:
+        capture_apps_form = ProjectCaptureAppsForm(
+            initial={"apps": "\n".join(capture_apps)}
         )
     access = get_request_project_access(request)
     if access is None:
@@ -113,6 +120,8 @@ def render_project_settings(
             "run_mode_form": run_mode_form,
             "run_mode_label": RunHelpMode(project.default_help_mode).label,
             "can_change_run_mode": request.user.is_superuser and project_can_write,
+            "capture_apps_form": capture_apps_form,
+            "capture_apps": capture_apps,
             "active_tab": "settings",
             "active_nav": "projects",
         },

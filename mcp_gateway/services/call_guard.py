@@ -24,7 +24,11 @@ from django.conf import settings
 from controller_client.exceptions import ProtocolError
 from knowledge_base.exceptions import KnowledgeBaseError
 from mcp_gateway.exceptions import McpToolError
-from mcp_gateway.limits import MCP_MARK_RATE_PER_MINUTE, MCP_READ_RATE_PER_MINUTE
+from mcp_gateway.limits import (
+    MCP_MACHINE_RATE_PER_MINUTE,
+    MCP_MARK_RATE_PER_MINUTE,
+    MCP_READ_RATE_PER_MINUTE,
+)
 from mcp_gateway.oauth_types import AuthKind
 from projects.exceptions import ManualRunError, PersonStepError
 from projects.manual_case_submit_services import DROPPED_CLAIM
@@ -51,6 +55,9 @@ _ANSWER_THROTTLED: Final = (
     "Too many claims, releases or hand-ins. Wait a minute and try again."
 )
 _SHOT_THROTTLED: Final = "Too many screenshots. Wait a minute and try again."
+_MACHINE_THROTTLED: Final = (
+    "Too many requests to the test machine. Wait a minute and try again."
+)
 _INTERNAL: Final = "The server could not complete this call. Try again later."
 _MACHINE_BUSY = "The test machine is busy. Try again in a minute."
 _CLAIM_ENDED = (
@@ -70,7 +77,10 @@ class CallKind(StrEnum):
     # Claim, release and hand-in: the project's shared runner answer budget.
     ANSWER = "answer"
     MARK = "mark"
+    # add_screenshot and capture_screenshot share this budget.
     SHOT = "shot"
+    # list_windows: a round trip to the test machine.
+    MACHINE = "machine"
 
 
 @dataclass(frozen=True)
@@ -167,6 +177,12 @@ def _throttle(project_id: int, kind: CallKind) -> None:
             f"mcp:mark:{project_id}",
             MCP_MARK_RATE_PER_MINUTE,
             _MARK_THROTTLED,
+        )
+    elif kind is CallKind.MACHINE:
+        key, limit, message = (
+            f"mcp:machine:{project_id}",
+            MCP_MACHINE_RATE_PER_MINUTE,
+            _MACHINE_THROTTLED,
         )
     else:
         key, limit, message = (

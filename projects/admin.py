@@ -143,6 +143,8 @@ class TestRunAdmin(admin.ModelAdmin[TestRun]):
 class TestRunScreenshotInline(admin.TabularInline[TestRunScreenshot, TestRunTestCase]):
     model = TestRunScreenshot
     extra = 0
+    # Internal marker: never rendered (projects.models.ScreenshotCaptureSource).
+    exclude = ("capture_source",)
     readonly_fields = (
         "image",
         "tool_name",
@@ -196,6 +198,8 @@ class TestRunTestCaseAdmin(admin.ModelAdmin[TestRunTestCase]):
 class TestRunScreenshotAdmin(admin.ModelAdmin[TestRunScreenshot]):
     list_display = ("id", "test_run_test_case", "tool_name", "created_at")
     list_filter = ("tool_name",)
+    # Internal marker: never rendered (projects.models.ScreenshotCaptureSource).
+    exclude = ("capture_source",)
     readonly_fields = (
         "image",
         "tool_name",

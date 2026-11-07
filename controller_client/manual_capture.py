@@ -16,8 +16,9 @@ Every capture runs hide → confirmed ack → settle → capture → show (plan 
    ``MANUAL_SHOT_MAX_BYTES``, downscaled when still too large) with a small
    PNG thumbnail for the window. Storing it is the caller's job.
 
-Captures are serialized by one lock, so a double click yields one shot at a
-time; while an agent action holds the window, a capture waits for it
+Captures are serialized by the process-wide screen-use lock
+(``screen_use_lock``, shared with ``capture_window``), so a double click
+yields one shot at a time; while an agent action holds the window, a capture waits for it
 (holds nest).
 
 On a phone target (plan D8) the shot is the phone's screen, so the window on
@@ -45,6 +46,7 @@ from controller_client.protocol import (
     ManualShotMime,
 )
 from controller_client.screen_capture import capture_screen
+from controller_client.screen_use_lock import screen_use_lock
 from controller_client.target import get_mobile_device
 
 logger = logging.getLogger(__name__)
@@ -64,6 +66,10 @@ class CaptureAbortedError(Exception):
     """No screenshot was taken; the message is shown in the window."""
 
 
+class ShotTooLargeError(CaptureAbortedError):
+    """Still over ``max_bytes`` after every downscale step (``too_large``)."""
+
+
 @dataclass(frozen=True)
 class EncodedShot:
     data: bytes
@@ -71,6 +77,9 @@ class EncodedShot:
     # Lowercase hex of ``data``.
     sha256: str
     thumbnail_png: bytes
+    # Pixels of the encoded image (after any downscale).
+    width: int
+    height: int
 
 
 def _png(image: Image.Image) -> bytes:
@@ -85,37 +94,59 @@ def _jpeg(image: Image.Image) -> bytes:
     return buffer.getvalue()
 
 
-def encode_shot(image: Image.Image) -> EncodedShot:
+def _fit_pixels(image: Image.Image, max_pixels: int) -> Image.Image:
+    pixels = image.width * image.height
+    if pixels <= max_pixels:
+        return image
+    factor = math.sqrt(max_pixels / pixels)
+    size = (
+        max(1, math.floor(image.width * factor)),
+        max(1, math.floor(image.height * factor)),
+    )
+    return image.resize(size, Image.Resampling.LANCZOS)
+
+
+def _encode(
+    image: Image.Image, max_bytes: int
+) -> tuple[bytes, ManualShotMime, tuple[int, int]]:
+    """PNG, else JPEG q85, else JPEG downscaled step by step; the bytes, the
+    type and the encoded size. Raises ShotTooLargeError."""
+    data = _png(image)
+    if len(data) <= max_bytes:
+        return data, ManualShotMime.PNG, image.size
+    rgb = image.convert("RGB")
+    scale = 1.0
+    size = rgb.size
+    data = _jpeg(rgb)
+    while len(data) > max_bytes:
+        scale *= _DOWNSCALE_STEP
+        if scale < _MIN_SCALE:
+            raise ShotTooLargeError(
+                "The screenshot is too large to upload; try a smaller screen."
+            )
+        size = (max(1, int(rgb.width * scale)), max(1, int(rgb.height * scale)))
+        data = _jpeg(rgb.resize(size, Image.Resampling.LANCZOS))
+    return data, ManualShotMime.JPEG, size
+
+
+def encode_shot(
+    image: Image.Image,
+    *,
+    max_bytes: int = MANUAL_SHOT_MAX_BYTES,
+    max_pixels: int = MANUAL_SHOT_MAX_PIXELS,
+) -> EncodedShot:
     """The screenshot as stored and uploaded, plus its thumbnail.
 
-    A capture over the protocol's MANUAL_SHOT_MAX_PIXELS (a large multi-
-    monitor desktop) is first downscaled to it, keeping the aspect ratio, so
-    the server never refuses it. Raises CaptureAbortedError when it cannot be
-    made small enough.
+    A capture over ``max_pixels`` (a large multi-monitor desktop) is first
+    downscaled to it, keeping the aspect ratio, so the server never refuses
+    it; then PNG, JPEG q85 when the PNG is over ``max_bytes``, and smaller
+    JPEGs while still too large. The limits default to the protocol's
+    MANUAL_SHOT_MAX_BYTES / MANUAL_SHOT_MAX_PIXELS (a ``capture_window``
+    request sends its own). Raises ShotTooLargeError (a CaptureAbortedError)
+    when it cannot be made small enough.
     """
-    pixels = image.width * image.height
-    if pixels > MANUAL_SHOT_MAX_PIXELS:
-        factor = math.sqrt(MANUAL_SHOT_MAX_PIXELS / pixels)
-        size = (
-            max(1, math.floor(image.width * factor)),
-            max(1, math.floor(image.height * factor)),
-        )
-        image = image.resize(size, Image.Resampling.LANCZOS)
-    data = _png(image)
-    mime = ManualShotMime.PNG
-    if len(data) > MANUAL_SHOT_MAX_BYTES:
-        rgb = image.convert("RGB")
-        scale = 1.0
-        mime = ManualShotMime.JPEG
-        data = _jpeg(rgb)
-        while len(data) > MANUAL_SHOT_MAX_BYTES:
-            scale *= _DOWNSCALE_STEP
-            if scale < _MIN_SCALE:
-                raise CaptureAbortedError(
-                    "The screenshot is too large to upload; try a smaller screen."
-                )
-            size = (max(1, int(rgb.width * scale)), max(1, int(rgb.height * scale)))
-            data = _jpeg(rgb.resize(size, Image.Resampling.LANCZOS))
+    image = _fit_pixels(image, max_pixels)
+    data, mime, (width, height) = _encode(image, max_bytes)
     thumbnail = image.convert("RGB")
     thumbnail.thumbnail(_THUMBNAIL_BOX)
     return EncodedShot(
@@ -123,6 +154,8 @@ def encode_shot(image: Image.Image) -> EncodedShot:
         mime=mime,
         sha256=hashlib.sha256(data).hexdigest(),
         thumbnail_png=_png(thumbnail),
+        width=width,
+        height=height,
     )
 
 
@@ -136,11 +169,12 @@ class ManualCapturer:
     ) -> None:
         self._window = window
         self._grab = grab
-        self._lock = asyncio.Lock()
 
     async def capture(self) -> EncodedShot:
         """One screenshot; CaptureAbortedError when none was taken."""
-        async with self._lock:
+        # Shared with WindowCaptureService: captures and desktop switches
+        # never interleave.
+        async with screen_use_lock():
             if get_mobile_device() is not None:
                 image = await self._grab_image()
             else:

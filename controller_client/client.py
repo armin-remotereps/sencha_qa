@@ -102,6 +102,7 @@ from controller_client.protocol import (
     UPDATE_STATUS_DETAIL_MAX_LENGTH,
     ActionResultPayload,
     BrowserContentResultPayload,
+    CaptureStatus,
     CasePauseActionPayload,
     CloseCode,
     CommandResultPayload,
@@ -128,6 +129,7 @@ from controller_client.protocol import (
     parse_browser_navigate_payload,
     parse_browser_target_payload,
     parse_browser_type_payload,
+    parse_capture_window_payload,
     parse_case_pause_action_result_payload,
     parse_check_app_installed_payload,
     parse_click_payload,
@@ -141,6 +143,7 @@ from controller_client.protocol import (
     parse_install_app_payload,
     parse_key_press_payload,
     parse_launch_app_payload,
+    parse_list_windows_payload,
     parse_long_press_payload,
     parse_manual_case_action_result_payload,
     parse_manual_case_submit_result_payload,
@@ -172,6 +175,8 @@ from controller_client.protocol import (
     serialize_person_chat_send,
     serialize_person_help_action,
     serialize_person_step_action,
+    serialize_window_capture_result_message,
+    serialize_window_list_result_message,
 )
 from controller_client.system_info import gather_system_info
 from controller_client.target import get_mobile_device
@@ -179,6 +184,11 @@ from controller_client.update_runner import (
     RunnerUpdate,
     finish_update_as_new_runner,
     prepare_update,
+)
+from controller_client.window_capture import (
+    WindowCaptureService,
+    capture_refusal,
+    list_refusal,
 )
 
 logger = logging.getLogger(__name__)
@@ -228,6 +238,11 @@ _WINDOW_SAFE_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
         # Read-only file system inventory; nothing on screen changes.
         MessageType.SCAN_DIRECTORY,
         MessageType.INSPECT_PATHS,
+        # Window capture: list_windows only reads the window list, and
+        # capture_window hides the window itself with the confirmed variant
+        # (window_capture), like tester screenshots.
+        MessageType.LIST_WINDOWS,
+        MessageType.CAPTURE_WINDOW,
     }
 )
 # Desktop-only messages, answered TARGET_MISMATCH on a phone target: there is
@@ -429,6 +444,9 @@ class ControllerClient:
             MessageType.HIDE_KEYBOARD: self._handle_hide_keyboard,
             MessageType.OPEN_URL: self._handle_open_url,
             MessageType.INSTALL_APP: self._handle_install_app,
+            # Window capture (WINDOW_CAPTURE_V1), every target.
+            MessageType.LIST_WINDOWS: self._handle_list_windows,
+            MessageType.CAPTURE_WINDOW: self._handle_capture_window,
         }
         # The latest device_status, re-sent after every accepted handshake.
         self._last_device_status: DeviceStatusPayload | None = None
@@ -499,6 +517,8 @@ class ControllerClient:
         self._handlers[MessageType.MANUAL_SCREENSHOT_ACK] = (
             self._handle_manual_screenshot_ack
         )
+        # list_windows / capture_window; hides the person window itself.
+        self._window_capture = WindowCaptureService(person_window)
         self._window_pid_source: Callable[[], int | None] | None = None
         if person_window is not None:
             self._window_pid_source = lambda: person_window.pid
@@ -600,6 +620,9 @@ class ControllerClient:
     async def stop(self) -> None:
         self._running = False
         self._stop_event.set()
+        # A capture that switched desktops switches back on its worker thread;
+        # wait for it before the person window and the loop go away.
+        await self._window_capture.wait_idle()
         await self._cancel_update_tasks()
         await self._stop_manual_upload()
         await self._stop_person_window()
@@ -1390,6 +1413,46 @@ class ControllerClient:
                 success=True,
                 result=result,
                 duration_ms=(time.monotonic() - start) * 1000,
+            )
+        )
+
+    async def _handle_list_windows(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        start = time.monotonic()
+        try:
+            payload = parse_list_windows_payload(data)
+        except ProtocolError as e:
+            result = list_refusal(CaptureStatus.INVALID, str(e))
+        else:
+            try:
+                result = await self._window_capture.list_windows(payload)
+            except Exception:
+                logger.exception("list_windows failed (request_id=%s)", request_id)
+                result = list_refusal(CaptureStatus.CAPTURE_FAILED, "")
+        await self._send_message(
+            serialize_window_list_result_message(
+                result, request_id, (time.monotonic() - start) * 1000
+            )
+        )
+
+    async def _handle_capture_window(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        start = time.monotonic()
+        try:
+            payload = parse_capture_window_payload(data)
+        except ProtocolError as e:
+            result = capture_refusal(CaptureStatus.INVALID, str(e))
+        else:
+            try:
+                result = await self._window_capture.capture(payload)
+            except Exception:
+                logger.exception("capture_window failed (request_id=%s)", request_id)
+                result = capture_refusal(CaptureStatus.CAPTURE_FAILED, "")
+        await self._send_message(
+            serialize_window_capture_result_message(
+                result, request_id, (time.monotonic() - start) * 1000
             )
         )
 

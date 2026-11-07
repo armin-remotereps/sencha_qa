@@ -39,6 +39,11 @@ class McpStagedShot(models.Model):
     kind = models.CharField(max_length=8, blank=True, default="")
     bound_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(default=timezone.now, db_index=True)
+    # ``projects.models.ScreenshotCaptureSource`` value: "runner" for
+    # ``capture_screenshot``, "" for ``add_screenshot``; copied to the stored
+    # screenshot at hand-in. Internal. Never render a value that is not
+    # ``runner``.
+    capture_source = models.CharField(max_length=16, blank=True, default="")
 
     class Meta:
         constraints = [

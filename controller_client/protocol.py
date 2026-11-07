@@ -15,7 +15,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.19.0"
+CLIENT_VERSION: Final[str] = "0.20.0"
 
 
 class CloseCode(IntEnum):
@@ -127,6 +127,14 @@ class MessageType(StrEnum):
     OPEN_URL = "open_url"
     INSTALL_APP = "install_app"
     DEVICE_STATUS = "device_status"
+    # Window capture (WINDOW_CAPTURE_V1): server -> runner with
+    # ``list_windows`` or ``capture_window``; runner -> server with
+    # ``window_list_result`` / ``window_capture_result`` (same request_id)
+    # carrying the result object under ``result``, as ``artifact_scan_result``.
+    LIST_WINDOWS = "list_windows"
+    CAPTURE_WINDOW = "capture_window"
+    WINDOW_LIST_RESULT = "window_list_result"
+    WINDOW_CAPTURE_RESULT = "window_capture_result"
 
 
 class ClientCapability(StrEnum):
@@ -187,6 +195,13 @@ class ClientCapability(StrEnum):
     # ``android`` or ``ios``), answers the phone messages above and reports
     # ``device_status``. Advertised only on a phone target.
     MOBILE_DEVICE_V1 = "mobile_device_v1"
+    # Optional: ``list_windows`` and ``capture_window`` (allowlisted window,
+    # region and screen capture, answered with ``window_list_result`` /
+    # ``window_capture_result``). Every build from 0.20.0 advertises it on
+    # every OS and target, with or without the person window, so a runner
+    # without it is outdated; a platform that cannot capture says so in the
+    # result's ``status``.
+    WINDOW_CAPTURE_V1 = "window_capture_v1"
     # Retired in 0.18.0 (How to do it and Ask AI): person_step_assist_v1,
     # person_step_guide_v1, manual_step_guide_v1 may still arrive from runners
     # < 0.18.0; ignored; never reuse.
@@ -237,8 +252,8 @@ def advertised_capabilities(
 # capabilities (BROWSER_SELECTION_V1, DOUBLE_CLICK_V1, CLOSE_APP_V1,
 # WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1,
 # PERSON_STEP_CASE_STEPS_V1, ARTIFACT_SCAN_V1, PERSON_CASE_CONTEXT_V1,
-# PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1, MANUAL_PAUSE_DISCUSS_V1)
-# are checked where they are used instead.
+# PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1, MANUAL_PAUSE_DISCUSS_V1,
+# MOBILE_DEVICE_V1, WINDOW_CAPTURE_V1) are checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
@@ -4036,4 +4051,739 @@ def serialize_device_status(status: DeviceStatusPayload) -> str:
         MessageType.DEVICE_STATUS,
         state=status.state.value,
         detail=status.detail[:DEVICE_STATUS_DETAIL_MAX_CHARS],
+    )
+
+
+# --- Window capture (WINDOW_CAPTURE_V1) -------------------------------------
+#
+# The server asks the runner for the allowlisted windows (``list_windows``)
+# or for one capture (``capture_window``). Requests carry only the target
+# description, the project's allowlist and the limits: never a pivot, claim,
+# run, user or client detail. The runner answers ``window_list_result`` /
+# ``window_capture_result`` with ``success: true`` and the result object (the
+# ``serialize_window_*_result`` JSON form) under ``result``; a refusal is a
+# ``status`` other than ``ok`` inside that object, never an ``error`` message.
+# The server re-validates every result with the ``parse_window_*_result``
+# functions and checks the reported process against the allowlist again.
+
+# Most process names in one project's allowlist.
+CAPTURE_ALLOWED_PROCESSES_MAX: Final[int] = 20
+# Longest normalized process name (``normalize_process_name``).
+CAPTURE_PROCESS_NAME_MAX_CHARS: Final[int] = 64
+# Longest ``title_contains`` a request may carry (refused when longer).
+CAPTURE_TITLE_MATCH_MAX_CHARS: Final[int] = 200
+# Longest window title a result carries (cut on both sides).
+CAPTURE_TITLE_MAX_CHARS: Final[int] = 256
+# Longest platform window id (HWND, CGWindowID, X11 id, sway con id, Hyprland
+# address, GNOME window id, or "device" on a phone), as a string.
+CAPTURE_WINDOW_ID_MAX_CHARS: Final[int] = 64
+# Longest virtual desktop name a result carries (cut on both sides).
+CAPTURE_DESKTOP_NAME_MAX_CHARS: Final[int] = 64
+# Longest ``detail`` a result carries (cut on both sides). Kept small so a
+# capture result fits WINDOW_CAPTURE_RESULT_MAX_BYTES even when every
+# character is JSON-escaped.
+CAPTURE_DETAIL_MAX_CHARS: Final[int] = 500
+# Most windows one ``window_list_result`` carries (topmost first).
+WINDOW_LIST_MAX: Final[int] = 50
+# Longest extra wait after the window settled, in milliseconds.
+CAPTURE_DELAY_MAX_MS: Final[int] = 5000
+# Largest region edge, and largest window or screen edge a result reports.
+CAPTURE_REGION_MAX_PIXELS_PER_AXIS: Final[int] = 16384
+# Largest window edge a ``window_list_result`` reports (clamped by the
+# serializer; a window may extend past its monitors).
+_CAPTURE_WINDOW_SIZE_MAX: Final[int] = 65535
+# Highest 1-based virtual desktop index a result may report.
+_CAPTURE_DESKTOP_INDEX_MAX: Final[int] = 1000
+# Highest ``other_matches`` / ``others_hidden`` count a result may report.
+_CAPTURE_COUNT_MAX: Final[int] = 100_000
+# Room for the rest of a ``window_capture_result`` besides the base64 text
+# (title, detail, desktop name and the fixed fields, all JSON-escaped).
+_WINDOW_CAPTURE_JSON_OVERHEAD_BYTES: Final[int] = 8 * 1024
+# Largest raw ``window_capture_result`` message the server reads: the padded
+# base64 size of MANUAL_SHOT_MAX_BYTES plus the overhead.
+WINDOW_CAPTURE_RESULT_MAX_BYTES: Final[int] = (
+    4 * -(-MANUAL_SHOT_MAX_BYTES // 3) + _WINDOW_CAPTURE_JSON_OVERHEAD_BYTES
+)
+assert (
+    WINDOW_CAPTURE_RESULT_MAX_BYTES <= MAX_MESSAGE_SIZE
+), "WINDOW_CAPTURE_RESULT_MAX_BYTES does not fit in MAX_MESSAGE_SIZE"
+# Largest raw ``window_list_result`` message the server reads.
+WINDOW_LIST_RESULT_MAX_BYTES: Final[int] = 256 * 1024
+# The ``window_id`` of the single entry a phone runner lists.
+PHONE_WINDOW_ID: Final[str] = "device"
+
+_PROCESS_NAME_RE: Final[re.Pattern[str]] = re.compile(r"[a-z0-9 ._+-]+")
+_PROCESS_NAME_SUFFIXES: Final[tuple[str, ...]] = (".exe", ".app")
+# Raw names longer than this are refused before any work.
+_PROCESS_NAME_RAW_MAX_CHARS: Final[int] = 4096
+
+
+def normalize_process_name(raw: str) -> str | None:
+    """The allowlist form of a process name, or None when it is not valid.
+
+    Takes the stripped basename (``/`` and ``\\`` both separate), lower-cased,
+    without one trailing ``.exe`` or ``.app``. Refuses an empty name, one longer
+    than CAPTURE_PROCESS_NAME_MAX_CHARS, one made only of dots and spaces, and
+    one with characters outside ``[a-z0-9 ._+-]``. ``C:\\...\\firefox.exe``,
+    ``firefox.exe``, ``Firefox`` and ``firefox`` all give ``firefox``;
+    ``Microsoft Edge`` (a macOS owner name) gives ``microsoft edge``.
+
+    The one definition of a process name: the server's Settings form, the
+    runner's allowlist matching and both result parsers use it.
+    """
+    if len(raw) > _PROCESS_NAME_RAW_MAX_CHARS:
+        return None
+    name = raw.strip().replace("\\", "/").rsplit("/", 1)[-1].strip().lower()
+    for suffix in _PROCESS_NAME_SUFFIXES:
+        if name.endswith(suffix):
+            name = name[: -len(suffix)].rstrip()
+            break
+    if (
+        not name
+        or len(name) > CAPTURE_PROCESS_NAME_MAX_CHARS
+        or not _PROCESS_NAME_RE.fullmatch(name)
+        or not name.strip(". ")
+    ):
+        return None
+    return name
+
+
+class CaptureTarget(StrEnum):
+    # The matched window only (``region`` must be absent).
+    WINDOW = "window"
+    # The whole monitor holding the matched (or topmost allowlisted) window,
+    # refused with ``screen_not_clean`` when a foreign window is visible there.
+    SCREEN = "screen"
+    # A rectangle of the matched window's shot, in its image pixels (a phone:
+    # of the screen).
+    REGION = "region"
+
+
+class CaptureStatus(StrEnum):
+    """Outcome of ``list_windows`` / ``capture_window``; only ``ok`` carries
+    an image. The detail conventions are on WindowCaptureResultPayload."""
+
+    OK = "ok"
+    # The match is not allowlisted, or denied (runner, terminal, OS shell).
+    NOT_ALLOWED = "not_allowed"
+    WINDOW_NOT_FOUND = "window_not_found"
+    WINDOW_MINIMIZED = "window_minimized"
+    # Only when the request's ``switch_desktop`` is false.
+    WINDOW_ON_OTHER_DESKTOP = "window_on_other_desktop"
+    # The switch could not be done or verified (elevated window in front,
+    # desktop order unreadable, Accessibility missing, auto-switch off, IPC or
+    # helper refused, no window to return to).
+    DESKTOP_SWITCH_FAILED = "desktop_switch_failed"
+    # After the switch the window kept changing past the freshness budget.
+    WINDOW_NOT_SETTLED = "window_not_settled"
+    # Covered, and the platform has no faithful window-only capture.
+    WINDOW_OBSCURED = "window_obscured"
+    REGION_OUT_OF_BOUNDS = "region_out_of_bounds"
+    SCREEN_NOT_CLEAN = "screen_not_clean"
+    # Session 0, locked screen, secure desktop, disconnected session, no
+    # display or session bus.
+    NOT_INTERACTIVE = "not_interactive"
+    # macOS Screen Recording not granted.
+    PERMISSION_MISSING = "permission_missing"
+    # All black or uniform; never sent.
+    CAPTURE_BLANK = "capture_blank"
+    # The person window could not be confirmed hidden.
+    HIDE_FAILED = "hide_failed"
+    # Still over ``max_bytes`` after every downscale step.
+    TOO_LARGE = "too_large"
+    # KDE Wayland or an unknown Wayland compositor.
+    COMPOSITOR_UNSUPPORTED = "compositor_unsupported"
+    # The GNOME helper extension is not installed, enabled or current, or a
+    # wlroots tool (swaymsg, hyprctl, grim) is missing.
+    HELPER_MISSING = "helper_missing"
+    # A phone asked for ``window``.
+    UNSUPPORTED = "unsupported"
+    # The request itself was invalid (the runner could not parse it).
+    INVALID = "invalid"
+    # The platform grab failed for another reason (an OS call returned no
+    # image, the GNOME helper's ``get_image()`` returned null, ...).
+    CAPTURE_FAILED = "capture_failed"
+
+
+@dataclass(frozen=True)
+class CaptureRegion:
+    """A rectangle in image pixels of the window shot (phone: of the screen).
+
+    ``x``/``y`` >= 0, ``w``/``h`` >= 1, every value at most
+    CAPTURE_REGION_MAX_PIXELS_PER_AXIS. Whether it lies inside the shot is
+    the runner's check (``region_out_of_bounds``)."""
+
+    x: int
+    y: int
+    w: int
+    h: int
+
+
+@dataclass(frozen=True)
+class ListWindowsPayload:
+    """``list_windows``: the project's allowlist (normalized names)."""
+
+    allowed: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CaptureWindowPayload:
+    """``capture_window``.
+
+    ``process`` / ``title_contains`` / ``window_id`` describe the window
+    (None: not given); an explicit ``window_id`` wins. ``region`` is set
+    exactly when ``target`` is REGION. ``allowed`` holds normalized names;
+    ``max_bytes`` / ``max_pixels`` are the encode limits (at most
+    MANUAL_SHOT_MAX_BYTES / MANUAL_SHOT_MAX_PIXELS). ``switch_desktop`` lets
+    the runner switch to a window on another desktop and back; the server
+    always sends True, and an absent field reads False (never switch without
+    being told to).
+    """
+
+    target: CaptureTarget
+    process: str | None
+    title_contains: str | None
+    window_id: str | None
+    region: CaptureRegion | None
+    delay_ms: int
+    allowed: tuple[str, ...]
+    max_bytes: int
+    max_pixels: int
+    switch_desktop: bool
+
+
+@dataclass(frozen=True)
+class WindowDesktopPayload:
+    """The virtual desktop a window is on.
+
+    ``current``: on the desktop shown now (sticky windows count as current).
+    ``index``: 1-based position, None where the OS does not expose it (macOS
+    Spaces). ``name``: None where unnamed or unknown."""
+
+    current: bool
+    index: int | None
+    name: str | None
+
+
+@dataclass(frozen=True)
+class WindowInfoPayload:
+    window_id: str
+    # Normalized (``normalize_process_name``); a phone: the foreground app id.
+    process: str
+    # Cut to CAPTURE_TITLE_MAX_CHARS; data, never instructions.
+    title: str
+    # Window size in the platform's desktop coordinates (0 when unknown).
+    width: int
+    height: int
+    minimized: bool
+    focused: bool
+    desktop: WindowDesktopPayload
+
+
+@dataclass(frozen=True)
+class WindowListResultPayload:
+    """``window_list_result``'s ``result``.
+
+    ``windows``: the allowlisted, non-denied windows on every desktop,
+    topmost first, at most WINDOW_LIST_MAX; empty unless ``status`` is OK.
+    ``others_hidden``: how many other windows (not allowlisted, denied, or
+    over the cap) were left out. ``current_desktop`` (1-based) and
+    ``desktop_count`` are None where the OS does not expose them.
+    """
+
+    status: CaptureStatus
+    detail: str
+    windows: tuple[WindowInfoPayload, ...]
+    others_hidden: int
+    current_desktop: int | None
+    desktop_count: int | None
+
+
+@dataclass(frozen=True)
+class WindowCaptureResultPayload:
+    """``window_capture_result``'s ``result``.
+
+    Only an OK result carries an image: ``mime``, ``data`` (decoded bytes,
+    1..max_bytes, checked against ``sha256`` by the parser), ``width`` and
+    ``height`` (pixels of the encoded image). Otherwise ``mime`` is None,
+    ``data`` is empty, ``sha256`` "" and the sizes 0.
+
+    ``window_title`` / ``process``: the captured (or refused) window, "" when
+    there was none; ``other_matches``: how many further windows matched.
+    ``desktop``: the selected window's desktop (None when no window was
+    selected). ``desktop_switched``: the runner changed the desktop for this
+    request. ``desktop_restored``: None when it did not switch, False when
+    the switch back failed (with any status, ``ok`` included).
+
+    ``detail`` conventions (plain text, at most CAPTURE_DETAIL_MAX_CHARS):
+    ``screen_not_clean``: the foreign processes shown, normalized, joined by
+    ", "; ``region_out_of_bounds``: the shot size as ``"<w>x<h>"``;
+    ``desktop_switch_failed``, ``not_interactive``, ``permission_missing``,
+    ``compositor_unsupported``, ``helper_missing``: the runner's fixed,
+    user-safe explanation; anything else: a short hint or "". Never a window
+    title.
+    """
+
+    status: CaptureStatus
+    detail: str
+    mime: ManualShotMime | None
+    data: bytes
+    sha256: str
+    width: int
+    height: int
+    window_title: str
+    process: str
+    other_matches: int
+    desktop: WindowDesktopPayload | None
+    desktop_switched: bool
+    desktop_restored: bool | None
+
+
+def _extract_optional_request_text(
+    data: Mapping[str, object], field: str, max_chars: int
+) -> str | None:
+    """A request's optional string: None when absent, null or blank;
+    refused when longer than ``max_chars`` or not a string."""
+    value = data.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ProtocolError(f"Invalid '{field}': expected a string")
+    if len(value) > max_chars:
+        raise ProtocolError(f"Invalid '{field}': longer than {max_chars} characters")
+    return value if value.strip() else None
+
+
+def _extract_ranged_int(
+    data: Mapping[str, object],
+    field: str,
+    minimum: int,
+    maximum: int,
+    default: int | None = None,
+) -> int:
+    value = data.get(field, default)
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not minimum <= value <= maximum
+    ):
+        raise ProtocolError(
+            f"Missing or invalid '{field}': expected an int in {minimum}..{maximum}"
+        )
+    return value
+
+
+def _extract_optional_ranged_int(
+    data: Mapping[str, object], field: str, minimum: int, maximum: int
+) -> int | None:
+    if data.get(field) is None:
+        return None
+    return _extract_ranged_int(data, field, minimum, maximum)
+
+
+def _extract_optional_flag(data: Mapping[str, object], field: str) -> bool | None:
+    value = data.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ProtocolError(f"Invalid '{field}': expected a bool or null")
+    return value
+
+
+def _extract_process_name(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        raise ProtocolError(f"Missing or invalid '{field}': expected a string")
+    name = normalize_process_name(value)
+    if name is None:
+        raise ProtocolError(f"Invalid '{field}': not a valid process name")
+    return name
+
+
+def _extract_allowed(data: Mapping[str, object]) -> tuple[str, ...]:
+    """0..CAPTURE_ALLOWED_PROCESSES_MAX normalized names, duplicates removed."""
+    raw = data.get("allowed", [])
+    if not isinstance(raw, list) or len(raw) > CAPTURE_ALLOWED_PROCESSES_MAX:
+        raise ProtocolError(
+            "Invalid 'allowed': expected a list of at most "
+            f"{CAPTURE_ALLOWED_PROCESSES_MAX} process names"
+        )
+    names = (_extract_process_name(item, "allowed") for item in raw)
+    return tuple(dict.fromkeys(names))
+
+
+def _clean_result_text(value: str, max_chars: int) -> str:
+    """Printable characters only, stripped and cut to ``max_chars``."""
+    cleaned = "".join(ch for ch in value if ch.isprintable())
+    return cleaned.strip()[:max_chars]
+
+
+def _extract_result_text(data: Mapping[str, object], field: str, max_chars: int) -> str:
+    value = data.get(field, "")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ProtocolError(f"Invalid '{field}': expected a string")
+    return _clean_result_text(value, max_chars)
+
+
+def _extract_status(data: Mapping[str, object]) -> CaptureStatus:
+    raw = data.get("status")
+    if not isinstance(raw, str):
+        raise ProtocolError("Missing or invalid 'status'")
+    try:
+        return CaptureStatus(raw)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown capture status: {raw[:40]!r}") from e
+
+
+def _extract_window_id(value: object, field: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > CAPTURE_WINDOW_ID_MAX_CHARS
+        or not value.isprintable()
+    ):
+        raise ProtocolError(f"Missing or invalid '{field}': expected a window id")
+    return value
+
+
+def _parse_region(raw: object) -> CaptureRegion:
+    region = _extract_object(raw, "region")
+    limit = CAPTURE_REGION_MAX_PIXELS_PER_AXIS
+    return CaptureRegion(
+        x=_extract_ranged_int(region, "x", 0, limit),
+        y=_extract_ranged_int(region, "y", 0, limit),
+        w=_extract_ranged_int(region, "w", 1, limit),
+        h=_extract_ranged_int(region, "h", 1, limit),
+    )
+
+
+def parse_list_windows_payload(data: Mapping[str, object]) -> ListWindowsPayload:
+    """Validate a ``list_windows`` request (runner side)."""
+    return ListWindowsPayload(allowed=_extract_allowed(data))
+
+
+def serialize_list_windows_payload(payload: ListWindowsPayload) -> dict[str, object]:
+    """The JSON fields of a ``list_windows`` request (server side; passed as
+    the action's keyword payload)."""
+    return {"allowed": list(payload.allowed)}
+
+
+def parse_capture_window_payload(data: Mapping[str, object]) -> CaptureWindowPayload:
+    """Validate a ``capture_window`` request (runner side).
+
+    Refuses (ProtocolError) an unknown target, a region without target
+    ``region`` or the reverse, limits out of range and invalid names; the
+    runner answers that with status ``invalid``.
+    """
+    raw_target = data.get("target")
+    if not isinstance(raw_target, str):
+        raise ProtocolError("Missing or invalid 'target'")
+    try:
+        target = CaptureTarget(raw_target)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown capture target: {raw_target[:40]!r}") from e
+    raw_region = data.get("region")
+    region = None if raw_region is None else _parse_region(raw_region)
+    if (region is None) != (target is not CaptureTarget.REGION):
+        raise ProtocolError("'region' is required for, and only for, target region")
+    raw_process = data.get("process")
+    process = (
+        None
+        if raw_process is None or raw_process == ""
+        else _extract_process_name(raw_process, "process")
+    )
+    raw_window_id = data.get("window_id")
+    window_id = (
+        None
+        if raw_window_id is None or raw_window_id == ""
+        else _extract_window_id(raw_window_id, "window_id")
+    )
+    return CaptureWindowPayload(
+        target=target,
+        process=process,
+        title_contains=_extract_optional_request_text(
+            data, "title_contains", CAPTURE_TITLE_MATCH_MAX_CHARS
+        ),
+        window_id=window_id,
+        region=region,
+        delay_ms=_extract_ranged_int(
+            data, "delay_ms", 0, CAPTURE_DELAY_MAX_MS, default=0
+        ),
+        allowed=_extract_allowed(data),
+        max_bytes=_extract_ranged_int(data, "max_bytes", 1, MANUAL_SHOT_MAX_BYTES),
+        max_pixels=_extract_ranged_int(data, "max_pixels", 1, MANUAL_SHOT_MAX_PIXELS),
+        switch_desktop=_extract_bool(dict(data), "switch_desktop", default=False),
+    )
+
+
+def serialize_capture_window_payload(
+    payload: CaptureWindowPayload,
+) -> dict[str, object]:
+    """The JSON fields of a ``capture_window`` request (server side; passed
+    as the action's keyword payload). Absent values are sent as null."""
+    region: dict[str, object] | None = (
+        None
+        if payload.region is None
+        else {
+            "x": payload.region.x,
+            "y": payload.region.y,
+            "w": payload.region.w,
+            "h": payload.region.h,
+        }
+    )
+    return {
+        "target": payload.target.value,
+        "process": payload.process,
+        "title_contains": payload.title_contains,
+        "window_id": payload.window_id,
+        "region": region,
+        "delay_ms": payload.delay_ms,
+        "allowed": list(payload.allowed),
+        "max_bytes": payload.max_bytes,
+        "max_pixels": payload.max_pixels,
+        "switch_desktop": payload.switch_desktop,
+    }
+
+
+def _serialize_desktop(desktop: WindowDesktopPayload) -> dict[str, object]:
+    return {
+        "current": desktop.current,
+        "index": desktop.index,
+        "name": (
+            None
+            if desktop.name is None
+            else desktop.name[:CAPTURE_DESKTOP_NAME_MAX_CHARS]
+        ),
+    }
+
+
+def _parse_desktop(raw: object) -> WindowDesktopPayload:
+    desktop = _extract_object(raw, "desktop")
+    name = _extract_result_text(desktop, "name", CAPTURE_DESKTOP_NAME_MAX_CHARS)
+    return WindowDesktopPayload(
+        current=_extract_bool(desktop, "current"),
+        index=_extract_optional_ranged_int(
+            desktop, "index", 1, _CAPTURE_DESKTOP_INDEX_MAX
+        ),
+        name=name or None,
+    )
+
+
+def _parse_window_info(raw: object) -> WindowInfoPayload:
+    window = _extract_object(raw, "window")
+    limit = _CAPTURE_WINDOW_SIZE_MAX
+    return WindowInfoPayload(
+        window_id=_extract_window_id(window.get("window_id"), "window_id"),
+        process=_extract_process_name(window.get("process"), "process"),
+        title=_extract_result_text(window, "title", CAPTURE_TITLE_MAX_CHARS),
+        width=_extract_ranged_int(window, "width", 0, limit, default=0),
+        height=_extract_ranged_int(window, "height", 0, limit, default=0),
+        minimized=_extract_bool(window, "minimized", default=False),
+        focused=_extract_bool(window, "focused", default=False),
+        desktop=_parse_desktop(window.get("desktop")),
+    )
+
+
+def serialize_window_list_result(result: WindowListResultPayload) -> dict[str, object]:
+    """The ``result`` object of a ``window_list_result`` (runner side).
+
+    Cuts titles, names and the detail to their caps and the list to
+    WINDOW_LIST_MAX (the cut windows are added to ``others_hidden``)."""
+    windows = result.windows[:WINDOW_LIST_MAX]
+    return {
+        "status": result.status.value,
+        "detail": _clean_result_text(result.detail, CAPTURE_DETAIL_MAX_CHARS),
+        "windows": [
+            {
+                "window_id": window.window_id,
+                "process": window.process,
+                "title": _clean_result_text(window.title, CAPTURE_TITLE_MAX_CHARS),
+                "width": min(max(window.width, 0), _CAPTURE_WINDOW_SIZE_MAX),
+                "height": min(max(window.height, 0), _CAPTURE_WINDOW_SIZE_MAX),
+                "minimized": window.minimized,
+                "focused": window.focused,
+                "desktop": _serialize_desktop(window.desktop),
+            }
+            for window in windows
+        ],
+        "others_hidden": result.others_hidden + len(result.windows) - len(windows),
+        "current_desktop": result.current_desktop,
+        "desktop_count": result.desktop_count,
+    }
+
+
+def parse_window_list_result(raw: object) -> WindowListResultPayload:
+    """Validate a ``window_list_result``'s ``result`` (server side).
+
+    At most WINDOW_LIST_MAX windows, every process a valid normalized name;
+    titles and names are cut, not refused. A non-OK status carries no
+    windows (any sent are dropped). Raises ProtocolError otherwise."""
+    data = _extract_object(raw, "window list result")
+    status = _extract_status(data)
+    raw_windows = _extract_list(data, "windows")
+    if len(raw_windows) > WINDOW_LIST_MAX:
+        raise ProtocolError(
+            f"Invalid 'windows': expected at most {WINDOW_LIST_MAX} windows"
+        )
+    windows = (
+        tuple(_parse_window_info(item) for item in raw_windows)
+        if status is CaptureStatus.OK
+        else ()
+    )
+    return WindowListResultPayload(
+        status=status,
+        detail=_extract_result_text(data, "detail", CAPTURE_DETAIL_MAX_CHARS),
+        windows=windows,
+        others_hidden=_extract_ranged_int(
+            data, "others_hidden", 0, _CAPTURE_COUNT_MAX, default=0
+        ),
+        current_desktop=_extract_optional_ranged_int(
+            data, "current_desktop", 1, _CAPTURE_DESKTOP_INDEX_MAX
+        ),
+        desktop_count=_extract_optional_ranged_int(
+            data, "desktop_count", 1, _CAPTURE_DESKTOP_INDEX_MAX
+        ),
+    )
+
+
+def serialize_window_capture_result(
+    result: WindowCaptureResultPayload,
+) -> dict[str, object]:
+    """The ``result`` object of a ``window_capture_result`` (runner side).
+
+    The image goes out base64 under ``data_b64`` only for an OK result; the
+    caller keeps ``data`` within the request's ``max_bytes``."""
+    has_image = result.status is CaptureStatus.OK and result.mime is not None
+    return {
+        "status": result.status.value,
+        "detail": _clean_result_text(result.detail, CAPTURE_DETAIL_MAX_CHARS),
+        "mime": result.mime.value if has_image and result.mime else None,
+        "data_b64": (
+            base64.b64encode(result.data).decode("ascii") if has_image else None
+        ),
+        "sha256": result.sha256 if has_image else "",
+        "width": result.width if has_image else 0,
+        "height": result.height if has_image else 0,
+        "window_title": _clean_result_text(
+            result.window_title, CAPTURE_TITLE_MAX_CHARS
+        ),
+        "process": result.process,
+        "other_matches": result.other_matches,
+        "desktop": (
+            None if result.desktop is None else _serialize_desktop(result.desktop)
+        ),
+        "desktop_switched": result.desktop_switched,
+        "desktop_restored": result.desktop_restored,
+    }
+
+
+def _parse_capture_image(
+    data: Mapping[str, object], *, max_bytes: int
+) -> tuple[ManualShotMime, bytes, str]:
+    """The checked ``(mime, image, sha256)`` of an OK capture result."""
+    raw_mime = data.get("mime")
+    if not isinstance(raw_mime, str):
+        raise ProtocolError("Missing or invalid 'mime'")
+    try:
+        mime = ManualShotMime(raw_mime)
+    except ValueError as e:
+        raise ProtocolError(f"Unsupported image type: {raw_mime[:40]!r}") from e
+    raw_data = data.get("data_b64")
+    if not isinstance(raw_data, str):
+        raise ProtocolError("Missing or invalid 'data_b64'")
+    # Checked before decoding, so an oversized result is never decoded.
+    if len(raw_data) > 4 * -(-max_bytes // 3):
+        raise ProtocolError("Screenshot too large")
+    try:
+        image = base64.b64decode(raw_data, validate=True)
+    except (binascii.Error, ValueError) as e:
+        raise ProtocolError("Invalid 'data_b64': not base64") from e
+    if not 1 <= len(image) <= max_bytes:
+        raise ProtocolError("Screenshot empty or too large")
+    sha256 = _extract_sha256(data)
+    if hashlib.sha256(image).hexdigest() != sha256:
+        raise ProtocolError("Screenshot does not match its sha256")
+    return mime, image, sha256
+
+
+def parse_window_capture_result(
+    raw: object, *, max_bytes: int
+) -> WindowCaptureResultPayload:
+    """Validate a ``window_capture_result``'s ``result`` (server side).
+
+    For an OK result: decodes the base64 strictly and refuses (ProtocolError)
+    an image over ``max_bytes`` (the request's), an empty one, one whose
+    sha256 does not match, and sizes outside 1..CAPTURE_REGION_MAX_PIXELS_PER_AXIS;
+    an OK result must name its ``process``. The image format itself is
+    checked by the server's service (``check_manual_image``). A non-OK result
+    never carries an image (any sent is ignored, not decoded).
+    """
+    data = _extract_object(raw, "window capture result")
+    status = _extract_status(data)
+    raw_process = data.get("process")
+    process = (
+        ""
+        if raw_process is None or raw_process == ""
+        else _extract_process_name(raw_process, "process")
+    )
+    mime: ManualShotMime | None = None
+    image = b""
+    sha256 = ""
+    width = 0
+    height = 0
+    if status is CaptureStatus.OK:
+        if not process:
+            raise ProtocolError("Missing 'process' in an ok capture result")
+        mime, image, sha256 = _parse_capture_image(data, max_bytes=max_bytes)
+        limit = CAPTURE_REGION_MAX_PIXELS_PER_AXIS
+        width = _extract_ranged_int(data, "width", 1, limit)
+        height = _extract_ranged_int(data, "height", 1, limit)
+    raw_desktop = data.get("desktop")
+    return WindowCaptureResultPayload(
+        status=status,
+        detail=_extract_result_text(data, "detail", CAPTURE_DETAIL_MAX_CHARS),
+        mime=mime,
+        data=image,
+        sha256=sha256,
+        width=width,
+        height=height,
+        window_title=_extract_result_text(
+            data, "window_title", CAPTURE_TITLE_MAX_CHARS
+        ),
+        process=process,
+        other_matches=_extract_ranged_int(
+            data, "other_matches", 0, _CAPTURE_COUNT_MAX, default=0
+        ),
+        desktop=None if raw_desktop is None else _parse_desktop(raw_desktop),
+        desktop_switched=_extract_bool(dict(data), "desktop_switched", default=False),
+        desktop_restored=_extract_optional_flag(data, "desktop_restored"),
+    )
+
+
+def serialize_window_list_result_message(
+    result: WindowListResultPayload, request_id: str, duration_ms: float
+) -> str:
+    """A ``window_list_result`` message (runner side; echoes the request's
+    ``request_id``)."""
+    return serialize_message(
+        MessageType.WINDOW_LIST_RESULT,
+        request_id,
+        success=True,
+        result=serialize_window_list_result(result),
+        duration_ms=duration_ms,
+    )
+
+
+def serialize_window_capture_result_message(
+    result: WindowCaptureResultPayload, request_id: str, duration_ms: float
+) -> str:
+    """A ``window_capture_result`` message (runner side; echoes the request's
+    ``request_id``)."""
+    return serialize_message(
+        MessageType.WINDOW_CAPTURE_RESULT,
+        request_id,
+        success=True,
+        result=serialize_window_capture_result(result),
+        duration_ms=duration_ms,
     )

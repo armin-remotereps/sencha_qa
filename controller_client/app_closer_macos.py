@@ -37,21 +37,16 @@ from controller_client.app_close_policy import (
 from controller_client.app_discovery import MATCH_THRESHOLD
 from controller_client.executor import execute_key_press
 from controller_client.protocol import KeyPressPayload
+from controller_client.shell_processes import (
+    MACOS_OS_SHELL_BUNDLE_IDS,
+    MACOS_TERMINAL_BUNDLE_IDS,
+)
 
 if sys.platform == "darwin":
     import AppKit
     import Quartz
 
-    _OS_SHELL_BUNDLE_IDS: Final[frozenset[str]] = frozenset(
-        {
-            "com.apple.finder",
-            "com.apple.dock",
-            "com.apple.loginwindow",
-            "com.apple.systemuiserver",
-            "com.apple.WindowManager",
-            "com.apple.controlcenter",
-        }
-    )
+    _OS_SHELL_BUNDLE_IDS: Final[frozenset[str]] = MACOS_OS_SHELL_BUNDLE_IDS
     # AppleScript that prints the tty of the tab cmd+w would close.
     _FRONT_TAB_TTY_SCRIPTS: Final[dict[str, str]] = {
         "com.apple.Terminal": (
@@ -66,19 +61,7 @@ if sys.platform == "darwin":
     # Terminal apps that may host the runner without being its ancestor (iTerm2
     # 3.4+ runs sessions under iTermServer, a child of launchd). When the runner
     # has a controlling tty, close_app never quits them.
-    _TERMINAL_BUNDLE_IDS: Final[frozenset[str]] = frozenset(
-        {
-            *_FRONT_TAB_TTY_SCRIPTS,
-            "dev.warp.Warp-Stable",
-            "dev.warp.Warp",
-            "org.alacritty",
-            "net.kovidgoyal.kitty",
-            "com.github.wez.wezterm",
-            "com.mitchellh.ghostty",
-            "co.zeit.hyper",
-            "org.tabby",
-        }
-    )
+    _TERMINAL_BUNDLE_IDS: Final[frozenset[str]] = MACOS_TERMINAL_BUNDLE_IDS
     # A first-use Automation prompt blocks osascript; give up and refuse.
     _OSASCRIPT_TIMEOUT_SECONDS: Final[float] = 5.0
     _NORMAL_WINDOW_LAYER: Final[int] = 0

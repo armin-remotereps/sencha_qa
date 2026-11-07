@@ -396,6 +396,9 @@ class MobileBackend:
             lambda driver: self._platform.find_installed_app(driver, app)
         )
 
+    def foreground_app(self) -> str | None:
+        return self._session.call(self._platform.current_app)
+
     def cleanup(self) -> list[str]:
         """One call: every request fits the call's budget, so the reply
         reaches the server before its cleanup timeout; apps left when the

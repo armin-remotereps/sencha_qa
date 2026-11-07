@@ -357,3 +357,7 @@ class ManualShotRejectedError(ManualRunError):
     valid image of the announced type, not announced, not matching its
     announcement): the runner deletes that shot only (``drop_shot`` on the
     wire); the hand-in's other screenshots still upload."""
+
+
+class CaptureAppsError(ValueError):
+    """The allowed-applications list for screenshot capture is invalid."""

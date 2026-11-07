@@ -51,7 +51,7 @@ from projects.manual_screenshot_services import (
     reject_manual_shot,
     store_manual_screenshot,
 )
-from projects.models import Project
+from projects.models import Project, ScreenshotCaptureSource
 from projects.person_step_actor import PersonStepActor
 
 # The shared helpers of the runner's answers; the answer throttle key and
@@ -201,4 +201,8 @@ def upload_from_runner(
         if ids is None:
             raise ManualShotRejectedError(message) from exc
         reject_manual_shot(project=project, submission_id=ids[0], message=message)
-    store_manual_screenshot(project=project, payload=payload)
+    store_manual_screenshot(
+        project=project,
+        payload=payload,
+        capture_source=ScreenshotCaptureSource.RUNNER,
+    )

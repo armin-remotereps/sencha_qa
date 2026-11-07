@@ -1,7 +1,7 @@
 {% extends "layouts/project.html" %}
 
 {% comment %} Project settings tab: the Members card (invite by email, leave), the
-   project Run mode card and the TestRail integration used by "Import from TestRail account".
+   project Run mode card, the Screenshot capture card and the TestRail integration used by "Import from TestRail account".
 
    Context contract (projects.testrail_views.render_project_settings):
      project      — current Project
@@ -20,6 +20,11 @@
      run_mode_label — label of project.default_help_mode
      can_change_run_mode — bool, superuser and writable member: the Run mode
                     card shows the form, else the mode as text
+     capture_apps_form — ProjectCaptureAppsForm (apps textarea, one name per
+                    line); unbound with initial = the stored list, or bound
+                    after an invalid post to projects:settings_capture_apps
+     capture_apps — list of stored normalized process names; empty means
+                    screenshot capture is off
      project_can_write (context processor) — false hides the invite form,
                     role selects and the TestRail forms; a read-only member
                     sees the members table and Leave only. {% endcomment %}
@@ -185,6 +190,45 @@
     New runs in this project use: <strong>{{ run_mode_label }}</strong>.
     Only a superuser can change it.
   </p>
+  {% endif %}
+</div>
+
+<div class="card" id="screenshot-capture">
+  <div class="card-header">
+    <h2>Screenshot capture</h2>
+    {% if capture_apps %}
+      <span class="badge badge-passed">{{ capture_apps|length }} allowed</span>
+    {% else %}
+      <span class="badge badge-draft">Off</span>
+    {% endif %}
+  </div>
+  <p class="muted">
+    Applications whose windows may be captured on the test machine as
+    screenshots for manual runs, one per line (for example <code>firefox.exe</code>;
+    <code>Firefox</code> on macOS; <code>firefox</code> on Linux). Leave empty to
+    turn capture off. The Test Runner itself, terminals and the system shell are
+    never captured.
+  </p>
+  {% if project_can_write %}
+  <form method="post" action="{% url 'projects:settings_capture_apps' project.id %}" novalidate>
+    {% csrf_token %}
+    <div class="field{% if capture_apps_form.apps.errors %} has-error{% endif %}">
+      <label for="{{ capture_apps_form.apps.id_for_label }}">{{ capture_apps_form.apps.label }}</label>
+      {{ capture_apps_form.apps }}
+      <p class="hint">Names are saved in a common form: lower case, without the folder, <code>.exe</code> or <code>.app</code>.</p>
+      {% for error in capture_apps_form.apps.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+    </div>
+    {% for error in capture_apps_form.non_field_errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+    <div class="dialog-actions">
+      <button class="btn btn-primary" type="submit">Save</button>
+    </div>
+  </form>
+  {% elif capture_apps %}
+  <p>
+    {% for name in capture_apps %}<span class="chip">{{ name }}</span>{% endfor %}
+  </p>
+  {% else %}
+  <p class="muted">No applications are allowed, so screenshot capture is off.</p>
   {% endif %}
 </div>
 

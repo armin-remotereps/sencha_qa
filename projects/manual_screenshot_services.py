@@ -45,6 +45,7 @@ from projects.models import (
     ManualCaseSubmission,
     ManualUploadState,
     Project,
+    ScreenshotCaptureSource,
     TestRunScreenshot,
     TestRunTestCase,
 )
@@ -73,6 +74,7 @@ def store_manual_screenshot(
     project: Project,
     payload: ManualScreenshotUploadPayload,
     image_checked: bool = False,
+    capture_source: str = "",
 ) -> str | None:
     """Store one screenshot of a hand-in of ``project`` (idempotent); the
     stored file's name, or None when nothing was written.
@@ -82,6 +84,10 @@ def store_manual_screenshot(
     staged); the key, sha256 and size are still matched against the
     announcement. The runner upload leaves it False.
 
+    ``capture_source`` (a ``ScreenshotCaptureSource`` value, internal) is
+    written on the stored row: ``"runner"`` for shots captured on the test
+    machine, ``""`` when unknown. Raises ``ValueError`` for any other value.
+
     Raises ``ManualSubmissionDroppedError`` when the hand-in is unknown to the
     project or superseded (the runner deletes the whole hand-in) and
     ``ManualShotRejectedError`` when this shot can never be stored (too large,
@@ -89,6 +95,7 @@ def store_manual_screenshot(
     announced, not matching its announcement); the hand-in is then marked
     incomplete first.
     """
+    source = ScreenshotCaptureSource(capture_source)
     submission_uuid = uuid.UUID(payload.submission_id)
     pivot_id = _submission_pivot_id(project, submission_uuid)
     if not image_checked:
@@ -114,7 +121,7 @@ def store_manual_screenshot(
         elif not TestRunScreenshot.objects.filter(
             test_run_test_case_id=pivot.pk, manual_key=payload.key
         ).exists():
-            stored_name = _store(project.pk, pivot, submission, entry, payload)
+            stored_name = _store(project.pk, pivot, submission, entry, payload, source)
     # Raised after the commit, so the incomplete mark is kept.
     if rejected:
         raise ManualShotRejectedError(rejected)
@@ -190,6 +197,7 @@ def _store(
     submission: ManualCaseSubmission,
     entry: dict[str, object],
     payload: ManualScreenshotUploadPayload,
+    capture_source: ScreenshotCaptureSource,
 ) -> str:
     """Write the screenshot and count it on the locked hand-in; the stored
     file's name (a caller whose outer transaction rolls back deletes it)."""
@@ -211,6 +219,7 @@ def _store(
         ),
         step_num=raw_step if isinstance(raw_step, int) else None,
         manual_key=payload.key,
+        capture_source=capture_source,
     )
     screenshot.image.save(
         f"manual_{payload.key}.{_EXTENSIONS[payload.mime]}",
@@ -243,29 +252,48 @@ def _store(
 
 def check_manual_image(mime: ManualShotMime, data: bytes) -> str:
     """Why the bytes are not storable as a manual screenshot ("" when they
-    are; no query). Shared by the runner upload and the MCP gateway.
+    are; no query). Shared by the runner upload and the MCP gateway."""
+    reason, image = load_manual_image(mime, data)
+    if image is not None:
+        image.close()
+    return reason
+
+
+def load_manual_image(
+    mime: ManualShotMime, data: bytes
+) -> tuple[str, Image.Image | None]:
+    """``check_manual_image`` that keeps the decode: ("", the fully loaded
+    image) when the bytes are storable, else (the reason, None). The caller
+    closes the image.
 
     The size first, then the header (format and pixel count, nothing
     decoded), then ``verify()`` and a full ``load()`` on a fresh handle.
     """
     if len(data) > settings.MANUAL_SHOT_MAX_BYTES:
-        return _TOO_LARGE
+        return _TOO_LARGE, None
     expected_format = _PIL_FORMATS[mime]
     try:
         with Image.open(io.BytesIO(data), formats=[expected_format]) as header:
             if header.format != expected_format:
-                return _NOT_AN_IMAGE
+                return _NOT_AN_IMAGE, None
             width, height = header.size
             if width * height > MANUAL_SHOT_MAX_PIXELS:
-                return _TOO_MANY_PIXELS
+                return _TOO_MANY_PIXELS, None
             header.verify()
-        with Image.open(io.BytesIO(data), formats=[expected_format]) as image:
-            image.load()
+        image = Image.open(io.BytesIO(data), formats=[expected_format])
     except Image.DecompressionBombError:
-        return _TOO_MANY_PIXELS
+        return _TOO_MANY_PIXELS, None
     except (UnidentifiedImageError, OSError, SyntaxError, ValueError):
-        return _NOT_AN_IMAGE
-    return ""
+        return _NOT_AN_IMAGE, None
+    try:
+        image.load()
+    except Image.DecompressionBombError:
+        image.close()
+        return _TOO_MANY_PIXELS, None
+    except (UnidentifiedImageError, OSError, SyntaxError, ValueError):
+        image.close()
+        return _NOT_AN_IMAGE, None
+    return "", image
 
 
 def _attempt_key(entry: dict[str, object], key: str) -> str:
