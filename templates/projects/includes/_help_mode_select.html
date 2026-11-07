@@ -15,7 +15,7 @@
     <option value="{{ value }}"{% if value == current %} selected{% endif %}>{{ label }}</option>
     {% endfor %}
   </select>
-  <p class="hint">Attended pauses the run and notifies people. Night lets the Machine setup agent try to fix the machine first. Human in the loop: a person performs every step; the agent prepares each step and confirms the result. Manual: testers perform every case in the Test Runner window and decide every result; a run switches to or from Manual only while it is a draft.</p>
+  <p class="hint">Attended pauses the run and notifies people. Night lets the Machine setup agent try to fix the machine first. Human in the loop: a person performs every step; the agent prepares each step and confirms the result. Manual: testers perform every case themselves and decide every result; a run switches to or from Manual only while it is a draft.</p>
 </div>
 {% else %}
 <p class="hint">Run mode: {% for value, label in choices %}{% if value == current %}{{ label }}{% endif %}{% endfor %}</p>

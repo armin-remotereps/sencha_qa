@@ -10,6 +10,8 @@
 # the way the server does, with no .env in the image (dummy settings env vars
 # only, no database or Redis needed), and checks what the runner will accept:
 # version, sha256, size limit, entry paths, and no .env/.venv/logs inside.
+# Also imports the MCP gateway entrypoint (auto_tester.mcp_asgi) with the same
+# dummy env, which builds the MCP server and its Starlette app.
 #
 # Usage: scripts/verify_server_image.sh [image-tag]
 set -euo pipefail
@@ -103,5 +105,11 @@ for name in names:
     assert not any(p.startswith("test-runner-") for p in parts), f"self-update leftover in bundle: {name}"
 print(f"runner update bundle ok: {bundle.version}, {len(bundle.archive)} bytes, {len(names)} entries, no .env")
 PY
+SECRET_KEY=verify-image \
+FIELD_ENCRYPTION_KEY="$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")" \
+DB_NAME=verify DB_USER=verify DB_PASSWORD=verify DB_HOST=localhost \
+REDIS_URL=redis://localhost:6379/0 \
+DJANGO_SETTINGS_MODULE=auto_tester.settings \
+python -c "import auto_tester.mcp_asgi; print(\"mcp gateway entrypoint import ok\")"
 '
 echo "Server image verification passed."

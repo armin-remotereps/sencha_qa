@@ -76,6 +76,26 @@ services:
         # does not reset an otherwise healthy WebSocket mid-action.
         entrypoint: "python -m daphne -b 0.0.0.0 -p 8000 --ping-interval 30 --ping-timeout 120 --websocket-max-message-size 33554432 --websocket-max-frame-size 33554432 auto_tester.asgi:application"
 
+    # MCP gateway (Manual runs and KB reads for an external tester): its own
+    # ASGI process, because the SDK needs the ASGI lifespan and large JSON
+    # bodies or slow tool calls must stay off the Daphne process that holds
+    # runner WebSockets. nginx proxies /mcp here; only nginx sets the
+    # forwarded headers and the port is bound to loopback on the host.
+    mcp:
+        image: local/auto_tester:latest
+        build: .
+        env_file:
+            - "./.env"
+        restart: always
+        depends_on:
+            - "db"
+            - "redis"
+        extra_hosts:
+            - "host.docker.internal:host-gateway"
+        ports:
+            - "127.0.0.1:8001:8001"
+        entrypoint: "python -m uvicorn auto_tester.mcp_asgi:application --host 0.0.0.0 --port 8001 --workers 2 --proxy-headers --forwarded-allow-ips '*'"
+
     upload-celery:
         hostname: upload
         image: local/auto_tester:latest
@@ -193,6 +213,7 @@ services:
         restart: always
         depends_on:
             - "api"
+            - "mcp"
             - "flower"
         ports:
             - "80:80"

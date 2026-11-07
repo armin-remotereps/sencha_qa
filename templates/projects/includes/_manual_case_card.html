@@ -30,6 +30,12 @@
        panel.discuss_blocker explains a read-only thread.
      panel.progress (ManualProgressView or None): "Progress reported by the
        Test Runner at …", the marks so far (advisory; the hand-in decides).
+     panel.at_test_runner: False when the claim or the current hand-in did
+       not come from the Test Runner (with neither, when any case of the run
+       did not); every Test Runner text then has a neutral twin ("Performed
+       manually", "In progress", "a tester", ...). Pause / Continue and
+       Discuss are never offered for such a claim (can_pause, can_continue,
+       can_discuss are False).
    After a hand-in, includes/_evidence_review_badge.html shows the AI
    screenshot review of the checked, unsent case (pivot.evidence_review_*).
    The page reloads when the case's manual_paused changes (case socket).
@@ -38,7 +44,7 @@
 <section aria-labelledby="manual-h" class="card card-tone-manual">
   <div class="card-header">
     <h2 id="manual-h">Manual test</h2>
-    <span class="badge badge-manual">Performed at the Test Runner</span>
+    <span class="badge badge-manual">{% if panel.at_test_runner %}Performed at the Test Runner{% else %}Performed manually{% endif %}</span>
     {% if panel.pause and panel.pause.paused %}
     <span class="badge badge-warning">Paused by {{ panel.pause.paused_label|default:"a person" }}{% if panel.pause.paused_at %} since <time datetime="{{ panel.pause.paused_at|date:'c' }}">{{ panel.pause.paused_at|date:"H:i" }}</time>{% endif %}</span>
     {% endif %}
@@ -49,13 +55,13 @@
     <span class="alert-icon" aria-hidden="true">ℹ</span>
     <div>
       <p>
-        <strong>In progress at the Test Runner</strong>: {{ panel.claimed_by_label|default:"a person at the Test Runner" }}{% if panel.claimed_at %} picked this case at <time datetime="{{ panel.claimed_at|date:'c' }}">{{ panel.claimed_at|date:"M j, H:i" }}</time>{% endif %}.
+        {% if panel.at_test_runner %}<strong>In progress at the Test Runner</strong>: {{ panel.claimed_by_label|default:"a person at the Test Runner" }}{% else %}<strong>In progress</strong>: {{ panel.claimed_by_label|default:"a tester" }}{% endif %}{% if panel.claimed_at %} picked this case at <time datetime="{{ panel.claimed_at|date:'c' }}">{{ panel.claimed_at|date:"M j, H:i" }}</time>{% endif %}.
         The result appears here when they submit it.
       </p>
       {% if can_write and panel.can_release %}
       <div class="actions card-actions">
         <button type="button" class="btn btn-sm btn-secondary" @click="$dispatch('open-manual-release')">Release case</button>
-        <span class="hint">Only when the tester's Test Runner is gone: the case goes back to Not started and anything they marked is discarded.</span>
+        <span class="hint">{% if panel.at_test_runner %}Only when the tester's Test Runner is gone: the case goes back to Not started and anything they marked is discarded.{% else %}Use this only when the tester can no longer finish this case. The case goes back to Not started and anything they marked is discarded.{% endif %}</span>
       </div>
       {% endif %}
       {% if panel.pause %}
@@ -69,7 +75,7 @@
       <form class="actions card-actions" method="post" action="{% url 'projects:test_run_case_manual_continue' project.id test_run.id pivot.id %}">
         {% csrf_token %}
         <button type="submit" class="btn btn-sm btn-primary">Continue testing</button>
-        <span class="hint">The case's clock runs again and the tester goes on at the Test Runner.</span>
+        <span class="hint">{% if panel.at_test_runner %}The case's clock runs again and the tester goes on at the Test Runner.{% else %}The case's clock runs again and the tester goes on.{% endif %}</span>
       </form>
       {% elif can_write and panel.pause.paused and panel.pause.blocker %}
       <div class="actions card-actions">
@@ -83,7 +89,7 @@
     </div>
   </div>
   {% elif not panel.has_submission %}
-  <p class="hint">{% if panel.run_is_manual %}Not performed yet. A tester picks this case in the Test Runner window, marks each step and submits the result.{% else %}No result was handed in for this case.{% endif %}</p>
+  <p class="hint">{% if panel.run_is_manual and panel.at_test_runner %}Not performed yet. A tester picks this case in the Test Runner window, marks each step and submits the result.{% elif panel.run_is_manual %}Not performed yet. A tester picks this case, marks each step and submits the result.{% else %}No result was handed in for this case.{% endif %}</p>
   {% endif %}
 
   {% if panel.discussion_thread_id or can_write and panel.can_discuss %}
@@ -99,7 +105,7 @@
   {% endif %}
 
   {% if panel.progress %}
-  <h3 class="manual-subhead">Progress reported by the Test Runner at <time datetime="{{ panel.progress.reported_at|date:'c' }}">{{ panel.progress.reported_at|date:"H:i" }}</time></h3>
+  <h3 class="manual-subhead">{% if panel.at_test_runner %}Progress reported by the Test Runner at{% else %}Progress reported at{% endif %} <time datetime="{{ panel.progress.reported_at|date:'c' }}">{{ panel.progress.reported_at|date:"H:i" }}</time></h3>
   <p class="hint">The tester's marks so far{% if panel.progress.current_step %}, now at step {{ panel.progress.current_step }}{% endif %}. Nothing is final until they submit the result.</p>
   {% if panel.progress.steps %}
   <ol class="step-list manual-step-list">
@@ -131,7 +137,7 @@
     </div>
     <div>
       <dt>Submitted</dt>
-      <dd>{{ panel.submitted_label|default:"a person at the Test Runner" }}{% if panel.submitted_at %} · <time datetime="{{ panel.submitted_at|date:'c' }}">{{ panel.submitted_at|date:"M j, Y H:i" }}</time>{% endif %}</dd>
+      <dd>{% if panel.at_test_runner %}{{ panel.submitted_label|default:"a person at the Test Runner" }}{% else %}{{ panel.submitted_label|default:"a tester" }}{% endif %}{% if panel.submitted_at %} · <time datetime="{{ panel.submitted_at|date:'c' }}">{{ panel.submitted_at|date:"M j, Y H:i" }}</time>{% endif %}</dd>
     </div>
     {% if panel.upload %}
     <div>
@@ -141,7 +147,7 @@
         <span class="badge badge-uploading" x-text="'Uploading ' + manualShotsReceived + '/' + manualShotsExpected">Uploading {{ panel.upload.received }}/{{ panel.upload.expected }}</span>
         {% elif panel.upload.is_incomplete %}
         <span class="badge badge-upload-incomplete">Incomplete {{ panel.upload.received }}/{{ panel.upload.expected }}</span>
-        <span class="hint">Some screenshots never arrived from the Test Runner; they still complete the case if they do.</span>
+        <span class="hint">{% if panel.at_test_runner %}Some screenshots never arrived from the Test Runner; they still complete the case if they do.{% else %}Some screenshots never arrived; they still complete the case if they do.{% endif %}</span>
         {% elif panel.upload.is_complete %}
         {% if panel.upload.expected %}<span class="badge badge-passed">All {{ panel.upload.expected }} received</span>{% else %}<span class="muted">None taken</span>{% endif %}
         {% else %}
@@ -252,7 +258,7 @@
 
 {% if can_write and panel.can_release %}
 {% url 'projects:test_run_case_manual_release' project.id test_run.id pivot.id as manual_release_url %}
-{% include "partials/confirm_dialog.html" with dialog_id="manual-release" title="Release this case?" body="The case goes back to Not started and the tester's unsubmitted marks are discarded. Use this only when the Test Runner that picked it is gone; the tester can release it from the window themselves." confirm_label="Release case" confirm_class="btn-danger-solid" action_url=manual_release_url csrf_token=csrf_token only %}
+{% if panel.at_test_runner %}{% include "partials/confirm_dialog.html" with dialog_id="manual-release" title="Release this case?" body="The case goes back to Not started and the tester's unsubmitted marks are discarded. Use this only when the Test Runner that picked it is gone; the tester can release it from the window themselves." confirm_label="Release case" confirm_class="btn-danger-solid" action_url=manual_release_url csrf_token=csrf_token only %}{% else %}{% include "partials/confirm_dialog.html" with dialog_id="manual-release" title="Release this case?" body="The case goes back to Not started and the tester's unsubmitted marks are discarded. Use this only when the tester can no longer finish this case." confirm_label="Release case" confirm_class="btn-danger-solid" action_url=manual_release_url csrf_token=csrf_token only %}{% endif %}
 {% endif %}
 
 {% if can_write and panel.can_discuss and not panel.discussion_thread_id %}

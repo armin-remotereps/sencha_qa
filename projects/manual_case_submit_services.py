@@ -71,7 +71,7 @@ _VERDICT_STATUSES: Final[dict[ManualVerdict, TestRunTestCaseStatus]] = {
 
 _DROPPED_UNKNOWN = "This hand-in is not known for this project any more."
 _DROPPED_SUPERSEDED = "This case was re-run or reset; the hand-in was discarded."
-_DROPPED_CLAIM = "This case is not claimed by the window any more (released, re-run or the run was stopped)."
+DROPPED_CLAIM = "This case is not claimed by the window any more (released, re-run or the run was stopped)."
 _RUN_NOT_RUNNING = "This manual run is not running any more."
 _NOT_MANUAL_CASE = "This case has no manual steps to hand in."
 _STEP_OUT_OF_RANGE = "The hand-in names a step this case does not have."
@@ -116,7 +116,7 @@ def submit_manual_case(
         if not claim_matches(pivot, payload.claim_token) or (
             pivot.status != TestRunTestCaseStatus.IN_PROGRESS
         ):
-            raise ManualSubmissionDroppedError(_DROPPED_CLAIM)
+            raise ManualSubmissionDroppedError(DROPPED_CLAIM)
         # Permanent refusals drop the hand-in: the runner retries anything else,
         # and a hand-in that can never land would keep its spool (and block
         # Test Runner updates) forever.
@@ -154,6 +154,7 @@ def submit_manual_case(
         )
         pivot.finished_at = now
         claim_token = pivot.manual_claim_token
+        claim_source = pivot.manual_claim_source
         for field, value in MANUAL_CLAIM_CLEARED.items():
             setattr(pivot, field, value)
         pivot.save(update_fields=list(_PIVOT_SUBMIT_FIELDS))
@@ -167,6 +168,7 @@ def submit_manual_case(
             submitted_by=actor.user,
             submitted_label=actor.label(),
             submitted_via=actor.via,
+            source=claim_source,
             submitted_at=now,
             verdict=verdict,
             verdict_note=payload.verdict_note,

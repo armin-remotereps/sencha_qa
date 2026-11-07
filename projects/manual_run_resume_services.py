@@ -1,4 +1,4 @@
-"""Resume a Manual run's Cancelled cases: back to the Test Runner's list.
+"""Resume a Manual run's Cancelled cases: back to the list of cases to test.
 
 A manual case is never continued mid-way: the runner window's draft belongs
 to the claim that the abort cleared. Resume puts the run's Cancelled cases
@@ -69,17 +69,22 @@ def count_manual_resumable(test_run: TestRun) -> int:
     return test_run.pivot_entries.filter(status__in=MANUAL_RESUMABLE_STATUSES).count()
 
 
-def build_manual_resume_confirm_body(count: int) -> str:
-    """Server-built Resume dialog text from the count only (no user text)."""
+def build_manual_resume_confirm_body(count: int, *, at_test_runner: bool = True) -> str:
+    """Server-built Resume dialog text from the count only (no user text).
+
+    ``at_test_runner`` False: the same text without the Test Runner (a run
+    performed elsewhere).
+    """
+    where = "the Test Runner's list" if at_test_runner else "the list of cases to test"
     if count == 1:
         head = (
-            "1 cancelled case goes back to the Test Runner's list; a tester "
+            f"1 cancelled case goes back to {where}; a tester "
             "starts it again from step 1. The run is Running until it is "
             "handed in"
         )
     else:
         head = (
-            f"{count} cancelled cases go back to the Test Runner's list; a "
+            f"{count} cancelled cases go back to {where}; a "
             "tester starts each one again from step 1. The run is Running "
             "until they are handed in"
         )

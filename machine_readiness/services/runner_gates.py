@@ -22,8 +22,8 @@ RUNNER_UPDATING_MESSAGE = (
 )
 # Same wording as ``projects.manual_run_policy.MANUAL_TESTER_ON_MACHINE``.
 MANUAL_TESTER_MESSAGE = (
-    "A tester is performing a manual case on this machine. Ask them to pause "
-    "it from the Manual test card or the Test Runner, then try again."
+    "A tester is performing a manual case on this machine. Try again once "
+    "the case is paused, handed in or released."
 )
 NOT_CONNECTED_MESSAGE = "The Test Runner is not connected."
 

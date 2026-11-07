@@ -46,6 +46,7 @@ from auto_tester.celery import app as celery_app
 from projects.manual_current_submission import current_manual_submissions
 from projects.manual_run_policy import is_manual_checkpoint
 from projects.models import (
+    MANUAL_SOURCE_MCP,
     ManualCaseSubmission,
     ManualRefineState,
     ManualUploadState,
@@ -273,7 +274,9 @@ def _comment_parts(
         and submission.upload_state == ManualUploadState.INCOMPLETE
     ):
         shots_note = format_manual_shots_note(
-            submission.shots_received, submission.shots_expected
+            submission.shots_received,
+            submission.shots_expected,
+            at_test_runner=submission.source != MANUAL_SOURCE_MCP,
         )
     return ManualCommentParts(
         tester_label=submission.submitted_label if submission is not None else "",

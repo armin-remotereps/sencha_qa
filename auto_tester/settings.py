@@ -67,6 +67,7 @@ INSTALLED_APPS: list[str] = [
     "knowledge_base",
     "machine_readiness",
     "run_triage",
+    "mcp_gateway",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -255,6 +256,7 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "notifications.tasks.send_notification": {"queue": "notify"},
     "notifications.tasks.send_night_digest": {"queue": "notify"},
     "test_sessions.tasks.close_stale_test_sessions": {"queue": "notify"},
+    "mcp_gateway.tasks.sweep_mcp_staged_shots": {"queue": "notify"},
     # Own worker (knowledge-celery): extraction is CPU and memory heavy and
     # must never hold up TestRail imports or notifications.
     "knowledge_base.tasks.extract_knowledge_item": {"queue": "knowledge"},
@@ -292,6 +294,13 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "task": "test_sessions.tasks.close_stale_test_sessions",
         "schedule": 900.0,
         "options": {"expire_seconds": 840},
+    },
+    # MCP gateway: staged screenshots and step marks of claims that ended
+    # (released, handed in, re-run or reset); a live claim is never touched.
+    "mcp-gateway-sweep-staged-shots": {
+        "task": "mcp_gateway.tasks.sweep_mcp_staged_shots",
+        "schedule": crontab(minute=10),
+        "options": {"expire_seconds": 3000},
     },
     # Manual run: hand-ins with no screenshot for MANUAL_UPLOAD_STALE_HOURS
     # become "Screenshots incomplete", so they can be checked and sent.

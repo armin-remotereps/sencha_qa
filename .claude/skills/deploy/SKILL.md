@@ -53,8 +53,8 @@ harmless. Show the user only the lines you added.
 ssh -o BatchMode=yes RRAutoTester 'cd ~/sencha_qa && docker compose build api 2>&1 | tail -5'
 ```
 
-All app services (api, the celery workers, beat, flower) use the `local/auto_tester`
-image that `api` builds.
+All app services (api, the MCP gateway `mcp`, the celery workers, beat, flower) use
+the `local/auto_tester` image that `api` builds, so this one build covers `mcp` too.
 
 ## 4. Migrate and collect static
 
@@ -72,9 +72,11 @@ do not continue to step 5.
 
 ## 5. Restart the stack
 
-`up -d nginx flower` recreates the api and every celery worker and beat on the new
-image, through `depends_on`. Restart nginx afterwards so it re-resolves the new api
-container.
+`up -d nginx flower` recreates the api, the MCP gateway (`mcp`, uvicorn) and every
+celery worker and beat on the new image, through `depends_on`. Restart nginx
+afterwards so it re-resolves the new api and mcp containers and picks up any change
+to `nginx/server.conf` (the config file is mounted read-only, so a restart is
+enough; check it first with `docker compose exec nginx nginx -t` when it changed).
 
 ```bash
 ssh -o BatchMode=yes RRAutoTester 'cd ~/sencha_qa && docker compose up -d nginx flower 2>&1 | tail -15 && docker compose restart nginx'
@@ -83,12 +85,30 @@ ssh -o BatchMode=yes RRAutoTester 'cd ~/sencha_qa && docker compose up -d nginx 
 ## 6. Verify
 
 ```bash
-ssh -o BatchMode=yes RRAutoTester 'cd ~/sencha_qa && sleep 5 && docker compose ps --format "{{.Service}} {{.State}} {{.Status}}" && docker compose logs --since 2m api execution-celery notify-celery assist-celery 2>&1 | grep -iE "error|traceback|exception" | grep -v VISION_WORKER | head'
+ssh -o BatchMode=yes RRAutoTester 'cd ~/sencha_qa && sleep 5 && docker compose ps --format "{{.Service}} {{.State}} {{.Status}}" && docker compose logs --since 2m api mcp execution-celery notify-celery assist-celery 2>&1 | grep -iE "error|traceback|exception" | grep -v VISION_WORKER | head'
 curl -s -o /dev/null -w "%{http_code}\n" https://sench.remotereps.com/accounts/login/
+curl -s -o /dev/null -w "%{http_code}\n" https://sench.remotereps.com/mcp
 ```
 
-Every service should be `running`, the log scan should be empty, and the login page
-should return 200.
+Every service (including `mcp`) should be `running`, the log scan should be empty,
+the login page should return 200 and `/mcp` without a key should return 401 (a 502
+means the `mcp` container is down or nginx still points at the old one).
+
+### Connecting an MCP client (for the report, if the user asks)
+
+A project member connects an MCP client to `https://sench.remotereps.com/mcp` with the
+header `Authorization: Bearer <project Connection key>` (the key from the project's
+Environment Connection card; it acts as that project only). Never paste a real key
+into chat, logs or files.
+
+- Claude: add a custom connector with that URL and the `Authorization` request header.
+- Codex (`~/.codex/config.toml`), with the key in an environment variable:
+
+  ```toml
+  [mcp_servers.punk-hazard]
+  url = "https://sench.remotereps.com/mcp"
+  bearer_token_env_var = "PUNK_HAZARD_CONNECTION_KEY"
+  ```
 
 Report to the user:
 

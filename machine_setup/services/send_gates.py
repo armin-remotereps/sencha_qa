@@ -105,7 +105,7 @@ def manual_thread_send_refusal(
 
 def is_claimed_manual_pivot(project: Project, pivot_id: int | None) -> bool:
     """Whether ``pivot_id`` is a claimed IN_PROGRESS case of a started manual
-    run of ``project`` (one query)."""
+    run of ``project``, claimed at the Test Runner window (one query)."""
     if pivot_id is None:
         return False
     pivot = (
@@ -114,6 +114,7 @@ def is_claimed_manual_pivot(project: Project, pivot_id: int | None) -> bool:
             "id",
             "status",
             "manual_claim_token",
+            "manual_claim_source",
             "test_run__id",
             "test_run__status",
             "test_run__help_mode",
@@ -121,7 +122,11 @@ def is_claimed_manual_pivot(project: Project, pivot_id: int | None) -> bool:
         .filter(pk=pivot_id, test_run__project=project)
         .first()
     )
-    return pivot is not None and is_claimed_manual_case(pivot.test_run, pivot)
+    return (
+        pivot is not None
+        and is_claimed_manual_case(pivot.test_run, pivot)
+        and pivot.manual_claim_at_runner
+    )
 
 
 def triage_thread_send_refusal(

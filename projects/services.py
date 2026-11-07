@@ -155,11 +155,7 @@ from projects.exceptions import (
     TestRunnerDisconnectedError,
     TestRunnerUnresponsiveError,
 )
-from projects.manual_run_policy import (
-    MANUAL_RUNNER_OUTDATED,
-    is_manual_mode,
-    runner_supports_manual,
-)
+from projects.manual_run_policy import is_manual_mode
 from projects.manual_submission_supersede import supersede_manual_submissions
 from projects.models import (
     ACTIVE_RUN_STATUSES,
@@ -978,16 +974,11 @@ def get_run_readiness(
         test_run.help_mode if test_run is not None else project.default_help_mode
     )
     if is_manual_mode(help_mode):
-        # A person performs every step (D11): no visual engine and no machine
-        # preparation, but a Test Runner whose window runs manual tests.
-        manual_state = (
-            MachineState.READY if project.agent_connected else MachineState.DISCONNECTED
-        )
+        # A person performs every step (D11): no visual engine, no machine
+        # preparation and no Test Runner (a tester may work elsewhere).
         return RunReadiness(
             checks=(
                 _cases_selected_check(test_run, selected_count),
-                _machine_connected_check(project, manual_state),
-                _manual_runner_check(project),
                 _no_active_run_check(project, test_run),
                 _no_machine_setup_check(project),
                 _no_runner_update_check(project),
@@ -1008,41 +999,6 @@ def get_run_readiness(
     if test_run is not None:
         checks += (_machine_prepared_check(project, test_run, stage0_summary),)
     return RunReadiness(checks=checks)
-
-
-def runner_runs_manual_tests(project: Project) -> bool:
-    """The project's Test Runner is connected and its window runs manual tests
-    (MANUAL_RUN_V1; no query)."""
-    capabilities = project.agent_capabilities
-    return (
-        project.agent_connected
-        and isinstance(capabilities, list)
-        and runner_supports_manual(str(item) for item in capabilities)
-    )
-
-
-def _manual_runner_check(project: Project) -> ReadinessCheck:
-    supported = runner_runs_manual_tests(project)
-    # A phone runner's tester works on the device: it must be connected.
-    device_not_ready = supported and device_offline(project)
-    passed = supported and not device_not_ready
-    if passed:
-        title = "Test Runner supports manual testing"
-        help_text = ""
-    elif device_not_ready:
-        title = "Phone or tablet not connected"
-        help_text = DEVICE_NOT_READY_MESSAGE
-    else:
-        title = "Test Runner cannot run manual tests"
-        help_text = MANUAL_RUNNER_OUTDATED
-    return ReadinessCheck(
-        key="manual_runner",
-        passed=passed,
-        blocking=True,
-        title=title,
-        help=help_text,
-        link_url=reverse("projects:environment", args=[project.id]),
-    )
 
 
 # ============================================================================
@@ -2992,17 +2948,6 @@ def start_test_run(
         locked_help_mode if resolved_help_mode is None else resolved_help_mode
     )
     manual = is_manual_mode(new_help_mode)
-    if manual:
-        runner = Project.objects.only(
-            "agent_connected",
-            "agent_capabilities",
-            "agent_device_state",
-            "agent_device_reported_at",
-        ).get(pk=test_run.project_id)
-        if not runner_runs_manual_tests(runner):
-            raise ValueError(MANUAL_RUNNER_OUTDATED)
-        if device_offline(runner):
-            raise ValueError(DEVICE_NOT_READY_MESSAGE)
 
     test_run.status = TestRunStatus.STARTED
     test_run.help_mode = new_help_mode

@@ -69,9 +69,18 @@ _MISMATCH = "This screenshot does not match the one its hand-in announced."
 
 
 def store_manual_screenshot(
-    *, project: Project, payload: ManualScreenshotUploadPayload
-) -> None:
-    """Store one screenshot of a hand-in of ``project`` (idempotent).
+    *,
+    project: Project,
+    payload: ManualScreenshotUploadPayload,
+    image_checked: bool = False,
+) -> str | None:
+    """Store one screenshot of a hand-in of ``project`` (idempotent); the
+    stored file's name, or None when nothing was written.
+
+    ``image_checked`` skips ``check_manual_image`` for bytes the caller
+    already passed through it (the MCP gateway checks each image when it is
+    staged); the key, sha256 and size are still matched against the
+    announcement. The runner upload leaves it False.
 
     Raises ``ManualSubmissionDroppedError`` when the hand-in is unknown to the
     project or superseded (the runner deletes the whole hand-in) and
@@ -82,13 +91,15 @@ def store_manual_screenshot(
     """
     submission_uuid = uuid.UUID(payload.submission_id)
     pivot_id = _submission_pivot_id(project, submission_uuid)
-    reason = _check_image(payload)
-    if reason:
-        reject_manual_shot(
-            project=project, submission_id=payload.submission_id, message=reason
-        )
+    if not image_checked:
+        reason = check_manual_image(payload.mime, payload.data)
+        if reason:
+            reject_manual_shot(
+                project=project, submission_id=payload.submission_id, message=reason
+            )
 
     rejected = ""
+    stored_name: str | None = None
     with transaction.atomic():
         pivot, submission = _lock_current(pivot_id, submission_uuid)
         entry = _manifest_entry(submission.shot_manifest, payload.key)
@@ -103,10 +114,11 @@ def store_manual_screenshot(
         elif not TestRunScreenshot.objects.filter(
             test_run_test_case_id=pivot.pk, manual_key=payload.key
         ).exists():
-            _store(project.pk, pivot, submission, entry, payload)
+            stored_name = _store(project.pk, pivot, submission, entry, payload)
     # Raised after the commit, so the incomplete mark is kept.
     if rejected:
         raise ManualShotRejectedError(rejected)
+    return stored_name
 
 
 def reject_manual_shot(
@@ -178,17 +190,16 @@ def _store(
     submission: ManualCaseSubmission,
     entry: dict[str, object],
     payload: ManualScreenshotUploadPayload,
-) -> None:
-    """Write the screenshot and count it on the locked hand-in."""
+) -> str:
+    """Write the screenshot and count it on the locked hand-in; the stored
+    file's name (a caller whose outer transaction rolls back deletes it)."""
     kind = ManualShotKind(str(entry.get("kind")))
     raw_step = entry.get("step_num")
     # The file is written before the row, as for every screenshot; a rollback
-    # leaves only an orphan file.
-    screenshot = TestRunScreenshot.objects.create(
+    # leaves only an orphan file (the caller deletes the returned name). A
+    # failed insert deletes its own file, whose name the caller never gets.
+    screenshot = TestRunScreenshot(
         test_run_test_case=pivot,
-        image=ContentFile(
-            payload.data, name=f"manual_{payload.key}.{_EXTENSIONS[payload.mime]}"
-        ),
         tool_name=MANUAL_SHOT_TOOL_NAMES[kind],
         # A step shot carries its step's attempt id: named by the step's first
         # shot (``attempt_key``; hand-ins stored before it had one shot per
@@ -201,40 +212,54 @@ def _store(
         step_num=raw_step if isinstance(raw_step, int) else None,
         manual_key=payload.key,
     )
-    submission.shots_received = min(
-        submission.shots_received + 1, submission.shots_expected
+    screenshot.image.save(
+        f"manual_{payload.key}.{_EXTENSIONS[payload.mime]}",
+        ContentFile(payload.data),
+        save=False,
     )
-    submission.last_shot_at = timezone.now()
-    completed = submission.shots_received >= submission.shots_expected
-    if completed:
-        # Also from ``incomplete``: a late shot still completes it.
-        submission.upload_state = ManualUploadState.COMPLETE
-    submission.save(update_fields=["shots_received", "last_shot_at", "upload_state"])
+    try:
+        screenshot.save()
+        submission.shots_received = min(
+            submission.shots_received + 1, submission.shots_expected
+        )
+        submission.last_shot_at = timezone.now()
+        completed = submission.shots_received >= submission.shots_expected
+        if completed:
+            # Also from ``incomplete``: a late shot still completes it.
+            submission.upload_state = ManualUploadState.COMPLETE
+        submission.save(
+            update_fields=["shots_received", "last_shot_at", "upload_state"]
+        )
+    except Exception:
+        screenshot.image.delete(save=False)
+        raise
     pivot_id = pivot.pk
     transaction.on_commit(lambda: broadcast_manual_screenshot(pivot_id, screenshot))
     if completed:
         queue_manual_refinement(submission.pk)
         transaction.on_commit(lambda: nudge_runner_person_steps(project_id))
+    return str(screenshot.image.name)
 
 
-def _check_image(payload: ManualScreenshotUploadPayload) -> str:
-    """Why the bytes are not storable ("" when they are; no query).
+def check_manual_image(mime: ManualShotMime, data: bytes) -> str:
+    """Why the bytes are not storable as a manual screenshot ("" when they
+    are; no query). Shared by the runner upload and the MCP gateway.
 
     The size first, then the header (format and pixel count, nothing
     decoded), then ``verify()`` and a full ``load()`` on a fresh handle.
     """
-    if len(payload.data) > settings.MANUAL_SHOT_MAX_BYTES:
+    if len(data) > settings.MANUAL_SHOT_MAX_BYTES:
         return _TOO_LARGE
-    expected_format = _PIL_FORMATS[payload.mime]
+    expected_format = _PIL_FORMATS[mime]
     try:
-        with Image.open(io.BytesIO(payload.data), formats=[expected_format]) as header:
+        with Image.open(io.BytesIO(data), formats=[expected_format]) as header:
             if header.format != expected_format:
                 return _NOT_AN_IMAGE
             width, height = header.size
             if width * height > MANUAL_SHOT_MAX_PIXELS:
                 return _TOO_MANY_PIXELS
             header.verify()
-        with Image.open(io.BytesIO(payload.data), formats=[expected_format]) as image:
+        with Image.open(io.BytesIO(data), formats=[expected_format]) as image:
             image.load()
     except Image.DecompressionBombError:
         return _TOO_MANY_PIXELS

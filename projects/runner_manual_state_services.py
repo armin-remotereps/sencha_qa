@@ -40,6 +40,7 @@ from projects.manual_case_pause_services import get_manual_pause_panel
 from projects.manual_case_steps import manual_steps_from_checkpoint
 from projects.manual_case_submit_services import manifest_keys
 from projects.models import (
+    MANUAL_SOURCE_MCP,
     ManualCaseSubmission,
     ManualUploadState,
     Project,
@@ -135,17 +136,21 @@ def _active_case(
     test_run: TestRun, *, pause_discuss: bool
 ) -> ManualActiveCasePayload | None:
     """The run's claimed case with its verbatim steps (one query; the pause
-    fields with ``pause_discuss`` come from loaded fields)."""
+    fields with ``pause_discuss`` come from loaded fields). A claim made
+    outside the Test Runner (``MANUAL_SOURCE_MCP``) is never the window's
+    active case: it stays listed as In progress, but its token is not sent."""
     claimed = (
         TestRunTestCase.objects.filter(
             test_run_id=test_run.pk, status=TestRunTestCaseStatus.IN_PROGRESS
         )
         .exclude(manual_claim_token="")
+        .exclude(manual_claim_source=MANUAL_SOURCE_MCP)
         .select_related("test_case")
         .only(
             "id",
             "status",
             "manual_claim_token",
+            "manual_claim_source",
             "manual_claimed_at",
             "manual_paused_at",
             "manual_paused_label",

@@ -19,6 +19,8 @@ _SUBMISSION_FIELDS: Final = (
     "id",
     "test_run_test_case_id",
     "submitted_label",
+    # Internal marker (only branched on, never output).
+    "source",
     "verdict_note",
     "shots_expected",
     "shots_received",

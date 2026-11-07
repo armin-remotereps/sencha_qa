@@ -89,6 +89,9 @@ class ResumePanel:
     confirm_body: str
     # A Manual run: the dialog shows the mode as text (it cannot change).
     is_manual: bool = False
+    # A Manual run: ``confirm_body`` without the Test Runner, shown when the
+    # run page's manual panel is not ``at_test_runner`` ("" otherwise).
+    confirm_body_neutral: str = ""
 
 
 def get_resume_panel(test_run: TestRun, *, blockers: Sequence[str]) -> ResumePanel:
@@ -142,6 +145,9 @@ def _manual_resume_panel(test_run: TestRun, blockers: Sequence[str]) -> ResumePa
         blockers=tuple(blockers),
         confirm_body=build_manual_resume_confirm_body(count),
         is_manual=True,
+        confirm_body_neutral=build_manual_resume_confirm_body(
+            count, at_test_runner=False
+        ),
     )
 
 

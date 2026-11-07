@@ -80,7 +80,7 @@ def get_manual_pause_panel(
     """The case's pause panel from loaded fields (no query).
 
     ``test_run`` needs ``status`` and ``help_mode``; ``pivot`` its status,
-    claim token and pause fields. Whether the discussion agent is busy is the
+    claim token and source, and pause fields. Whether the discussion agent is busy is the
     Continue service's check, not the panel's.
     """
     paused = pivot.manual_paused_at is not None
@@ -91,7 +91,9 @@ def get_manual_pause_panel(
         blocker = MANUAL_RUN_NOT_RUNNING
     elif not is_claimed_manual_case(test_run, pivot):
         blocker = MANUAL_PAUSE_NOT_CLAIMED
-    actionable = not blocker
+    # A claim made outside the Test Runner window has no Pause / Continue
+    # (and no hint: the source is never shown).
+    actionable = not blocker and pivot.manual_claim_at_runner
     return ManualPausePanel(
         paused=paused,
         paused_label=pivot.manual_paused_label if paused else "",
@@ -191,6 +193,8 @@ def _lock_claimed_case(
     if claim_token is not None:
         if not claimed or not claim_matches(pivot, claim_token):
             raise ManualRunError(MANUAL_PAUSE_STALE_CLAIM)
-    elif not claimed:
+    elif not claimed or not pivot.manual_claim_at_runner:
+        # A claim made outside the Test Runner window is never paused from
+        # the web; same neutral refusal as an unclaimed case.
         raise ManualRunError(MANUAL_PAUSE_NOT_CLAIMED)
     return test_run, pivot

@@ -326,11 +326,14 @@ def format_manual_step_breakdown(
     return "\n\n".join(paragraphs)
 
 
-def format_manual_shots_note(received: int, expected: int) -> str:
-    """The note for a hand-in whose screenshots never all arrived."""
+def format_manual_shots_note(
+    received: int, expected: int, *, at_test_runner: bool = True
+) -> str:
+    """The note for a hand-in whose screenshots never all arrived
+    (``at_test_runner`` False: without the Test Runner)."""
     return (
         f"{received} of {pluralize_count(expected, 'screenshot', 'screenshots')} "
-        "received from the Test Runner."
+        + ("received from the Test Runner." if at_test_runner else "received.")
     )
 
 

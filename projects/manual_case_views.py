@@ -40,7 +40,7 @@ def test_run_case_manual_release(
         raise Http404
     try:
         # None: a writable member's force release (no claim token).
-        release_manual_case(
+        at_runner = release_manual_case(
             project=project,
             pivot_id=pivot.id,
             actor=PersonStepActor.web(request.user),
@@ -51,8 +51,12 @@ def test_run_case_manual_release(
     else:
         messages.success(
             request,
-            "Case released. It is Not started again and can be picked at the "
-            "Test Runner.",
+            (
+                "Case released. It is Not started again and can be picked at the "
+                "Test Runner."
+                if at_runner
+                else "Case released. It is Not started again and can be picked again."
+            ),
         )
     form = ManualReleaseForm(request.POST)
     next_url = form.cleaned_data["next"] if form.is_valid() else ""

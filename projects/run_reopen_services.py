@@ -16,7 +16,7 @@ from django.utils import timezone
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from projects.checked_push_limits import is_checked_push_live
 from projects.exceptions import RunHelpError
-from projects.manual_run_policy import MANUAL_RUNNER_OUTDATED, is_manual_run
+from projects.manual_run_policy import is_manual_run
 from projects.models import (
     ACTIVE_RUN_STATUSES,
     Project,
@@ -40,7 +40,6 @@ from projects.services import (
     finish_test_run,
     get_machine_state,
     queue_test_run_cases,
-    runner_runs_manual_tests,
 )
 from visual_engine.services.pool_status import get_visual_engine_status
 
@@ -55,7 +54,6 @@ _MACHINE_FAILED = (
     "Check the vision workers on the Environment page."
 )
 _VISUAL_ENGINE_OFFLINE = "Start a vision worker."
-_RUNNER_NOT_CONNECTED = "Connect the Test Runner."
 _NOT_PAUSED = "This run is not waiting for help."
 _STILL_NEEDS_HELP = "A case of this run still needs help."
 _WAITING_FOR_PERSON_STEP = "A case of this run is waiting for a person's step."
@@ -123,13 +121,11 @@ def _list_blockers(
         blockers.append(_OTHER_RUN_ACTIVE)
     if include_push:
         blockers.extend(list_testrail_push_blockers(test_run))
-    machine_blocker = (
-        _manual_machine_blocker(project)
-        if is_manual_run(test_run)
-        else _machine_blocker(project)
-    )
-    if machine_blocker:
-        blockers.append(machine_blocker)
+    # A manual run needs no machine: its tester may work anywhere.
+    if not is_manual_run(test_run):
+        machine_blocker = _machine_blocker(project)
+        if machine_blocker:
+            blockers.append(machine_blocker)
     now = timezone.now()
     if live_turn_exists(project.pk, now):
         blockers.append(MACHINE_SETUP_RUNNING_MESSAGE)
@@ -288,18 +284,6 @@ def _has_other_started_run(project_id: int, test_run_id: int) -> bool:
         .exclude(pk=test_run_id)
         .exists()
     )
-
-
-def _manual_machine_blocker(project: Project) -> str | None:
-    """A manual run needs no visual engine, only a runner that runs manual
-    tests (D11; no query)."""
-    if not project.agent_connected:
-        return _RUNNER_NOT_CONNECTED
-    if not runner_runs_manual_tests(project):
-        return MANUAL_RUNNER_OUTDATED
-    if device_offline(project):
-        return DEVICE_NOT_READY_MESSAGE
-    return None
 
 
 def _machine_blocker(project: Project) -> str | None:

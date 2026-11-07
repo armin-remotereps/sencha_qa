@@ -35,6 +35,7 @@ from projects.models import (
     MANUAL_CLAIM_CLEARED,
     MANUAL_CLAIM_FIELDS,
     MANUAL_PAUSE_CLEARED,
+    ManualClaimSource,
     Project,
     TestRunStatus,
     TestRunTestCase,
@@ -57,14 +58,19 @@ _CLAIM_TOKEN_BYTES = 16
 
 
 def claim_manual_case(
-    *, project: Project, pivot_id: int, actor: PersonStepActor
+    *,
+    project: Project,
+    pivot_id: int,
+    actor: PersonStepActor,
+    source: ManualClaimSource = "",
 ) -> str:
     """Claim a Created case of the project's running manual run; the claim token.
 
     Raises ``ManualRunError`` (user-safe) when the case is not one of the
     project's manual run cases, the run is not running, the case is not
     Created, another case of the run is claimed, or any Machine setup turn
-    of the project is live (it may be using the machine). Records the actor's
+    of the project is live (it may be using the machine). ``source`` is the
+    internal ``manual_claim_source`` (blank, or ``MANUAL_SOURCE_MCP``). Records the actor's
     ``CaseActivity.START`` (a member only); no leaderboard credit until the
     hand-in.
     """
@@ -97,6 +103,7 @@ def claim_manual_case(
         pivot.finished_at = None
         open_case_segment(pivot, now)
         pivot.manual_claim_token = token
+        pivot.manual_claim_source = source
         pivot.manual_claimed_by = actor.user
         pivot.manual_claimed_label = actor.label()
         pivot.manual_claimed_at = now
@@ -132,8 +139,11 @@ def release_manual_case(
     pivot_id: int,
     actor: PersonStepActor,
     claim_token: str | None,
-) -> None:
+) -> bool:
     """Give the claim back: the case is Created again, its checkpoint cleared.
+
+    Returns whether the released claim was made at the Test Runner window
+    (``manual_claim_at_runner``), so the caller can word its message.
 
     ``claim_token``: the claim the Test Runner window gives back; ``None`` is a
     writable member's force release on the web (the view authorizes it; a
@@ -157,6 +167,7 @@ def release_manual_case(
         # Not while the discussion's agent may be using the machine.
         if manual_case_turn_live(pivot.pk):
             raise ManualRunError(MANUAL_PAUSE_AGENT_BUSY)
+        at_runner = pivot.manual_claim_at_runner
         now = timezone.now()
         close_case_segment(pivot.pk, now)
         pivot.segment_started_at = None
@@ -174,3 +185,4 @@ def release_manual_case(
             ]
         )
         transaction.on_commit(lambda: broadcast_run_and_pivots(test_run, [pivot]))
+    return at_runner

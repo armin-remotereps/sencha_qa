@@ -5,7 +5,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final, Literal
 
 from django.conf import settings
 from django.db import models
@@ -202,8 +202,15 @@ MANUAL_PAUSE_CLEARED: dict[str, object] = {
     "manual_paused_label": "",
     "manual_paused_via": "",
 }
+# ``TestRunTestCase.manual_claim_source`` / ``ManualCaseSubmission.source``:
+# the claim came through the MCP gateway (blank: Test Runner or web).
+# Internal. Never render, export, broadcast or send to TestRail/prompts.
+MANUAL_SOURCE_MCP: Final = "m"
+# The values ``claim_manual_case(source=)`` accepts.
+ManualClaimSource = Literal["", "m"]
 MANUAL_CLAIM_FIELDS: tuple[str, ...] = (
     "manual_claim_token",
+    "manual_claim_source",
     "manual_claimed_by",
     "manual_claimed_label",
     "manual_claimed_at",
@@ -211,6 +218,7 @@ MANUAL_CLAIM_FIELDS: tuple[str, ...] = (
 )
 MANUAL_CLAIM_CLEARED: dict[str, object] = {
     "manual_claim_token": "",
+    "manual_claim_source": "",
     "manual_claimed_by": None,
     "manual_claimed_label": "",
     "manual_claimed_at": None,
@@ -864,6 +872,10 @@ class TestRunTestCase(models.Model):
     manual_claim_token = models.CharField(
         max_length=MANUAL_CLAIM_TOKEN_LENGTH, blank=True, default=""
     )
+    # Where the claim came from: blank (Test Runner or web) or
+    # ``MANUAL_SOURCE_MCP``. Internal. Never render, export, broadcast or send
+    # to TestRail/prompts; only branch on it (``manual_claim_at_runner``).
+    manual_claim_source = models.CharField(max_length=8, blank=True, default="")
     # Null: an anonymous person at the Test Runner (or the user was deleted).
     manual_claimed_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -910,6 +922,12 @@ class TestRunTestCase(models.Model):
         if self.status not in FINISHED_CASE_STATUSES:
             return None
         return self.active_duration
+
+    @property
+    def manual_claim_at_runner(self) -> bool:
+        """False when the current claim came through the MCP gateway (picks
+        neutral wording; the source itself is never shown)."""
+        return self.manual_claim_source != MANUAL_SOURCE_MCP
 
     def __str__(self) -> str:
         return f"TRTC #{self.pk} — {self.test_case.title[:50]}"
@@ -1735,6 +1753,9 @@ class ManualCaseSubmission(models.Model):
     submitted_via = models.CharField(
         max_length=16, choices=PersonStepChannel.choices, blank=True, default=""
     )
+    # The claim's ``manual_claim_source``, kept after the claim ends.
+    # Internal. Never render, export, broadcast or send to TestRail/prompts.
+    source = models.CharField(max_length=8, blank=True, default="")
     submitted_at = models.DateTimeField(default=timezone.now)
     verdict = models.CharField(max_length=16, choices=ManualVerdict.choices)
     # The tester's case note, verbatim (runner-sent; shown escaped).

@@ -12,11 +12,10 @@ instead.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from typing import Final
 
 from controller_client.protocol import (
-    ClientCapability,
     ManualCaseVerdictWire,
     ManualShotKind,
 )
@@ -65,18 +64,14 @@ MANUAL_DISCUSS_MACHINE_NEEDS_PAUSE: Final = (
 )
 # Any setup thread but the case's own discussion (``run_machine_use``).
 MANUAL_TESTER_ON_MACHINE: Final = (
-    "A tester is performing a manual case on this machine. Ask them to pause "
-    "it from the Manual test card or the Test Runner, then try again."
+    "A tester is performing a manual case on this machine. Try again once "
+    "the case is paused, handed in or released."
 )
 MANUAL_REDESIGN_REFUSED: Final = (
     "A manual case follows the test case's own steps; its plan cannot be redesigned."
 )
 MANUAL_MODE_SWITCH_REFUSED: Final = (
     "A run can be switched to or from Manual only while it is a draft."
-)
-# Readiness: a manual run needs a runner whose window supports it.
-MANUAL_RUNNER_OUTDATED: Final = (
-    "Update the Test Runner (and enable its window) to run manual tests."
 )
 
 # ``TestRunScreenshot.tool_name`` of each kind of manual screenshot.
@@ -134,11 +129,6 @@ def is_manual_checkpoint(checkpoint_json: object) -> bool:
         isinstance(checkpoint_json, dict)
         and checkpoint_json.get(_MANUAL_CHECKPOINT_KEY) is True
     )
-
-
-def runner_supports_manual(capabilities: Iterable[str]) -> bool:
-    """The connected runner advertises MANUAL_RUN_V1 (only with its window)."""
-    return ClientCapability.MANUAL_RUN_V1 in set(capabilities)
 
 
 def manual_attempt_id(shot_key: str) -> str:

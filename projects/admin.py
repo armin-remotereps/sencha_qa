@@ -116,6 +116,8 @@ class TestRunTestCaseInline(admin.TabularInline[TestRunTestCase, TestRun]):
     model = TestRunTestCase
     extra = 1
     readonly_fields = ("status", "result", "logs")
+    # Internal marker: never rendered (projects.models.MANUAL_SOURCE_MCP).
+    exclude = ("manual_claim_source",)
 
 
 @admin.register(TestRun)
@@ -166,6 +168,8 @@ class TestRunTestCaseAdmin(admin.ModelAdmin[TestRunTestCase]):
         "created_at",
     )
     list_filter = ("status",)
+    # Internal marker: never rendered (projects.models.MANUAL_SOURCE_MCP).
+    exclude = ("manual_claim_source",)
     readonly_fields = (
         "status",
         "failed_by",

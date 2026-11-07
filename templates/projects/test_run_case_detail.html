@@ -135,7 +135,10 @@
      projects:test_run_case_manual_pause / _continue, "Discuss" / "Go to
      discussion" for machine_setup:manual_chat_open / machine_setup:thread,
      and the runner's progress report: manual_result.pause, .progress,
-     .discussion_thread_id, .can_discuss, .discuss_blocker). The page
+     .discussion_thread_id, .can_discuss, .discuss_blocker).
+     manual_result.at_test_runner is False when the claim or hand-in did not
+     come from the Test Runner: neutral wording (blocked hint, steps hint,
+     Resume hint, screenshots and log hints). The page
      reloads when a manual case changes status or its WS `manual_paused`
      flips, and once when its last manual screenshot arrives. The agent's
      "Pause and discuss" never shows for a manual case (pause_panel.can_pause
@@ -200,7 +203,7 @@
       <p class="subtitle">
         Case {{ case_position }} of {{ case_total }} in {{ test_run.display_name }}
         {% if pivot.started_at %} · started <time datetime="{{ pivot.started_at|date:'c' }}">{{ pivot.started_at|date:"M j, H:i" }}</time>{% endif %}
-        {% if pivot.finished_at %} · <span title="Time the Test Runner worked on this case">{{ pivot.active_duration|duration }}</span>{% if wall_clock_with_waiting %} ({{ wall_clock_with_waiting|duration }} incl. waiting for help){% endif %}{% endif %}
+        {% if pivot.finished_at %} · <span title="{% if manual_result and not manual_result.at_test_runner %}Time spent on this case{% else %}Time the Test Runner worked on this case{% endif %}">{{ pivot.active_duration|duration }}</span>{% if wall_clock_with_waiting %} ({{ wall_clock_with_waiting|duration }} incl. waiting for help){% endif %}{% endif %}
       </p>
     </div>
     <div class="actions">
@@ -392,7 +395,7 @@
     <p class="hint" x-show="!steps.available && steps.planning" x-cloak>Planning the steps…</p>
     <p class="hint" x-show="!steps.available && !steps.planning" x-cloak>No step breakdown was recorded for this execution.</p>
     {% if manual_result %}
-    <p class="hint" x-show="steps.available" x-cloak>The test case's own steps, marked by the tester at the Test Runner.</p>
+    <p class="hint" x-show="steps.available" x-cloak>{% if manual_result.at_test_runner %}The test case's own steps, marked by the tester at the Test Runner.{% else %}The test case's own steps, marked by the tester.{% endif %}</p>
     {% else %}
     <p class="hint" x-show="steps.available" x-cloak>The agent splits the test case into these steps; they rarely match the test case's own step numbers.</p>
     {% endif %}
@@ -468,7 +471,7 @@
     <p class="pre-wrap" x-text="result || 'No details were recorded.'"></p>
     <p class="hint" x-show="blockedReason === 'help_skipped'"{% if pivot.blocked_reason != "help_skipped" %} x-cloak{% endif %}>A person marked this case blocked while it was waiting for help, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
     <p class="hint" x-show="blockedReason === 'person_review'"{% if pivot.blocked_reason != "person_review" %} x-cloak{% endif %}>A person marked this case blocked after reviewing its result with the agent, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
-    <p class="hint" x-show="blockedReason === 'manual_verdict'"{% if pivot.blocked_reason != "manual_verdict" %} x-cloak{% endif %}>The tester marked this case blocked at the Test Runner, so it counts as neither passed nor failed. Fix the problem, then select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a>.</p>
+    <p class="hint" x-show="blockedReason === 'manual_verdict'"{% if pivot.blocked_reason != "manual_verdict" %} x-cloak{% endif %}>{% if manual_result and not manual_result.at_test_runner %}The tester marked this case blocked{% else %}The tester marked this case blocked at the Test Runner{% endif %}, so it counts as neither passed nor failed. Fix the problem, then select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a>.</p>
     <p class="hint" x-show="blockedReason !== 'help_skipped' && blockedReason !== 'person_review' && blockedReason !== 'manual_verdict'"{% if pivot.blocked_reason == "help_skipped" or pivot.blocked_reason == "person_review" or pivot.blocked_reason == "manual_verdict" %} x-cloak{% endif %}>This case was not judged: an infrastructure problem stopped it before the agent could reach a verdict, so it counts as neither passed nor failed. Fix the problem, then resume it here to continue on this run from the step where it stopped, select it on the <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">run page</a> and re-run it from step 1 on this run, or use <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">Re-run blocked in a new run</a> to start it again from step 1.</p>
     {% if can_resume and project_can_write %}
     <div class="actions card-actions">
@@ -483,7 +486,9 @@
     <div class="card-header">
       <h2 id="cancelled-h">This case was cancelled</h2>
     </div>
-    {% if resume_is_manual %}
+    {% if resume_is_manual and manual_result and not manual_result.at_test_runner %}
+    <p class="hint">The run stopped before this case was handed in. Resume it to put it back in the list of cases to test; a tester starts it again from step 1.</p>
+    {% elif resume_is_manual %}
     <p class="hint">The run stopped before this case was handed in. Resume it to put it back in the Test Runner's list; a tester starts it again from step 1.</p>
     {% else %}
     <p class="hint">The run stopped before this case finished. Resume it to continue on this run{% if resume_steps %} from the step where it stopped{% endif %}.</p>
@@ -648,7 +653,7 @@
     <div class="card-header">
       <h2 id="shots-h">Screenshots <span class="muted small" style="font-weight: 500;">(<span x-text="screenshots.length"></span>)</span></h2>
     </div>
-    <p class="hint" x-show="screenshots.length > 0">Captured in order while the agent worked through the steps. Click one to view it full size.</p>
+    <p class="hint" x-show="screenshots.length > 0">{% if manual_result and not manual_result.at_test_runner %}Captured in order while the tester worked through the steps.{% else %}Captured in order while the agent worked through the steps.{% endif %} Click one to view it full size.</p>
     <p class="hint" x-show="screenshots.length === 0">Screenshots appear here as they are taken.</p>
     <div class="gallery" x-show="screenshots.length > 0">
       <template x-for="(screenshot, index) in screenshots" :key="screenshot.screenshot_id">
@@ -674,8 +679,13 @@
         </button>
       </div>
     </div>
+    {% if manual_result and not manual_result.at_test_runner %}
+    <p class="hint">The step-by-step record for this case only. Warnings and errors are highlighted.</p>
+    <p class="hint" x-show="!logs" x-cloak>No log yet.</p>
+    {% else %}
     <p class="hint">The agent's step-by-step record for this case only. Warnings and errors are highlighted.</p>
     <p class="hint" x-show="!logs" x-cloak>No log yet — the agent's steps stream here once the case starts.</p>
+    {% endif %}
     <pre class="code-block log-stream" x-ref="logsContainer" x-show="logs" x-html="renderLog(logs)"></pre>
     <div class="skeleton skeleton-text" style="max-width: 320px;" x-show="status === 'in_progress'"></div>
   </section>
@@ -752,7 +762,9 @@
       </div>
       <form method="post" action="{% url 'projects:test_run_case_resume' project.id test_run.id pivot.id %}">
         {% csrf_token %}
-        {% if resume_is_manual %}
+        {% if resume_is_manual and manual_result and not manual_result.at_test_runner %}
+        <p>The run stopped before this case was handed in. Resume it to put it back in the list of cases to test; a tester starts it again from step 1.</p>
+        {% elif resume_is_manual %}
         <p>The run stopped before this case was handed in. Resume it to put it back in the Test Runner's list; a tester starts it again from step 1.</p>
         {% elif resume_form %}
         <div class="field">

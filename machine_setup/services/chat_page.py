@@ -414,6 +414,7 @@ def _manual_thread_header(pivot_id: int | None) -> ManualThreadHeader | None:
             "id",
             "status",
             "manual_claim_token",
+            "manual_claim_source",
             "manual_claimed_label",
             "manual_paused_at",
             "manual_paused_label",
@@ -428,7 +429,11 @@ def _manual_thread_header(pivot_id: int | None) -> ManualThreadHeader | None:
     )
     if pivot is None:
         return None
-    claimed = is_claimed_manual_case(pivot.test_run, pivot)
+    # A later claim through the MCP gateway is not this thread's (its
+    # send gate refuses it too).
+    claimed = (
+        is_claimed_manual_case(pivot.test_run, pivot) and pivot.manual_claim_at_runner
+    )
     paused = claimed and pivot.manual_paused_at is not None
     return ManualThreadHeader(
         test_run_id=pivot.test_run_id,

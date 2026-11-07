@@ -2,7 +2,8 @@
 
 One non-archived ``manual_case`` thread per run case: an existing one is
 reopened; otherwise it is created with the case brief as its first message.
-Only a claimed IN_PROGRESS case of a started manual run can be discussed;
+Only a claimed IN_PROGRESS case of a started manual run can be discussed
+(not a claim made outside the Test Runner window);
 after the hand-in the thread stays readable and the result chat takes over.
 The person's message is sent through the ordinary ``send_setup_message``
 (manual gates), so the turn has the same limits and Stop as any setup turn.
@@ -112,7 +113,11 @@ def _open_thread(
     except ManualRunError as exc:
         raise MachineSetupError(MANUAL_DISCUSS_NOT_CLAIMED) from exc
     locked.test_run = test_run
-    if not is_claimed_manual_case(locked.test_run, locked):
+    # A claim made outside the Test Runner window has no discussion.
+    if (
+        not is_claimed_manual_case(locked.test_run, locked)
+        or not locked.manual_claim_at_runner
+    ):
         raise MachineSetupError(MANUAL_DISCUSS_NOT_CLAIMED)
     if claim_token is not None and not claim_matches(locked, claim_token):
         raise MachineSetupError(MANUAL_PAUSE_STALE_CLAIM)

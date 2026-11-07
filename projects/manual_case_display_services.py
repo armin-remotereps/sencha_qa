@@ -5,9 +5,11 @@ panels only show who holds a case, what the tester reported, the upload of
 the screenshots and the AI rewrite for TestRail. Every text the runner sent is
 returned as plain strings for autoescaped templates (never ``|safe``).
 
-Queries: the run panel costs at most two (the claimed case, the page's open
-uploads); the case panel at most three (the current hand-in, the runner's
-progress report of a claimed case, the case's manual discussion thread) and
+Queries: the run panel costs at most three (the claimed case, the page's open
+uploads, whether any case went through the MCP gateway); the case panel at
+most four (the current hand-in, the runner's progress report of a claimed
+case, the case's manual discussion thread, and either the live-turn check of
+a paused case or, with no claim and no hand-in, the run's MCP check) and
 reuses the case page's prefetched screenshots.
 """
 
@@ -18,6 +20,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Final, Literal
 
+from django.db.models import Q
 from django.utils import timezone
 
 from agents.checkpoint import checkpoint_from_json, final_step_indices
@@ -39,9 +42,9 @@ from projects.manual_run_policy import (
     is_claimed_manual_case,
     is_manual_checkpoint,
     is_manual_run,
-    runner_supports_manual,
 )
 from projects.models import (
+    MANUAL_SOURCE_MCP,
     ManualCaseSubmission,
     ManualUploadState,
     Project,
@@ -50,13 +53,6 @@ from projects.models import (
     TestRunStatus,
     TestRunTestCase,
     TestRunTestCaseStatus,
-)
-
-RUNNER_OFFLINE_NOTICE: Final = (
-    "The Test Runner is not connected. Connect it to continue this manual run."
-)
-RUNNER_OUTDATED_NOTICE: Final = (
-    "Update the Test Runner (and enable its window) to continue this manual run."
 )
 
 _SHOT_LABELS: Final[Mapping[str, str]] = {
@@ -68,6 +64,11 @@ _SHOT_LABELS: Final[Mapping[str, str]] = {
 _OPEN_UPLOAD_STATES: Final = (
     ManualUploadState.UPLOADING,
     ManualUploadState.INCOMPLETE,
+)
+
+# Every hand-in state but SUPERSEDED (the current hand-in of a case).
+_CURRENT_UPLOAD_STATES: Final = tuple(
+    state for state in ManualUploadState if state != ManualUploadState.SUPERSEDED
 )
 
 StepOutcome = Literal["passed", "failed", "not_run"]
@@ -104,9 +105,9 @@ class ManualRunPanel:
     claimed_title: str
     claimed_by_label: str
     claimed_at: datetime | None
-    # "" when the runner is connected and supports manual runs (or the run is
-    # not Running).
-    runner_notice: str
+    # False when a case of this run was claimed or handed in through the MCP
+    # gateway (neutral wording; the source itself is never shown).
+    at_test_runner: bool
     # Pivot id -> its open upload (uploading / incomplete), cases on this page.
     uploads: Mapping[int, ManualUpload]
 
@@ -168,6 +169,10 @@ class ManualCasePanel:
     # progress); else discuss_blocker says why ("" when it can).
     can_discuss: bool = False
     discuss_blocker: str = ""
+    # False when the claim or the current hand-in came through the MCP
+    # gateway; with neither, when any case of the Manual run did (neutral
+    # wording; the source itself is never shown).
+    at_test_runner: bool = True
 
     @property
     def has_refined_step_notes(self) -> bool:
@@ -183,18 +188,17 @@ def _upload_of(submission: ManualCaseSubmission) -> ManualUpload:
     )
 
 
-def _runner_notice(project: Project, test_run: TestRun) -> str:
-    """Why the tester cannot go on at the Test Runner (no query)."""
-    if test_run.status != TestRunStatus.STARTED:
-        return ""
-    if not project.agent_connected:
-        return RUNNER_OFFLINE_NOTICE
-    capabilities = project.agent_capabilities
-    if not isinstance(capabilities, list) or not runner_supports_manual(
-        str(item) for item in capabilities
-    ):
-        return RUNNER_OUTDATED_NOTICE
-    return ""
+def _run_at_test_runner(test_run: TestRun) -> bool:
+    """False when any case of the run has an MCP claim or a current MCP
+    hand-in (one query)."""
+    return not TestRunTestCase.objects.filter(
+        Q(manual_claim_source=MANUAL_SOURCE_MCP)
+        | Q(
+            manual_submissions__source=MANUAL_SOURCE_MCP,
+            manual_submissions__upload_state__in=_CURRENT_UPLOAD_STATES,
+        ),
+        test_run=test_run,
+    ).exists()
 
 
 def get_manual_run_panel(
@@ -203,7 +207,7 @@ def get_manual_run_panel(
     """The run page's manual panel; None unless the run is in Manual mode.
 
     ``pivot_ids``: the cases shown on this page (their open uploads are
-    listed). At most two queries.
+    listed). At most three queries.
     """
     if not is_manual_run(test_run):
         return None
@@ -245,7 +249,7 @@ def get_manual_run_panel(
         claimed_title=claimed.test_case.title if claimed is not None else "",
         claimed_by_label=claimed.manual_claimed_label if claimed is not None else "",
         claimed_at=claimed.manual_claimed_at if claimed is not None else None,
-        runner_notice=_runner_notice(project, test_run),
+        at_test_runner=_run_at_test_runner(test_run),
         uploads=uploads,
     )
 
@@ -342,6 +346,23 @@ def _pause_panel(pivot: TestRunTestCase) -> ManualPausePanel:
     return panel
 
 
+def _case_at_test_runner(
+    pivot: TestRunTestCase,
+    submission: ManualCaseSubmission | None,
+    *,
+    is_claimed: bool,
+    run_is_manual: bool,
+) -> bool:
+    """The case's claim or current hand-in, else (neither) the run's: False
+    when any came through the MCP gateway. One query, only for a Manual run
+    case with neither (its "not performed yet" and Resume hints)."""
+    if is_claimed or submission is not None:
+        return pivot.manual_claim_at_runner and (
+            submission is None or submission.source != MANUAL_SOURCE_MCP
+        )
+    return _run_at_test_runner(pivot.test_run) if run_is_manual else True
+
+
 def get_manual_case_panel(
     *,
     pivot: TestRunTestCase,
@@ -351,7 +372,8 @@ def get_manual_case_panel(
 
     ``pivot`` has ``test_run`` and ``test_case`` loaded; ``screenshots`` are
     the case page's prefetched rows. At most four queries (the fourth only
-    while the case is paused).
+    while the case is paused, or for a Manual run case with no claim and no
+    hand-in: whether the run went through the MCP gateway).
     """
     run_is_manual = is_manual_run(pivot.test_run)
     if not run_is_manual and not is_manual_checkpoint(pivot.execution_checkpoint):
@@ -362,7 +384,9 @@ def get_manual_case_panel(
     refined = _refined_step_notes(submission, is_refined)
     steps, case_shots = _step_rows(pivot, screenshots, refined)
     is_claimed = bool(pivot.manual_claim_token)
-    can_discuss = is_claimed_manual_case(pivot.test_run, pivot)
+    claimed_case = is_claimed_manual_case(pivot.test_run, pivot)
+    # No discussion of a claim made outside the Test Runner window.
+    can_discuss = claimed_case and pivot.manual_claim_at_runner
     pause = _pause_panel(pivot) if run_is_manual else None
     discussion_thread_id = (
         SetupConversation.objects.filter(
@@ -403,5 +427,11 @@ def get_manual_case_panel(
         progress=load_manual_progress(pivot) if is_claimed else None,
         discussion_thread_id=discussion_thread_id,
         can_discuss=can_discuss,
-        discuss_blocker="" if can_discuss else MANUAL_DISCUSS_NOT_CLAIMED,
+        # No hint for a claim made elsewhere (the source is never shown).
+        discuss_blocker=(
+            MANUAL_DISCUSS_NOT_CLAIMED if not claimed_case and not can_discuss else ""
+        ),
+        at_test_runner=_case_at_test_runner(
+            pivot, submission, is_claimed=is_claimed, run_is_manual=run_is_manual
+        ),
     )

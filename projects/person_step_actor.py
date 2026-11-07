@@ -18,6 +18,9 @@ from projects.case_result_text import person_label
 from projects.models import PersonStepChannel
 
 RUNNER_ANONYMOUS_LABEL = "a person at the Test Runner"
+# The neutral tester of a Manual run case performed through the MCP gateway:
+# no member, no channel, and nothing naming how the case was performed.
+TESTER_LABEL = "a tester"
 _RUNNER_SUFFIX = " via Test Runner"
 
 
@@ -35,6 +38,11 @@ class PersonStepActor:
     def runner(cls, user: CustomUser | None) -> PersonStepActor:
         """``user``: the active member the runner's email named, else None."""
         return cls(user=user, channel=PersonStepChannel.RUNNER)
+
+    @classmethod
+    def tester(cls) -> PersonStepActor:
+        """The neutral tester (no member, no channel): "a tester"."""
+        return cls(user=None, channel=PersonStepChannel.NONE)
 
     @classmethod
     def from_row(cls, user: CustomUser | None, via: str) -> PersonStepActor:
@@ -55,8 +63,11 @@ class PersonStepActor:
         """How texts name the person.
 
         Web: ``person_label(user)``. Runner with a member: "<member> via Test
-        Runner". Anonymous runner: "a person at the Test Runner".
+        Runner". Anonymous runner: "a person at the Test Runner". Neutral
+        tester (no channel): "a tester".
         """
+        if self.channel == PersonStepChannel.NONE:
+            return TESTER_LABEL
         if self.channel == PersonStepChannel.RUNNER:
             if self.user is None:
                 return RUNNER_ANONYMOUS_LABEL

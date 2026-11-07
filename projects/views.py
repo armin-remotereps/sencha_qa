@@ -1062,7 +1062,7 @@ def _build_test_run_detail_context(
         # Resume / Re-run dialogs: pre-set to the run's current mode.
         "help_mode_form": RunHelpModeForm(initial={"help_mode": test_run.help_mode}),
         # Manual run: who holds a case at the Test Runner, open uploads of the
-        # cases on this page, a runner notice (None unless the run is Manual).
+        # cases on this page, and whether every manual claim and hand-in came from the Test Runner (the wording; None unless the run is Manual).
         "manual_panel": get_manual_run_panel(
             project=project, test_run=test_run, pivot_ids=(p.id for p in cases)
         ),
