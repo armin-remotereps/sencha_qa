@@ -1,0 +1,19 @@
+{% extends "layouts/auth.html" %}
+
+{% comment %} Too many consent answers in a minute (429). No context. {% endcomment %}
+
+{% block title %}Too many attempts · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block auth %}
+<div class="auth-card">
+  <div class="card">
+    <div class="alert alert-warning" role="alert">
+      <span class="alert-icon" aria-hidden="true">⚠</span>
+      <div>
+        <strong>Too many attempts</strong>
+        <p>Wait a minute, then go back and answer again. If the sign-in link has expired by then, start again from the app.</p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

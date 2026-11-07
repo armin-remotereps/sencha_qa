@@ -12,6 +12,8 @@ urlpatterns: list[URLResolver | URLPattern] = [
     # Test sessions, all under /test-sessions/.
     path("", include("test_sessions.urls")),
     path("projects/", include("projects.urls")),
+    # Connected apps (MCP OAuth consent and connections), under /connected-apps/.
+    path("connected-apps/", include("mcp_gateway.urls")),
     path(
         "projects/<int:project_id>/machine-setup/",
         include("machine_setup.urls"),

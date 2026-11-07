@@ -1,9 +1,18 @@
-"""The MCP server: twelve tools for a manual tester of the key's project.
+"""The MCP server: twelve tools for a manual tester of the caller's project.
 
-``build_mcp_server()`` returns the SDK ``MCPServer`` with the Connection key
-verifier (``ProjectKeyVerifier``) and resource-server ``AuthSettings``; the
-ASGI host (``auto_tester.mcp_asgi``) builds its Streamable HTTP app. Each
-tool handler only packs its arguments into the tool's request DTO
+``build_mcp_server()`` returns the SDK ``MCPServer`` with the bearer verifier
+(``BearerVerifier``: an OAuth access token or the Connection key) and
+resource-server ``AuthSettings``; the ASGI host (``auto_tester.mcp_asgi``)
+builds its Streamable HTTP app. With ``MCP_OAUTH_ENABLED`` the SDK also
+serves the RFC 9728 protected-resource metadata at
+``/.well-known/oauth-protected-resource/mcp`` (``authorization_servers`` =
+the issuer), points its 401 at it and refuses tokens whose ``resource`` is
+not ``<SITE_URL>/mcp``; the OAuth endpoints themselves are a separate
+Starlette app (``mcp_gateway.oauth_app``). With OAuth off, no discovery is
+offered and only the Connection key works. Every token carries the single
+``mcp`` scope (``required_scopes``), key tokens included.
+
+Each tool handler only packs its arguments into the tool's request DTO
 (``mcp_gateway.schemas``), runs one ``mcp_gateway.services`` use case through
 ``call_guard.guarded_call`` in a worker thread and returns the response DTO;
 an ``McpToolError`` becomes a tool error with its user-safe text.
@@ -20,13 +29,12 @@ from collections.abc import Awaitable, Callable
 from typing import Final, TypeVar
 
 from channels.db import database_sync_to_async
-from django.conf import settings
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from pydantic import AnyHttpUrl, BaseModel
+from pydantic import BaseModel
 
 from knowledge_base.services.agent_tools import (
     LIST_KNOWLEDGE_TOOL,
@@ -34,6 +42,12 @@ from knowledge_base.services.agent_tools import (
     SEARCH_KNOWLEDGE_TOOL,
 )
 from mcp_gateway.exceptions import McpToolError
+from mcp_gateway.oauth_policy import (
+    MCP_SCOPE,
+    canonical_resource,
+    issuer,
+    oauth_enabled,
+)
 from mcp_gateway.schemas import (
     AddScreenshotRequest,
     AddScreenshotResponse,
@@ -78,8 +92,9 @@ from mcp_gateway.schemas import (
     VerdictNoteArg,
 )
 from mcp_gateway.services.add_screenshot import add_screenshot as add_screenshot_use
-from mcp_gateway.services.authenticate_project_key import (
-    ProjectKeyVerifier,
+from mcp_gateway.services.authenticate_bearer import (
+    BearerVerifier,
+    McpAccessToken,
     project_id_of,
 )
 from mcp_gateway.services.call_guard import CallKind, McpCall, guarded_call
@@ -113,11 +128,18 @@ _KB_NOTE: Final = (
 async def _run(
     tool: str, kind: CallKind, pivot_id: int | None, use: Callable[[McpCall], _T]
 ) -> _T:
-    """Run one use case for the verified key's project (worker thread)."""
-    project_id = project_id_of(get_access_token())
+    """Run one use case for the verified bearer's project (worker thread)."""
+    access_token = get_access_token()
+    oauth_token = access_token if isinstance(access_token, McpAccessToken) else None
     try:
         return await database_sync_to_async(guarded_call, thread_sensitive=False)(
-            project_id=project_id, tool=tool, kind=kind, pivot_id=pivot_id, run=use
+            project_id=project_id_of(access_token),
+            auth=oauth_token.auth_kind if oauth_token else "key",
+            grant_id=oauth_token.grant_id if oauth_token else None,
+            tool=tool,
+            kind=kind,
+            pivot_id=pivot_id,
+            run=use,
         )
     except McpToolError as exc:
         raise ToolError(exc.message) from exc
@@ -392,25 +414,33 @@ _TOOLS: Final[tuple[tuple[_ToolHandler, str, str, ToolAnnotations], ...]] = (
 )
 
 
-def _issuer_url() -> AnyHttpUrl:
-    site_url = settings.SITE_URL.strip().rstrip("/")
-    return AnyHttpUrl(site_url or _FALLBACK_ISSUER)
+def _auth_settings() -> AuthSettings:
+    """Resource-server settings; discovery and the audience check only with
+    OAuth on.
+
+    Built from strings with ``model_validate``: the model keeps a path-less
+    issuer as typed (no trailing slash), so the protected-resource
+    document's ``authorization_servers`` entry equals the authorization
+    server metadata's ``issuer`` exactly (ChatGPT compares them as strings).
+    """
+    enabled = oauth_enabled()
+    return AuthSettings.model_validate(
+        {
+            "issuer_url": issuer() or _FALLBACK_ISSUER,
+            "resource_server_url": canonical_resource() if enabled else None,
+            "validate_token_resource": enabled,
+            "required_scopes": [MCP_SCOPE],
+        }
+    )
 
 
 def build_mcp_server() -> MCPServer:
-    """The MCP server with its twelve tools and Connection key auth."""
+    """The MCP server with its twelve tools and bearer auth."""
     server = MCPServer(
         name=SERVER_NAME,
         instructions=WORKFLOW_TEXT,
-        token_verifier=ProjectKeyVerifier(),
-        # Resource server only, with no OAuth metadata route: clients send the
-        # Connection key as a fixed bearer header, so no discovery is offered
-        # (``resource_server_url`` None). The verifier checks the key itself.
-        auth=AuthSettings(
-            issuer_url=_issuer_url(),
-            resource_server_url=None,
-            validate_token_resource=False,
-        ),
+        token_verifier=BearerVerifier(),
+        auth=_auth_settings(),
     )
     for function, name, description, annotations in _TOOLS:
         server.add_tool(

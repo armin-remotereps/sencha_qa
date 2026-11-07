@@ -38,6 +38,12 @@ For each missing key, check `auto_tester/settings.py`:
 - Has no default → it must be added.
 - Needs a production value → add it.
   - `SITE_URL=https://sench.remotereps.com` (the origin is in `CSRF_TRUSTED_ORIGINS`).
+  - `MCP_OAUTH_ENABLED` (default `False`) turns on the MCP gateway's OAuth sign-in
+    for ChatGPT and claude.ai connectors; with `True` the gateway refuses to start
+    unless `SITE_URL` is the public https origin. `MCP_OAUTH_REDIRECT_HOSTS`
+    (default `chatgpt.com,claude.ai,claude.com`) lists the allowed redirect hosts.
+    Both have safe defaults: leave them missing unless the user asks to switch
+    OAuth on.
   - For a secret the user must supply, ask the user. Never invent one.
 
 Also read the newest `docs/changed/` notes for new or renamed settings and other
@@ -77,6 +83,9 @@ celery worker and beat on the new image, through `depends_on`. Restart nginx
 afterwards so it re-resolves the new api and mcp containers and picks up any change
 to `nginx/server.conf` (the config file is mounted read-only, so a restart is
 enough; check it first with `docker compose exec nginx nginx -t` when it changed).
+The deploy that introduces MCP OAuth adds one anchored regex nginx location (exact paths) for
+`/.well-known/oauth-*`, `/authorize`, `/token`, `/register` and `/revoke` (to `mcp`),
+so nginx must be checked and restarted on that deploy.
 
 ```bash
 ssh -o BatchMode=yes RRAutoTester 'cd ~/sencha_qa && docker compose up -d nginx flower 2>&1 | tail -15 && docker compose restart nginx'

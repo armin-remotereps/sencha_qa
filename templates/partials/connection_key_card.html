@@ -63,6 +63,7 @@
     Not connected. Regenerating the key invalidates the old one, so every Test Runner
     using it has to be updated with the new line.
   </p>
+  <p class="hint">Regenerating the key also disconnects the ChatGPT and Claude connections of this project.</p>
 </div>
 
 {% url 'projects:regenerate_api_key' project.id as regenerate_key_url %}

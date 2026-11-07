@@ -1,0 +1,21 @@
+{% extends "layouts/auth.html" %}
+
+{% comment %} Consent link is unknown, expired or already used (400). Never redirects:
+   there is no trusted place to send the user. No context. {% endcomment %}
+
+{% block title %}Sign-in link expired · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block auth %}
+<div class="auth-card">
+  <div class="card">
+    <div class="alert alert-warning" role="alert">
+      <span class="alert-icon" aria-hidden="true">⚠</span>
+      <div>
+        <strong>This sign-in link can't be used</strong>
+        <p>This sign-in link has expired or was already used. Start again from the app.</p>
+      </div>
+    </div>
+    <a class="btn btn-secondary" href="{% url 'mcp_gateway:connections' %}">Go to Connected apps</a>
+  </div>
+</div>
+{% endblock %}

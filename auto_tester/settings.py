@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 django_stubs_ext.monkeypatch()
 
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from celery.schedules import crontab
 from decouple import Choices, Csv, config
@@ -257,6 +258,7 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     "notifications.tasks.send_night_digest": {"queue": "notify"},
     "test_sessions.tasks.close_stale_test_sessions": {"queue": "notify"},
     "mcp_gateway.tasks.sweep_mcp_staged_shots": {"queue": "notify"},
+    "mcp_gateway.tasks.sweep_mcp_oauth": {"queue": "notify"},
     # Own worker (knowledge-celery): extraction is CPU and memory heavy and
     # must never hold up TestRail imports or notifications.
     "knowledge_base.tasks.extract_knowledge_item": {"queue": "knowledge"},
@@ -300,6 +302,13 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     "mcp-gateway-sweep-staged-shots": {
         "task": "mcp_gateway.tasks.sweep_mcp_staged_shots",
         "schedule": crontab(minute=10),
+        "options": {"expire_seconds": 3000},
+    },
+    # MCP gateway OAuth: expired consents, codes and tokens, dead grants and
+    # clients that never got (or no longer have) a connection.
+    "mcp-gateway-sweep-oauth": {
+        "task": "mcp_gateway.tasks.sweep_mcp_oauth",
+        "schedule": crontab(minute=20),
         "options": {"expire_seconds": 3000},
     },
     # Manual run: hand-ins with no screenshot for MANUAL_UPLOAD_STALE_HOURS
@@ -776,6 +785,44 @@ NTFY_REQUEST_TIMEOUT: int = config("NTFY_REQUEST_TIMEOUT", default=10, cast=int)
 # absolute links built outside a request, such as notification clicks. Empty
 # means notifications carry no click link.
 SITE_URL: str = config("SITE_URL", default="", cast=str)
+
+# MCP gateway OAuth 2.1 sign-in (ChatGPT and claude.ai connectors;
+# mcp_gateway/oauth_*). Off: only the Connection key bearer is accepted and no
+# OAuth discovery is served. On: SITE_URL is the issuer and must be https
+# (http only on localhost/127.0.0.1).
+MCP_OAUTH_ENABLED: bool = config("MCP_OAUTH_ENABLED", default=False, cast=bool)
+# Exact hosts a registered client may redirect to. Add localhost,127.0.0.1 to
+# allow native loopback clients (Codex `mcp login`, Claude Code via OAuth).
+MCP_OAUTH_REDIRECT_HOSTS: list[str] = [
+    host.strip().lower()
+    for host in config(
+        "MCP_OAUTH_REDIRECT_HOSTS",
+        default="chatgpt.com,claude.ai,claude.com",
+        cast=Csv(),
+    )
+    if host.strip()
+]
+if MCP_OAUTH_ENABLED:
+    _mcp_site = SITE_URL.strip().rstrip("/")
+    _mcp_site_parts = urlsplit(_mcp_site)
+    if not (
+        _mcp_site_parts.hostname
+        and (
+            _mcp_site_parts.scheme == "https"
+            or (
+                _mcp_site_parts.scheme == "http"
+                and _mcp_site_parts.hostname in ("localhost", "127.0.0.1")
+            )
+        )
+    ):
+        raise ImproperlyConfigured(
+            "MCP_OAUTH_ENABLED needs SITE_URL set to an https origin "
+            "(http only on localhost or 127.0.0.1)"
+        )
+    if _mcp_site_parts.path or _mcp_site_parts.query or _mcp_site_parts.fragment:
+        raise ImproperlyConfigured(
+            "SITE_URL must be an origin (no path, query or fragment)"
+        )
 
 # "Send checked to TestRail" attaches only relevant screenshots of the attempts
 # that caused a Failed or Blocked result (projects/testrail_evidence.py): at

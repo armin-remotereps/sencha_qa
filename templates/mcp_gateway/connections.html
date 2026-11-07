@@ -1,0 +1,111 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Connected apps page: the user's ChatGPT / Claude (OAuth) connections, with
+   Revoke, and how to connect an app to the MCP endpoint.
+
+   Context contract (mcp_gateway/views.py):
+     connections   — list of mcp_gateway.services.oauth_connections.ConnectionRow
+                     (grant_id, client_display_name, client_declared_name, project_name,
+                     created_at, last_used_at, status: "active" | "revoked" | "not_valid",
+                     status_label), newest first
+     mcp_url       — the MCP endpoint URL (<SITE_URL>/mcp)
+     oauth_enabled — bool; False when OAuth sign-in is turned off on this server {% endcomment %}
+
+{% block title %}Connected apps · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <h1>Connected apps</h1>
+    <p class="subtitle">Apps you allowed to act as a tester on one of your projects. Revoke a connection to stop it at once.</p>
+  </div>
+</div>
+
+<div class="stack">
+  <section class="card" aria-labelledby="connections-heading">
+    <div class="card-header">
+      <h2 id="connections-heading">Your connections</h2>
+    </div>
+    {% if connections %}
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th scope="col">App</th>
+              <th scope="col">Project</th>
+              <th scope="col">Connected</th>
+              <th scope="col">Last used</th>
+              <th scope="col">Status</th>
+              <th scope="col"><span class="visually-hidden">Actions</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in connections %}
+              <tr{% if row.status != "active" %} class="muted"{% endif %}>
+                <td data-label="App" class="cell-primary">
+                  {{ row.client_display_name }}
+                  {% if row.client_declared_name and row.client_declared_name != row.client_display_name %}
+                    <div class="muted small consent-declared-name">calls itself “{{ row.client_declared_name }}”</div>
+                  {% endif %}
+                </td>
+                <td data-label="Project">{{ row.project_name }}</td>
+                <td data-label="Connected">{{ row.created_at|date:"M j, Y H:i" }}</td>
+                <td data-label="Last used">{% if row.last_used_at %}{{ row.last_used_at|date:"M j, Y H:i" }}{% else %}<span class="muted">Never</span>{% endif %}</td>
+                <td data-label="Status">
+                  {% if row.status == "active" %}<span class="badge badge-passed">{{ row.status_label }}</span>
+                  {% elif row.status == "revoked" %}<span class="badge badge-draft">{{ row.status_label }}</span>
+                  {% else %}<span class="badge badge-warning">{{ row.status_label }}</span>{% endif %}
+                </td>
+                <td data-label="Actions">
+                  {% if row.status == "active" %}
+                    <button class="btn btn-sm btn-secondary" type="button" @click="$dispatch('open-revoke-connection-{{ row.grant_id }}')">Revoke</button>
+                  {% endif %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      {% include "partials/empty_state.html" with icon="⇄" title="No connected apps" body="When you allow ChatGPT or Claude to act on one of your projects, the connection shows here." %}
+    {% endif %}
+  </section>
+
+  <section class="card" aria-labelledby="how-to-connect-heading">
+    <div class="card-header">
+      <h2 id="how-to-connect-heading">How to connect</h2>
+    </div>
+    <p>The MCP endpoint of this server:</p>
+    <pre class="code-block">{{ mcp_url }}</pre>
+    <div class="actions">
+      <span x-data="clipboard()">
+        <button class="btn btn-sm btn-secondary" type="button" @click="copy('{{ mcp_url|escapejs }}')">
+          <span x-show="!copied">Copy URL</span>
+          <span x-show="copied" x-cloak>Copied!</span>
+        </button>
+      </span>
+    </div>
+    <h3>ChatGPT and Claude</h3>
+    {% if oauth_enabled %}
+      <p>Add a custom connector with exactly this URL, then sign in here and choose the project the app may work on.</p>
+    {% else %}
+      <p>OAuth sign-in is not enabled on this server, so ChatGPT and Claude connectors cannot connect yet. Ask an administrator to turn it on.</p>
+    {% endif %}
+    <h3>Codex, Claude Code and the APIs</h3>
+    <p>Use the same URL and send the project's Connection key (project Environment page) as a header:</p>
+    <pre class="code-block">Authorization: Bearer &lt;connection key&gt;</pre>
+    <p class="hint">Regenerating a project's Connection key also disconnects every ChatGPT and Claude connection of that project.</p>
+  </section>
+</div>
+
+{% for row in connections %}
+  {% if row.status == "active" %}
+    {% url 'mcp_gateway:revoke' row.grant_id as revoke_url %}
+    {% with grant_id=row.grant_id|stringformat:"d" %}
+      {% with dialog_id="revoke-connection-"|add:grant_id %}
+        {% include "partials/confirm_dialog.html" with dialog_id=dialog_id title="Revoke this connection?" body="The app stops acting on this project at once. To use it again, connect it again from the app." confirm_label="Revoke" confirm_class="btn-danger-solid" action_url=revoke_url %}
+      {% endwith %}
+    {% endwith %}
+  {% endif %}
+{% endfor %}
+{% endblock %}

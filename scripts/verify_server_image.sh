@@ -11,7 +11,9 @@
 # only, no database or Redis needed), and checks what the runner will accept:
 # version, sha256, size limit, entry paths, and no .env/.venv/logs inside.
 # Also imports the MCP gateway entrypoint (auto_tester.mcp_asgi) with the same
-# dummy env, which builds the MCP server and its Starlette app.
+# dummy env, which builds the MCP server and its Starlette app, and imports
+# the OAuth app (mcp_gateway.oauth_app) and builds the entrypoint once more with
+# MCP_OAUTH_ENABLED=True, which builds the OAuth endpoints and metadata too.
 #
 # Usage: scripts/verify_server_image.sh [image-tag]
 set -euo pipefail
@@ -111,5 +113,12 @@ DB_NAME=verify DB_USER=verify DB_PASSWORD=verify DB_HOST=localhost \
 REDIS_URL=redis://localhost:6379/0 \
 DJANGO_SETTINGS_MODULE=auto_tester.settings \
 python -c "import auto_tester.mcp_asgi; print(\"mcp gateway entrypoint import ok\")"
+SECRET_KEY=verify-image \
+FIELD_ENCRYPTION_KEY="$(python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())")" \
+DB_NAME=verify DB_USER=verify DB_PASSWORD=verify DB_HOST=localhost \
+REDIS_URL=redis://localhost:6379/0 \
+DJANGO_SETTINGS_MODULE=auto_tester.settings \
+MCP_OAUTH_ENABLED=True SITE_URL=https://verify.example.com \
+python -c "import mcp_gateway.oauth_app; import auto_tester.mcp_asgi; print(\"mcp oauth app import ok\")"
 '
 echo "Server image verification passed."

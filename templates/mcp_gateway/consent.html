@@ -1,0 +1,84 @@
+{% extends "layouts/auth.html" %}
+
+{% comment %} OAuth consent page: an app (ChatGPT, Claude, …) asks to act as a tester on
+   one of the user's projects. Works without JavaScript: two submit buttons named
+   "decision".
+
+   Context contract (mcp_gateway/views.py):
+     handle               — the consent handle (form action)
+     client_display_name  — trusted name derived from the redirect host
+     client_declared_name — the app's self-declared name (untrusted, escaped; may be "")
+     redirect_host        — host the code is sent to
+     redirect_uri         — exact URI the code is sent to
+     is_loopback          — bool; the code goes to an app on the user's computer
+     projects             — list of WritableProject (id, name) the user can connect
+     form                 — mcp_gateway.forms.ConsentForm
+     scope_text           — what the connection may do
+     error_message        — optional refusal text (e.g. the project can no longer be connected) {% endcomment %}
+
+{% block title %}Connect an app · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block auth %}
+<div class="auth-card">
+  <div class="card">
+    <h1 class="consent-title">{{ client_display_name }} ({{ redirect_host }}) wants to act as a tester on one of your projects</h1>
+    {% if client_declared_name and client_declared_name != client_display_name %}
+      <p class="muted small consent-declared-name">The app calls itself “{{ client_declared_name }}”.</p>
+    {% endif %}
+    <p class="muted small">After you answer, you go back to <code>{{ redirect_uri }}</code>.</p>
+
+    {% if is_loopback %}
+      <div class="alert alert-warning" role="note">
+        <span class="alert-icon" aria-hidden="true">⚠</span>
+        <div>
+          <strong>This app runs on your computer</strong>
+          <p>The sign-in goes to a program on this computer, not to a known website. Allow it only if you just started the connection yourself.</p>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if error_message %}
+      <div class="alert alert-danger" role="alert">
+        <span class="alert-icon" aria-hidden="true">⚠</span>
+        <div><p>{{ error_message }}</p></div>
+      </div>
+    {% endif %}
+
+    <p><strong>It will be able to:</strong> {{ scope_text }}</p>
+    <p class="muted small">It uses your access to that project; its actions show as &ldquo;a tester&rdquo;. You can revoke it at any time on the Connected apps page.</p>
+
+    <form method="post" action="{% url 'mcp_gateway:consent' handle %}">
+      {% csrf_token %}
+      {% if projects %}
+        <fieldset class="radio-card-stack consent-projects">
+          <legend class="label">Choose the project</legend>
+          {% for choice in form.project %}
+            <label class="radio-card" for="{{ choice.id_for_label }}">
+              {{ choice.tag }}
+              <span class="radio-title">{{ choice.choice_label }}</span>
+            </label>
+          {% endfor %}
+          {% if form.project.errors %}
+            <p class="error-text"><span aria-hidden="true">⚠</span> {{ form.project.errors.0 }}</p>
+          {% endif %}
+        </fieldset>
+        <div class="actions">
+          <button class="btn btn-primary" type="submit" name="decision" value="allow">Allow</button>
+          <button class="btn btn-secondary" type="submit" name="decision" value="deny">Deny</button>
+        </div>
+      {% else %}
+        <div class="alert alert-info" role="status">
+          <span class="alert-icon" aria-hidden="true">ℹ</span>
+          <div>
+            <strong>You have no project to connect</strong>
+            <p>Only members who can edit a project can connect it to an app. Ask a member of the project to give you write access, then start again from the app.</p>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn btn-secondary" type="submit" name="decision" value="deny">Deny</button>
+        </div>
+      {% endif %}
+    </form>
+  </div>
+</div>
+{% endblock %}

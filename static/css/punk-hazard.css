@@ -5123,3 +5123,32 @@ details.card[open] > summary,
   font-size: 0.85rem;
   resize: vertical;
 }
+
+/* --------------------------------------------------------------------------
+   Connected apps (MCP OAuth consent page and connections list)
+   -------------------------------------------------------------------------- */
+
+.consent-title {
+  font-size: 1.2rem;
+  line-height: 1.35;
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+
+/* Fieldset reset for the no-JS project picker; :has() marks the checked
+   card without Alpine. */
+.consent-projects {
+  border: 0;
+  padding: 0;
+  margin: 16px 0;
+  min-width: 0;
+}
+
+.consent-projects .radio-card:has(input[type="radio"]:checked) {
+  border-color: var(--brand-cyan);
+  background: var(--cyan-soft);
+}
+
+.consent-declared-name {
+  overflow-wrap: anywhere;
+}
