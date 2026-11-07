@@ -147,8 +147,15 @@ class RequestBodyCap:
             if not message.get("more_body", False):
                 break
 
+        replayed = False
+
         async def replay_receive() -> Message:
-            if chunks:
+            # The body was already read from the client, so it is replayed as
+            # exactly one message, even when empty (a GET /authorize): falling
+            # through to ``receive()`` for it would wait for the disconnect.
+            nonlocal replayed
+            if not replayed:
+                replayed = True
                 body = b"".join(chunks)
                 # Drop this middleware's reference: only the app's copy stays.
                 chunks.clear()
