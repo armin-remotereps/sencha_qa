@@ -94,6 +94,10 @@ services:
             - "host.docker.internal:host-gateway"
         ports:
             - "127.0.0.1:8001:8001"
+        # hand_in stores screenshots under MEDIA_ROOT: they must land in the
+        # shared volume that api and nginx serve.
+        volumes:
+            - "MEDIA:/src/media"
         entrypoint: "python -m uvicorn auto_tester.mcp_asgi:application --host 0.0.0.0 --port 8001 --workers 2 --proxy-headers --forwarded-allow-ips '*'"
 
     upload-celery:
