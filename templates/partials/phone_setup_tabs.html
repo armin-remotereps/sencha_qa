@@ -1,0 +1,182 @@
+{% comment %} Phone and tablet Test Runner setup (CONTROLLER_TARGET android / ios),
+   as an ARIA tablist driven by Alpine's osTabs() component
+   (static/js/punk-hazard.js). Mirrors controller_client/example.env (the
+   CONTROLLER_* phone keys), controller_client/mobile_ios.py (WebDriverAgent
+   signing capabilities: xcodeOrgId, xcodeSigningId, updatedWDABundleId,
+   usePreinstalledWDA) and `python -m controller_client.diagnose --mobile`;
+   keep them in sync if either changes.
+
+   No context variables required; the content is static across projects. {% endcomment %}
+<div class="os-tabs" x-data="osTabs('android')">
+  <div class="visually-hidden" id="phone-tabs-label">Phone or tablet type</div>
+  <div role="tablist" aria-labelledby="phone-tabs-label">
+    <button
+      type="button"
+      role="tab"
+      id="phone-tab-android"
+      class="os-tab"
+      x-ref="tab-android"
+      :aria-selected="isActive('android').toString()"
+      :tabindex="isActive('android') ? 0 : -1"
+      aria-controls="phone-panel-android"
+      @click="select('android')"
+      @keydown="onKeydown($event, ['android', 'ios'])"
+    >
+      Android
+    </button>
+    <button
+      type="button"
+      role="tab"
+      id="phone-tab-ios"
+      class="os-tab"
+      x-ref="tab-ios"
+      :aria-selected="isActive('ios').toString()"
+      :tabindex="isActive('ios') ? 0 : -1"
+      aria-controls="phone-panel-ios"
+      @click="select('ios')"
+      @keydown="onKeydown($event, ['android', 'ios'])"
+    >
+      iPhone &amp; iPad
+    </button>
+  </div>
+
+  <div class="os-panels">
+    <section
+      class="os-panel"
+      id="phone-panel-android"
+      role="tabpanel"
+      aria-labelledby="phone-tab-android"
+      x-show="isActive('android')"
+      x-cloak
+    >
+      <p class="muted small">The host computer can be Windows, macOS or Linux. A real phone, a tablet or an Android emulator all work.</p>
+      <ol class="setup-steps">
+        <li>
+          <div class="step-title">Set up the Test Runner on the host computer</div>
+          <p class="muted small">Download the ZIP above and run the setup script for the host's operating system, as for a desktop test machine. Do not start it yet.</p>
+        </li>
+        <li>
+          <div class="step-title">Install Node.js, Appium and its Android driver on the host</div>
+          <p class="muted small">Node.js 22.22.2 or newer (or 24.15+), then:</p>
+          <pre class="code-block">npm i -g appium@3
+appium driver install uiautomator2</pre>
+        </li>
+        <li>
+          <div class="step-title">Install the Android platform tools</div>
+          <p class="muted small">Through Android Studio &rarr; SDK Manager, <code>brew install android-platform-tools</code> on macOS, or <code>winget install Google.PlatformTools</code> on Windows. <code>adb</code> must be on PATH, and Appium's Android driver needs <code>ANDROID_HOME</code> set to the folder that <em>contains</em> <code>platform-tools</code>, in the terminal that starts the Test Runner. Android Studio's SDK is usually <code>~/Library/Android/sdk</code> (macOS), <code>~/Android/Sdk</code> (Linux) or <code>%LOCALAPPDATA%\Android\Sdk</code> (Windows).</p>
+          <pre class="code-block">export ANDROID_HOME="$HOME/Library/Android/sdk"   # macOS, in ~/.zshrc
+export ANDROID_HOME="$HOME/Android/Sdk"           # Linux, in ~/.bashrc
+setx ANDROID_HOME "%LOCALAPPDATA%\Android\Sdk"    # Windows Command Prompt, then open a new terminal
+adb version</pre>
+          <p class="muted small">In PowerShell use <code>setx ANDROID_HOME "$env:LOCALAPPDATA\Android\Sdk"</code>. If you installed only the platform tools (brew, winget), set it to the folder that holds their <code>platform-tools</code> folder instead.</p>
+        </li>
+        <li>
+          <div class="step-title">Turn on USB debugging on the phone</div>
+          <p class="muted small">Settings &rarr; About phone &rarr; tap <strong>Build number</strong> seven times to unlock Developer options. Then Settings &rarr; System &rarr; Developer options &rarr; turn on <strong>USB debugging</strong>. The exact menu names differ a little between phone makers.</p>
+        </li>
+        <li>
+          <div class="step-title">Connect the phone and allow this computer</div>
+          <p class="muted small">Connect it with a USB cable, unlock it and tap <strong>Allow</strong> on the "Allow USB debugging?" prompt (tick "Always allow from this computer"). The phone must show as <code>device</code>, not <code>unauthorized</code>:</p>
+          <pre class="code-block">adb devices -l</pre>
+        </li>
+        <li>
+          <div class="step-title">Point the Test Runner at Android</div>
+          <p class="muted small">In <code>controller_client/.env</code>:</p>
+          <pre class="code-block">CONTROLLER_TARGET=android
+CONTROLLER_DEVICE=</pre>
+          <p class="muted small">Leave <code>CONTROLLER_DEVICE</code> blank: the first start from a terminal lists the connected devices, asks which one to drive and saves its serial. With several devices connected (a phone and an emulator, say), set it yourself before the check below, to the serial from <code>adb devices -l</code>. Leave <code>CONTROLLER_APPIUM_URL</code> blank so the Test Runner starts and stops its own Appium.</p>
+        </li>
+        <li>
+          <div class="step-title">Check, then start the Test Runner</div>
+          <pre class="code-block">controller_client/.venv/bin/python -m controller_client.diagnose --mobile
+controller_client/.venv/bin/python -m controller_client.main</pre>
+          <p class="muted small">On Windows use <code>controller_client\.venv\Scripts\python</code>. The check asks before it taps the centre of the screen. Keep the phone unlocked and connected while tests run; the Connection card shows "Phone disconnected" when it is not.</p>
+        </li>
+        <li>
+          <div class="step-title">Browsers on the phone (optional)</div>
+          <p class="muted small">Chrome and Edge need no setup: open the app on the phone. For Firefox, turn on Firefox &rarr; Settings &rarr; <strong>Remote debugging via USB</strong>.</p>
+        </li>
+      </ol>
+    </section>
+
+    <section
+      class="os-panel"
+      id="phone-panel-ios"
+      role="tabpanel"
+      aria-labelledby="phone-tab-ios"
+      x-show="isActive('ios')"
+      x-cloak
+    >
+      <p class="muted small">iPhones and iPads need a Mac as the host computer, with Xcode. A Simulator needs no signing: skip steps 4 and 5, and leave the <code>CONTROLLER_IOS_*</code> keys of step 6 blank.</p>
+      <ol class="setup-steps">
+        <li>
+          <div class="step-title">Set up the Test Runner on the Mac</div>
+          <p class="muted small">Download the ZIP above and run <code>bash controller_client/scripts/setup.sh</code>. Do not start it yet.</p>
+        </li>
+        <li>
+          <div class="step-title">Install Xcode, Node.js, Appium and its iOS driver</div>
+          <p class="muted small">Install Xcode from the App Store and open it once to accept the licence. Then Node.js 22.22.2 or newer (or 24.15+), and:</p>
+          <pre class="code-block">npm i -g appium@3
+appium driver install xcuitest</pre>
+        </li>
+        <li>
+          <div class="step-title">Prepare the iPhone</div>
+          <p class="muted small">Connect it with a cable, unlock it and tap <strong>Trust This Computer</strong>. Then on the iPhone:</p>
+          <ul class="muted small">
+            <li>Settings &rarr; Privacy &amp; Security &rarr; <strong>Developer Mode</strong> on (the iPhone restarts; confirm again).</li>
+            <li>Settings &rarr; Developer &rarr; <strong>Enable UI Automation</strong> on.</li>
+            <li>Settings &rarr; Accessibility &rarr; Zoom off (otherwise taps land in the wrong place).</li>
+          </ul>
+        </li>
+        <li>
+          <div class="step-title">Add your Apple ID to Xcode and find your Team ID</div>
+          <p class="muted small">Xcode &rarr; Settings &rarr; Accounts &rarr; <strong>+</strong> &rarr; Apple ID. A free Apple ID works; a paid Apple Developer account avoids the 7-day re-signing below. List your signing certificates to get the exact certificate name:</p>
+          <pre class="code-block">security find-identity -v -p codesigning</pre>
+          <p class="muted small">Each line looks like <code>"Apple Development: you@example.com (ABCDE12345)"</code>. The value in brackets is <strong>not</strong> the Team ID. The Team ID (10 characters) is the <code>OU</code> value of that certificate; use the name from the line above:</p>
+          <pre class="code-block">security find-certificate -c "Apple Development: you@example.com" -p | openssl x509 -noout -subject</pre>
+          <p class="muted small">For a paid account it is also shown on developer.apple.com &rarr; Account &rarr; Membership.</p>
+        </li>
+        <li>
+          <div class="step-title">Sign WebDriverAgent once in Xcode</div>
+          <p class="muted small">Appium installs WebDriverAgent (WDA) on the iPhone to drive it, and iOS only runs it signed by your team. Open the WDA project that came with Appium's iOS driver:</p>
+          <pre class="code-block">WDA_PROJECT="$(find "${APPIUM_HOME:-$HOME/.appium}" -maxdepth 6 -name WebDriverAgent.xcodeproj | head -n 1)"
+if [ -z "$WDA_PROJECT" ]; then echo "WebDriverAgent not found: run 'appium driver install xcuitest' first"; else mkdir -p "$(dirname "$WDA_PROJECT")/Resources/WebDriverAgent.bundle" &amp;&amp; open "$WDA_PROJECT"; fi</pre>
+          <p class="muted small">In Xcode:</p>
+          <ol class="muted small">
+            <li>Select the project, then the <strong>WebDriverAgentRunner</strong> target &rarr; <strong>Signing &amp; Capabilities</strong>.</li>
+            <li>Tick <strong>Automatically manage signing</strong> and pick your <strong>Team</strong>.</li>
+            <li>Change <strong>Bundle Identifier</strong> from <code>com.facebook.WebDriverAgentRunner</code> to one only you use, e.g. <code>com.yourname.WebDriverAgentRunner</code>. A free Apple ID must change it; Apple refuses the default.</li>
+            <li>Do the same Team on the <strong>WebDriverAgentLib</strong> target if Xcode shows a signing error there.</li>
+            <li>Product &rarr; Scheme &rarr; <strong>WebDriverAgentRunner</strong>; Product &rarr; Destination &rarr; your iPhone; then <strong>Product &rarr; Test</strong> (&#8984;U). This builds WDA and installs it on the iPhone. Stop the test once the iPhone shows WebDriverAgent running (a blank screen or the home screen is fine).</li>
+          </ol>
+          <p class="muted small">If the iPhone says the developer is not trusted (free Apple ID): Settings &rarr; General &rarr; <strong>VPN &amp; Device Management</strong> &rarr; Developer App &rarr; your Apple ID &rarr; <strong>Trust</strong> &rarr; Allow (the iPhone needs internet for this), then run Product &rarr; Test again.</p>
+        </li>
+        <li>
+          <div class="step-title">Point the Test Runner at the iPhone</div>
+          <p class="muted small">In <code>controller_client/.env</code>, with your Team ID and the Bundle Identifier from step 5:</p>
+          <pre class="code-block">CONTROLLER_TARGET=ios
+CONTROLLER_DEVICE=
+CONTROLLER_IOS_TEAM_ID=XXXXXXXXXX
+CONTROLLER_IOS_SIGNING_ID=Apple Development
+CONTROLLER_IOS_WDA_BUNDLE_ID=com.yourname.WebDriverAgentRunner</pre>
+          <p class="muted small">Appium then signs and installs WDA itself whenever it needs to, with the same team and bundle identifier. Leave <code>CONTROLLER_DEVICE</code> blank: the first start from a terminal lists the connected devices, asks which one to drive and saves its UDID. With several devices connected (an iPhone and a booted Simulator, say), set it yourself before the check below, to the UDID shown in brackets by <code>xcrun xctrace list devices</code> (not the Identifier column of <code>devicectl</code>), or <code>xcrun simctl list devices booted</code> for a Simulator.</p>
+          <p class="muted small">Alternative: keep the WDA you installed in step 5 and never rebuild it (iOS 17 or newer). Set <code>CONTROLLER_IOS_PREINSTALLED_WDA=true</code> and <code>CONTROLLER_IOS_WDA_BUNDLE_ID</code> to the Bundle Identifier from step 5 (without <code>.xctrunner</code>); <code>CONTROLLER_IOS_TEAM_ID</code> is then not used. This needs Xcode 15 or newer, and WDA is then never rebuilt by Appium: re-sign it yourself in Xcode (step 5).</p>
+        </li>
+        <li>
+          <div class="step-title">Check, then start the Test Runner</div>
+          <pre class="code-block">controller_client/.venv/bin/python -m controller_client.diagnose --mobile
+controller_client/.venv/bin/python -m controller_client.main</pre>
+          <p class="muted small">The first start builds WDA and can take several minutes; the Connection card shows "Phone starting" meanwhile. The check asks before it taps the centre of the screen. Keep the iPhone unlocked and connected while tests run.</p>
+        </li>
+        <li>
+          <div class="step-title">Re-sign every 7 days with a free Apple ID</div>
+          <p class="muted small">A free Apple ID's signature expires after 7 days and WDA stops launching. Run Product &rarr; Test in Xcode again (step 5), or restart the Test Runner so Appium rebuilds it (not with the preinstalled option: then only Xcode re-signs it). A paid Apple Developer account lasts a year.</p>
+        </li>
+        <li>
+          <div class="step-title">Browsers on the iPhone (optional)</div>
+          <p class="muted small">Settings &rarr; Apps &rarr; Safari &rarr; Advanced &rarr; <strong>Web Inspector</strong> on. For Chrome, also turn on its own Web Inspector setting in Chrome &rarr; Settings &rarr; Content Settings, then restart Chrome. Edge and Firefox are controlled through their pages when the app allows inspection, otherwise through what is on screen.</p>
+        </li>
+      </ol>
+    </section>
+  </div>
+</div>

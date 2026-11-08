@@ -3,7 +3,8 @@
 
 {% comment %}
   Environment page: test machine connection state, download/setup
-  instructions, the connection key (to switch an installed Test Runner to
+  instructions (desktop: partials/os_setup_tabs.html; phone or tablet:
+  partials/phone_setup_tabs.html), the connection key (to switch an installed Test Runner to
   this project), and advanced diagnostics.
 
   Context contract (projects/views.py::project_environment):
@@ -72,6 +73,13 @@
       </div>
       <p class="muted">Pick the operating system of the test machine to see the matching commands.</p>
       {% include "partials/os_setup_tabs.html" %}
+    </div>
+    <div class="card" id="phone-setup">
+      <div class="card-header">
+        <h2>Test a phone or tablet</h2>
+      </div>
+      <p class="muted">A phone cannot run the Test Runner itself: the Test Runner runs on a host computer and drives one Android or iOS device attached to it (by cable, or an emulator or simulator on it), through Appium. Pick the device type.</p>
+      {% include "partials/phone_setup_tabs.html" %}
     </div>
   </section>
 
