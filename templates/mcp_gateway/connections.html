@@ -1,13 +1,14 @@
 {% extends "layouts/app.html" %}
 
 {% comment %} Connected apps page: the user's ChatGPT / Claude (OAuth) connections, with
-   Revoke, and how to connect an app to the MCP endpoint.
+   Edit projects and Revoke, and how to connect an app to the MCP endpoint.
 
    Context contract (mcp_gateway/views.py):
      connections   — list of mcp_gateway.services.oauth_connections.ConnectionRow
-                     (grant_id, client_display_name, client_declared_name, project_name,
+                     (grant_id, client_display_name, client_declared_name,
+                     projects: list of ConnectionProjectRow (project_name, status, status_label),
                      created_at, last_used_at, status: "active" | "revoked" | "not_valid",
-                     status_label), newest first
+                     status_label), newest first; status values are shared by both
      mcp_url       — the MCP endpoint URL (<SITE_URL>/mcp)
      oauth_enabled — bool; False when OAuth sign-in is turned off on this server {% endcomment %}
 
@@ -17,7 +18,7 @@
 <div class="page-header">
   <div>
     <h1>Connected apps</h1>
-    <p class="subtitle">Apps you allowed to act as a tester on one of your projects. Revoke a connection to stop it at once.</p>
+    <p class="subtitle">Apps you allowed to act as a tester on your projects. One connection can cover several projects. Revoke a connection to stop it at once.</p>
   </div>
 </div>
 
@@ -32,7 +33,7 @@
           <thead>
             <tr>
               <th scope="col">App</th>
-              <th scope="col">Project</th>
+              <th scope="col">Projects</th>
               <th scope="col">Connected</th>
               <th scope="col">Last used</th>
               <th scope="col">Status</th>
@@ -48,7 +49,22 @@
                     <div class="muted small consent-declared-name">calls itself “{{ row.client_declared_name }}”</div>
                   {% endif %}
                 </td>
-                <td data-label="Project">{{ row.project_name }}</td>
+                <td data-label="Projects">
+                  {% if row.projects %}
+                    <ul class="connection-projects">
+                      {% for link in row.projects %}
+                        <li{% if link.status != "active" %} class="muted"{% endif %}>
+                          <span class="connection-project-name">{{ link.project_name }}</span>
+                          {% if link.status == "active" %}<span class="badge badge-passed">{{ link.status_label }}</span>
+                          {% elif link.status == "revoked" %}<span class="badge badge-draft">{{ link.status_label }}</span>
+                          {% else %}<span class="badge badge-warning">{{ link.status_label }}</span>{% endif %}
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  {% else %}
+                    <span class="muted">None</span>
+                  {% endif %}
+                </td>
                 <td data-label="Connected">{{ row.created_at|date:"M j, Y H:i" }}</td>
                 <td data-label="Last used">{% if row.last_used_at %}{{ row.last_used_at|date:"M j, Y H:i" }}{% else %}<span class="muted">Never</span>{% endif %}</td>
                 <td data-label="Status">
@@ -56,9 +72,12 @@
                   {% elif row.status == "revoked" %}<span class="badge badge-draft">{{ row.status_label }}</span>
                   {% else %}<span class="badge badge-warning">{{ row.status_label }}</span>{% endif %}
                 </td>
-                <td data-label="Actions">
+                <td data-label="Actions" class="cell-actions">
                   {% if row.status == "active" %}
-                    <button class="btn btn-sm btn-secondary" type="button" @click="$dispatch('open-revoke-connection-{{ row.grant_id }}')">Revoke</button>
+                    <div class="actions">
+                      <a class="btn btn-sm btn-secondary" href="{% url 'mcp_gateway:edit_projects' row.grant_id %}">Edit projects</a>
+                      <button class="btn btn-sm btn-secondary" type="button" @click="$dispatch('open-revoke-connection-{{ row.grant_id }}')">Revoke</button>
+                    </div>
                   {% endif %}
                 </td>
               </tr>
@@ -67,7 +86,7 @@
         </table>
       </div>
     {% else %}
-      {% include "partials/empty_state.html" with icon="⇄" title="No connected apps" body="When you allow ChatGPT or Claude to act on one of your projects, the connection shows here." %}
+      {% include "partials/empty_state.html" with icon="⇄" title="No connected apps" body="When you allow ChatGPT or Claude to act on your projects, the connection shows here." %}
     {% endif %}
   </section>
 
@@ -87,14 +106,15 @@
     </div>
     <h3>ChatGPT and Claude</h3>
     {% if oauth_enabled %}
-      <p>Add a custom connector with exactly this URL, then sign in here and choose the project the app may work on.</p>
+      <p>Add a custom connector with exactly this URL, then sign in here and tick the projects the app may work on. One connection can cover several projects; add or remove projects later with Edit projects.</p>
     {% else %}
       <p>OAuth sign-in is not enabled on this server, so ChatGPT and Claude connectors cannot connect yet. Ask an administrator to turn it on.</p>
     {% endif %}
     <h3>Codex, Claude Code and the APIs</h3>
     <p>Use the same URL and send the project's Connection key (project Environment page) as a header:</p>
     <pre class="code-block">Authorization: Bearer &lt;connection key&gt;</pre>
-    <p class="hint">Regenerating a project's Connection key also disconnects every ChatGPT and Claude connection of that project.</p>
+    <p>Every tool needs a <code>project_id</code>. Apps get it from the <code>list_projects</code> tool, also when a connection or key covers one project only.</p>
+    <p class="hint">Regenerating a project's Connection key also ends every ChatGPT and Claude connection's access to that project.</p>
   </section>
 </div>
 
@@ -103,7 +123,7 @@
     {% url 'mcp_gateway:revoke' row.grant_id as revoke_url %}
     {% with grant_id=row.grant_id|stringformat:"d" %}
       {% with dialog_id="revoke-connection-"|add:grant_id %}
-        {% include "partials/confirm_dialog.html" with dialog_id=dialog_id title="Revoke this connection?" body="The app stops acting on this project at once. To use it again, connect it again from the app." confirm_label="Revoke" confirm_class="btn-danger-solid" action_url=revoke_url %}
+        {% include "partials/confirm_dialog.html" with dialog_id=dialog_id title="Revoke this connection?" body="The app stops acting on all of its projects at once. To use it again, connect it again from the app." confirm_label="Revoke" confirm_class="btn-danger-solid" action_url=revoke_url %}
       {% endwith %}
     {% endwith %}
   {% endif %}

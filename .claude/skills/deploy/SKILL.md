@@ -86,6 +86,9 @@ enough; check it first with `docker compose exec nginx nginx -t` when it changed
 The deploy that introduces MCP OAuth adds one anchored regex nginx location (exact paths) for
 `/.well-known/oauth-*`, `/authorize`, `/token`, `/register` and `/revoke` (to `mcp`),
 so nginx must be checked and restarted on that deploy.
+The MCP gateway and the Django app share the OAuth tables: after a migration that
+changes `mcp_gateway` models (e.g. `0004_grant_projects`), restart `mcp` together with
+the api in this step (the command below does), never one of them alone.
 
 ```bash
 ssh -o BatchMode=yes RRAutoTester 'cd ~/sencha_qa && docker compose up -d nginx flower 2>&1 | tail -15 && docker compose restart nginx'

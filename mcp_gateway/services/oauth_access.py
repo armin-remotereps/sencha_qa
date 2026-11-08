@@ -8,9 +8,11 @@ A user may approve, and a grant stays valid, only while:
   project (superusers' implicit admin access does not count; read-only
   members cannot approve: the tools write);
 - the project is not archived;
-- for a grant: it is not revoked and the project's Connection key still has
-  the fingerprint taken at consent (regenerating the key ends every
-  connection of the project).
+- for a connection: the grant and its link to the project are not revoked,
+  and the project's Connection key still has the fingerprint taken when the
+  link was made (regenerating the key ends every connection's link to the
+  project). A grant covers several projects; each link is checked on its
+  own.
 
 The rule is checked on read every time, so losing write access, archiving
 the project or regenerating the key takes effect at the next call.
@@ -19,12 +21,13 @@ the project or regenerating the key takes effect at the next call.
 from __future__ import annotations
 
 import hmac
+from collections.abc import Iterable
 from dataclasses import dataclass
 
-from django.db.models import Exists, OuterRef, QuerySet
+from django.db.models import CharField, Exists, Func, OuterRef, QuerySet
 
 from accounts.models import CustomUser
-from mcp_gateway.models import McpGrant
+from mcp_gateway.models import McpGrantProject
 from mcp_gateway.oauth_tokens import api_key_fingerprint
 from projects.models import WRITABLE_ROLES, Project, ProjectMembership
 
@@ -33,6 +36,15 @@ from projects.models import WRITABLE_ROLES, Project, ProjectMembership
 class WritableProject:
     id: int
     name: str
+
+
+class _Sha256Hex(Func):
+    """Lowercase sha256 hex of a text column, as ``api_key_fingerprint``
+    computes it. PostgreSQL's built-in ``sha256(bytea)``, not Django's
+    ``SHA256`` (that one needs the pgcrypto extension)."""
+
+    template = "ENCODE(SHA256(CONVERT_TO(%(expressions)s, 'UTF8')), 'hex')"
+    output_field = CharField()
 
 
 def writable_membership(user_ref: OuterRef, project_ref: OuterRef) -> Exists:
@@ -61,35 +73,46 @@ def writable_projects(user: CustomUser) -> list[WritableProject]:
     return [WritableProject(id=pk, name=name) for pk, name in rows]
 
 
-def can_approve(user_id: int, project_id: int) -> bool:
-    """``user_id`` may connect ``project_id`` now (one query)."""
-    return Project.objects.filter(
-        pk=project_id,
-        archived=False,
-        memberships__user_id=user_id,
-        memberships__user__is_active=True,
-        memberships__role__in=WRITABLE_ROLES,
-    ).exists()
+def approvable_ids(user_id: int, project_ids: Iterable[int]) -> set[int]:
+    """The ids among ``project_ids`` that ``user_id`` may connect now (one
+    query)."""
+    ids = set(project_ids)
+    if not ids:
+        return set()
+    return set(
+        Project.objects.filter(
+            pk__in=ids,
+            archived=False,
+            memberships__user_id=user_id,
+            memberships__user__is_active=True,
+            memberships__role__in=WRITABLE_ROLES,
+        ).values_list("pk", flat=True)
+    )
 
 
-def live_grants() -> QuerySet[McpGrant]:
-    """Grants that are not revoked and pass the access rule, except the key
-    fingerprint (compare it with ``fingerprint_matches`` on the loaded row:
-    the queryset selects ``project__api_key`` for that)."""
+def live_links() -> QuerySet[McpGrantProject]:
+    """Project links that are not revoked, whose grant is not revoked, and
+    that pass the access rule, the key fingerprint included (sha256 of the
+    project's key in SQL, so an ``Exists`` of this queryset is the whole
+    rule). Callers that load rows still compare with
+    ``link_fingerprint_matches`` (constant time); the queryset selects the
+    project for that."""
     return (
-        McpGrant.objects.filter(
+        McpGrantProject.objects.filter(
             revoked_at__isnull=True,
-            user__is_active=True,
+            grant__revoked_at__isnull=True,
+            grant__user__is_active=True,
             project__archived=False,
+            api_key_fingerprint=_Sha256Hex("project__api_key"),
         )
-        .filter(writable_membership(OuterRef("user_id"), OuterRef("project_id")))
+        .filter(writable_membership(OuterRef("grant__user_id"), OuterRef("project_id")))
         .select_related("project")
     )
 
 
-def fingerprint_matches(grant: McpGrant) -> bool:
-    """The project's Connection key is still the one the grant was made
-    under (constant-time compare). Needs ``grant.project`` loaded."""
+def link_fingerprint_matches(link: McpGrantProject) -> bool:
+    """The project's Connection key is still the one the link was made
+    under (constant-time compare). Needs ``link.project`` loaded."""
     return hmac.compare_digest(
-        api_key_fingerprint(grant.project.api_key), grant.api_key_fingerprint
+        api_key_fingerprint(link.project.api_key), link.api_key_fingerprint
     )

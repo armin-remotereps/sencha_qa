@@ -126,3 +126,19 @@ def client_display_name(redirect_uri: str) -> str:
     if host in _LOOPBACK_HOSTS:
         return LOOPBACK_DISPLAY_NAME
     return _KNOWN_CLIENTS.get(host, host)
+
+
+_UNKNOWN_APP: Final = "Unknown app"
+
+
+def client_names(client_name: str, redirect_uris: object) -> tuple[str, str]:
+    """The trusted display name (from the first redirect URI) and the
+    self-declared, untrusted name of an OAuth client."""
+    first_uri = (
+        redirect_uris[0]
+        if isinstance(redirect_uris, list)
+        and redirect_uris
+        and isinstance(redirect_uris[0], str)
+        else ""
+    )
+    return client_display_name(first_uri) or _UNKNOWN_APP, client_name.strip()

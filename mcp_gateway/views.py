@@ -11,10 +11,12 @@ from mcp_gateway.exceptions import (
     ConsentProjectRefused,
     ConsentUnavailable,
     GrantNotFound,
+    GrantProjectsRefused,
 )
-from mcp_gateway.forms import ConsentDecision, ConsentForm
+from mcp_gateway.forms import ConsentDecision, ConsentForm, GrantProjectsForm
 from mcp_gateway.limits import MCP_OAUTH_CONSENT_PER_MINUTE
 from mcp_gateway.oauth_policy import canonical_resource, oauth_enabled
+from mcp_gateway.services.oauth_access import writable_projects
 from mcp_gateway.services.oauth_connections import list_connections
 from mcp_gateway.services.oauth_consent import (
     ConsentView,
@@ -22,14 +24,20 @@ from mcp_gateway.services.oauth_consent import (
     deny,
     load_consent,
 )
+from mcp_gateway.services.oauth_grant_projects import (
+    GrantProjects,
+    load_grant_projects,
+    set_grant_projects,
+)
 from mcp_gateway.services.oauth_revoke import revoke_grant_for_user
 from projects.runner_person_step_services import hit_runner_throttle
 
 SCOPE_TEXT = (
     "Claim and perform Manual run cases, send screenshots, hand in results, "
-    "and read runs and the knowledge base of the chosen project."
+    "and read runs and the knowledge base of the chosen projects."
 )
 _CONSENT_WINDOW_SECONDS = 60
+_EDIT_THROTTLED = "Too many changes in a minute. Wait a minute, then try again."
 
 
 def _render_consent(
@@ -89,7 +97,7 @@ def consent(request: AuthenticatedRequest, handle: str) -> HttpResponse:
         if form.cleaned_data["decision"] == ConsentDecision.DENY:
             url = deny(handle)
         else:
-            url = approve(handle, request.user, form.cleaned_data["project"])
+            url = approve(handle, request.user, form.cleaned_data["projects"])
     except ConsentUnavailable:
         return _render_unavailable(request)
     except ConsentProjectRefused as exc:
@@ -116,6 +124,68 @@ def connections(request: AuthenticatedRequest) -> HttpResponse:
     )
 
 
+def _render_edit_projects(
+    request: AuthenticatedRequest,
+    grant: GrantProjects,
+    form: GrantProjectsForm,
+    *,
+    error_message: str = "",
+    status: int = 200,
+) -> HttpResponse:
+    return render(
+        request,
+        "mcp_gateway/edit_projects.html",
+        {
+            "active_nav": "connected_apps",
+            "grant": grant,
+            "form": form,
+            "error_message": error_message,
+        },
+        status=status,
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def edit_projects(request: AuthenticatedRequest, grant_id: int) -> HttpResponse:
+    try:
+        grant = load_grant_projects(request.user, grant_id)
+    except GrantNotFound as exc:
+        raise Http404(exc.message) from exc
+    projects = writable_projects(request.user)
+
+    if request.method != "POST":
+        form = GrantProjectsForm(projects, selected_ids=grant.project_ids)
+        return _render_edit_projects(request, grant, form)
+    # Shares the consent Allow budget: both write connection projects.
+    if not hit_runner_throttle(
+        f"mcp_gateway:consent:{request.user.pk}",
+        limit=MCP_OAUTH_CONSENT_PER_MINUTE,
+        window_seconds=_CONSENT_WINDOW_SECONDS,
+    ):
+        return _render_edit_projects(
+            request,
+            grant,
+            GrantProjectsForm(projects, selected_ids=grant.project_ids),
+            error_message=_EDIT_THROTTLED,
+            status=429,
+        )
+
+    form = GrantProjectsForm(projects, request.POST)
+    if not form.is_valid():
+        return _render_edit_projects(request, grant, form, status=400)
+    try:
+        set_grant_projects(request.user, grant_id, form.cleaned_data["projects"])
+    except GrantNotFound as exc:
+        raise Http404(exc.message) from exc
+    except GrantProjectsRefused as exc:
+        return _render_edit_projects(
+            request, grant, form, error_message=exc.message, status=400
+        )
+    messages.success(request, "Connection updated.")
+    return redirect("mcp_gateway:connections")
+
+
 @login_required
 @require_POST
 def revoke(request: AuthenticatedRequest, grant_id: int) -> HttpResponse:
@@ -124,6 +194,6 @@ def revoke(request: AuthenticatedRequest, grant_id: int) -> HttpResponse:
     except GrantNotFound as exc:
         raise Http404(exc.message) from exc
     messages.success(
-        request, "Connection revoked. The app can no longer act on that project."
+        request, "Connection revoked. The app can no longer act on its projects."
     )
     return redirect("mcp_gateway:connections")

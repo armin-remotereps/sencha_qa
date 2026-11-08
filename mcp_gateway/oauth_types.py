@@ -78,3 +78,13 @@ class TokenPair:
     refresh_token: str
     expires_in: int
     scope: str
+
+
+@dataclass(frozen=True)
+class McpCaller:
+    """Who is calling a tool: an OAuth grant (several projects) or a
+    Connection key (its one project). Exactly one id is set."""
+
+    grant_id: int | None
+    key_project_id: int | None
+    auth: AuthKind

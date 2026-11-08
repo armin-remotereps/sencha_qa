@@ -120,6 +120,7 @@ class OAuthGrantRevokedReason(models.TextChoices):
     REFRESH_REUSE = "refresh_reuse", "Refresh token reused"
     CODE_REUSE = "code_reuse", "Authorization code reused"
     MEMBERSHIP = "membership", "Access to the project ended"
+    REMOVED = "removed", "Removed by you"
 
 
 class McpOAuthClient(models.Model):
@@ -173,7 +174,8 @@ class McpAuthorizationRequest(models.Model):
 
 
 class McpGrant(models.Model):
-    """One connection: a client acting for one user on one project."""
+    """One connection: a client acting for one user on one or more projects
+    (``projects_links``)."""
 
     client = models.ForeignKey(
         McpOAuthClient, on_delete=models.CASCADE, related_name="grants"
@@ -185,12 +187,8 @@ class McpGrant(models.Model):
         related_name="+",
         db_index=False,
     )
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="+")
     scopes = models.JSONField(default=list)
     resource = models.CharField(max_length=_URI_MAX_CHARS)
-    # sha256 hex of ``Project.api_key`` at consent: regenerating the key ends
-    # every connection of the project (compared on read).
-    api_key_fingerprint = models.CharField(max_length=_HASH_CHARS)
     created_at = models.DateTimeField(default=timezone.now)
     last_used_at = models.DateTimeField(null=True, blank=True)
     revoked_at = models.DateTimeField(null=True, blank=True)
@@ -207,6 +205,39 @@ class McpGrant(models.Model):
         return f"McpGrant #{self.pk}"
 
 
+class McpGrantProject(models.Model):
+    """One project a grant covers. Each link is checked on its own (write
+    access, archive, the project's Connection key), so one project can end
+    while the others of the same connection keep working."""
+
+    # Indexed by ``mcp_grant_project_uniq`` (leading column).
+    grant = models.ForeignKey(
+        McpGrant,
+        on_delete=models.CASCADE,
+        related_name="projects_links",
+        db_index=False,
+    )
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="+")
+    # sha256 hex of ``Project.api_key`` when the link was made: regenerating
+    # the key ends every connection's link to the project (compared on read).
+    api_key_fingerprint = models.CharField(max_length=_HASH_CHARS)
+    created_at = models.DateTimeField(default=timezone.now)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    revoked_reason = models.CharField(
+        max_length=16, choices=OAuthGrantRevokedReason.choices, blank=True, default=""
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["grant", "project"], name="mcp_grant_project_uniq"
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"McpGrantProject #{self.pk}"
+
+
 class McpAuthorizationCode(models.Model):
     """An authorization code issued on approval; single use, 60 seconds."""
 
@@ -217,7 +248,9 @@ class McpAuthorizationCode(models.Model):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+"
     )
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="+")
+    # The approved project ids (1..MCP_OAUTH_GRANT_MAX_PROJECTS), re-checked
+    # at the exchange.
+    project_ids = models.JSONField(default=list)
     code_challenge = models.CharField(max_length=128)
     redirect_uri = models.CharField(max_length=_URI_MAX_CHARS)
     redirect_uri_provided_explicitly = models.BooleanField(default=True)

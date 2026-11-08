@@ -1,7 +1,7 @@
 {% extends "layouts/auth.html" %}
 
 {% comment %} OAuth consent page: an app (ChatGPT, Claude, …) asks to act as a tester on
-   one of the user's projects. Works without JavaScript: two submit buttons named
+   the user's projects; the user ticks the projects it may use. Works without JavaScript: two submit buttons named
    "decision".
 
    Context contract (mcp_gateway/views.py):
@@ -14,14 +14,14 @@
      projects             — list of WritableProject (id, name) the user can connect
      form                 — mcp_gateway.forms.ConsentForm
      scope_text           — what the connection may do
-     error_message        — optional refusal text (e.g. the project can no longer be connected) {% endcomment %}
+     error_message        — optional refusal text (e.g. a project can no longer be connected) {% endcomment %}
 
 {% block title %}Connect an app · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
 {% block auth %}
 <div class="auth-card">
   <div class="card">
-    <h1 class="consent-title">{{ client_display_name }} ({{ redirect_host }}) wants to act as a tester on one of your projects</h1>
+    <h1 class="consent-title">{{ client_display_name }} ({{ redirect_host }}) wants to act as a tester on your projects</h1>
     {% if client_declared_name and client_declared_name != client_display_name %}
       <p class="muted small consent-declared-name">The app calls itself “{{ client_declared_name }}”.</p>
     {% endif %}
@@ -45,21 +45,21 @@
     {% endif %}
 
     <p><strong>It will be able to:</strong> {{ scope_text }}</p>
-    <p class="muted small">It uses your access to that project; its actions show as &ldquo;a tester&rdquo;. You can revoke it at any time on the Connected apps page.</p>
+    <p class="muted small">It uses your access to the projects you tick; its actions show as &ldquo;a tester&rdquo;. You can add or remove projects, or revoke it, at any time on the Connected apps page.</p>
 
     <form method="post" action="{% url 'mcp_gateway:consent' handle %}">
       {% csrf_token %}
       {% if projects %}
         <fieldset class="radio-card-stack consent-projects">
-          <legend class="label">Choose the project</legend>
-          {% for choice in form.project %}
+          <legend class="label">Choose the projects</legend>
+          {% for choice in form.projects %}
             <label class="radio-card" for="{{ choice.id_for_label }}">
               {{ choice.tag }}
               <span class="radio-title">{{ choice.choice_label }}</span>
             </label>
           {% endfor %}
-          {% if form.project.errors %}
-            <p class="error-text"><span aria-hidden="true">⚠</span> {{ form.project.errors.0 }}</p>
+          {% if form.projects.errors %}
+            <p class="error-text"><span aria-hidden="true">⚠</span> {{ form.projects.errors.0 }}</p>
           {% endif %}
         </fieldset>
         <div class="actions">

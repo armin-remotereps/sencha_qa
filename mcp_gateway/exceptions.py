@@ -67,3 +67,8 @@ class ConsentProjectRefused(OAuthError):
 
 class GrantNotFound(OAuthError):
     """The connection does not exist or is not the user's."""
+
+
+class GrantProjectsRefused(OAuthError):
+    """A change of a connection's projects was refused (none left, or a
+    project the user cannot connect)."""

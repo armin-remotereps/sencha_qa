@@ -39,6 +39,19 @@ IDEMPOTENCY_KEY_MAX_CHARS = 64
 _PROCESS_ARG_MAX_CHARS = 260
 
 # Argument types (shared by the tool signatures and the request DTOs).
+# The first, required argument of every project-scoped tool; consumed by
+# ``call_guard.guarded_call``, never by the request DTOs.
+ProjectIdArg = Annotated[
+    int,
+    Field(
+        ge=1,
+        le=_ID_MAX,
+        description=(
+            "Required. The project_id from list_projects; call list_projects "
+            "first if you do not have it."
+        ),
+    ),
+]
 PivotIdArg = Annotated[
     int, Field(ge=1, le=_ID_MAX, description="The case id (pivot_id) of a run case.")
 ]
@@ -373,6 +386,19 @@ class CaptureScreenshotRequest(_Dto):
 class RunRef(_Dto):
     id: int
     name: str
+
+
+class ProjectRef(_Dto):
+    """One project the connection may use (list_projects)."""
+
+    project_id: int
+    name: str
+    # The project's running manual run; None when none is running.
+    manual_run: RunRef | None
+
+
+class ListProjectsResponse(_Dto):
+    projects: list[ProjectRef]
 
 
 class CaptureInfo(_Dto):

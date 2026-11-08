@@ -1,0 +1,69 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Edit projects of a connection: the user ticks which of their writable
+   projects a ChatGPT / Claude connection may use. Works without JavaScript.
+
+   Context contract (mcp_gateway/views.py):
+     grant         — mcp_gateway.services.oauth_grant_projects.GrantProjects
+                     (grant_id, client_display_name, client_declared_name, project_ids)
+     form          — mcp_gateway.forms.GrantProjectsForm (field "projects")
+     error_message — optional refusal text (e.g. a project can no longer be connected) {% endcomment %}
+
+{% block title %}Edit projects · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <h1>Edit projects of {{ grant.client_display_name }}</h1>
+    {% if grant.client_declared_name and grant.client_declared_name != grant.client_display_name %}
+      <p class="muted small consent-declared-name">The app calls itself “{{ grant.client_declared_name }}”.</p>
+    {% endif %}
+    <p class="subtitle">Tick the projects this connection may act on as a tester. Projects you untick stop at once; projects you add use your current access and Connection key.</p>
+  </div>
+</div>
+
+<section class="card" aria-labelledby="edit-projects-heading">
+  <h2 id="edit-projects-heading" class="visually-hidden">Projects</h2>
+
+  {% if error_message %}
+    <div class="alert alert-danger" role="alert">
+      <span class="alert-icon" aria-hidden="true">⚠</span>
+      <div><p>{{ error_message }}</p></div>
+    </div>
+  {% endif %}
+
+  <form method="post" action="{% url 'mcp_gateway:edit_projects' grant.grant_id %}">
+    {% csrf_token %}
+    {% if form.projects.field.choices %}
+      <fieldset class="radio-card-stack consent-projects">
+        <legend class="label">Projects</legend>
+        {% for choice in form.projects %}
+          <label class="radio-card" for="{{ choice.id_for_label }}">
+            {{ choice.tag }}
+            <span class="radio-title">{{ choice.choice_label }}</span>
+          </label>
+        {% endfor %}
+        {% if form.projects.errors %}
+          <p class="error-text"><span aria-hidden="true">⚠</span> {{ form.projects.errors.0 }}</p>
+        {% endif %}
+      </fieldset>
+      <p class="hint">To stop the app on every project, revoke the connection on the Connected apps page.</p>
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">Save</button>
+        <a class="btn btn-ghost" href="{% url 'mcp_gateway:connections' %}">Cancel</a>
+      </div>
+    {% else %}
+      <div class="alert alert-info" role="status">
+        <span class="alert-icon" aria-hidden="true">ℹ</span>
+        <div>
+          <strong>You have no project to connect</strong>
+          <p>Only members who can edit a project can connect it to an app. To stop this connection, revoke it on the Connected apps page.</p>
+        </div>
+      </div>
+      <div class="actions">
+        <a class="btn btn-secondary" href="{% url 'mcp_gateway:connections' %}">Back to Connected apps</a>
+      </div>
+    {% endif %}
+  </form>
+</section>
+{% endblock %}

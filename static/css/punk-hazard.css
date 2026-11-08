@@ -5144,9 +5144,38 @@ details.card[open] > summary,
   min-width: 0;
 }
 
-.consent-projects .radio-card:has(input[type="radio"]:checked) {
+.consent-projects .radio-card:has(input:checked) {
   border-color: var(--brand-cyan);
   background: var(--cyan-soft);
+}
+
+/* The project pickers (consent, Edit projects) are checkbox cards. */
+.consent-projects .radio-card input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  margin-top: 3px;
+  accent-color: var(--brand-cyan);
+  flex: none;
+}
+
+/* Connected apps: each connection's projects with their own status. */
+.connection-projects {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.connection-projects li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.connection-project-name {
+  overflow-wrap: anywhere;
 }
 
 .consent-declared-name {

@@ -84,3 +84,5 @@ MCP_OAUTH_REQUEST_MAX_BYTES: Final[int] = 64 * 1024
 MCP_OAUTH_LAST_USED_EVERY_SECONDS: Final[int] = 300
 # Revoked or expired connections stay listed on the page this long.
 MCP_OAUTH_CONNECTIONS_HISTORY_DAYS: Final[int] = 30
+# Projects one OAuth connection may cover (consent form, code, links).
+MCP_OAUTH_GRANT_MAX_PROJECTS: Final[int] = 50

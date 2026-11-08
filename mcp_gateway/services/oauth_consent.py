@@ -1,5 +1,5 @@
 """The consent page's use cases: load a pending authorization request, then
-approve it for one project (mint a code) or deny it.
+approve it for one or more projects (mint a code) or deny it.
 
 The handle, the code and the client's ``state`` are never logged. The
 redirect URI was validated at registration and at /authorize, so it is safe
@@ -17,7 +17,10 @@ from django.utils import timezone
 
 from accounts.models import CustomUser
 from mcp_gateway.exceptions import ConsentProjectRefused, ConsentUnavailable
-from mcp_gateway.limits import MCP_OAUTH_CODE_TTL_SECONDS
+from mcp_gateway.limits import (
+    MCP_OAUTH_CODE_TTL_SECONDS,
+    MCP_OAUTH_GRANT_MAX_PROJECTS,
+)
 from mcp_gateway.models import (
     McpAuthorizationCode,
     McpAuthorizationRequest,
@@ -31,7 +34,7 @@ from mcp_gateway.oauth_policy import (
 from mcp_gateway.oauth_tokens import hash_token, mint_token
 from mcp_gateway.services.oauth_access import (
     WritableProject,
-    can_approve,
+    approvable_ids,
     writable_projects,
 )
 
@@ -41,7 +44,9 @@ _HANDLE_MAX_CHARS = 128
 _UNAVAILABLE = (
     "This sign-in link has expired or was already used. Start again from the app."
 )
-_PROJECT_REFUSED = "Choose a project you can edit."
+_PROJECT_REFUSED = "Choose only projects you can edit."
+_NO_PROJECT = "Choose at least one project."
+_TOO_MANY_PROJECTS = f"Choose at most {MCP_OAUTH_GRANT_MAX_PROJECTS} projects."
 
 
 @dataclass(frozen=True)
@@ -120,20 +125,32 @@ def _state_param(request: McpAuthorizationRequest) -> list[tuple[str, str]]:
     return [("state", request.state)] if request.has_state else []
 
 
-def approve(handle: str, user: CustomUser, project_id: int) -> str:
-    """Approve the request for ``project_id``: mint a single-use code and
+def _checked_project_ids(user: CustomUser, project_ids: list[int]) -> list[int]:
+    """``project_ids`` de-duplicated and sorted, or ``ConsentProjectRefused``
+    when none is given, too many are, or one is not approvable (one query)."""
+    if not project_ids:
+        raise ConsentProjectRefused(_NO_PROJECT)
+    ids = sorted(set(project_ids))
+    if len(ids) > MCP_OAUTH_GRANT_MAX_PROJECTS:
+        raise ConsentProjectRefused(_TOO_MANY_PROJECTS)
+    if approvable_ids(user.pk, ids) != set(ids):
+        raise ConsentProjectRefused(_PROJECT_REFUSED)
+    return ids
+
+
+def approve(handle: str, user: CustomUser, project_ids: list[int]) -> str:
+    """Approve the request for ``project_ids``: mint a single-use code and
     return the client redirect URL carrying it (and ``state``)."""
     with transaction.atomic():
         request = _lock_pending(handle)
-        if not can_approve(user.pk, project_id):
-            raise ConsentProjectRefused(_PROJECT_REFUSED)
+        ids = _checked_project_ids(user, project_ids)
         now = timezone.now()
         code = mint_token()
         McpAuthorizationCode.objects.create(
             code_hash=hash_token(code),
             client_id=request.client_id,
             user_id=user.pk,
-            project_id=project_id,
+            project_ids=ids,
             code_challenge=request.code_challenge,
             redirect_uri=request.redirect_uri,
             redirect_uri_provided_explicitly=request.redirect_uri_provided_explicitly,

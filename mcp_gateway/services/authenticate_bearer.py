@@ -5,18 +5,18 @@ on every HTTP request. It accepts two kinds of bearer:
 
 - **OAuth access token** (``pha_`` prefix, only while ``MCP_OAUTH_ENABLED``):
   one query on ``McpOAuthToken`` by sha256 hash (kind access, not expired)
-  joined to its grant and project under the shared access rule
-  (``services.oauth_access``: grant not revoked, user active, project not
-  archived, writable membership), then the Connection key fingerprint
-  compare in Python. Losing write access, archiving the project,
-  regenerating the key or revoking the connection therefore refuses the very
-  next request. A miss falls through to the key check, so a Connection key
-  that happens to start with ``pha_`` still works.
+  joined to its grant (not revoked, user active) with an ``EXISTS`` of at
+  least one project link passing the shared access rule, Connection key
+  fingerprint included (``services.oauth_access.live_links``). The token carries the grant, not a
+  project: a grant covers several projects, and each call names its project
+  (``call_guard`` resolves it per call). A grant with no live link left is refused here (401, so the
+  client re-authenticates). A miss falls through to the key check, so a
+  Connection key that happens to start with ``pha_`` still works.
 - **Connection key**: looked up exactly as the Test Runner handshake does
   (``projects.services.get_project_by_api_key``: indexed equality on the
   unique ``Project.api_key``, non-archived projects only), then re-checked in
-  constant time. Regenerating the key stops MCP access at once, as for
-  runners.
+  constant time. The token carries the key's one project. Regenerating the
+  key stops MCP access at once, as for runners.
 
 No bearer is ever logged, echoed or stored.
 
@@ -54,7 +54,7 @@ from typing import Final
 
 from channels.db import database_sync_to_async
 from django.core.cache import cache
-from django.db.models import OuterRef
+from django.db.models import Exists, OuterRef
 from django.utils import timezone
 from mcp.server.auth.provider import AccessToken
 
@@ -65,8 +65,8 @@ from mcp_gateway.limits import (
 from mcp_gateway.models import McpGrant, McpOAuthToken, OAuthTokenKind
 from mcp_gateway.oauth_policy import MCP_SCOPE, canonical_resource, oauth_enabled
 from mcp_gateway.oauth_tokens import ACCESS_TOKEN_PREFIX, hash_token
-from mcp_gateway.oauth_types import AuthKind
-from mcp_gateway.services.oauth_access import fingerprint_matches, writable_membership
+from mcp_gateway.oauth_types import AuthKind, McpCaller
+from mcp_gateway.services.oauth_access import live_links
 from projects.models import Project
 from projects.runner_person_step_services import hit_runner_throttle
 from projects.services import get_project_by_api_key
@@ -83,17 +83,14 @@ _FAILURE_WINDOW_SECONDS: Final = 60
 class McpAccessToken(AccessToken):
     """The verified caller of one MCP request (internal; never serialised).
 
-    ``user_id`` and ``grant_id`` are None for the Connection key.
+    OAuth: ``grant_id`` and ``user_id`` are set, ``key_project_id`` is None
+    (the grant covers several projects; each call names one). Connection
+    key: ``key_project_id`` is the key's project, the others are None.
     """
 
-    project_id: int
+    key_project_id: int | None = None
     user_id: int | None = None
     grant_id: int | None = None
-
-    @property
-    def auth_kind(self) -> AuthKind:
-        """``oauth`` or ``key``, for the gateway log line."""
-        return "oauth" if self.grant_id is not None else "key"
 
 
 def _failure_key(ip: str) -> str:
@@ -125,28 +122,22 @@ def _load_oauth_with_last_used(
             expires_at__gt=timezone.now(),
             grant__revoked_at__isnull=True,
             grant__user__is_active=True,
-            grant__project__archived=False,
         )
-        .filter(
-            writable_membership(
-                OuterRef("grant__user_id"), OuterRef("grant__project_id")
-            )
-        )
-        .select_related("grant__project", "grant__client")
+        # At least one project link passes the access rule (key fingerprint
+        # included, in SQL).
+        .filter(Exists(live_links().filter(grant_id=OuterRef("grant_id"))))
+        .select_related("grant__client")
         .only(
             "expires_at",
             "grant__id",
             "grant__user",
-            "grant__api_key_fingerprint",
             "grant__last_used_at",
-            "grant__project__id",
-            "grant__project__api_key",
             "grant__client__id",
             "grant__client__client_id",
         )
         .first()
     )
-    if row is None or not fingerprint_matches(row.grant):
+    if row is None:
         return None
     grant = row.grant
     # ``token`` is required by the SDK model; it never leaves the process.
@@ -157,7 +148,6 @@ def _load_oauth_with_last_used(
         expires_at=int(row.expires_at.timestamp()),
         resource=canonical_resource(),
         subject=str(grant.user_id),
-        project_id=grant.project_id,
         user_id=grant.user_id,
         grant_id=grant.pk,
     )
@@ -188,7 +178,7 @@ def _verify(token: str, ip: str) -> McpAccessToken | None:
             client_id=str(project.pk),
             scopes=[MCP_SCOPE],
             resource=canonical_resource(),
-            project_id=project.pk,
+            key_project_id=project.pk,
         )
     if ip:
         _count_failure(ip)
@@ -231,8 +221,17 @@ class BearerVerifier:
         )
 
 
-def project_id_of(access_token: AccessToken | None) -> int | None:
-    """The project id a verified access token carries (None when absent)."""
-    if isinstance(access_token, McpAccessToken):
-        return access_token.project_id
+def caller_of(access_token: AccessToken | None) -> McpCaller | None:
+    """Who a verified access token names: its OAuth grant or its Connection
+    key's project (None when the request had no verified bearer)."""
+    if not isinstance(access_token, McpAccessToken):
+        return None
+    if access_token.grant_id is not None:
+        return McpCaller(
+            grant_id=access_token.grant_id, key_project_id=None, auth="oauth"
+        )
+    if access_token.key_project_id is not None:
+        return McpCaller(
+            grant_id=None, key_project_id=access_token.key_project_id, auth="key"
+        )
     return None
