@@ -8,11 +8,12 @@ and, on macOS, the bundle ids of the listed windows' apps.
 Allowlist: the server's normalized process names. Deny list (applies even to
 an allowlisted name):
 
-* the runner's own process, its ancestors (the terminal or service that
-  started it) and its helpers (the person window and its children);
-* the OS shell (``explorer``, Finder, Dock, gnome-shell, ...);
-* known terminals (``shell_processes``'s lists, shared with close_app, plus
-  the common Linux terminals), whether or not they host the runner.
+* the runner's own process and its helpers (the person window and its
+  children);
+* the OS shell (``explorer``, Finder, Dock, gnome-shell, ...).
+
+Terminals are not denied: a project that allowlists a terminal may capture
+any of its windows, the one that started the runner included.
 
 A window whose process is unknown ("") never matches the allowlist, and only
 ``capturable`` windows (normal app windows with a known pid) are ever
@@ -38,36 +39,16 @@ from controller_client.protocol import (
 )
 from controller_client.shell_processes import (
     MACOS_OS_SHELL_BUNDLE_IDS,
-    MACOS_TERMINAL_BUNDLE_IDS,
     WINDOWS_OS_SHELL_EXES,
-    WINDOWS_TABBED_TERMINAL_EXES,
-    WINDOWS_TERMINAL_HOST_EXES,
 )
 from controller_client.window_model import CaptureUnavailableError, DesktopWindow, Rect
 
 if sys.platform == "win32":
-    _PLATFORM_DENIED_RAW: Final[frozenset[str]] = frozenset(
-        {
-            *WINDOWS_OS_SHELL_EXES,
-            *WINDOWS_TABBED_TERMINAL_EXES,
-            *WINDOWS_TERMINAL_HOST_EXES,
-            # Classic consoles and shells that own their console window.
-            "conhost.exe",
-            "cmd.exe",
-            "powershell.exe",
-            "powershell_ise.exe",
-            "pwsh.exe",
-            "wsl.exe",
-            "wslhost.exe",
-            "bash.exe",
-        }
-    )
+    _PLATFORM_DENIED_RAW: Final[frozenset[str]] = frozenset(WINDOWS_OS_SHELL_EXES)
 elif sys.platform == "darwin":
     import AppKit
 
-    _DENIED_BUNDLE_IDS: Final[frozenset[str]] = frozenset(
-        {*MACOS_OS_SHELL_BUNDLE_IDS, *MACOS_TERMINAL_BUNDLE_IDS}
-    )
+    _DENIED_BUNDLE_IDS: Final[frozenset[str]] = frozenset(MACOS_OS_SHELL_BUNDLE_IDS)
     # Owner names of the same apps, for a pid whose bundle id cannot be read.
     _PLATFORM_DENIED_RAW: Final[frozenset[str]] = frozenset(
         {
@@ -77,17 +58,6 @@ elif sys.platform == "darwin":
             "SystemUIServer",
             "WindowManager",
             "Control Center",
-            "Terminal",
-            "iTerm2",
-            "iTerm",
-            "Warp",
-            "Alacritty",
-            "kitty",
-            "WezTerm",
-            "wezterm-gui",
-            "Ghostty",
-            "Hyper",
-            "Tabby",
         }
     )
 else:
@@ -111,41 +81,6 @@ else:
             "xdg-desktop-portal-gnome",
             "xdg-desktop-portal-gtk",
             "xdg-desktop-portal-kde",
-            # Terminals.
-            "gnome-terminal-server",
-            "gnome-terminal",
-            "kgx",
-            "ptyxis",
-            "ptyxis-agent",
-            "konsole",
-            "yakuake",
-            "xterm",
-            "uxterm",
-            "alacritty",
-            "kitty",
-            "foot",
-            "footclient",
-            "wezterm",
-            "wezterm-gui",
-            "tilix",
-            "terminator",
-            "xfce4-terminal",
-            "mate-terminal",
-            "lxterminal",
-            "qterminal",
-            "urxvt",
-            "rxvt",
-            "st",
-            "sakura",
-            "guake",
-            "terminology",
-            "ghostty",
-            "blackbox",
-            "cool-retro-term",
-            "warp",
-            "warp-terminal",
-            "tabby",
-            "hyper",
         }
     )
 
@@ -156,7 +91,7 @@ def _normalized(names: Iterable[str]) -> frozenset[str]:
     )
 
 
-# Normalized names denied on this platform (shells and terminals).
+# Normalized names denied on this platform (OS shells).
 DENIED_PROCESS_NAMES: Final[frozenset[str]] = _normalized(_PLATFORM_DENIED_RAW)
 
 _RUNNER_UNKNOWN_DETAIL: Final[str] = (
@@ -213,8 +148,8 @@ class SelectionRefusedError(CaptureUnavailableError):
 if sys.platform == "darwin":
 
     def _denied_bundle_pids(windows: Sequence[DesktopWindow]) -> frozenset[int]:
-        """Pids of the listed windows whose app is an OS shell or a terminal
-        (app_closer_macos's bundle id lists)."""
+        """Pids of the listed windows whose app is an OS shell
+        (app_closer_macos's bundle id list)."""
         denied: set[int] = set()
         for pid in {window.pid for window in windows if window.pid is not None}:
             app = AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(
@@ -244,7 +179,7 @@ def build_deny_rules(windows: Sequence[DesktopWindow]) -> DenyRules:
             CaptureStatus.CAPTURE_FAILED, _RUNNER_UNKNOWN_DETAIL
         ) from e
     runner_pids = frozenset({runner.own_pid, *runner.helper_pids})
-    pids = {*runner_pids, *runner.ancestor_pids}
+    pids = set(runner_pids)
     pids.update(_denied_bundle_pids(windows))
     return DenyRules(
         pids=frozenset(pids),
