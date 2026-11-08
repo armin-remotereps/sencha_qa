@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from agents.exceptions import InfrastructureError
+from controller_client.protocol import WebBrowser, WebBrowserSetupStep
 
 
 class TestRailRunImportError(Exception):
@@ -71,6 +72,48 @@ class ControllerActionError(Exception):
 
 class KeptSessionLimitError(ControllerActionError):
     """The Test Runner already keeps as many command sessions as allowed."""
+
+
+class WebBrowserSetupNeededError(ControllerActionError):
+    """WEB_BROWSER_V1: the browser needs a one-time setup on the test machine
+    or phone. ``setup_step`` is parsed from the runner's details (None when
+    unknown); the message is fixed server text."""
+
+    def __init__(self, message: str, *, setup_step: WebBrowserSetupStep | None) -> None:
+        super().__init__(message)
+        self.setup_step = setup_step
+
+
+class WebBrowserUnsupportedError(ControllerActionError):
+    """WEB_BROWSER_V1: the action does not exist for this browser, platform or
+    mode (e.g. hover on a phone, a script in accessibility mode)."""
+
+
+class WebBrowserScriptError(ControllerActionError):
+    """WEB_BROWSER_V1: the evaluated script threw. ``error_class`` is the
+    sanitized JavaScript error class ([A-Za-z0-9_$.], at most 64 characters,
+    else "Error"); never the runner's message."""
+
+    def __init__(self, message: str, *, error_class: str) -> None:
+        super().__init__(message)
+        self.error_class = error_class
+
+
+class WebBrowserNotOpenError(ControllerActionError):
+    """WEB_BROWSER_V1: no controllable browser is open (``named`` None) or the
+    named one is not open."""
+
+    def __init__(self, message: str, *, named: WebBrowser | None) -> None:
+        super().__init__(message)
+        self.named = named
+
+
+class WebBrowserAmbiguousError(ControllerActionError):
+    """WEB_BROWSER_V1: no browser was named and several are open."""
+
+    def __init__(self, message: str, *, open_browsers: tuple[WebBrowser, ...]) -> None:
+        super().__init__(message)
+        self.open_browsers = open_browsers
 
 
 class TestRunnerUnavailableError(ControllerActionError, InfrastructureError):

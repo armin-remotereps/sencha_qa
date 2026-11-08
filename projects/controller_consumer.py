@@ -79,6 +79,7 @@ from projects.controller_authenticator import (
 )
 from projects.controller_protocol import (
     INTERACTIVE_SESSIONS_RESULT_MAX_BYTES,
+    WEB_BROWSER_RESULT_MAX_BYTES,
     ActionTypeRegistry,
     BaseActionEvent,
     BrowserClickActionEvent,
@@ -124,6 +125,17 @@ from projects.controller_protocol import (
     TypeTextActionEvent,
     UpdateRunnerEvent,
     WaitForCommandActionEvent,
+    WebBrowserActActionEvent,
+    WebBrowserCloseActionEvent,
+    WebBrowserElementsActionEvent,
+    WebBrowserEvaluateActionEvent,
+    WebBrowserHistoryActionEvent,
+    WebBrowserListActionEvent,
+    WebBrowserNavigateActionEvent,
+    WebBrowserOpenActionEvent,
+    WebBrowserReadActionEvent,
+    WebBrowserTabsActionEvent,
+    WebBrowserWaitActionEvent,
 )
 from projects.controller_reply_tracker import ReplyTracker
 from projects.exceptions import (
@@ -412,6 +424,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
         if msg_type == MessageType.INTERACTIVE_SESSIONS:
             await self._handle_interactive_sessions(request_id, data, raw_length)
+            return
+
+        if msg_type == MessageType.WEB_BROWSER_RESULT:
+            await self._handle_web_browser_result(request_id, data, raw_length)
             return
 
         handlers = {
@@ -1193,6 +1209,34 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             return
         await self._reply_tracker.send_interactive_sessions(request_id, data)
 
+    async def _handle_web_browser_result(
+        self, request_id: str, data: dict[str, Any], raw_length: int
+    ) -> None:
+        """Route a ``web_browser_result`` reply to its waiter (WEB_BROWSER_V1).
+
+        A raw message over WEB_BROWSER_RESULT_MAX_BYTES is not forwarded: the
+        waiter gets an error reply (``ControllerActionError``) instead.
+        """
+        if raw_length > WEB_BROWSER_RESULT_MAX_BYTES:
+            logger.warning(
+                "Refusing oversized %s (%d bytes) for project %s",
+                MessageType.WEB_BROWSER_RESULT,
+                raw_length,
+                self._project.id if self._project is not None else None,
+            )
+            await self._reply_tracker.send_error(
+                request_id,
+                {
+                    "code": ErrorCode.INVALID_MESSAGE,
+                    "message": (
+                        f"The {MessageType.WEB_BROWSER_RESULT} reply is too large"
+                    ),
+                    "details": "",
+                },
+            )
+            return
+        await self._reply_tracker.send_web_browser_result(request_id, data)
+
     async def _forward_action(self, event: BaseActionEvent) -> None:
         request_id: str = event.get("request_id") or str(uuid.uuid4())
         reply_channel: str = event.get("reply_channel", "")
@@ -1329,6 +1373,59 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await self._forward_action(event)
 
     async def controller_capture_window(self, event: CaptureWindowActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_web_browser_open(
+        self, event: WebBrowserOpenActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_web_browser_list(
+        self, event: WebBrowserListActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_web_browser_navigate(
+        self, event: WebBrowserNavigateActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_web_browser_history(
+        self, event: WebBrowserHistoryActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_web_browser_tabs(
+        self, event: WebBrowserTabsActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_web_browser_elements(
+        self, event: WebBrowserElementsActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_web_browser_act(self, event: WebBrowserActActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_web_browser_read(
+        self, event: WebBrowserReadActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_web_browser_wait(
+        self, event: WebBrowserWaitActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_web_browser_evaluate(
+        self, event: WebBrowserEvaluateActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_web_browser_close(
+        self, event: WebBrowserCloseActionEvent
+    ) -> None:
         await self._forward_action(event)
 
     async def controller_swipe(self, event: SwipeActionEvent) -> None:

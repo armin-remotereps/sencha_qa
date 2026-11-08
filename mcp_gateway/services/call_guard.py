@@ -48,6 +48,7 @@ from mcp_gateway.limits import (
     MCP_AI_RATE_PER_MINUTE,
     MCP_COMMAND_RATE_PER_MINUTE,
     MCP_CONTROL_RATE_PER_MINUTE,
+    MCP_EVAL_RATE_PER_MINUTE,
     MCP_MACHINE_RATE_PER_MINUTE,
     MCP_MARK_RATE_PER_MINUTE,
     MCP_READ_RATE_PER_MINUTE,
@@ -97,6 +98,10 @@ _COMMAND_THROTTLED: Final = "Too many command requests. Wait a minute and try ag
 _SCREEN_THROTTLED: Final = (
     "Too many screenshots of the test machine. Wait a minute and try again."
 )
+_EVAL_THROTTLED: Final = (
+    "Too many scripts run in the test machine's browser. Wait a minute and "
+    "try again."
+)
 _INTERNAL: Final = "The server could not complete this call. Try again later."
 _MACHINE_BUSY = "The test machine is busy. Try again in a minute."
 _CLAIM_ENDED = (
@@ -130,6 +135,8 @@ class CallKind(StrEnum):
     COMMAND = "command"
     # take_screenshot (analysis only).
     SCREEN = "screen"
+    # browse_evaluate (a script in the test machine's browser).
+    EVAL = "eval"
 
 
 # kind -> (throttle key prefix, limit per project and minute, refusal).
@@ -148,6 +155,7 @@ _RATE_LIMITS: Final[dict[CallKind, tuple[str, int, str]]] = {
         _COMMAND_THROTTLED,
     ),
     CallKind.SCREEN: ("mcp:screen", MCP_SCREEN_RATE_PER_MINUTE, _SCREEN_THROTTLED),
+    CallKind.EVAL: ("mcp:eval", MCP_EVAL_RATE_PER_MINUTE, _EVAL_THROTTLED),
 }
 
 

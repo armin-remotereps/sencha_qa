@@ -10,6 +10,13 @@ from controller_client.protocol import MessageType, serialize_message
 # bytes each fit many times over; anything bigger is refused.
 INTERACTIVE_SESSIONS_RESULT_MAX_BYTES: Final[int] = 65_536
 
+# Largest raw ``web_browser_result`` reply the consumer forwards
+# (WEB_BROWSER_V1). ``content`` is at most WEB_RESULT_CONTENT_MAX_CHARS
+# characters, and the runner's ``json.dumps`` escapes non-ASCII text (up to
+# 12 bytes per character for astral ones), plus at most WEB_BROWSER_LIST_MAX
+# small list entries; anything bigger is refused.
+WEB_BROWSER_RESULT_MAX_BYTES: Final[int] = 1024 * 1024
+
 
 class BaseActionEvent(TypedDict):
     type: str
@@ -201,6 +208,81 @@ class CaptureWindowActionEvent(BaseActionEvent):
     switch_desktop: bool
 
 
+# WebDriver browser layer (WEB_BROWSER_V1). The fields are exactly what
+# ``projects.controller_web_browser_actions`` sends after checking them with
+# the runner's own ``parse_web_browser_*_payload``; optional fields are left
+# out when unset. ``browser`` is a ``WebBrowser`` value; ``target`` is
+# ``serialize_web_element_target`` output.
+
+
+class WebBrowserOpenActionEvent(BaseActionEvent):
+    browser: str
+    url: NotRequired[str]
+
+
+class WebBrowserListActionEvent(BaseActionEvent):
+    """No fields besides the request id."""
+
+
+class WebBrowserNavigateActionEvent(BaseActionEvent):
+    browser: NotRequired[str]
+    url: str
+
+
+class WebBrowserHistoryActionEvent(BaseActionEvent):
+    browser: NotRequired[str]
+    action: str
+
+
+class WebBrowserTabsActionEvent(BaseActionEvent):
+    browser: NotRequired[str]
+    action: str
+    index: NotRequired[int]
+
+
+class WebBrowserElementsActionEvent(BaseActionEvent):
+    browser: NotRequired[str]
+    scope_css: NotRequired[str]
+    max: NotRequired[int]
+
+
+class WebBrowserActActionEvent(BaseActionEvent):
+    browser: NotRequired[str]
+    action: str
+    target: NotRequired[dict[str, object]]
+    text: NotRequired[str]
+    clear: NotRequired[bool]
+    value: NotRequired[str]
+    label: NotRequired[str]
+    key: NotRequired[str]
+
+
+class WebBrowserReadActionEvent(BaseActionEvent):
+    browser: NotRequired[str]
+    what: str
+    target: NotRequired[dict[str, object]]
+    name: NotRequired[str]
+    max_chars: NotRequired[int]
+
+
+class WebBrowserWaitActionEvent(BaseActionEvent):
+    browser: NotRequired[str]
+    target: dict[str, object]
+    state: str
+    timeout_ms: NotRequired[int]
+
+
+class WebBrowserEvaluateActionEvent(BaseActionEvent):
+    browser: NotRequired[str]
+    script: str
+    args_json: NotRequired[str]
+    timeout_ms: NotRequired[int]
+
+
+class WebBrowserCloseActionEvent(BaseActionEvent):
+    browser: NotRequired[str]
+
+
 # Phone or tablet target (MOBILE_DEVICE_V1). Coordinates are screenshot pixels.
 
 
@@ -289,6 +371,17 @@ class ActionTypeRegistry:
         "controller.inspect_paths": MessageType.INSPECT_PATHS,
         "controller.list_windows": MessageType.LIST_WINDOWS,
         "controller.capture_window": MessageType.CAPTURE_WINDOW,
+        "controller.web_browser_open": MessageType.WEB_BROWSER_OPEN,
+        "controller.web_browser_list": MessageType.WEB_BROWSER_LIST,
+        "controller.web_browser_navigate": MessageType.WEB_BROWSER_NAVIGATE,
+        "controller.web_browser_history": MessageType.WEB_BROWSER_HISTORY,
+        "controller.web_browser_tabs": MessageType.WEB_BROWSER_TABS,
+        "controller.web_browser_elements": MessageType.WEB_BROWSER_ELEMENTS,
+        "controller.web_browser_act": MessageType.WEB_BROWSER_ACT,
+        "controller.web_browser_read": MessageType.WEB_BROWSER_READ,
+        "controller.web_browser_wait": MessageType.WEB_BROWSER_WAIT,
+        "controller.web_browser_evaluate": MessageType.WEB_BROWSER_EVALUATE,
+        "controller.web_browser_close": MessageType.WEB_BROWSER_CLOSE,
         "controller.update_runner": MessageType.UPDATE_RUNNER,
         "controller.swipe": MessageType.SWIPE,
         "controller.long_press": MessageType.LONG_PRESS,
@@ -364,6 +457,38 @@ class ActionTypeRegistry:
             "max_pixels",
             "switch_desktop",
         ),
+        # WEB_BROWSER_V1: optional fields go out only when the event has them.
+        "controller.web_browser_open": ("browser", "url"),
+        "controller.web_browser_list": (),
+        "controller.web_browser_navigate": ("browser", "url"),
+        "controller.web_browser_history": ("browser", "action"),
+        "controller.web_browser_tabs": ("browser", "action", "index"),
+        "controller.web_browser_elements": ("browser", "scope_css", "max"),
+        "controller.web_browser_act": (
+            "browser",
+            "action",
+            "target",
+            "text",
+            "clear",
+            "value",
+            "label",
+            "key",
+        ),
+        "controller.web_browser_read": (
+            "browser",
+            "what",
+            "target",
+            "name",
+            "max_chars",
+        ),
+        "controller.web_browser_wait": ("browser", "target", "state", "timeout_ms"),
+        "controller.web_browser_evaluate": (
+            "browser",
+            "script",
+            "args_json",
+            "timeout_ms",
+        ),
+        "controller.web_browser_close": ("browser",),
         "controller.update_runner": (
             "update_id",
             "target_version",

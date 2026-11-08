@@ -15,7 +15,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.21.0"
+CLIENT_VERSION: Final[str] = "0.22.0"
 
 
 class CloseCode(IntEnum):
@@ -141,6 +141,22 @@ class MessageType(StrEnum):
     # carrying ``sessions``. Runner-local: never resent after a reconnect.
     LIST_INTERACTIVE_SESSIONS = "list_interactive_sessions"
     INTERACTIVE_SESSIONS = "interactive_sessions"
+    # Web browser layer (WEB_BROWSER_V1, WebDriver based; separate from the
+    # Playwright ``browser_*`` messages): server -> runner with one of the
+    # ``web_browser_*`` requests; runner -> server with ``web_browser_result``
+    # (same request_id) or an ``error``.
+    WEB_BROWSER_OPEN = "web_browser_open"
+    WEB_BROWSER_LIST = "web_browser_list"
+    WEB_BROWSER_NAVIGATE = "web_browser_navigate"
+    WEB_BROWSER_HISTORY = "web_browser_history"
+    WEB_BROWSER_TABS = "web_browser_tabs"
+    WEB_BROWSER_ELEMENTS = "web_browser_elements"
+    WEB_BROWSER_ACT = "web_browser_act"
+    WEB_BROWSER_READ = "web_browser_read"
+    WEB_BROWSER_WAIT = "web_browser_wait"
+    WEB_BROWSER_EVALUATE = "web_browser_evaluate"
+    WEB_BROWSER_CLOSE = "web_browser_close"
+    WEB_BROWSER_RESULT = "web_browser_result"
 
 
 class ClientCapability(StrEnum):
@@ -216,6 +232,12 @@ class ClientCapability(StrEnum):
     # kept start over ``max_kept`` is answered with TOO_MANY_SESSIONS. Older
     # controllers ignore the fields and keep one session.
     KEPT_SESSIONS_V1 = "kept_sessions_v1"
+    # Optional: the ``web_browser_*`` messages (WebDriver browser layer for
+    # Chrome, Edge, Firefox and Safari on desktop and phones), answered with
+    # ``web_browser_result``. Every build from 0.22.0 advertises it on every
+    # OS and target; which browsers a runner serves is
+    # ``web_browsers_for(target, host_os)``.
+    WEB_BROWSER_V1 = "web_browser_v1"
     # Retired in 0.18.0 (How to do it and Ask AI): person_step_assist_v1,
     # person_step_guide_v1, manual_step_guide_v1 may still arrive from runners
     # < 0.18.0; ignored; never reuse.
@@ -267,7 +289,8 @@ def advertised_capabilities(
 # WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1,
 # PERSON_STEP_CASE_STEPS_V1, ARTIFACT_SCAN_V1, PERSON_CASE_CONTEXT_V1,
 # PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1, MANUAL_PAUSE_DISCUSS_V1,
-# MOBILE_DEVICE_V1, WINDOW_CAPTURE_V1, KEPT_SESSIONS_V1) are checked where they are used instead.
+# MOBILE_DEVICE_V1, WINDOW_CAPTURE_V1, KEPT_SESSIONS_V1, WEB_BROWSER_V1) are
+# checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
@@ -348,6 +371,15 @@ class ErrorCode(StrEnum):
     # A kept ``start_interactive_cmd`` while ``max_kept`` kept sessions are
     # already running (KEPT_SESSIONS_V1).
     TOO_MANY_SESSIONS = "TOO_MANY_SESSIONS"
+    # WEB_BROWSER_V1. ``details`` of SETUP_NEEDED is one WebBrowserSetupStep
+    # value; of NOT_OPEN the named browser (or empty); of AMBIGUOUS the open
+    # browsers, comma-separated WebBrowser values. SCRIPT_FAILED carries the
+    # JavaScript error class only.
+    WEB_BROWSER_SETUP_NEEDED = "WEB_BROWSER_SETUP_NEEDED"
+    WEB_BROWSER_UNSUPPORTED = "WEB_BROWSER_UNSUPPORTED"
+    WEB_BROWSER_NOT_OPEN = "WEB_BROWSER_NOT_OPEN"
+    WEB_BROWSER_AMBIGUOUS = "WEB_BROWSER_AMBIGUOUS"
+    SCRIPT_FAILED = "SCRIPT_FAILED"
 
 
 @dataclass(frozen=True)
@@ -4964,3 +4996,666 @@ def serialize_window_capture_result_message(
         result=serialize_window_capture_result(result),
         duration_ms=duration_ms,
     )
+
+
+# --- Web browser layer (WEB_BROWSER_V1) -------------------------------------
+#
+# A WebDriver-based browser layer, separate from the Playwright ``browser_*``
+# messages above (their ``BrowserName`` is untouched). The runner acts only on
+# a browser that is already open and controllable; only ``web_browser_open``
+# starts one. Every request except ``web_browser_open`` and
+# ``web_browser_list`` carries an optional ``browser``: named -> that browser
+# if open, else WEB_BROWSER_NOT_OPEN; not named -> the single open browser of
+# the target's table, none -> WEB_BROWSER_NOT_OPEN, several ->
+# WEB_BROWSER_AMBIGUOUS. Replies are ``web_browser_result``.
+
+
+class WebBrowser(StrEnum):
+    CHROME = "chrome"
+    EDGE = "edge"
+    FIREFOX = "firefox"
+    SAFARI = "safari"
+
+
+WEB_BROWSER_DISPLAY_NAMES: Final[dict[WebBrowser, str]] = {
+    WebBrowser.CHROME: "Google Chrome",
+    WebBrowser.EDGE: "Microsoft Edge",
+    WebBrowser.FIREFOX: "Firefox",
+    WebBrowser.SAFARI: "Safari",
+}
+
+# ``system_info.os`` values (``platform.system()``) of the desktop table.
+_WEB_BROWSERS_DESKTOP: Final[dict[str, frozenset[WebBrowser]]] = {
+    "Windows": frozenset({WebBrowser.CHROME, WebBrowser.EDGE, WebBrowser.FIREFOX}),
+    "Linux": frozenset({WebBrowser.CHROME, WebBrowser.FIREFOX}),
+    "Darwin": frozenset({WebBrowser.SAFARI, WebBrowser.CHROME, WebBrowser.FIREFOX}),
+}
+_WEB_BROWSERS_PHONE: Final[dict[RunnerTarget, frozenset[WebBrowser]]] = {
+    RunnerTarget.ANDROID: frozenset(
+        {WebBrowser.CHROME, WebBrowser.EDGE, WebBrowser.FIREFOX}
+    ),
+    RunnerTarget.IOS: frozenset(
+        {WebBrowser.SAFARI, WebBrowser.CHROME, WebBrowser.EDGE, WebBrowser.FIREFOX}
+    ),
+}
+
+
+def web_browsers_for(target: RunnerTarget, host_os: str) -> frozenset[WebBrowser]:
+    """The one support table: the browsers a runner of ``target`` on
+    ``host_os`` (``platform.system()``) serves. Unknown OS -> empty."""
+    if target in _WEB_BROWSERS_PHONE:
+        return _WEB_BROWSERS_PHONE[target]
+    return _WEB_BROWSERS_DESKTOP.get(host_os, frozenset())
+
+
+def ordered_web_browsers(browsers: frozenset[WebBrowser]) -> tuple[WebBrowser, ...]:
+    """``browsers`` in enum order (stable lists for replies and errors)."""
+    return tuple(browser for browser in WebBrowser if browser in browsers)
+
+
+class WebBrowserMode(StrEnum):
+    # WebDriver reaches the page (selectors, scripts, tabs).
+    PAGE = "page"
+    # Only the native accessibility tree of the web content (phones whose
+    # browser exposes no inspectable page): list, tap, type, read.
+    ACCESSIBILITY = "accessibility"
+
+
+class WebBrowserHowToOpen(StrEnum):
+    # A person may open it with the runner's test browser shortcut.
+    SHORTCUT = "shortcut"
+    # A person may open the app on the phone normally.
+    APP = "app"
+    # Only ``web_browser_open`` can open a controllable one.
+    OPEN_TOOL_ONLY = "open_tool_only"
+
+
+class WebBrowserSetupStep(StrEnum):
+    """``details`` of WEB_BROWSER_SETUP_NEEDED: what the person must set up."""
+
+    SAFARI_REMOTE_AUTOMATION_OFF = "safari_remote_automation_off"
+    IOS_WEB_INSPECTOR_OFF = "ios_web_inspector_off"
+    CHROME_IOS_WEB_INSPECTOR_OFF = "chrome_ios_web_inspector_off"
+    DRIVER_UNAVAILABLE = "driver_unavailable"
+    ANDROID_DEVTOOLS_UNAVAILABLE = "android_devtools_unavailable"
+    FIREFOX_ANDROID_REMOTE_DEBUGGING_OFF = "firefox_android_remote_debugging_off"
+
+
+class WebHistoryAction(StrEnum):
+    BACK = "back"
+    FORWARD = "forward"
+    RELOAD = "reload"
+
+
+class WebTabsAction(StrEnum):
+    LIST = "list"
+    SWITCH = "switch"
+    CLOSE = "close"
+    NEW = "new"
+
+
+class WebActKind(StrEnum):
+    CLICK = "click"
+    DOUBLE_CLICK = "double_click"
+    HOVER = "hover"
+    TYPE = "type"
+    CLEAR = "clear"
+    SELECT = "select"
+    PRESS_KEY = "press_key"
+
+
+class WebReadWhat(StrEnum):
+    TEXT = "text"
+    URL = "url"
+    TITLE = "title"
+    ELEMENT_TEXT = "element_text"
+    ATTRIBUTE = "attribute"
+
+
+class WebWaitState(StrEnum):
+    PRESENT = "present"
+    VISIBLE = "visible"
+    GONE = "gone"
+
+
+# Limits, checked by the parsers below (runner side) and mirrored by the
+# server before it sends.
+WEB_SELECTOR_MAX_CHARS: Final[int] = 2000
+WEB_TYPE_TEXT_MAX_CHARS: Final[int] = 10_000
+WEB_SELECT_VALUE_MAX_CHARS: Final[int] = 1000
+WEB_KEY_MAX_CHARS: Final[int] = 64
+WEB_ATTRIBUTE_NAME_MAX_CHARS: Final[int] = 128
+WEB_SCRIPT_MAX_CHARS: Final[int] = 20_000
+WEB_SCRIPT_ARGS_MAX_CHARS: Final[int] = 20_000
+WEB_TIMEOUT_MS_MAX: Final[int] = 10_000
+WEB_TIMEOUT_MS_DEFAULT: Final[int] = 5_000
+WEB_ELEMENT_INDEX_MAX: Final[int] = 9_999
+WEB_ELEMENTS_MAX: Final[int] = 300
+WEB_ELEMENT_TEXT_MAX_CHARS: Final[int] = 100
+WEB_TAB_INDEX_MAX: Final[int] = 99
+WEB_READ_MAX_CHARS: Final[int] = 50_000
+# Largest ``content`` a ``web_browser_result`` carries (the runner cuts and
+# sets ``truncated``); evaluate results are cut at WEB_EVAL_RESULT_MAX_BYTES.
+WEB_RESULT_CONTENT_MAX_CHARS: Final[int] = 60_000
+WEB_EVAL_RESULT_MAX_BYTES: Final[int] = 64 * 1024
+# Runner answer budgets: every reply comes within these, else a retryable
+# error. ``web_browser_open`` may download a driver or attach to a phone.
+WEB_BROWSER_ACTION_BUDGET_SECONDS: Final[int] = 24
+# On a phone the call also waits for the phone session's own budget (24 s,
+# after its presence check), so the hub allows a little more there.
+WEB_BROWSER_PHONE_ACTION_BUDGET_SECONDS: Final[int] = 28
+WEB_BROWSER_OPEN_BUDGET_SECONDS: Final[int] = 80
+WEB_BROWSER_LIST_MAX: Final[int] = 8
+WEB_BROWSER_VERSION_MAX_CHARS: Final[int] = 64
+
+# URL schemes ``web_browser_open`` / ``web_browser_navigate`` accept. Scripts
+# go through ``web_browser_evaluate``; ``file`` is refused on phones by the
+# runner (it is desktop-only).
+WEB_URL_SCHEMES: Final[frozenset[str]] = frozenset({"http", "https", "about", "file"})
+
+
+@dataclass(frozen=True)
+class WebElementTarget:
+    """Exactly one of ``index`` (from the last element listing), ``css`` or
+    ``xpath``. A plain-words description is resolved to an index on the
+    server, never sent."""
+
+    index: int | None = None
+    css: str | None = None
+    xpath: str | None = None
+
+
+@dataclass(frozen=True)
+class WebBrowserOpenPayload:
+    browser: WebBrowser
+    url: str | None
+
+
+@dataclass(frozen=True)
+class WebBrowserChoicePayload:
+    """Requests that only pick a browser (``list`` ignores it, ``close``)."""
+
+    browser: WebBrowser | None
+
+
+@dataclass(frozen=True)
+class WebBrowserNavigatePayload:
+    browser: WebBrowser | None
+    url: str
+
+
+@dataclass(frozen=True)
+class WebBrowserHistoryPayload:
+    browser: WebBrowser | None
+    action: WebHistoryAction
+
+
+@dataclass(frozen=True)
+class WebBrowserTabsPayload:
+    """``index`` is required for ``switch``; optional for ``close`` (None:
+    the current tab); ignored otherwise."""
+
+    browser: WebBrowser | None
+    action: WebTabsAction
+    index: int | None
+
+
+@dataclass(frozen=True)
+class WebBrowserElementsPayload:
+    browser: WebBrowser | None
+    scope_css: str | None
+    max_elements: int
+
+
+@dataclass(frozen=True)
+class WebBrowserActPayload:
+    """``target`` is None only for ``press_key`` (the focused element).
+    ``text`` for type, ``clear`` for type (clear first), ``value`` or
+    ``label`` (exactly one) for select, ``key`` for press_key."""
+
+    browser: WebBrowser | None
+    action: WebActKind
+    target: WebElementTarget | None
+    text: str | None
+    clear: bool
+    value: str | None
+    label: str | None
+    key: str | None
+
+
+@dataclass(frozen=True)
+class WebBrowserReadPayload:
+    """``target`` is required for element_text and attribute, ``name`` for
+    attribute."""
+
+    browser: WebBrowser | None
+    what: WebReadWhat
+    target: WebElementTarget | None
+    name: str | None
+    max_chars: int
+
+
+@dataclass(frozen=True)
+class WebBrowserWaitPayload:
+    browser: WebBrowser | None
+    target: WebElementTarget
+    state: WebWaitState
+    timeout_ms: int
+
+
+@dataclass(frozen=True)
+class WebBrowserEvaluatePayload:
+    """``script`` is a function body run with ``arguments`` = the decoded
+    ``args_json`` list."""
+
+    browser: WebBrowser | None
+    script: str
+    args_json: str
+    timeout_ms: int
+
+
+@dataclass(frozen=True)
+class WebBrowserListEntry:
+    browser: WebBrowser
+    installed: bool
+    open: bool
+    mode: WebBrowserMode | None
+    how_to_open: WebBrowserHowToOpen
+    version: str
+
+
+@dataclass(frozen=True)
+class WebBrowserResultPayload:
+    """``web_browser_result``. ``content`` is text (page text, element list,
+    JSON of an evaluate result or tab list, a short confirmation); ``browser``
+    and ``mode`` name what the runner acted on (None for ``list``);
+    ``browsers`` is set for ``list`` only."""
+
+    success: bool
+    content: str
+    browser: WebBrowser | None
+    mode: WebBrowserMode | None
+    truncated: bool
+    browsers: tuple[WebBrowserListEntry, ...]
+    duration_ms: float
+
+
+def _clean_wire_text(value: str) -> str:
+    return "".join(ch for ch in value if ch.isprintable() or ch in "\n\t")
+
+
+def _extract_optional_web_browser(data: Mapping[str, object]) -> WebBrowser | None:
+    raw = data.get("browser")
+    if raw is None or raw == "":
+        return None
+    if not isinstance(raw, str):
+        raise ProtocolError("Invalid 'browser'")
+    try:
+        return WebBrowser(raw)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown browser: {raw}") from e
+
+
+def _extract_bounded_str(
+    data: Mapping[str, object], field: str, max_chars: int, *, required: bool
+) -> str | None:
+    value = data.get(field)
+    if value is None:
+        if required:
+            raise ProtocolError(f"Missing '{field}'")
+        return None
+    if not isinstance(value, str) or len(value) > max_chars:
+        raise ProtocolError(f"Invalid '{field}': not text or too long")
+    if required and not value.strip():
+        raise ProtocolError(f"Invalid '{field}': empty")
+    return value
+
+
+def validate_web_url(url: str) -> str:
+    """``url`` stripped, or ProtocolError. Only WEB_URL_SCHEMES pass."""
+    text = url.strip()
+    if not text or len(text) > OPEN_URL_MAX_CHARS:
+        raise ProtocolError("Invalid 'url': empty or too long")
+    if any(not ch.isprintable() or ch.isspace() for ch in text):
+        raise ProtocolError("Invalid 'url': contains spaces or control characters")
+    match = _URL_SCHEME_RE.match(text)
+    if match is None or match.group(1).lower() not in WEB_URL_SCHEMES:
+        raise ProtocolError("Invalid 'url': only http, https, about and file URLs")
+    return text
+
+
+def web_url_is_file(url: str) -> bool:
+    return url.strip().lower().startswith("file:")
+
+
+def parse_web_element_target(raw: object) -> WebElementTarget:
+    """Exactly one of ``index`` / ``css`` / ``xpath``."""
+    if not isinstance(raw, dict):
+        raise ProtocolError("Invalid 'target': expected an object")
+    index = raw.get("index")
+    css = raw.get("css")
+    xpath = raw.get("xpath")
+    given = [value for value in (index, css, xpath) if value is not None]
+    if len(given) != 1:
+        raise ProtocolError("Invalid 'target': give exactly one of index, css, xpath")
+    if index is not None:
+        if (
+            not isinstance(index, int)
+            or isinstance(index, bool)
+            or not 0 <= index <= WEB_ELEMENT_INDEX_MAX
+        ):
+            raise ProtocolError("Invalid 'target.index'")
+        return WebElementTarget(index=index)
+    selector = css if css is not None else xpath
+    if (
+        not isinstance(selector, str)
+        or not selector.strip()
+        or len(selector) > WEB_SELECTOR_MAX_CHARS
+    ):
+        raise ProtocolError("Invalid 'target' selector: empty or too long")
+    if css is not None:
+        return WebElementTarget(css=selector)
+    return WebElementTarget(xpath=selector)
+
+
+def serialize_web_element_target(target: WebElementTarget) -> dict[str, object]:
+    if target.index is not None:
+        return {"index": target.index}
+    if target.css is not None:
+        return {"css": target.css}
+    return {"xpath": target.xpath}
+
+
+def _optional_target(data: Mapping[str, object]) -> WebElementTarget | None:
+    raw = data.get("target")
+    return None if raw is None else parse_web_element_target(raw)
+
+
+def _timeout_ms(data: Mapping[str, object]) -> int:
+    value = data.get("timeout_ms", WEB_TIMEOUT_MS_DEFAULT)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ProtocolError("Invalid 'timeout_ms'")
+    return min(max(value, 0), WEB_TIMEOUT_MS_MAX)
+
+
+def parse_web_browser_open_payload(data: dict[str, object]) -> WebBrowserOpenPayload:
+    browser = _extract_optional_web_browser(data)
+    if browser is None:
+        raise ProtocolError("Missing 'browser'")
+    raw_url = data.get("url")
+    url = None
+    if raw_url is not None and raw_url != "":
+        if not isinstance(raw_url, str):
+            raise ProtocolError("Invalid 'url'")
+        url = validate_web_url(raw_url)
+    return WebBrowserOpenPayload(browser=browser, url=url)
+
+
+def parse_web_browser_choice_payload(
+    data: dict[str, object],
+) -> WebBrowserChoicePayload:
+    return WebBrowserChoicePayload(browser=_extract_optional_web_browser(data))
+
+
+def parse_web_browser_navigate_payload(
+    data: dict[str, object],
+) -> WebBrowserNavigatePayload:
+    return WebBrowserNavigatePayload(
+        browser=_extract_optional_web_browser(data),
+        url=validate_web_url(_extract_str(data, "url")),
+    )
+
+
+def parse_web_browser_history_payload(
+    data: dict[str, object],
+) -> WebBrowserHistoryPayload:
+    raw = _extract_str(data, "action")
+    try:
+        action = WebHistoryAction(raw)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown history action: {raw}") from e
+    return WebBrowserHistoryPayload(
+        browser=_extract_optional_web_browser(data), action=action
+    )
+
+
+def parse_web_browser_tabs_payload(data: dict[str, object]) -> WebBrowserTabsPayload:
+    raw = _extract_str(data, "action")
+    try:
+        action = WebTabsAction(raw)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown tabs action: {raw}") from e
+    index = _extract_optional_int(data, "index")
+    if index is not None and not 0 <= index <= WEB_TAB_INDEX_MAX:
+        raise ProtocolError("Invalid 'index'")
+    if action is WebTabsAction.SWITCH and index is None:
+        raise ProtocolError("Missing 'index' for switch")
+    return WebBrowserTabsPayload(
+        browser=_extract_optional_web_browser(data), action=action, index=index
+    )
+
+
+def parse_web_browser_elements_payload(
+    data: dict[str, object],
+) -> WebBrowserElementsPayload:
+    scope = _extract_bounded_str(
+        data, "scope_css", WEB_SELECTOR_MAX_CHARS, required=False
+    )
+    max_elements = _clamped_optional_int(data, "max", 1, WEB_ELEMENTS_MAX)
+    return WebBrowserElementsPayload(
+        browser=_extract_optional_web_browser(data),
+        scope_css=scope.strip() if scope and scope.strip() else None,
+        max_elements=WEB_ELEMENTS_MAX if max_elements is None else max_elements,
+    )
+
+
+def parse_web_browser_act_payload(data: dict[str, object]) -> WebBrowserActPayload:
+    raw = _extract_str(data, "action")
+    try:
+        action = WebActKind(raw)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown action: {raw}") from e
+    target = _optional_target(data)
+    if target is None and action is not WebActKind.PRESS_KEY:
+        raise ProtocolError("Missing 'target'")
+    text = _extract_bounded_str(data, "text", WEB_TYPE_TEXT_MAX_CHARS, required=False)
+    # Typing only spaces is valid; only an empty text is refused.
+    if action is WebActKind.TYPE and not text:
+        raise ProtocolError("Missing 'text'")
+    value = _extract_bounded_str(
+        data, "value", WEB_SELECT_VALUE_MAX_CHARS, required=False
+    )
+    label = _extract_bounded_str(
+        data, "label", WEB_SELECT_VALUE_MAX_CHARS, required=False
+    )
+    if action is WebActKind.SELECT and (value is None) == (label is None):
+        raise ProtocolError("Give exactly one of 'value' or 'label' for select")
+    key = _extract_bounded_str(
+        data, "key", WEB_KEY_MAX_CHARS, required=action is WebActKind.PRESS_KEY
+    )
+    return WebBrowserActPayload(
+        browser=_extract_optional_web_browser(data),
+        action=action,
+        target=target,
+        text=text,
+        clear=_extract_bool(data, "clear", default=False),
+        value=value,
+        label=label,
+        key=key,
+    )
+
+
+def parse_web_browser_read_payload(data: dict[str, object]) -> WebBrowserReadPayload:
+    raw = _extract_str(data, "what")
+    try:
+        what = WebReadWhat(raw)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown read: {raw}") from e
+    target = _optional_target(data)
+    if target is None and what in (WebReadWhat.ELEMENT_TEXT, WebReadWhat.ATTRIBUTE):
+        raise ProtocolError("Missing 'target'")
+    name = _extract_bounded_str(
+        data,
+        "name",
+        WEB_ATTRIBUTE_NAME_MAX_CHARS,
+        required=what is WebReadWhat.ATTRIBUTE,
+    )
+    max_chars = _clamped_optional_int(data, "max_chars", 1, WEB_READ_MAX_CHARS)
+    return WebBrowserReadPayload(
+        browser=_extract_optional_web_browser(data),
+        what=what,
+        target=target,
+        name=name,
+        max_chars=WEB_READ_MAX_CHARS if max_chars is None else max_chars,
+    )
+
+
+def parse_web_browser_wait_payload(data: dict[str, object]) -> WebBrowserWaitPayload:
+    target = _optional_target(data)
+    if target is None:
+        raise ProtocolError("Missing 'target'")
+    raw = _extract_str(data, "state")
+    try:
+        state = WebWaitState(raw)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown state: {raw}") from e
+    return WebBrowserWaitPayload(
+        browser=_extract_optional_web_browser(data),
+        target=target,
+        state=state,
+        timeout_ms=_timeout_ms(data),
+    )
+
+
+def parse_web_browser_evaluate_payload(
+    data: dict[str, object],
+) -> WebBrowserEvaluatePayload:
+    script = _extract_bounded_str(data, "script", WEB_SCRIPT_MAX_CHARS, required=True)
+    args_json = _extract_bounded_str(
+        data, "args_json", WEB_SCRIPT_ARGS_MAX_CHARS, required=False
+    )
+    args_text = args_json if args_json and args_json.strip() else "[]"
+    try:
+        decoded = json.loads(args_text)
+    except json.JSONDecodeError as e:
+        raise ProtocolError("Invalid 'args_json': not JSON") from e
+    if not isinstance(decoded, list):
+        raise ProtocolError("Invalid 'args_json': expected a JSON list")
+    assert script is not None  # required=True
+    return WebBrowserEvaluatePayload(
+        browser=_extract_optional_web_browser(data),
+        script=script,
+        args_json=args_text,
+        timeout_ms=_timeout_ms(data),
+    )
+
+
+def _serialize_list_entry(entry: WebBrowserListEntry) -> dict[str, object]:
+    return {
+        "browser": entry.browser.value,
+        "installed": entry.installed,
+        "open": entry.open,
+        "mode": None if entry.mode is None else entry.mode.value,
+        "how_to_open": entry.how_to_open.value,
+        "version": entry.version[:WEB_BROWSER_VERSION_MAX_CHARS],
+    }
+
+
+def serialize_web_browser_result_message(
+    result: WebBrowserResultPayload, request_id: str
+) -> str:
+    """A ``web_browser_result`` (runner side); ``content`` is cut to
+    WEB_RESULT_CONTENT_MAX_CHARS (``truncated`` then set)."""
+    content = result.content
+    truncated = result.truncated or len(content) > WEB_RESULT_CONTENT_MAX_CHARS
+    return serialize_message(
+        MessageType.WEB_BROWSER_RESULT,
+        request_id,
+        success=result.success,
+        content=content[:WEB_RESULT_CONTENT_MAX_CHARS],
+        browser=None if result.browser is None else result.browser.value,
+        mode=None if result.mode is None else result.mode.value,
+        truncated=truncated,
+        browsers=[
+            _serialize_list_entry(entry)
+            for entry in result.browsers[:WEB_BROWSER_LIST_MAX]
+        ],
+        duration_ms=result.duration_ms,
+    )
+
+
+def _parse_list_entry(raw: object) -> WebBrowserListEntry:
+    if not isinstance(raw, dict):
+        raise ProtocolError("Invalid 'browsers' entry")
+    try:
+        browser = WebBrowser(_extract_str(raw, "browser"))
+        how_to_open = WebBrowserHowToOpen(_extract_str(raw, "how_to_open"))
+        raw_mode = raw.get("mode")
+        mode = None if raw_mode is None else WebBrowserMode(str(raw_mode))
+    except ValueError as e:
+        raise ProtocolError("Invalid 'browsers' entry") from e
+    version = raw.get("version", "")
+    if not isinstance(version, str):
+        raise ProtocolError("Invalid 'browsers' entry version")
+    return WebBrowserListEntry(
+        browser=browser,
+        installed=_extract_bool(raw, "installed"),
+        open=_extract_bool(raw, "open"),
+        mode=mode,
+        how_to_open=how_to_open,
+        version=_clean_wire_text(version)[:WEB_BROWSER_VERSION_MAX_CHARS],
+    )
+
+
+def parse_web_browser_result_payload(
+    data: Mapping[str, object],
+) -> WebBrowserResultPayload:
+    """Validate a ``web_browser_result`` (server side). Unknown ``browser`` /
+    ``mode`` values are refused; ``content`` is cleaned and capped."""
+    content = data.get("content", "")
+    if not isinstance(content, str):
+        raise ProtocolError("Invalid 'content'")
+    raw_browser = data.get("browser")
+    raw_mode = data.get("mode")
+    try:
+        browser = None if raw_browser is None else WebBrowser(str(raw_browser))
+        mode = None if raw_mode is None else WebBrowserMode(str(raw_mode))
+    except ValueError as e:
+        raise ProtocolError("Invalid 'browser' or 'mode'") from e
+    raw_list = data.get("browsers", [])
+    if not isinstance(raw_list, list) or len(raw_list) > WEB_BROWSER_LIST_MAX:
+        raise ProtocolError("Invalid 'browsers'")
+    success = data.get("success")
+    truncated = data.get("truncated", False)
+    duration = data.get("duration_ms", 0)
+    if (
+        not isinstance(success, bool)
+        or not isinstance(truncated, bool)
+        or not isinstance(duration, (int, float))
+        or isinstance(duration, bool)
+    ):
+        raise ProtocolError("Invalid 'success', 'truncated' or 'duration_ms'")
+    over = len(content) > WEB_RESULT_CONTENT_MAX_CHARS
+    return WebBrowserResultPayload(
+        success=success,
+        content=_clean_wire_text(content[:WEB_RESULT_CONTENT_MAX_CHARS]),
+        browser=browser,
+        mode=mode,
+        truncated=truncated or over,
+        browsers=tuple(_parse_list_entry(entry) for entry in raw_list),
+        duration_ms=float(duration),
+    )
+
+
+def parse_web_browser_list_details(details: str) -> tuple[WebBrowser, ...]:
+    """The ``details`` of WEB_BROWSER_AMBIGUOUS (comma-separated values) as
+    WebBrowser values; unknown names are dropped, never echoed."""
+    found: list[WebBrowser] = []
+    for part in details.split(","):
+        try:
+            browser = WebBrowser(part.strip())
+        except ValueError:
+            continue
+        if browser not in found:
+            found.append(browser)
+    return tuple(found)

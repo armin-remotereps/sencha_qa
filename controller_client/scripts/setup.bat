@@ -139,6 +139,13 @@ echo and this copy is deleted. Start it from then on with:
 echo   "!UPDATE_BASE_DIR!\start-test-runner.cmd"
 endlocal
 echo.
+:: The test browser shortcut (web browser layer): opens Chrome, Edge or
+:: Firefox with the Test Runner's own profile so the Test Runner can control it.
+pushd "%ROOT_DIR%"
+"%ROOT_DIR%\controller_client\.venv\Scripts\python.exe" -m controller_client.web_browser_launch --write-shortcut
+if errorlevel 1 echo Warning: could not write the open-test-browser.cmd shortcut
+popd
+echo.
 echo To check that the Test Runner can capture the screen:
 echo   controller_client\.venv\Scripts\python -m controller_client.diagnose
 echo.

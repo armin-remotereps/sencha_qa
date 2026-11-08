@@ -10,17 +10,25 @@ than captures (the capture texts point to add_screenshot).
 
 from __future__ import annotations
 
+import logging
 import re
 from enum import StrEnum
 from typing import Final
 
 from agents.exceptions import AIServiceError
+from controller_client.protocol import (
+    ErrorCode,
+    RunnerTarget,
+    WebBrowser,
+    WebBrowserSetupStep,
+)
 from mcp_gateway.exceptions import McpToolError
 from mcp_gateway.services.capture_errors import CaptureErrorCode
 from mcp_gateway.services.capture_errors import error as capture_error
 from projects.call_deadline import CallDeadlineExceededError
 from projects.exceptions import (
     BrowserUnavailableError,
+    ControllerActionError,
     ControllerNotConnectedError,
     ControllerReconnectTimeoutError,
     DeviceDisconnectedError,
@@ -30,6 +38,11 @@ from projects.exceptions import (
     TestRunnerUnavailableError,
     TestRunnerUnresponsiveError,
     VisualEngineError,
+    WebBrowserAmbiguousError,
+    WebBrowserNotOpenError,
+    WebBrowserScriptError,
+    WebBrowserSetupNeededError,
+    WebBrowserUnsupportedError,
 )
 
 
@@ -49,6 +62,15 @@ class MachineErrorCode(StrEnum):
     TOO_MANY_COMMANDS = "too_many_commands"
     SEARCH_BUSY = "search_busy"
     SEARCH_FAILED = "search_failed"
+    # The browse_* tools' own.
+    BROWSER_SETUP_NEEDED = "browser_setup_needed"
+    BROWSER_ACTION_UNSUPPORTED = "browser_action_unsupported"
+    ELEMENT_NOT_FOUND = "element_not_found"
+    SCRIPT_FAILED = "script_failed"
+    BROWSER_NOT_OPEN = "browser_not_open"
+    BROWSER_AMBIGUOUS = "browser_ambiguous"
+    BROWSER_ACTION_FAILED = "browser_action_failed"
+    BROWSER_OUT_OF_TIME = "browser_out_of_time"
 
 
 # Codes whose capture text fits an action as well.
@@ -104,7 +126,104 @@ _FIXED: Final[dict[MachineErrorCode, str]] = {
         "The web search did not work this time. Try again later or rephrase "
         "the query."
     ),
+    MachineErrorCode.BROWSER_SETUP_NEEDED: (
+        "The browser on the test machine needs a one-time setup first."
+    ),
+    MachineErrorCode.BROWSER_ACTION_UNSUPPORTED: (
+        "This action is not available for this browser on the test machine "
+        "(for example hover on a phone, or selectors, scripts, tabs and "
+        "waits in accessibility mode). Use browse_list_elements and an index "
+        "instead."
+    ),
+    MachineErrorCode.ELEMENT_NOT_FOUND: (
+        "No single element matched. Call browse_list_elements again (indexes "
+        "change when the page changes) and use an index, a selector, or a "
+        "more precise description."
+    ),
+    MachineErrorCode.SCRIPT_FAILED: (
+        "The script failed or ran out of time in the test machine's browser."
+    ),
+    MachineErrorCode.BROWSER_NOT_OPEN: (
+        "No browser is open on the test machine. Call browse_list_browsers, "
+        "then open one with browse_open, or ask the person at the test "
+        "machine to open one."
+    ),
+    MachineErrorCode.BROWSER_AMBIGUOUS: (
+        "Several browsers are open on the test machine. Name one with the "
+        "browser argument."
+    ),
+    MachineErrorCode.BROWSER_ACTION_FAILED: (
+        "The browser action failed on the test machine."
+    ),
+    MachineErrorCode.BROWSER_OUT_OF_TIME: (
+        "Too little time was left in this call for the browser action, so it "
+        "was not sent to the test machine. Try again; an index or a selector "
+        "is faster than a description."
+    ),
 }
+# A browse_* request the test machine refused as malformed (INVALID_MESSAGE)
+# or the server refused before sending: fixed text, never the runner's.
+BROWSE_INVALID_REQUEST: Final = (
+    "[invalid] The test machine's browser cannot take this request. Check the "
+    "URL (http, https, about or file), the selectors and the key."
+)
+# Longest runner text kept in the server log for a failed browse_* action.
+_LOG_TEXT_MAX_CHARS: Final = 300
+
+logger = logging.getLogger(__name__)
+
+# browser_setup_needed: what the person at the test machine must set up.
+_SETUP_STEP_TEXT: Final[dict[WebBrowserSetupStep, str]] = {
+    WebBrowserSetupStep.SAFARI_REMOTE_AUTOMATION_OFF: (
+        "Safari does not allow remote automation yet. Ask the person at the "
+        "test machine to turn on Allow Remote Automation in Safari's "
+        "Developer settings (or run safaridriver --enable once), then try "
+        "again."
+    ),
+    WebBrowserSetupStep.IOS_WEB_INSPECTOR_OFF: (
+        "Web Inspector is off on the phone. Ask the person at the test "
+        "machine to turn it on in Settings > Apps > Safari > Advanced > Web "
+        "Inspector, then try again."
+    ),
+    WebBrowserSetupStep.CHROME_IOS_WEB_INSPECTOR_OFF: (
+        "Chrome on the phone does not allow inspection. Ask the person at the "
+        "test machine to turn on Web Inspector in Chrome's own settings "
+        "(Settings > Content Settings > Web Inspector), then try again."
+    ),
+    WebBrowserSetupStep.DRIVER_UNAVAILABLE: (
+        "The test machine could not get the driver for this browser (no "
+        "network, or downloads are off and none is stored). Ask the person at "
+        "the test machine to check its network or set up the browser driver, "
+        "then try again."
+    ),
+    WebBrowserSetupStep.ANDROID_DEVTOOLS_UNAVAILABLE: (
+        "The browser on the phone cannot be inspected right now. Make sure USB "
+        "debugging is on and the browser is open on the phone, then try again."
+    ),
+    WebBrowserSetupStep.FIREFOX_ANDROID_REMOTE_DEBUGGING_OFF: (
+        "Firefox on the phone does not allow remote debugging. Ask the person "
+        "at the test machine to turn on Remote debugging via USB in Firefox's "
+        "settings, then try again."
+    ),
+}
+_SETUP_STEP_UNKNOWN: Final = (
+    "Call browse_list_browsers, or ask the person at the test machine to "
+    "check the browser."
+)
+# browser_not_open, a browser named: how it can be opened (fixed texts).
+_NOT_OPEN_NAMED: Final = "No {browser} is open on the test machine."
+_OPEN_WITH_SHORTCUT: Final = (
+    "Open it with browse_open, or ask the person at the test machine to open "
+    "it with the test browser shortcut (a browser opened any other way cannot "
+    "be used)."
+)
+_OPEN_APP: Final = (
+    "Open it with browse_open, or ask the person at the test machine to open "
+    "the app on the phone."
+)
+_OPEN_TOOL_ONLY: Final = (
+    "Only browse_open can open it; a window the person opened cannot be used."
+)
 
 # "Test Runner(s)" (also test_runner, test-runner) and "controller(s)"
 # with an optional "client(s)", with an optional "the", as whole words (not
@@ -189,6 +308,94 @@ def map_machine_exception(exc: Exception) -> McpToolError | None:
     if isinstance(exc, AIServiceError):
         return machine_error(MachineErrorCode.AI_UNAVAILABLE)
     return None
+
+
+def map_browse_exception(
+    exc: Exception, *, runner_target: RunnerTarget, os_name: str
+) -> McpToolError | None:
+    """The coded tool error of an exception a browse_* call raised, or None
+    when it is not a controller or infrastructure fault. The runner's text
+    is never forwarded: fixed texts, built from enum values only; any other
+    ``ControllerActionError`` is ``[browser_action_failed]`` and INVALID_MESSAGE
+    ``[invalid]``, with the runner's text cut short in the server log."""
+    if isinstance(exc, WebBrowserSetupNeededError):
+        step = exc.setup_step
+        detail = _SETUP_STEP_UNKNOWN if step is None else _SETUP_STEP_TEXT[step]
+        return machine_error(MachineErrorCode.BROWSER_SETUP_NEEDED, detail)
+    if isinstance(exc, WebBrowserUnsupportedError):
+        return machine_error(MachineErrorCode.BROWSER_ACTION_UNSUPPORTED)
+    if isinstance(exc, WebBrowserScriptError):
+        return machine_error(
+            MachineErrorCode.SCRIPT_FAILED, f"Error class: {exc.error_class}."
+        )
+    if isinstance(exc, WebBrowserNotOpenError):
+        return browser_not_open_error(
+            exc.named, runner_target=runner_target, os_name=os_name
+        )
+    if isinstance(exc, WebBrowserAmbiguousError):
+        return browser_ambiguous_error(exc.open_browsers)
+    if type(exc) is ControllerActionError and _has_error_code(
+        exc, ErrorCode.ELEMENT_NOT_FOUND
+    ):
+        # ``_raise_for_error_reply`` raises the plain class with the code in
+        # its message; the runner's text is dropped.
+        return machine_error(MachineErrorCode.ELEMENT_NOT_FOUND)
+    if type(exc) is ControllerActionError and _has_error_code(
+        exc, ErrorCode.INVALID_MESSAGE
+    ):
+        _log_browse_failure(exc)
+        return McpToolError(BROWSE_INVALID_REQUEST)
+    mapped = map_machine_exception(exc)
+    if mapped is not None:
+        return mapped
+    if isinstance(exc, ControllerActionError):
+        # EXECUTION_FAILED, an unparsable or unsuccessful reply, any other
+        # runner refusal: a fixed text; the runner's stays in the server log.
+        _log_browse_failure(exc)
+        return machine_error(MachineErrorCode.BROWSER_ACTION_FAILED)
+    return None
+
+
+def _log_browse_failure(exc: Exception) -> None:
+    text = " ".join(str(exc).split())
+    if len(text) > _LOG_TEXT_MAX_CHARS:
+        text = text[:_LOG_TEXT_MAX_CHARS] + "..."
+    logger.warning("A browse action failed on the test machine: %s", text)
+
+
+def browser_not_open_error(
+    named: WebBrowser | None, *, runner_target: RunnerTarget, os_name: str
+) -> McpToolError:
+    """``[browser_not_open]``: the general text without a browser named,
+    else how the named browser can be opened on this test machine."""
+    if named is None:
+        return machine_error(MachineErrorCode.BROWSER_NOT_OPEN)
+    head = _NOT_OPEN_NAMED.format(browser=named.value)
+    if (runner_target == RunnerTarget.DESKTOP and named == WebBrowser.SAFARI) or (
+        runner_target == RunnerTarget.ANDROID and named == WebBrowser.FIREFOX
+    ):
+        how = _OPEN_TOOL_ONLY
+    elif runner_target == RunnerTarget.DESKTOP:
+        how = _OPEN_WITH_SHORTCUT
+    else:
+        how = _OPEN_APP
+    return McpToolError(f"[{MachineErrorCode.BROWSER_NOT_OPEN.value}] {head} {how}")
+
+
+def browser_ambiguous_error(open_browsers: tuple[WebBrowser, ...]) -> McpToolError:
+    """``[browser_ambiguous]`` listing the open browsers (enum values only)."""
+    names = ", ".join(browser.value for browser in open_browsers)
+    if not names:
+        return machine_error(MachineErrorCode.BROWSER_AMBIGUOUS)
+    return McpToolError(
+        f"[{MachineErrorCode.BROWSER_AMBIGUOUS.value}] Several browsers are open "
+        f"on the test machine ({names}). Name one with the browser argument."
+    )
+
+
+def _has_error_code(exc: Exception, code: ErrorCode) -> bool:
+    """The controller error code ``_raise_for_error_reply`` appended."""
+    return f"[{code.value}]" in str(exc)
 
 
 def neutral_machine_text(text: str) -> str:

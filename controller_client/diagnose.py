@@ -29,6 +29,7 @@ from controller_client.protocol import (
     CaptureWindowPayload,
     ManualShotMime,
 )
+from controller_client.web_browser_diagnostics import build_web_browser_steps
 from controller_client.window_capture import WindowCaptureService
 from controller_client.window_capture_policy import build_deny_rules, is_denied
 from controller_client.window_inventory import platform_capture
@@ -64,6 +65,27 @@ def _run_browser_diagnostics(browsers: tuple[BrowserName, ...]) -> None:
         print("All browser checks passed.")
         return
     print("Some browsers could not be launched; follow the hints above and re-run.")
+    sys.exit(1)
+
+
+def _run_web_browser_diagnostics() -> None:
+    mobile, _problem = load_mobile_settings()
+    if mobile is not None:
+        print(
+            "On a phone target, open the browser app on the phone and use the "
+            "browser tools while the Test Runner runs; check the phone itself "
+            "with --mobile."
+        )
+        return
+    steps = build_web_browser_steps()
+    if not steps:
+        print("This operating system has no test browsers.")
+        sys.exit(1)
+    results = [run_diagnostics((step,), print) for step in steps]
+    if all(results):
+        print("All test browser checks passed.")
+        return
+    print("Some test browsers failed; follow the hints above and re-run.")
     sys.exit(1)
 
 
@@ -223,7 +245,8 @@ def main(argv: list[str] | None = None) -> None:
             "With --window, check the Test Runner window where a person "
             "answers Human in the loop steps. "
             "With --mobile, check the phone or tablet set in CONTROLLER_TARGET. "
-            "With --capture, check window listing and capture for screenshots."
+            "With --capture, check window listing and capture for screenshots. "
+            "With --web-browsers, open, read and close each test browser."
         ),
     )
     mode = parser.add_mutually_exclusive_group()
@@ -274,6 +297,15 @@ def main(argv: list[str] | None = None) -> None:
             "temp file (never uploaded)"
         ),
     )
+    mode.add_argument(
+        "--web-browsers",
+        action="store_true",
+        help=(
+            "open each test browser of this desktop with its Test Runner "
+            "profile (Chrome, Edge, Firefox, Safari as this OS allows), read "
+            "its URL and close it again; may download browser drivers"
+        ),
+    )
     parser.add_argument(
         "--no-interactive",
         action="store_true",
@@ -308,6 +340,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.browsers is not None:
         _run_browser_diagnostics(args.browsers)
+        return
+
+    if args.web_browsers:
+        _run_web_browser_diagnostics()
         return
 
     passed = run_diagnostics(get_desktop_backend().diagnostic_steps(), print)

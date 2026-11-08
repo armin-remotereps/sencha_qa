@@ -258,6 +258,12 @@ echo "After an update from the panel (Update Test Runner), the new version runs 
 echo "$UPDATE_BASE_DIR/test-runner-<version>/ and this copy is deleted. Start it from then on with:"
 echo "  $UPDATE_BASE_DIR/start-test-runner.sh"
 echo ""
+# The test browser shortcut (web browser layer): opens Chrome, Edge or
+# Firefox with the Test Runner's own profile so the Test Runner can control it.
+if ! (cd "$ROOT_DIR" && "$PROJECT_DIR/.venv/bin/python" -m controller_client.web_browser_launch --write-shortcut); then
+    echo "Warning: could not write $UPDATE_BASE_DIR/open-test-browser.sh"
+fi
+echo ""
 if [[ "$(uname -s)" == "Linux" ]]; then
     echo "Start the Test Runner from a terminal inside the desktop session, not over SSH:"
     echo "it needs that session's D-Bus and screen."

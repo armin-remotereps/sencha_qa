@@ -66,9 +66,25 @@ _INFO_PLIST: Final[str] = "Info.plist"
 _MAX_PLIST_BYTES: Final[int] = 4 * 1024 * 1024
 _WDA_LAUNCH_TIMEOUT_MS: Final[int] = 600_000
 _WDA_CONNECTION_TIMEOUT_MS: Final[int] = 600_000
+# The browsers the web browser layer drives (WEB_BROWSER_V1). Safari's web
+# views come with ``includeSafariInWebviews``; the others are WKWebView apps
+# whose pages are listed only through ``additionalWebviewBundleIds`` (and
+# only when the app makes them inspectable).
+IOS_SAFARI_BUNDLE_ID: Final[str] = "com.apple.mobilesafari"
+IOS_CHROME_BUNDLE_ID: Final[str] = "com.google.chrome.ios"
+IOS_EDGE_BUNDLE_ID: Final[str] = "com.microsoft.msedge"
+IOS_FIREFOX_BUNDLE_ID: Final[str] = "org.mozilla.ios.Firefox"
+_WEBVIEW_BUNDLE_IDS: Final[tuple[str, ...]] = (
+    IOS_CHROME_BUNDLE_ID,
+    IOS_EDGE_BUNDLE_ID,
+    IOS_FIREFOX_BUNDLE_ID,
+)
+# Short, so a context switch to a page that does not answer fails within an
+# action's budget instead of the driver's default wait.
+_WEBVIEW_CONNECT_TIMEOUT_MS: Final[int] = 5_000
 # Used when the driver cannot list installed apps.
 _WELL_KNOWN_APPS: Final[dict[str, str]] = {
-    "com.apple.mobilesafari": "Safari",
+    IOS_SAFARI_BUNDLE_ID: "Safari",
     "com.apple.Preferences": "Settings",
     "com.apple.mobileslideshow": "Photos",
     "com.apple.camera": "Camera",
@@ -105,6 +121,13 @@ class IosPlatform:
             "mjpegServerPort": ports.mjpeg_server_port,
             "wdaLaunchTimeout": _WDA_LAUNCH_TIMEOUT_MS,
             "wdaConnectionTimeout": _WDA_CONNECTION_TIMEOUT_MS,
+            # Web view contexts for the web browser layer: listing them costs
+            # nothing until a context is asked for, and the native context
+            # stays the default.
+            "includeSafariInWebviews": True,
+            "additionalWebviewBundleIds": list(_WEBVIEW_BUNDLE_IDS),
+            "enableWebviewDetailsCollection": True,
+            "webviewConnectTimeout": _WEBVIEW_CONNECT_TIMEOUT_MS,
         }
         if device.kind is DeviceKind.PHYSICAL:
             caps.update(self._signing_capabilities())

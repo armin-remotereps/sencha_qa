@@ -126,6 +126,16 @@ Write-Host "After an update from the panel (Update Test Runner), the new version
 Write-Host "$UpdateBaseDir\test-runner-<version>\ and this copy is deleted. Start it from then on with:"
 Write-Host "  $UpdateBaseDir\start-test-runner.cmd"
 Write-Host ""
+# The test browser shortcut (web browser layer): opens Chrome, Edge or
+# Firefox with the Test Runner's own profile so the Test Runner can control it.
+Push-Location -LiteralPath $RootDir
+try {
+    & (Join-Path $RootDir 'controller_client\.venv\Scripts\python.exe') -m controller_client.web_browser_launch --write-shortcut
+    if ($LASTEXITCODE -ne 0) { Write-Host "Warning: could not write $UpdateBaseDir\open-test-browser.cmd" }
+} finally {
+    Pop-Location
+}
+Write-Host ""
 Write-Host "To check that the Test Runner can capture the screen:"
 Write-Host "  controller_client\.venv\Scripts\python -m controller_client.diagnose"
 Write-Host ""

@@ -78,3 +78,50 @@ class DeviceDisconnectedError(ExecutionError):
 class TargetMismatchError(ExecutionError):
     """A desktop-only message on a phone target, or a phone message on a
     desktop target; answered with ``ErrorCode.TARGET_MISMATCH``."""
+
+
+# --- Web browser layer (WEB_BROWSER_V1) -------------------------------------
+# ``client.py`` maps these to the ErrorCode of the same name. Messages are
+# short and fixed; the server shows its own wording for every one of them.
+
+
+class WebBrowserSetupNeededError(ExecutionError):
+    """The browser needs a one-time setup on the machine or device.
+
+    ``step`` is a ``protocol.WebBrowserSetupStep`` value, sent as ``details``.
+    """
+
+    def __init__(self, step: str, message: str = "Browser setup needed") -> None:
+        super().__init__(message)
+        self.step = step
+
+
+class WebBrowserUnsupportedError(ExecutionError):
+    """The action does not exist for this browser, target or mode."""
+
+
+class WebBrowserNotOpenError(ExecutionError):
+    """No controllable browser is open (``named``: the requested browser
+    value, or "" when none was named)."""
+
+    def __init__(self, named: str) -> None:
+        super().__init__("Browser not open")
+        self.named = named
+
+
+class WebBrowserAmbiguousError(ExecutionError):
+    """Several browsers are open and none was named (``open_browsers``:
+    WebBrowser values)."""
+
+    def __init__(self, open_browsers: tuple[str, ...]) -> None:
+        super().__init__("Several browsers are open")
+        self.open_browsers = open_browsers
+
+
+class WebScriptFailedError(ExecutionError):
+    """A page script threw or timed out; ``error_class`` is the JavaScript
+    error class name only (never the message or stack)."""
+
+    def __init__(self, error_class: str) -> None:
+        super().__init__("Script failed")
+        self.error_class = error_class

@@ -62,6 +62,8 @@ controller_client/logs/
 /test-runner-*/
 /start-test-runner.sh
 /start-test-runner.cmd
+/open-test-browser.sh
+/open-test-browser.cmd
 
 # Vision worker runtime artifacts (OmniParser weights, venv, secrets)
 vision_worker/.venv/
@@ -79,3 +81,4 @@ private_media/
 
 # Test Runner manual run screenshot spool (per machine)
 controller_client/manual_spool/
+controller_client/web_profiles/

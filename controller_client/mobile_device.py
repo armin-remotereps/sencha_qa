@@ -9,7 +9,10 @@ phone actions. Coordinates are input-space points, mapped by the executor.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol
+
+from appium.webdriver.webdriver import WebDriver
 
 from controller_client.desktop_backend import DesktopBackend
 from controller_client.protocol import (
@@ -105,6 +108,14 @@ class MobileDevice(Protocol):
     def cleanup(self) -> list[str]:
         """Terminate the apps launched since the last cleanup, hide the
         keyboard and go home; returns one line per thing done."""
+        ...
+
+    def web_call[T](self, operation: Callable[[WebDriver], T]) -> T:
+        """Run ``operation`` on the phone's Appium session like every phone
+        action (action lock, budget, errors translated, a lost session
+        recreated). The web browser layer's only way into the session; an
+        operation that switches context must switch back to NATIVE_APP
+        before it returns."""
         ...
 
 

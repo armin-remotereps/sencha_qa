@@ -7,7 +7,19 @@ from typing import Final
 
 from django.conf import settings
 
-from controller_client.protocol import KEPT_SESSION_MAX_SECONDS, KEPT_SESSIONS_MAX
+from controller_client.protocol import (
+    KEPT_SESSION_MAX_SECONDS,
+    KEPT_SESSIONS_MAX,
+    WEB_BROWSER_ACTION_BUDGET_SECONDS,
+    WEB_BROWSER_OPEN_BUDGET_SECONDS,
+    WEB_BROWSER_PHONE_ACTION_BUDGET_SECONDS,
+    WEB_ELEMENT_INDEX_MAX,
+    WEB_EVAL_RESULT_MAX_BYTES,
+    WEB_READ_MAX_CHARS,
+    WEB_SCRIPT_ARGS_MAX_CHARS,
+    WEB_SCRIPT_MAX_CHARS,
+    WEB_TIMEOUT_MS_MAX,
+)
 
 # Request body cap, checked before parsing (nginx caps at 11m as well).
 MCP_REQUEST_MAX_BYTES: Final[int] = 10 * 1024 * 1024
@@ -96,6 +108,38 @@ MCP_SCREEN_DEADLINE_SECONDS: Final[int] = 50
 MCP_SCREEN_LOCK_SECONDS: Final[int] = (
     MCP_SCREEN_DEADLINE_SECONDS + MCP_MACHINE_LOCK_MARGIN_SECONDS
 )
+# --- Browser tools (browse_*; docs/plan/feat-mcp-browser-toolset.md) ---
+# browse_open may download a driver or attach to a phone (runner budget
+# WEB_BROWSER_OPEN_BUDGET_SECONDS): its own deadline and lock. Every other
+# browse_* call uses the CONTROL budget (AI with a description).
+MCP_BROWSE_OPEN_DEADLINE_SECONDS: Final[int] = 100
+MCP_BROWSE_OPEN_LOCK_SECONDS: Final[int] = (
+    MCP_BROWSE_OPEN_DEADLINE_SECONDS + MCP_MACHINE_LOCK_MARGIN_SECONDS
+)
+# The reply waits sent to the test machine (each cut to the call deadline);
+# longer than the runner's own answer budgets (desktop, phone, open), so it
+# always answers first.
+MCP_BROWSE_REPLY_TIMEOUT_SECONDS: Final[int] = 30
+MCP_BROWSE_OPEN_REPLY_TIMEOUT_SECONDS: Final[int] = 90
+# A browse_* request is sent only while the call has at least the runner's
+# budget for it plus this margin left (a description call makes a listing,
+# an AI pick and the action under one deadline); else it is refused unsent,
+# never sent and then abandoned while the test machine still acts.
+MCP_BROWSE_SEND_MARGIN_SECONDS: Final[int] = 2
+# Element listing text one response carries (and the plain-words pick reads).
+MCP_BROWSE_ELEMENTS_MAX_CHARS: Final[int] = 30_000
+# Page text browse_read asks for.
+MCP_BROWSE_TEXT_MAX_CHARS: Final[int] = 50_000
+# browse_evaluate: script and args (a JSON array) sizes, the result cap.
+MCP_BROWSE_SCRIPT_MAX_CHARS: Final[int] = 20_000
+MCP_BROWSE_ARGS_MAX_CHARS: Final[int] = 20_000
+MCP_BROWSE_EVAL_RESULT_MAX_BYTES: Final[int] = 64 * 1024
+MCP_BROWSE_EVAL_TIMEOUT_MS_MAX: Final[int] = WEB_TIMEOUT_MS_MAX
+# Highest element index a call may name (from browse_list_elements).
+MCP_BROWSE_INDEX_MAX: Final[int] = WEB_ELEMENT_INDEX_MAX
+# EVAL: browse_evaluate calls per project and minute (CONTROL budget).
+MCP_EVAL_RATE_PER_MINUTE: Final[int] = 30
+
 # Longest ``wait`` (sleeps on the event loop, holds no lock or thread) and
 # the deadline of web_search.
 MCP_WAIT_MAX_SECONDS: Final[int] = 50
@@ -132,8 +176,24 @@ assert all(
         (MCP_AI_DEADLINE_SECONDS, MCP_AI_LOCK_SECONDS),
         (MCP_COMMAND_DEADLINE_SECONDS, MCP_COMMAND_LOCK_SECONDS),
         (MCP_SCREEN_DEADLINE_SECONDS, MCP_SCREEN_LOCK_SECONDS),
+        (MCP_BROWSE_OPEN_DEADLINE_SECONDS, MCP_BROWSE_OPEN_LOCK_SECONDS),
     )
 ), "a machine lock could expire before its call ends"
+assert (
+    max(WEB_BROWSER_ACTION_BUDGET_SECONDS, WEB_BROWSER_PHONE_ACTION_BUDGET_SECONDS)
+    + MCP_BROWSE_SEND_MARGIN_SECONDS
+    <= MCP_BROWSE_REPLY_TIMEOUT_SECONDS
+    <= min(MCP_CONTROL_DEADLINE_SECONDS, MCP_AI_DEADLINE_SECONDS)
+), "a browser reply wait shorter than the runner budget or over the deadline"
+assert (
+    WEB_BROWSER_OPEN_BUDGET_SECONDS + MCP_BROWSE_SEND_MARGIN_SECONDS
+    <= MCP_BROWSE_OPEN_REPLY_TIMEOUT_SECONDS
+    <= MCP_BROWSE_OPEN_DEADLINE_SECONDS
+), "browse_open's reply wait shorter than the runner budget or over the deadline"
+assert MCP_BROWSE_TEXT_MAX_CHARS <= WEB_READ_MAX_CHARS
+assert MCP_BROWSE_SCRIPT_MAX_CHARS <= WEB_SCRIPT_MAX_CHARS
+assert MCP_BROWSE_ARGS_MAX_CHARS <= WEB_SCRIPT_ARGS_MAX_CHARS
+assert MCP_BROWSE_EVAL_RESULT_MAX_BYTES >= WEB_EVAL_RESULT_MAX_BYTES
 assert MCP_EXECUTE_WAIT_SECONDS < MCP_COMMAND_DEADLINE_SECONDS
 assert MCP_READ_OUTPUT_MAX_WAIT_SECONDS < MCP_COMMAND_DEADLINE_SECONDS
 assert MCP_MAX_KEPT_COMMANDS <= KEPT_SESSIONS_MAX, "kept commands over the runner cap"

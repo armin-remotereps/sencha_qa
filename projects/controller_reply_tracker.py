@@ -236,6 +236,38 @@ class ReplyTracker:
         )
         return True
 
+    async def send_web_browser_result(
+        self, request_id: str, data: dict[str, Any]
+    ) -> bool:
+        """Forward a ``web_browser_result`` reply (WEB_BROWSER_V1).
+
+        The consumer has already refused a message over its size cap.
+        """
+        reply_channel = self.pop_reply_channel(request_id)
+        if not reply_channel:
+            logger.warning(
+                "Received web_browser_result with unknown request_id: %s",
+                request_id,
+            )
+            return False
+
+        # Runner data; ``controller_web_browser_actions`` validates it.
+        await self._channel_layer.send(
+            reply_channel,
+            {
+                "type": "web_browser.result",
+                "request_id": request_id,
+                "success": data.get("success"),
+                "content": data.get("content", ""),
+                "browser": data.get("browser"),
+                "mode": data.get("mode"),
+                "truncated": data.get("truncated", False),
+                "browsers": data.get("browsers", []),
+                "duration_ms": data.get("duration_ms", 0.0),
+            },
+        )
+        return True
+
     async def send_error(self, request_id: str, data: dict[str, Any]) -> bool:
         reply_channel = self.pop_reply_channel(request_id)
         if not reply_channel:

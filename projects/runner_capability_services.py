@@ -7,7 +7,16 @@ and pauses the case for help with a clear "update the Test Runner" message inste
 
 from __future__ import annotations
 
-from controller_client.protocol import ClientCapability
+from collections.abc import Collection
+from enum import StrEnum
+
+from controller_client.protocol import (
+    ClientCapability,
+    RunnerTarget,
+    WebBrowser,
+    ordered_web_browsers,
+    web_browsers_for,
+)
 from projects.exceptions import RunnerOutdatedError
 from projects.models import Project
 
@@ -81,3 +90,37 @@ def _windows_shell_outdated() -> RunnerOutdatedError:
         "This Test Runner cannot run shell commands on Windows. Download a fresh "
         "Test Runner from the Environment page."
     )
+
+
+class WebBrowserCheck(StrEnum):
+    """Whether the WEB_BROWSER_V1 layer can serve a request (no query)."""
+
+    OK = "ok"
+    # The runner does not advertise WEB_BROWSER_V1.
+    OUTDATED = "outdated"
+    # The named browser is not in ``web_browsers_for(target, host_os)``.
+    UNSUPPORTED = "unsupported"
+
+
+def web_browser_check(
+    capabilities: Collection[str],
+    target: RunnerTarget,
+    host_os: str,
+    browser: WebBrowser | None,
+) -> WebBrowserCheck:
+    """Check loaded runner values (capabilities, target, ``system_info.os``)
+    against the web browser layer; ``browser`` None checks only the
+    capability (the runner picks the open browser)."""
+    if ClientCapability.WEB_BROWSER_V1.value not in capabilities:
+        return WebBrowserCheck.OUTDATED
+    if browser is not None and browser not in web_browsers_for(target, host_os):
+        return WebBrowserCheck.UNSUPPORTED
+    return WebBrowserCheck.OK
+
+
+def web_browsers_supported(
+    target: RunnerTarget, host_os: str
+) -> tuple[WebBrowser, ...]:
+    """The browsers a runner of ``target`` on ``host_os`` serves, in a stable
+    order (no query)."""
+    return ordered_web_browsers(web_browsers_for(target, host_os))

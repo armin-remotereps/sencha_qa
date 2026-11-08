@@ -13,7 +13,7 @@ import io
 import logging
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Final
 
 from appium.webdriver.webdriver import WebDriver
@@ -429,6 +429,9 @@ class MobileBackend:
                 continue
             lines.append(self._cleanup_app(driver, app_id))
         return lines
+
+    def web_call[T](self, operation: Callable[[WebDriver], T]) -> T:
+        return self._session.call(operation)
 
     # --- helpers ----------------------------------------------------------
 

@@ -2,7 +2,8 @@
 
 The project's name, its running Manual run (if any), the screenshot limits,
 whether the test machine can capture screenshots now, the test machine's
-target and connection (``machine``) and the workflow text. Three queries.
+target, connection and browse_* browsers (``machine``) and the workflow
+text. Three queries.
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ from mcp_gateway.services.call_guard import McpCall
 from mcp_gateway.services.capture_errors import readiness_code
 from mcp_gateway.untrusted_text import case_line
 from mcp_gateway.workflow import WORKFLOW_TEXT
-from projects.models import RunHelpMode, TestRun, TestRunStatus
+from projects.models import Project, RunHelpMode, TestRun, TestRunStatus
+from projects.runner_capability_services import os_name_of, web_browsers_supported
 from projects.runner_capture_readiness import capture_readiness
-from projects.runner_target import load_runner_target
+from projects.runner_target import project_runner_target
 
 
 def read_project(call: McpCall) -> ProjectResponse:
@@ -34,6 +36,12 @@ def read_project(call: McpCall) -> ProjectResponse:
     )
     readiness = capture_readiness(call.project.pk)
     reason = readiness_code(readiness)
+    # One read of the stored system info: the target and the OS name.
+    machine_row = Project.objects.only("agent_system_info").get(pk=call.project.pk)
+    target = project_runner_target(machine_row)
+    web_browsers = web_browsers_supported(
+        target, os_name_of(machine_row.agent_system_info)
+    )
     return ProjectResponse(
         name=case_line(call.project.name),
         manual_run=(
@@ -51,8 +59,9 @@ def read_project(call: McpCall) -> ProjectResponse:
             allowed_processes=list(readiness.allowed),
         ),
         machine=MachineInfo(
-            target=load_runner_target(call.project.pk).value,
+            target=target.value,
             connected=readiness.connected,
+            web_browsers=[browser.value for browser in web_browsers],
         ),
         how_to=WORKFLOW_TEXT,
     )

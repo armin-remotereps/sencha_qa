@@ -43,6 +43,9 @@ class MachineTool:
     uses_visual_engine: bool = False
     # Counts as AI when called with an expected_result.
     ai_with_expected_result: bool = False
+    # Counts as AI when called with a plain-words description (the browse_*
+    # element tools resolve it with one AI request).
+    ai_with_description: bool = False
 
 
 def _tool(
@@ -54,6 +57,7 @@ def _tool(
     needs_runner: bool = True,
     uses_visual_engine: bool = False,
     ai_with_expected_result: bool = False,
+    ai_with_description: bool = False,
 ) -> MachineTool:
     """A table row; a dispatching tool has the agent tool of its own name."""
     return MachineTool(
@@ -64,6 +68,26 @@ def _tool(
         needs_runner=needs_runner,
         uses_visual_engine=uses_visual_engine,
         ai_with_expected_result=ai_with_expected_result,
+        ai_with_description=ai_with_description,
+    )
+
+
+def _browse(
+    name: str,
+    targets: frozenset[RunnerTarget] = _ALL,
+    *,
+    kind: CallKind = CallKind.CONTROL,
+    ai_with_description: bool = False,
+) -> MachineTool:
+    """A browse_* row: its own browser layer on the test machine, never the
+    agent's dispatch, never the visual engine."""
+    return _tool(
+        name,
+        kind,
+        targets,
+        dispatches=False,
+        uses_visual_engine=False,
+        ai_with_description=ai_with_description,
     )
 
 
@@ -99,6 +123,24 @@ _TOOLS: Final[tuple[MachineTool, ...]] = (
     _tool("browser_get_url", CallKind.CONTROL, _DESKTOP),
     _tool("browser_download", CallKind.CONTROL, _DESKTOP),
     _tool("browser_list_downloads", CallKind.CONTROL, _DESKTOP),
+    # Browser layer (browse_*; desktop and phone browsers, separate from the
+    # browser_* tools above).
+    _browse("browse_open"),
+    _browse("browse_list_browsers"),
+    _browse("browse_navigate"),
+    _browse("browse_history"),
+    _browse("browse_tabs"),
+    _browse("browse_list_elements"),
+    _browse("browse_click", ai_with_description=True),
+    _browse("browse_double_click", ai_with_description=True),
+    _browse("browse_hover", _DESKTOP, ai_with_description=True),
+    _browse("browse_type", ai_with_description=True),
+    _browse("browse_select", ai_with_description=True),
+    _browse("browse_press_key"),
+    _browse("browse_read", ai_with_description=True),
+    _browse("browse_wait"),
+    _browse("browse_evaluate", kind=CallKind.EVAL),
+    _browse("browse_close"),
     # Phone.
     _tool("long_press", CallKind.AI, _PHONE, uses_visual_engine=True),
     _tool("swipe", CallKind.CONTROL, _PHONE, ai_with_expected_result=True),
@@ -116,12 +158,17 @@ _TOOLS: Final[tuple[MachineTool, ...]] = (
 )
 
 
-def effective_kind(tool: MachineTool, expected_result: object) -> CallKind:
+def effective_kind(
+    tool: MachineTool, expected_result: object = None, *, description: object = None
+) -> CallKind:
     """``tool``'s throttle and budget class: AI for a coordinate action
-    called with a non-empty expected_result (a vision check), else its own.
-    The one rule for the handler's throttle and ``run_agent_tool``'s
-    budget."""
+    called with a non-empty expected_result (a vision check) and for a
+    browse_* element tool called with a description (an AI pick), else its
+    own. The one rule for the handler's throttle, ``run_agent_tool``'s and
+    the browse_* budget."""
     if tool.ai_with_expected_result and expected_result:
+        return CallKind.AI
+    if tool.ai_with_description and description:
         return CallKind.AI
     return tool.kind
 
@@ -129,7 +176,7 @@ def effective_kind(tool: MachineTool, expected_result: object) -> CallKind:
 MACHINE_TOOLS: Final[Mapping[str, MachineTool]] = MappingProxyType(
     {tool.name: tool for tool in _TOOLS}
 )
-assert len(MACHINE_TOOLS) == len(_TOOLS) == 36, "machine tool table is not 36 tools"
+assert len(MACHINE_TOOLS) == len(_TOOLS) == 52, "machine tool table is not 52 tools"
 
 # What ``allowlisted_dispatcher`` lets the machine tools reach: every agent
 # tool of the table (never wait_for_command or browser_take_screenshot).

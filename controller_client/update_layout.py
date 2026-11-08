@@ -11,6 +11,7 @@ counts as an update folder only when it holds the marker file the update wrote
 is treated like any manual install.
 """
 
+import logging
 import os
 import re
 import shlex
@@ -25,6 +26,8 @@ from typing import Final
 from controller_client.config import API_KEY_ENV_NAME, PERSON_EMAIL_ENV_NAME
 from controller_client.exceptions import UpdateError
 from controller_client.protocol import version_tuple
+
+logger = logging.getLogger(__name__)
 
 PACKAGE_DIR_NAME: Final[str] = "controller_client"
 # The package this process runs from; the only source of the "old install"
@@ -42,6 +45,11 @@ _MAX_NAME_SUFFIX: Final[int] = 100
 MIN_FREE_BYTES: Final[int] = 1536 * 1024 * 1024
 START_SCRIPT_POSIX: Final[str] = "start-test-runner.sh"
 START_SCRIPT_WINDOWS: Final[str] = "start-test-runner.cmd"
+OPEN_BROWSER_SCRIPT_POSIX: Final[str] = "open-test-browser.sh"
+OPEN_BROWSER_SCRIPT_WINDOWS: Final[str] = "open-test-browser.cmd"
+# The web browser layer's dedicated browser profiles (inside the package
+# folder); never packaged, moved to the new install by a self-update.
+WEB_PROFILES_DIR_NAME: Final[str] = "web_profiles"
 ENV_FILE_NAME: Final[str] = ".env"
 # Written into every folder an update creates; holds the version.
 MANAGED_MARKER_NAME: Final[str] = ".punk-hazard-runner"
@@ -202,6 +210,33 @@ def install_env_file(
     return True
 
 
+def move_web_profiles(old_package_dir: Path, new_package_dir: Path) -> bool:
+    """Move the web browser layer's profiles (logins made during tests) from
+    the old install to the new one; False when there are none or the move
+    failed. Called by the new runner once the old one has exited, before the
+    old folder is deleted. A plain rename (both installs are siblings under
+    ``<base>``): it moves all or nothing, never a partial copy; a test
+    browser still running from the old profile can make it fail, which
+    only loses saved logins."""
+    source = old_package_dir / WEB_PROFILES_DIR_NAME
+    target = new_package_dir / WEB_PROFILES_DIR_NAME
+    if not source.is_dir():
+        return False
+    if target.exists():
+        logger.info(
+            "The new install already has test browser profiles; the old ones "
+            "in %s are not kept",
+            source,
+        )
+        return False
+    try:
+        os.rename(source, target)
+    except OSError as e:
+        logger.warning("Could not move the test browser profiles: %s", e)
+        return False
+    return True
+
+
 def _with_env_value(content: bytes, name: str, value: str, invalid: str) -> bytes:
     """``content`` with its ``name`` assignment set to ``value``.
 
@@ -308,10 +343,52 @@ def start_script_text(new_root: Path) -> str:
 
 def write_start_script(base: Path, new_root: Path) -> Path:
     """(Re)write ``<base>/start-test-runner.{sh,cmd}`` atomically; returns its path."""
-    target = start_script_path(base)
-    text = start_script_text(new_root)
+    return _write_script(start_script_path(base), start_script_text(new_root))
+
+
+def open_browser_script_path(base: Path) -> Path:
+    name = (
+        OPEN_BROWSER_SCRIPT_WINDOWS
+        if sys.platform == "win32"
+        else OPEN_BROWSER_SCRIPT_POSIX
+    )
+    return base / name
+
+
+def open_browser_script_text(new_root: Path) -> str:
+    """The test browser shortcut: ``open-test-browser <chrome|edge|firefox>
+    [url]`` runs the web browser launcher of the install at ``new_root``."""
+    python = venv_python(new_root / PACKAGE_DIR_NAME)
+    if sys.platform == "win32":
+        root = str(new_root).replace("%", "%%")
+        exe = str(python).replace("%", "%%")
+        return (
+            "@echo off\r\n"
+            "rem Written by the Test Runner: opens a test browser it can control.\r\n"
+            "chcp 65001 >nul\r\n"
+            "setlocal\r\n"
+            f'cd /d "{root}" || exit /b 1\r\n'
+            f'"{exe}" -m controller_client.web_browser_launch %*\r\n'
+        )
+    return (
+        "#!/bin/sh\n"
+        "# Written by the Test Runner: opens a test browser it can control.\n"
+        f"cd {shlex.quote(str(new_root))} || exit 1\n"
+        f'exec {shlex.quote(str(python))} -m controller_client.web_browser_launch "$@"\n'
+    )
+
+
+def write_open_browser_script(base: Path, new_root: Path) -> Path:
+    """(Re)write ``<base>/open-test-browser.{sh,cmd}`` atomically; returns its
+    path."""
+    return _write_script(
+        open_browser_script_path(base), open_browser_script_text(new_root)
+    )
+
+
+def _write_script(target: Path, text: str) -> Path:
     fd, temp_name = tempfile.mkstemp(
-        dir=base, prefix=".start-test-runner.", suffix=".tmp"
+        dir=target.parent, prefix=f".{target.stem}.", suffix=".tmp"
     )
     temp = Path(temp_name)
     try:

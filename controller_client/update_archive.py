@@ -29,7 +29,9 @@ MAX_ENTRIES: Final[int] = 1000
 MAX_TOTAL_UNCOMPRESSED_BYTES: Final[int] = 32 * 1024 * 1024
 MAX_FILE_BYTES: Final[int] = 8 * 1024 * 1024
 # Never shipped in a bundle; the runner carries .env over itself.
-_FORBIDDEN_PARTS: Final[frozenset[str]] = frozenset({".env", ".venv", "logs"})
+_FORBIDDEN_PARTS: Final[frozenset[str]] = frozenset(
+    {".env", ".venv", "logs", "web_profiles"}
+)
 _REQUIRED_FILES: Final[tuple[str, ...]] = (
     f"{PACKAGE_DIR_NAME}/protocol.py",
     f"{PACKAGE_DIR_NAME}/main.py",

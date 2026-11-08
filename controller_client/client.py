@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import functools
 import logging
+import platform
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine
@@ -49,6 +50,11 @@ from controller_client.exceptions import (
     TargetMismatchError,
     UnknownMessageTypeError,
     UpdateError,
+    WebBrowserAmbiguousError,
+    WebBrowserNotOpenError,
+    WebBrowserSetupNeededError,
+    WebBrowserUnsupportedError,
+    WebScriptFailedError,
 )
 from controller_client.executor import (
     execute_click,
@@ -180,16 +186,20 @@ from controller_client.protocol import (
     serialize_person_chat_send,
     serialize_person_help_action,
     serialize_person_step_action,
+    serialize_web_browser_result_message,
     serialize_window_capture_result_message,
     serialize_window_list_result_message,
 )
 from controller_client.system_info import gather_system_info
-from controller_client.target import get_mobile_device
+from controller_client.target import current_target, get_mobile_device
+from controller_client.update_layout import RUNNING_PACKAGE_DIR
 from controller_client.update_runner import (
     RunnerUpdate,
     finish_update_as_new_runner,
     prepare_update,
 )
+from controller_client.web_browser_backend import WebBrowserContext
+from controller_client.web_browser_hub import WebBrowserHub
 from controller_client.window_capture import (
     WindowCaptureService,
     capture_refusal,
@@ -374,6 +384,39 @@ def _error_code(exc: Exception, fallback: ErrorCode) -> ErrorCode:
     return fallback
 
 
+# The web browser layer (WEB_BROWSER_V1): every message goes to the hub.
+_WEB_BROWSER_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
+    {
+        MessageType.WEB_BROWSER_OPEN,
+        MessageType.WEB_BROWSER_LIST,
+        MessageType.WEB_BROWSER_NAVIGATE,
+        MessageType.WEB_BROWSER_HISTORY,
+        MessageType.WEB_BROWSER_TABS,
+        MessageType.WEB_BROWSER_ELEMENTS,
+        MessageType.WEB_BROWSER_ACT,
+        MessageType.WEB_BROWSER_READ,
+        MessageType.WEB_BROWSER_WAIT,
+        MessageType.WEB_BROWSER_EVALUATE,
+        MessageType.WEB_BROWSER_CLOSE,
+    }
+)
+
+
+def _web_browser_error(exc: Exception) -> tuple[ErrorCode, str]:
+    """The error code and ``details`` for a web browser layer failure."""
+    if isinstance(exc, WebBrowserSetupNeededError):
+        return ErrorCode.WEB_BROWSER_SETUP_NEEDED, exc.step
+    if isinstance(exc, WebBrowserUnsupportedError):
+        return ErrorCode.WEB_BROWSER_UNSUPPORTED, ""
+    if isinstance(exc, WebBrowserNotOpenError):
+        return ErrorCode.WEB_BROWSER_NOT_OPEN, exc.named
+    if isinstance(exc, WebBrowserAmbiguousError):
+        return ErrorCode.WEB_BROWSER_AMBIGUOUS, ",".join(exc.open_browsers)
+    if isinstance(exc, WebScriptFailedError):
+        return ErrorCode.SCRIPT_FAILED, exc.error_class
+    return _error_code(exc, _browser_error_code(exc, ErrorCode.EXECUTION_FAILED)), ""
+
+
 def _target_mismatch(message_type: MessageType) -> str | None:
     """Why ``message_type`` cannot run on this runner's target, or None."""
     on_phone = get_mobile_device() is not None
@@ -411,6 +454,9 @@ class ControllerClient:
         )
         self._session_manager = InteractiveSessionManager()
         self._process_tracker = ProcessTracker()
+        # The web browser layer; built at the first web_browser_* message,
+        # once the target backend (and its phone) is selected.
+        self._web_browser_hub: WebBrowserHub | None = None
         self._interactive_cmd_timeout = interactive_cmd_timeout
         self._handlers: dict[MessageType, MessageHandler] = {
             MessageType.CLICK: self._handle_click,
@@ -460,6 +506,10 @@ class ControllerClient:
             MessageType.LIST_WINDOWS: self._handle_list_windows,
             MessageType.CAPTURE_WINDOW: self._handle_capture_window,
         }
+        for web_type in _WEB_BROWSER_MESSAGE_TYPES:
+            self._handlers[web_type] = functools.partial(
+                self._handle_web_browser, web_type
+            )
         # The latest device_status, re-sent after every accepted handshake.
         self._last_device_status: DeviceStatusPayload | None = None
         # Self-update (SELF_UPDATE_V1).
@@ -643,6 +693,8 @@ class ControllerClient:
         # The executor is not shut down: stop() can run twice (signal, then
         # after run() returns) and the idle worker is joined at exit anyway.
         await self._run_browser(self._browser_session.close)
+        if self._web_browser_hub is not None:
+            await self._web_browser_hub.shutdown()
         if self._connection is not None:
             await self._connection.close()
 
@@ -1490,6 +1542,9 @@ class ControllerClient:
                 self._process_tracker,
                 Path(self._config.cleanup_dir).expanduser(),
             )
+            # Desktop browsers the web browser layer started (its profiles);
+            # never raises.
+            await self._web_hub().cleanup()
             if get_mobile_device() is not None:
                 # After the host: the device's apps, keyboard and home screen.
                 result = await asyncio.to_thread(execute_device_cleanup, result)
@@ -1498,6 +1553,45 @@ class ControllerClient:
             await self._send_error(
                 request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
             )
+
+    # --- Web browser layer (WEB_BROWSER_V1) --------------------------------
+
+    def _web_hub(self) -> WebBrowserHub:
+        if self._web_browser_hub is None:
+            mobile = self._config.mobile
+            self._web_browser_hub = WebBrowserHub(
+                WebBrowserContext(
+                    target=current_target(),
+                    host_os=platform.system(),
+                    runner_root=RUNNING_PACKAGE_DIR,
+                    driver_download=self._config.web_driver_download,
+                    mobile=get_mobile_device(),
+                    device_serial=(mobile.device_id or None) if mobile else None,
+                )
+            )
+        return self._web_browser_hub
+
+    async def _shutdown_web_browsers(self) -> None:
+        """End the web browser layer's driver sessions (never raises)."""
+        if self._web_browser_hub is not None:
+            await self._web_browser_hub.shutdown()
+
+    async def _handle_web_browser(
+        self, message_type: MessageType, request_id: str, data: dict[str, object]
+    ) -> None:
+        """Every ``web_browser_*`` request: the hub answers within its budget.
+        ProtocolError reaches ``_dispatch`` (INVALID_MESSAGE)."""
+        try:
+            result = await self._web_hub().handle(message_type, data)
+        except ProtocolError:
+            raise
+        except ExecutionError as e:
+            code, details = _web_browser_error(e)
+            await self._send_error(request_id, code, str(e), details)
+            return
+        await self._send_message(
+            serialize_web_browser_result_message(result, request_id)
+        )
 
     # --- Phone and tablet target (MOBILE_DEVICE_V1) -----------------------
 
@@ -1654,7 +1748,13 @@ class ControllerClient:
         except (ProtocolError, UpdateError, OSError) as e:
             await self._refuse_update(update_id, str(e) or type(e).__name__)
             return
-        update = RunnerUpdate(payload, layout, self._config, self._send_update_status)
+        update = RunnerUpdate(
+            payload,
+            layout,
+            self._config,
+            self._send_update_status,
+            before_device_release=self._shutdown_web_browsers,
+        )
         self._update = update
         await self._send_update_status(update_id, UpdatePhase.ACCEPTED)
         # In the background, so pings and actions keep being answered.

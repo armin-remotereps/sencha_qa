@@ -73,9 +73,12 @@ from controller_client.protocol import (
     ClientCapability,
     ErrorCode,
     ScrollDirection,
+    WebBrowser,
+    WebBrowserSetupStep,
     is_mobile_target,
     parse_inspect_paths_result,
     parse_scan_directory_result,
+    parse_web_browser_list_details,
 )
 from knowledge_base.services.item_processing import COPY_PROJECT_KNOWLEDGE_TASK
 from knowledge_base.services.knowledge_index import knowledge_index_text
@@ -156,6 +159,11 @@ from projects.exceptions import (
     KeptSessionLimitError,
     TestRunnerDisconnectedError,
     TestRunnerUnresponsiveError,
+    WebBrowserAmbiguousError,
+    WebBrowserNotOpenError,
+    WebBrowserScriptError,
+    WebBrowserSetupNeededError,
+    WebBrowserUnsupportedError,
 )
 from projects.manual_run_policy import is_manual_mode
 from projects.manual_submission_supersede import supersede_manual_submissions
@@ -1331,6 +1339,70 @@ _TARGET_MISMATCH_MESSAGE = (
     "runner drives (a desktop action on a phone or tablet, or the reverse)."
 )
 
+# WEB_BROWSER_V1 refusals: fixed server text; the typed fields of the raised
+# exceptions carry what the caller needs (never the runner's own text).
+_WEB_BROWSER_SETUP_NEEDED_MESSAGE = "The browser needs a one-time setup first."
+_WEB_BROWSER_UNSUPPORTED_MESSAGE = "This browser is not supported on the test machine."
+_WEB_BROWSER_NOT_OPEN_MESSAGE = "No controllable browser is open."
+_WEB_BROWSER_AMBIGUOUS_MESSAGE = "Several browsers are open; name one."
+_WEB_SCRIPT_FAILED_MESSAGE = "The script threw an error."
+_WEB_SCRIPT_ERROR_CLASS_MAX_CHARS = 64
+_WEB_SCRIPT_ERROR_CLASS_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_$."
+)
+
+
+def _web_setup_step(details: object) -> WebBrowserSetupStep | None:
+    try:
+        return WebBrowserSetupStep(str(details).strip())
+    except ValueError:
+        return None
+
+
+def _web_browser_named(details: object) -> WebBrowser | None:
+    try:
+        return WebBrowser(str(details).strip())
+    except ValueError:
+        return None
+
+
+def _web_script_error_class(details: object) -> str:
+    """The runner's JavaScript error class if it is a plain identifier path
+    ([A-Za-z0-9_$.], at most 64 characters), else ``"Error"``."""
+    text = str(details).strip()
+    if (
+        not text
+        or len(text) > _WEB_SCRIPT_ERROR_CLASS_MAX_CHARS
+        or not set(text) <= _WEB_SCRIPT_ERROR_CLASS_CHARS
+    ):
+        return "Error"
+    return text
+
+
+def _raise_for_web_browser_error(code: object, details: object, message: str) -> None:
+    """Raise the WEB_BROWSER_V1 exception for ``code``; return for any other
+    code. The runner's text stays in the server log."""
+    if code == ErrorCode.WEB_BROWSER_SETUP_NEEDED:
+        logger.info("Controller reports a browser setup step: %s", message)
+        raise WebBrowserSetupNeededError(
+            _WEB_BROWSER_SETUP_NEEDED_MESSAGE, setup_step=_web_setup_step(details)
+        )
+    if code == ErrorCode.WEB_BROWSER_UNSUPPORTED:
+        raise WebBrowserUnsupportedError(_WEB_BROWSER_UNSUPPORTED_MESSAGE)
+    if code == ErrorCode.WEB_BROWSER_NOT_OPEN:
+        raise WebBrowserNotOpenError(
+            _WEB_BROWSER_NOT_OPEN_MESSAGE, named=_web_browser_named(details)
+        )
+    if code == ErrorCode.WEB_BROWSER_AMBIGUOUS:
+        raise WebBrowserAmbiguousError(
+            _WEB_BROWSER_AMBIGUOUS_MESSAGE,
+            open_browsers=parse_web_browser_list_details(str(details)),
+        )
+    if code == ErrorCode.SCRIPT_FAILED:
+        raise WebBrowserScriptError(
+            _WEB_SCRIPT_FAILED_MESSAGE, error_class=_web_script_error_class(details)
+        )
+
 
 def _raise_for_error_reply(reply: dict[str, Any], event_type: str) -> None:
     """Turn a controller error reply into an exception.
@@ -1365,6 +1437,7 @@ def _raise_for_error_reply(reply: dict[str, Any], event_type: str) -> None:
         raise ControllerActionError(_TARGET_MISMATCH_MESSAGE)
     if code == ErrorCode.TOO_MANY_SESSIONS:
         raise KeptSessionLimitError(message)
+    _raise_for_web_browser_error(code, details, message)
     raise ControllerActionError(message)
 
 

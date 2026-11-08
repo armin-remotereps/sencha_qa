@@ -113,6 +113,9 @@ class ClientConfig:
     manual_shortcuts: bool = True
     # CONTROLLER_MANUAL_SPOOL_MAX_MB, at least MIN_SPOOL_MAX_MB.
     manual_spool_max_mb: int = DEFAULT_SPOOL_MAX_MB
+    # CONTROLLER_WEB_DRIVER_DOWNLOAD: the web browser layer may let Selenium
+    # Manager download browser drivers; False = PATH or its cache only.
+    web_driver_download: bool = True
     # The CLI overrides this process got, re-passed to the runner a self-update
     # starts (update flags excluded).
     cli_overrides: tuple[str, ...] = ()
@@ -210,6 +213,11 @@ def _env_proxy() -> tuple[str | None, str | None]:
             f"{PROXY_ENV_NAME} is not a valid proxy: a SOCKS proxy needs a port",
         )
     return raw, None
+
+
+def web_driver_download_enabled() -> bool:
+    """CONTROLLER_WEB_DRIVER_DOWNLOAD (default true)."""
+    return _env_bool("CONTROLLER_WEB_DRIVER_DOWNLOAD", True)
 
 
 def load_mobile_settings() -> tuple[MobileSettings | None, str | None]:
@@ -349,6 +357,7 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
             MIN_SPOOL_MAX_MB,
             _env_int(MANUAL_SPOOL_MAX_MB_ENV_NAME, DEFAULT_SPOOL_MAX_MB),
         ),
+        web_driver_download=web_driver_download_enabled(),
         cli_overrides=_carried_overrides(args),
         api_key_from_cli=bool(args.api_key),
         update_id=args.update_id,

@@ -13,11 +13,15 @@ controller_client/.mypy_cache/
 controller_client/logs/
 # Manual run screenshots waiting to upload (per machine).
 controller_client/manual_spool/
+# Test browser profiles of the web browser layer (per machine, hold logins).
+controller_client/web_profiles/
 # Side-by-side installs and start script left by a runner self-update run
 # from this checkout (they also hold a copy of controller_client/.env).
 test-runner-*/
 start-test-runner.sh
 start-test-runner.cmd
+open-test-browser.sh
+open-test-browser.cmd
 # Same for vision_worker: the server imports vision_worker.protocol, so the
 # source stays; its venv, model weights and .env are per-machine artifacts.
 vision_worker/.venv/

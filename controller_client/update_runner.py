@@ -57,6 +57,7 @@ from controller_client.update_layout import (
     check_free_space,
     install_env_file,
     plan_layout,
+    write_open_browser_script,
     write_start_script,
 )
 
@@ -111,8 +112,12 @@ class RunnerUpdate:
         config: ClientConfig,
         send_status: StatusSender,
         old_package_dir: Path = RUNNING_PACKAGE_DIR,
+        before_device_release: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._payload = payload
+        # Ends sessions that use the phone (the web browser layer's driver
+        # sessions) before it is handed to the new runner; never raises.
+        self._before_device_release = before_device_release
         self._layout = layout
         self._config = config
         self._send_status = send_status
@@ -183,6 +188,8 @@ class RunnerUpdate:
             cli_email,
         )
         new_python = await install(layout, Path(sys.executable), self._on_phase)
+        if self._before_device_release is not None:
+            await self._before_device_release()
         self._device_released = True
         await asyncio.to_thread(release_mobile_device)
         spawned = await asyncio.to_thread(
@@ -304,10 +311,14 @@ async def finish_update_as_new_runner(
     """The new runner's bookkeeping after its first accepted handshake."""
     try:
         await asyncio.to_thread(mark_connected, install_root, update_id)
-        script = await asyncio.to_thread(
-            write_start_script, base_for_install_root(install_root), install_root
-        )
+        base = base_for_install_root(install_root)
+        script = await asyncio.to_thread(write_start_script, base, install_root)
         logger.info("Start this Test Runner next time with %s", script)
+        if config.mobile is None:
+            browser_script = await asyncio.to_thread(
+                write_open_browser_script, base, install_root
+            )
+            logger.info("Open a test browser with %s", browser_script)
     except OSError as e:
         logger.warning("Could not finish the update bookkeeping: %s", e)
     target = config.remove_old_install

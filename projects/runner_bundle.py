@@ -27,6 +27,7 @@ _EXCLUDE_DIRS = frozenset(
     {
         ".venv",
         "manual_spool",
+        "web_profiles",
         "__pycache__",
         ".pytest_cache",
         ".mypy_cache",
