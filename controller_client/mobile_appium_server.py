@@ -204,7 +204,12 @@ def _run_tool(argv: list[str]) -> str | None:
 
 
 class ManagedAppiumServer:
-    """One Appium process bound to 127.0.0.1; ``start`` is idempotent."""
+    """One Appium process bound to 127.0.0.1; ``start`` is idempotent.
+
+    Construction registers ``stop`` with atexit as a safety net. An owner
+    that must quit its Appium session first registers its own exit handler
+    after building this server, so atexit (last in, first out) runs it first.
+    """
 
     def __init__(self, command: str, target: RunnerTarget, log_dir: Path) -> None:
         self._command = command
@@ -215,7 +220,11 @@ class ManagedAppiumServer:
         self._log_file: IO[bytes] | None = None
         self._log_path: Path | None = None
         self._url = ""
-        self._atexit_registered = False
+        # Safety net for an exit nobody cleaned up. Registered here, not at
+        # spawn: atexit runs last-in first-out, so an owner that registers
+        # its own stop after building this server (the diagnose backend:
+        # quit the session, then stop Appium) runs first.
+        atexit.register(self.stop)
 
     @property
     def url(self) -> str:
@@ -270,9 +279,6 @@ class ManagedAppiumServer:
             raise ExecutionError(
                 f"Appium could not be started ({exc}). {APPIUM_INSTALL_HINT}"
             ) from exc
-        if not self._atexit_registered:
-            atexit.register(self.stop)
-            self._atexit_registered = True
         self._url = f"http://{LOCAL_HOST}:{port}"
         self._wait_until_ready_locked()
         return self._url
