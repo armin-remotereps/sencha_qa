@@ -194,7 +194,7 @@ class IosPlatform:
             if driver.is_app_installed(name):
                 return name
             raise ExecutionError(f"The app '{name}' is not installed on the device")
-        apps = self._list_apps(driver)
+        apps = self.installed_apps(driver)
         if apps is None:
             matches = match_app_name(name, _WELL_KNOWN_APPS)
             if len(matches) == 1 and driver.is_app_installed(matches[0]):
@@ -237,7 +237,7 @@ class IosPlatform:
         bundle_id = info.get("bundleId") if isinstance(info, Mapping) else None
         return bundle_id if isinstance(bundle_id, str) and bundle_id else None
 
-    def _list_apps(self, driver: WebDriver) -> dict[str, str] | None:
+    def installed_apps(self, driver: WebDriver) -> dict[str, str] | None:
         """Installed bundle ids with their visible names, or None."""
         apps: dict[str, str] = {}
         for app_type in _APP_TYPES:

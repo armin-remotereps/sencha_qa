@@ -408,3 +408,8 @@ class ManualShotRejectedError(ManualRunError):
 
 class CaptureAppsError(ValueError):
     """The allowed-applications list for screenshot capture is invalid."""
+
+
+class CapturePhoneAppsError(Exception):
+    """The phone's installed apps could not be listed for the capture
+    allowlist. The message is fixed, user-safe server text."""

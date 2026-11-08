@@ -13,6 +13,7 @@ from django.utils.text import Truncator
 
 from controller_client.protocol import (
     CAPTURE_ALLOWED_PROCESSES_MAX,
+    CAPTURE_PROCESS_NAME_MAX_CHARS,
     MANUAL_CLAIM_TOKEN_MAX_CHARS,
     MAX_VERSION_LENGTH,
     PERSON_CHAT_TEXT_MAX_CHARS,
@@ -459,6 +460,47 @@ class ProjectCaptureAppsForm(forms.Form):
         if errors:
             raise forms.ValidationError(errors)
         return lines
+
+
+class ProjectCaptureAppsAddForm(forms.Form):
+    """Settings "Screenshot capture": the phone apps ticked in the picker.
+
+    ``apps`` is every submitted ``apps`` value (``getlist``); the template
+    renders the checkboxes itself. ``cleaned_data["apps"]`` holds the ids in
+    order without duplicates; each must already be a normalized app id
+    (``normalize_process_name`` returns it unchanged), as the picker lists
+    them. ``project_capture_apps_services.add_capture_allowed_processes``
+    checks the cap against the stored list.
+    """
+
+    apps = forms.Field(
+        required=True,
+        widget=forms.MultipleHiddenInput,
+        error_messages={"required": "Tick at least one app."},
+    )
+
+    def clean_apps(self) -> list[str]:
+        raw: object = self.cleaned_data["apps"]
+        values = raw if isinstance(raw, list) else [raw]
+        app_ids: list[str] = []
+        for value in values:
+            if (
+                not isinstance(value, str)
+                or not value
+                or len(value) > CAPTURE_PROCESS_NAME_MAX_CHARS
+                or normalize_process_name(value) != value
+            ):
+                raise forms.ValidationError(
+                    "The selection contains an invalid app id. Load the list again."
+                )
+            if value not in app_ids:
+                app_ids.append(value)
+        if len(app_ids) > CAPTURE_ALLOWED_PROCESSES_MAX:
+            raise forms.ValidationError(
+                f"Tick at most {CAPTURE_ALLOWED_PROCESSES_MAX} apps "
+                f"(you ticked {len(app_ids)})."
+            )
+        return app_ids
 
 
 class CaseHelpResolutionForm(forms.Form):

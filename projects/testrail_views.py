@@ -8,6 +8,7 @@ from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 
 from accounts.types import AuthenticatedRequest
+from projects.capture_phone_apps_services import PhoneAppList, phone_app_picker
 from projects.decorators import project_membership_required
 from projects.exceptions import (
     CheckedPushError,
@@ -31,6 +32,7 @@ from projects.forms import (
 )
 from projects.models import Project, RunHelpMode, TestRun
 from projects.project_access import get_request_project_access
+from projects.project_capture_apps_services import stored_capture_apps
 from projects.project_member_services import list_project_members
 from projects.services import get_test_case_for_project, get_test_run_for_project
 from projects.testrail_case_refresh_services import (
@@ -80,8 +82,16 @@ def render_project_settings(
     invite_form: ProjectMemberInviteForm | None = None,
     run_mode_form: ProjectRunModeForm | None = None,
     capture_apps_form: ProjectCaptureAppsForm | None = None,
+    phone_apps: PhoneAppList | None = None,
+    phone_apps_error: str = "",
+    capture_apps_add_error: str = "",
 ) -> HttpResponse:
-    """Render the Settings tab; a card whose form is not given gets a fresh one."""
+    """Render the Settings tab; a card whose form is not given gets a fresh one.
+
+    ``phone_apps`` is the loaded phone app picker list (only after "Pick from
+    the phone's apps"); ``phone_apps_error`` / ``capture_apps_add_error`` are
+    fixed texts shown on the Screenshot capture card.
+    """
     if testrail_form is None:
         testrail_form = TestRailSettingsForm(
             initial=_settings_initial(project),
@@ -93,7 +103,7 @@ def render_project_settings(
         run_mode_form = ProjectRunModeForm(
             initial={"help_mode": project.default_help_mode}
         )
-    capture_apps: list[str] = list(project.capture_allowed_processes)
+    capture_apps = stored_capture_apps(project)
     if capture_apps_form is None:
         capture_apps_form = ProjectCaptureAppsForm(
             initial={"apps": "\n".join(capture_apps)}
@@ -122,6 +132,10 @@ def render_project_settings(
             "can_change_run_mode": request.user.is_superuser and project_can_write,
             "capture_apps_form": capture_apps_form,
             "capture_apps": capture_apps,
+            "phone_app_picker": phone_app_picker(project),
+            "phone_apps": phone_apps,
+            "phone_apps_error": phone_apps_error,
+            "capture_apps_add_error": capture_apps_add_error,
             "active_tab": "settings",
             "active_nav": "projects",
         },

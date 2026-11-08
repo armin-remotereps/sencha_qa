@@ -38,6 +38,8 @@ from controller_client.browser_executor import (
 )
 from controller_client.cleanup import execute_cleanup
 from controller_client.config import ClientConfig
+from controller_client.device_apps import list_device_apps
+from controller_client.device_apps import refusal as device_apps_refusal
 from controller_client.exceptions import (
     AuthenticationError,
     BrowserElementNotFoundError,
@@ -115,6 +117,7 @@ from controller_client.protocol import (
     CasePauseActionPayload,
     CloseCode,
     CommandResultPayload,
+    DeviceAppsStatus,
     DeviceStatusPayload,
     ErrorCode,
     InteractiveOutputPayload,
@@ -178,6 +181,7 @@ from controller_client.protocol import (
     peek_update_id,
     scan_directory_result_to_json,
     serialize_case_pause_action,
+    serialize_device_apps_result_message,
     serialize_device_status,
     serialize_interactive_sessions_message,
     serialize_manual_case_action,
@@ -260,6 +264,8 @@ _WINDOW_SAFE_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
         MessageType.CAPTURE_WINDOW,
         # Lists the runner's shell sessions; touches no screen.
         MessageType.LIST_INTERACTIVE_SESSIONS,
+        # Reads the phone's installed apps; nothing on screen is read.
+        MessageType.LIST_DEVICE_APPS,
     }
 )
 # Desktop-only messages, answered TARGET_MISMATCH on a phone target: there is
@@ -292,6 +298,7 @@ _PHONE_ONLY_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
         MessageType.HIDE_KEYBOARD,
         MessageType.OPEN_URL,
         MessageType.INSTALL_APP,
+        MessageType.LIST_DEVICE_APPS,
     }
 )
 _ANSWER_NO_REPLY: Final[str] = "No answer from the server; check Punk Hazard."
@@ -502,6 +509,7 @@ class ControllerClient:
             MessageType.HIDE_KEYBOARD: self._handle_hide_keyboard,
             MessageType.OPEN_URL: self._handle_open_url,
             MessageType.INSTALL_APP: self._handle_install_app,
+            MessageType.LIST_DEVICE_APPS: self._handle_list_device_apps,
             # Window capture (WINDOW_CAPTURE_V1), every target.
             MessageType.LIST_WINDOWS: self._handle_list_windows,
             MessageType.CAPTURE_WINDOW: self._handle_capture_window,
@@ -1526,6 +1534,22 @@ class ControllerClient:
                 result = capture_refusal(CaptureStatus.CAPTURE_FAILED, "")
         await self._send_message(
             serialize_window_capture_result_message(
+                result, request_id, (time.monotonic() - start) * 1000
+            )
+        )
+
+    async def _handle_list_device_apps(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        """The phone's installed apps (DEVICE_APPS_V1); always answers."""
+        start = time.monotonic()
+        try:
+            result = await asyncio.to_thread(list_device_apps)
+        except Exception:
+            logger.exception("list_device_apps failed (request_id=%s)", request_id)
+            result = device_apps_refusal(DeviceAppsStatus.FAILED, "")
+        await self._send_message(
+            serialize_device_apps_result_message(
                 result, request_id, (time.monotonic() - start) * 1000
             )
         )

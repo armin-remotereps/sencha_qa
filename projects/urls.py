@@ -91,6 +91,16 @@ urlpatterns: list[URLPattern] = [
         project_capture_apps_views.settings_capture_apps,
         name="settings_capture_apps",
     ),
+    path(
+        "<int:project_id>/settings/capture-apps/phone-apps/",
+        project_capture_apps_views.settings_capture_phone_apps,
+        name="settings_capture_phone_apps",
+    ),
+    path(
+        "<int:project_id>/settings/capture-apps/add/",
+        project_capture_apps_views.settings_capture_apps_add,
+        name="settings_capture_apps_add",
+    ),
     path("<int:project_id>/leave/", member_views.project_leave, name="leave"),
     path(
         "<int:project_id>/settings/testrail/test/",

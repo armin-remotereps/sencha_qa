@@ -105,6 +105,12 @@ class MobileDevice(Protocol):
         """The id of the app in front (package or bundle id), or None."""
         ...
 
+    def installed_apps(self) -> dict[str, str] | None:
+        """The installed apps' ids (package or bundle id) mapped to their
+        visible names ("" when the platform reports none), or None when the
+        phone's driver cannot list apps."""
+        ...
+
     def cleanup(self) -> list[str]:
         """Terminate the apps launched since the last cleanup, hide the
         keyboard and go home; returns one line per thing done."""

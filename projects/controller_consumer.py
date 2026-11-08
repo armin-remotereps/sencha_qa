@@ -13,6 +13,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 
 from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
+    DEVICE_APPS_RESULT_MAX_BYTES,
     MANUAL_CASE_ACTION_MAX_BYTES,
     MANUAL_CASE_PROGRESS_MAX_BYTES,
     MANUAL_CASE_SUBMIT_MAX_BYTES,
@@ -108,6 +109,7 @@ from projects.controller_protocol import (
     InstallAppActionEvent,
     KeyPressActionEvent,
     LaunchAppActionEvent,
+    ListDeviceAppsActionEvent,
     ListInteractiveSessionsActionEvent,
     ListWindowsActionEvent,
     LongPressActionEvent,
@@ -189,6 +191,13 @@ from projects.runner_window_state import (
 from projects.services import broadcast_agent_status, release_agent_connection
 
 logger = logging.getLogger(__name__)
+
+# Raw size cap of each reply ``_handle_window_result`` routes.
+_RESULT_MAX_BYTES: dict[str, int] = {
+    MessageType.WINDOW_LIST_RESULT: WINDOW_LIST_RESULT_MAX_BYTES,
+    MessageType.WINDOW_CAPTURE_RESULT: WINDOW_CAPTURE_RESULT_MAX_BYTES,
+    MessageType.DEVICE_APPS_RESULT: DEVICE_APPS_RESULT_MAX_BYTES,
+}
 
 # What the Test Runner window says after an answer was saved and the run
 # continues (the web card's flash texts).
@@ -418,6 +427,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         if msg_type in (
             MessageType.WINDOW_LIST_RESULT,
             MessageType.WINDOW_CAPTURE_RESULT,
+            MessageType.DEVICE_APPS_RESULT,
         ):
             await self._handle_window_result(msg_type, request_id, data, raw_length)
             return
@@ -1153,16 +1163,12 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         data: dict[str, Any],
         raw_length: int,
     ) -> None:
-        """Route a window list / capture reply to its waiter.
+        """Route a window list / capture or device apps reply to its waiter.
 
         A raw message over its cap is not forwarded: the waiter gets an error
         reply (``ControllerActionError``) instead of the oversized result.
         """
-        cap = (
-            WINDOW_LIST_RESULT_MAX_BYTES
-            if msg_type == MessageType.WINDOW_LIST_RESULT
-            else WINDOW_CAPTURE_RESULT_MAX_BYTES
-        )
+        cap = _RESULT_MAX_BYTES[msg_type]
         if raw_length > cap:
             logger.warning(
                 "Refusing oversized %s (%d bytes) for project %s",
@@ -1447,6 +1453,11 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         await self._forward_action(event)
 
     async def controller_install_app(self, event: InstallAppActionEvent) -> None:
+        await self._forward_action(event)
+
+    async def controller_list_device_apps(
+        self, event: ListDeviceAppsActionEvent
+    ) -> None:
         await self._forward_action(event)
 
     async def controller_update_runner(self, event: UpdateRunnerEvent) -> None:

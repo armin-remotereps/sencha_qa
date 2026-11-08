@@ -75,3 +75,8 @@ class MobilePlatform(Protocol):
     def current_app(self, driver: WebDriver) -> str | None:
         """The id of the app in front, or None when unknown."""
         ...
+
+    def installed_apps(self, driver: WebDriver) -> dict[str, str] | None:
+        """Installed app ids mapped to their visible names ("" when the
+        platform reports none), or None when the driver cannot list apps."""
+        ...

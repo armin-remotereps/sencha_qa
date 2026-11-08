@@ -320,6 +320,11 @@ class InstallAppActionEvent(BaseActionEvent):
     path: str
 
 
+class ListDeviceAppsActionEvent(BaseActionEvent):
+    """The installed apps of the phone (DEVICE_APPS_V1); no fields besides the
+    request id (``serialize_list_device_apps_payload``)."""
+
+
 class UpdateRunnerEvent(TypedDict):
     """Channel-layer event ``controller.update_runner``.
 
@@ -390,6 +395,7 @@ class ActionTypeRegistry:
         "controller.hide_keyboard": MessageType.HIDE_KEYBOARD,
         "controller.open_url": MessageType.OPEN_URL,
         "controller.install_app": MessageType.INSTALL_APP,
+        "controller.list_device_apps": MessageType.LIST_DEVICE_APPS,
     }
 
     _PAYLOAD_KEYS: Final[dict[str, tuple[str, ...]]] = {
@@ -503,6 +509,7 @@ class ActionTypeRegistry:
         "controller.hide_keyboard": (),
         "controller.open_url": ("url",),
         "controller.install_app": ("path",),
+        "controller.list_device_apps": (),
     }
 
     @classmethod

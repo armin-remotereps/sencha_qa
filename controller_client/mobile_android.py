@@ -109,7 +109,7 @@ class AndroidPlatform:
             if driver.is_app_installed(name):
                 return name
             raise ExecutionError(f"The app '{name}' is not installed on the device")
-        apps = self._list_apps(driver)
+        apps = self.installed_apps(driver)
         if apps is None:
             matches = match_app_name(name, _WELL_KNOWN_APPS)
             if len(matches) == 1 and driver.is_app_installed(matches[0]):
@@ -138,9 +138,9 @@ class AndroidPlatform:
         source = Path(path)
         if source.suffix.lower() not in _APK_SUFFIXES or not source.is_file():
             raise ExecutionError(f"'{path}' is not an .apk file on the Test Runner")
-        before = self._list_apps(driver)
+        before = self.installed_apps(driver)
         driver.install_app(str(source), replace=True, timeout=_INSTALL_TIMEOUT_MS)
-        after = self._list_apps(driver)
+        after = self.installed_apps(driver)
         if before is None or after is None:
             return ""
         added = sorted(set(after) - set(before))
@@ -151,7 +151,7 @@ class AndroidPlatform:
         package = driver.current_package
         return package if isinstance(package, str) and package else None
 
-    def _list_apps(self, driver: WebDriver) -> dict[str, str] | None:
+    def installed_apps(self, driver: WebDriver) -> dict[str, str] | None:
         """Installed package ids (no visible names), or None when the driver
         has no ``mobile: listApps``."""
         try:

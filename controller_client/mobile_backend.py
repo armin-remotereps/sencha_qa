@@ -399,6 +399,9 @@ class MobileBackend:
     def foreground_app(self) -> str | None:
         return self._session.call(self._platform.current_app)
 
+    def installed_apps(self) -> dict[str, str] | None:
+        return self._session.call(self._platform.installed_apps)
+
     def cleanup(self) -> list[str]:
         """One call: every request fits the call's budget, so the reply
         reaches the server before its cleanup timeout; apps left when the

@@ -185,7 +185,8 @@ class ReplyTracker:
         return True
 
     async def send_window_result(self, request_id: str, data: dict[str, Any]) -> bool:
-        """Forward a ``window_list_result`` / ``window_capture_result`` reply.
+        """Forward a ``window_list_result`` / ``window_capture_result`` /
+        ``device_apps_result`` reply.
 
         The consumer has already refused a message over its size cap.
         """
@@ -196,7 +197,8 @@ class ReplyTracker:
             )
             return False
 
-        # ``result`` is runner data; ``controller_capture_actions`` validates it.
+        # ``result`` is runner data; ``controller_capture_actions`` /
+        # ``controller_mobile_actions`` validate it.
         await self._channel_layer.send(
             reply_channel,
             {

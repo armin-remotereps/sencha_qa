@@ -25,6 +25,18 @@
                     after an invalid post to projects:settings_capture_apps
      capture_apps — list of stored normalized process names; empty means
                     screenshot capture is off
+     phone_app_picker — PhoneAppPicker (show, enabled, reason): show = a
+                    phone runner is connected; the "Pick from the phone's
+                    apps" button is shown to writable members, disabled with
+                    the fixed reason when not enabled
+     phone_apps   — PhoneAppList or None; set only by the POST to
+                    projects:settings_capture_phone_apps (rows of app_id,
+                    name, allowed; names_available, skipped, truncated,
+                    remaining); its ticked ids post to
+                    projects:settings_capture_apps_add
+     phone_apps_error — fixed text when loading the phone's apps failed, or ""
+     capture_apps_add_error — fixed text when adding the ticked apps failed,
+                    or ""
      project_can_write (context processor) — false hides the invite form,
                     role selects and the TestRail forms; a read-only member
                     sees the members table and Leave only. {% endcomment %}
@@ -209,6 +221,12 @@
     turn capture off. The Test Runner itself, terminals and the system shell are
     never captured.
   </p>
+  <p class="muted">
+    On a phone or tablet, list the app's bundle id (iOS, for example
+    <code>com.apple.mobilesafari</code>) or package (Android, for example
+    <code>com.android.chrome</code>), or use "Pick from the phone's apps" while
+    the Test Runner is connected to the device.
+  </p>
   {% if project_can_write %}
   <form method="post" action="{% url 'projects:settings_capture_apps' project.id %}" novalidate>
     {% csrf_token %}
@@ -223,6 +241,69 @@
       <button class="btn btn-primary" type="submit">Save</button>
     </div>
   </form>
+  {% if capture_apps_add_error %}<p class="error-text" role="alert">⚠ {{ capture_apps_add_error }}</p>{% endif %}
+  {% if phone_app_picker.show %}
+  <form class="phone-apps-load" method="post" action="{% url 'projects:settings_capture_phone_apps' project.id %}#screenshot-capture" x-data="{ loading: false }" @submit="loading = true">
+    {% csrf_token %}
+    <button class="btn btn-secondary" type="submit"{% if not phone_app_picker.enabled %} disabled aria-describedby="phone-apps-reason"{% else %} :disabled="loading"{% endif %}>
+      <span x-show="!loading">Pick from the phone's apps</span>
+      <span x-show="loading" x-cloak>Asking the phone…</span>
+    </button>
+    {% if not phone_app_picker.enabled %}<p class="hint" id="phone-apps-reason">{{ phone_app_picker.reason }}</p>{% endif %}
+  </form>
+  {% endif %}
+  {% if phone_apps_error %}<p class="error-text" role="alert">⚠ {{ phone_apps_error }}</p>{% endif %}
+  {% if phone_apps %}
+  {% comment %} The phone's apps: ids are posted, names are runner text shown
+     escaped (autoescape only). Alpine filters rows and counts ticks; nothing
+     is fetched. Already allowed rows are ticked, disabled and unnamed, so
+     they never post. {% endcomment %}
+  <form class="phone-apps" method="post" action="{% url 'projects:settings_capture_apps_add' project.id %}" novalidate
+        x-data="{ q: '', picked: 0, remaining: {{ phone_apps.remaining }} }"
+        @change="picked = $root.querySelectorAll('input[name=apps]:checked').length">
+    {% csrf_token %}
+    {% if not phone_apps.names_available %}
+    <p class="hint">Android does not report app names; the list shows package ids.</p>
+    {% endif %}
+    {% if phone_apps.rows %}
+    <div class="phone-apps-toolbar">
+      <input class="input" type="search" placeholder="Filter apps…" aria-label="Filter apps" x-model="q" autocomplete="off" spellcheck="false">
+      <span class="muted"><span x-text="Math.max(remaining - picked, 0)">{{ phone_apps.remaining }}</span> of {{ phone_apps.remaining }} left</span>
+    </div>
+    <ul class="checklist phone-apps-list">
+      {% for row in phone_apps.rows %}
+      <li data-search="{{ row.name|lower }} {{ row.app_id }}" x-show="!q || $el.dataset.search.includes(q.toLowerCase())">
+        <label class="checkbox">
+          {% if row.allowed %}
+          <input type="checkbox" checked disabled>
+          {% else %}
+          <input type="checkbox" name="apps" value="{{ row.app_id }}">
+          {% endif %}
+          <span>
+            {% if row.name %}<strong>{{ row.name }}</strong><br>{% endif %}
+            <code>{{ row.app_id }}</code>{% if row.allowed %} <span class="muted">(allowed)</span>{% endif %}
+          </span>
+        </label>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted">The phone reported no apps.</p>
+    {% endif %}
+    {% if phone_apps.skipped %}
+    <p class="hint">{{ phone_apps.skipped }} app{{ phone_apps.skipped|pluralize }} with an id that cannot be used here {{ phone_apps.skipped|pluralize:"is,are" }} not listed.</p>
+    {% endif %}
+    {% if phone_apps.truncated %}
+    <p class="hint">The phone has more apps than the list shows; type an app's id in the list above if it is missing.</p>
+    {% endif %}
+    {% if phone_apps.rows %}
+    <p class="error-text" x-show="picked > remaining" x-cloak>⚠ Tick at most {{ phone_apps.remaining }} more app{{ phone_apps.remaining|pluralize }}.</p>
+    <div class="dialog-actions">
+      <button class="btn btn-primary" type="submit" :disabled="picked === 0 || picked > remaining">Add selected</button>
+    </div>
+    {% endif %}
+  </form>
+  {% endif %}
   {% elif capture_apps %}
   <p>
     {% for name in capture_apps %}<span class="chip">{{ name }}</span>{% endfor %}

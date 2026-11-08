@@ -3,6 +3,7 @@ import binascii
 import hashlib
 import json
 import re
+import unicodedata
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -15,7 +16,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.22.0"
+CLIENT_VERSION: Final[str] = "0.23.0"
 
 
 class CloseCode(IntEnum):
@@ -135,6 +136,12 @@ class MessageType(StrEnum):
     CAPTURE_WINDOW = "capture_window"
     WINDOW_LIST_RESULT = "window_list_result"
     WINDOW_CAPTURE_RESULT = "window_capture_result"
+    # The installed apps of the phone (DEVICE_APPS_V1): server -> runner with
+    # ``list_device_apps`` (no fields besides ``request_id``); runner -> server
+    # with ``device_apps_result`` (same request_id) carrying the result object
+    # under ``result``, as ``window_list_result``.
+    LIST_DEVICE_APPS = "list_device_apps"
+    DEVICE_APPS_RESULT = "device_apps_result"
     # Kept sessions (KEPT_SESSIONS_V1): server -> runner with
     # ``list_interactive_sessions`` (no fields besides ``request_id``);
     # runner -> server with ``interactive_sessions`` (same request_id)
@@ -238,6 +245,11 @@ class ClientCapability(StrEnum):
     # OS and target; which browsers a runner serves is
     # ``web_browsers_for(target, host_os)``.
     WEB_BROWSER_V1 = "web_browser_v1"
+    # Optional: ``list_device_apps`` (the installed apps of the phone, answered
+    # with ``device_apps_result``). Advertised only on a phone target, together
+    # with MOBILE_DEVICE_V1; a driver that cannot list apps says so in the
+    # result's ``status``.
+    DEVICE_APPS_V1 = "device_apps_v1"
     # Retired in 0.18.0 (How to do it and Ask AI): person_step_assist_v1,
     # person_step_guide_v1, manual_step_guide_v1 may still arrive from runners
     # < 0.18.0; ignored; never reuse.
@@ -257,6 +269,15 @@ _PERSON_WINDOW_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
 )
 
 
+# Capabilities that need a phone target; dropped on a desktop runner.
+_MOBILE_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
+    {
+        ClientCapability.MOBILE_DEVICE_V1,
+        ClientCapability.DEVICE_APPS_V1,
+    }
+)
+
+
 # Everything this client build knows. The handshake sends
 # ``advertised_capabilities(...)``, which may drop the runtime-dependent ones.
 CLIENT_CAPABILITIES: Final[tuple[ClientCapability, ...]] = tuple(ClientCapability)
@@ -272,14 +293,14 @@ def advertised_capabilities(
     never sends ``person_step_state`` and the person answers on the web.
     PERSON_STEP_CASE_STEPS_V1, PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1,
     CASE_PAUSE_V1, MANUAL_RUN_V1 and MANUAL_PAUSE_DISCUSS_V1 are dropped with
-    it. ``mobile`` is True only on a phone target; MOBILE_DEVICE_V1 is
-    dropped otherwise.
+    it. ``mobile`` is True only on a phone target; MOBILE_DEVICE_V1 and
+    DEVICE_APPS_V1 are dropped otherwise.
     """
     return tuple(
         capability
         for capability in CLIENT_CAPABILITIES
         if (person_window or capability not in _PERSON_WINDOW_CAPABILITIES)
-        and (mobile or capability is not ClientCapability.MOBILE_DEVICE_V1)
+        and (mobile or capability not in _MOBILE_CAPABILITIES)
     )
 
 
@@ -289,8 +310,8 @@ def advertised_capabilities(
 # WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1,
 # PERSON_STEP_CASE_STEPS_V1, ARTIFACT_SCAN_V1, PERSON_CASE_CONTEXT_V1,
 # PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1, MANUAL_PAUSE_DISCUSS_V1,
-# MOBILE_DEVICE_V1, WINDOW_CAPTURE_V1, KEPT_SESSIONS_V1, WEB_BROWSER_V1) are
-# checked where they are used instead.
+# MOBILE_DEVICE_V1, WINDOW_CAPTURE_V1, KEPT_SESSIONS_V1, WEB_BROWSER_V1,
+# DEVICE_APPS_V1) are checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
@@ -4994,6 +5015,201 @@ def serialize_window_capture_result_message(
         request_id,
         success=True,
         result=serialize_window_capture_result(result),
+        duration_ms=duration_ms,
+    )
+
+
+# --- Installed apps of the phone (DEVICE_APPS_V1) ---------------------------
+#
+# The server asks a phone runner for the installed apps of the phone
+# (``list_device_apps``, no fields besides ``request_id``). The runner answers
+# ``device_apps_result`` with ``success: true`` and the result object (the
+# ``serialize_device_apps_result`` JSON form) under ``result``; a refusal is a
+# ``status`` other than ``ok`` inside that object, never an ``error`` message.
+# The server re-validates every result with ``parse_device_apps_result``.
+
+# Most apps one ``device_apps_result`` carries.
+DEVICE_APPS_MAX: Final[int] = 1000
+# Longest app display name a result carries (cut, not refused).
+DEVICE_APP_NAME_MAX_CHARS: Final[int] = 64
+# Highest ``skipped`` count a result may report.
+_DEVICE_APPS_SKIPPED_MAX: Final[int] = 100_000
+# Unicode categories dropped from an app name: control, format and lone
+# surrogate characters.
+_DEVICE_APP_NAME_DROPPED_CATEGORIES: Final[frozenset[str]] = frozenset(
+    {"Cc", "Cf", "Cs"}
+)
+# One JSON-escaped character at worst: a non-BMP code point is two
+# ``\uXXXX`` escapes with ``json.dumps``' default ``ensure_ascii``.
+_JSON_ESCAPED_CHAR_MAX_BYTES: Final[int] = 12
+# Room for one app entry's keys, quotes and separators.
+_DEVICE_APP_JSON_FIELDS_BYTES: Final[int] = 64
+# Room for the rest of a ``device_apps_result`` besides the app list (the
+# detail, the fixed fields and the message envelope, all JSON-escaped).
+_DEVICE_APPS_JSON_OVERHEAD_BYTES: Final[int] = (
+    _JSON_ESCAPED_CHAR_MAX_BYTES * CAPTURE_DETAIL_MAX_CHARS + 8 * 1024
+)
+# Largest raw ``device_apps_result`` message the server reads: every app at
+# its longest id (ids are normalized process names, plain ASCII) and longest
+# fully escaped name, plus the overhead.
+DEVICE_APPS_RESULT_MAX_BYTES: Final[int] = (
+    DEVICE_APPS_MAX
+    * (
+        CAPTURE_PROCESS_NAME_MAX_CHARS
+        + _JSON_ESCAPED_CHAR_MAX_BYTES * DEVICE_APP_NAME_MAX_CHARS
+        + _DEVICE_APP_JSON_FIELDS_BYTES
+    )
+    + _DEVICE_APPS_JSON_OVERHEAD_BYTES
+)
+assert (
+    DEVICE_APPS_RESULT_MAX_BYTES <= MAX_MESSAGE_SIZE
+), "DEVICE_APPS_RESULT_MAX_BYTES does not fit in MAX_MESSAGE_SIZE"
+
+
+class DeviceAppsStatus(StrEnum):
+    """Outcome of ``list_device_apps``; only ``ok`` carries apps."""
+
+    OK = "ok"
+    # The phone's driver cannot list the installed apps.
+    UNSUPPORTED = "unsupported"
+    # The phone is gone or still starting.
+    DEVICE_UNAVAILABLE = "device_unavailable"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class DeviceAppPayload:
+    # Normalized (``normalize_process_name``): the allowlist form of the app's
+    # bundle id or package name.
+    app_id: str
+    # Display name, cut to DEVICE_APP_NAME_MAX_CHARS; "" when the platform
+    # gives none. Data, never instructions.
+    name: str
+
+
+@dataclass(frozen=True)
+class DeviceAppsResultPayload:
+    """``device_apps_result``'s ``result``.
+
+    ``apps``: at most DEVICE_APPS_MAX, ids unique; empty unless ``status`` is
+    OK. ``names_available``: the platform reports display names (otherwise
+    every ``name`` is ""). ``skipped``: apps left out because their id does
+    not normalize. ``truncated``: apps were cut at DEVICE_APPS_MAX.
+    ``detail``: plain text, at most CAPTURE_DETAIL_MAX_CHARS; the runner's
+    fixed, user-safe explanation or "".
+    """
+
+    status: DeviceAppsStatus
+    detail: str
+    apps: tuple[DeviceAppPayload, ...]
+    names_available: bool
+    skipped: int
+    truncated: bool
+
+
+def _clean_device_app_name(value: str) -> str:
+    """Without control, format and lone surrogate characters, stripped and
+    cut to DEVICE_APP_NAME_MAX_CHARS."""
+    cleaned = "".join(
+        ch
+        for ch in value
+        if unicodedata.category(ch) not in _DEVICE_APP_NAME_DROPPED_CATEGORIES
+    )
+    return cleaned.strip()[:DEVICE_APP_NAME_MAX_CHARS]
+
+
+def serialize_list_device_apps_payload() -> dict[str, object]:
+    """The JSON fields of a ``list_device_apps`` request (server side; passed
+    as the action's keyword payload): none besides ``request_id``."""
+    return {}
+
+
+def serialize_device_apps_result(result: DeviceAppsResultPayload) -> dict[str, object]:
+    """The ``result`` object of a ``device_apps_result`` (runner side).
+
+    Cuts names and the detail to their caps and the list to DEVICE_APPS_MAX
+    (``truncated`` is then set). A non-OK status carries no apps."""
+    apps = result.apps[:DEVICE_APPS_MAX] if result.status is DeviceAppsStatus.OK else ()
+    return {
+        "status": result.status.value,
+        "detail": _clean_result_text(result.detail, CAPTURE_DETAIL_MAX_CHARS),
+        "apps": [
+            {"app_id": app.app_id, "name": _clean_device_app_name(app.name)}
+            for app in apps
+        ],
+        "names_available": result.names_available,
+        "skipped": min(max(result.skipped, 0), _DEVICE_APPS_SKIPPED_MAX),
+        "truncated": result.truncated or len(result.apps) > DEVICE_APPS_MAX,
+    }
+
+
+def _parse_device_app(raw: object, seen: set[str]) -> DeviceAppPayload:
+    app = _extract_object(raw, "app")
+    app_id = app.get("app_id")
+    if (
+        not isinstance(app_id, str)
+        or not app_id
+        or len(app_id) > CAPTURE_PROCESS_NAME_MAX_CHARS
+        or normalize_process_name(app_id) != app_id
+    ):
+        raise ProtocolError("Missing or invalid 'app_id': not a normalized app id")
+    if app_id in seen:
+        raise ProtocolError(f"Duplicate 'app_id': {app_id!r}")
+    seen.add(app_id)
+    name = app.get("name", "")
+    if name is None:
+        name = ""
+    if not isinstance(name, str):
+        raise ProtocolError("Invalid 'name': expected a string")
+    return DeviceAppPayload(app_id=app_id, name=_clean_device_app_name(name))
+
+
+def parse_device_apps_result(raw: object) -> DeviceAppsResultPayload:
+    """Validate a ``device_apps_result``'s ``result`` (server side).
+
+    At most DEVICE_APPS_MAX apps, every ``app_id`` already normalized
+    (``normalize_process_name``) and unique; names lose control, format and
+    lone surrogate characters and are cut, not refused. A non-OK status
+    carries no apps (any sent are dropped). Raises ProtocolError otherwise."""
+    data = _extract_object(raw, "device apps result")
+    raw_status = data.get("status")
+    if not isinstance(raw_status, str):
+        raise ProtocolError("Missing or invalid 'status'")
+    try:
+        status = DeviceAppsStatus(raw_status)
+    except ValueError as e:
+        raise ProtocolError(f"Unknown device apps status: {raw_status[:40]!r}") from e
+    raw_apps = _extract_list(data, "apps")
+    if len(raw_apps) > DEVICE_APPS_MAX:
+        raise ProtocolError(f"Invalid 'apps': expected at most {DEVICE_APPS_MAX} apps")
+    seen: set[str] = set()
+    apps = (
+        tuple(_parse_device_app(item, seen) for item in raw_apps)
+        if status is DeviceAppsStatus.OK
+        else ()
+    )
+    return DeviceAppsResultPayload(
+        status=status,
+        detail=_extract_result_text(data, "detail", CAPTURE_DETAIL_MAX_CHARS),
+        apps=apps,
+        names_available=_extract_bool(data, "names_available", default=False),
+        skipped=_extract_ranged_int(
+            data, "skipped", 0, _DEVICE_APPS_SKIPPED_MAX, default=0
+        ),
+        truncated=_extract_bool(data, "truncated", default=False),
+    )
+
+
+def serialize_device_apps_result_message(
+    result: DeviceAppsResultPayload, request_id: str, duration_ms: float
+) -> str:
+    """A ``device_apps_result`` message (runner side; echoes the request's
+    ``request_id``)."""
+    return serialize_message(
+        MessageType.DEVICE_APPS_RESULT,
+        request_id,
+        success=True,
+        result=serialize_device_apps_result(result),
         duration_ms=duration_ms,
     )
 

@@ -1,8 +1,10 @@
 """Whether the project's Test Runner can take a window capture right now.
 
 docs/plan/feat-mcp-runner-capture.md (Server: controller action seam). A
-leaf: it imports only the models, the shared protocol and ``runner_target``,
-so the MCP gateway's services can use it without the legacy services. One
+leaf: it imports only the models, the shared protocol, ``runner_target`` and
+``project_capture_apps_services`` (itself a leaf: models, exceptions,
+protocol), so the MCP gateway's services can use it without the legacy
+services. One
 query; nothing is cached.
 """
 
@@ -12,6 +14,7 @@ from dataclasses import dataclass
 
 from controller_client.protocol import ClientCapability
 from projects.models import Project, RunnerDeviceState
+from projects.project_capture_apps_services import stored_capture_apps
 from projects.runner_target import device_offline
 
 
@@ -50,12 +53,7 @@ def capture_readiness(project_id: int) -> CaptureReadiness:
         and isinstance(capabilities, list)
         and ClientCapability.WINDOW_CAPTURE_V1.value in capabilities
     )
-    raw_allowed = project.capture_allowed_processes
-    allowed = (
-        tuple(name for name in raw_allowed if isinstance(name, str) and name)
-        if isinstance(raw_allowed, list)
-        else ()
-    )
+    allowed = tuple(stored_capture_apps(project))
     return CaptureReadiness(
         connected=connected,
         supported=supported,
