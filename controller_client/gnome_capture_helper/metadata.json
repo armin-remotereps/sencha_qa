@@ -2,5 +2,5 @@
   "uuid": "test-runner-capture@punk-hazard",
   "name": "Test Runner capture",
   "description": "Lets the Test Runner on this computer list windows and workspaces, switch the shown workspace, and save a screen area or one window's picture into its own private folder. It sends nothing anywhere and has no input or settings.",
-  "shell-version": ["45", "46", "47", "48", "49"]
+  "shell-version": ["45", "46", "47", "48", "49", "50"]
 }
