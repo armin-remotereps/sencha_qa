@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import os
+import signal
 import sys
 from collections.abc import Mapping
+from typing import Final
 
 from controller_client.process_tracker import ProcessTracker
 
 if sys.platform != "win32":
     import pexpect
+
+    _DRAIN_CHUNK_CHARS: Final[int] = 65_536
 
     class ShellProcess:
         """A ``/bin/bash -c`` command on a PTY, driven by pexpect."""
@@ -41,6 +46,16 @@ if sys.platform != "win32":
                 return raw.decode("utf-8", errors="replace")
             return str(raw)
 
+        def drain(self, timeout: float) -> str:
+            """Output that arrived since the last drain, waiting up to
+            ``timeout`` for some (kept sessions; never mixed with ``read``,
+            whose text repeats everything still in pexpect's buffer)."""
+            try:
+                text: str = self._child.read_nonblocking(_DRAIN_CHUNK_CHARS, timeout)
+            except (pexpect.TIMEOUT, pexpect.EOF):
+                return ""
+            return text
+
         def send_line(self, text: str) -> None:
             self._child.sendline(text)
 
@@ -57,3 +72,20 @@ if sys.platform != "win32":
         def terminate(self) -> None:
             if self._child.isalive():
                 self._child.terminate(force=True)
+
+        def kill_tree(self) -> None:
+            """Kill the shell and everything left in its process group (the
+            PTY child leads its own session, so the group id is its pid),
+            then reap the shell."""
+            pid = self._child.pid
+            if pid is not None:
+                try:
+                    os.killpg(pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            self.terminate()
+
+        def at_eof(self) -> bool:
+            """Whether every writer of the PTY has closed it."""
+            result: bool = self._child.eof()
+            return result

@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from django.conf import settings
 
@@ -22,6 +25,24 @@ from projects.models import Project, TestRun, TestRunStatus
 logger = logging.getLogger(__name__)
 
 CONTROLLER_POLL_INTERVAL_SECONDS = 2
+
+# Set by callers that must fail at once instead of waiting for a reconnect
+# (bounded calls that answer a person, and their clean-up tasks).
+_no_reconnect_wait: ContextVar[bool] = ContextVar("no_reconnect_wait", default=False)
+
+
+@contextmanager
+def no_reconnect_wait() -> Iterator[None]:
+    """While active, ``wait_for_controller`` never waits for a reconnect.
+
+    With no owner connected it raises ControllerNotConnectedError at once and
+    records no outage, even while a run is Started.
+    """
+    token = _no_reconnect_wait.set(True)
+    try:
+        yield
+    finally:
+        _no_reconnect_wait.reset(token)
 
 
 def max_outage_seconds_per_case() -> int:
@@ -43,7 +64,7 @@ def wait_for_controller(project_id: int, lost_owner: str = "") -> str:
     if owner is not None:
         return owner
 
-    if not _has_started_run(project_id):
+    if _no_reconnect_wait.get() or not _has_started_run(project_id):
         raise ControllerNotConnectedError(
             f"Test Runner is not connected for project {project_id}"
         )

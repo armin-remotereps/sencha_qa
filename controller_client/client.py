@@ -65,7 +65,10 @@ from controller_client.executor import (
     execute_type_text,
     execute_wait_for_command,
 )
-from controller_client.interactive_session import InteractiveSessionManager
+from controller_client.interactive_session import (
+    InteractiveSessionManager,
+    TooManySessionsError,
+)
 from controller_client.manual_capture import ManualCapturer
 from controller_client.manual_coordinator import ManualCoordinator
 from controller_client.manual_spool import ManualSpool
@@ -109,6 +112,7 @@ from controller_client.protocol import (
     DeviceStatusPayload,
     ErrorCode,
     InteractiveOutputPayload,
+    InteractiveSessionsPayload,
     ManualCaseActionKind,
     ManualCaseActionPayload,
     ManualChatSendPayload,
@@ -169,6 +173,7 @@ from controller_client.protocol import (
     scan_directory_result_to_json,
     serialize_case_pause_action,
     serialize_device_status,
+    serialize_interactive_sessions_message,
     serialize_manual_case_action,
     serialize_manual_chat_send,
     serialize_message,
@@ -243,6 +248,8 @@ _WINDOW_SAFE_MESSAGE_TYPES: Final[frozenset[MessageType]] = frozenset(
         # (window_capture), like tester screenshots.
         MessageType.LIST_WINDOWS,
         MessageType.CAPTURE_WINDOW,
+        # Lists the runner's shell sessions; touches no screen.
+        MessageType.LIST_INTERACTIVE_SESSIONS,
     }
 )
 # Desktop-only messages, answered TARGET_MISMATCH on a phone target: there is
@@ -362,6 +369,8 @@ def _error_code(exc: Exception, fallback: ErrorCode) -> ErrorCode:
         return ErrorCode.DEVICE_DISCONNECTED
     if isinstance(exc, TargetMismatchError):
         return ErrorCode.TARGET_MISMATCH
+    if isinstance(exc, TooManySessionsError):
+        return ErrorCode.TOO_MANY_SESSIONS
     return fallback
 
 
@@ -429,6 +438,9 @@ class ControllerClient:
             MessageType.SEND_INPUT: self._handle_send_input,
             MessageType.WAIT_FOR_COMMAND: self._handle_wait_for_command,
             MessageType.TERMINATE_INTERACTIVE_CMD: self._handle_terminate_interactive_cmd,
+            MessageType.LIST_INTERACTIVE_SESSIONS: (
+                self._handle_list_interactive_sessions
+            ),
             MessageType.LAUNCH_APP: self._handle_launch_app,
             MessageType.CLOSE_APP: self._handle_close_app,
             MessageType.CLOSE_TAB: self._handle_close_tab,
@@ -1324,6 +1336,16 @@ class ControllerClient:
                 request_id, _error_code(e, ErrorCode.EXECUTION_FAILED), str(e)
             )
 
+    async def _handle_list_interactive_sessions(
+        self, request_id: str, data: dict[str, object]
+    ) -> None:
+        sessions = await asyncio.to_thread(self._session_manager.list_sessions)
+        await self._send_message(
+            serialize_interactive_sessions_message(
+                InteractiveSessionsPayload(sessions=sessions), request_id
+            )
+        )
+
     async def _handle_launch_app(
         self, request_id: str, data: dict[str, object]
     ) -> None:
@@ -1563,6 +1585,11 @@ class ControllerClient:
     async def _send_interactive_output(
         self, request_id: str, result: InteractiveOutputPayload
     ) -> None:
+        # ``output_dropped`` only when set, so a plain session's reply is
+        # unchanged.
+        extra: dict[str, object] = (
+            {"output_dropped": True} if result.output_dropped else {}
+        )
         message = serialize_message(
             MessageType.INTERACTIVE_OUTPUT,
             request_id=request_id,
@@ -1571,6 +1598,7 @@ class ControllerClient:
             is_alive=result.is_alive,
             exit_code=result.exit_code,
             duration_ms=result.duration_ms,
+            **extra,
         )
         await self._send_message(message)
 

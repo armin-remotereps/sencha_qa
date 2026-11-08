@@ -30,11 +30,12 @@ def wait(
         return _shortened_wait_result(requested=duration, actual=float(remaining))
 
     _sleep_until_deadline(time.monotonic() + duration, cancellation_check)
-    return ToolResult(
-        tool_call_id="",
-        content=f"Waited {_format_duration(duration)} seconds.",
-        is_error=False,
-    )
+    return ToolResult(tool_call_id="", content=waited_message(duration), is_error=False)
+
+
+def waited_message(duration: float) -> str:
+    """The result text of a full wait of ``duration`` seconds."""
+    return f"Waited {_format_duration(duration)} seconds."
 
 
 def _validate_duration(seconds: object) -> float | None:

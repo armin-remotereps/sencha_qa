@@ -22,8 +22,8 @@ from mcp_gateway.services.capture_errors import (
     refuse_unready,
     status_error,
 )
-from mcp_gateway.services.capture_lock import capture_in_progress, machine_round_trip
 from mcp_gateway.services.capture_mapping import desktop_item
+from mcp_gateway.services.machine_round_trip import machine_busy, machine_round_trip
 from mcp_gateway.untrusted_text import case_line
 from projects.controller_capture_actions import controller_list_windows
 from projects.exceptions import ControllerActionError, ControllerNotConnectedError
@@ -39,8 +39,8 @@ def list_windows(call: McpCall) -> ListWindowsResponse:
     readiness = capture_readiness(call.project.pk)
     refuse_unready(readiness)
     # The machine handles one request at a time: a listing would only wait
-    # behind a running capture and time out.
-    if capture_in_progress(call.project.pk):
+    # behind a running capture or machine action and time out.
+    if machine_busy(call.project.pk):
         raise error(CaptureErrorCode.MACHINE_BUSY)
     with machine_round_trip():
         try:

@@ -69,6 +69,10 @@ class ControllerActionError(Exception):
     pass
 
 
+class KeptSessionLimitError(ControllerActionError):
+    """The Test Runner already keeps as many command sessions as allowed."""
+
+
 class TestRunnerUnavailableError(ControllerActionError, InfrastructureError):
     """The Test Runner could not carry out an action; the app was not judged."""
 

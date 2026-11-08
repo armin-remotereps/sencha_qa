@@ -10,7 +10,10 @@ from PIL import Image
 
 from controller_client.exceptions import ExecutionError
 from controller_client.input_guard import ensure_input_not_blocked
-from controller_client.interactive_session import InteractiveSessionManager
+from controller_client.interactive_session import (
+    InteractiveSessionManager,
+    TooManySessionsError,
+)
 from controller_client.pointer_mapping import ScreenSpaces, map_to_input
 from controller_client.process_tracker import ProcessTracker
 from controller_client.protocol import (
@@ -428,17 +431,41 @@ def execute_start_interactive_cmd(
     timeout: float,
     process_tracker: ProcessTracker,
 ) -> InteractiveOutputPayload:
+    """Start a command: in the foreground session (replacing it), or as a kept
+    session when ``payload.keep`` (refused over ``max_kept`` with
+    TooManySessionsError). ``initial_read_ms`` bounds the first read."""
     try:
-        session = session_manager.start_session(payload.command, timeout)
-        output = session.start(process_tracker, env=child_env())
+        session = session_manager.start_session(
+            payload.command,
+            timeout,
+            keep=payload.keep,
+            max_seconds=(
+                float(payload.max_seconds) if payload.max_seconds is not None else None
+            ),
+            max_kept=payload.max_kept,
+        )
+    except TooManySessionsError:
+        raise
     except Exception as e:
+        raise ExecutionError(f"Start interactive command failed: {e}") from e
+    try:
+        if payload.initial_read_ms is None:
+            output = session.start_with_status(process_tracker, env=child_env())
+        else:
+            output = session.start_with_status(
+                process_tracker, payload.initial_read_ms / 1000, env=child_env()
+            )
+    except Exception as e:
+        if session.kept:
+            session_manager.discard(session.session_id)
         raise ExecutionError(f"Start interactive command failed: {e}") from e
     return InteractiveOutputPayload(
         session_id=session.session_id,
-        output=output,
+        output=output.text,
         is_alive=session.is_alive(),
         exit_code=session.exit_code(),
         duration_ms=session.elapsed_ms(),
+        output_dropped=output.dropped,
     )
 
 
@@ -448,15 +475,16 @@ def execute_send_input(
 ) -> InteractiveOutputPayload:
     try:
         session = session_manager.get_session(payload.session_id)
-        output = session.send_input(payload.input_text)
+        output = session.send_input_with_status(payload.input_text)
     except Exception as e:
         raise ExecutionError(f"Send input failed: {e}") from e
     return InteractiveOutputPayload(
         session_id=session.session_id,
-        output=output,
+        output=output.text,
         is_alive=session.is_alive(),
         exit_code=session.exit_code(),
         duration_ms=session.elapsed_ms(),
+        output_dropped=output.dropped,
     )
 
 
@@ -467,13 +495,16 @@ def execute_wait_for_command(
     try:
         session = session_manager.get_session(payload.session_id)
         chunks: list[str] = []
+        dropped = False
         while session.is_alive():
-            chunk = session.read_output()
-            if chunk:
-                chunks.append(chunk)
-        final = session.read_output()
-        if final:
-            chunks.append(final)
+            chunk = session.read_output_with_status()
+            if chunk.text:
+                chunks.append(chunk.text)
+            dropped = dropped or chunk.dropped
+        final = session.read_output_with_status()
+        if final.text:
+            chunks.append(final.text)
+        dropped = dropped or final.dropped
     except Exception as e:
         raise ExecutionError(f"Wait for command failed: {e}") from e
     return InteractiveOutputPayload(
@@ -482,6 +513,7 @@ def execute_wait_for_command(
         is_alive=session.is_alive(),
         exit_code=session.exit_code(),
         duration_ms=session.elapsed_ms(),
+        output_dropped=dropped,
     )
 
 

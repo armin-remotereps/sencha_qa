@@ -54,6 +54,7 @@ from mcp_gateway.services.own_claim import (
     delete_claim_staging,
     refuse_paused,
 )
+from mcp_gateway.tasks import stop_claim_commands
 from projects.exceptions import ManualSubmissionDroppedError
 from projects.manual_case_lock import lock_manual_run_case
 from projects.manual_case_submit_services import submit_manual_case
@@ -142,6 +143,7 @@ def hand_in(call: McpCall, request: HandInRequest) -> HandInResponse:
                 if stored_name:
                     stored_names.append(stored_name)
             delete_claim_staging(request.pivot_id, request.claim_token)
+            _stop_commands_on_commit(call.project.pk, request.pivot_id)
     except ManualSubmissionDroppedError:
         discard_files()
         delete_claim_staging(request.pivot_id, request.claim_token)
@@ -159,6 +161,15 @@ def hand_in(call: McpCall, request: HandInRequest) -> HandInResponse:
         raise
     return HandInResponse(
         message=_HANDED_IN, run_finished=_run_finished(request.pivot_id)
+    )
+
+
+def _stop_commands_on_commit(project_id: int, pivot_id: int) -> None:
+    """After the commit, stop the ended claim's kept commands (D7, best
+    effort; ``robust``: a broker fault never fails the hand-in, the minute
+    sweep catches up)."""
+    transaction.on_commit(
+        lambda: stop_claim_commands.delay(project_id, pivot_id), robust=True
     )
 
 

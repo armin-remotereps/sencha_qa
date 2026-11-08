@@ -68,7 +68,10 @@ if sys.platform == "win32":
             self._detached = False
             stdout = self._proc.stdout
             assert stdout is not None
-            threading.Thread(target=self._pump, args=(stdout,), daemon=True).start()
+            self._pump_thread = threading.Thread(
+                target=self._pump, args=(stdout,), daemon=True
+            )
+            self._pump_thread.start()
 
         def _pump(self, stdout: IO[bytes]) -> None:
             fd = stdout.fileno()
@@ -117,6 +120,10 @@ if sys.platform == "win32":
                     pass
             return "".join(parts)
 
+        def drain(self, timeout: float) -> str:
+            """Output that arrived since the last read (kept sessions)."""
+            return self.read(timeout)
+
         def send_line(self, text: str) -> None:
             stdin = self._proc.stdin
             if stdin is None:
@@ -148,3 +155,15 @@ if sys.platform == "win32":
                     self._proc.stdin.close()
                 except OSError:
                     pass
+
+        def kill_tree(self) -> None:
+            """Kill cmd and its child tree (``terminate`` already does)."""
+            self.terminate()
+
+        def at_eof(self) -> bool:
+            """Whether every holder of the output pipe has closed it."""
+            # ``terminate`` empties the queue and may take the end marker
+            # with it; a finished pump thread with nothing queued is the end.
+            return self._eof or (
+                not self._pump_thread.is_alive() and self._chunks.empty()
+            )

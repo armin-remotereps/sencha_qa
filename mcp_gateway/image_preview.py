@@ -4,7 +4,8 @@
 check the shot (right window, expected result) before it marks a step. The
 preview is never stored; the staged shot keeps the full image. It is built
 from the image ``load_manual_image`` already decoded (``stage_shot``, under
-``DECODE_SLOTS``), so the bytes are decoded once.
+``DECODE_SLOTS``), so the bytes are decoded once. ``take_screenshot``
+(``machine_screenshot``) passes its own, larger caps.
 """
 
 from __future__ import annotations
@@ -30,17 +31,22 @@ _WHITE: Final = (255, 255, 255)
 _NEAREST_ONLY: Final = frozenset({"1", "P"})
 
 
-def make_preview(image: Image.Image) -> bytes:
-    """A JPEG of the loaded ``image`` with its long edge at most
-    MCP_CAPTURE_PREVIEW_MAX_EDGE and at most MCP_CAPTURE_PREVIEW_MAX_BYTES.
+def make_preview(
+    image: Image.Image,
+    *,
+    max_edge: int = MCP_CAPTURE_PREVIEW_MAX_EDGE,
+    max_bytes: int = MCP_CAPTURE_PREVIEW_MAX_BYTES,
+) -> bytes:
+    """A JPEG of the loaded ``image`` with its long edge at most ``max_edge``
+    and at most ``max_bytes`` (defaults: the capture preview caps).
 
     Shrinks ``image`` in place first (the caller owns and closes it), so the
     colour conversion and the quality loop only ever handle an image of at
-    most MCP_CAPTURE_PREVIEW_MAX_EDGE pixels. Steps the quality, then the
-    size, down until it fits; the smallest attempt is returned if nothing
-    fits (cannot happen at the minimum edge).
+    most ``max_edge`` pixels. Steps the quality, then the size, down until
+    it fits; the smallest attempt is returned if nothing fits (cannot happen
+    at the minimum edge).
     """
-    edge = MCP_CAPTURE_PREVIEW_MAX_EDGE
+    edge = max_edge
     if image.mode in _NEAREST_ONLY:
         image.thumbnail((2 * edge, 2 * edge), Image.Resampling.NEAREST)
         small = _to_rgb(image)
@@ -54,13 +60,20 @@ def make_preview(image: Image.Image) -> bytes:
         scaled.thumbnail((edge, edge), Image.Resampling.LANCZOS)
         for quality in _QUALITIES:
             encoded = _jpeg(scaled, quality)
-            if len(encoded) <= MCP_CAPTURE_PREVIEW_MAX_BYTES:
+            if len(encoded) <= max_bytes:
                 return encoded
             if not smallest or len(encoded) < len(smallest):
                 smallest = encoded
         if edge <= _MIN_EDGE:
             return smallest
         edge = max(_MIN_EDGE, int(edge * _EDGE_STEP))
+
+
+def preview_size(jpeg: bytes) -> tuple[int, int]:
+    """Width and height of a ``make_preview`` JPEG (reads the header only)."""
+    with Image.open(io.BytesIO(jpeg), formats=["JPEG"]) as image:
+        width, height = image.size
+    return int(width), int(height)
 
 
 def _to_rgb(image: Image.Image) -> Image.Image:

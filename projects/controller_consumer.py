@@ -78,6 +78,7 @@ from projects.controller_authenticator import (
     HandshakeStatus,
 )
 from projects.controller_protocol import (
+    INTERACTIVE_SESSIONS_RESULT_MAX_BYTES,
     ActionTypeRegistry,
     BaseActionEvent,
     BrowserClickActionEvent,
@@ -106,6 +107,7 @@ from projects.controller_protocol import (
     InstallAppActionEvent,
     KeyPressActionEvent,
     LaunchAppActionEvent,
+    ListInteractiveSessionsActionEvent,
     ListWindowsActionEvent,
     LongPressActionEvent,
     OpenUrlActionEvent,
@@ -406,6 +408,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             MessageType.WINDOW_CAPTURE_RESULT,
         ):
             await self._handle_window_result(msg_type, request_id, data, raw_length)
+            return
+
+        if msg_type == MessageType.INTERACTIVE_SESSIONS:
+            await self._handle_interactive_sessions(request_id, data, raw_length)
             return
 
         handlers = {
@@ -1159,6 +1165,34 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             return
         await self._reply_tracker.send_window_result(request_id, data)
 
+    async def _handle_interactive_sessions(
+        self, request_id: str, data: dict[str, Any], raw_length: int
+    ) -> None:
+        """Route an ``interactive_sessions`` reply to its waiter.
+
+        A raw message over INTERACTIVE_SESSIONS_RESULT_MAX_BYTES is not
+        forwarded: the waiter gets an error reply (``ControllerActionError``).
+        """
+        if raw_length > INTERACTIVE_SESSIONS_RESULT_MAX_BYTES:
+            logger.warning(
+                "Refusing oversized %s (%d bytes) for project %s",
+                MessageType.INTERACTIVE_SESSIONS,
+                raw_length,
+                self._project.id if self._project is not None else None,
+            )
+            await self._reply_tracker.send_error(
+                request_id,
+                {
+                    "code": ErrorCode.INVALID_MESSAGE,
+                    "message": (
+                        f"The {MessageType.INTERACTIVE_SESSIONS} reply is too large"
+                    ),
+                    "details": "",
+                },
+            )
+            return
+        await self._reply_tracker.send_interactive_sessions(request_id, data)
+
     async def _forward_action(self, event: BaseActionEvent) -> None:
         request_id: str = event.get("request_id") or str(uuid.uuid4())
         reply_channel: str = event.get("reply_channel", "")
@@ -1258,6 +1292,11 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
     async def controller_terminate_interactive_cmd(
         self, event: TerminateInteractiveCmdActionEvent
+    ) -> None:
+        await self._forward_action(event)
+
+    async def controller_list_interactive_sessions(
+        self, event: ListInteractiveSessionsActionEvent
     ) -> None:
         await self._forward_action(event)
 

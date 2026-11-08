@@ -19,7 +19,16 @@ def runner_supports(project_id: int, capability: ClientCapability) -> bool:
         .values_list("agent_capabilities", flat=True)
         .get()
     )
-    return capability.value in (capabilities or [])
+    return capabilities_include(capabilities, capability)
+
+
+def capabilities_include(capabilities: object, capability: ClientCapability) -> bool:
+    """Whether a loaded ``Project.agent_capabilities`` value (a list, or a
+    set of its names) lists ``capability`` (no query)."""
+    return (
+        isinstance(capabilities, (list, frozenset, set))
+        and capability.value in capabilities
+    )
 
 
 def ensure_runner_supports_double_click(project_id: int) -> None:
@@ -40,7 +49,13 @@ def runner_os_name(project_id: int) -> str:
         .values_list("agent_system_info", flat=True)
         .get()
     )
-    return str(info.get("os", "")) if isinstance(info, dict) else ""
+    return os_name_of(info)
+
+
+def os_name_of(system_info: object) -> str:
+    """The OS name in a loaded ``Project.agent_system_info`` value, or ``""``
+    (no query)."""
+    return str(system_info.get("os", "")) if isinstance(system_info, dict) else ""
 
 
 def ensure_runner_supports_windows_shell(project_id: int, os_name: str) -> None:
@@ -49,7 +64,20 @@ def ensure_runner_supports_windows_shell(project_id: int, os_name: str) -> None:
         return
     if runner_supports(project_id, ClientCapability.WINDOWS_SHELL_V1):
         return
-    raise RunnerOutdatedError(
+    raise _windows_shell_outdated()
+
+
+def ensure_windows_shell_supported(os_name: str, capabilities: object) -> None:
+    """``ensure_runner_supports_windows_shell`` on loaded values (no query)."""
+    if os_name != "Windows":
+        return
+    if capabilities_include(capabilities, ClientCapability.WINDOWS_SHELL_V1):
+        return
+    raise _windows_shell_outdated()
+
+
+def _windows_shell_outdated() -> RunnerOutdatedError:
+    return RunnerOutdatedError(
         "This Test Runner cannot run shell commands on Windows. Download a fresh "
         "Test Runner from the Environment page."
     )

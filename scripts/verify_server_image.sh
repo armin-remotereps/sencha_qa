@@ -35,6 +35,7 @@ for f in \
     controller_client/client.py \
     controller_client/protocol.py \
     controller_client/exceptions.py \
+    controller_client/kept_output_buffer.py \
     controller_client/scripts/setup.sh \
     controller_client/scripts/setup.ps1 \
     controller_client/scripts/setup.bat \

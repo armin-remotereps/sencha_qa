@@ -28,6 +28,7 @@ from agents.types import (
     PixelParseResult,
     PixelUIElement,
 )
+from projects.call_deadline import capped_timeout
 from projects.exceptions import VisualEngineError
 from vision_worker.exceptions import ProtocolError
 from vision_worker.protocol import (
@@ -95,13 +96,17 @@ def parse_screenshot(
     if layer is None:
         raise VisualEngineError("Channel layer is not configured")
 
-    wait_timeout = float(settings.VISION_WORKER_WAIT_SECONDS)
+    # A bounded caller's deadline (``call_deadline``) cuts both budgets;
+    # unset: unchanged.
+    wait_timeout = capped_timeout(float(settings.VISION_WORKER_WAIT_SECONDS))
     workers = list_ready_workers()
     if not workers:
         _wait_for_any_ready_worker(wait_timeout, cancellation_check)
         workers = list_ready_workers()
 
-    deadline = time.monotonic() + float(settings.VISION_PARSE_BUDGET_SECONDS)
+    deadline = time.monotonic() + capped_timeout(
+        float(settings.VISION_PARSE_BUDGET_SECONDS)
+    )
     attempt_timeout = float(settings.VISION_PARSE_ATTEMPT_TIMEOUT)
     start_index = _next_round_robin_index()
     # Keyed by channel, not row: a worker that dropped and reconnected under

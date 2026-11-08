@@ -5,6 +5,11 @@ from typing import Any, Final, NotRequired, TypedDict
 
 from controller_client.protocol import MessageType, serialize_message
 
+# Largest raw ``interactive_sessions`` reply the consumer forwards
+# (KEPT_SESSIONS_V1). INTERACTIVE_SESSIONS_MAX_ENTRIES entries of about 250
+# bytes each fit many times over; anything bigger is refused.
+INTERACTIVE_SESSIONS_RESULT_MAX_BYTES: Final[int] = 65_536
+
 
 class BaseActionEvent(TypedDict):
     type: str
@@ -115,6 +120,12 @@ class BrowserListDownloadsActionEvent(BaseActionEvent):
 
 class StartInteractiveCmdActionEvent(BaseActionEvent):
     command: str
+    # KEPT_SESSIONS_V1 only (``controller_command_sessions``); agent starts
+    # never carry them, so their message is unchanged.
+    keep: NotRequired[bool]
+    max_seconds: NotRequired[int]
+    initial_read_ms: NotRequired[int]
+    max_kept: NotRequired[int]
 
 
 class SendInputActionEvent(BaseActionEvent):
@@ -128,6 +139,10 @@ class WaitForCommandActionEvent(BaseActionEvent):
 
 class TerminateInteractiveCmdActionEvent(BaseActionEvent):
     session_id: str
+
+
+class ListInteractiveSessionsActionEvent(BaseActionEvent):
+    """KEPT_SESSIONS_V1: no fields besides the request id."""
 
 
 class LaunchAppActionEvent(BaseActionEvent):
@@ -264,6 +279,7 @@ class ActionTypeRegistry:
         "controller.send_input": MessageType.SEND_INPUT,
         "controller.wait_for_command": MessageType.WAIT_FOR_COMMAND,
         "controller.terminate_interactive_cmd": MessageType.TERMINATE_INTERACTIVE_CMD,
+        "controller.list_interactive_sessions": (MessageType.LIST_INTERACTIVE_SESSIONS),
         "controller.launch_app": MessageType.LAUNCH_APP,
         "controller.close_app": MessageType.CLOSE_APP,
         "controller.close_tab": MessageType.CLOSE_TAB,
@@ -311,10 +327,18 @@ class ActionTypeRegistry:
         "controller.browser_take_screenshot": ("browser",),
         "controller.browser_download": ("url", "save_path", "browser"),
         "controller.browser_list_downloads": (),
-        "controller.start_interactive_cmd": ("command",),
+        # The kept-session fields go out only when the event has them.
+        "controller.start_interactive_cmd": (
+            "command",
+            "keep",
+            "max_seconds",
+            "initial_read_ms",
+            "max_kept",
+        ),
         "controller.send_input": ("session_id", "input_text"),
         "controller.wait_for_command": ("session_id",),
         "controller.terminate_interactive_cmd": ("session_id",),
+        "controller.list_interactive_sessions": (),
         "controller.launch_app": ("app_name",),
         "controller.close_app": ("app_name", "force"),
         "controller.close_tab": ("app_name",),

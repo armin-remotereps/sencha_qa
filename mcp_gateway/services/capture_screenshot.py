@@ -7,7 +7,7 @@ claimed case (capture_screenshot).
    the request against it: a desktop runner needs ``window_match`` for
    window and region; a named process must be allowlisted.
 3. A process round-trip slot and one capture per project at a time
-   (``capture_lock``, both released in ``finally``) for the runner round
+   (``machine_lock``, both released in ``finally``) for the runner round
    trip, which holds no transaction.
 4. A refusal on the machine becomes a coded tool error
    (``capture_errors``); a success is checked again: its process must be on
@@ -46,6 +46,7 @@ from controller_client.protocol import (
 from mcp_gateway.exceptions import DecodeSlotTimeout
 from mcp_gateway.limits import (
     MCP_CAPTURE_DEADLINE_SECONDS,
+    MCP_CAPTURE_LOCK_SECONDS,
     MCP_CAPTURE_REPLY_TIMEOUT_SECONDS,
 )
 from mcp_gateway.schemas import CaptureScreenshotRequest, CaptureScreenshotResponse
@@ -58,8 +59,8 @@ from mcp_gateway.services.capture_errors import (
     refuse_unready,
     status_error,
 )
-from mcp_gateway.services.capture_lock import capture_lock, machine_round_trip
 from mcp_gateway.services.capture_mapping import desktop_item
+from mcp_gateway.services.machine_round_trip import machine_lock, machine_round_trip
 from mcp_gateway.services.own_claim import load_own_claim, refuse_paused
 from mcp_gateway.services.stage_shot import refuse_full, stage_shot
 from mcp_gateway.untrusted_text import case_line
@@ -224,8 +225,8 @@ def _capture_once(
     project_id: int, window_request: CaptureWindowRequest
 ) -> WindowCapture:
     """The runner round trip under a process round-trip slot and the
-    project's capture lock (no transaction is open here)."""
-    with machine_round_trip(), capture_lock(project_id):
+    project's machine lock (no transaction is open here)."""
+    with machine_round_trip(), machine_lock(project_id, MCP_CAPTURE_LOCK_SECONDS):
         try:
             return controller_capture_window(
                 project_id,

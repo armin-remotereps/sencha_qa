@@ -17,7 +17,9 @@ bodies and slow tool calls stay off the process holding runner WebSockets.
 
 The MCP Starlette app returned by ``streamable_http_app`` owns the lifespan
 (it enters ``session_manager.run()`` exactly once), so lifespan events go to
-it alone, untouched; the OAuth app has no lifespan. The dispatcher also
+it alone, untouched (the dispatcher only sets the loop's bounded default
+executor, ``MCP_EXECUTOR_THREADS``, before passing it on); the OAuth app has
+no lifespan. The dispatcher also
 publishes the client IP (``scope["client"]``, the real IP behind nginx with
 ``--proxy-headers``) for the bearer check's per-IP failure counter and the
 OAuth throttles.
@@ -25,8 +27,10 @@ OAuth throttles.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 
 import django
@@ -50,6 +54,7 @@ os.environ.setdefault("DJANGO_SETTINGS_MODULE", "auto_tester.settings")
 django.setup()
 
 from mcp_gateway.limits import (  # noqa: E402
+    MCP_EXECUTOR_THREADS,
     MCP_OAUTH_AUTHORIZE_PER_MINUTE,
     MCP_OAUTH_REGISTER_PER_HOUR_GLOBAL,
     MCP_OAUTH_REGISTER_PER_HOUR_PER_IP,
@@ -186,6 +191,8 @@ class GatewayDispatcher:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
+            if scope["type"] == "lifespan":
+                _set_default_executor()
             # Lifespan goes to the MCP Starlette app alone: it enters
             # session_manager.run() itself.
             await self.mcp_starlette(scope, receive, send)
@@ -209,6 +216,18 @@ class GatewayDispatcher:
             await self.oauth(scope, receive, send)
         else:
             await self.other(scope, receive, send)
+
+
+def _set_default_executor() -> None:
+    """Give the event loop an explicit, bounded default executor (once per
+    process, at lifespan startup): tool calls run their sync work there
+    (``sync_to_async(thread_sensitive=False)``), and the default size
+    depends on the host's CPU count."""
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(
+            max_workers=MCP_EXECUTOR_THREADS, thread_name_prefix="mcp-tool"
+        )
+    )
 
 
 def _oauth_request_allowed(path: str, ip: str) -> bool:

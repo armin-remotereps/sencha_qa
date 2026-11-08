@@ -18,7 +18,16 @@ no project resolution, a READ throttle keyed by the caller.
 Both apply the call's throttle, run the use case and turn every expected
 domain error into an ``McpToolError`` with user-safe text. One log line per
 call: tool, project id, auth kind (``key`` / ``oauth``), grant id, case id,
-outcome and milliseconds; never arguments, notes, images, the key or a token.
+actor kind (``member`` for OAuth, ``anonymous`` for a Connection key; never a
+name), command session id (command tools only), outcome and milliseconds;
+never arguments, notes, images, the key or a token.
+
+``McpCall.actor`` is the neutral tester of the Manual tools. The machine
+tools write nothing attributed or user-visible; the log line records only
+their actor's kind. D5 (docs/plan/feat-mcp-runner-tools.md) is the rule for
+any future user-visible text of a machine tool: an OAuth grant acts as
+"<member> via Test Runner" (``PersonStepActor.runner(user)``), a Connection
+key as "a person at the Test Runner" (``PersonStepActor.runner(None)``).
 """
 
 from __future__ import annotations
@@ -36,9 +45,13 @@ from controller_client.exceptions import ProtocolError
 from knowledge_base.exceptions import KnowledgeBaseError
 from mcp_gateway.exceptions import McpToolError
 from mcp_gateway.limits import (
+    MCP_AI_RATE_PER_MINUTE,
+    MCP_COMMAND_RATE_PER_MINUTE,
+    MCP_CONTROL_RATE_PER_MINUTE,
     MCP_MACHINE_RATE_PER_MINUTE,
     MCP_MARK_RATE_PER_MINUTE,
     MCP_READ_RATE_PER_MINUTE,
+    MCP_SCREEN_RATE_PER_MINUTE,
 )
 from mcp_gateway.oauth_types import McpCaller
 from mcp_gateway.services.oauth_access import link_fingerprint_matches, live_links
@@ -73,6 +86,17 @@ _SHOT_THROTTLED: Final = "Too many screenshots. Wait a minute and try again."
 _MACHINE_THROTTLED: Final = (
     "Too many requests to the test machine. Wait a minute and try again."
 )
+_CONTROL_THROTTLED: Final = (
+    "Too many actions on the test machine. Wait a minute and try again."
+)
+_AI_THROTTLED: Final = (
+    "Too many actions that find elements by description or search the web. "
+    "Wait a minute and try again, or use click_at with coordinates."
+)
+_COMMAND_THROTTLED: Final = "Too many command requests. Wait a minute and try again."
+_SCREEN_THROTTLED: Final = (
+    "Too many screenshots of the test machine. Wait a minute and try again."
+)
 _INTERNAL: Final = "The server could not complete this call. Try again later."
 _MACHINE_BUSY = "The test machine is busy. Try again in a minute."
 _CLAIM_ENDED = (
@@ -96,6 +120,35 @@ class CallKind(StrEnum):
     SHOT = "shot"
     # list_windows: a round trip to the test machine.
     MACHINE = "machine"
+    # Machine tools inside a claimed case (mcp_gateway.machine_tools).
+    # Coordinate input, keys, apps, plain browser tools, phone buttons, wait.
+    CONTROL = "control"
+    # Description tools, web_search; click_at / swipe / rotate_device with an
+    # expected_result.
+    AI = "ai"
+    # The command tools.
+    COMMAND = "command"
+    # take_screenshot (analysis only).
+    SCREEN = "screen"
+
+
+# kind -> (throttle key prefix, limit per project and minute, refusal).
+_RATE_LIMITS: Final[dict[CallKind, tuple[str, int, str]]] = {
+    CallKind.MARK: ("mcp:mark", MCP_MARK_RATE_PER_MINUTE, _MARK_THROTTLED),
+    CallKind.MACHINE: ("mcp:machine", MCP_MACHINE_RATE_PER_MINUTE, _MACHINE_THROTTLED),
+    CallKind.CONTROL: (
+        "mcp:control",
+        MCP_CONTROL_RATE_PER_MINUTE,
+        _CONTROL_THROTTLED,
+    ),
+    CallKind.AI: ("mcp:ai", MCP_AI_RATE_PER_MINUTE, _AI_THROTTLED),
+    CallKind.COMMAND: (
+        "mcp:command",
+        MCP_COMMAND_RATE_PER_MINUTE,
+        _COMMAND_THROTTLED,
+    ),
+    CallKind.SCREEN: ("mcp:screen", MCP_SCREEN_RATE_PER_MINUTE, _SCREEN_THROTTLED),
+}
 
 
 @dataclass(frozen=True)
@@ -103,6 +156,8 @@ class McpCall:
     """The resolved caller of one tool call."""
 
     project: Project
+    # The neutral tester ("a tester") of the Manual tools. The machine tools
+    # have no actor here: see D5 in the module docstring.
     actor: PersonStepActor
 
 
@@ -114,11 +169,13 @@ def guarded_call(
     kind: CallKind,
     pivot_id: int | None,
     run: Callable[[McpCall], _T],
+    session: str | None = None,
 ) -> _T:
     """Resolve, throttle and run one project-scoped tool call (sync).
 
     ``caller`` is the verified bearer; ``project_id`` the project the call
-    names. Raises ``McpToolError`` for every refusal.
+    names; ``session`` the command session id a command tool names (logged
+    only). Raises ``McpToolError`` for every refusal.
     """
 
     def body() -> _T:
@@ -127,7 +184,12 @@ def guarded_call(
         return run(call)
 
     return _guarded(
-        caller=caller, project_id=project_id, tool=tool, pivot_id=pivot_id, body=body
+        caller=caller,
+        project_id=project_id,
+        tool=tool,
+        pivot_id=pivot_id,
+        session=session,
+        body=body,
     )
 
 
@@ -150,6 +212,7 @@ def guarded_caller_call(
         project_id=caller.key_project_id,
         tool=tool,
         pivot_id=None,
+        session=None,
         body=body,
     )
 
@@ -160,6 +223,7 @@ def _guarded(
     project_id: int | None,
     tool: str,
     pivot_id: int | None,
+    session: str | None,
     body: Callable[[], _T],
 ) -> _T:
     """Run ``body``, map expected errors to ``McpToolError`` and log once."""
@@ -186,12 +250,15 @@ def _guarded(
         raise McpToolError(_INTERNAL) from exc
     finally:
         logger.info(
-            "mcp tool=%s project=%s auth=%s grant=%s pivot=%s outcome=%s ms=%d",
+            "mcp tool=%s project=%s auth=%s grant=%s actor=%s pivot=%s "
+            "session=%s outcome=%s ms=%d",
             tool,
             project_id,
             caller.auth,
             caller.grant_id,
+            _actor_kind(caller),
             pivot_id,
+            session,
             outcome,
             int((time.monotonic() - started) * 1000),
         )
@@ -229,6 +296,12 @@ def _resolve_call(caller: McpCaller, project_id: int) -> McpCall:
     return McpCall(project=project, actor=PersonStepActor.tester())
 
 
+def _actor_kind(caller: McpCaller) -> str:
+    """The machine actor's kind for the log line (never a name): an OAuth
+    grant acts as its member, a Connection key anonymously."""
+    return "member" if caller.grant_id is not None else "anonymous"
+
+
 def _caller_read_key(caller: McpCaller) -> str:
     """The READ throttle key of a caller-scoped call: per grant, or the
     Connection key's project budget."""
@@ -255,23 +328,11 @@ def _throttle(project_id: int, kind: CallKind) -> None:
     if kind is CallKind.READ:
         _throttle_read(f"mcp:read:{project_id}")
         return
-    if kind is CallKind.MARK:
-        key, limit, message = (
-            f"mcp:mark:{project_id}",
-            MCP_MARK_RATE_PER_MINUTE,
-            _MARK_THROTTLED,
-        )
-    elif kind is CallKind.MACHINE:
-        key, limit, message = (
-            f"mcp:machine:{project_id}",
-            MCP_MACHINE_RATE_PER_MINUTE,
-            _MACHINE_THROTTLED,
-        )
-    else:
-        key, limit, message = (
-            f"mcp:shot:{project_id}",
-            settings.MANUAL_SHOT_RATE_PER_MINUTE,
-            _SHOT_THROTTLED,
-        )
+    rate = _RATE_LIMITS.get(kind)
+    if rate is None:
+        # SHOT: add_screenshot and capture_screenshot.
+        rate = ("mcp:shot", settings.MANUAL_SHOT_RATE_PER_MINUTE, _SHOT_THROTTLED)
+    prefix, limit, message = rate
+    key = f"{prefix}:{project_id}"
     if not hit_runner_throttle(key, limit=limit, window_seconds=_WINDOW_SECONDS):
         raise McpToolError(message)

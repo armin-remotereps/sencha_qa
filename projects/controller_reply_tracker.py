@@ -154,6 +154,8 @@ class ReplyTracker:
                 "is_alive": data.get("is_alive", False),
                 "exit_code": data.get("exit_code"),
                 "duration_ms": data.get("duration_ms", 0.0),
+                # KEPT_SESSIONS_V1; older runners never send it.
+                "output_dropped": data.get("output_dropped", False),
             },
         )
         return True
@@ -203,6 +205,33 @@ class ReplyTracker:
                 "success": data.get("success", False),
                 "result": data.get("result"),
                 "duration_ms": data.get("duration_ms", 0.0),
+            },
+        )
+        return True
+
+    async def send_interactive_sessions(
+        self, request_id: str, data: dict[str, Any]
+    ) -> bool:
+        """Forward an ``interactive_sessions`` reply (KEPT_SESSIONS_V1).
+
+        The consumer has already refused a message over its size cap.
+        """
+        reply_channel = self.pop_reply_channel(request_id)
+        if not reply_channel:
+            logger.warning(
+                "Received interactive_sessions with unknown request_id: %s",
+                request_id,
+            )
+            return False
+
+        # ``sessions`` is runner data; ``controller_command_sessions``
+        # validates it.
+        await self._channel_layer.send(
+            reply_channel,
+            {
+                "type": "interactive_sessions.result",
+                "request_id": request_id,
+                "sessions": data.get("sessions"),
             },
         )
         return True

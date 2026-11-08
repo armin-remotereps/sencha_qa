@@ -271,6 +271,9 @@ CELERY_TASK_ROUTES: dict[str, dict[str, str]] = {
     # In projects.tasks: projects composes their runner ports (plan D2).
     "projects.tasks.scan_artifacts_task": {"queue": "assist"},
     "projects.tasks.quick_check_task": {"queue": "assist"},
+    # Stops kept commands of Manual claims that ended (short runner round trips).
+    "mcp_gateway.tasks.stop_claim_commands": {"queue": "assist"},
+    "mcp_gateway.tasks.sweep_ended_claim_commands": {"queue": "assist"},
     # Several LLM calls over minutes, like an import (sent by name after one).
     "machine_readiness.tasks.analyse_preconditions_task": {"queue": "upload"},
 }
@@ -310,6 +313,13 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "task": "mcp_gateway.tasks.sweep_mcp_oauth",
         "schedule": crontab(minute=20),
         "options": {"expire_seconds": 3000},
+    },
+    # MCP gateway: kept commands of Manual claims that ended outside the
+    # gateway (web Release, re-test, re-run, reset, run stop); <= 60 s late.
+    "mcp-gateway-sweep-ended-claim-commands": {
+        "task": "mcp_gateway.tasks.sweep_ended_claim_commands",
+        "schedule": 60.0,
+        "options": {"expire_seconds": 55},
     },
     # Manual run: hand-ins with no screenshot for MANUAL_UPLOAD_STALE_HOURS
     # become "Screenshots incomplete", so they can be checked and sent.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -9,9 +10,11 @@ import trafilatura
 from django.conf import settings
 
 from agents.exceptions import AIServiceError
+from agents.http_deadline import deadline_timeout, request_by
 from agents.services.llm_client import send_chat_completion
 from agents.services.tool_utils import safe_tool_call
 from agents.types import ChatMessage, LLMConfig, ToolResult
+from projects.call_deadline import capped_timeout, remaining_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,20 @@ def web_search(*, query: str, summarizer_config: LLMConfig | None = None) -> Too
     )
 
 
+def web_search_snippets(
+    *, query: str, summarizer_config: LLMConfig | None = None
+) -> ToolResult:
+    """``web_search`` without fetching any page from this server: SearXNG
+    titles, URLs and snippets only, summarised when ``summarizer_config`` is
+    given. Under a call deadline (``projects.call_deadline``) the SearXNG
+    request and the summary are both cut to it. For callers outside the
+    test run (the MCP gateway); the agent keeps ``web_search``."""
+    return safe_tool_call(
+        "web_search",
+        lambda: _execute_search(query, summarizer_config, fetch_pages=False),
+    )
+
+
 def _fetch_searxng_results(query: str) -> list[dict[str, Any]]:
     base_url: str = settings.SEARXNG_BASE_URL
     max_results: int = settings.SEARXNG_MAX_RESULTS
@@ -58,9 +75,24 @@ def _fetch_searxng_results(query: str) -> list[dict[str, Any]]:
         "categories": "general",
     }
 
-    with httpx.Client(timeout=timeout) as client:
-        response = client.get(f"{base_url}/search", params=params)
-        response.raise_for_status()
+    remaining = remaining_seconds()
+    if remaining is None:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(f"{base_url}/search", params=params)
+            response.raise_for_status()
+    else:
+        # Under a call deadline: phases that add up to the time left and a
+        # streamed body checked against the deadline per chunk.
+        budget = capped_timeout(float(timeout))
+        with httpx.Client(timeout=deadline_timeout(budget)) as client:
+            response = request_by(
+                client,
+                "GET",
+                f"{base_url}/search",
+                deadline=time.monotonic() + budget,
+                params=params,
+            )
+            response.raise_for_status()
 
     data: dict[str, Any] = response.json()
     results: list[dict[str, Any]] = data.get("results", [])
@@ -170,15 +202,19 @@ def _attempt_summarization(query: str, formatted: str, config: LLMConfig) -> Too
         return _build_result(formatted)
 
 
-def _execute_search(query: str, summarizer_config: LLMConfig | None) -> ToolResult:
+def _execute_search(
+    query: str, summarizer_config: LLMConfig | None, *, fetch_pages: bool = True
+) -> ToolResult:
     results = _fetch_searxng_results(query)
 
     if not results:
         return _build_result(NO_RESULTS_MESSAGE)
 
-    fetch_count: int = settings.SEARCH_FETCH_PAGE_COUNT
-    urls = [r["url"] for r in results if r.get("url")][:fetch_count]
-    page_contents = _fetch_pages_content(urls)
+    page_contents: dict[str, str] = {}
+    if fetch_pages:
+        fetch_count: int = settings.SEARCH_FETCH_PAGE_COUNT
+        urls = [r["url"] for r in results if r.get("url")][:fetch_count]
+        page_contents = _fetch_pages_content(urls)
 
     formatted = _format_results(results, page_contents)
 

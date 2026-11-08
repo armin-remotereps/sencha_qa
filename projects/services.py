@@ -86,6 +86,7 @@ from machine_setup.auto_fix_stop import request_auto_fix_stop
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
 from notifications.services.inbox_broadcast import broadcast_project_attention_changed
 from projects.application_context_services import write_application_context
+from projects.call_deadline import capped_timeout
 from projects.case_checkpoint_services import (
     build_checkpoint_callback,
     load_resume_checkpoint,
@@ -152,6 +153,7 @@ from projects.exceptions import (
     ControllerNotConnectedError,
     ControllerReconnectTimeoutError,
     DeviceDisconnectedError,
+    KeptSessionLimitError,
     TestRunnerDisconnectedError,
     TestRunnerUnresponsiveError,
 )
@@ -1361,6 +1363,8 @@ def _raise_for_error_reply(reply: dict[str, Any], event_type: str) -> None:
     if code == ErrorCode.TARGET_MISMATCH:
         logger.warning("Controller refused %s for its target: %s", event_type, message)
         raise ControllerActionError(_TARGET_MISMATCH_MESSAGE)
+    if code == ErrorCode.TOO_MANY_SESSIONS:
+        raise KeptSessionLimitError(message)
     raise ControllerActionError(message)
 
 
@@ -1529,6 +1533,9 @@ def _send_controller_action_once(
     *,
     runner_local: bool,
 ) -> dict[str, Any]:
+    # A bounded caller's deadline (``call_deadline``) cuts the wait; raises
+    # before anything is sent when no time is left. Unset: unchanged.
+    reply_timeout = capped_timeout(reply_timeout)
     reply_channel: str = async_to_sync(layer.new_channel)()
     request_id = str(uuid.uuid4())
 

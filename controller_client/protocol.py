@@ -15,7 +15,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.20.0"
+CLIENT_VERSION: Final[str] = "0.21.0"
 
 
 class CloseCode(IntEnum):
@@ -135,6 +135,12 @@ class MessageType(StrEnum):
     CAPTURE_WINDOW = "capture_window"
     WINDOW_LIST_RESULT = "window_list_result"
     WINDOW_CAPTURE_RESULT = "window_capture_result"
+    # Kept sessions (KEPT_SESSIONS_V1): server -> runner with
+    # ``list_interactive_sessions`` (no fields besides ``request_id``);
+    # runner -> server with ``interactive_sessions`` (same request_id)
+    # carrying ``sessions``. Runner-local: never resent after a reconnect.
+    LIST_INTERACTIVE_SESSIONS = "list_interactive_sessions"
+    INTERACTIVE_SESSIONS = "interactive_sessions"
 
 
 class ClientCapability(StrEnum):
@@ -202,6 +208,14 @@ class ClientCapability(StrEnum):
     # without it is outdated; a platform that cannot capture says so in the
     # result's ``status``.
     WINDOW_CAPTURE_V1 = "window_capture_v1"
+    # Optional: kept interactive sessions. ``start_interactive_cmd`` may carry
+    # ``keep``, ``max_seconds``, ``initial_read_ms`` and ``max_kept``; a kept
+    # session is never replaced by a later start, its output is buffered
+    # (``output_dropped`` on ``interactive_output``) and it ends after
+    # ``max_seconds``; ``list_interactive_sessions`` lists the sessions. A
+    # kept start over ``max_kept`` is answered with TOO_MANY_SESSIONS. Older
+    # controllers ignore the fields and keep one session.
+    KEPT_SESSIONS_V1 = "kept_sessions_v1"
     # Retired in 0.18.0 (How to do it and Ask AI): person_step_assist_v1,
     # person_step_guide_v1, manual_step_guide_v1 may still arrive from runners
     # < 0.18.0; ignored; never reuse.
@@ -253,7 +267,7 @@ def advertised_capabilities(
 # WINDOWS_SHELL_V1, SCROLL_V1, SELF_UPDATE_V1, PERSON_STEPS_V1,
 # PERSON_STEP_CASE_STEPS_V1, ARTIFACT_SCAN_V1, PERSON_CASE_CONTEXT_V1,
 # PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1, MANUAL_PAUSE_DISCUSS_V1,
-# MOBILE_DEVICE_V1, WINDOW_CAPTURE_V1) are checked where they are used instead.
+# MOBILE_DEVICE_V1, WINDOW_CAPTURE_V1, KEPT_SESSIONS_V1) are checked where they are used instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
@@ -331,6 +345,9 @@ class ErrorCode(StrEnum):
     # A desktop-only message on a phone target, or a phone message on a
     # desktop target.
     TARGET_MISMATCH = "TARGET_MISMATCH"
+    # A kept ``start_interactive_cmd`` while ``max_kept`` kept sessions are
+    # already running (KEPT_SESSIONS_V1).
+    TOO_MANY_SESSIONS = "TOO_MANY_SESSIONS"
 
 
 @dataclass(frozen=True)
@@ -508,9 +525,30 @@ class BrowserContentResultPayload:
     duration_ms: float
 
 
+# Kept interactive sessions (KEPT_SESSIONS_V1). The parser clamps the
+# request's values to these limits.
+KEPT_SESSIONS_MAX: Final[int] = 4
+KEPT_SESSION_MAX_SECONDS: Final[int] = 14_400
+# Output a kept session buffers between reads; older output is dropped.
+KEPT_SESSION_BUFFER_BYTES: Final[int] = 1_048_576
+# Bounds of the first read after a start, in milliseconds.
+INITIAL_READ_MS_MIN: Final[int] = 200
+INITIAL_READ_MS_MAX: Final[int] = 5_000
+# Most sessions one ``interactive_sessions`` reply carries.
+INTERACTIVE_SESSIONS_MAX_ENTRIES: Final[int] = 32
+# Longest session id an ``interactive_sessions`` reply may carry.
+INTERACTIVE_SESSION_ID_MAX_CHARS: Final[int] = 128
+
+
 @dataclass(frozen=True)
 class StartInteractiveCmdPayload:
     command: str
+    # KEPT_SESSIONS_V1 only; absent from older servers. A kept session needs
+    # ``max_seconds`` and ``max_kept``.
+    keep: bool = False
+    max_seconds: int | None = None
+    initial_read_ms: int | None = None
+    max_kept: int | None = None
 
 
 @dataclass(frozen=True)
@@ -531,6 +569,23 @@ class InteractiveOutputPayload:
     is_alive: bool
     exit_code: int | None
     duration_ms: float
+    # KEPT_SESSIONS_V1: True when a kept session's buffer discarded output
+    # since the last read. Older servers ignore it.
+    output_dropped: bool = False
+
+
+@dataclass(frozen=True)
+class InteractiveSessionInfo:
+    session_id: str
+    alive: bool
+    exit_code: int | None
+    elapsed_ms: float
+    kept: bool
+
+
+@dataclass(frozen=True)
+class InteractiveSessionsPayload:
+    sessions: tuple[InteractiveSessionInfo, ...]
 
 
 @dataclass(frozen=True)
@@ -877,11 +932,133 @@ def _extract_optional_int(data: dict[str, object], field: str) -> int | None:
     return value
 
 
+def _clamped_optional_int(
+    data: dict[str, object], field: str, minimum: int, maximum: int
+) -> int | None:
+    value = _extract_optional_int(data, field)
+    if value is None:
+        return None
+    return min(max(value, minimum), maximum)
+
+
 def parse_start_interactive_cmd_payload(
     data: dict[str, object],
 ) -> StartInteractiveCmdPayload:
+    """Validate a ``start_interactive_cmd`` request (runner side).
+
+    The KEPT_SESSIONS_V1 fields may be absent (older servers); present values
+    are clamped to the limits. ``keep`` without ``max_seconds`` and
+    ``max_kept`` is refused."""
+    keep = _extract_bool(data, "keep", default=False)
+    max_seconds = _clamped_optional_int(
+        data, "max_seconds", 1, KEPT_SESSION_MAX_SECONDS
+    )
+    max_kept = _clamped_optional_int(data, "max_kept", 1, KEPT_SESSIONS_MAX)
+    if keep and (max_seconds is None or max_kept is None):
+        raise ProtocolError("A kept session needs 'max_seconds' and 'max_kept'")
     return StartInteractiveCmdPayload(
         command=_extract_str(data, "command"),
+        keep=keep,
+        max_seconds=max_seconds,
+        initial_read_ms=_clamped_optional_int(
+            data, "initial_read_ms", INITIAL_READ_MS_MIN, INITIAL_READ_MS_MAX
+        ),
+        max_kept=max_kept,
+    )
+
+
+def serialize_start_interactive_cmd_payload(
+    payload: StartInteractiveCmdPayload,
+) -> dict[str, object]:
+    """The JSON fields of a ``start_interactive_cmd`` request (server side;
+    passed as the action's keyword payload). The KEPT_SESSIONS_V1 fields are
+    sent only when set, so a plain start is unchanged."""
+    fields: dict[str, object] = {"command": payload.command}
+    if payload.keep:
+        fields["keep"] = True
+    if payload.max_seconds is not None:
+        fields["max_seconds"] = payload.max_seconds
+    if payload.initial_read_ms is not None:
+        fields["initial_read_ms"] = payload.initial_read_ms
+    if payload.max_kept is not None:
+        fields["max_kept"] = payload.max_kept
+    return fields
+
+
+def serialize_list_interactive_sessions_payload() -> dict[str, object]:
+    """The JSON fields of a ``list_interactive_sessions`` request (server
+    side): none besides ``request_id``."""
+    return {}
+
+
+def serialize_interactive_sessions_payload(
+    payload: InteractiveSessionsPayload,
+) -> dict[str, object]:
+    """The JSON fields of an ``interactive_sessions`` reply (runner side),
+    cut to INTERACTIVE_SESSIONS_MAX_ENTRIES sessions."""
+    return {
+        "sessions": [
+            {
+                "session_id": info.session_id,
+                "alive": info.alive,
+                "exit_code": info.exit_code,
+                "elapsed_ms": max(info.elapsed_ms, 0.0),
+                "kept": info.kept,
+            }
+            for info in payload.sessions[:INTERACTIVE_SESSIONS_MAX_ENTRIES]
+        ]
+    }
+
+
+def serialize_interactive_sessions_message(
+    payload: InteractiveSessionsPayload, request_id: str
+) -> str:
+    """An ``interactive_sessions`` message (runner side; echoes the
+    request's ``request_id``)."""
+    return serialize_message(
+        MessageType.INTERACTIVE_SESSIONS,
+        request_id,
+        **serialize_interactive_sessions_payload(payload),
+    )
+
+
+def _parse_interactive_session_info(raw: object) -> InteractiveSessionInfo:
+    if not isinstance(raw, dict):
+        raise ProtocolError("Invalid session: expected an object")
+    session_id = _extract_str(raw, "session_id")
+    if (
+        not session_id
+        or len(session_id) > INTERACTIVE_SESSION_ID_MAX_CHARS
+        or not session_id.isprintable()
+    ):
+        raise ProtocolError("Invalid 'session_id'")
+    elapsed_ms = _extract_number(raw, "elapsed_ms", default=0.0)
+    if elapsed_ms < 0:
+        raise ProtocolError("Invalid 'elapsed_ms': expected a non-negative number")
+    return InteractiveSessionInfo(
+        session_id=session_id,
+        alive=_extract_bool(raw, "alive"),
+        exit_code=_extract_optional_int(raw, "exit_code"),
+        elapsed_ms=elapsed_ms,
+        kept=_extract_bool(raw, "kept", default=False),
+    )
+
+
+def parse_interactive_sessions_payload(
+    data: dict[str, object],
+) -> InteractiveSessionsPayload:
+    """Validate an ``interactive_sessions`` reply (server side): at most
+    INTERACTIVE_SESSIONS_MAX_ENTRIES sessions. Raises ProtocolError."""
+    raw = data.get("sessions", [])
+    if not isinstance(raw, list):
+        raise ProtocolError("Invalid 'sessions': expected a list")
+    if len(raw) > INTERACTIVE_SESSIONS_MAX_ENTRIES:
+        raise ProtocolError(
+            "Invalid 'sessions': expected at most "
+            f"{INTERACTIVE_SESSIONS_MAX_ENTRIES} sessions"
+        )
+    return InteractiveSessionsPayload(
+        sessions=tuple(_parse_interactive_session_info(item) for item in raw)
     )
 
 

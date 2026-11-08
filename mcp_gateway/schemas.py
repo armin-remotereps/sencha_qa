@@ -9,27 +9,44 @@ neutralised and fenced as data (``mcp_gateway.untrusted_text``).
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, WithJsonSchema, model_validator
 
 from controller_client.protocol import (
     CAPTURE_DELAY_MAX_MS,
     CAPTURE_REGION_MAX_PIXELS_PER_AXIS,
     CAPTURE_TITLE_MATCH_MAX_CHARS,
     CAPTURE_WINDOW_ID_MAX_CHARS,
+    INTERACTIVE_SESSION_ID_MAX_CHARS,
+    LONG_PRESS_MAX_SECONDS,
+    LONG_PRESS_MIN_SECONDS,
     MANUAL_CLAIM_TOKEN_MAX_CHARS,
     MANUAL_SHOT_KEY_MAX_CHARS,
     MANUAL_STEP_MAX_SHOTS,
     MANUAL_STEP_NOTE_MAX_CHARS,
     MANUAL_VERDICT_NOTE_MAX_CHARS,
+    MAX_SCROLL_AMOUNT,
+    SWIPE_MAX_DISTANCE,
+    SWIPE_MAX_DURATION,
+    SWIPE_MIN_DISTANCE,
+    SWIPE_MIN_DURATION,
+    BrowserName,
+    DeviceOrientation,
+    MobileButton,
+    ScrollDirection,
 )
 from knowledge_base.services.agent_tools import TAG_ARGUMENT_MAX_LENGTH
 from knowledge_base.services.search_knowledge import (
     SEARCH_LIMIT_MAX,
     SEARCH_QUERY_MAX_LENGTH,
 )
-from mcp_gateway.limits import MCP_SHOT_MAX_BASE64_CHARS
+from mcp_gateway.limits import (
+    MCP_READ_OUTPUT_MAX_WAIT_SECONDS,
+    MCP_SHOT_MAX_BASE64_CHARS,
+    MCP_WAIT_MAX_SECONDS,
+)
 
 _ID_MAX = 2**63 - 1
 _CURSOR_MAX_CHARS = 32
@@ -228,6 +245,280 @@ DelayMsArg = Annotated[
     ),
 ]
 
+# --- Machine tool arguments (docs/plan/feat-mcp-runner-tools.md) ---
+_COMMAND_MAX_CHARS = 10_000
+_PATH_MAX_CHARS = 1024
+_DESCRIPTION_MAX_CHARS = 1000
+_TYPED_TEXT_MAX_CHARS = 10_000
+_KEYS_MAX_CHARS = 100
+_APP_NAME_MAX_CHARS = 260
+_URL_MAX_CHARS = 2048
+_SEARCH_QUERY_MAX_CHARS = 500
+_MachinePixel = Annotated[int, Field(ge=0, le=CAPTURE_REGION_MAX_PIXELS_PER_AXIS)]
+
+CommandArg = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=_COMMAND_MAX_CHARS,
+        description=(
+            "The shell command to run on the test machine (cmd.exe on Windows, "
+            "the login shell elsewhere; on a phone project, on the computer the "
+            "phone is attached to)."
+        ),
+    ),
+]
+CwdArg = Annotated[
+    str | None,
+    Field(
+        min_length=1,
+        max_length=_PATH_MAX_CHARS,
+        description="Optional working directory (absolute path).",
+    ),
+]
+DetachArg = Annotated[
+    bool,
+    Field(
+        description=(
+            "True: start the command and return its session_id at once; read its "
+            "output later with read_command_output. False (default): wait up to "
+            "about 40 seconds, then return the output so far and, if it still "
+            "runs, its session_id."
+        )
+    ),
+]
+SessionIdArg = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=INTERACTIVE_SESSION_ID_MAX_CHARS,
+        pattern=r"^[A-Za-z0-9_-]+$",
+        description="The session_id execute_command or list_commands returned.",
+    ),
+]
+WaitSecondsArg = Annotated[
+    int,
+    Field(
+        ge=0,
+        le=MCP_READ_OUTPUT_MAX_WAIT_SECONDS,
+        description=(
+            "Optional: wait up to this many seconds (0 to "
+            f"{MCP_READ_OUTPUT_MAX_WAIT_SECONDS}) for the command to end; it "
+            "returns earlier when it ends."
+        ),
+    ),
+]
+InputTextArg = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=_TYPED_TEXT_MAX_CHARS,
+        description=(
+            "Text to send to the command's input; end it with a newline to "
+            "press Enter."
+        ),
+    ),
+]
+DescriptionArg = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=_DESCRIPTION_MAX_CHARS,
+        description=(
+            "The element in plain words, as it looks on screen (e.g. 'the Save "
+            "button in the toolbar')."
+        ),
+    ),
+]
+ExpectedResultArg = Annotated[
+    str | None,
+    Field(
+        min_length=1,
+        max_length=_DESCRIPTION_MAX_CHARS,
+        description=(
+            "Optional: what the screen should show afterwards; the action is "
+            "checked against it."
+        ),
+    ),
+]
+StartDescriptionArg = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=_DESCRIPTION_MAX_CHARS,
+        description="The element to drag from, in plain words.",
+    ),
+]
+EndDescriptionArg = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=_DESCRIPTION_MAX_CHARS,
+        description="The element to drag to, in plain words.",
+    ),
+]
+XArg = Annotated[
+    _MachinePixel,
+    Field(description="Horizontal pixel in take_screenshot's width x height."),
+]
+YArg = Annotated[
+    _MachinePixel,
+    Field(description="Vertical pixel in take_screenshot's width x height."),
+]
+OptionalXArg = Annotated[
+    _MachinePixel | None,
+    Field(description="Optional horizontal pixel (give it together with y)."),
+]
+OptionalYArg = Annotated[
+    _MachinePixel | None,
+    Field(description="Optional vertical pixel (give it together with x)."),
+]
+TypedTextArg = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=_TYPED_TEXT_MAX_CHARS,
+        description="The text to type into the focused field.",
+    ),
+]
+KeysArg = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=_KEYS_MAX_CHARS,
+        description="A key or key combination, e.g. 'Return', 'ctrl+c', 'alt+F4'.",
+    ),
+]
+ScrollDirectionArg = Annotated[
+    ScrollDirection,
+    Field(
+        description=(
+            "scroll: the content direction (down reveals content below). swipe: "
+            "the direction the finger moves."
+        )
+    ),
+]
+ScrollAmountArg = Annotated[
+    int | None,
+    Field(
+        ge=1,
+        le=MAX_SCROLL_AMOUNT,
+        description=f"Optional: how far, 1 to {MAX_SCROLL_AMOUNT}.",
+    ),
+]
+AppNameArg = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=_APP_NAME_MAX_CHARS,
+        description=(
+            "The application: its name (desktop), or its package name, bundle id "
+            "or the name under its icon (phone)."
+        ),
+    ),
+]
+ForceArg = Annotated[
+    bool,
+    Field(
+        description=(
+            "Desktop only: true kills the application, discarding unsaved work. "
+            "Default false (a normal close)."
+        )
+    ),
+]
+UrlArg = Annotated[
+    str,
+    Field(min_length=1, max_length=_URL_MAX_CHARS, description="The URL."),
+]
+BrowserArg = Annotated[
+    BrowserName,
+    # Inline enum: the protocol enum's docstring would otherwise become the
+    # schema's description (it names the runner).
+    WithJsonSchema({"type": "string", "enum": [name.value for name in BrowserName]}),
+    Field(
+        description=(
+            "Optional browser, default chromium. Changing it closes the other "
+            "browser with its page state."
+        )
+    ),
+]
+SavePathArg = Annotated[
+    str | None,
+    Field(
+        min_length=1,
+        max_length=_PATH_MAX_CHARS,
+        description=(
+            "Optional absolute path to save the file; default the Downloads "
+            "folder with the suggested file name."
+        ),
+    ),
+]
+LongPressDurationArg = Annotated[
+    float | None,
+    Field(
+        ge=LONG_PRESS_MIN_SECONDS,
+        le=LONG_PRESS_MAX_SECONDS,
+        description=(
+            f"Optional seconds to hold, {LONG_PRESS_MIN_SECONDS:g} to "
+            f"{LONG_PRESS_MAX_SECONDS:g}."
+        ),
+    ),
+]
+SwipeDistanceArg = Annotated[
+    float | None,
+    Field(
+        ge=SWIPE_MIN_DISTANCE,
+        le=SWIPE_MAX_DISTANCE,
+        description=(
+            "Optional swipe length as a share of the screen side, "
+            f"{SWIPE_MIN_DISTANCE:g} to {SWIPE_MAX_DISTANCE:g}."
+        ),
+    ),
+]
+SwipeDurationArg = Annotated[
+    float | None,
+    Field(
+        ge=SWIPE_MIN_DURATION,
+        le=SWIPE_MAX_DURATION,
+        description=(
+            f"Optional seconds the swipe takes, {SWIPE_MIN_DURATION:g} to "
+            f"{SWIPE_MAX_DURATION:g}; short is a fling."
+        ),
+    ),
+]
+ButtonArg = Annotated[
+    MobileButton,
+    Field(description="The device button (back is Android only)."),
+]
+OrientationArg = Annotated[
+    DeviceOrientation, Field(description="The orientation to rotate to.")
+]
+InstallPathArg = Annotated[
+    str,
+    Field(
+        min_length=1,
+        max_length=_PATH_MAX_CHARS,
+        description=(
+            "The app build on the computer the phone is attached to: an .apk, a "
+            "simulator .app or a device-signed .ipa."
+        ),
+    ),
+]
+SearchQueryArg = Annotated[
+    str,
+    Field(
+        min_length=1, max_length=_SEARCH_QUERY_MAX_CHARS, description="The web search."
+    ),
+]
+WaitArg = Annotated[
+    float,
+    Field(
+        gt=0,
+        le=MCP_WAIT_MAX_SECONDS,
+        description=f"Seconds to wait, more than 0 and at most {MCP_WAIT_MAX_SECONDS}.",
+    ),
+]
+
 
 class _Dto(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -380,6 +671,173 @@ class CaptureScreenshotRequest(_Dto):
         return self
 
 
+# --- Machine tool requests -------------------------------------------------
+
+
+def _both_or_neither(x: int | None, y: int | None) -> None:
+    if (x is None) != (y is None):
+        raise ValueError("[invalid] Give x and y together, or neither.")
+
+
+class MachineRequest(_Dto):
+    """The claim every machine tool runs inside. As a request of its own:
+    list_commands, take_screenshot, browser_list_downloads, hide_keyboard."""
+
+    pivot_id: int
+    claim_token: str
+
+    def agent_arguments(self) -> dict[str, object]:
+        """The agent tool's arguments: the request's own fields, unset
+        optional ones left out (the claim and ``browser`` are not
+        arguments)."""
+        return self.model_dump(
+            mode="json",
+            exclude={"pivot_id", "claim_token", "browser"},
+            exclude_none=True,
+        )
+
+
+class ExecuteCommandRequest(MachineRequest):
+    command: str
+    cwd: str | None = None
+    detach: bool = False
+
+
+class ReadCommandOutputRequest(MachineRequest):
+    session_id: str
+    wait_seconds: int = 0
+
+
+class SendCommandInputRequest(MachineRequest):
+    session_id: str
+    input_text: str
+
+
+class StopCommandRequest(MachineRequest):
+    session_id: str
+
+
+class DescribedActionRequest(MachineRequest):
+    """click, double_click, hover."""
+
+    description: str
+    expected_result: str | None = None
+
+
+class ClickAtRequest(MachineRequest):
+    x: int
+    y: int
+    expected_result: str | None = None
+
+
+class TypeTextRequest(MachineRequest):
+    text: str
+
+
+class KeyPressRequest(MachineRequest):
+    keys: str
+
+
+class DragRequest(MachineRequest):
+    start_description: str
+    end_description: str
+    expected_result: str | None = None
+
+
+class ScrollRequest(MachineRequest):
+    direction: ScrollDirection
+    amount: int | None = None
+    x: int | None = None
+    y: int | None = None
+
+    @model_validator(mode="after")
+    def _point(self) -> ScrollRequest:
+        _both_or_neither(self.x, self.y)
+        return self
+
+
+class AppRequest(MachineRequest):
+    """launch_app, check_app_installed, close_tab."""
+
+    app_name: str
+
+
+class CloseAppRequest(MachineRequest):
+    app_name: str
+    force: bool = False
+
+
+class BrowserRequest(MachineRequest):
+    """browser_get_page_content, browser_get_url."""
+
+    browser: BrowserName = BrowserName.CHROMIUM
+
+
+class BrowserNavigateRequest(BrowserRequest):
+    url: str
+
+
+class BrowserElementRequest(BrowserRequest):
+    """browser_click, browser_double_click, browser_hover."""
+
+    description: str
+
+
+class BrowserTypeRequest(BrowserRequest):
+    description: str
+    text: str
+
+
+class BrowserDownloadRequest(BrowserRequest):
+    url: str
+    save_path: str | None = None
+
+
+class LongPressRequest(MachineRequest):
+    description: str
+    duration: float | None = None
+    expected_result: str | None = None
+
+
+class SwipeRequest(MachineRequest):
+    direction: ScrollDirection
+    x: int | None = None
+    y: int | None = None
+    distance: float | None = None
+    duration: float | None = None
+    expected_result: str | None = None
+
+    @model_validator(mode="after")
+    def _point(self) -> SwipeRequest:
+        _both_or_neither(self.x, self.y)
+        return self
+
+
+class PressButtonRequest(MachineRequest):
+    button: MobileButton
+
+
+class RotateDeviceRequest(MachineRequest):
+    orientation: DeviceOrientation
+    expected_result: str | None = None
+
+
+class OpenUrlRequest(MachineRequest):
+    url: str
+
+
+class InstallAppRequest(MachineRequest):
+    path: str
+
+
+class WebSearchRequest(MachineRequest):
+    query: str
+
+
+class WaitRequest(MachineRequest):
+    seconds: WaitArg
+
+
 # --- Responses --------------------------------------------------------------
 
 
@@ -411,6 +869,14 @@ class CaptureInfo(_Dto):
     allowed_processes: list[str]
 
 
+class MachineInfo(_Dto):
+    """get_project's ``machine`` block."""
+
+    # desktop, android or ios.
+    target: str
+    connected: bool
+
+
 class ProjectResponse(_Dto):
     name: str
     manual_run: RunRef | None
@@ -419,6 +885,8 @@ class ProjectResponse(_Dto):
     shot_max_pixels: int
     staged_shots_max: int
     capture: CaptureInfo
+    # The test machine the machine tools drive (additive).
+    machine: MachineInfo
     how_to: str
 
 
@@ -578,3 +1046,54 @@ class CaptureScreenshotResponse(_Dto):
     desktop_switched: bool
     # null: no switch; false: the switch back failed (switch back yourself).
     desktop_restored: bool | None
+
+
+# --- Machine tool responses -------------------------------------------------
+
+
+class MachineActionResponse(_Dto):
+    # The action's result in the test machine's words, neutralised; page,
+    # command and search text fenced as data.
+    text: str
+
+
+class TakeScreenshotResponse(_Dto):
+    # The real screen size click_at / scroll / swipe coordinates refer to;
+    # null when the test machine did not report it.
+    width: int | None
+    height: int | None
+    # The size of the preview image returned with this result.
+    preview_width: int
+    preview_height: int
+    note: str
+
+
+class CommandResponse(_Dto):
+    # None when the command ended and is no longer kept.
+    session_id: str | None
+    # Fenced as data; head and tail kept when long.
+    output: str
+    alive: bool
+    exit_code: int | None
+    # The test machine discarded output since the last read.
+    output_dropped: bool
+    # Kept for this claim (survives later commands); false on a test machine
+    # whose software keeps only one command.
+    kept: bool
+    note: str
+
+
+class CommandItem(_Dto):
+    session_id: str
+    started_at: datetime
+    detached: bool
+    # The command's start, data only.
+    command_head: str
+    # None when the test machine cannot say (it may have ended).
+    alive: bool | None
+    exit_code: int | None
+
+
+class ListCommandsResponse(_Dto):
+    commands: list[CommandItem]
+    note: str

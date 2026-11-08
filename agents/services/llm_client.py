@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Literal
 
 import httpx
 from django.conf import settings
 
 from agents.exceptions import AIServiceError, AIServiceErrorKind
+from agents.http_deadline import deadline_timeout, request_by
 from agents.services.llm_serializer import (
     _parse_response,
     _serialize_input,
@@ -17,6 +19,11 @@ from agents.types import (
     LLMConfig,
     LLMResponse,
     ToolDefinition,
+)
+from projects.call_deadline import (
+    CallDeadlineExceededError,
+    capped_timeout,
+    remaining_seconds,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,6 +91,7 @@ def send_chat_completion(
         if timeout_seconds is None
         else float(timeout_seconds)
     )
+    budget = _deadline_budget(timeout)
     payload = _build_payload(config, messages, tools, tool_choice)
 
     logger.info(
@@ -94,8 +102,24 @@ def send_chat_completion(
     )
 
     try:
-        with httpx.Client(timeout=timeout) as client:
-            response = client.post(config.endpoint_url, json=payload, headers=headers)
+        if budget is None:
+            with httpx.Client(timeout=timeout) as client:
+                response = client.post(
+                    config.endpoint_url, json=payload, headers=headers
+                )
+        else:
+            # Under a call deadline: phases that add up to the budget and a
+            # streamed body checked against the deadline per chunk.
+            deadline = time.monotonic() + budget
+            with httpx.Client(timeout=deadline_timeout(budget)) as client:
+                response = request_by(
+                    client,
+                    "POST",
+                    config.endpoint_url,
+                    deadline=deadline,
+                    json=payload,
+                    headers=headers,
+                )
     except httpx.TimeoutException as exc:
         raise AIServiceError(
             AIServiceErrorKind.TIMEOUT,
@@ -137,6 +161,20 @@ def send_chat_completion(
     )
 
     return parsed
+
+
+def _deadline_budget(timeout: float) -> float | None:
+    """None when no call deadline is set; otherwise the seconds the request
+    may take (``call_deadline``). Raises a TIMEOUT ``AIServiceError`` when too
+    little is left to send it."""
+    if remaining_seconds() is None:
+        return None
+    try:
+        return capped_timeout(timeout)
+    except CallDeadlineExceededError as exc:
+        raise AIServiceError(
+            AIServiceErrorKind.TIMEOUT, "The call's time budget ran out"
+        ) from exc
 
 
 def _status_error(response: httpx.Response) -> AIServiceError:
