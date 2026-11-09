@@ -14,7 +14,7 @@ Context menus could not be opened: the tools only pressed the left button.
 
 ## Behaviour and contract changes
 - New desktop agent and MCP tools `right_click(description, expected_result?)` and `right_click_at(x, y, expected_result?)`.
-- No Test Runner change, capability or `CLIENT_VERSION` bump: the `click` message's `button` field has carried "right" since the first client version. Phones get neither tool (the phone backend refuses a non-left button); long press is their context menu.
+- No Test Runner change or capability (the shared `CLIENT_VERSION` 0.23.3 bump is in `2026-11-09-coordinate-pointer-tools.md`): the `click` message's `button` field has carried "right" since the first client version. Phones get neither tool (the phone backend refuses a non-left button); long press is their context menu.
 
 ## Notes for future changes
 - No `button` argument on `click` / `click_at`, no browser right click, no middle click.

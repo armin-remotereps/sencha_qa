@@ -378,3 +378,4 @@ The three parts touch disjoint files and share only the contract fixed above
 - 2026-11-09: Q1/Q2 answered (drag_at duration; teardown unchanged); status In progress
 - 2026-11-09: review fixes (MCP drag_at duration optional/None, size note target-neutral); act_once_and_check parameter bundling deferred (six callers); status Done
 - 2026-11-09: second verify pass: reverted click_at to _read_point (one-missing-coordinate message would change); reviewer nit on a long comment in machine_tools.py left as is
+- 2026-11-09: after deploy: `CLIENT_VERSION` bumped 0.23.2 → 0.23.3 because `controller_client/protocol.py` changed (drag duration constants), so installed runners match the bundle

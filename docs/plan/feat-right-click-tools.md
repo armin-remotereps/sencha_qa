@@ -311,3 +311,4 @@ allowlists unchanged.
 
 ## Changelog
 - 2026-11-09: created
+- 2026-11-09: after deploy: `CLIENT_VERSION` bumped 0.23.2 → 0.23.3 because `controller_client/protocol.py` changed (drag duration constants), so installed runners match the bundle
