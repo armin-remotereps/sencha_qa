@@ -4,10 +4,13 @@ from functools import cache
 
 from agents.types import ToolCategory, ToolDefinition, ToolParameter
 from controller_client.protocol import (
+    DEFAULT_DRAG_SECONDS,
     DEFAULT_LONG_PRESS_SECONDS,
     DEFAULT_SCROLL_AMOUNT,
     DEFAULT_SWIPE_DISTANCE,
     DEFAULT_SWIPE_DURATION,
+    DRAG_MAX_SECONDS,
+    DRAG_MIN_SECONDS,
     LONG_PRESS_MAX_SECONDS,
     LONG_PRESS_MIN_SECONDS,
     MAX_SCROLL_AMOUNT,
@@ -23,6 +26,47 @@ from controller_client.protocol import (
     ScrollDirection,
 )
 from knowledge_base.services.agent_tools import knowledge_tool_definitions
+
+
+def _pixel_parameter(name: str, axis: str, point: str = "") -> ToolParameter:
+    """A required screenshot-pixel coordinate, as click_at's x and y."""
+    where = f" of the point where the {point}" if point else ""
+    return ToolParameter(
+        name=name,
+        type="integer",
+        description=f"{axis} pixel coordinate{where} in the latest screenshot.",
+        required=True,
+    )
+
+
+def _coordinate_expected_result(
+    action: str, example: str, repeat: str
+) -> ToolParameter:
+    """The single before/after check of the coordinate (*_at) tools, as click_at's."""
+    example_text = f" (e.g. '{example}')" if example else ""
+    return ToolParameter(
+        name="expected_result",
+        type="string",
+        description=(
+            f"Optional. What the screen should show after the {action}{example_text}. "
+            "The tool then compares the screen before and after once and reports "
+            f"whether it is shown; it never {repeat} again."
+        ),
+        required=False,
+    )
+
+
+def _drag_duration_parameter() -> ToolParameter:
+    return ToolParameter(
+        name="duration",
+        type="number",
+        description=(
+            f"Optional. Seconds the drag takes, {DRAG_MIN_SECONDS:g}-"
+            f"{DRAG_MAX_SECONDS:g}, default {DEFAULT_DRAG_SECONDS:g}. A longer drag "
+            "helps with sliders or apps that need a slow drag."
+        ),
+        required=False,
+    )
 
 
 def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
@@ -191,6 +235,41 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
             ),
         ),
         ToolDefinition(
+            name="right_click",
+            description=(
+                "Right-click an element on the desktop found by vision-based natural-language "
+                "description, usually to open its context menu. The target element is verified "
+                "by vision before right-clicking and the result is checked afterwards, like "
+                "click: the tool retries automatically with other candidates (up to 10) and "
+                "returns an error if it cannot confirm the element, or an 'element not found' "
+                "error once 3 candidates on the current screen have been rejected. Use it only "
+                "when the step asks for a right-click or a context menu; otherwise use click."
+                " Not for web pages opened with browser_navigate."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                ToolParameter(
+                    name="description",
+                    type="string",
+                    description="Natural language description of the element to right-click.",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="expected_result",
+                    type="string",
+                    description=(
+                        "Optional. What the screen should show after the right-click "
+                        "(e.g. 'the context menu with Rename and Delete opens'). The tool "
+                        "verifies the right-click against it and retries other candidates "
+                        "when it missed; when the intended element was right-clicked but "
+                        "the result differs, it stops and reports the action as performed "
+                        "but not confirmed."
+                    ),
+                    required=False,
+                ),
+            ),
+        ),
+        ToolDefinition(
             name="click_at",
             description=(
                 "Left-click at pixel coordinates of the desktop screenshot, for targets "
@@ -226,6 +305,52 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                         "it is shown; it never clicks again."
                     ),
                     required=False,
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="double_click_at",
+            description=(
+                "Double-click at pixel coordinates of the desktop screenshot, for "
+                "targets double_click cannot find by description: a word in a text "
+                "line, a spot in a canvas or grid. Get the coordinates from "
+                "take_screenshot, which reports pixel coordinates and the screenshot "
+                "size. Not verified unless expected_result is given, and never "
+                "retried. Use it only when the step says double-click or the UI needs "
+                "one; never emulate it with two click_at calls. Prefer double_click "
+                "whenever the target can be described. Never use it for web pages "
+                "opened with browser_navigate — use browser_double_click for those."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                _pixel_parameter("x", "Horizontal"),
+                _pixel_parameter("y", "Vertical"),
+                _coordinate_expected_result(
+                    "double-click", "the word Total is selected", "double-clicks"
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="right_click_at",
+            description=(
+                "Right-click at pixel coordinates of the desktop screenshot, for "
+                "targets right_click cannot find by description: a blank area of a "
+                "window or the desktop, a spot in a canvas or grid. Usually opens a "
+                "context menu. Get the coordinates from take_screenshot, which reports "
+                "pixel coordinates and the screenshot size. Not verified unless "
+                "expected_result is given, and never retried. Use it only when the step "
+                "asks for a right-click or a context menu. Prefer right_click whenever "
+                "the target can be described. Never use it for web pages opened with "
+                "browser_navigate."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                _pixel_parameter("x", "Horizontal"),
+                _pixel_parameter("y", "Vertical"),
+                _coordinate_expected_result(
+                    "right-click",
+                    "the context menu of the selected file opens",
+                    "right-clicks",
                 ),
             ),
         ),
@@ -322,6 +447,51 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                         "confirmed when the intended element was acted on but the result differs."
                     ),
                     required=False,
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="hover_at",
+            description=(
+                "Move the mouse to pixel coordinates of the desktop screenshot and "
+                "leave it there, for targets hover cannot find by description: a spot "
+                "in a chart, a canvas or a window edge. Get the coordinates from "
+                "take_screenshot, which reports pixel coordinates and the screenshot "
+                "size. Not verified unless expected_result is given, and never "
+                "retried. Prefer hover whenever the target can be described. Never "
+                "use it for web pages opened with browser_navigate — use "
+                "browser_hover for those."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                _pixel_parameter("x", "Horizontal"),
+                _pixel_parameter("y", "Vertical"),
+                _coordinate_expected_result(
+                    "hover", "a tooltip with the value 42 appears", "hovers"
+                ),
+            ),
+        ),
+        ToolDefinition(
+            name="drag_at",
+            description=(
+                "Drag with the left mouse button from one point to another, both in "
+                "pixel coordinates of the desktop screenshot, for drags drag cannot "
+                "describe: a slider handle, a splitter, a window edge, a selection "
+                "rectangle. Get the coordinates from take_screenshot, which reports "
+                "pixel coordinates and the screenshot size. Not verified unless "
+                "expected_result is given, and never retried. Prefer drag whenever "
+                "both ends can be described. Never use it for web pages opened with "
+                "browser_navigate."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                _pixel_parameter("start_x", "Horizontal", "drag starts"),
+                _pixel_parameter("start_y", "Vertical", "drag starts"),
+                _pixel_parameter("end_x", "Horizontal", "drag ends"),
+                _pixel_parameter("end_y", "Vertical", "drag ends"),
+                _drag_duration_parameter(),
+                _coordinate_expected_result(
+                    "drag", "the volume slider is at 50%", "drags"
                 ),
             ),
         ),
@@ -864,6 +1034,51 @@ def get_mobile_tool_definitions() -> tuple[ToolDefinition, ...]:
             ),
         ),
         ToolDefinition(
+            name="double_click_at",
+            description=(
+                "Double-tap at pixel coordinates of the phone screenshot, for targets "
+                "double_click cannot find by description: a spot on a map or photo, a "
+                "word in a text line. Get the coordinates from take_screenshot. Not "
+                "verified unless expected_result is given, and never retried. Use it "
+                "only when the step says double-tap or the app needs one; never "
+                "emulate it with two click_at calls. Prefer double_click whenever the "
+                "target can be described."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                _pixel_parameter("x", "Horizontal"),
+                _pixel_parameter("y", "Vertical"),
+                _coordinate_expected_result("double-tap", "", "double-taps"),
+            ),
+        ),
+        ToolDefinition(
+            name="long_press_at",
+            description=(
+                "Touch and hold at pixel coordinates of the phone screenshot, for "
+                "targets long_press cannot find by description: a spot on a map, a "
+                "word in a text line, a blank area. Get the coordinates from "
+                "take_screenshot. Not verified unless expected_result is given, and "
+                "never retried. Prefer long_press whenever the target can be "
+                "described."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                _pixel_parameter("x", "Horizontal"),
+                _pixel_parameter("y", "Vertical"),
+                ToolParameter(
+                    name="duration",
+                    type="number",
+                    description=(
+                        f"Optional. Seconds to hold, {LONG_PRESS_MIN_SECONDS:g}-"
+                        f"{LONG_PRESS_MAX_SECONDS:g}, default "
+                        f"{DEFAULT_LONG_PRESS_SECONDS:g}."
+                    ),
+                    required=False,
+                ),
+                _coordinate_expected_result("long press", "", "presses"),
+            ),
+        ),
+        ToolDefinition(
             name="long_press",
             description=(
                 "Touch and hold an element on the phone screen found by vision-based "
@@ -952,6 +1167,26 @@ def get_mobile_tool_definitions() -> tuple[ToolDefinition, ...]:
                 _expected_result_parameter(
                     "drag", "the icon is in the second position"
                 ),
+            ),
+        ),
+        ToolDefinition(
+            name="drag_at",
+            description=(
+                "Drag from one point to another, both in pixel coordinates of the "
+                "phone screenshot, for drags drag cannot describe: a slider handle, a "
+                "map, a crop frame. Get the coordinates from take_screenshot. Not "
+                "verified unless expected_result is given, and never retried. Prefer "
+                "drag whenever both ends can be described. To scroll or page, use "
+                "scroll or swipe instead."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                _pixel_parameter("start_x", "Horizontal", "drag starts"),
+                _pixel_parameter("start_y", "Vertical", "drag starts"),
+                _pixel_parameter("end_x", "Horizontal", "drag ends"),
+                _pixel_parameter("end_y", "Vertical", "drag ends"),
+                _drag_duration_parameter(),
+                _coordinate_expected_result("drag", "", "drags"),
             ),
         ),
         ToolDefinition(

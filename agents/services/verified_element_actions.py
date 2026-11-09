@@ -255,3 +255,10 @@ def default_double_click_expectation(description: str) -> str:
         f"the double-click landed on '{description}' and the UI reacted to it "
         "(item opened, edit mode, word or row selected, window maximised, or similar)"
     )
+
+
+def default_right_click_expectation(description: str) -> str:
+    return (
+        f"the right-click landed on '{description}' and the UI reacted to it "
+        "(context menu, selection, or similar)"
+    )

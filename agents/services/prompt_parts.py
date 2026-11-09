@@ -141,29 +141,34 @@ def build_tool_taxonomy(*, system_info: dict[str, object] | None = None) -> str:
         "3. take_screenshot — Capture the desktop and answer a question about it using vision AI\n"
         "4. click — Click an element found by vision-based natural-language description\n"
         "5. double_click — Double-click an element found by vision-based description\n"
-        "6. type_text — Type text using the keyboard\n"
-        "7. key_press — Press a key or key combination\n"
-        "8. hover — Hover over an element found by vision-based description\n"
-        "9. drag — Drag from one element to another, both found by vision-based description\n"
-        "10. scroll — Scroll with the mouse wheel at a screen point\n"
-        "11. click_at — Left-click at pixel coordinates from take_screenshot\n"
-        "12. launch_app — Launch a desktop application by name\n"
-        "13. close_app — Quit a desktop application the test no longer needs\n"
-        "14. close_tab — Close the front tab you opened in an app that has other tabs to keep\n\n"
+        "6. right_click — Right-click an element found by vision-based description (context menus)\n"
+        "7. type_text — Type text using the keyboard\n"
+        "8. key_press — Press a key or key combination\n"
+        "9. hover — Hover over an element found by vision-based description\n"
+        "10. drag — Drag from one element to another, both found by vision-based description\n"
+        "11. scroll — Scroll with the mouse wheel at a screen point\n"
+        "12. click_at — Left-click at pixel coordinates from take_screenshot\n"
+        "13. double_click_at — Double-click at pixel coordinates from take_screenshot\n"
+        "14. right_click_at — Right-click at pixel coordinates from take_screenshot\n"
+        "15. hover_at — Hover at pixel coordinates from take_screenshot\n"
+        "16. drag_at — Drag between two pixel coordinates from take_screenshot\n"
+        "17. launch_app — Launch a desktop application by name\n"
+        "18. close_app — Quit a desktop application the test no longer needs\n"
+        "19. close_tab — Close the front tab you opened in an app that has other tabs to keep\n\n"
         "BROWSER TOOLS (Playwright — for web page interactions):\n"
-        "15. browser_navigate — Navigate the browser to a URL\n"
-        "16. browser_click — Click a web page element found by AI-based description\n"
-        "17. browser_double_click — Double-click a web page element found by AI-based description\n"
-        "18. browser_type — Type text into a web page element found by AI-based description\n"
-        "19. browser_hover — Hover over a web page element found by AI-based description\n"
-        "20. browser_get_page_content — Get the text content of the current page\n"
-        "21. browser_get_url — Get the current browser URL\n"
-        "22. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
-        "23. browser_download — Download a file from a URL via the browser\n\n"
+        "20. browser_navigate — Navigate the browser to a URL\n"
+        "21. browser_click — Click a web page element found by AI-based description\n"
+        "22. browser_double_click — Double-click a web page element found by AI-based description\n"
+        "23. browser_type — Type text into a web page element found by AI-based description\n"
+        "24. browser_hover — Hover over a web page element found by AI-based description\n"
+        "25. browser_get_page_content — Get the text content of the current page\n"
+        "26. browser_get_url — Get the current browser URL\n"
+        "27. browser_take_screenshot — Take a browser screenshot and answer a question about it\n"
+        "28. browser_download — Download a file from a URL via the browser\n\n"
         "SEARCH TOOLS (for looking up information on the web):\n"
-        "24. web_search — Search the web and return top results with titles, snippets, and URLs\n\n"
+        "29. web_search — Search the web and return top results with titles, snippets, and URLs\n\n"
         "UTILITY TOOLS:\n"
-        "25. wait — Pause for a fixed number of seconds while the UI settles"
+        "30. wait — Pause for a fixed number of seconds while the UI settles"
     )
 
 
@@ -176,26 +181,29 @@ def _build_mobile_tool_taxonomy() -> str:
         "3. double_click — Double-tap an element found by vision-based description\n"
         "4. long_press — Touch and hold an element found by vision-based description\n"
         "5. click_at — Tap at pixel coordinates from take_screenshot\n"
-        "6. drag — Drag from one element to another, both found by vision-based description\n"
-        "7. scroll — Scroll content (done as a swipe)\n"
-        "8. swipe — Swipe a finger across the screen (pages, refresh, dismiss)\n"
-        "9. type_text — Type text into the focused field\n"
-        "10. key_press — Press one keyboard key (enter, backspace, delete, tab, space, escape)\n"
-        "11. press_button — Press a device button (back, home, app switch, volume, power)\n"
-        "12. hide_keyboard — Hide the on-screen keyboard\n"
-        "13. rotate_device — Rotate to portrait or landscape\n"
-        "14. launch_app — Open an app by package name, bundle id or visible name\n"
-        "15. close_app — Close an app the test no longer needs\n"
-        "16. check_app_installed — Check whether an app is installed on the phone\n"
-        "17. open_url — Open a URL or deep link on the phone\n"
-        "18. install_app — Install an app build from the Test Runner computer\n\n"
+        "6. double_click_at — Double-tap at pixel coordinates from take_screenshot\n"
+        "7. long_press_at — Touch and hold at pixel coordinates from take_screenshot\n"
+        "8. drag — Drag from one element to another, both found by vision-based description\n"
+        "9. drag_at — Drag between two pixel coordinates from take_screenshot\n"
+        "10. scroll — Scroll content (done as a swipe)\n"
+        "11. swipe — Swipe a finger across the screen (pages, refresh, dismiss)\n"
+        "12. type_text — Type text into the focused field\n"
+        "13. key_press — Press one keyboard key (enter, backspace, delete, tab, space, escape)\n"
+        "14. press_button — Press a device button (back, home, app switch, volume, power)\n"
+        "15. hide_keyboard — Hide the on-screen keyboard\n"
+        "16. rotate_device — Rotate to portrait or landscape\n"
+        "17. launch_app — Open an app by package name, bundle id or visible name\n"
+        "18. close_app — Close an app the test no longer needs\n"
+        "19. check_app_installed — Check whether an app is installed on the phone\n"
+        "20. open_url — Open a URL or deep link on the phone\n"
+        "21. install_app — Install an app build from the Test Runner computer\n\n"
         "COMPUTER TOOLS (run on the Test Runner computer, not on the phone):\n"
-        "19. execute_command — Run shell commands (handles both interactive and non-interactive)\n"
-        "20. send_command_input — Send input to a running interactive command session\n\n"
+        "22. execute_command — Run shell commands (handles both interactive and non-interactive)\n"
+        "23. send_command_input — Send input to a running interactive command session\n\n"
         "SEARCH TOOLS (for looking up information on the web):\n"
-        "21. web_search — Search the web and return top results with titles, snippets, and URLs\n\n"
+        "24. web_search — Search the web and return top results with titles, snippets, and URLs\n\n"
         "UTILITY TOOLS:\n"
-        "22. wait — Pause for a fixed number of seconds while the UI settles"
+        "25. wait — Pause for a fixed number of seconds while the UI settles"
     )
 
 
@@ -364,9 +372,9 @@ def build_tool_guidelines(*, system_info: dict[str, object] | None) -> str:
 def build_desktop_tool_examples() -> str:
     return (
         "DESKTOP TOOLS (for native desktop interactions):\n"
-        "- Vision-based tools (click, double_click, hover, drag) use natural-language "
+        "- Vision-based tools (click, double_click, right_click, hover, drag) use natural-language "
         "descriptions to find elements on the screen via AI vision.\n"
-        "- click, double_click, hover and drag verify the target element before acting and confirm the "
+        "- click, double_click, right_click, hover and drag verify the target element before acting and confirm the "
         "result afterwards, trying up to 10 candidates on their own. Pass expected_result "
         "to tell them what the screen should show once the action worked.\n"
         "- If the element is not on the screen they stop early and report that it was not "
@@ -374,7 +382,9 @@ def build_desktop_tool_examples() -> str:
         "- Use double_click / browser_double_click only when the step says double-click "
         "or the UI needs it (open a file or desktop icon, edit a grid cell). Never "
         "emulate it with two click calls.\n"
-        "- When click, double_click, hover or drag returns an error, the element could not be confirmed: "
+        "- Use right_click / right_click_at only when the step asks for a right-click "
+        "or a context menu; pick the menu entry afterwards with click.\n"
+        "- When click, double_click, right_click, hover or drag returns an error, the element could not be confirmed: "
         "re-describe it more precisely or use take_screenshot to understand the screen "
         "instead of repeating the same call.\n"
         "- When the result says the expected result was NOT confirmed, the action was "
@@ -384,15 +394,20 @@ def build_desktop_tool_examples() -> str:
         "- When content is outside the visible area, use scroll at a point over that "
         "area, not PageDown or zoom.\n"
         "- When click cannot find a target (window chrome, a blank area, the end of a "
-        "text line), ask take_screenshot for its pixel coordinates and use click_at. "
+        "text line, a slider handle), ask take_screenshot for its pixel coordinates and "
+        "use click_at, or double_click_at, right_click_at, hover_at or drag_at for the other actions. "
         "Never fake a click with AppleScript, osascript, ctypes or other scripts: they "
         "do not move keyboard focus.\n"
         '- click(description="the Login button", expected_result="the login form opens") — describe what to click and what should happen\n'
         '- double_click(description="the Documents folder icon", expected_result="the Documents folder opens") — double-click and describe what should happen\n'
+        '- right_click(description="the report.pdf file", expected_result="its context menu opens") — right-click to open a context menu\n'
         '- hover(description="the Settings menu") — describe what to hover\n'
         '- drag(start_description="file icon", end_description="trash icon", expected_result="the file disappears from the desktop") — describe start, end and outcome\n'
         '- scroll(direction="down", amount=5, x=640, y=500) — wheel notches (default 5) over the point; omit x and y to scroll at the pointer\n'
         '- click_at(x=812, y=233, expected_result="the caret is at the end of the Editor 3 text") — left-click at screenshot pixel coordinates; expected_result is optional\n'
+        "- double_click_at(x=420, y=310), hover_at(x=640, y=88) — double-click or hover at screenshot pixel coordinates; expected_result is optional\n"
+        "- right_click_at(x=420, y=310) — right-click at screenshot pixel coordinates; expected_result is optional\n"
+        '- drag_at(start_x=300, start_y=540, end_x=520, end_y=540, expected_result="the volume slider is at 50%") — drag between screenshot pixel coordinates; duration in seconds is optional\n'
         '- type_text(text="hello") — type text using the keyboard\n'
         '- launch_app(app_name="Calculator") — open a desktop application\n'
         '- close_app(app_name="Calculator") — quit an application the test no longer needs\n'
@@ -437,7 +452,8 @@ def build_mobile_tool_examples(*, system_info: dict[str, object] | None) -> str:
         + (" (back is Android only)" if not android else "")
         + ".\n"
         "- After rotate_device the screenshot size changes: take a new screenshot "
-        "before click_at, swipe or scroll with coordinates.\n"
+        "before click_at, double_click_at, long_press_at, drag_at, swipe or scroll "
+        "with coordinates.\n"
         '- click(description="the Login button", expected_result="the login form opens") — tap and describe what should happen\n'
         '- double_click(description="the map", expected_result="the map zooms in") — double tap\n'
         '- long_press(description="the Photos app icon", expected_result="a menu with Remove App appears") — touch and hold; duration in seconds is optional\n'
@@ -445,6 +461,8 @@ def build_mobile_tool_examples(*, system_info: dict[str, object] | None) -> str:
         '- scroll(direction="down", amount=5) — reveal content below; give x and y to scroll a specific area\n'
         '- swipe(direction="left", expected_result="the next onboarding page is shown") — the finger moves left; x, y, distance and duration are optional\n'
         "- click_at(x=540, y=1210) — tap at screenshot pixel coordinates; expected_result is optional\n"
+        "- double_click_at(x=540, y=900), long_press_at(x=540, y=1210, duration=2) — double tap or touch and hold at screenshot pixel coordinates; expected_result is optional\n"
+        "- drag_at(start_x=200, start_y=1500, end_x=800, end_y=1500) — drag between screenshot pixel coordinates; duration in seconds is optional\n"
         '- type_text(text="user@example.com") — type into the focused field\n'
         '- key_press(keys="enter") — press one key\n'
         '- press_button(button="home") — press a device button (back, home, app_switch, volume_up, volume_down, power)\n'

@@ -2,23 +2,20 @@
 
 The shared tools (tap = ``click``, ``scroll`` as a swipe, ``type_text``, ...)
 stay in ``tools_controller``; the runner maps them onto the device.
-``long_press`` reuses the verified element flow of ``click``; ``swipe`` and
-``rotate_device`` run one before/after outcome check only when an
-``expected_result`` is given, like ``click_at``; the rest are plain.
+``long_press`` reuses the verified element flow of ``click``; ``swipe``,
+``rotate_device`` and the coordinate tool ``long_press_at`` act once through
+``act_and_check.act_once_and_check`` and run one before/after outcome check
+only when an ``expected_result`` is given, like ``click_at``; the rest are
+plain.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
+from agents.services.act_and_check import COORDINATE_MISS_HINT, act_once_and_check
 from agents.services.tool_utils import safe_tool_call
 from agents.services.tools_controller import ensure_action_succeeded, verified_click
-from agents.services.verified_element_actions import (
-    VerificationBudget,
-    confirm_action,
-    format_unconfirmed_message,
-    take_before_screenshot,
-)
 from agents.types import CancellationCheck, LLMConfig, ScreenshotCallback, ToolResult
 from controller_client.protocol import DeviceOrientation, MobileButton, ScrollDirection
 from projects.controller_mobile_actions import (
@@ -70,79 +67,40 @@ def long_press(
     )
 
 
-def _act_and_check(
+_GESTURE_DONE_SUFFIX = ". Take a screenshot to see the result."
+_GESTURE_MISS_HINT = "Take a screenshot before trying again."
+
+
+def long_press_at(
     project_id: int,
     *,
-    tool_name: str,
-    act: Callable[[], ActionResult],
-    success_message: str,
-    action_summary: str,
-    expected_result: str,
+    x: int,
+    y: int,
+    duration: float,
     vision_config: LLMConfig | None,
-    on_screenshot: ScreenshotCallback | None,
-    cancellation_check: CancellationCheck | None,
-    deadline: float | None,
+    expected_result: str = "",
+    on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
+    deadline: float | None = None,
 ) -> ToolResult:
-    """Run ``act`` once; with ``expected_result``, compare the screen before
-    and after once and report it (a miss is an error, never retried)."""
-
-    def _do() -> ToolResult:
-        budget = VerificationBudget(
-            deadline=deadline, cancellation_check=cancellation_check
-        )
-        budget.raise_if_cancelled()
-        if not expected_result:
-            ensure_action_succeeded(act())
-            return ToolResult(
-                tool_call_id="",
-                content=f"{success_message}. Take a screenshot to see the result.",
-                is_error=False,
-            )
-        if vision_config is None:
-            return ToolResult(
-                tool_call_id="",
-                content="Vision model not configured, so expected_result cannot "
-                f"be checked. Call {tool_name} without it.",
-                is_error=True,
-            )
-        before_image = take_before_screenshot(project_id)
-        ensure_action_succeeded(act())
-        verdict = confirm_action(
-            project_id,
-            vision_config,
-            budget,
-            acted_on=(),
-            before_image_base64=before_image,
-            action_summary=action_summary,
-            expected_result=expected_result,
-            tool_name=tool_name,
-            on_screenshot=on_screenshot,
-        )
-        if verdict.status == "confirmed":
-            return ToolResult(
-                tool_call_id="",
-                content=f"{success_message}; expected result confirmed.",
-                is_error=False,
-            )
-        if verdict.status == "unexpected":
-            return ToolResult(
-                tool_call_id="",
-                content=format_unconfirmed_message(
-                    success_message, verdict.reason, budget
-                ),
-                is_error=False,
-            )
-        reason = " ".join(verdict.reason.split()).rstrip(".")
-        return ToolResult(
-            tool_call_id="",
-            content=(
-                f"{success_message}, but the expected result is NOT shown: "
-                f"{reason}. Take a screenshot before trying again."
-            ),
-            is_error=True,
-        )
-
-    return safe_tool_call(tool_name, _do)
+    """Long-press screenshot pixel (x, y) for ``duration`` seconds."""
+    summary = f"long-pressed at ({x}, {y}) for {duration:g}s"
+    return act_once_and_check(
+        project_id,
+        tool_name="long_press_at",
+        act=lambda: ensure_action_succeeded(
+            controller_long_press(project_id, x, y, duration)
+        ),
+        success_message=summary[0].upper() + summary[1:],
+        action_summary=summary,
+        expected_result=expected_result,
+        vision_config=vision_config,
+        done_suffix=".",
+        miss_hint=COORDINATE_MISS_HINT,
+        on_screenshot=on_screenshot,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+    )
 
 
 def swipe(
@@ -161,14 +119,18 @@ def swipe(
 ) -> ToolResult:
     start = "from the centre" if x is None or y is None else f"from ({x}, {y})"
     summary = f"swiped {direction.value} {start} over {distance:g} of the screen"
-    return _act_and_check(
+    return act_once_and_check(
         project_id,
         tool_name="swipe",
-        act=lambda: controller_swipe(project_id, direction, x, y, distance, duration),
+        act=lambda: ensure_action_succeeded(
+            controller_swipe(project_id, direction, x, y, distance, duration)
+        ),
         success_message=summary[0].upper() + summary[1:],
         action_summary=summary,
         expected_result=expected_result,
         vision_config=vision_config,
+        done_suffix=_GESTURE_DONE_SUFFIX,
+        miss_hint=_GESTURE_MISS_HINT,
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,
@@ -185,10 +147,12 @@ def rotate_device(
     cancellation_check: CancellationCheck | None = None,
     deadline: float | None = None,
 ) -> ToolResult:
-    return _act_and_check(
+    return act_once_and_check(
         project_id,
         tool_name="rotate_device",
-        act=lambda: controller_rotate_device(project_id, orientation),
+        act=lambda: ensure_action_succeeded(
+            controller_rotate_device(project_id, orientation)
+        ),
         success_message=(
             f"Rotated the device to {orientation.value}; screenshot coordinates "
             "have changed"
@@ -196,6 +160,8 @@ def rotate_device(
         action_summary=f"rotated the device to {orientation.value}",
         expected_result=expected_result,
         vision_config=vision_config,
+        done_suffix=_GESTURE_DONE_SUFFIX,
+        miss_hint=_GESTURE_MISS_HINT,
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,

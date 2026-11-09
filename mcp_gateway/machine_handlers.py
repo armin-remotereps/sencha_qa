@@ -1,4 +1,4 @@
-"""The 52 machine tools: using the test machine inside your claimed case.
+"""The 58 machine tools: using the test machine inside your claimed case.
 
 docs/plan/feat-mcp-runner-tools.md. Every handler packs its arguments into
 its request DTO and runs through ``tool_runner.run_project_tool`` (project,
@@ -26,7 +26,11 @@ from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 from pydantic import BaseModel, ValidationError
 
 from agents.services.tools_utility import waited_message
-from controller_client.protocol import WEB_TIMEOUT_MS_DEFAULT, BrowserName, WebBrowser
+from controller_client.protocol import (
+    WEB_TIMEOUT_MS_DEFAULT,
+    BrowserName,
+    WebBrowser,
+)
 from mcp_gateway.machine_tools import MACHINE_TOOLS, effective_kind
 from mcp_gateway.schemas import (
     AppNameArg,
@@ -68,10 +72,14 @@ from mcp_gateway.schemas import (
     DescribedActionRequest,
     DescriptionArg,
     DetachArg,
+    DragAtRequest,
+    DragDurationArg,
     DragRequest,
     ElementDescriptionArg,
     ElementIndexArg,
     EndDescriptionArg,
+    EndXArg,
+    EndYArg,
     ExecuteCommandRequest,
     ExpectedResultArg,
     ForceArg,
@@ -82,6 +90,7 @@ from mcp_gateway.schemas import (
     KeyPressRequest,
     KeysArg,
     ListCommandsResponse,
+    LongPressAtRequest,
     LongPressDurationArg,
     LongPressRequest,
     MachineActionResponse,
@@ -111,6 +120,8 @@ from mcp_gateway.schemas import (
     SendCommandInputRequest,
     SessionIdArg,
     StartDescriptionArg,
+    StartXArg,
+    StartYArg,
     StopCommandRequest,
     SwipeDistanceArg,
     SwipeDurationArg,
@@ -427,6 +438,62 @@ async def click_at(
     )
 
 
+async def double_click_at(
+    project_id: ProjectIdArg,
+    pivot_id: PivotIdArg,
+    claim_token: ClaimTokenArg,
+    x: XArg,
+    y: YArg,
+    expected_result: ExpectedResultArg = None,
+) -> MachineActionResponse:
+    request = ClickAtRequest(
+        pivot_id=pivot_id,
+        claim_token=claim_token,
+        x=x,
+        y=y,
+        expected_result=expected_result,
+    )
+    return await _agent(
+        "double_click_at", project_id, request, expected_result=expected_result
+    )
+
+
+async def right_click(
+    project_id: ProjectIdArg,
+    pivot_id: PivotIdArg,
+    claim_token: ClaimTokenArg,
+    description: DescriptionArg,
+    expected_result: ExpectedResultArg = None,
+) -> MachineActionResponse:
+    request = DescribedActionRequest(
+        pivot_id=pivot_id,
+        claim_token=claim_token,
+        description=description,
+        expected_result=expected_result,
+    )
+    return await _agent("right_click", project_id, request)
+
+
+async def right_click_at(
+    project_id: ProjectIdArg,
+    pivot_id: PivotIdArg,
+    claim_token: ClaimTokenArg,
+    x: XArg,
+    y: YArg,
+    expected_result: ExpectedResultArg = None,
+) -> MachineActionResponse:
+    request = ClickAtRequest(
+        pivot_id=pivot_id,
+        claim_token=claim_token,
+        x=x,
+        y=y,
+        expected_result=expected_result,
+    )
+    return await _agent(
+        "right_click_at", project_id, request, expected_result=expected_result
+    )
+
+
 async def type_text(
     project_id: ProjectIdArg,
     pivot_id: PivotIdArg,
@@ -479,6 +546,50 @@ async def drag(
         expected_result=expected_result,
     )
     return await _agent("drag", project_id, request)
+
+
+async def hover_at(
+    project_id: ProjectIdArg,
+    pivot_id: PivotIdArg,
+    claim_token: ClaimTokenArg,
+    x: XArg,
+    y: YArg,
+    expected_result: ExpectedResultArg = None,
+) -> MachineActionResponse:
+    request = ClickAtRequest(
+        pivot_id=pivot_id,
+        claim_token=claim_token,
+        x=x,
+        y=y,
+        expected_result=expected_result,
+    )
+    return await _agent(
+        "hover_at", project_id, request, expected_result=expected_result
+    )
+
+
+async def drag_at(
+    project_id: ProjectIdArg,
+    pivot_id: PivotIdArg,
+    claim_token: ClaimTokenArg,
+    start_x: StartXArg,
+    start_y: StartYArg,
+    end_x: EndXArg,
+    end_y: EndYArg,
+    duration: DragDurationArg = None,
+    expected_result: ExpectedResultArg = None,
+) -> MachineActionResponse:
+    request = DragAtRequest(
+        pivot_id=pivot_id,
+        claim_token=claim_token,
+        start_x=start_x,
+        start_y=start_y,
+        end_x=end_x,
+        end_y=end_y,
+        duration=duration,
+        expected_result=expected_result,
+    )
+    return await _agent("drag_at", project_id, request, expected_result=expected_result)
 
 
 async def scroll(
@@ -1096,6 +1207,28 @@ async def long_press(
     return await _agent("long_press", project_id, request)
 
 
+async def long_press_at(
+    project_id: ProjectIdArg,
+    pivot_id: PivotIdArg,
+    claim_token: ClaimTokenArg,
+    x: XArg,
+    y: YArg,
+    duration: LongPressDurationArg = None,
+    expected_result: ExpectedResultArg = None,
+) -> MachineActionResponse:
+    request = LongPressAtRequest(
+        pivot_id=pivot_id,
+        claim_token=claim_token,
+        x=x,
+        y=y,
+        duration=duration,
+        expected_result=expected_result,
+    )
+    return await _agent(
+        "long_press_at", project_id, request, expected_result=expected_result
+    )
+
+
 async def swipe(
     project_id: ProjectIdArg,
     pivot_id: PivotIdArg,
@@ -1260,8 +1393,8 @@ MACHINE_HANDLERS: Final[tuple[tuple[_Handler, str, str, ToolAnnotations], ...]] 
         "take_screenshot",
         "See the test machine's whole screen (a phone: the whole device "
         "screen) as a preview image, to decide what to do next. width and "
-        "height are the screen size click_at, scroll and swipe coordinates "
-        "use: map a preview point with x = preview_x * width / preview_width "
+        "height are the screen size the coordinates of click_at and the other "
+        "*_at tools, scroll and swipe use: map a preview point with x = preview_x * width / preview_width "
         "(y alike). Never test evidence and never stored: for a step's "
         "screenshot use capture_screenshot or add_screenshot." + _CLAIMED,
         _LOOK,
@@ -1289,6 +1422,29 @@ MACHINE_HANDLERS: Final[tuple[tuple[_Handler, str, str, ToolAnnotations], ...]] 
         _ACT,
     ),
     (
+        double_click_at,
+        "double_click_at",
+        "Double-click (double-tap on a phone) at x, y in take_screenshot's "
+        "width x height. Optional expected_result is checked afterwards." + _CLAIMED,
+        _ACT,
+    ),
+    (
+        right_click,
+        "right_click",
+        "Right-click an element you describe in plain words, e.g. to open its "
+        "context menu (desktop; on a phone use long_press). Optional "
+        "expected_result is checked afterwards." + _CLAIMED,
+        _ACT,
+    ),
+    (
+        right_click_at,
+        "right_click_at",
+        "Right-click at x, y in take_screenshot's width x height (desktop; on a "
+        "phone use long_press_at). Optional expected_result is checked "
+        "afterwards." + _CLAIMED,
+        _ACT,
+    ),
+    (
         type_text,
         "type_text",
         "Type text into the focused field." + _CLAIMED,
@@ -1312,6 +1468,21 @@ MACHINE_HANDLERS: Final[tuple[tuple[_Handler, str, str, ToolAnnotations], ...]] 
         "drag",
         "Drag from one element to another, both described in plain words. "
         "Optional expected_result is checked afterwards." + _CLAIMED,
+        _DESTRUCTIVE,
+    ),
+    (
+        hover_at,
+        "hover_at",
+        "Move the pointer to x, y in take_screenshot's width x height "
+        "(desktop). Optional expected_result is checked afterwards." + _CLAIMED,
+        _ACT,
+    ),
+    (
+        drag_at,
+        "drag_at",
+        "Drag from start_x, start_y to end_x, end_y in take_screenshot's width "
+        "x height, optionally over duration seconds. Optional expected_result "
+        "is checked afterwards." + _CLAIMED,
         _DESTRUCTIVE,
     ),
     (
@@ -1552,6 +1723,13 @@ MACHINE_HANDLERS: Final[tuple[tuple[_Handler, str, str, ToolAnnotations], ...]] 
         "long_press",
         "Press and hold an element you describe in plain words (phone). "
         "Optional duration and expected_result." + _CLAIMED,
+        _ACT,
+    ),
+    (
+        long_press_at,
+        "long_press_at",
+        "Press and hold at x, y in take_screenshot's width x height (phone). "
+        "Optional duration; optional expected_result is checked afterwards." + _CLAIMED,
         _ACT,
     ),
     (

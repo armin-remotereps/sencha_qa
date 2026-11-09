@@ -110,7 +110,16 @@ _ECHO_TOOLS: Final[frozenset[str]] = frozenset(
 # The same, only when called without an expected_result (with one, the
 # text carries a check's reason).
 _ECHO_WITHOUT_CHECK_TOOLS: Final[frozenset[str]] = frozenset(
-    {"click_at", "swipe", "rotate_device"}
+    {
+        "click_at",
+        "double_click_at",
+        "right_click_at",
+        "hover_at",
+        "drag_at",
+        "long_press_at",
+        "swipe",
+        "rotate_device",
+    }
 )
 _EMPTY: Final = "(no text)"
 # web_search's summary header names the summariser; the client sees a

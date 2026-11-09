@@ -1,6 +1,6 @@
 """The MCP server: tools for a manual tester of the caller's projects.
 
-Fifteen Manual-run tools here, plus the 52 machine tools of
+Fifteen Manual-run tools here, plus the 58 machine tools of
 ``mcp_gateway.machine_handlers`` (the test machine, inside a claimed case).
 
 ``build_mcp_server()`` returns the SDK ``MCPServer`` with the bearer verifier
@@ -603,7 +603,7 @@ def _auth_settings() -> AuthSettings:
 
 
 def build_mcp_server() -> MCPServer:
-    """The MCP server with its 67 tools and bearer auth."""
+    """The MCP server with its 73 tools and bearer auth."""
     server = MCPServer(
         name=SERVER_NAME,
         instructions=WORKFLOW_TEXT,

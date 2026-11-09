@@ -16,7 +16,8 @@ there is no ``shot_id``, so it can never reach ``mark_step`` or ``hand_in``.
    capped at MCP_SCREEN_PREVIEW_MAX_EDGE / MCP_SCREEN_PREVIEW_MAX_BYTES.
 
 ``width`` / ``height`` are the size the test machine reports for the shot:
-screenshot pixels, the space ``click_at`` / ``scroll`` / ``swipe`` take
+screenshot pixels, the space ``click_at`` and the other ``*_at`` tools,
+``scroll`` and ``swipe`` take
 (the runner maps them to its input backend itself, iOS points included).
 A test machine that reports 0 x 0 gets null and a note, as the agent does.
 """
@@ -75,14 +76,16 @@ _TOO_LARGE: Final = (
 _NOTE: Final = (
     "For looking only: this screenshot is never test evidence. The preview is "
     "{preview_width} x {preview_height}; the screen is {width} x {height} "
-    "pixels, the coordinates click_at, scroll and swipe take. Map a preview "
+    "pixels, the coordinates click_at and the other *_at tools, scroll and "
+    "swipe take. Map a preview "
     "point with x = preview_x * {width} / {preview_width} and "
     "y = preview_y * {height} / {preview_height}."
 )
 _NOTE_NO_SIZE: Final = (
     "For looking only: this screenshot is never test evidence. The test "
     "machine did not report its screen size, so preview points cannot be "
-    "mapped to click_at, scroll or swipe coordinates; prefer the tools that "
+    "mapped to the coordinates of click_at and the other *_at tools, scroll "
+    "or swipe; prefer the tools that "
     "take a description."
 )
 

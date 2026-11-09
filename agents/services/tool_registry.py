@@ -24,10 +24,13 @@ from agents.types import (
 )
 from controller_client.exceptions import ProtocolError
 from controller_client.protocol import (
+    DEFAULT_DRAG_SECONDS,
     DEFAULT_LONG_PRESS_SECONDS,
     DEFAULT_SCROLL_AMOUNT,
     DEFAULT_SWIPE_DISTANCE,
     DEFAULT_SWIPE_DURATION,
+    DRAG_MAX_SECONDS,
+    DRAG_MIN_SECONDS,
     LONG_PRESS_MAX_SECONDS,
     LONG_PRESS_MIN_SECONDS,
     MAX_SCROLL_AMOUNT,
@@ -83,6 +86,28 @@ def _read_point(arguments: dict[str, object]) -> tuple[int | None, int | None]:
     if x < 0 or y < 0:
         raise _InvalidArgumentError(
             "x and y are screenshot pixel coordinates and cannot be negative."
+        )
+    return x, y
+
+
+def _required_point(
+    arguments: dict[str, object],
+    tool_name: str,
+    x_key: str = "x",
+    y_key: str = "y",
+) -> tuple[int, int]:
+    """Read a required pair of non-negative screenshot pixel coordinates."""
+    raw_x, raw_y = arguments.get(x_key), arguments.get(y_key)
+    if raw_x is None or raw_y is None:
+        raise _InvalidArgumentError(
+            f"{tool_name} needs both {x_key} and {y_key} (screenshot pixel "
+            "coordinates)."
+        )
+    x, y = _strict_int(x_key, raw_x), _strict_int(y_key, raw_y)
+    if x < 0 or y < 0:
+        raise _InvalidArgumentError(
+            f"{x_key} and {y_key} are screenshot pixel coordinates and cannot be "
+            "negative."
         )
     return x, y
 
@@ -257,6 +282,25 @@ def _handle_double_click(
     )
 
 
+def _handle_right_click(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    description = str(arguments.get("description", ""))
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_controller.right_click(
+        context.project_id,
+        description=description,
+        expected_result=_read_expected_result(arguments),
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
+    )
+
+
 def _handle_click_at(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     try:
         x, y = _read_point(arguments)
@@ -272,6 +316,89 @@ def _handle_click_at(context: ToolContext, arguments: dict[str, object]) -> Tool
         context.project_id,
         x=x,
         y=y,
+        expected_result=_read_expected_result(arguments),
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
+    )
+
+
+def _handle_double_click_at(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    try:
+        x, y = _required_point(arguments, "double_click_at")
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
+    return tools_controller.double_click_at(
+        context.project_id,
+        x=x,
+        y=y,
+        expected_result=_read_expected_result(arguments),
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
+    )
+
+
+def _handle_right_click_at(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    try:
+        x, y = _required_point(arguments, "right_click_at")
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
+    return tools_controller.right_click_at(
+        context.project_id,
+        x=x,
+        y=y,
+        expected_result=_read_expected_result(arguments),
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
+    )
+
+
+def _handle_hover_at(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    try:
+        x, y = _required_point(arguments, "hover_at")
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
+    return tools_controller.hover_at(
+        context.project_id,
+        x=x,
+        y=y,
+        expected_result=_read_expected_result(arguments),
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
+    )
+
+
+def _handle_drag_at(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
+    try:
+        start_x, start_y = _required_point(arguments, "drag_at", "start_x", "start_y")
+        end_x, end_y = _required_point(arguments, "drag_at", "end_x", "end_y")
+        duration = _optional_number(
+            arguments,
+            "duration",
+            DEFAULT_DRAG_SECONDS,
+            DRAG_MIN_SECONDS,
+            DRAG_MAX_SECONDS,
+        )
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
+    return tools_controller.drag_at(
+        context.project_id,
+        start_x=start_x,
+        start_y=start_y,
+        end_x=end_x,
+        end_y=end_y,
+        duration=duration,
         expected_result=_read_expected_result(arguments),
         vision_config=context.vision_config,
         on_screenshot=context.on_screenshot,
@@ -569,6 +696,33 @@ def _handle_long_press(
     )
 
 
+def _handle_long_press_at(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    try:
+        x, y = _required_point(arguments, "long_press_at")
+        duration = _optional_number(
+            arguments,
+            "duration",
+            DEFAULT_LONG_PRESS_SECONDS,
+            LONG_PRESS_MIN_SECONDS,
+            LONG_PRESS_MAX_SECONDS,
+        )
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
+    return tools_mobile.long_press_at(
+        context.project_id,
+        x=x,
+        y=y,
+        duration=duration,
+        expected_result=_read_expected_result(arguments),
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
+    )
+
+
 def _handle_swipe(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     try:
         direction = ScrollDirection(str(arguments.get("direction", "")))
@@ -723,17 +877,23 @@ _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "take_screenshot": _handle_take_screenshot,
     "click": _handle_click,
     "double_click": _handle_double_click,
+    "right_click": _handle_right_click,
     "click_at": _handle_click_at,
+    "double_click_at": _handle_double_click_at,
+    "right_click_at": _handle_right_click_at,
     "scroll": _handle_scroll,
     "type_text": _handle_type_text,
     "key_press": _handle_key_press,
     "hover": _handle_hover,
     "drag": _handle_drag,
+    "hover_at": _handle_hover_at,
+    "drag_at": _handle_drag_at,
     "launch_app": _handle_launch_app,
     "close_app": _handle_close_app,
     "close_tab": _handle_close_tab,
     "check_app_installed": _handle_check_app_installed,
     "long_press": _handle_long_press,
+    "long_press_at": _handle_long_press_at,
     "swipe": _handle_swipe,
     "press_button": _handle_press_button,
     "rotate_device": _handle_rotate_device,

@@ -30,8 +30,8 @@ class MachineTool:
     # tools (command services), take_screenshot (machine_screenshot),
     # web_search (its snippets-only search) and wait (the handler sleeps).
     agent_tool: str | None
-    # The throttle class (``click_at`` / ``swipe`` / ``rotate_device`` count
-    # as AI instead when ``ai_with_expected_result`` and an expected_result
+    # The throttle class (``click_at`` and the other ``*_at`` tools,
+    # ``swipe`` / ``rotate_device`` count as AI instead when ``ai_with_expected_result`` and an expected_result
     # is given).
     kind: CallKind
     # Where the tool runs.
@@ -102,11 +102,16 @@ _TOOLS: Final[tuple[MachineTool, ...]] = (
     _tool("take_screenshot", CallKind.SCREEN, _ALL, dispatches=False),
     _tool("click", CallKind.AI, _ALL, uses_visual_engine=True),
     _tool("double_click", CallKind.AI, _ALL, uses_visual_engine=True),
+    _tool("right_click", CallKind.AI, _DESKTOP, uses_visual_engine=True),
     _tool("click_at", CallKind.CONTROL, _ALL, ai_with_expected_result=True),
+    _tool("double_click_at", CallKind.CONTROL, _ALL, ai_with_expected_result=True),
+    _tool("right_click_at", CallKind.CONTROL, _DESKTOP, ai_with_expected_result=True),
     _tool("type_text", CallKind.CONTROL, _ALL),
     _tool("key_press", CallKind.CONTROL, _ALL),
     _tool("hover", CallKind.AI, _DESKTOP, uses_visual_engine=True),
     _tool("drag", CallKind.AI, _ALL, uses_visual_engine=True),
+    _tool("hover_at", CallKind.CONTROL, _DESKTOP, ai_with_expected_result=True),
+    _tool("drag_at", CallKind.CONTROL, _ALL, ai_with_expected_result=True),
     _tool("scroll", CallKind.CONTROL, _ALL),
     # Apps.
     _tool("launch_app", CallKind.CONTROL, _ALL),
@@ -143,6 +148,7 @@ _TOOLS: Final[tuple[MachineTool, ...]] = (
     _browse("browse_close"),
     # Phone.
     _tool("long_press", CallKind.AI, _PHONE, uses_visual_engine=True),
+    _tool("long_press_at", CallKind.CONTROL, _PHONE, ai_with_expected_result=True),
     _tool("swipe", CallKind.CONTROL, _PHONE, ai_with_expected_result=True),
     _tool("press_button", CallKind.CONTROL, _PHONE),
     _tool("rotate_device", CallKind.CONTROL, _PHONE, ai_with_expected_result=True),
@@ -176,7 +182,7 @@ def effective_kind(
 MACHINE_TOOLS: Final[Mapping[str, MachineTool]] = MappingProxyType(
     {tool.name: tool for tool in _TOOLS}
 )
-assert len(MACHINE_TOOLS) == len(_TOOLS) == 52, "machine tool table is not 52 tools"
+assert len(MACHINE_TOOLS) == len(_TOOLS) == 58, "machine tool table is not 58 tools"
 
 # What ``allowlisted_dispatcher`` lets the machine tools reach: every agent
 # tool of the table (never wait_for_command or browser_take_screenshot).

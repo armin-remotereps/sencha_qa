@@ -102,13 +102,13 @@ _FIXED: Final[dict[MachineErrorCode, str]] = {
     ),
     MachineErrorCode.VISUAL_ENGINE_OFFLINE: (
         "Finding elements by description is not available right now. Use "
-        "take_screenshot and click_at with coordinates instead, or try again "
-        "later."
+        "take_screenshot and click_at and the other *_at tools with "
+        "coordinates instead, or try again later."
     ),
     MachineErrorCode.AI_UNAVAILABLE: (
         "The service that reads the screen and the web is not available right "
-        "now. Use take_screenshot and click_at with coordinates instead, or try "
-        "again later."
+        "now. Use take_screenshot and click_at and the other *_at tools with "
+        "coordinates instead, or try again later."
     ),
     MachineErrorCode.COMMAND_NOT_FOUND: (
         "No command with this session_id belongs to your claimed case (it ended, "

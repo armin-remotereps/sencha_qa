@@ -23,7 +23,8 @@ def answer_screenshot_question(
         question: Question to ask about the screenshot.
         image_size: The screenshot's (width, height) in pixels. When given, the
             model is told the size and asked for pixel coordinates, which
-            click_at and scroll take.
+            click_at and the other *_at tools (double_click_at, hover_at,
+            drag_at, long_press_at), scroll and swipe take.
 
     Returns:
         Text answer from the vision model.

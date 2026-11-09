@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from agents.command_output import clean_command_output
+from agents.services.act_and_check import COORDINATE_MISS_HINT, act_once_and_check
 from agents.services.browser_element_finder import find_element_index
 from agents.services.shell_command import build_shell_command
 from agents.services.tool_utils import safe_tool_call
@@ -11,6 +12,7 @@ from agents.services.verified_element_actions import (
     confirm_action,
     default_click_expectation,
     default_double_click_expectation,
+    default_right_click_expectation,
     format_unconfirmed_message,
     format_verified_message,
     resolve_verified_element,
@@ -200,8 +202,8 @@ def take_screenshot(
         )
         if known_size:
             answer = (
-                f"{answer}\n(Screenshot: {width} x {height} pixels; click_at and "
-                "scroll use these coordinates.)"
+                f"{answer}\n(Screenshot: {width} x {height} pixels; click_at, "
+                "the other *_at tools and scroll use these coordinates.)"
             )
         return ToolResult(tool_call_id="", content=answer, is_error=False)
 
@@ -306,7 +308,7 @@ def verified_click(
     deadline: float | None,
     precheck: Callable[[], None] | None = None,
 ) -> ToolResult:
-    """Run the verified click flow shared by click and double_click.
+    """Run the verified click flow shared by click, double_click and right_click.
 
     ``press`` performs the mouse action at the verified element's centre;
     ``verb`` / ``success_verb`` word the outcome check and the success text.
@@ -407,6 +409,37 @@ def double_click(
     )
 
 
+def right_click(
+    project_id: int,
+    *,
+    description: str,
+    vision_config: LLMConfig,
+    expected_result: str = "",
+    on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
+    deadline: float | None = None,
+) -> ToolResult:
+    """Right-click (desktop, e.g. a context menu) with click's verified flow."""
+
+    def _press(x: int, y: int) -> ActionResult:
+        return controller_click(project_id, x, y, button="right")
+
+    return verified_click(
+        project_id,
+        tool_name="right_click",
+        description=description,
+        vision_config=vision_config,
+        expected_result=expected_result,
+        press=_press,
+        verb="right-clicked",
+        success_verb="Right-clicked",
+        default_expectation=default_right_click_expectation,
+        on_screenshot=on_screenshot,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+    )
+
+
 def click_at(
     project_id: int,
     *,
@@ -424,64 +457,152 @@ def click_at(
     is no element to resolve; the outcome is checked once, only when
     ``expected_result`` is given, and a miss is reported, never retried.
     """
-    success_message = f"Clicked at ({x}, {y})"
+    return act_once_and_check(
+        project_id,
+        tool_name="click_at",
+        act=lambda: ensure_action_succeeded(controller_click(project_id, x, y)),
+        success_message=f"Clicked at ({x}, {y})",
+        action_summary=f"clicked at ({x}, {y})",
+        expected_result=expected_result,
+        vision_config=vision_config,
+        done_suffix=".",
+        miss_hint=COORDINATE_MISS_HINT,
+        on_screenshot=on_screenshot,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+    )
 
-    def _do() -> ToolResult:
-        budget = VerificationBudget(
-            deadline=deadline, cancellation_check=cancellation_check
-        )
-        budget.raise_if_cancelled()
-        if not expected_result:
-            ensure_action_succeeded(controller_click(project_id, x, y))
-            return ToolResult(
-                tool_call_id="", content=f"{success_message}.", is_error=False
-            )
-        if vision_config is None:
-            return ToolResult(
-                tool_call_id="",
-                content="Vision model not configured, so expected_result cannot "
-                "be checked. Call click_at without it.",
-                is_error=True,
-            )
-        before_image = take_before_screenshot(project_id)
-        ensure_action_succeeded(controller_click(project_id, x, y))
-        verdict = confirm_action(
-            project_id,
-            vision_config,
-            budget,
-            acted_on=(),
-            before_image_base64=before_image,
-            action_summary=f"clicked at ({x}, {y})",
-            expected_result=expected_result,
-            tool_name="click_at",
-            on_screenshot=on_screenshot,
-        )
-        if verdict.status == "confirmed":
-            return ToolResult(
-                tool_call_id="",
-                content=f"{success_message}; expected result confirmed.",
-                is_error=False,
-            )
-        if verdict.status == "unexpected":
-            return ToolResult(
-                tool_call_id="",
-                content=format_unconfirmed_message(
-                    success_message, verdict.reason, budget
-                ),
-                is_error=False,
-            )
-        reason = " ".join(verdict.reason.split()).rstrip(".")
-        return ToolResult(
-            tool_call_id="",
-            content=(
-                f"{success_message}, but the expected result is NOT shown: "
-                f"{reason}. Take a screenshot and ask for the target's "
-                "coordinates again."
-            ),
-            is_error=True,
-        )
 
-    return safe_tool_call("click_at", _do)
+def double_click_at(
+    project_id: int,
+    *,
+    x: int,
+    y: int,
+    vision_config: LLMConfig | None,
+    expected_result: str = "",
+    on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
+    deadline: float | None = None,
+) -> ToolResult:
+    """Double-click (double tap on a phone) at screenshot pixel (x, y).
+
+    Needs ``double_click_v1`` like ``double_click``: an older runner raises
+    ``RunnerOutdatedError`` before any input is sent.
+    """
+    return act_once_and_check(
+        project_id,
+        tool_name="double_click_at",
+        act=lambda: ensure_action_succeeded(controller_double_click(project_id, x, y)),
+        success_message=f"Double-clicked at ({x}, {y})",
+        action_summary=f"double-clicked at ({x}, {y})",
+        expected_result=expected_result,
+        vision_config=vision_config,
+        done_suffix=".",
+        miss_hint=COORDINATE_MISS_HINT,
+        on_screenshot=on_screenshot,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+        precheck=lambda: ensure_runner_supports_double_click(project_id),
+    )
+
+
+def right_click_at(
+    project_id: int,
+    *,
+    x: int,
+    y: int,
+    vision_config: LLMConfig | None,
+    expected_result: str = "",
+    on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
+    deadline: float | None = None,
+) -> ToolResult:
+    """Right-click (desktop) at screenshot pixel (x, y).
+
+    Sends the existing ``click`` message with ``button="right"``, which every
+    desktop Test Runner handles; checked once only when ``expected_result`` is
+    given, never retried.
+    """
+    return act_once_and_check(
+        project_id,
+        tool_name="right_click_at",
+        act=lambda: ensure_action_succeeded(
+            controller_click(project_id, x, y, button="right")
+        ),
+        success_message=f"Right-clicked at ({x}, {y})",
+        action_summary=f"right-clicked at ({x}, {y})",
+        expected_result=expected_result,
+        vision_config=vision_config,
+        done_suffix=".",
+        miss_hint=COORDINATE_MISS_HINT,
+        on_screenshot=on_screenshot,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+    )
+
+
+def hover_at(
+    project_id: int,
+    *,
+    x: int,
+    y: int,
+    vision_config: LLMConfig | None,
+    expected_result: str = "",
+    on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
+    deadline: float | None = None,
+) -> ToolResult:
+    """Move the pointer to screenshot pixel (x, y) (desktop only)."""
+    return act_once_and_check(
+        project_id,
+        tool_name="hover_at",
+        act=lambda: ensure_action_succeeded(controller_hover(project_id, x, y)),
+        success_message=f"Hovered at ({x}, {y})",
+        action_summary=f"hovered at ({x}, {y})",
+        expected_result=expected_result,
+        vision_config=vision_config,
+        done_suffix=".",
+        miss_hint=COORDINATE_MISS_HINT,
+        on_screenshot=on_screenshot,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+    )
+
+
+def drag_at(
+    project_id: int,
+    *,
+    start_x: int,
+    start_y: int,
+    end_x: int,
+    end_y: int,
+    duration: float,
+    vision_config: LLMConfig | None,
+    expected_result: str = "",
+    on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
+    deadline: float | None = None,
+) -> ToolResult:
+    """Drag with the left button from one screenshot pixel to another."""
+    summary = f"dragged from ({start_x}, {start_y}) to ({end_x}, {end_y})"
+    return act_once_and_check(
+        project_id,
+        tool_name="drag_at",
+        act=lambda: ensure_action_succeeded(
+            controller_drag(
+                project_id, start_x, start_y, end_x, end_y, duration=duration
+            )
+        ),
+        success_message=summary[0].upper() + summary[1:],
+        action_summary=summary,
+        expected_result=expected_result,
+        vision_config=vision_config,
+        done_suffix=".",
+        miss_hint=COORDINATE_MISS_HINT,
+        on_screenshot=on_screenshot,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+    )
 
 
 _SCROLL_OUTDATED_MESSAGE = (

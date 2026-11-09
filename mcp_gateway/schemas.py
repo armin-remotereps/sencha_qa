@@ -19,6 +19,9 @@ from controller_client.protocol import (
     CAPTURE_REGION_MAX_PIXELS_PER_AXIS,
     CAPTURE_TITLE_MATCH_MAX_CHARS,
     CAPTURE_WINDOW_ID_MAX_CHARS,
+    DEFAULT_DRAG_SECONDS,
+    DRAG_MAX_SECONDS,
+    DRAG_MIN_SECONDS,
     INTERACTIVE_SESSION_ID_MAX_CHARS,
     LONG_PRESS_MAX_SECONDS,
     LONG_PRESS_MIN_SECONDS,
@@ -381,6 +384,42 @@ YArg = Annotated[
     _MachinePixel,
     Field(description="Vertical pixel in take_screenshot's width x height."),
 ]
+StartXArg = Annotated[
+    _MachinePixel,
+    Field(
+        description=(
+            "Horizontal pixel where the drag starts, in take_screenshot's "
+            "width x height."
+        )
+    ),
+]
+StartYArg = Annotated[
+    _MachinePixel,
+    Field(
+        description=(
+            "Vertical pixel where the drag starts, in take_screenshot's "
+            "width x height."
+        )
+    ),
+]
+EndXArg = Annotated[
+    _MachinePixel,
+    Field(
+        description=(
+            "Horizontal pixel where the drag ends, in take_screenshot's "
+            "width x height."
+        )
+    ),
+]
+EndYArg = Annotated[
+    _MachinePixel,
+    Field(
+        description=(
+            "Vertical pixel where the drag ends, in take_screenshot's "
+            "width x height."
+        )
+    ),
+]
 OptionalXArg = Annotated[
     _MachinePixel | None,
     Field(description="Optional horizontal pixel (give it together with y)."),
@@ -477,6 +516,17 @@ LongPressDurationArg = Annotated[
         description=(
             f"Optional seconds to hold, {LONG_PRESS_MIN_SECONDS:g} to "
             f"{LONG_PRESS_MAX_SECONDS:g}."
+        ),
+    ),
+]
+DragDurationArg = Annotated[
+    float | None,
+    Field(
+        ge=DRAG_MIN_SECONDS,
+        le=DRAG_MAX_SECONDS,
+        description=(
+            f"Optional seconds the drag takes, {DRAG_MIN_SECONDS:g} to "
+            f"{DRAG_MAX_SECONDS:g}; default {DEFAULT_DRAG_SECONDS:g}."
         ),
     ),
 ]
@@ -940,13 +990,15 @@ class StopCommandRequest(MachineRequest):
 
 
 class DescribedActionRequest(MachineRequest):
-    """click, double_click, hover."""
+    """click, double_click, right_click, hover."""
 
     description: str
     expected_result: str | None = None
 
 
 class ClickAtRequest(MachineRequest):
+    """click_at, double_click_at, right_click_at, hover_at."""
+
     x: int
     y: int
     expected_result: str | None = None
@@ -963,6 +1015,15 @@ class KeyPressRequest(MachineRequest):
 class DragRequest(MachineRequest):
     start_description: str
     end_description: str
+    expected_result: str | None = None
+
+
+class DragAtRequest(MachineRequest):
+    start_x: int
+    start_y: int
+    end_x: int
+    end_y: int
+    duration: float | None = None
     expected_result: str | None = None
 
 
@@ -1017,6 +1078,13 @@ class BrowserDownloadRequest(BrowserRequest):
 
 class LongPressRequest(MachineRequest):
     description: str
+    duration: float | None = None
+    expected_result: str | None = None
+
+
+class LongPressAtRequest(MachineRequest):
+    x: int
+    y: int
     duration: float | None = None
     expected_result: str | None = None
 
@@ -1445,7 +1513,8 @@ class BrowseBrowsersResponse(_Dto):
 
 
 class TakeScreenshotResponse(_Dto):
-    # The real screen size click_at / scroll / swipe coordinates refer to;
+    # The real screen size the coordinates of click_at and the other *_at
+    # tools, scroll and swipe refer to;
     # null when the test machine did not report it.
     width: int | None
     height: int | None

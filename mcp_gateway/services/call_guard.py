@@ -92,7 +92,8 @@ _CONTROL_THROTTLED: Final = (
 )
 _AI_THROTTLED: Final = (
     "Too many actions that find elements by description or search the web. "
-    "Wait a minute and try again, or use click_at with coordinates."
+    "Wait a minute and try again, or use click_at and the other *_at tools "
+    "with coordinates."
 )
 _COMMAND_THROTTLED: Final = "Too many command requests. Wait a minute and try again."
 _SCREEN_THROTTLED: Final = (
@@ -128,8 +129,8 @@ class CallKind(StrEnum):
     # Machine tools inside a claimed case (mcp_gateway.machine_tools).
     # Coordinate input, keys, apps, plain browser tools, phone buttons, wait.
     CONTROL = "control"
-    # Description tools, web_search; click_at / swipe / rotate_device with an
-    # expected_result.
+    # Description tools, web_search; click_at and the other *_at tools,
+    # swipe / rotate_device with an expected_result.
     AI = "ai"
     # The command tools.
     COMMAND = "command"

@@ -3998,6 +3998,11 @@ DEFAULT_SWIPE_DURATION: Final[float] = 0.4
 LONG_PRESS_MIN_SECONDS: Final[float] = 0.5
 LONG_PRESS_MAX_SECONDS: Final[float] = 10.0
 DEFAULT_LONG_PRESS_SECONDS: Final[float] = 1.0
+# Seconds a coordinate drag (drag_at) lasts; the server bounds it, the runner
+# accepts any non-negative duration in the drag message.
+DRAG_MIN_SECONDS: Final[float] = 0.1
+DRAG_MAX_SECONDS: Final[float] = 10.0
+DEFAULT_DRAG_SECONDS: Final[float] = 0.5
 OPEN_URL_MAX_CHARS: Final[int] = PERSON_STEP_URL_MAX_CHARS
 
 _URL_SCHEME_RE: Final[re.Pattern[str]] = re.compile(r"([A-Za-z][A-Za-z0-9+.-]{0,31}):")

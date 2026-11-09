@@ -84,8 +84,8 @@ MCP_CONTROL_DEADLINE_SECONDS: Final[int] = 50
 MCP_CONTROL_LOCK_SECONDS: Final[int] = (
     MCP_CONTROL_DEADLINE_SECONDS + MCP_MACHINE_LOCK_MARGIN_SECONDS
 )
-# AI: the description tools, web_search, and click_at / swipe /
-# rotate_device with expected_result.
+# AI: the description tools, web_search, and click_at and the other *_at
+# tools / swipe / rotate_device with expected_result.
 MCP_AI_RATE_PER_MINUTE: Final[int] = 20
 MCP_AI_DEADLINE_SECONDS: Final[int] = 45
 MCP_AI_LOCK_SECONDS: Final[int] = (
