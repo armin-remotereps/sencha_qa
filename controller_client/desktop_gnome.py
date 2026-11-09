@@ -40,7 +40,7 @@ from controller_client.keysyms import (
     resolve_key_name,
 )
 from controller_client.pipewire_frame import grab_frame
-from controller_client.protocol import ScrollDirection
+from controller_client.protocol import PointerModifier, ScrollDirection
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,16 @@ _BUTTONS: Final[dict[str, int]] = {
     "left": BTN_LEFT,
     "right": BTN_RIGHT,
     "middle": BTN_MIDDLE,
+}
+
+# The keysym each pointer modifier holds (Control_L, Shift_L, Alt_L,
+# Super_L); primary and ctrl are both Control_L and pressed once.
+_MODIFIER_KEYSYMS: Final[dict[PointerModifier, int]] = {
+    PointerModifier.PRIMARY: key_name_to_keysym("ctrl"),
+    PointerModifier.CTRL: key_name_to_keysym("ctrl"),
+    PointerModifier.ALT: key_name_to_keysym("alt"),
+    PointerModifier.SHIFT: key_name_to_keysym("shift"),
+    PointerModifier.META: key_name_to_keysym("win"),
 }
 
 # (axis, sign of the steps) per direction; positive is down / right. One table,
@@ -89,22 +99,49 @@ class GnomeDesktopBackend:
     # out even when its press failed, since a press whose reply timed out may
     # still have reached mutter; a failed release never hides the press error.
 
-    def click(self, x: int, y: int, button: str) -> None:
+    #
+    # Held modifiers go out on that same stream: pressed before the action and
+    # released after it, in reverse order, through _then_release.
+
+    def click(
+        self,
+        x: int,
+        y: int,
+        button: str,
+        *,
+        modifiers: Sequence[PointerModifier] = (),
+    ) -> None:
         code = _button_code(button)
         stream = self._check_bounds(x, y)
-        self._session.pointer_move(x, y, stream_path=stream)
-        self._press_release(code, stream)
 
-    def double_click(self, x: int, y: int) -> None:
-        stream = self._check_bounds(x, y)
-        self._session.pointer_move(x, y, stream_path=stream)
-        self._press_release(BTN_LEFT, stream)
-        time.sleep(_DOUBLE_CLICK_GAP_S)
-        self._press_release(BTN_LEFT, stream)
+        def action() -> None:
+            self._session.pointer_move(x, y, stream_path=stream)
+            self._press_release(code, stream)
 
-    def move_to(self, x: int, y: int) -> None:
+        self._holding(modifiers, stream, action)
+
+    def double_click(
+        self, x: int, y: int, *, modifiers: Sequence[PointerModifier] = ()
+    ) -> None:
         stream = self._check_bounds(x, y)
-        self._session.pointer_move(x, y, stream_path=stream)
+
+        def action() -> None:
+            self._session.pointer_move(x, y, stream_path=stream)
+            self._press_release(BTN_LEFT, stream)
+            time.sleep(_DOUBLE_CLICK_GAP_S)
+            self._press_release(BTN_LEFT, stream)
+
+        self._holding(modifiers, stream, action)
+
+    def move_to(
+        self, x: int, y: int, *, modifiers: Sequence[PointerModifier] = ()
+    ) -> None:
+        stream = self._check_bounds(x, y)
+        self._holding(
+            modifiers,
+            stream,
+            lambda: self._session.pointer_move(x, y, stream_path=stream),
+        )
 
     def drag(
         self,
@@ -114,6 +151,8 @@ class GnomeDesktopBackend:
         end_y: int,
         button: str,
         duration: float,
+        *,
+        modifiers: Sequence[PointerModifier] = (),
     ) -> None:
         code = _button_code(button)
         stream = self._check_bounds(start_x, start_y)
@@ -124,7 +163,6 @@ class GnomeDesktopBackend:
             )
         steps = max(_DRAG_MIN_STEPS, round(duration * _DRAG_STEPS_PER_SECOND))
         step_sleep = max(duration, 0.0) / steps
-        self._session.pointer_move(start_x, start_y, stream_path=stream)
 
         def press_and_move() -> None:
             self._session.pointer_button(code, True, stream_path=stream)
@@ -138,26 +176,43 @@ class GnomeDesktopBackend:
                 if step_sleep > 0:
                     time.sleep(step_sleep)
 
-        _then_release(
-            press_and_move, lambda quiet: self._release_button(code, stream, quiet)
-        )
+        def action() -> None:
+            self._session.pointer_move(start_x, start_y, stream_path=stream)
+            _then_release(
+                press_and_move,
+                lambda quiet: self._release_button(code, stream, quiet),
+            )
+
+        self._holding(modifiers, stream, action)
 
     def scroll(
-        self, direction: ScrollDirection, amount: int, x: int | None, y: int | None
+        self,
+        direction: ScrollDirection,
+        amount: int,
+        x: int | None,
+        y: int | None,
+        *,
+        modifiers: Sequence[PointerModifier] = (),
     ) -> None:
         axis, sign = _SCROLL_AXES[direction]
         if x is not None and y is not None:
             stream = self._check_bounds(x, y)
-            self._session.pointer_move(x, y, stream_path=stream)
         else:
             stream = self._session.ensure_started().stream_path
-        self._session.pointer_axis_discrete(axis, sign * amount, stream_path=stream)
+
+        def action() -> None:
+            if x is not None and y is not None:
+                self._session.pointer_move(x, y, stream_path=stream)
+            self._session.pointer_axis_discrete(axis, sign * amount, stream_path=stream)
+
+        self._holding(modifiers, stream, action)
 
     # Modifier keys: unlike the pyautogui backend, nothing extra is released
-    # after key combinations or before typing. press_keys and type_text
-    # release every keysym they pressed in _then_release, even on errors, and
-    # mutter's virtual keyboard holds no other state; key-ups for keys it never
-    # pressed would only add warnings to mutter's log.
+    # after key combinations, modified pointer actions or before typing.
+    # press_keys, type_text and _holding release every keysym they pressed in
+    # _then_release, even on errors, and mutter's virtual keyboard holds no
+    # other state; key-ups for keys it never pressed would only add warnings
+    # to mutter's log.
 
     def type_text(self, text: str, interval: float) -> None:
         stream = self._session.ensure_started().stream_path
@@ -252,6 +307,34 @@ class GnomeDesktopBackend:
                 "coordinates from a current screenshot."
             )
         return stream
+
+    def _holding(
+        self,
+        modifiers: Sequence[PointerModifier],
+        stream: str,
+        action: Callable[[], None],
+    ) -> None:
+        """Run ``action`` with the modifier keysyms held on ``stream``."""
+        if not modifiers:
+            action()
+            return
+        keysyms: list[int] = []
+        for modifier in modifiers:
+            keysym = _MODIFIER_KEYSYMS[modifier]
+            if keysym not in keysyms:
+                keysyms.append(keysym)
+        pressed: list[int] = []
+
+        def press_and_act() -> None:
+            for keysym in keysyms:
+                pressed.append(keysym)
+                self._session.key(keysym, True, stream_path=stream)
+            action()
+
+        _then_release(
+            press_and_act,
+            lambda quiet: self._release_keys(list(reversed(pressed)), stream, quiet),
+        )
 
     def _press_release(self, code: int, stream: str) -> None:
         _then_release(

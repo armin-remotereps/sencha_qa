@@ -103,9 +103,11 @@ _TOOLS: Final[tuple[MachineTool, ...]] = (
     _tool("click", CallKind.AI, _ALL, uses_visual_engine=True),
     _tool("double_click", CallKind.AI, _ALL, uses_visual_engine=True),
     _tool("right_click", CallKind.AI, _DESKTOP, uses_visual_engine=True),
+    _tool("middle_click", CallKind.AI, _DESKTOP, uses_visual_engine=True),
     _tool("click_at", CallKind.CONTROL, _ALL, ai_with_expected_result=True),
     _tool("double_click_at", CallKind.CONTROL, _ALL, ai_with_expected_result=True),
     _tool("right_click_at", CallKind.CONTROL, _DESKTOP, ai_with_expected_result=True),
+    _tool("middle_click_at", CallKind.CONTROL, _DESKTOP, ai_with_expected_result=True),
     _tool("type_text", CallKind.CONTROL, _ALL),
     _tool("key_press", CallKind.CONTROL, _ALL),
     _tool("hover", CallKind.AI, _DESKTOP, uses_visual_engine=True),
@@ -182,7 +184,7 @@ def effective_kind(
 MACHINE_TOOLS: Final[Mapping[str, MachineTool]] = MappingProxyType(
     {tool.name: tool for tool in _TOOLS}
 )
-assert len(MACHINE_TOOLS) == len(_TOOLS) == 58, "machine tool table is not 58 tools"
+assert len(MACHINE_TOOLS) == len(_TOOLS) == 60, "machine tool table is not 60 tools"
 
 # What ``allowlisted_dispatcher`` lets the machine tools reach: every agent
 # tool of the table (never wait_for_command or browser_take_screenshot).

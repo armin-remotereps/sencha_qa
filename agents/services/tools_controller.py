@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from agents.command_output import clean_command_output
+from agents.pointer_modifiers import modifiers_text
 from agents.services.act_and_check import COORDINATE_MISS_HINT, act_once_and_check
 from agents.services.browser_element_finder import find_element_index
 from agents.services.shell_command import build_shell_command
@@ -12,6 +13,7 @@ from agents.services.verified_element_actions import (
     confirm_action,
     default_click_expectation,
     default_double_click_expectation,
+    default_middle_click_expectation,
     default_right_click_expectation,
     format_unconfirmed_message,
     format_verified_message,
@@ -32,12 +34,14 @@ from controller_client.protocol import (
     BROWSER_DISPLAY_NAMES,
     BrowserName,
     ClientCapability,
+    PointerModifier,
     ScrollDirection,
 )
 from projects.browser_selection_services import ensure_runner_supports_browser
 from projects.exceptions import ControllerActionError
 from projects.runner_capability_services import (
     ensure_runner_supports_double_click,
+    ensure_runner_supports_pointer_modifiers,
     ensure_runner_supports_windows_shell,
     runner_os_name,
     runner_supports,
@@ -222,6 +226,34 @@ def capture_screenshot(project_id: int, *, on_screenshot: ScreenshotCallback) ->
 
 _AttemptFunc = Callable[[VerificationBudget], ToolResult | None]
 PressFunc = Callable[[int, int], ActionResult]
+Modifiers = tuple[PointerModifier, ...]
+
+
+def _holding(modifiers: Modifiers) -> str:
+    """`` holding shift+primary`` for texts, ``""`` without modifiers."""
+    return f" holding {modifiers_text(modifiers)}" if modifiers else ""
+
+
+def _with_modifiers_check(
+    project_id: int,
+    modifiers: Modifiers,
+    precheck: Callable[[], None] | None = None,
+) -> Callable[[], None] | None:
+    """``precheck`` followed, when modifiers are held, by the modifiers check.
+
+    ``ensure_runner_supports_pointer_modifiers`` raises ``RunnerOutdatedError``
+    (an InfrastructureError, so the case pauses for help) before any screen
+    parse or input: an older runner would ignore the keys and press plainly.
+    """
+    if not modifiers:
+        return precheck
+
+    def _check() -> None:
+        if precheck is not None:
+            precheck()
+        ensure_runner_supports_pointer_modifiers(project_id)
+
+    return _check
 
 
 def _run_verified_action(
@@ -258,7 +290,14 @@ def _confirm_or_finish(
     tool_name: str,
     success_message: str,
     on_screenshot: ScreenshotCallback | None,
+    retry_on_miss: bool = True,
+    modifiers: Modifiers = (),
 ) -> ToolResult | None:
+    """The outcome result, or ``None`` on a miss to try the next candidate.
+
+    With ``retry_on_miss=False`` (a press with modifiers held) a miss is an
+    error instead: pressing again could undo or extend what this press did.
+    """
     if expected_result:
         verdict = confirm_action(
             project_id,
@@ -272,7 +311,21 @@ def _confirm_or_finish(
             on_screenshot=on_screenshot,
         )
         if verdict.status == "missed":
-            return None
+            if retry_on_miss:
+                return None
+            reason = " ".join(verdict.reason.split()).rstrip(".")
+            shown = f": {reason}." if reason else "."
+            return ToolResult(
+                tool_call_id="",
+                content=(
+                    f"{success_message}, but the expected result is NOT shown"
+                    f"{shown} Not retried: pressing again with "
+                    f"{modifiers_text(modifiers)} held could undo or extend what "
+                    "this press did (e.g. toggle the selection back). Take a "
+                    "screenshot and decide."
+                ),
+                is_error=True,
+            )
         if verdict.status == "unexpected":
             return ToolResult(
                 tool_call_id="",
@@ -307,13 +360,19 @@ def verified_click(
     cancellation_check: CancellationCheck | None,
     deadline: float | None,
     precheck: Callable[[], None] | None = None,
+    modifiers: Modifiers = (),
 ) -> ToolResult:
-    """Run the verified click flow shared by click, double_click and right_click.
+    """Run the verified click flow shared by click, double_click, right_click
+    and middle_click.
 
-    ``press`` performs the mouse action at the verified element's centre;
-    ``verb`` / ``success_verb`` word the outcome check and the success text.
+    ``press`` performs the mouse action at the verified element's centre (the
+    caller binds ``modifiers`` into it); ``verb`` / ``success_verb`` word the
+    outcome check and the success text. ``modifiers`` here only changes the
+    wording, adds the modifiers check to ``precheck`` and stops a missed
+    press from being retried on another candidate.
     """
     effective_expectation = expected_result or default_expectation(description)
+    holding = _holding(modifiers)
 
     def _attempt(budget: VerificationBudget) -> ToolResult | None:
         element = resolve_verified_element(
@@ -328,11 +387,15 @@ def verified_click(
             budget,
             acted_on=(element,),
             before_image_base64=before_image,
-            action_summary=f"{verb} '{description}' at ({x}, {y})",
+            action_summary=f"{verb} '{description}' at ({x}, {y}){holding}",
             expected_result=effective_expectation,
             tool_name=tool_name,
-            success_message=f"{success_verb} element at ({x}, {y}): {description}",
+            success_message=(
+                f"{success_verb} element at ({x}, {y}){holding}: {description}"
+            ),
             on_screenshot=on_screenshot,
+            retry_on_miss=not modifiers,
+            modifiers=modifiers,
         )
 
     return _run_verified_action(
@@ -340,7 +403,7 @@ def verified_click(
         _attempt,
         cancellation_check=cancellation_check,
         deadline=deadline,
-        precheck=precheck,
+        precheck=_with_modifiers_check(project_id, modifiers, precheck),
     )
 
 
@@ -353,9 +416,10 @@ def click(
     on_screenshot: ScreenshotCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
     deadline: float | None = None,
+    modifiers: Modifiers = (),
 ) -> ToolResult:
     def _press(x: int, y: int) -> ActionResult:
-        return controller_click(project_id, x, y)
+        return controller_click(project_id, x, y, modifiers=modifiers)
 
     return verified_click(
         project_id,
@@ -370,6 +434,7 @@ def click(
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,
+        modifiers=modifiers,
     )
 
 
@@ -382,9 +447,10 @@ def double_click(
     on_screenshot: ScreenshotCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
     deadline: float | None = None,
+    modifiers: Modifiers = (),
 ) -> ToolResult:
     def _press(x: int, y: int) -> ActionResult:
-        return controller_double_click(project_id, x, y)
+        return controller_double_click(project_id, x, y, modifiers=modifiers)
 
     def _precheck() -> None:
         # Raises RunnerOutdatedError (an InfrastructureError, so safe_tool_call
@@ -406,6 +472,7 @@ def double_click(
         cancellation_check=cancellation_check,
         deadline=deadline,
         precheck=_precheck,
+        modifiers=modifiers,
     )
 
 
@@ -418,11 +485,12 @@ def right_click(
     on_screenshot: ScreenshotCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
     deadline: float | None = None,
+    modifiers: Modifiers = (),
 ) -> ToolResult:
     """Right-click (desktop, e.g. a context menu) with click's verified flow."""
 
     def _press(x: int, y: int) -> ActionResult:
-        return controller_click(project_id, x, y, button="right")
+        return controller_click(project_id, x, y, button="right", modifiers=modifiers)
 
     return verified_click(
         project_id,
@@ -437,6 +505,44 @@ def right_click(
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,
+        modifiers=modifiers,
+    )
+
+
+def middle_click(
+    project_id: int,
+    *,
+    description: str,
+    vision_config: LLMConfig,
+    expected_result: str = "",
+    on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
+    deadline: float | None = None,
+    modifiers: Modifiers = (),
+) -> ToolResult:
+    """Middle-click (desktop, the wheel as a button) with click's verified flow.
+
+    Sends the existing ``click`` message with ``button="middle"``, which every
+    desktop Test Runner handles; no capability unless modifiers are held.
+    """
+
+    def _press(x: int, y: int) -> ActionResult:
+        return controller_click(project_id, x, y, button="middle", modifiers=modifiers)
+
+    return verified_click(
+        project_id,
+        tool_name="middle_click",
+        description=description,
+        vision_config=vision_config,
+        expected_result=expected_result,
+        press=_press,
+        verb="middle-clicked",
+        success_verb="Middle-clicked",
+        default_expectation=default_middle_click_expectation,
+        on_screenshot=on_screenshot,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+        modifiers=modifiers,
     )
 
 
@@ -450,6 +556,7 @@ def click_at(
     on_screenshot: ScreenshotCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
     deadline: float | None = None,
+    modifiers: Modifiers = (),
 ) -> ToolResult:
     """Left-click at screenshot pixel (x, y), for targets OmniParser cannot name.
 
@@ -457,12 +564,15 @@ def click_at(
     is no element to resolve; the outcome is checked once, only when
     ``expected_result`` is given, and a miss is reported, never retried.
     """
+    holding = _holding(modifiers)
     return act_once_and_check(
         project_id,
         tool_name="click_at",
-        act=lambda: ensure_action_succeeded(controller_click(project_id, x, y)),
-        success_message=f"Clicked at ({x}, {y})",
-        action_summary=f"clicked at ({x}, {y})",
+        act=lambda: ensure_action_succeeded(
+            controller_click(project_id, x, y, modifiers=modifiers)
+        ),
+        success_message=f"Clicked at ({x}, {y}){holding}",
+        action_summary=f"clicked at ({x}, {y}){holding}",
         expected_result=expected_result,
         vision_config=vision_config,
         done_suffix=".",
@@ -470,6 +580,7 @@ def click_at(
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,
+        precheck=_with_modifiers_check(project_id, modifiers),
     )
 
 
@@ -483,18 +594,22 @@ def double_click_at(
     on_screenshot: ScreenshotCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
     deadline: float | None = None,
+    modifiers: Modifiers = (),
 ) -> ToolResult:
     """Double-click (double tap on a phone) at screenshot pixel (x, y).
 
     Needs ``double_click_v1`` like ``double_click``: an older runner raises
     ``RunnerOutdatedError`` before any input is sent.
     """
+    holding = _holding(modifiers)
     return act_once_and_check(
         project_id,
         tool_name="double_click_at",
-        act=lambda: ensure_action_succeeded(controller_double_click(project_id, x, y)),
-        success_message=f"Double-clicked at ({x}, {y})",
-        action_summary=f"double-clicked at ({x}, {y})",
+        act=lambda: ensure_action_succeeded(
+            controller_double_click(project_id, x, y, modifiers=modifiers)
+        ),
+        success_message=f"Double-clicked at ({x}, {y}){holding}",
+        action_summary=f"double-clicked at ({x}, {y}){holding}",
         expected_result=expected_result,
         vision_config=vision_config,
         done_suffix=".",
@@ -502,7 +617,11 @@ def double_click_at(
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,
-        precheck=lambda: ensure_runner_supports_double_click(project_id),
+        precheck=_with_modifiers_check(
+            project_id,
+            modifiers,
+            lambda: ensure_runner_supports_double_click(project_id),
+        ),
     )
 
 
@@ -516,6 +635,7 @@ def right_click_at(
     on_screenshot: ScreenshotCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
     deadline: float | None = None,
+    modifiers: Modifiers = (),
 ) -> ToolResult:
     """Right-click (desktop) at screenshot pixel (x, y).
 
@@ -523,14 +643,15 @@ def right_click_at(
     desktop Test Runner handles; checked once only when ``expected_result`` is
     given, never retried.
     """
+    holding = _holding(modifiers)
     return act_once_and_check(
         project_id,
         tool_name="right_click_at",
         act=lambda: ensure_action_succeeded(
-            controller_click(project_id, x, y, button="right")
+            controller_click(project_id, x, y, button="right", modifiers=modifiers)
         ),
-        success_message=f"Right-clicked at ({x}, {y})",
-        action_summary=f"right-clicked at ({x}, {y})",
+        success_message=f"Right-clicked at ({x}, {y}){holding}",
+        action_summary=f"right-clicked at ({x}, {y}){holding}",
         expected_result=expected_result,
         vision_config=vision_config,
         done_suffix=".",
@@ -538,6 +659,44 @@ def right_click_at(
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,
+        precheck=_with_modifiers_check(project_id, modifiers),
+    )
+
+
+def middle_click_at(
+    project_id: int,
+    *,
+    x: int,
+    y: int,
+    vision_config: LLMConfig | None,
+    expected_result: str = "",
+    on_screenshot: ScreenshotCallback | None = None,
+    cancellation_check: CancellationCheck | None = None,
+    deadline: float | None = None,
+    modifiers: Modifiers = (),
+) -> ToolResult:
+    """Middle-click (desktop) at screenshot pixel (x, y).
+
+    Sends the existing ``click`` message with ``button="middle"``; checked once
+    only when ``expected_result`` is given, never retried.
+    """
+    holding = _holding(modifiers)
+    return act_once_and_check(
+        project_id,
+        tool_name="middle_click_at",
+        act=lambda: ensure_action_succeeded(
+            controller_click(project_id, x, y, button="middle", modifiers=modifiers)
+        ),
+        success_message=f"Middle-clicked at ({x}, {y}){holding}",
+        action_summary=f"middle-clicked at ({x}, {y}){holding}",
+        expected_result=expected_result,
+        vision_config=vision_config,
+        done_suffix=".",
+        miss_hint=COORDINATE_MISS_HINT,
+        on_screenshot=on_screenshot,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+        precheck=_with_modifiers_check(project_id, modifiers),
     )
 
 
@@ -551,14 +710,18 @@ def hover_at(
     on_screenshot: ScreenshotCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
     deadline: float | None = None,
+    modifiers: Modifiers = (),
 ) -> ToolResult:
     """Move the pointer to screenshot pixel (x, y) (desktop only)."""
+    holding = _holding(modifiers)
     return act_once_and_check(
         project_id,
         tool_name="hover_at",
-        act=lambda: ensure_action_succeeded(controller_hover(project_id, x, y)),
-        success_message=f"Hovered at ({x}, {y})",
-        action_summary=f"hovered at ({x}, {y})",
+        act=lambda: ensure_action_succeeded(
+            controller_hover(project_id, x, y, modifiers=modifiers)
+        ),
+        success_message=f"Hovered at ({x}, {y}){holding}",
+        action_summary=f"hovered at ({x}, {y}){holding}",
         expected_result=expected_result,
         vision_config=vision_config,
         done_suffix=".",
@@ -566,6 +729,7 @@ def hover_at(
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,
+        precheck=_with_modifiers_check(project_id, modifiers),
     )
 
 
@@ -582,15 +746,25 @@ def drag_at(
     on_screenshot: ScreenshotCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
     deadline: float | None = None,
+    modifiers: Modifiers = (),
 ) -> ToolResult:
     """Drag with the left button from one screenshot pixel to another."""
-    summary = f"dragged from ({start_x}, {start_y}) to ({end_x}, {end_y})"
+    summary = (
+        f"dragged from ({start_x}, {start_y}) to ({end_x}, {end_y})"
+        f"{_holding(modifiers)}"
+    )
     return act_once_and_check(
         project_id,
         tool_name="drag_at",
         act=lambda: ensure_action_succeeded(
             controller_drag(
-                project_id, start_x, start_y, end_x, end_y, duration=duration
+                project_id,
+                start_x,
+                start_y,
+                end_x,
+                end_y,
+                duration=duration,
+                modifiers=modifiers,
             )
         ),
         success_message=summary[0].upper() + summary[1:],
@@ -602,6 +776,7 @@ def drag_at(
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,
+        precheck=_with_modifiers_check(project_id, modifiers),
     )
 
 
@@ -619,6 +794,7 @@ def scroll(
     amount: int,
     x: int | None = None,
     y: int | None = None,
+    modifiers: Modifiers = (),
 ) -> ToolResult:
     def _do() -> ToolResult:
         # Like close_app: an old Test Runner gets a tool error with a key_press
@@ -627,14 +803,20 @@ def scroll(
             return ToolResult(
                 tool_call_id="", content=_SCROLL_OUTDATED_MESSAGE, is_error=True
             )
-        ensure_action_succeeded(controller_scroll(project_id, direction, amount, x, y))
+        if modifiers:
+            # Raises RunnerOutdatedError: the case pauses for help (see
+            # _with_modifiers_check), since a plain scroll is not the step.
+            ensure_runner_supports_pointer_modifiers(project_id)
+        ensure_action_succeeded(
+            controller_scroll(project_id, direction, amount, x, y, modifiers=modifiers)
+        )
         notches = "notch" if amount == 1 else "notches"
         where = "at the pointer" if x is None or y is None else f"at ({x}, {y})"
         return ToolResult(
             tool_call_id="",
             content=(
-                f"Scrolled {direction.value} {amount} {notches} {where}. "
-                "Take a screenshot to see the result."
+                f"Scrolled {direction.value} {amount} {notches} {where}"
+                f"{_holding(modifiers)}. Take a screenshot to see the result."
             ),
             is_error=False,
         )
@@ -671,29 +853,40 @@ def hover(
     on_screenshot: ScreenshotCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
     deadline: float | None = None,
+    modifiers: Modifiers = (),
 ) -> ToolResult:
+    holding = _holding(modifiers)
+
     def _attempt(budget: VerificationBudget) -> ToolResult | None:
         element = resolve_verified_element(
             project_id, description, vision_config, budget, on_screenshot=on_screenshot
         )
         x, y = element.center_x, element.center_y
         before_image = _before_image_if_confirming(project_id, expected_result)
-        ensure_action_succeeded(controller_hover(project_id, x, y))
+        ensure_action_succeeded(controller_hover(project_id, x, y, modifiers=modifiers))
         return _confirm_or_finish(
             project_id,
             vision_config,
             budget,
             acted_on=(element,),
             before_image_base64=before_image,
-            action_summary=f"hovered over '{description}' at ({x}, {y})",
+            action_summary=f"hovered over '{description}' at ({x}, {y}){holding}",
             expected_result=expected_result,
             tool_name="hover",
-            success_message=f"Hovered over element at ({x}, {y}): {description}",
+            success_message=(
+                f"Hovered over element at ({x}, {y}){holding}: {description}"
+            ),
             on_screenshot=on_screenshot,
+            retry_on_miss=not modifiers,
+            modifiers=modifiers,
         )
 
     return _run_verified_action(
-        "hover", _attempt, cancellation_check=cancellation_check, deadline=deadline
+        "hover",
+        _attempt,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+        precheck=_with_modifiers_check(project_id, modifiers),
     )
 
 
@@ -707,7 +900,10 @@ def drag(
     on_screenshot: ScreenshotCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
     deadline: float | None = None,
+    modifiers: Modifiers = (),
 ) -> ToolResult:
+    holding = _holding(modifiers)
+
     def _attempt(budget: VerificationBudget) -> ToolResult | None:
         start = resolve_verified_element(
             project_id,
@@ -725,7 +921,9 @@ def drag(
         )
         sx, sy, ex, ey = start.center_x, start.center_y, end.center_x, end.center_y
         before_image = _before_image_if_confirming(project_id, expected_result)
-        ensure_action_succeeded(controller_drag(project_id, sx, sy, ex, ey))
+        ensure_action_succeeded(
+            controller_drag(project_id, sx, sy, ex, ey, modifiers=modifiers)
+        )
         return _confirm_or_finish(
             project_id,
             vision_config,
@@ -734,16 +932,22 @@ def drag(
             before_image_base64=before_image,
             action_summary=(
                 f"dragged '{start_description}' at ({sx}, {sy}) onto "
-                f"'{end_description}' at ({ex}, {ey})"
+                f"'{end_description}' at ({ex}, {ey}){holding}"
             ),
             expected_result=expected_result,
             tool_name="drag",
-            success_message=f"Dragged from ({sx}, {sy}) to ({ex}, {ey})",
+            success_message=f"Dragged from ({sx}, {sy}) to ({ex}, {ey}){holding}",
             on_screenshot=on_screenshot,
+            retry_on_miss=not modifiers,
+            modifiers=modifiers,
         )
 
     return _run_verified_action(
-        "drag", _attempt, cancellation_check=cancellation_check, deadline=deadline
+        "drag",
+        _attempt,
+        cancellation_check=cancellation_check,
+        deadline=deadline,
+        precheck=_with_modifiers_check(project_id, modifiers),
     )
 
 

@@ -4,7 +4,7 @@ import os
 import subprocess
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from PIL import Image
 
@@ -25,6 +25,7 @@ from controller_client.protocol import (
     HoverPayload,
     InteractiveOutputPayload,
     KeyPressPayload,
+    PointerModifier,
     RunCommandPayload,
     ScreenshotResponsePayload,
     ScrollPayload,
@@ -61,12 +62,19 @@ def _point(x: int, y: int, input_x: int, input_y: int) -> str:
     return f"({x}, {y}) [input ({input_x}, {input_y})]"
 
 
+def _holding(modifiers: Sequence[PointerModifier]) -> str:
+    # Appended to a pointer action's message only when keys were held.
+    if not modifiers:
+        return ""
+    return " holding " + "+".join(modifier.value for modifier in modifiers)
+
+
 def execute_click(payload: ClickPayload) -> ActionResultPayload:
     _guard_input()
     start = time.monotonic()
     x, y = to_input(payload.x, payload.y)
     try:
-        get_target_backend().click(x, y, payload.button)
+        get_target_backend().click(x, y, payload.button, modifiers=payload.modifiers)
     except ExecutionError:
         raise
     except Exception as e:
@@ -76,7 +84,7 @@ def execute_click(payload: ClickPayload) -> ActionResultPayload:
         success=True,
         message=(
             f"Clicked {_point(payload.x, payload.y, x, y)} "
-            f"with {payload.button} button"
+            f"with {payload.button} button{_holding(payload.modifiers)}"
         ),
         duration_ms=duration_ms,
     )
@@ -87,7 +95,7 @@ def execute_double_click(payload: DoubleClickPayload) -> ActionResultPayload:
     start = time.monotonic()
     x, y = to_input(payload.x, payload.y)
     try:
-        get_target_backend().double_click(x, y)
+        get_target_backend().double_click(x, y, modifiers=payload.modifiers)
     except ExecutionError:
         raise
     except Exception as e:
@@ -95,7 +103,10 @@ def execute_double_click(payload: DoubleClickPayload) -> ActionResultPayload:
     duration_ms = (time.monotonic() - start) * 1000
     return ActionResultPayload(
         success=True,
-        message=f"Double-clicked {_point(payload.x, payload.y, x, y)}",
+        message=(
+            f"Double-clicked {_point(payload.x, payload.y, x, y)}"
+            f"{_holding(payload.modifiers)}"
+        ),
         duration_ms=duration_ms,
     )
 
@@ -105,7 +116,7 @@ def execute_hover(payload: HoverPayload) -> ActionResultPayload:
     start = time.monotonic()
     x, y = to_input(payload.x, payload.y)
     try:
-        get_target_backend().move_to(x, y)
+        get_target_backend().move_to(x, y, modifiers=payload.modifiers)
     except ExecutionError:
         raise
     except Exception as e:
@@ -113,7 +124,10 @@ def execute_hover(payload: HoverPayload) -> ActionResultPayload:
     duration_ms = (time.monotonic() - start) * 1000
     return ActionResultPayload(
         success=True,
-        message=f"Hovered to {_point(payload.x, payload.y, x, y)}",
+        message=(
+            f"Hovered to {_point(payload.x, payload.y, x, y)}"
+            f"{_holding(payload.modifiers)}"
+        ),
         duration_ms=duration_ms,
     )
 
@@ -131,6 +145,7 @@ def execute_drag(payload: DragPayload) -> ActionResultPayload:
             end_y,
             payload.button,
             payload.duration,
+            modifiers=payload.modifiers,
         )
     except ExecutionError:
         raise
@@ -142,6 +157,7 @@ def execute_drag(payload: DragPayload) -> ActionResultPayload:
         message=(
             f"Dragged from {_point(payload.start_x, payload.start_y, start_x, start_y)} "
             f"to {_point(payload.end_x, payload.end_y, end_x, end_y)}"
+            f"{_holding(payload.modifiers)}"
         ),
         duration_ms=duration_ms,
     )
@@ -160,7 +176,13 @@ def execute_scroll(payload: ScrollPayload) -> ActionResultPayload:
         input_x = input_y = None
         where = "at the pointer"
     try:
-        get_target_backend().scroll(payload.direction, payload.amount, input_x, input_y)
+        get_target_backend().scroll(
+            payload.direction,
+            payload.amount,
+            input_x,
+            input_y,
+            modifiers=payload.modifiers,
+        )
     except ExecutionError:
         raise
     except Exception as e:
@@ -169,7 +191,10 @@ def execute_scroll(payload: ScrollPayload) -> ActionResultPayload:
     notches = "notch" if payload.amount == 1 else "notches"
     return ActionResultPayload(
         success=True,
-        message=f"Scrolled {payload.direction} {payload.amount} {notches} {where}",
+        message=(
+            f"Scrolled {payload.direction} {payload.amount} {notches} {where}"
+            f"{_holding(payload.modifiers)}"
+        ),
         duration_ms=duration_ms,
     )
 

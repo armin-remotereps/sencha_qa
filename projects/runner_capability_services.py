@@ -51,6 +51,20 @@ def ensure_runner_supports_double_click(project_id: int) -> None:
     )
 
 
+def ensure_runner_supports_pointer_modifiers(project_id: int) -> None:
+    """Raise ``RunnerOutdatedError`` when the runner cannot hold modifier keys.
+
+    An older runner ignores the ``modifiers`` field and would do a plain
+    click, so this runs before anything is parsed or pressed.
+    """
+    if runner_supports(project_id, ClientCapability.POINTER_MODIFIERS_V1):
+        return
+    raise RunnerOutdatedError(
+        "This Test Runner is too old to hold modifier keys during a click, "
+        "drag, hover or scroll. Update the Test Runner from the Environment page."
+    )
+
+
 def runner_os_name(project_id: int) -> str:
     """Return the runner-reported OS name (``"Windows"``, ...), or ``""``."""
     info = (

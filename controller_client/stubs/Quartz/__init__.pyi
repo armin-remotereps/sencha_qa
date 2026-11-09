@@ -1,11 +1,11 @@
 # Local stub for pyobjc-framework-Quartz, which ships no type information.
 # It covers only what the controller uses: posting mouse events with an
-# explicit click state (executor double-click), scroll wheel events and the
-# session's modifier flags (desktop_pyautogui), listing windows
-# (app_closer_macos, window_inventory_macos), the main display mode for
-# diagnose --input (display_scale), and the display bounds, session state and
-# Screen Recording check of the window capture (window_grab_macos,
-# capture_session_macos). Extend it when the controller uses more of Quartz.
+# explicit click state and modifier flags, scroll wheel events
+# (macos_pointer_events), the session's modifier flags (desktop_pyautogui),
+# listing windows (app_closer_macos, window_inventory_macos), the main
+# display mode for diagnose --input (display_scale), and the display bounds,
+# session state and Screen Recording check of the window capture
+# (window_grab_macos, capture_session_macos). Extend it when the controller uses more of Quartz.
 from collections.abc import Mapping, Sequence
 from typing import Final, NewType
 
@@ -34,6 +34,7 @@ def CGEventGetIntegerValueField(event: CGEventRef, field: int) -> int: ...
 def CGEventCreateScrollWheelEvent(
     source: None, units: int, wheelCount: int, wheel1: int, *wheels: int
 ) -> CGEventRef | None: ...
+def CGEventSetFlags(event: CGEventRef, flags: int) -> None: ...
 def CGEventPost(tap: int, event: CGEventRef) -> None: ...
 def CGEventSourceFlagsState(stateID: int) -> int: ...
 def CGWindowListCopyWindowInfo(
@@ -57,7 +58,17 @@ def CGDisplayModeGetHeight(mode: CGDisplayModeRef) -> int: ...
 
 kCGEventLeftMouseDown: Final[int]
 kCGEventLeftMouseUp: Final[int]
+kCGEventLeftMouseDragged: Final[int]
+kCGEventRightMouseDown: Final[int]
+kCGEventRightMouseUp: Final[int]
+kCGEventRightMouseDragged: Final[int]
+kCGEventOtherMouseDown: Final[int]
+kCGEventOtherMouseUp: Final[int]
+kCGEventOtherMouseDragged: Final[int]
+kCGEventMouseMoved: Final[int]
 kCGMouseButtonLeft: Final[int]
+kCGMouseButtonRight: Final[int]
+kCGMouseButtonCenter: Final[int]
 kCGMouseEventClickState: Final[int]
 kCGHIDEventTap: Final[int]
 kCGScrollEventUnitLine: Final[int]

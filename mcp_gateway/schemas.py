@@ -530,6 +530,20 @@ DragDurationArg = Annotated[
         ),
     ),
 ]
+# The canonical modifier names (agents.pointer_modifiers); the Test Runner
+# resolves primary per platform.
+PointerModifierName = Literal["primary", "ctrl", "shift", "alt", "meta"]
+ModifiersArg = Annotated[
+    list[PointerModifierName] | None,
+    Field(
+        max_length=5,
+        description=(
+            "Optional (desktop): keys held during the action and released "
+            "afterwards. primary = Cmd on macOS, Ctrl elsewhere; alt = Option "
+            "on macOS; meta = Win / Super / Cmd."
+        ),
+    ),
+]
 SwipeDistanceArg = Annotated[
     float | None,
     Field(
@@ -990,18 +1004,20 @@ class StopCommandRequest(MachineRequest):
 
 
 class DescribedActionRequest(MachineRequest):
-    """click, double_click, right_click, hover."""
+    """click, double_click, right_click, middle_click, hover."""
 
     description: str
     expected_result: str | None = None
+    modifiers: list[PointerModifierName] | None = None
 
 
 class ClickAtRequest(MachineRequest):
-    """click_at, double_click_at, right_click_at, hover_at."""
+    """click_at, double_click_at, right_click_at, middle_click_at, hover_at."""
 
     x: int
     y: int
     expected_result: str | None = None
+    modifiers: list[PointerModifierName] | None = None
 
 
 class TypeTextRequest(MachineRequest):
@@ -1016,6 +1032,7 @@ class DragRequest(MachineRequest):
     start_description: str
     end_description: str
     expected_result: str | None = None
+    modifiers: list[PointerModifierName] | None = None
 
 
 class DragAtRequest(MachineRequest):
@@ -1025,6 +1042,7 @@ class DragAtRequest(MachineRequest):
     end_y: int
     duration: float | None = None
     expected_result: str | None = None
+    modifiers: list[PointerModifierName] | None = None
 
 
 class ScrollRequest(MachineRequest):
@@ -1032,6 +1050,7 @@ class ScrollRequest(MachineRequest):
     amount: int | None = None
     x: int | None = None
     y: int | None = None
+    modifiers: list[PointerModifierName] | None = None
 
     @model_validator(mode="after")
     def _point(self) -> ScrollRequest:

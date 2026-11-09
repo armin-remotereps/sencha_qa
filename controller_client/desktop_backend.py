@@ -12,24 +12,40 @@ from typing import Protocol
 from PIL import Image
 
 from controller_client.diagnostics import DiagnosticStep
-from controller_client.protocol import ScrollDirection
+from controller_client.protocol import PointerModifier, ScrollDirection
 
 
 class DesktopBackend(Protocol):
     """Pointer methods (click, double_click, move_to, drag, scroll) take
     input-space coordinates: the executor maps screenshot pixels with
-    ``pointer_mapping.map_to_input`` before calling them."""
+    ``pointer_mapping.map_to_input`` before calling them.
+
+    Their ``modifiers`` (canonical order, see ``POINTER_MODIFIER_ORDER``) are
+    held for the whole action and released, in reverse order, before the
+    method returns, also when the action raises. Empty means no key is
+    touched."""
 
     @property
     def name(self) -> str:
         """Short backend name for logs and diagnose output."""
         ...
 
-    def click(self, x: int, y: int, button: str) -> None: ...
+    def click(
+        self,
+        x: int,
+        y: int,
+        button: str,
+        *,
+        modifiers: Sequence[PointerModifier] = (),
+    ) -> None: ...
 
-    def double_click(self, x: int, y: int) -> None: ...
+    def double_click(
+        self, x: int, y: int, *, modifiers: Sequence[PointerModifier] = ()
+    ) -> None: ...
 
-    def move_to(self, x: int, y: int) -> None: ...
+    def move_to(
+        self, x: int, y: int, *, modifiers: Sequence[PointerModifier] = ()
+    ) -> None: ...
 
     def drag(
         self,
@@ -39,10 +55,18 @@ class DesktopBackend(Protocol):
         end_y: int,
         button: str,
         duration: float,
+        *,
+        modifiers: Sequence[PointerModifier] = (),
     ) -> None: ...
 
     def scroll(
-        self, direction: ScrollDirection, amount: int, x: int | None, y: int | None
+        self,
+        direction: ScrollDirection,
+        amount: int,
+        x: int | None,
+        y: int | None,
+        *,
+        modifiers: Sequence[PointerModifier] = (),
     ) -> None:
         """Turn the wheel ``amount`` notches; x/y None scroll at the pointer."""
         ...

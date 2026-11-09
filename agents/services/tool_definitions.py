@@ -15,6 +15,7 @@ from controller_client.protocol import (
     LONG_PRESS_MIN_SECONDS,
     MAX_SCROLL_AMOUNT,
     MOBILE_TARGETS,
+    POINTER_MODIFIER_ORDER,
     SWIPE_MAX_DISTANCE,
     SWIPE_MAX_DURATION,
     SWIPE_MIN_DISTANCE,
@@ -67,6 +68,32 @@ def _drag_duration_parameter() -> ToolParameter:
         ),
         required=False,
     )
+
+
+def _modifiers_parameter(action: str, example: str) -> ToolParameter:
+    """The optional keys held during a desktop pointer action."""
+    example_text = f"{example} " if example else ""
+    return ToolParameter(
+        name="modifiers",
+        type="array",
+        description=(
+            f"Optional. Keys held down during the {action} and released afterwards: "
+            "primary (Cmd on macOS, Ctrl on Windows and Linux), ctrl, shift, alt "
+            f"(Option on macOS), meta (Win / Super; Cmd on macOS). {example_text}"
+            "Only when the step asks for it."
+        ),
+        required=False,
+        max_items=5,
+        items_schema={
+            "type": "string",
+            "enum": [modifier.value for modifier in POINTER_MODIFIER_ORDER],
+        },
+    )
+
+
+_CLICK_MODIFIERS_EXAMPLE = (
+    '["primary"] adds an item to a selection, ["shift"] selects a range.'
+)
 
 
 def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
@@ -196,6 +223,7 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     ),
                     required=False,
                 ),
+                _modifiers_parameter("click", _CLICK_MODIFIERS_EXAMPLE),
             ),
         ),
         ToolDefinition(
@@ -232,6 +260,7 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     ),
                     required=False,
                 ),
+                _modifiers_parameter("double-click", _CLICK_MODIFIERS_EXAMPLE),
             ),
         ),
         ToolDefinition(
@@ -267,6 +296,36 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     ),
                     required=False,
                 ),
+                _modifiers_parameter("right-click", ""),
+            ),
+        ),
+        ToolDefinition(
+            name="middle_click",
+            description=(
+                "Middle-click (press the mouse wheel) an element found by vision-based "
+                "description, e.g. open a link in a new tab, close a tab, or paste the "
+                "selection on Linux. Verified before and checked after like click. Use it "
+                "only when the step asks for a middle-click. Not for web pages opened with "
+                "browser_navigate."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                ToolParameter(
+                    name="description",
+                    type="string",
+                    description="Natural language description of the element to middle-click.",
+                    required=True,
+                ),
+                ToolParameter(
+                    name="expected_result",
+                    type="string",
+                    description=(
+                        "Optional. What the screen should show after the middle-click "
+                        "(e.g. 'the link opens in a new tab'). Checked like click's."
+                    ),
+                    required=False,
+                ),
+                _modifiers_parameter("middle-click", ""),
             ),
         ),
         ToolDefinition(
@@ -306,6 +365,7 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     ),
                     required=False,
                 ),
+                _modifiers_parameter("click", _CLICK_MODIFIERS_EXAMPLE),
             ),
         ),
         ToolDefinition(
@@ -328,6 +388,7 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                 _coordinate_expected_result(
                     "double-click", "the word Total is selected", "double-clicks"
                 ),
+                _modifiers_parameter("double-click", _CLICK_MODIFIERS_EXAMPLE),
             ),
         ),
         ToolDefinition(
@@ -352,6 +413,26 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     "the context menu of the selected file opens",
                     "right-clicks",
                 ),
+                _modifiers_parameter("right-click", ""),
+            ),
+        ),
+        ToolDefinition(
+            name="middle_click_at",
+            description=(
+                "Middle-click (press the mouse wheel) at pixel coordinates of the desktop "
+                "screenshot, for targets middle_click cannot find by description. Get the "
+                "coordinates from take_screenshot. Not verified unless expected_result is "
+                "given, and never retried. Use it only when the step asks for a "
+                "middle-click. Never use it for web pages opened with browser_navigate."
+            ),
+            category=ToolCategory.CONTROLLER,
+            parameters=(
+                _pixel_parameter("x", "Horizontal"),
+                _pixel_parameter("y", "Vertical"),
+                _coordinate_expected_result(
+                    "middle-click", "the link opens in a new tab", "middle-clicks"
+                ),
+                _modifiers_parameter("middle-click", ""),
             ),
         ),
         ToolDefinition(
@@ -412,6 +493,7 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     ),
                     required=False,
                 ),
+                _modifiers_parameter("hover", ""),
             ),
         ),
         ToolDefinition(
@@ -448,6 +530,7 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                     ),
                     required=False,
                 ),
+                _modifiers_parameter("drag", '["alt"] copies in many file managers.'),
             ),
         ),
         ToolDefinition(
@@ -469,6 +552,7 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                 _coordinate_expected_result(
                     "hover", "a tooltip with the value 42 appears", "hovers"
                 ),
+                _modifiers_parameter("hover", ""),
             ),
         ),
         ToolDefinition(
@@ -493,6 +577,7 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                 _coordinate_expected_result(
                     "drag", "the volume slider is at 50%", "drags"
                 ),
+                _modifiers_parameter("drag", '["alt"] copies in many file managers.'),
             ),
         ),
         ToolDefinition(
@@ -543,6 +628,9 @@ def get_controller_tool_definitions() -> tuple[ToolDefinition, ...]:
                         "to scroll; give it together with x."
                     ),
                     required=False,
+                ),
+                _modifiers_parameter(
+                    "scroll", '["ctrl"] zooms in many apps, ["shift"] scrolls sideways.'
                 ),
             ),
         ),

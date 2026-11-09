@@ -53,6 +53,7 @@ from controller_client.protocol import (
     DeviceState,
     DeviceStatusPayload,
     MobileButton,
+    PointerModifier,
     RunnerTarget,
     ScrollDirection,
     device_info_to_system_info,
@@ -95,6 +96,8 @@ _ORIENTATION_VALUES: Final[dict[DeviceOrientation, str]] = {
 _NO_RIGHT_CLICK: Final[str] = (
     "A phone has no right or middle click: use long_press for a context menu"
 )
+# Defence in depth: the server never sends modifiers to a phone runner.
+_NO_MODIFIERS: Final[str] = "A phone has no modifier keys"
 _NO_HOVER: Final[str] = "A phone has no pointer to hover with: tap instead"
 _NO_COMBINATIONS: Final[str] = (
     "Key combinations do not exist on a phone: press one key at a time"
@@ -154,15 +157,29 @@ class MobileBackend:
     def target(self) -> RunnerTarget:
         return self._platform.target
 
-    def click(self, x: int, y: int, button: str) -> None:
+    def click(
+        self,
+        x: int,
+        y: int,
+        button: str,
+        *,
+        modifiers: Sequence[PointerModifier] = (),
+    ) -> None:
+        _refuse_modifiers(modifiers)
         if button != LEFT_BUTTON:
             raise ExecutionError(_NO_RIGHT_CLICK)
         self._session.call(lambda driver: gestures.tap(driver, x, y))
 
-    def double_click(self, x: int, y: int) -> None:
+    def double_click(
+        self, x: int, y: int, *, modifiers: Sequence[PointerModifier] = ()
+    ) -> None:
+        _refuse_modifiers(modifiers)
         self._session.call(lambda driver: gestures.double_tap(driver, x, y))
 
-    def move_to(self, x: int, y: int) -> None:
+    def move_to(
+        self, x: int, y: int, *, modifiers: Sequence[PointerModifier] = ()
+    ) -> None:
+        _refuse_modifiers(modifiers)
         raise ExecutionError(_NO_HOVER)
 
     def drag(
@@ -173,7 +190,10 @@ class MobileBackend:
         end_y: int,
         button: str,
         duration: float,
+        *,
+        modifiers: Sequence[PointerModifier] = (),
     ) -> None:
+        _refuse_modifiers(modifiers)
         if button != LEFT_BUTTON:
             raise ExecutionError(_NO_RIGHT_CLICK)
         self._session.call(
@@ -183,8 +203,15 @@ class MobileBackend:
         )
 
     def scroll(
-        self, direction: ScrollDirection, amount: int, x: int | None, y: int | None
+        self,
+        direction: ScrollDirection,
+        amount: int,
+        x: int | None,
+        y: int | None,
+        *,
+        modifiers: Sequence[PointerModifier] = (),
     ) -> None:
+        _refuse_modifiers(modifiers)
         distance = min(max(amount, 1) * SCROLL_NOTCH_DISTANCE, SWIPE_MAX_DISTANCE)
         self.swipe(
             _FINGER_FOR_SCROLL[direction], x, y, distance, DEFAULT_SWIPE_DURATION
@@ -543,6 +570,11 @@ class MobileBackend:
         launcher = self._platform.current_app(driver)
         if launcher is not None:
             self._policy.add_launcher(launcher)
+
+
+def _refuse_modifiers(modifiers: Sequence[PointerModifier]) -> None:
+    if modifiers:
+        raise ExecutionError(_NO_MODIFIERS)
 
 
 def _clamp(value: int, size: int) -> int:

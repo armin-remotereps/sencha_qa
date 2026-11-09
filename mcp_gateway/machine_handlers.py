@@ -1,4 +1,4 @@
-"""The 58 machine tools: using the test machine inside your claimed case.
+"""The 60 machine tools: using the test machine inside your claimed case.
 
 docs/plan/feat-mcp-runner-tools.md. Every handler packs its arguments into
 its request DTO and runs through ``tool_runner.run_project_tool`` (project,
@@ -95,6 +95,7 @@ from mcp_gateway.schemas import (
     LongPressRequest,
     MachineActionResponse,
     MachineRequest,
+    ModifiersArg,
     OpenUrlRequest,
     OptionalBrowseUrlArg,
     OptionalWebBrowserArg,
@@ -392,12 +393,14 @@ async def click(
     claim_token: ClaimTokenArg,
     description: DescriptionArg,
     expected_result: ExpectedResultArg = None,
+    modifiers: ModifiersArg = None,
 ) -> MachineActionResponse:
     request = DescribedActionRequest(
         pivot_id=pivot_id,
         claim_token=claim_token,
         description=description,
         expected_result=expected_result,
+        modifiers=modifiers,
     )
     return await _agent("click", project_id, request)
 
@@ -408,12 +411,14 @@ async def double_click(
     claim_token: ClaimTokenArg,
     description: DescriptionArg,
     expected_result: ExpectedResultArg = None,
+    modifiers: ModifiersArg = None,
 ) -> MachineActionResponse:
     request = DescribedActionRequest(
         pivot_id=pivot_id,
         claim_token=claim_token,
         description=description,
         expected_result=expected_result,
+        modifiers=modifiers,
     )
     return await _agent("double_click", project_id, request)
 
@@ -425,6 +430,7 @@ async def click_at(
     x: XArg,
     y: YArg,
     expected_result: ExpectedResultArg = None,
+    modifiers: ModifiersArg = None,
 ) -> MachineActionResponse:
     request = ClickAtRequest(
         pivot_id=pivot_id,
@@ -432,6 +438,7 @@ async def click_at(
         x=x,
         y=y,
         expected_result=expected_result,
+        modifiers=modifiers,
     )
     return await _agent(
         "click_at", project_id, request, expected_result=expected_result
@@ -445,6 +452,7 @@ async def double_click_at(
     x: XArg,
     y: YArg,
     expected_result: ExpectedResultArg = None,
+    modifiers: ModifiersArg = None,
 ) -> MachineActionResponse:
     request = ClickAtRequest(
         pivot_id=pivot_id,
@@ -452,6 +460,7 @@ async def double_click_at(
         x=x,
         y=y,
         expected_result=expected_result,
+        modifiers=modifiers,
     )
     return await _agent(
         "double_click_at", project_id, request, expected_result=expected_result
@@ -464,12 +473,14 @@ async def right_click(
     claim_token: ClaimTokenArg,
     description: DescriptionArg,
     expected_result: ExpectedResultArg = None,
+    modifiers: ModifiersArg = None,
 ) -> MachineActionResponse:
     request = DescribedActionRequest(
         pivot_id=pivot_id,
         claim_token=claim_token,
         description=description,
         expected_result=expected_result,
+        modifiers=modifiers,
     )
     return await _agent("right_click", project_id, request)
 
@@ -481,6 +492,7 @@ async def right_click_at(
     x: XArg,
     y: YArg,
     expected_result: ExpectedResultArg = None,
+    modifiers: ModifiersArg = None,
 ) -> MachineActionResponse:
     request = ClickAtRequest(
         pivot_id=pivot_id,
@@ -488,9 +500,50 @@ async def right_click_at(
         x=x,
         y=y,
         expected_result=expected_result,
+        modifiers=modifiers,
     )
     return await _agent(
         "right_click_at", project_id, request, expected_result=expected_result
+    )
+
+
+async def middle_click(
+    project_id: ProjectIdArg,
+    pivot_id: PivotIdArg,
+    claim_token: ClaimTokenArg,
+    description: DescriptionArg,
+    expected_result: ExpectedResultArg = None,
+    modifiers: ModifiersArg = None,
+) -> MachineActionResponse:
+    request = DescribedActionRequest(
+        pivot_id=pivot_id,
+        claim_token=claim_token,
+        description=description,
+        expected_result=expected_result,
+        modifiers=modifiers,
+    )
+    return await _agent("middle_click", project_id, request)
+
+
+async def middle_click_at(
+    project_id: ProjectIdArg,
+    pivot_id: PivotIdArg,
+    claim_token: ClaimTokenArg,
+    x: XArg,
+    y: YArg,
+    expected_result: ExpectedResultArg = None,
+    modifiers: ModifiersArg = None,
+) -> MachineActionResponse:
+    request = ClickAtRequest(
+        pivot_id=pivot_id,
+        claim_token=claim_token,
+        x=x,
+        y=y,
+        expected_result=expected_result,
+        modifiers=modifiers,
+    )
+    return await _agent(
+        "middle_click_at", project_id, request, expected_result=expected_result
     )
 
 
@@ -520,12 +573,14 @@ async def hover(
     claim_token: ClaimTokenArg,
     description: DescriptionArg,
     expected_result: ExpectedResultArg = None,
+    modifiers: ModifiersArg = None,
 ) -> MachineActionResponse:
     request = DescribedActionRequest(
         pivot_id=pivot_id,
         claim_token=claim_token,
         description=description,
         expected_result=expected_result,
+        modifiers=modifiers,
     )
     return await _agent("hover", project_id, request)
 
@@ -537,6 +592,7 @@ async def drag(
     start_description: StartDescriptionArg,
     end_description: EndDescriptionArg,
     expected_result: ExpectedResultArg = None,
+    modifiers: ModifiersArg = None,
 ) -> MachineActionResponse:
     request = DragRequest(
         pivot_id=pivot_id,
@@ -544,6 +600,7 @@ async def drag(
         start_description=start_description,
         end_description=end_description,
         expected_result=expected_result,
+        modifiers=modifiers,
     )
     return await _agent("drag", project_id, request)
 
@@ -555,6 +612,7 @@ async def hover_at(
     x: XArg,
     y: YArg,
     expected_result: ExpectedResultArg = None,
+    modifiers: ModifiersArg = None,
 ) -> MachineActionResponse:
     request = ClickAtRequest(
         pivot_id=pivot_id,
@@ -562,6 +620,7 @@ async def hover_at(
         x=x,
         y=y,
         expected_result=expected_result,
+        modifiers=modifiers,
     )
     return await _agent(
         "hover_at", project_id, request, expected_result=expected_result
@@ -578,6 +637,7 @@ async def drag_at(
     end_y: EndYArg,
     duration: DragDurationArg = None,
     expected_result: ExpectedResultArg = None,
+    modifiers: ModifiersArg = None,
 ) -> MachineActionResponse:
     request = DragAtRequest(
         pivot_id=pivot_id,
@@ -588,6 +648,7 @@ async def drag_at(
         end_y=end_y,
         duration=duration,
         expected_result=expected_result,
+        modifiers=modifiers,
     )
     return await _agent("drag_at", project_id, request, expected_result=expected_result)
 
@@ -600,6 +661,7 @@ async def scroll(
     amount: ScrollAmountArg = None,
     x: OptionalXArg = None,
     y: OptionalYArg = None,
+    modifiers: ModifiersArg = None,
 ) -> MachineActionResponse:
     request = _build(
         lambda: ScrollRequest(
@@ -609,6 +671,7 @@ async def scroll(
             amount=amount,
             x=x,
             y=y,
+            modifiers=modifiers,
         )
     )
     return await _agent("scroll", project_id, request)
@@ -1442,6 +1505,23 @@ MACHINE_HANDLERS: Final[tuple[tuple[_Handler, str, str, ToolAnnotations], ...]] 
         "Right-click at x, y in take_screenshot's width x height (desktop; on a "
         "phone use long_press_at). Optional expected_result is checked "
         "afterwards." + _CLAIMED,
+        _ACT,
+    ),
+    (
+        middle_click,
+        "middle_click",
+        "Middle-click (press the mouse wheel) an element you describe in plain "
+        "words, e.g. open a link in a new tab (desktop). Optional "
+        "expected_result is checked afterwards; optional modifiers are held "
+        "during the click." + _CLAIMED,
+        _ACT,
+    ),
+    (
+        middle_click_at,
+        "middle_click_at",
+        "Middle-click at x, y in take_screenshot's width x height (desktop). "
+        "Optional expected_result is checked afterwards; optional modifiers "
+        "are held during the click." + _CLAIMED,
         _ACT,
     ),
     (

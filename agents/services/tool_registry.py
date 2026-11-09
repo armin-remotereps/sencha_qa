@@ -4,6 +4,10 @@ import dataclasses
 import logging
 from collections.abc import Callable
 
+from agents.pointer_modifiers import (
+    PointerModifierArgumentError,
+    read_pointer_modifiers,
+)
 from agents.services import tools_controller, tools_mobile, tools_search, tools_utility
 from agents.services.tool_definitions import (
     MOBILE_KEYS,
@@ -41,6 +45,7 @@ from controller_client.protocol import (
     BrowserName,
     DeviceOrientation,
     MobileButton,
+    PointerModifier,
     RunnerTarget,
     ScrollDirection,
     validate_open_url,
@@ -110,6 +115,22 @@ def _required_point(
             "negative."
         )
     return x, y
+
+
+def _read_modifiers(
+    context: ToolContext, arguments: dict[str, object]
+) -> tuple[PointerModifier, ...]:
+    """Read the optional ``modifiers`` list; non-empty only on a desktop."""
+    try:
+        modifiers = read_pointer_modifiers(arguments.get("modifiers"))
+    except PointerModifierArgumentError as error:
+        raise _InvalidArgumentError(str(error)) from error
+    if modifiers and context.runner_target != RunnerTarget.DESKTOP:
+        raise _InvalidArgumentError(
+            "modifiers exist only on a desktop computer; a phone or tablet has "
+            "no modifier keys."
+        )
+    return modifiers
 
 
 def _strict_number(name: str, raw: object, minimum: float, maximum: float) -> float:
@@ -248,6 +269,10 @@ def _read_expected_result(arguments: dict[str, object]) -> str:
 
 def _handle_click(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     description = str(arguments.get("description", ""))
+    try:
+        modifiers = _read_modifiers(context, arguments)
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
     if context.vision_config is None:
         return ToolResult(
             tool_call_id="", content="Vision model not configured.", is_error=True
@@ -260,6 +285,7 @@ def _handle_click(context: ToolContext, arguments: dict[str, object]) -> ToolRes
         on_screenshot=context.on_screenshot,
         cancellation_check=context.cancellation_check,
         deadline=context.deadline,
+        modifiers=modifiers,
     )
 
 
@@ -267,6 +293,10 @@ def _handle_double_click(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
     description = str(arguments.get("description", ""))
+    try:
+        modifiers = _read_modifiers(context, arguments)
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
     if context.vision_config is None:
         return ToolResult(
             tool_call_id="", content="Vision model not configured.", is_error=True
@@ -279,6 +309,7 @@ def _handle_double_click(
         on_screenshot=context.on_screenshot,
         cancellation_check=context.cancellation_check,
         deadline=context.deadline,
+        modifiers=modifiers,
     )
 
 
@@ -286,6 +317,10 @@ def _handle_right_click(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
     description = str(arguments.get("description", ""))
+    try:
+        modifiers = _read_modifiers(context, arguments)
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
     if context.vision_config is None:
         return ToolResult(
             tool_call_id="", content="Vision model not configured.", is_error=True
@@ -298,12 +333,14 @@ def _handle_right_click(
         on_screenshot=context.on_screenshot,
         cancellation_check=context.cancellation_check,
         deadline=context.deadline,
+        modifiers=modifiers,
     )
 
 
 def _handle_click_at(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     try:
         x, y = _read_point(arguments)
+        modifiers = _read_modifiers(context, arguments)
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     if x is None or y is None:
@@ -321,6 +358,7 @@ def _handle_click_at(context: ToolContext, arguments: dict[str, object]) -> Tool
         on_screenshot=context.on_screenshot,
         cancellation_check=context.cancellation_check,
         deadline=context.deadline,
+        modifiers=modifiers,
     )
 
 
@@ -329,6 +367,7 @@ def _handle_double_click_at(
 ) -> ToolResult:
     try:
         x, y = _required_point(arguments, "double_click_at")
+        modifiers = _read_modifiers(context, arguments)
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_controller.double_click_at(
@@ -340,6 +379,7 @@ def _handle_double_click_at(
         on_screenshot=context.on_screenshot,
         cancellation_check=context.cancellation_check,
         deadline=context.deadline,
+        modifiers=modifiers,
     )
 
 
@@ -348,6 +388,7 @@ def _handle_right_click_at(
 ) -> ToolResult:
     try:
         x, y = _required_point(arguments, "right_click_at")
+        modifiers = _read_modifiers(context, arguments)
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_controller.right_click_at(
@@ -359,12 +400,59 @@ def _handle_right_click_at(
         on_screenshot=context.on_screenshot,
         cancellation_check=context.cancellation_check,
         deadline=context.deadline,
+        modifiers=modifiers,
+    )
+
+
+def _handle_middle_click(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    description = str(arguments.get("description", ""))
+    try:
+        modifiers = _read_modifiers(context, arguments)
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
+    if context.vision_config is None:
+        return ToolResult(
+            tool_call_id="", content="Vision model not configured.", is_error=True
+        )
+    return tools_controller.middle_click(
+        context.project_id,
+        description=description,
+        expected_result=_read_expected_result(arguments),
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
+        modifiers=modifiers,
+    )
+
+
+def _handle_middle_click_at(
+    context: ToolContext, arguments: dict[str, object]
+) -> ToolResult:
+    try:
+        x, y = _required_point(arguments, "middle_click_at")
+        modifiers = _read_modifiers(context, arguments)
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
+    return tools_controller.middle_click_at(
+        context.project_id,
+        x=x,
+        y=y,
+        expected_result=_read_expected_result(arguments),
+        vision_config=context.vision_config,
+        on_screenshot=context.on_screenshot,
+        cancellation_check=context.cancellation_check,
+        deadline=context.deadline,
+        modifiers=modifiers,
     )
 
 
 def _handle_hover_at(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     try:
         x, y = _required_point(arguments, "hover_at")
+        modifiers = _read_modifiers(context, arguments)
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_controller.hover_at(
@@ -376,6 +464,7 @@ def _handle_hover_at(context: ToolContext, arguments: dict[str, object]) -> Tool
         on_screenshot=context.on_screenshot,
         cancellation_check=context.cancellation_check,
         deadline=context.deadline,
+        modifiers=modifiers,
     )
 
 
@@ -390,6 +479,7 @@ def _handle_drag_at(context: ToolContext, arguments: dict[str, object]) -> ToolR
             DRAG_MIN_SECONDS,
             DRAG_MAX_SECONDS,
         )
+        modifiers = _read_modifiers(context, arguments)
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_controller.drag_at(
@@ -404,6 +494,7 @@ def _handle_drag_at(context: ToolContext, arguments: dict[str, object]) -> ToolR
         on_screenshot=context.on_screenshot,
         cancellation_check=context.cancellation_check,
         deadline=context.deadline,
+        modifiers=modifiers,
     )
 
 
@@ -429,10 +520,16 @@ def _handle_scroll(context: ToolContext, arguments: dict[str, object]) -> ToolRe
                 f"amount must be between 1 and {MAX_SCROLL_AMOUNT} wheel notches."
             )
         x, y = _read_point(arguments)
+        modifiers = _read_modifiers(context, arguments)
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_controller.scroll(
-        context.project_id, direction=direction, amount=amount, x=x, y=y
+        context.project_id,
+        direction=direction,
+        amount=amount,
+        x=x,
+        y=y,
+        modifiers=modifiers,
     )
 
 
@@ -461,6 +558,10 @@ def _handle_key_press(context: ToolContext, arguments: dict[str, object]) -> Too
 
 def _handle_hover(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     description = str(arguments.get("description", ""))
+    try:
+        modifiers = _read_modifiers(context, arguments)
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
     if context.vision_config is None:
         return ToolResult(
             tool_call_id="", content="Vision model not configured.", is_error=True
@@ -473,12 +574,17 @@ def _handle_hover(context: ToolContext, arguments: dict[str, object]) -> ToolRes
         on_screenshot=context.on_screenshot,
         cancellation_check=context.cancellation_check,
         deadline=context.deadline,
+        modifiers=modifiers,
     )
 
 
 def _handle_drag(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     start_description = str(arguments.get("start_description", ""))
     end_description = str(arguments.get("end_description", ""))
+    try:
+        modifiers = _read_modifiers(context, arguments)
+    except _InvalidArgumentError as error:
+        return _invalid_argument_result(error)
     if context.vision_config is None:
         return ToolResult(
             tool_call_id="", content="Vision model not configured.", is_error=True
@@ -492,6 +598,7 @@ def _handle_drag(context: ToolContext, arguments: dict[str, object]) -> ToolResu
         on_screenshot=context.on_screenshot,
         cancellation_check=context.cancellation_check,
         deadline=context.deadline,
+        modifiers=modifiers,
     )
 
 
@@ -878,9 +985,11 @@ _TOOL_HANDLERS: dict[str, _HandlerFunc] = {
     "click": _handle_click,
     "double_click": _handle_double_click,
     "right_click": _handle_right_click,
+    "middle_click": _handle_middle_click,
     "click_at": _handle_click_at,
     "double_click_at": _handle_double_click_at,
     "right_click_at": _handle_right_click_at,
+    "middle_click_at": _handle_middle_click_at,
     "scroll": _handle_scroll,
     "type_text": _handle_type_text,
     "key_press": _handle_key_press,

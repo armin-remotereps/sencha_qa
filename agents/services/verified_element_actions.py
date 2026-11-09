@@ -262,3 +262,10 @@ def default_right_click_expectation(description: str) -> str:
         f"the right-click landed on '{description}' and the UI reacted to it "
         "(context menu, selection, or similar)"
     )
+
+
+def default_middle_click_expectation(description: str) -> str:
+    return (
+        f"the middle-click landed on '{description}' and the UI reacted to it "
+        "(a link opened in a new tab, a tab closed, text was pasted, or similar)"
+    )

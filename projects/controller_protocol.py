@@ -28,11 +28,13 @@ class ClickActionEvent(BaseActionEvent):
     x: int
     y: int
     button: str
+    modifiers: NotRequired[list[str]]
 
 
 class DoubleClickActionEvent(BaseActionEvent):
     x: int
     y: int
+    modifiers: NotRequired[list[str]]
 
 
 class ScrollActionEvent(BaseActionEvent):
@@ -40,11 +42,13 @@ class ScrollActionEvent(BaseActionEvent):
     amount: int
     x: NotRequired[int]
     y: NotRequired[int]
+    modifiers: NotRequired[list[str]]
 
 
 class HoverActionEvent(BaseActionEvent):
     x: int
     y: int
+    modifiers: NotRequired[list[str]]
 
 
 class DragActionEvent(BaseActionEvent):
@@ -54,6 +58,7 @@ class DragActionEvent(BaseActionEvent):
     end_y: int
     button: str
     duration: float
+    modifiers: NotRequired[list[str]]
 
 
 class TypeTextActionEvent(BaseActionEvent):
@@ -399,10 +404,10 @@ class ActionTypeRegistry:
     }
 
     _PAYLOAD_KEYS: Final[dict[str, tuple[str, ...]]] = {
-        "controller.click": ("x", "y", "button"),
-        "controller.double_click": ("x", "y"),
-        "controller.hover": ("x", "y"),
-        "controller.scroll": ("direction", "amount", "x", "y"),
+        "controller.click": ("x", "y", "button", "modifiers"),
+        "controller.double_click": ("x", "y", "modifiers"),
+        "controller.hover": ("x", "y", "modifiers"),
+        "controller.scroll": ("direction", "amount", "x", "y", "modifiers"),
         "controller.drag": (
             "start_x",
             "start_y",
@@ -410,6 +415,7 @@ class ActionTypeRegistry:
             "end_y",
             "button",
             "duration",
+            "modifiers",
         ),
         "controller.type_text": ("text", "interval"),
         "controller.key_press": ("keys",),

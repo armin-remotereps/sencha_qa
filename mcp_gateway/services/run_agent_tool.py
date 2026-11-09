@@ -114,6 +114,7 @@ _ECHO_WITHOUT_CHECK_TOOLS: Final[frozenset[str]] = frozenset(
         "click_at",
         "double_click_at",
         "right_click_at",
+        "middle_click_at",
         "hover_at",
         "drag_at",
         "long_press_at",

@@ -16,7 +16,7 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.23.3"
+CLIENT_VERSION: Final[str] = "0.24.0"
 
 
 class CloseCode(IntEnum):
@@ -250,6 +250,11 @@ class ClientCapability(StrEnum):
     # with MOBILE_DEVICE_V1; a driver that cannot list apps says so in the
     # result's ``status``.
     DEVICE_APPS_V1 = "device_apps_v1"
+    # Optional: ``modifiers`` (keys held during the action) on ``click``,
+    # ``double_click``, ``hover``, ``drag`` and ``scroll``. Older controllers
+    # ignore the field and do a plain action, so the server checks this
+    # capability before it sends one. Advertised only on a desktop target.
+    POINTER_MODIFIERS_V1 = "pointer_modifiers_v1"
     # Retired in 0.18.0 (How to do it and Ask AI): person_step_assist_v1,
     # person_step_guide_v1, manual_step_guide_v1 may still arrive from runners
     # < 0.18.0; ignored; never reuse.
@@ -278,6 +283,14 @@ _MOBILE_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
 )
 
 
+# Capabilities that need a desktop target; dropped on a phone runner.
+_DESKTOP_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
+    {
+        ClientCapability.POINTER_MODIFIERS_V1,
+    }
+)
+
+
 # Everything this client build knows. The handshake sends
 # ``advertised_capabilities(...)``, which may drop the runtime-dependent ones.
 CLIENT_CAPABILITIES: Final[tuple[ClientCapability, ...]] = tuple(ClientCapability)
@@ -294,13 +307,15 @@ def advertised_capabilities(
     PERSON_STEP_CASE_STEPS_V1, PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1,
     CASE_PAUSE_V1, MANUAL_RUN_V1 and MANUAL_PAUSE_DISCUSS_V1 are dropped with
     it. ``mobile`` is True only on a phone target; MOBILE_DEVICE_V1 and
-    DEVICE_APPS_V1 are dropped otherwise.
+    DEVICE_APPS_V1 are dropped otherwise, and POINTER_MODIFIERS_V1 is dropped
+    on a phone.
     """
     return tuple(
         capability
         for capability in CLIENT_CAPABILITIES
         if (person_window or capability not in _PERSON_WINDOW_CAPABILITIES)
         and (mobile or capability not in _MOBILE_CAPABILITIES)
+        and not (mobile and capability in _DESKTOP_CAPABILITIES)
     )
 
 
@@ -311,7 +326,8 @@ def advertised_capabilities(
 # PERSON_STEP_CASE_STEPS_V1, ARTIFACT_SCAN_V1, PERSON_CASE_CONTEXT_V1,
 # PERSON_DISCUSSION_V1, CASE_PAUSE_V1, MANUAL_RUN_V1, MANUAL_PAUSE_DISCUSS_V1,
 # MOBILE_DEVICE_V1, WINDOW_CAPTURE_V1, KEPT_SESSIONS_V1, WEB_BROWSER_V1,
-# DEVICE_APPS_V1) are checked where they are used instead.
+# DEVICE_APPS_V1, POINTER_MODIFIERS_V1) are checked where they are used
+# instead.
 REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
@@ -362,6 +378,30 @@ DEFAULT_BROWSER: Final[BrowserName] = BrowserName.CHROMIUM
 class MouseButton(StrEnum):
     LEFT = "left"
     RIGHT = "right"
+
+
+class PointerModifier(StrEnum):
+    """A key held down during a pointer action; the runner resolves it.
+
+    ``primary`` is Command on macOS and Ctrl elsewhere; ``alt`` is Option on
+    macOS; ``meta`` is Win on Windows, Super on Linux and Command on macOS.
+    """
+
+    PRIMARY = "primary"
+    CTRL = "ctrl"
+    SHIFT = "shift"
+    ALT = "alt"
+    META = "meta"
+
+
+# Press order; keys are released in reverse.
+POINTER_MODIFIER_ORDER: Final[tuple[PointerModifier, ...]] = (
+    PointerModifier.PRIMARY,
+    PointerModifier.CTRL,
+    PointerModifier.ALT,
+    PointerModifier.SHIFT,
+    PointerModifier.META,
+)
 
 
 class StreamName(StrEnum):
@@ -455,18 +495,21 @@ class ClickPayload:
     x: int
     y: int
     button: str
+    modifiers: tuple[PointerModifier, ...] = ()
 
 
 @dataclass(frozen=True)
 class DoubleClickPayload:
     x: int
     y: int
+    modifiers: tuple[PointerModifier, ...] = ()
 
 
 @dataclass(frozen=True)
 class HoverPayload:
     x: int
     y: int
+    modifiers: tuple[PointerModifier, ...] = ()
 
 
 class ScrollDirection(StrEnum):
@@ -489,6 +532,7 @@ class ScrollPayload:
     # Both None: scroll at the current pointer position.
     x: int | None
     y: int | None
+    modifiers: tuple[PointerModifier, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -499,6 +543,7 @@ class DragPayload:
     end_y: int
     button: str
     duration: float
+    modifiers: tuple[PointerModifier, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -843,11 +888,30 @@ def parse_handshake_capabilities(data: dict[str, object]) -> tuple[str, ...]:
     return tuple(raw)
 
 
+def parse_pointer_modifiers(data: dict[str, object]) -> tuple[PointerModifier, ...]:
+    """The optional ``modifiers`` list, in POINTER_MODIFIER_ORDER; absent = ()."""
+    raw = data.get("modifiers")
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(isinstance(m, str) for m in raw):
+        raise ProtocolError("Invalid 'modifiers': expected a list of strings")
+    unknown = next(
+        (m for m in raw if m not in PointerModifier.__members__.values()), None
+    )
+    if unknown is not None:
+        raise ProtocolError(f"Unknown modifier in 'modifiers': {unknown[:20]!r}")
+    modifiers = [PointerModifier(m) for m in raw]
+    if len(set(modifiers)) != len(modifiers):
+        raise ProtocolError("Duplicate modifier in 'modifiers'")
+    return tuple(m for m in POINTER_MODIFIER_ORDER if m in modifiers)
+
+
 def parse_click_payload(data: dict[str, object]) -> ClickPayload:
     return ClickPayload(
         x=_extract_int(data, "x"),
         y=_extract_int(data, "y"),
         button=_extract_str(data, "button", default="left"),
+        modifiers=parse_pointer_modifiers(data),
     )
 
 
@@ -855,6 +919,7 @@ def parse_double_click_payload(data: dict[str, object]) -> DoubleClickPayload:
     return DoubleClickPayload(
         x=_extract_int(data, "x"),
         y=_extract_int(data, "y"),
+        modifiers=parse_pointer_modifiers(data),
     )
 
 
@@ -862,6 +927,7 @@ def parse_hover_payload(data: dict[str, object]) -> HoverPayload:
     return HoverPayload(
         x=_extract_int(data, "x"),
         y=_extract_int(data, "y"),
+        modifiers=parse_pointer_modifiers(data),
     )
 
 
@@ -873,6 +939,7 @@ def parse_drag_payload(data: dict[str, object]) -> DragPayload:
         end_y=_extract_int(data, "end_y"),
         button=_extract_str(data, "button", default="left"),
         duration=_extract_number(data, "duration", default=0.5),
+        modifiers=parse_pointer_modifiers(data),
     )
 
 
@@ -895,7 +962,13 @@ def parse_scroll_payload(data: dict[str, object]) -> ScrollPayload:
     y = _extract_optional_int(data, "y")
     if (x is None) != (y is None):
         raise ProtocolError("'x' and 'y' must both be given or both be omitted")
-    return ScrollPayload(direction=direction, amount=amount, x=x, y=y)
+    return ScrollPayload(
+        direction=direction,
+        amount=amount,
+        x=x,
+        y=y,
+        modifiers=parse_pointer_modifiers(data),
+    )
 
 
 def parse_type_text_payload(data: dict[str, object]) -> TypeTextPayload:

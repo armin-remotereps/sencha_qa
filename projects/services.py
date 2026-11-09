@@ -72,6 +72,7 @@ from controller_client.protocol import (
     BrowserName,
     ClientCapability,
     ErrorCode,
+    PointerModifier,
     ScrollDirection,
     WebBrowser,
     WebBrowserSetupStep,
@@ -1455,6 +1456,7 @@ def _run_with_reconnect_retry(
     *,
     on_resend: Callable[[], None] | None = None,
     resend: bool = True,
+    wait_first: bool | None = None,
 ) -> _T:
     """Run ``attempt`` and re-send it once if the Test Runner connection drops.
 
@@ -1462,12 +1464,14 @@ def _run_with_reconnect_retry(
     ``_ConnectionLost`` when the loss rule matches. Each attempt dispatches a
     new request on a new reply channel, so a late reply to the abandoned
     request is never read. Any other failure propagates unchanged. With
-    ``resend=False`` nothing waits for the runner: a missing runner raises
-    ``ControllerNotConnectedError`` and a lost connection fails the action.
+    ``resend=False`` a lost connection fails the action, and by default
+    nothing waits for the runner either: a missing runner raises
+    ``ControllerNotConnectedError``. ``wait_first=True`` still waits for a
+    reconnecting runner before the first send (nothing was sent yet).
     """
     owner = (
         wait_for_controller(project_id)
-        if resend
+        if (resend if wait_first is None else wait_first)
         else _current_owner_or_raise(project_id)
     )
     try:
@@ -1475,7 +1479,8 @@ def _run_with_reconnect_retry(
     except _ConnectionLost as exc:
         if not resend:
             raise ControllerActionError(
-                f"Test Runner connection was lost while running {event_type}"
+                f"Test Runner connection was lost while running {event_type}; "
+                "it may already have been done, so check before repeating it"
             ) from exc
         logger.warning(
             "Test Runner connection lost during %s for project %d; "
@@ -1554,6 +1559,7 @@ def _dispatch_controller_action(
     reply_timeout: float,
     *,
     resend_on_reconnect: bool = True,
+    wait_before_send: bool | None = None,
     runner_local: bool = False,
     **payload: Any,
 ) -> dict[str, Any]:
@@ -1571,7 +1577,11 @@ def _dispatch_controller_action(
         )
 
     return _run_with_reconnect_retry(
-        project_id, event_type, _attempt, resend=resend_on_reconnect
+        project_id,
+        event_type,
+        _attempt,
+        resend=resend_on_reconnect,
+        wait_first=wait_before_send,
     )
 
 
@@ -1660,12 +1670,24 @@ def build_action_result(reply: dict[str, Any]) -> ActionResult:
     return _build_action_result(reply)
 
 
+def _modifiers_field(modifiers: Sequence[PointerModifier]) -> dict[str, list[str]]:
+    """The ``modifiers`` key, only when some are held.
+
+    Without modifiers the message stays byte-identical to older servers', and
+    a runner without POINTER_MODIFIERS_V1 is never sent the field (callers
+    check the capability first).
+    """
+    return {"modifiers": [m.value for m in modifiers]} if modifiers else {}
+
+
 def controller_click(
     project_id: int,
     x: int,
     y: int,
     button: str = "left",
     timeout: float = 30.0,
+    *,
+    modifiers: Sequence[PointerModifier] = (),
 ) -> ActionResult:
     reply = _dispatch_controller_action(
         project_id,
@@ -1675,6 +1697,12 @@ def controller_click(
         y=y,
         button=button,
         runner_local=True,
+        # A modified press is not resent after a reconnect: done twice it
+        # undoes itself (Ctrl+click). It still waits for a reconnect before
+        # the first send, when nothing was done yet.
+        resend_on_reconnect=not modifiers,
+        wait_before_send=True,
+        **_modifiers_field(modifiers),
     )
     return _build_action_result(reply)
 
@@ -1684,6 +1712,8 @@ def controller_double_click(
     x: int,
     y: int,
     timeout: float = 30.0,
+    *,
+    modifiers: Sequence[PointerModifier] = (),
 ) -> ActionResult:
     reply = _dispatch_controller_action(
         project_id,
@@ -1692,6 +1722,12 @@ def controller_double_click(
         x=x,
         y=y,
         runner_local=True,
+        # A modified press is not resent after a reconnect: done twice it
+        # undoes itself (Ctrl+click). It still waits for a reconnect before
+        # the first send, when nothing was done yet.
+        resend_on_reconnect=not modifiers,
+        wait_before_send=True,
+        **_modifiers_field(modifiers),
     )
     return _build_action_result(reply)
 
@@ -1703,6 +1739,8 @@ def controller_scroll(
     x: int | None,
     y: int | None,
     timeout: float = 30.0,
+    *,
+    modifiers: Sequence[PointerModifier] = (),
 ) -> ActionResult:
     """Scroll ``amount`` wheel notches, at screenshot pixel (x, y) or the pointer.
 
@@ -1717,9 +1755,15 @@ def controller_scroll(
         "controller.scroll",
         timeout,
         runner_local=True,
+        # A modified press is not resent after a reconnect: done twice it
+        # undoes itself (Ctrl+click). It still waits for a reconnect before
+        # the first send, when nothing was done yet.
+        resend_on_reconnect=not modifiers,
+        wait_before_send=True,
         direction=direction.value,
         amount=amount,
         **point,
+        **_modifiers_field(modifiers),
     )
     return _build_action_result(reply)
 
@@ -1729,6 +1773,8 @@ def controller_hover(
     x: int,
     y: int,
     timeout: float = 30.0,
+    *,
+    modifiers: Sequence[PointerModifier] = (),
 ) -> ActionResult:
     reply = _dispatch_controller_action(
         project_id,
@@ -1737,6 +1783,12 @@ def controller_hover(
         x=x,
         y=y,
         runner_local=True,
+        # A modified press is not resent after a reconnect: done twice it
+        # undoes itself (Ctrl+click). It still waits for a reconnect before
+        # the first send, when nothing was done yet.
+        resend_on_reconnect=not modifiers,
+        wait_before_send=True,
+        **_modifiers_field(modifiers),
     )
     return _build_action_result(reply)
 
@@ -1750,18 +1802,26 @@ def controller_drag(
     button: str = "left",
     duration: float = 0.5,
     timeout: float = 30.0,
+    *,
+    modifiers: Sequence[PointerModifier] = (),
 ) -> ActionResult:
     reply = _dispatch_controller_action(
         project_id,
         "controller.drag",
         timeout,
         runner_local=True,
+        # A modified press is not resent after a reconnect: done twice it
+        # undoes itself (Ctrl+click). It still waits for a reconnect before
+        # the first send, when nothing was done yet.
+        resend_on_reconnect=not modifiers,
+        wait_before_send=True,
         start_x=start_x,
         start_y=start_y,
         end_x=end_x,
         end_y=end_y,
         button=button,
         duration=duration,
+        **_modifiers_field(modifiers),
     )
     return _build_action_result(reply)
 
