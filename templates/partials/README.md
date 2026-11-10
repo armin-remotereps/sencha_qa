@@ -71,44 +71,6 @@ suffix, if you're not using `confirm_dialog.html`) — e.g.
 `archive-project-{{ project.id }}` when a dialog is rendered once per row
 in a loop.
 
-## `advanced_diagnostics.html` — expected Alpine scope
-
-This partial reads variables from an ancestor `x-data` scope; it does not
-declare them itself. The page that includes it is expected to define an
-agent-status WebSocket component (ported from the current
-`detail.html` in a later phase) exposing:
-
-```js
-{
-  agentConnected: boolean,
-  clientVersion: string,
-  capabilities: string[],
-  // Global visual engine (vision workers), not per test machine. Set from
-  // `{{ visual_engine|json_script }}` and replaced on `visual_engine` /
-  // initial-state WebSocket messages.
-  visualEngine: {
-    state: 'ready' | 'starting' | 'failed' | 'offline',
-    ready_count: number,
-    connected_count: number,
-    workers: {
-      name: string,
-      state: 'loading' | 'ready' | 'failed' | '',
-      device: string,
-      gpu: string,
-      message: string,
-      client_version: string,
-      connected_since: string,  // ISO 8601 or ''
-    }[],
-  },
-  systemInfo: object,
-  lastConnectedAt: string | null,
-}
-```
-
-Until that component exists, wrap `{% include "partials/advanced_diagnostics.html" %}`
-in a scope providing at least empty defaults (`x-data="{ clientVersion: '', capabilities: [], visualEngine: {} }"`)
-so the `x-text` bindings don't error against `undefined`.
-
 ## Status badges and the Blocked result
 
 `badge_case_status.html` and `badge_run_status.html` are the only places that

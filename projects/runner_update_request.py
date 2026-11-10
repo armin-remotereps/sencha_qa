@@ -1,10 +1,10 @@
-"""Use case: a project member asks the connected Test Runner to update itself.
+"""Use case: a runner's owner asks their connected Test Runner to update itself.
 
-Locks the project row first (the order ``start_test_run``, resume and machine
-setup sends use), so an update and a run start or setup turn cannot both pass
-their "machine is free" checks. The bundle goes to the current owner channel
-only, after commit; the runner reports its progress with ``update_status``
-(``runner_update_progress``).
+Locks the runner row first (the order every holder of a runner takes, see
+``projects.runner_use``), so an update and a run start, Manual claim or setup
+turn on the same runner cannot both pass their "runner is free" checks. The
+bundle goes to the runner's current socket only, after commit; the runner
+reports its progress with ``update_status`` (``runner_update_progress``).
 """
 
 from __future__ import annotations
@@ -22,18 +22,21 @@ from accounts.models import CustomUser
 from controller_client.protocol import CLIENT_VERSION
 from projects.controller_protocol import UpdateRunnerEvent
 from projects.exceptions import RunnerUpdateRefusedError
-from projects.models import Project, RunnerUpdate
+from projects.models import RunnerUpdate
 from projects.runner_bundle import RunnerBundle, update_bundle
 from projects.runner_update_offer import (
+    RUNNER_UPDATE_OFFER_FIELDS,
     broadcast_runner_update,
+    expire_stale_runner_updates,
     list_runner_update_blockers,
     runner_can_self_update,
     runner_is_older,
 )
-from projects.runner_update_state import (
-    expire_stale_runner_updates,
-    runner_update_in_progress,
-)
+from projects.runner_use import runner_update_in_flight
+from runners.locks import lock_runner_row
+from runners.models import TestRunner
+from runners.services.runner_access import can_manage
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +47,10 @@ _STALE_PAGE = (
 _NOT_CONNECTED = "Connect the Test Runner first."
 _TOO_OLD = (
     "This Test Runner is too old to update itself. Download and set it up once "
-    "from this page; later versions update with one click."
+    "from its page; later versions update with one click."
 )
 _UP_TO_DATE = "The Test Runner is already up to date."
+_NOT_YOURS = "Only the Test Runner's owner can update it."
 _ALREADY_UPDATING = "An update of the Test Runner is already in progress."
 _BUNDLE_UNAVAILABLE = (
     "The update could not be prepared on the server. See the server log."
@@ -54,14 +58,14 @@ _BUNDLE_UNAVAILABLE = (
 
 
 def request_runner_update(
-    *, project: Project, user: CustomUser, expected_version: str
+    *, runner_id: RunnerId, user: CustomUser, expected_version: str
 ) -> RunnerUpdate:
     """Record an update to this server's runner version and send the bundle.
 
-    ``expected_version`` is the version the person saw on the page; it must
-    equal the server's, so a page left open across a deploy cannot send a
-    bundle the person did not see. Raises ``RunnerUpdateRefusedError``
-    (user-safe) when a gate refuses.
+    Owner only (``can_manage``). ``expected_version`` is the version the
+    person saw on the page; it must equal the server's, so a page left open
+    across a deploy cannot send a bundle the person did not see. Raises
+    ``RunnerUpdateRefusedError`` (user-safe) when a gate refuses.
     """
     if expected_version != CLIENT_VERSION:
         raise RunnerUpdateRefusedError(_STALE_PAGE)
@@ -72,57 +76,53 @@ def request_runner_update(
         raise RunnerUpdateRefusedError(_BUNDLE_UNAVAILABLE) from None
 
     with transaction.atomic():
-        locked = (
-            Project.objects.select_for_update()
-            .only(
-                "id",
-                "agent_connected",
-                "agent_channel_name",
-                "agent_client_version",
-                "agent_capabilities",
-            )
-            .get(pk=project.pk)
+        locked = lock_runner_row(
+            runner_id, fields=(*RUNNER_UPDATE_OFFER_FIELDS, "owner", "archived_at")
         )
+        if locked is None or locked.archived_at is not None:
+            raise RunnerUpdateRefusedError(_NOT_YOURS)
+        if not can_manage(user, locked):
+            raise RunnerUpdateRefusedError(_NOT_YOURS)
         now = timezone.now()
-        expire_stale_runner_updates(locked.id, now)
+        expire_stale_runner_updates(runner_id, now)
         _check_gates(locked, now)
         try:
             with transaction.atomic():
                 update = RunnerUpdate.objects.create(
-                    project=locked,
+                    runner=locked,
                     requested_by=user,
-                    from_version=locked.agent_client_version[:32],
+                    from_version=locked.client_version[:32],
                     to_version=bundle.version,
                     archive_sha256=bundle.sha256,
                 )
         except IntegrityError:
-            # The one-in-flight constraint; the project lock makes it unlikely.
+            # The one-in-flight constraint; the runner lock makes it unlikely.
             raise RunnerUpdateRefusedError(_ALREADY_UPDATING) from None
-        owner = locked.agent_channel_name
+        owner = locked.channel_name
         update_id = str(update.pk)
         transaction.on_commit(lambda: _send_bundle(owner, update_id, bundle))
-        transaction.on_commit(lambda: broadcast_runner_update(locked.id))
+        transaction.on_commit(lambda: broadcast_runner_update(runner_id))
     logger.info(
-        "Runner update %s requested for project %s: %s -> %s",
+        "Runner update %s requested for runner %s: %s -> %s",
         update.pk,
-        locked.id,
+        runner_id,
         update.from_version,
         update.to_version,
     )
     return update
 
 
-def _check_gates(project: Project, now: datetime) -> None:
-    if not project.agent_connected or not project.agent_channel_name:
+def _check_gates(runner: TestRunner, now: datetime) -> None:
+    if not runner.connected or not runner.channel_name:
         raise RunnerUpdateRefusedError(_NOT_CONNECTED)
-    if not runner_can_self_update(project.agent_capabilities):
+    if not runner_can_self_update(runner.capabilities or []):
         raise RunnerUpdateRefusedError(_TOO_OLD)
-    if not runner_is_older(project.agent_client_version):
+    if not runner_is_older(runner.client_version):
         raise RunnerUpdateRefusedError(_UP_TO_DATE)
-    blockers = list_runner_update_blockers(project.id, now)
+    blockers = list_runner_update_blockers(runner.runner_id, now)
     if blockers:
         raise RunnerUpdateRefusedError(blockers[0])
-    if runner_update_in_progress(project.id, now):
+    if runner_update_in_flight(runner.runner_id, now):
         raise RunnerUpdateRefusedError(_ALREADY_UPDATING)
 
 

@@ -69,6 +69,7 @@ INSTALLED_APPS: list[str] = [
     "machine_readiness",
     "run_triage",
     "mcp_gateway",
+    "runners",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -755,6 +756,10 @@ RUNNER_DEVICE_STALE_SECONDS: int = config(
 )
 if RUNNER_DEVICE_STALE_SECONDS < 1:
     raise ImproperlyConfigured("RUNNER_DEVICE_STALE_SECONDS must be 1 or more")
+# User-owned Test Runners: how many non-archived runners one user may have.
+RUNNER_MAX_PER_USER: int = config("RUNNER_MAX_PER_USER", default=20, cast=int)
+if RUNNER_MAX_PER_USER < 1:
+    raise ImproperlyConfigured("RUNNER_MAX_PER_USER must be 1 or more")
 
 # Visual engine (remote vision workers running OmniParser)
 # Shared secret every vision worker sends in its handshake. Empty rejects all.

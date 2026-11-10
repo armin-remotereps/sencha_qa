@@ -144,9 +144,9 @@
   {% if project_can_write %}
     {% url 'knowledge_base:item_delete' project_id=project.id item_id=summary.id as delete_url %}
     {% if summary.kind == "archive" %}
-      {% include "partials/confirm_dialog.html" with dialog_id="kb-delete-item" title="Delete this archive?" body="The archive and every file read from it are removed from the knowledge base. Agents can no longer read them." confirm_label="Delete" action_url=delete_url only %}
+      {% include "partials/confirm_dialog.html" with dialog_id="kb-delete-item" title="Delete this archive?" body="The archive and every file read from it are removed from the knowledge base. Agents can no longer read them." confirm_label="Delete" action_url=delete_url csrf_token=csrf_token only %}
     {% else %}
-      {% include "partials/confirm_dialog.html" with dialog_id="kb-delete-item" title="Delete this file?" body="The file is removed from the knowledge base. Agents can no longer read it." confirm_label="Delete" action_url=delete_url only %}
+      {% include "partials/confirm_dialog.html" with dialog_id="kb-delete-item" title="Delete this file?" body="The file is removed from the knowledge base. Agents can no longer read it." confirm_label="Delete" action_url=delete_url csrf_token=csrf_token only %}
     {% endif %}
   {% endif %}
 </div>

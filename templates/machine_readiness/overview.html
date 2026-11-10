@@ -18,6 +18,11 @@
      runner_os      — the runner's OS label ("Windows", ...), "" when unknown
      scan_available — a scan can be queued now
      scan_reason    — why not ("" when available)
+     runner_choices — (id, name) of the viewer's own Test Runners usable here
+     selected_runner — the shown TestRunner (?runner=) or None; the scan form
+                      posts its id as `runner` (projects:machine_readiness_scan)
+     inventory.earlier_runner — the row is from before user runners: shown as
+                      "Scanned by an earlier Test Runner (<host>)"
      gap_report     — GapReport of the whole project (machine_readiness.services.gap_report);
                       on a phone Test Runner its runner_host is "<host>#<device id>"
                       and the device label (runner_device library) follows it
@@ -180,9 +185,21 @@
   <section class="card" aria-labelledby="mr-inventory-title">
     <div class="card-header">
       <h2 id="mr-inventory-title">Inventory</h2>
-      {% if project_can_write %}
+      {% if runner_choices %}
+      <form method="get" action="{% url 'machine_readiness:overview' project.id %}">
+        <label for="mr-runner">Test Runner</label>
+        <select id="mr-runner" name="runner" onchange="this.form.submit()">
+          {% for runner_id, runner_name in runner_choices %}
+          <option value="{{ runner_id }}"{% if selected_runner and selected_runner.pk == runner_id %} selected{% endif %}>{{ runner_name }}</option>
+          {% endfor %}
+        </select>
+        <noscript><button type="submit" class="btn btn-ghost btn-sm">Show</button></noscript>
+      </form>
+      {% endif %}
+      {% if project_can_write and selected_runner %}
       <form method="post" action="{% url 'projects:machine_readiness_scan' project.id %}">
         {% csrf_token %}
+        <input type="hidden" name="runner" value="{{ selected_runner.pk }}">
         <button type="submit" class="btn btn-secondary btn-sm"{% if not scan_available %} disabled aria-describedby="mr-scan-reason"{% endif %}>Scan base directory</button>
       </form>
       {% endif %}
@@ -193,7 +210,7 @@
       <dl class="kv">
         <div><dt>Test machine OS</dt><dd>{{ inventory.os_label }}</dd></div>
         <div><dt>Base directory</dt><dd class="mr-path">{{ inventory.base_dir }}</dd></div>
-        <div><dt>Scanned</dt><dd>{{ inventory.scanned_at|date:"M j, Y, H:i" }}{% if inventory.host %} on <span class="mr-path">{{ inventory.host }}</span>{% endif %}{% if inventory.scanned_by_name %} · {{ inventory.scanned_by_name }}{% endif %}{% if inventory.source_label %} · {{ inventory.source_label }}{% endif %}</dd></div>
+        <div><dt>Scanned</dt><dd>{{ inventory.scanned_at|date:"M j, Y, H:i" }}{% if inventory.earlier_runner %} · Scanned by an earlier Test Runner{% if inventory.host %} (<span class="mr-path">{{ inventory.host }}</span>){% endif %}{% elif inventory.host %} on <span class="mr-path">{{ inventory.host }}</span>{% endif %}{% if inventory.scanned_by_name %} · {{ inventory.scanned_by_name }}{% endif %}{% if inventory.source_label %} · {{ inventory.source_label }}{% endif %}</dd></div>
         <div><dt>Entries</dt><dd>{{ inventory.entry_count }}{% if inventory.truncated %} <span class="badge badge-warning">Cut short</span>{% endif %}{% if inventory.permission_errors %} · {{ inventory.permission_errors }} folder{{ inventory.permission_errors|pluralize }} could not be read{% endif %}</dd></div>
       </dl>
       {% if inventory.error %}
@@ -251,7 +268,7 @@
       {% if gap_report.gap_count %}<span class="card-header-count">{{ gap_report.gap_count }}</span>{% endif %}
     </div>
     <p class="hint">
-      {{ gap_report.present_count }} of {{ gap_report.requirement_count }} stage-0 requirement{{ gap_report.requirement_count|pluralize }} present{% if gap_report.runner_host %} on <span class="mr-path">{{ gap_report.runner_host }}</span>{% with device_label=project|runner_device_label %}{% if device_label %} with the {{ device_label }}{% endif %}{% endwith %}{% endif %}.
+      {{ gap_report.present_count }} of {{ gap_report.requirement_count }} stage-0 requirement{{ gap_report.requirement_count|pluralize }} present{% if gap_report.runner_host %} on <span class="mr-path">{{ gap_report.runner_host }}</span>{% with device_label=selected_runner|runner_device_label %}{% if device_label %} with the {{ device_label }}{% endif %}{% endwith %}{% endif %}.
       {% if gap_report.unanalysed_cases %}{{ gap_report.unanalysed_cases }} case{{ gap_report.unanalysed_cases|pluralize }} not analysed yet — see <a href="{% url 'machine_readiness:requirements' project_id=project.id %}">Requirements</a>.{% endif %}
     </p>
 

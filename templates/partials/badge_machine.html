@@ -1,12 +1,12 @@
-{% comment %} Status badge for a project's test machine / visual engine connection.
+{% comment %} Status badge for a Test Runner's machine / visual engine connection.
 
    Context contract:
      machine_state — "disconnected" | "starting" | "ready" | "failed" | "offline"
      | "device_offline"
      ("offline" = runner connected but no vision worker is; "device_offline" =
      a phone Test Runner is connected but its phone or tablet is not ready)
-     A page listing projects passes a row's state through the
-     runner_device library's project_machine_state filter. {% endcomment %}
+     (runners.machine_state.MachineState values; a page listing runners passes
+     each row's RunnerSummary.machine_state). {% endcomment %}
 {% if machine_state == "disconnected" %}
   <span class="badge badge-disconnected">Not connected</span>
 {% elif machine_state == "starting" %}

@@ -33,6 +33,7 @@ from controller_client.protocol import (
 )
 from projects.exceptions import ControllerActionError
 from projects.services import dispatch_controller_action
+from runners.types import RunnerId
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ class CommandOutput:
 
 
 def controller_start_kept_command(
-    project_id: int,
+    runner_id: RunnerId,
     command: str,
     *,
     max_seconds: int,
@@ -74,7 +75,7 @@ def controller_start_kept_command(
     # ``_raise_for_error_reply`` raises ``KeptSessionLimitError`` for the
     # runner's TOO_MANY_SESSIONS code.
     reply = dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.start_interactive_cmd",
         timeout,
         resend_on_reconnect=False,
@@ -85,11 +86,11 @@ def controller_start_kept_command(
 
 
 def controller_read_command_output(
-    project_id: int, session_id: str, *, timeout: float = 30.0
+    runner_id: RunnerId, session_id: str, *, timeout: float = 30.0
 ) -> CommandOutput:
     """Read a session's output since the previous read (an empty input)."""
     reply = dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.send_input",
         timeout,
         resend_on_reconnect=False,
@@ -101,14 +102,14 @@ def controller_read_command_output(
 
 
 def controller_list_interactive_sessions(
-    project_id: int, *, timeout: float = 10.0
+    runner_id: RunnerId, *, timeout: float = 10.0
 ) -> tuple[InteractiveSessionInfo, ...]:
     """List the runner's command sessions (kept and foreground).
 
     Raises ``ControllerActionError`` for a reply that does not parse.
     """
     reply = dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.list_interactive_sessions",
         timeout,
         resend_on_reconnect=False,

@@ -66,8 +66,8 @@ _STATUS_LABELS: dict[ProjectStatusFilter, str] = {
 }
 _RUNNER_LABELS: dict[RunnerFilter, str] = {
     RunnerFilter.ANY: "Any",
-    RunnerFilter.CONNECTED: "Connected",
-    RunnerFilter.DISCONNECTED: "Not connected",
+    RunnerFilter.CONNECTED: "Active run on a connected runner",
+    RunnerFilter.DISCONNECTED: "No active run on a connected runner",
 }
 _RUN_LABELS: dict[RunActivityFilter, str] = {
     RunActivityFilter.ANY: "Any",

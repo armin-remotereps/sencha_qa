@@ -45,7 +45,7 @@ from projects.models import (
     TestRunStatus,
 )
 from projects.person_step_services import hand_back_person_step
-from projects.run_reopen_services import is_valid_help_mode, lock_project_and_run
+from projects.run_reopen_services import is_valid_help_mode, lock_run_with_its_runner
 from projects.services import broadcast_run_and_pivots, broadcast_test_run_status
 
 _CHANGEABLE_STATUSES = (
@@ -85,7 +85,8 @@ def change_run_help_mode(
     if not user.is_superuser:
         raise HelpModeNotAllowedError()
     with transaction.atomic():
-        _, locked_run = lock_project_and_run(test_run.pk)
+        # The run's runner first: a hand-back below may queue the run.
+        _, locked_run = lock_run_with_its_runner(test_run.pk, error=RunHelpError)
         if locked_run.status not in _CHANGEABLE_STATUSES:
             raise RunHelpError(_NOT_CHANGEABLE)
         # A live run switched into or out of Manual would be an agent run with

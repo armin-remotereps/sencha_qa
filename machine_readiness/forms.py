@@ -303,3 +303,19 @@ class RequirementStatusForm(forms.Form):
             attrs={"class": "input", "placeholder": "How you know (optional)"}
         ),
     )
+
+
+class RunnerPickForm(forms.Form):
+    """The Test Runner a Machine readiness page shows (``?runner=``) or a
+    status form names (``runner``). Only the shape is checked here: the
+    picker keeps it only when it is one of the viewer's usable runners
+    (``services.runner_pick``)."""
+
+    runner = forms.IntegerField(min_value=1, required=False)
+
+    def wanted_runner_id(self) -> int | None:
+        """The asked-for runner id; None when absent or malformed."""
+        if not self.is_valid():
+            return None
+        value = self.cleaned_data.get("runner")
+        return value if isinstance(value, int) else None

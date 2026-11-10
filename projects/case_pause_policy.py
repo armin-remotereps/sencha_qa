@@ -1,7 +1,7 @@
 """Pause rules and texts, and the continue modes a help request allows.
 
-Pure: no ORM and no import of ``projects.services``, so the worker, the help
-services, the pause services and machine setup can all use it.
+Pure: no queries and no import of ``projects.services``, so the worker, the
+help services, the pause services and machine setup can all use it.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from enum import StrEnum
 
 from agents.checkpoint import checkpoint_from_json
 from agents.types import OrchestratorCheckpoint
-from projects.models import BlockedReason, HelpContinueMode
+from projects.models import BlockedReason, CaseHelpRequest, HelpContinueMode, TestRun
 
 # Faults after which the screen cannot be trusted (``case_faults``): the
 # runner may have restarted, so a case re-running its step there would test
@@ -96,8 +96,27 @@ def pause_continue_mode(
     return HelpContinueMode.CURRENT_SCREEN
 
 
+def help_screen_trusted(test_run: TestRun, request: CaseHelpRequest) -> bool:
+    """Whether the screen the help request's case stopped at is still there
+    (no query: reads loaded fields).
+
+    False when the run has no Test Runner (released, or carried over from
+    before user runners) or its runner was assigned after the request was
+    opened (switched to another machine, plan Q6): continuing "from the
+    current screen" would run the step on a machine that never showed it.
+    """
+    if test_run.runner_id is None:
+        return False
+    assigned_at = test_run.runner_assigned_at
+    return assigned_at is None or assigned_at <= request.requested_at
+
+
 def allowed_continue_modes(
-    stored: HelpContinueMode | str, fault: str, checkpoint_json: object
+    stored: HelpContinueMode | str,
+    fault: str,
+    checkpoint_json: object,
+    *,
+    screen_trusted: bool,
 ) -> tuple[HelpContinueMode, ...]:
     """The modes Continue may use for a help request, stored mode first.
 
@@ -105,8 +124,10 @@ def allowed_continue_modes(
     - restore: with a checkpoint whose cursor is past step 1 and within the
       plan, or when it is the stored mode (a runner fault at step 1 means
       cleanup, then step 1);
-    - current screen: with a checkpoint, unless the stored mode is restore or
-      the fault lost the runner (the screen cannot be trusted);
+    - current screen: with a checkpoint, unless the stored mode is restore,
+      the fault lost the runner, or ``screen_trusted`` is False (the run's
+      Test Runner is gone or changed since the request,
+      ``help_screen_trusted``): the screen cannot be trusted;
     - no checkpoint: only from scratch.
     """
     stored_mode = HelpContinueMode(stored)
@@ -118,13 +139,33 @@ def allowed_continue_modes(
         ):
             allowed.add(HelpContinueMode.RESTORE)
         if (
-            stored_mode != HelpContinueMode.RESTORE
+            screen_trusted
+            and stored_mode != HelpContinueMode.RESTORE
             and fault not in _UNTRUSTED_SCREEN_FAULTS
         ):
             allowed.add(HelpContinueMode.CURRENT_SCREEN)
     ordered = [stored_mode] if stored_mode in allowed else []
     ordered += [mode for mode in _MODE_ORDER if mode in allowed and mode != stored_mode]
     return tuple(ordered)
+
+
+def effective_continue_mode(
+    stored: HelpContinueMode | str,
+    fault: str,
+    checkpoint_json: object,
+    *,
+    screen_trusted: bool,
+) -> HelpContinueMode:
+    """The mode a Continue without a person's choice uses (the Night
+    auto-fix): the stored one while allowed, else the first allowed one
+    (``allowed_continue_modes``: restore when the checkpoint allows it, else
+    from scratch). A current-screen request whose screen is no longer
+    trusted (runner released or switched) is downgraded this way."""
+    stored_mode = HelpContinueMode(stored)
+    allowed = allowed_continue_modes(
+        stored_mode, fault, checkpoint_json, screen_trusted=screen_trusted
+    )
+    return stored_mode if stored_mode in allowed else allowed[0]
 
 
 class CasePauseOutcome(StrEnum):

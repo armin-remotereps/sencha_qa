@@ -153,7 +153,7 @@ def browse_open(
     def work() -> WebBrowserReply:
         _before_send(session, open_call=True)
         return controller_web_browser_open(
-            session.project_id,
+            session.machine(),
             browser=browser,
             url=url,
             timeout=MCP_BROWSE_OPEN_REPLY_TIMEOUT_SECONDS,
@@ -171,7 +171,7 @@ def browse_list_browsers(
         session,
         None,
         lambda: controller_web_browser_list(
-            session.project_id, timeout=_send_timeout(session)
+            session.machine(), timeout=_send_timeout(session)
         ),
     )
     return BrowseBrowsersResponse(
@@ -199,7 +199,7 @@ def browse_navigate(
         session,
         browser,
         lambda: controller_web_browser_navigate(
-            session.project_id,
+            session.machine(),
             browser=browser,
             url=url,
             timeout=_send_timeout(session),
@@ -216,7 +216,7 @@ def browse_history(
         session,
         browser,
         lambda: controller_web_browser_history(
-            session.project_id,
+            session.machine(),
             browser=browser,
             action=action,
             timeout=_send_timeout(session),
@@ -233,7 +233,7 @@ def browse_tabs(
         session,
         browser,
         lambda: controller_web_browser_tabs(
-            session.project_id,
+            session.machine(),
             browser=browser,
             action=action,
             index=index,
@@ -251,7 +251,7 @@ def browse_list_elements(
         session,
         browser,
         lambda: controller_web_browser_elements(
-            session.project_id,
+            session.machine(),
             browser=browser,
             scope_css=scope_css,
             max_elements=WEB_ELEMENTS_MAX,
@@ -304,7 +304,7 @@ def browse_press_key(
         session,
         browser,
         lambda: controller_web_browser_act(
-            session.project_id,
+            session.machine(),
             browser=browser,
             action=WebActKind.PRESS_KEY,
             target=None,
@@ -334,7 +334,7 @@ def browse_read(
                 xpath=request.xpath,
             )
         return controller_web_browser_read(
-            session.project_id,
+            session.machine(),
             browser=browser,
             what=what,
             target=target,
@@ -362,7 +362,7 @@ def browse_wait(
         session,
         browser,
         lambda: controller_web_browser_wait(
-            session.project_id,
+            session.machine(),
             browser=browser,
             target=target,
             state=state,
@@ -383,7 +383,7 @@ def browse_evaluate(
         session,
         browser,
         lambda: controller_web_browser_evaluate(
-            session.project_id,
+            session.machine(),
             browser=browser,
             script=script.script,
             args_json=script.args_json,
@@ -404,7 +404,7 @@ def browse_close(
         session,
         browser,
         lambda: controller_web_browser_close(
-            session.project_id,
+            session.machine(),
             browser=browser,
             timeout=_send_timeout(session),
         ),
@@ -437,7 +437,7 @@ def _act(
             xpath=request.xpath,
         )
         return controller_web_browser_act(
-            session.project_id,
+            session.machine(),
             browser=browser,
             action=action,
             target=target,
@@ -467,7 +467,7 @@ def _resolve_target(
     if description is None:
         return browser, WebElementTarget(index=index, css=css, xpath=xpath)
     listing = controller_web_browser_elements(
-        session.project_id,
+        session.machine(),
         browser=browser,
         scope_css=None,
         max_elements=WEB_ELEMENTS_MAX,
@@ -503,7 +503,7 @@ def _call(
         return map_browse_exception(exc, runner_target=target, os_name=session.os_name)
 
     return machine_call(
-        session.project_id,
+        session.machine(),
         deadline_seconds=deadline,
         lock_seconds=lock,
         work=work,

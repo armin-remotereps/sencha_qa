@@ -30,6 +30,7 @@ from agents.types import (
     ToolDispatcher,
     ToolResult,
 )
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ def run_knowledge_tool_loop(
     messages: tuple[ChatMessage, ...],
     *,
     project_id: int,
+    runner_id: RunnerId,
     max_rounds: int,
     timeout_seconds: int,
     final_prompt: str,
@@ -71,7 +73,11 @@ def run_knowledge_tool_loop(
     )
     result = run_tool_loop(
         list(messages),
-        ToolContext(project_id=project_id, browser_selection=BrowserSelection()),
+        ToolContext(
+            project_id=project_id,
+            runner_id=runner_id,
+            browser_selection=BrowserSelection(),
+        ),
         config=config,
         tool_definitions=tools,
         dispatch=_logged_dispatcher(

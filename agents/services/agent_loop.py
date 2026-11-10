@@ -37,6 +37,7 @@ from agents.types import (
 )
 from controller_client.protocol import is_mobile_target, parse_runner_target
 from projects.controller_outage_clock import agent_monotonic
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,7 @@ def build_agent_config() -> AgentConfig:
 def run_agent(
     task_description: str,
     project_id: int,
+    runner_id: RunnerId,
     *,
     config: AgentConfig | None = None,
     system_info: dict[str, object] | None = None,
@@ -140,6 +142,7 @@ def run_agent(
 
     context = ToolContext(
         project_id=project_id,
+        runner_id=runner_id,
         # Outside a test run there is no case to share a selection with.
         browser_selection=BrowserSelection(),
         summarizer_config=summarizer_config,

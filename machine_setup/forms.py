@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from django import forms
@@ -244,3 +245,30 @@ class OpenTriageChatForm(forms.Form):
         ):
             return next_url
         return ""
+
+
+class SetupRunnerSelectForm(forms.Form):
+    """The main chat header's Test Runner picker.
+
+    ``runners`` are the member's usable runners for the project
+    (``runner_access.usable_runners``); the empty choice clears the pick.
+    The service re-checks ownership under the runner lock.
+    """
+
+    runner = forms.TypedChoiceField(
+        label="Test Runner",
+        required=False,
+        coerce=int,
+        empty_value=None,
+    )
+
+    def __init__(
+        self,
+        *args: Any,
+        runners: Sequence[tuple[int, str]] = (),
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        field = self.fields["runner"]
+        assert isinstance(field, forms.TypedChoiceField)
+        field.choices = [("", "No Test Runner"), *runners]

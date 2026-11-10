@@ -6,6 +6,8 @@
      projects           — Page of Project, annotated with case_count / member_count
      latest_runs        — dict of project id -> latest TestRun (annotated
                           success_count / failed_count / blocked_count), for _project_table.html
+     active_runs        — dict of project id -> ProjectActiveRuns (active run count and
+                          the latest active run's Test Runner), for _project_table.html
      tags               — all tags visible to this user
      search             — current search string ("" when none)
      current_tag        — current tag filter ("" when none)
@@ -70,7 +72,7 @@
 {% elif not projects.object_list %}
   {% include "partials/empty_state.html" with icon="▣" title="No matching projects" body="No project matches the current search and filters. Try clearing them." only %}
 {% else %}
-  {% include "projects/includes/_project_table.html" with projects=projects show_archived=show_archived latest_runs=latest_runs %}
+  {% include "projects/includes/_project_table.html" with projects=projects show_archived=show_archived latest_runs=latest_runs active_runs=active_runs %}
   {% comment %} `request` is passed explicitly: pagination.html's per-page form reads
      request.GET to preserve the current filters as hidden fields, but
      `only` strips every context-processor variable, `request` included. {% endcomment %}

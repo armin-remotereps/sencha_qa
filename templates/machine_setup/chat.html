@@ -11,7 +11,17 @@
   one `x-data="machineSetupChat"` root.
 
   Context contract (machine_setup.views.setup_chat / setup_thread):
-    project    — the current Project (agent_connected)
+    project    — the current Project
+    thread_runner — machine_setup.services.chat_page.ThreadRunner | None:
+                 the Test Runner the shown thread drives (main chat: the
+                 picked one; help, auto-fix, result and manual threads: their
+                 run's runner; case analysis: None). Its name and owner are
+                 escaped text. The badge follows its runner_status events.
+    runner_state — the runner's MachineState value at page load
+    runner_select_form — main chat, writable members only:
+                 machine_setup.forms.SetupRunnerSelectForm (field `runner`,
+                 the member's own usable runners), posted to
+                 machine_setup:runner_select; else None
     conversation — the shown thread (SetupConversation) on the thread page,
                  None on the main chat
     thread_kind — "chat", "auto_fix", "case_help", "case_result",
@@ -100,7 +110,7 @@
   rows of every thread arrive; only the shown conversation's rows are kept;
   machine_setup.consumers):
   current_state (with `help` on a help thread, and `intake_pending`), message,
-  screenshot, turn, reset, help, agent_status, visual_engine,
+  screenshot, turn, reset, help, runner_status, visual_engine,
   machine_readiness ({event: profile|intake_skipped|scan|analysis, …} from
   machine_readiness.events: a saved profile hides the intake banner; a scan
   the worker refused comes with failed and reason; each
@@ -225,6 +235,19 @@
       {% endif %}
     </div>
     <div class="actions">
+      {% if thread_kind != "run_triage" %}
+      <span class="text-muted" data-testid="setup-thread-runner">
+        {% if thread_runner %}Test Runner: {{ thread_runner.name }}{% if thread_runner.owner_id != request.user.pk %} ({{ thread_runner.owner_label }}){% endif %}{% if thread_runner.archived %} (archived){% endif %}{% elif thread_kind == "chat" %}No Test Runner selected{% else %}This run has no Test Runner{% endif %}
+      </span>
+      {% endif %}
+      {% if runner_select_form %}
+      <form method="post" action="{% url 'machine_setup:runner_select' project.id %}">
+        {% csrf_token %}
+        <label for="{{ runner_select_form.runner.id_for_label }}">{{ runner_select_form.runner.label }}</label>
+        {{ runner_select_form.runner }}
+        <button type="submit" class="btn btn-secondary btn-sm">Use</button>
+      </form>
+      {% endif %}
       <span class="badge" :class="'badge-' + machineBadgeClass" x-text="machineBadgeLabel"></span>
       <span class="badge" x-show="turn" x-cloak :class="turnBadgeClass" x-text="turn ? turn.status_label : ''"></span>
       {% if thread_kind == "chat" and project_can_write %}
@@ -955,10 +978,12 @@ document.addEventListener('alpine:init', () => {
     intakePending: {{ page.intake_pending|yesno:'true,false' }},
     readinessNote: '',
     finishingPreviousTurn: {{ page.finishing_previous_turn|yesno:'true,false' }},
-    agentConnected: {{ project.agent_connected|yesno:'true,false' }},
+    // The thread's Test Runner (null: none picked or assigned).
+    runnerId: {% if thread_runner %}{{ thread_runner.runner_id }}{% else %}null{% endif %},
+    agentConnected: {% if thread_runner and thread_runner.connected %}true{% else %}false{% endif %},
     // Phone runners only (blank on a desktop runner); see punkHazard.deviceMachineState.
-    deviceState: '{{ project.agent_device_state|escapejs }}',
-    deviceReportedAt: '{{ project.agent_device_reported_at|date:"c" }}' || null,
+    deviceState: '{{ thread_runner.device_state|default:""|escapejs }}',
+    deviceReportedAt: '{{ thread_runner.device_reported_at|date:"c" }}' || null,
     deviceStaleSeconds: {% runner_device_stale_seconds %},
     visualEngine: readJson('setup-visual-engine') || {},
     draft: '',
@@ -1048,9 +1073,10 @@ document.addEventListener('alpine:init', () => {
         this.finishingPreviousTurn = !!data.finishing_previous_turn;
         this.setFinishingTurn(data.finishing_turn || null);
         this.otherThreadTurnLive = !!data.other_thread_turn_live;
-        this.agentConnected = !!data.agent_connected;
-        this.deviceState = data.agent_device_state || '';
-        this.deviceReportedAt = data.agent_device_reported_at || null;
+        this.runnerId = data.runner_id ?? null;
+        this.agentConnected = !!data.runner_connected;
+        this.deviceState = data.runner_device_state || '';
+        this.deviceReportedAt = data.runner_device_reported_at || null;
         if (data.visual_engine) this.visualEngine = data.visual_engine;
         if (data.help) this.$dispatch('help-state', data.help);
         this.intakePending = !!data.intake_pending;
@@ -1081,10 +1107,11 @@ document.addEventListener('alpine:init', () => {
         this.messages = [];
         this.hiddenMessageCount = 0;
         this.setTurn(null);
-      } else if (data.type === 'agent_status') {
-        this.agentConnected = !!data.agent_connected;
-        this.deviceState = data.agent_device_state || '';
-        this.deviceReportedAt = data.agent_device_reported_at || null;
+      } else if (data.type === 'runner_status') {
+        if (data.runner_id !== this.runnerId) return;
+        this.agentConnected = !!data.runner_connected;
+        this.deviceState = data.runner_device_state || '';
+        this.deviceReportedAt = data.runner_device_reported_at || null;
         if (data.visual_engine) this.visualEngine = data.visual_engine;
       } else if (data.type === 'visual_engine') {
         this.visualEngine = data.visual_engine || {};
@@ -1282,7 +1309,7 @@ document.addEventListener('alpine:init', () => {
 
     get machineBadgeLabel() {
       return {
-        disconnected: 'Not connected',
+        disconnected: this.runnerId === null ? 'No Test Runner' : 'Not connected',
         starting: 'Visual engine starting',
         ready: 'Connected',
         failed: 'Visual engine failed',
@@ -1306,7 +1333,8 @@ document.addEventListener('alpine:init', () => {
       const blockers = this.serverBlockers.filter((b) => b !== MACHINE_NOT_READY && b !== TURN_ACTIVE && b !== FINISHING && b !== OTHER_THREAD);
       // The main chat and a manual case discussion may run offline (their
       // machine tools say so); a case analysis never uses the machine.
-      if (THREAD_KIND !== 'chat' && THREAD_KIND !== 'manual_case' && THREAD_KIND !== 'run_triage' && this.machineState !== 'ready') blockers.unshift(MACHINE_NOT_READY);
+      // Without a runner the server's own blocker says so.
+      if (THREAD_KIND !== 'chat' && THREAD_KIND !== 'manual_case' && THREAD_KIND !== 'run_triage' && this.runnerId !== null && this.machineState !== 'ready') blockers.unshift(MACHINE_NOT_READY);
       if (this.turnLive) blockers.unshift(TURN_ACTIVE);
       else if (this.finishingPreviousTurn) blockers.unshift(FINISHING);
       else if (this.otherThreadTurnLive) blockers.unshift(OTHER_THREAD);

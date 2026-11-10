@@ -13,7 +13,9 @@ from machine_setup.payloads import (
     SetupScreenshotPayload,
     SetupTurnPayload,
 )
+from projects.models import ACTIVE_RUN_STATUSES, TestRun
 from projects.runner_person_step_push import nudge_runner_person_steps
+from runners.types import RunnerId
 
 
 def setup_group(project_id: int) -> str:
@@ -29,12 +31,31 @@ def _send(project_id: int, event: dict[str, object]) -> None:
     async_to_sync(layer.group_send)(setup_group(project_id), event)
 
 
+def _nudge_project_runners(project_id: int) -> None:
+    """Nudge the window of every Test Runner an active run of the project is
+    assigned to (one query): their help and manual discussions, and the
+    project's live-turn blockers, may have changed. Never raises."""
+    try:
+        runner_ids = set(
+            TestRun.objects.filter(
+                project_id=project_id,
+                status__in=ACTIVE_RUN_STATUSES,
+                runner__isnull=False,
+            ).values_list("runner_id", flat=True)
+        )
+    except Exception:
+        return
+    for runner_id in runner_ids:
+        if runner_id is not None:
+            nudge_runner_person_steps(RunnerId(runner_id))
+
+
 def broadcast_message(project_id: int, payload: SetupMessagePayload) -> None:
     _send(project_id, {"type": "machine_setup.message", "message": payload})
     # The Test Runner window shows help discussions (coalesced by its
     # consumer); it never shows sub-agent rows.
     if payload["parent_id"] is None:
-        nudge_runner_person_steps(project_id)
+        _nudge_project_runners(project_id)
 
 
 def broadcast_screenshot(
@@ -52,7 +73,7 @@ def broadcast_screenshot(
 
 def broadcast_turn(project_id: int, payload: SetupTurnPayload) -> None:
     _send(project_id, {"type": "machine_setup.turn", "turn": payload})
-    nudge_runner_person_steps(project_id)
+    _nudge_project_runners(project_id)
 
 
 def broadcast_reset(project_id: int) -> None:
@@ -62,4 +83,4 @@ def broadcast_reset(project_id: int) -> None:
 def broadcast_help(project_id: int, payload: HelpThreadPayload) -> None:
     """The help panel of a help thread changed (draft or the agent's suggestion)."""
     _send(project_id, {"type": "machine_setup.help", "help": payload})
-    nudge_runner_person_steps(project_id)
+    _nudge_project_runners(project_id)

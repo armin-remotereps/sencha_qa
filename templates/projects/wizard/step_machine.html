@@ -1,22 +1,23 @@
 {% extends "layouts/app.html" %}
-{% load runner_device %}
 
-{% comment %} Onboarding wizard, step 4: connect a test machine.
+{% comment %} Onboarding wizard, step 4: a Test Runner to run this project's tests.
+
+   Test Runners belong to people: the step lists the viewer's own runners
+   (each badge live over ws/runners/<id>/status/) and adds one inline. Reads
+   real state only; no wizard state is stored.
 
    Context contract (projects.views.setup_machine): project, wizard_step
-   (always 4), wizard_mode (always "edit"), visual_engine
-   (VisualEngineStatusPayload). Everything else (connection
-   state) is read straight off `project` at load time and kept live over
-   the agent-status WS — same fields/shape as the connection-status
-   component in the old templates/projects/detail.html (L10-45), and the
-   scope partials/advanced_diagnostics.html expects (see that partial's
-   docstring). A phone or tablet runner (docs/plan/feat-mobile-device-runner.md)
-   adds deviceState / deviceReportedAt from Project.agent_device_* and the
-   agent_status keys agent_device_state / agent_device_reported_at.
+   (always 4), wizard_mode (always "edit"),
+     own_runners — list of projects.runner_choices.OwnRunner (runner_id, name,
+                   machine_state), the viewer's usable runners for this project
+     add_form    — runners.forms.RunnerCreateForm (name), posted back here
+     new_runner  — dict (runner_id, name, token) of the runner just added, or
+                   None: its token is shown once (popped from the session)
+                   with a Download button (POST runners:download)
    project_can_write (context processor): a read-only member gets a notice
-   instead of the step's forms and actions. {% endcomment %}
+   instead of the step's forms and actions. Names are escaped (autoescape). {% endcomment %}
 
-{% block title %}Connect a test machine · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+{% block title %}Test Runner · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
 {% block breadcrumbs %}
 <nav class="breadcrumbs" aria-label="Breadcrumb">
@@ -31,76 +32,10 @@
 {% endblock %}
 
 {% block page %}
-{% comment %} Controller-reported values are untrusted: json_script escapes them,
-   JSON.parse reads them back — same pattern as the old detail.html. {% endcomment %}
-{{ project.agent_system_info|json_script:"agent-system-info" }}
-{{ project.agent_capabilities|json_script:"agent-capabilities" }}
-{{ visual_engine|json_script:"visual-engine-status" }}
-<div
-  class="narrow"
-  x-data="{
-    agentConnected: {{ project.agent_connected|yesno:'true,false' }},
-    systemInfo: JSON.parse(document.getElementById('agent-system-info').textContent),
-    lastConnectedAt: '{{ project.last_connected_at|date:'N j, Y, P'|default:'' }}',
-    clientVersion: '{{ project.agent_client_version|escapejs }}',
-    capabilities: JSON.parse(document.getElementById('agent-capabilities').textContent),
-    visualEngine: JSON.parse(document.getElementById('visual-engine-status').textContent),
-    deviceState: '{{ project.agent_device_state|escapejs }}',
-    deviceReportedAt: '{{ project.agent_device_reported_at|date:'c' }}' || null,
-    deviceStaleSeconds: {% runner_device_stale_seconds %},
-    now: Date.now(),
+<div class="narrow">
 
-    init() {
-      setInterval(() => { this.now = Date.now(); }, 10000);
-      const ws = new WebSocket(punkHazard.wsUrl('/ws/projects/{{ project.id }}/agent-status/'));
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'visual_engine') {
-          this.visualEngine = data.visual_engine;
-          return;
-        }
-        if (data.type !== 'agent_status') return;
-        this.agentConnected = data.agent_connected;
-        this.systemInfo = data.agent_system_info || {};
-        this.lastConnectedAt = data.last_connected_at || '';
-        this.clientVersion = data.agent_client_version || '';
-        this.capabilities = data.agent_capabilities || [];
-        this.deviceState = data.agent_device_state || '';
-        this.deviceReportedAt = data.agent_device_reported_at || null;
-        this.now = Date.now();
-        if (data.visual_engine) this.visualEngine = data.visual_engine;
-      };
-    },
-
-    get machineState() {
-      if (!this.agentConnected) return 'disconnected';
-      if (this.deviceMachineState) return this.deviceMachineState;
-      return { ready: 'ready', starting: 'starting', failed: 'failed', offline: 'offline' }[this.visualEngine.state] || 'starting';
-    },
-
-    get machineStatusText() {
-      if (this.deviceMachineState === 'starting') return ' is connected — connecting to the phone or tablet.';
-      return {
-        ready: ' is connected and ready.',
-        starting: ' is connected — visual engine starting.',
-        failed: ' is connected — visual engine failed.',
-        offline: ' is connected — visual engine offline (no vision worker connected).',
-        device_offline: ' is connected — the phone or tablet is not ready.',
-      }[this.machineState] || '';
-    },
-
-    get device() {
-      return window.punkHazard.runnerDevice(this.systemInfo, this.capabilities);
-    },
-
-    get deviceMachineState() {
-      return window.punkHazard.deviceMachineState(this.device, this.deviceState, this.deviceReportedAt, this.deviceStaleSeconds, this.now);
-    },
-  }"
->
-
-  <h1>Connect a test machine</h1>
-  <p class="subtitle">Install the Test Runner on a machine you control so Punk Hazard has somewhere to actually run your tests.</p>
+  <h1>Choose a Test Runner</h1>
+  <p class="subtitle">Runs execute on a machine you control, through a Test Runner you install on it. Your Test Runners serve all of your projects, one run at a time.</p>
 
   {% include "partials/wizard_steps.html" with project=project wizard_step=wizard_step only %}
 
@@ -116,10 +51,41 @@
   {% if project_admin_access %}<p>{% include "partials/badge_admin_access.html" %}</p>{% endif %}
 
   <div class="card">
-    <p>Punk Hazard doesn&rsquo;t run tests in the cloud &mdash; it drives a real machine you control, the same way a person would: clicking, typing, and taking screenshots. The <strong>Test Runner</strong> is a small program you install on that machine so Punk Hazard can connect to it.</p>
+    <p>Punk Hazard doesn&rsquo;t run tests in the cloud &mdash; it drives a real machine you control, the same way a person would: clicking, typing, and taking screenshots. The <strong>Test Runner</strong> is a small program you install on that machine. You choose which of your Test Runners a run uses when you start it.</p>
   </div>
 
-  {% include "partials/runner_download_card.html" with project=project %}
+  {% if new_runner %}
+  <div class="card">
+    <div class="card-header">
+      <h2>Install {{ new_runner.name }}</h2>
+    </div>
+    <div class="alert alert-warning alert-flush" role="status">
+      <span class="alert-icon" aria-hidden="true">⚠</span>
+      <div>
+        <strong>Its token is shown only now.</strong>
+        <p>The download already contains it. Keep it secret: anyone with it can connect as this Test Runner.</p>
+      </div>
+    </div>
+    <div x-data="{ revealed: false }">
+      <pre class="code-block">CONTROLLER_RUNNER_TOKEN=<span x-show="!revealed">••••••••</span><span x-show="revealed" x-cloak>{{ new_runner.token }}</span></pre>
+      <div class="actions">
+        <button class="btn btn-sm btn-secondary" type="button" @click="revealed = !revealed" x-text="revealed ? 'Hide token' : 'Show token'">Show token</button>
+        <span x-data="clipboard()">
+          <button class="btn btn-sm btn-secondary" type="button" @click="copy('CONTROLLER_RUNNER_TOKEN={{ new_runner.token|escapejs }}')">
+            <span x-show="!copied">Copy .env line</span>
+            <span x-show="copied" x-cloak>Copied!</span>
+          </button>
+        </span>
+      </div>
+    </div>
+    <form method="post" action="{% url 'runners:download' new_runner.runner_id %}">
+      {% csrf_token %}
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">&#11015; Download Test Runner</button>
+      </div>
+    </form>
+    <p class="hint">ZIP archive with the connection settings inside. It updates itself later from <a href="{% url 'runners:detail' new_runner.runner_id %}">its page</a>. Requires Python 3.13 or newer on the test machine.</p>
+  </div>
 
   <div class="card">
     <div class="card-header">
@@ -128,35 +94,35 @@
     <p class="muted">Pick the operating system of the test machine to see the matching commands.</p>
     {% include "partials/os_setup_tabs.html" %}
   </div>
+  {% endif %}
 
   <div class="card">
     <div class="card-header">
-      <h2>Connection status</h2>
+      <h2>Your Test Runners</h2>
+      <a class="btn btn-sm btn-ghost" href="{% url 'runners:list' %}">Manage</a>
     </div>
+    {% if own_runners %}
+    <ul class="checklist">
+      {% for runner in own_runners %}
+      <li>
+        <span><strong>{{ runner.name }}</strong></span>
+        {% include "projects/includes/_runner_status_badge.html" with runner_id=runner.runner_id machine_state=runner.machine_state only %}
+      </li>
+      {% endfor %}
+    </ul>
+    <p class="hint">A connected runner can run this project. You choose one in the next step.</p>
+    {% else %}
+    <p class="muted">You have no Test Runner yet. Add one below, download it and install it on the test machine.</p>
+    {% endif %}
 
-    <template x-if="!agentConnected">
-      <div>
-        <p><span class="badge badge-draft">Waiting for connection&hellip;</span></p>
-        <div class="skeleton skeleton-text" style="width: 60%;"></div>
+    <form method="post" action="{% url 'projects:setup_machine' project.id %}" novalidate>
+      {% csrf_token %}
+      {% include "partials/form_field.html" with field=add_form.name only %}
+      <div class="actions">
+        <button class="btn btn-secondary" type="submit">Add a Test Runner</button>
       </div>
-    </template>
-
-    <template x-if="agentConnected">
-      <div>
-        <p><span class="badge badge-connected">Test machine connected</span></p>
-        <div class="alert alert-success" style="margin: 0;">
-          <span class="alert-icon" aria-hidden="true">✓</span>
-          <div>
-            <p
-              x-text="(systemInfo.hostname || 'The test machine') + machineStatusText"
-            ></p>
-          </div>
-        </div>
-      </div>
-    </template>
+    </form>
   </div>
-
-  {% include "partials/advanced_diagnostics.html" %}
 
   {% url 'projects:setup_cases' project.id as back_url %}
   <div class="wizard-actions">

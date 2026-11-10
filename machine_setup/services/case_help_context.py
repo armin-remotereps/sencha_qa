@@ -22,7 +22,7 @@ from machine_setup.case_help_brief import (
     build_case_help_brief,
     build_case_help_update,
 )
-from projects.case_pause_policy import allowed_continue_modes
+from projects.case_pause_policy import allowed_continue_modes, help_screen_trusted
 from projects.case_plan_revision_services import get_pending_plan_draft
 from projects.case_step_refs import case_steps_label
 from projects.models import (
@@ -127,7 +127,10 @@ def case_help_brief_data(
         revisions=_revisions(checkpoint),
         pending_draft=get_pending_plan_draft(request.pk) if waiting else None,
         allowed_continue_modes=allowed_continue_modes(
-            request.continue_mode, request.fault, pivot.execution_checkpoint
+            request.continue_mode,
+            request.fault,
+            pivot.execution_checkpoint,
+            screen_trusted=help_screen_trusted(pivot.test_run, request),
         ),
     )
 

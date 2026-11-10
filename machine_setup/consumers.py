@@ -12,10 +12,11 @@ from machine_setup.payloads import HelpThreadPayload
 from machine_setup.presence_frame import parse_presence_frame
 from machine_setup.services.chat_page import SetupPage, find_thread, get_setup_page
 from machine_setup.services.help_thread_state import load_help_thread_payload
+from machine_setup.services.thread_runner import main_chat_runner_id, thread_runner_id
 from machine_setup.services.viewer_presence import clear_viewing, update_viewing
 from projects.consumers import AuthenticatedConsumer
 from projects.models import Project
-from projects.services import _agent_status_group
+from runners.channels import runner_status_group
 from visual_engine.services.pool_status import VISUAL_ENGINE_GROUP
 
 # Conversation ids checked on this socket. A long-lived main-route socket
@@ -27,8 +28,10 @@ _MAX_CHECKED_CONVERSATIONS = 32
 class MachineSetupConsumer(AuthenticatedConsumer):
     """Live machine setup chat: turn progress plus runner status on one socket.
 
-    Joins the setup group (via the base class `group_name`), the
-    project's agent status group and the global visual engine group. The only
+    Joins the setup group (via the base class `group_name`), the status
+    group of the shown thread's Test Runner (``runner_status_{id}``, when it
+    has one; a new pick or a reassigned run shows after a reload) and the
+    global visual engine group. The only
     client frame is the presence heartbeat (``{"type": "presence", "visible":
     bool, "conversation_id": int}``); anything else is ignored.
     The thread route (``conversation_id`` in the URL) uses the same group; its
@@ -38,7 +41,8 @@ class MachineSetupConsumer(AuthenticatedConsumer):
 
     _project: Project
     _thread: SetupConversation | None
-    _agent_group_name: str
+    # The thread runner's status group; "" without a runner.
+    _runner_group_name: str = ""
     # Conversation id -> whether it is a non-archived thread of the project.
     _checked_conversations: dict[int, bool]
     # The conversation this socket last marked as viewed, cleared on close.
@@ -60,18 +64,27 @@ class MachineSetupConsumer(AuthenticatedConsumer):
         self._project = project
         self._thread = thread
         self.group_name = setup_group(project.id)
-        self._agent_group_name = _agent_status_group(project.id)
         self._checked_conversations = {}
         return True
 
     async def _send_initial_state(self) -> None:
-        # Join before reading state so no runner update is missed in between.
-        await self.channel_layer.group_add(self._agent_group_name, self.channel_name)
-        await self.channel_layer.group_add(VISUAL_ENGINE_GROUP, self.channel_name)
         project = self._project
-        page: SetupPage = await sync_to_async(get_setup_page)(project, self._thread)
-        help_state: HelpThreadPayload | None = None
         thread = self._thread
+        runner_id = (
+            await sync_to_async(thread_runner_id)(thread)
+            if thread is not None
+            else await sync_to_async(main_chat_runner_id)(project.pk)
+        )
+        # Join before reading state so no runner update is missed in between.
+        if runner_id is not None:
+            self._runner_group_name = runner_status_group(runner_id)
+            await self.channel_layer.group_add(
+                self._runner_group_name, self.channel_name
+            )
+        await self.channel_layer.group_add(VISUAL_ENGINE_GROUP, self.channel_name)
+        page: SetupPage = await sync_to_async(get_setup_page)(project, thread)
+        runner = page.runner
+        help_state: HelpThreadPayload | None = None
         if thread is not None and thread.help_request_id is not None:
             help_state = await sync_to_async(load_help_thread_payload)(
                 thread.pk, thread.help_request_id
@@ -91,11 +104,14 @@ class MachineSetupConsumer(AuthenticatedConsumer):
                     "finishing_previous_turn": page.finishing_previous_turn,
                     "finishing_conversation_id": page.finishing_conversation_id,
                     "finishing_turn": page.finishing_turn,
-                    "agent_connected": project.agent_connected,
-                    "agent_device_state": project.agent_device_state,
-                    "agent_device_reported_at": (
-                        project.agent_device_reported_at.isoformat()
-                        if project.agent_device_reported_at is not None
+                    "runner_id": runner.runner_id if runner is not None else None,
+                    "runner_connected": runner is not None and runner.connected,
+                    "runner_device_state": (
+                        runner.device_state if runner is not None else ""
+                    ),
+                    "runner_device_reported_at": (
+                        runner.device_reported_at.isoformat()
+                        if runner is not None and runner.device_reported_at is not None
                         else None
                     ),
                     "visual_engine": page.visual_engine,
@@ -107,14 +123,11 @@ class MachineSetupConsumer(AuthenticatedConsumer):
 
     async def disconnect(self, close_code: int) -> None:
         await super().disconnect(close_code)
-        if hasattr(self, "_agent_group_name"):
+        if self._runner_group_name:
             await self.channel_layer.group_discard(
-                self._agent_group_name,
-                self.channel_name,
+                self._runner_group_name, self.channel_name
             )
-            await self.channel_layer.group_discard(
-                VISUAL_ENGINE_GROUP, self.channel_name
-            )
+        await self.channel_layer.group_discard(VISUAL_ENGINE_GROUP, self.channel_name)
         if self._viewing_conversation_id is not None:
             await clear_viewing(
                 self._viewing_conversation_id, self._user_id(), self.channel_name
@@ -188,14 +201,17 @@ class MachineSetupConsumer(AuthenticatedConsumer):
             text_data=json.dumps({"type": "reset", "conversation_id": None})
         )
 
-    async def agent_status(self, event: dict[str, Any]) -> None:
+    async def runner_status(self, event: dict[str, Any]) -> None:
+        # ``runners.services.runner_status.RunnerStatusEvent`` of the thread's
+        # runner; only what the header badge needs is forwarded.
         await self.send(
             text_data=json.dumps(
                 {
-                    "type": "agent_status",
-                    "agent_connected": event["agent_connected"],
-                    "agent_device_state": event.get("agent_device_state", ""),
-                    "agent_device_reported_at": event.get("agent_device_reported_at"),
+                    "type": "runner_status",
+                    "runner_id": event["runner_id"],
+                    "runner_connected": event["connected"],
+                    "runner_device_state": event.get("device_state", ""),
+                    "runner_device_reported_at": event.get("device_reported_at"),
                 }
             )
         )
@@ -206,8 +222,3 @@ class MachineSetupConsumer(AuthenticatedConsumer):
                 {"type": "visual_engine", "visual_engine": event["visual_engine"]}
             )
         )
-
-    async def agent_runner_update(self, event: dict[str, Any]) -> None:
-        # Shares the agent status group with the Environment page, which shows
-        # Test Runner updates; this page has nothing to show for them.
-        return

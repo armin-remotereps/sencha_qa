@@ -1,14 +1,13 @@
-"""The project's Test Runner pauses one of its project's cases (server-side seam).
+"""A Test Runner pauses a case of one of its runs (server-side seam).
 
 The runner window sends a pause (protocol owned by
 ``docs/plan/feat-runner-person-window-v2.md``); every rule of a pause stays in
 ``case_pause_services.request_case_pause``. This module applies the rules of
 ``runner_person_step_services.answer_from_runner``: only the connection that
-owns the project, the same shared per-project runner answer throttle
-(20/min, a pause counts as an answer), a case of that project that runs or
-waits for a person, and the pauser named only while the runner's email is
-an active writable member (else anonymous: the pause lands and its first
-message is sent as "a person at the Test Runner").
+owns the runner, the same shared per-runner answer throttle (20/min, a pause
+counts as an answer), a case of a run assigned to the runner that runs or
+waits for a person, and the pauser is the runner's owner ("<owner> via Test
+Runner") while a writable member of the run's project (else refused).
 """
 
 from __future__ import annotations
@@ -17,19 +16,18 @@ from projects.case_pause_policy import PAUSE_NOT_RUNNING, CasePauseOutcome
 from projects.case_pause_services import request_case_pause
 from projects.exceptions import CasePauseError, PersonStepError
 from projects.models import TestRunTestCase, TestRunTestCaseStatus
-from projects.person_step_actor import PersonStepActor
 
 # The shared helpers of the runner's answers; the throttle key and limit
-# must stay the same for every runner answer of a project.
+# must stay the same for every runner answer.
 from projects.runner_person_step_services import (
-    check_answer_throttle,
-    current_member,
-    owns_project,
+    NOT_RUNNER_CONNECTION,
+    NOT_RUNNER_MEMBER,
+    check_runner_answer_throttle,
+    owns_runner,
+    runner_actor,
 )
+from runners.types import RunnerId
 
-_NOT_OWNER = (
-    "This Test Runner is no longer the project's connection. Pause on Punk Hazard."
-)
 _PAUSABLE_STATUSES: tuple[str, ...] = (
     TestRunTestCaseStatus.IN_PROGRESS,
     TestRunTestCaseStatus.AWAITING_PERSON,
@@ -38,36 +36,37 @@ _PAUSABLE_STATUSES: tuple[str, ...] = (
 
 def pause_from_runner(
     *,
-    project_id: int,
+    runner_id: RunnerId,
     channel_name: str,
-    person_user_id: int | None,
     pivot_id: int,
     message: str,
 ) -> CasePauseOutcome:
-    """Pause one of the project's running or waiting cases from its Test Runner.
+    """Pause a running or waiting case of a run assigned to the Test Runner.
 
-    ``person_user_id``: the member the runner's email named at handshake
-    (``resolve_runner_person``), re-checked here. Raises ``CasePauseError``
-    (user-safe) when the connection no longer owns the project, the
-    project's runner answered too often, the case is not a running or
-    waiting case of the project, or ``request_case_pause`` refuses.
+    Raises ``CasePauseError`` (user-safe) when the connection no longer owns
+    the runner, the runner answered too often, the case is not a running or
+    waiting case of one of its runs, the owner is not a writable member of
+    the run's project, or ``request_case_pause`` refuses.
     """
-    if not owns_project(project_id, channel_name):
-        raise CasePauseError(_NOT_OWNER)
+    if not owns_runner(runner_id, channel_name):
+        raise CasePauseError(NOT_RUNNER_CONNECTION)
     try:
-        check_answer_throttle(project_id)
+        check_runner_answer_throttle(runner_id)
     except PersonStepError as exc:
         raise CasePauseError(exc.message) from exc
     pivot = (
         TestRunTestCase.objects.filter(
             pk=pivot_id,
-            test_run__project_id=project_id,
+            test_run__runner_id=runner_id,
             status__in=_PAUSABLE_STATUSES,
         )
-        .only("id", "test_run_id")
+        .select_related("test_run")
+        .only("id", "test_run_id", "test_run__id", "test_run__project_id")
         .first()
     )
     if pivot is None:
         raise CasePauseError(PAUSE_NOT_RUNNING)
-    actor = PersonStepActor.runner(current_member(project_id, person_user_id))
+    actor = runner_actor(runner_id, pivot.test_run.project_id)
+    if actor is None:
+        raise CasePauseError(NOT_RUNNER_MEMBER)
     return request_case_pause(pivot=pivot, actor=actor, message=message)

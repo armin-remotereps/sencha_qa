@@ -1,9 +1,11 @@
 """The Test Runner window's Manual run snapshot (``manual_run_state``).
 
-Read side only. The snapshot lists the project's running Manual run with its
+Read side only. The snapshot lists one running Manual run assigned to the
+runner (``TestRun.runner``) in a project its owner may write: the one whose
+case is claimed at the window, else the newest started. It carries the run's
 cases (capped, run order), the claimed case with its verbatim steps from the
-checkpoint the claim wrote, and every hand-in of the project still waiting
-for screenshots, with the keys the server misses, so a reconnected runner
+checkpoint the claim wrote, and every hand-in of the runner still waiting for
+screenshots, with the keys the server misses, so a reconnected runner
 resumes its uploads. A runner with MANUAL_PAUSE_DISCUSS_V1 also gets the
 claimed case's pause fields and sees it as ``paused`` in the list (no extra
 query); the case's discussion is composed in by
@@ -13,8 +15,11 @@ A constant number of queries (at most five), whatever the number of cases.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from typing import Final
+
+from django.db.models import Exists, OuterRef, QuerySet
 
 from agents.checkpoint import checkpoint_from_json
 from controller_client.protocol import (
@@ -52,39 +57,62 @@ from projects.models import (
     TestRunTestCaseStatus,
 )
 from projects.run_case_order import RUN_CASE_ORDERING
+from runners.types import RunnerId
 
 # The list status of the claimed case while it is paused (MANUAL_PAUSE_DISCUSS_V1).
 _PAUSED_LIST_STATUS: Final = "paused"
 
 
-def build_manual_run_state(
-    *, project: Project, runner_capabilities: frozenset[str]
-) -> ManualRunStateMessage:
-    """The ``manual_run_state`` for ``project``'s MANUAL_RUN_V1 runner window.
+@dataclass(frozen=True)
+class RunnerManualRunState:
+    message: ManualRunStateMessage
+    # The shown run's project (None without a run): the discussion reads it.
+    project: Project | None
 
-    ``run`` is None when the project has no running Manual run (the window
-    leaves the manual view); ``pending_uploads`` is listed either way. The
-    claimed case is the run's one claim (claims belong to the project's one
-    runner connection, so the snapshot is the same for every person at it).
-    The pause fields and the ``paused`` list status only for a runner that
-    also advertised MANUAL_PAUSE_DISCUSS_V1 (older windows get the snapshot
+
+def build_manual_run_state(
+    *,
+    runner_id: RunnerId,
+    project_ids: Sequence[int],
+    runner_capabilities: frozenset[str],
+) -> RunnerManualRunState:
+    """The ``manual_run_state`` for the runner's MANUAL_RUN_V1 window.
+
+    ``project_ids``: the projects the window may show
+    (``runner_window_project_ids``). ``run`` is None when no running Manual
+    run is assigned to the runner there (the window leaves the manual view);
+    ``pending_uploads`` (the runner's own hand-ins) is listed either way. The
+    pause fields and the ``paused`` list status only for a runner that also
+    advertised MANUAL_PAUSE_DISCUSS_V1 (older windows get the snapshot
     unchanged).
     """
+    pending = _pending_uploads(runner_id)
     run = (
-        TestRun.objects.filter(
-            project_id=project.pk,
-            help_mode=RunHelpMode.MANUAL,
-            status=TestRunStatus.STARTED,
+        (
+            TestRun.objects.filter(
+                runner_id=runner_id,
+                project_id__in=list(project_ids),
+                help_mode=RunHelpMode.MANUAL,
+                status=TestRunStatus.STARTED,
+            )
+            .annotate(
+                window_claim=Exists(_window_claims().filter(test_run_id=OuterRef("pk")))
+            )
+            .select_related("project")
+            # Status and mode: the pause panel (both known from the filter).
+            .only("id", "name", "status", "help_mode", "project")
+            .order_by("-window_claim", "-started_at", "-pk")
+            .first()
         )
-        # Status and mode: the pause panel (both known from the filter).
-        .only("id", "name", "status", "help_mode")
-        .order_by("-started_at", "-pk")
-        .first()
+        if project_ids
+        else None
     )
-    pending = _pending_uploads(project.pk)
     if run is None:
-        return ManualRunStateMessage(
-            run=None, cases=(), active=None, pending_uploads=pending
+        return RunnerManualRunState(
+            message=ManualRunStateMessage(
+                run=None, cases=(), active=None, pending_uploads=pending
+            ),
+            project=None,
         )
     pause_discuss = (
         ClientCapability.MANUAL_PAUSE_DISCUSS_V1.value in runner_capabilities
@@ -113,14 +141,26 @@ def build_manual_run_state(
         )
         for pivot_id, status, label, paused_at, title, testrail_id in rows
     )
-    return ManualRunStateMessage(
-        run=ManualRunInfoPayload(
-            run_id=run.pk,
-            name=(run.name or f"Run #{run.pk}")[:PERSON_STEP_LABEL_MAX_CHARS],
+    return RunnerManualRunState(
+        message=ManualRunStateMessage(
+            run=ManualRunInfoPayload(
+                run_id=run.pk,
+                name=(run.name or f"Run #{run.pk}")[:PERSON_STEP_LABEL_MAX_CHARS],
+            ),
+            cases=cases,
+            active=_active_case(run, pause_discuss=pause_discuss),
+            pending_uploads=pending,
         ),
-        cases=cases,
-        active=_active_case(run, pause_discuss=pause_discuss),
-        pending_uploads=pending,
+        project=run.project,
+    )
+
+
+def _window_claims() -> QuerySet[TestRunTestCase]:
+    """Claimed IN_PROGRESS cases made at a Test Runner window (not MCP)."""
+    return (
+        TestRunTestCase.objects.filter(status=TestRunTestCaseStatus.IN_PROGRESS)
+        .exclude(manual_claim_token="")
+        .exclude(manual_claim_source=MANUAL_SOURCE_MCP)
     )
 
 
@@ -140,11 +180,8 @@ def _active_case(
     outside the Test Runner (``MANUAL_SOURCE_MCP``) is never the window's
     active case: it stays listed as In progress, but its token is not sent."""
     claimed = (
-        TestRunTestCase.objects.filter(
-            test_run_id=test_run.pk, status=TestRunTestCaseStatus.IN_PROGRESS
-        )
-        .exclude(manual_claim_token="")
-        .exclude(manual_claim_source=MANUAL_SOURCE_MCP)
+        _window_claims()
+        .filter(test_run_id=test_run.pk)
         .select_related("test_case")
         .only(
             "id",
@@ -200,12 +237,12 @@ def _active_case(
     )
 
 
-def _pending_uploads(project_id: int) -> tuple[ManualPendingUploadPayload, ...]:
-    """The project's hand-ins still uploading, newest first (capped), with
+def _pending_uploads(runner_id: RunnerId) -> tuple[ManualPendingUploadPayload, ...]:
+    """The runner's hand-ins still uploading, newest first (capped), with
     their missing keys (two queries; one when there are none)."""
     submissions = list(
         ManualCaseSubmission.objects.filter(
-            test_run_test_case__test_run__project_id=project_id,
+            runner_id=runner_id,
             # An ``incomplete`` one is resumed by the runner's own replay of
             # the hand-in, which answers its missing keys.
             upload_state=ManualUploadState.UPLOADING,

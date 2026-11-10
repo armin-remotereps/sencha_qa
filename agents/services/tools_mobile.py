@@ -28,6 +28,7 @@ from projects.controller_mobile_actions import (
     controller_swipe,
 )
 from projects.services import ActionResult
+from runners.types import RunnerId
 
 
 def _default_long_press_expectation(description: str) -> str:
@@ -38,7 +39,7 @@ def _default_long_press_expectation(description: str) -> str:
 
 
 def long_press(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     description: str,
     duration: float,
@@ -49,10 +50,10 @@ def long_press(
     deadline: float | None = None,
 ) -> ToolResult:
     def _press(x: int, y: int) -> ActionResult:
-        return controller_long_press(project_id, x, y, duration)
+        return controller_long_press(runner_id, x, y, duration)
 
     return verified_click(
-        project_id,
+        runner_id,
         tool_name="long_press",
         description=description,
         vision_config=vision_config,
@@ -72,7 +73,7 @@ _GESTURE_MISS_HINT = "Take a screenshot before trying again."
 
 
 def long_press_at(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     x: int,
     y: int,
@@ -86,10 +87,10 @@ def long_press_at(
     """Long-press screenshot pixel (x, y) for ``duration`` seconds."""
     summary = f"long-pressed at ({x}, {y}) for {duration:g}s"
     return act_once_and_check(
-        project_id,
+        runner_id,
         tool_name="long_press_at",
         act=lambda: ensure_action_succeeded(
-            controller_long_press(project_id, x, y, duration)
+            controller_long_press(runner_id, x, y, duration)
         ),
         success_message=summary[0].upper() + summary[1:],
         action_summary=summary,
@@ -104,7 +105,7 @@ def long_press_at(
 
 
 def swipe(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     direction: ScrollDirection,
     x: int | None,
@@ -120,10 +121,10 @@ def swipe(
     start = "from the centre" if x is None or y is None else f"from ({x}, {y})"
     summary = f"swiped {direction.value} {start} over {distance:g} of the screen"
     return act_once_and_check(
-        project_id,
+        runner_id,
         tool_name="swipe",
         act=lambda: ensure_action_succeeded(
-            controller_swipe(project_id, direction, x, y, distance, duration)
+            controller_swipe(runner_id, direction, x, y, distance, duration)
         ),
         success_message=summary[0].upper() + summary[1:],
         action_summary=summary,
@@ -138,7 +139,7 @@ def swipe(
 
 
 def rotate_device(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     orientation: DeviceOrientation,
     vision_config: LLMConfig | None,
@@ -148,10 +149,10 @@ def rotate_device(
     deadline: float | None = None,
 ) -> ToolResult:
     return act_once_and_check(
-        project_id,
+        runner_id,
         tool_name="rotate_device",
         act=lambda: ensure_action_succeeded(
-            controller_rotate_device(project_id, orientation)
+            controller_rotate_device(runner_id, orientation)
         ),
         success_message=(
             f"Rotated the device to {orientation.value}; screenshot coordinates "
@@ -182,17 +183,17 @@ def _plain(operation: str, act: Callable[[], ActionResult]) -> ToolResult:
     return safe_tool_call(operation, _do)
 
 
-def press_button(project_id: int, *, button: MobileButton) -> ToolResult:
-    return _plain("press_button", lambda: controller_press_button(project_id, button))
+def press_button(runner_id: RunnerId, *, button: MobileButton) -> ToolResult:
+    return _plain("press_button", lambda: controller_press_button(runner_id, button))
 
 
-def hide_keyboard(project_id: int) -> ToolResult:
-    return _plain("hide_keyboard", lambda: controller_hide_keyboard(project_id))
+def hide_keyboard(runner_id: RunnerId) -> ToolResult:
+    return _plain("hide_keyboard", lambda: controller_hide_keyboard(runner_id))
 
 
-def open_url(project_id: int, *, url: str) -> ToolResult:
-    return _plain("open_url", lambda: controller_open_url(project_id, url))
+def open_url(runner_id: RunnerId, *, url: str) -> ToolResult:
+    return _plain("open_url", lambda: controller_open_url(runner_id, url))
 
 
-def install_app(project_id: int, *, path: str) -> ToolResult:
-    return _plain("install_app", lambda: controller_install_app(project_id, path))
+def install_app(runner_id: RunnerId, *, path: str) -> ToolResult:
+    return _plain("install_app", lambda: controller_install_app(runner_id, path))

@@ -21,13 +21,14 @@ from agents.services.verified_element_actions import (
     take_before_screenshot,
 )
 from agents.types import CancellationCheck, LLMConfig, ScreenshotCallback, ToolResult
+from runners.types import RunnerId
 
 # The miss hint of the coordinate tools (click_at and the other *_at tools).
 COORDINATE_MISS_HINT = "Take a screenshot and ask for the target's coordinates again."
 
 
 def act_once_and_check(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     tool_name: str,
     act: Callable[[], None],
@@ -71,10 +72,10 @@ def act_once_and_check(
                 f"be checked. Call {tool_name} without it.",
                 is_error=True,
             )
-        before_image = take_before_screenshot(project_id)
+        before_image = take_before_screenshot(runner_id)
         act()
         verdict = confirm_action(
-            project_id,
+            runner_id,
             vision_config,
             budget,
             acted_on=(),

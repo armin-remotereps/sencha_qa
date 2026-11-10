@@ -31,6 +31,7 @@ from projects.services import (
     build_action_result,
     dispatch_controller_action,
 )
+from runners.types import RunnerId
 
 # Installing an app (copy, verify, install) depends on its size and the
 # device, not only on the runner: a plain timeout the agent can judge.
@@ -71,7 +72,7 @@ class DeviceAppList:
 
 
 def controller_swipe(
-    project_id: int,
+    runner_id: RunnerId,
     direction: ScrollDirection,
     x: int | None,
     y: int | None,
@@ -87,7 +88,7 @@ def controller_swipe(
     """
     if x is None or y is None:
         reply = dispatch_controller_action(
-            project_id,
+            runner_id,
             "controller.swipe",
             timeout,
             runner_local=True,
@@ -97,7 +98,7 @@ def controller_swipe(
         )
     else:
         reply = dispatch_controller_action(
-            project_id,
+            runner_id,
             "controller.swipe",
             timeout,
             runner_local=True,
@@ -111,14 +112,14 @@ def controller_swipe(
 
 
 def controller_long_press(
-    project_id: int,
+    runner_id: RunnerId,
     x: int,
     y: int,
     duration: float,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.long_press",
         timeout,
         runner_local=True,
@@ -130,12 +131,12 @@ def controller_long_press(
 
 
 def controller_press_button(
-    project_id: int,
+    runner_id: RunnerId,
     button: MobileButton,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.press_button",
         timeout,
         runner_local=True,
@@ -145,12 +146,12 @@ def controller_press_button(
 
 
 def controller_rotate_device(
-    project_id: int,
+    runner_id: RunnerId,
     orientation: DeviceOrientation,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.rotate_device",
         timeout,
         runner_local=True,
@@ -159,9 +160,11 @@ def controller_rotate_device(
     return build_action_result(reply)
 
 
-def controller_hide_keyboard(project_id: int, timeout: float = 30.0) -> ActionResult:
+def controller_hide_keyboard(
+    runner_id: RunnerId, timeout: float = 30.0
+) -> ActionResult:
     reply = dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.hide_keyboard",
         timeout,
         runner_local=True,
@@ -170,7 +173,7 @@ def controller_hide_keyboard(project_id: int, timeout: float = 30.0) -> ActionRe
 
 
 def controller_open_url(
-    project_id: int, url: str, timeout: float = 30.0
+    runner_id: RunnerId, url: str, timeout: float = 30.0
 ) -> ActionResult:
     """Open ``url`` (a web link or an app deep link) on the device.
 
@@ -183,7 +186,7 @@ def controller_open_url(
     except ProtocolError as exc:
         raise ControllerActionError(str(exc)) from exc
     reply = dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.open_url",
         timeout,
         runner_local=True,
@@ -193,7 +196,7 @@ def controller_open_url(
 
 
 def controller_install_app(
-    project_id: int,
+    runner_id: RunnerId,
     path: str,
     timeout: float = INSTALL_APP_TIMEOUT_SECONDS,
 ) -> ActionResult:
@@ -213,7 +216,7 @@ def controller_install_app(
             "Invalid 'path': expected a local path on the Test Runner computer"
         )
     reply = dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.install_app",
         timeout,
         path=path,
@@ -222,7 +225,7 @@ def controller_install_app(
 
 
 def controller_list_device_apps(
-    project_id: int, *, timeout: float = DEVICE_APPS_TIMEOUT_SECONDS
+    runner_id: RunnerId, *, timeout: float = DEVICE_APPS_TIMEOUT_SECONDS
 ) -> DeviceAppList:
     """List the installed apps of the phone (DEVICE_APPS_V1).
 
@@ -233,7 +236,7 @@ def controller_list_device_apps(
     ``ControllerActionError`` (error reply or invalid result).
     """
     reply = dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.list_device_apps",
         timeout,
         resend_on_reconnect=False,

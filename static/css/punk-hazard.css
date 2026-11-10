@@ -4262,6 +4262,12 @@ details.card[open] > summary,
   gap: 6px 8px;
 }
 
+/* A runner token shown once on /runners/<id>/: long, unbroken, selectable. */
+.runner-token {
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
 /* Runner-provided failure text: escaped, may be long and unbroken. */
 .runner-update-detail {
   overflow-wrap: anywhere;

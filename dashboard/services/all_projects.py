@@ -5,7 +5,8 @@ scoped pages (dashboard, failures, ``/projects/``) stay unchanged.
 
 Every row value is a correlated subquery or ``Exists`` (never a join that fans
 out), so a page costs a constant number of queries whatever its size:
-paginator count, page rows, tags prefetch and latest runs (4).
+paginator count, page rows, tags prefetch, latest runs and active runs with
+their Test Runners (5).
 """
 
 from __future__ import annotations
@@ -48,8 +49,10 @@ from projects.models import (
     TestRun,
 )
 from projects.project_access import has_superuser_project_control
-from projects.runner_target import device_machine_state
+from projects.project_active_runners import ProjectActiveRuns, active_runs_by_project
+from projects.runner_display import RunnerSummary
 from projects.services import get_latest_runs_by_project
+from visual_engine.types import VisualEngineStatus
 
 
 @dataclass(frozen=True)
@@ -76,12 +79,10 @@ class AllProjectsRow:
     # "Member" / "Read-only" / "Not a member": the actor's own membership.
     viewer_role_label: str
     viewer_is_member: bool
-    runner_connected: bool
-    runner_version: str
-    # "" unless a phone runner's device holds the badge: "starting" or
-    # "device_offline" (``MachineState`` values).
-    device_machine_state: str
-    last_connected_at: datetime | None
+    # Active (Started or Paused) runs, and the Test Runner the latest of them
+    # holds (None when none holds one).
+    active_run_count: int
+    runner: RunnerSummary | None
     latest_run: AllProjectsLatestRun | None
 
 
@@ -101,10 +102,20 @@ def _filtered(actor: CustomUser, filters: AllProjectsFilters) -> QuerySet[Projec
     elif filters.status is ProjectStatusFilter.ARCHIVED:
         qs = qs.filter(archived=True)
 
-    if filters.runner is RunnerFilter.CONNECTED:
-        qs = qs.filter(agent_connected=True)
-    elif filters.runner is RunnerFilter.DISCONNECTED:
-        qs = qs.filter(agent_connected=False)
+    if filters.runner is not RunnerFilter.ANY:
+        # An active run holds a connected Test Runner.
+        on_connected_runner = Exists(
+            TestRun.objects.filter(
+                project=OuterRef("pk"),
+                status__in=ACTIVE_RUN_STATUSES,
+                runner__connected=True,
+            )
+        )
+        qs = qs.filter(
+            on_connected_runner
+            if filters.runner is RunnerFilter.CONNECTED
+            else ~on_connected_runner
+        )
 
     if filters.run is not RunActivityFilter.ANY:
         has_active_run = Exists(
@@ -149,6 +160,7 @@ def list_all_projects(
     filters: AllProjectsFilters,
     page: int,
     per_page: int,
+    visual_engine: VisualEngineStatus,
 ) -> Page[AllProjectsRow]:
     """One page of every project matching ``filters``.
 
@@ -168,11 +180,6 @@ def list_all_projects(
             "name",
             "archived",
             "created_at",
-            "agent_connected",
-            "agent_client_version",
-            "agent_device_state",
-            "agent_device_reported_at",
-            "last_connected_at",
         )
         .annotate(
             case_count=_count(TestCase.objects.filter(project=OuterRef("pk"))),
@@ -210,8 +217,15 @@ def list_all_projects(
     paginator: Paginator[Project] = Paginator(qs, per_page)
     project_page = paginator.get_page(page)
     runs_by_project = get_latest_runs_by_project(project_page.object_list)
+    active_by_project = active_runs_by_project(
+        [project.id for project in project_page.object_list], visual_engine
+    )
     rows = [
-        _to_row(project, runs_by_project.get(project.id))
+        _to_row(
+            project,
+            runs_by_project.get(project.id),
+            active_by_project.get(project.id),
+        )
         for project in project_page.object_list
     ]
     # The paginator counted the projects; this page holds the same rows mapped
@@ -225,7 +239,9 @@ def _role_label(role: str | None) -> str:
     return str(ProjectRole(role).label) if role in ProjectRole.values else role
 
 
-def _to_row(project: Project, run: TestRun | None) -> AllProjectsRow:
+def _to_row(
+    project: Project, run: TestRun | None, active: ProjectActiveRuns | None
+) -> AllProjectsRow:
     # The annotate() fields below are not modelled by django-stubs.
     return AllProjectsRow(
         id=project.id,
@@ -238,10 +254,8 @@ def _to_row(project: Project, run: TestRun | None) -> AllProjectsRow:
         writable_member_count=project.writable_member_count,  # type: ignore[attr-defined]  # annotate() field
         viewer_role_label=_role_label(project.viewer_role),  # type: ignore[attr-defined]  # annotate() field
         viewer_is_member=bool(project.viewer_role),  # type: ignore[attr-defined]  # annotate() field
-        runner_connected=project.agent_connected,
-        runner_version=project.agent_client_version,
-        device_machine_state=device_machine_state(project) or "",
-        last_connected_at=project.last_connected_at,
+        active_run_count=0 if active is None else active.active_run_count,
+        runner=None if active is None else active.latest_runner,
         latest_run=None if run is None else _to_latest_run(run),
     )
 

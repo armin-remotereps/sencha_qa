@@ -152,6 +152,16 @@ class SetupConversation(models.Model):
         blank=True,
         related_name="triage_conversations",
     )
+    # Main chat only: the Test Runner the person picked in the chat header.
+    # Help, auto-fix, result and manual threads use their run's runner; triage
+    # threads use none.
+    runner = models.ForeignKey(
+        "runners.TestRunner",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
     # Auto-fix threads only: the agent's last ``report_case_fix`` call.
     fix_result = models.CharField(
         max_length=16, choices=SetupFixResult.choices, blank=True, default=""
@@ -215,6 +225,15 @@ class SetupTurn(models.Model):
         blank=True,
         related_name="+",
     )
+    # The Test Runner the turn drives, recorded when it is queued. Null: a
+    # turn that needs no machine (triage) or a main chat with no runner.
+    runner = models.ForeignKey(
+        "runners.TestRunner",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="setup_turns",
+    )
     status = models.CharField(
         max_length=20, choices=SetupTurnStatus.choices, default=SetupTurnStatus.QUEUED
     )
@@ -252,7 +271,10 @@ class SetupTurn(models.Model):
                 name="setup_one_live_turn_per_project",
             )
         ]
-        indexes = [models.Index(fields=["project", "status"])]
+        indexes = [
+            models.Index(fields=["project", "status"]),
+            models.Index(fields=["runner", "status"]),
+        ]
 
     def __str__(self) -> str:
         return f"Setup turn #{self.pk} ({self.status})"

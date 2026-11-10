@@ -9,8 +9,14 @@ the checkpoint; the window releases its own claim (with the token), a
 writable member on the web releases a stuck one (no token). A claim's pause
 (``manual_case_pause_services``) starts cleared and ends with it.
 
+Runner (Q12): a Manual run's Test Runner is optional. When the run has one,
+a claim holds it (``projects.runner_use``), so the claim locks the runner row
+first (lock order runner, project, run) and is refused while anything else
+holds it. A claim from a runner window (``runner_id``) is only for a run
+assigned to that runner.
+
 Every change is broadcast on commit (``broadcast_run_and_pivots``), which also
-nudges the project's Test Runner to re-read its snapshot.
+nudges the run's Test Runner to re-read its snapshot.
 """
 
 from __future__ import annotations
@@ -42,7 +48,11 @@ from projects.models import (
     TestRunTestCaseStatus,
 )
 from projects.person_step_actor import PersonStepActor
+from projects.runner_use import runner_hold
 from projects.services import broadcast_run_and_pivots
+from runners.locks import lock_runner_row
+from runners.services.runner_access import runner_serves_project
+from runners.types import RunnerId
 from test_sessions.case_activity import CaseActivity
 from test_sessions.services.record_case_activity import record_case_activity
 
@@ -53,6 +63,13 @@ _OTHER_CLAIMED = (
 )
 _NOT_CLAIMED = "This case is not claimed any more."
 _SIGNED_IN_ONLY = "Only a signed-in member can release a case."
+_NOT_THIS_RUNNER = "This manual run is not assigned to this Test Runner."
+RUNNER_CHANGED_MESSAGE = "The run's Test Runner changed. Look at the list again."
+# Neutral (also an MCP refusal): names neither the runner's owner nor why.
+RUN_MACHINE_UNAVAILABLE = (
+    "The run's test machine is no longer available. Ask a project member to "
+    "choose another one."
+)
 # Token bytes: 16 bytes give 22 URL-safe characters (the wire allows 32).
 _CLAIM_TOKEN_BYTES = 16
 
@@ -63,21 +80,30 @@ def claim_manual_case(
     pivot_id: int,
     actor: PersonStepActor,
     source: ManualClaimSource = "",
+    runner_id: RunnerId | None = None,
 ) -> str:
-    """Claim a Created case of the project's running manual run; the claim token.
+    """Claim a Created case of one of the project's running manual runs; the
+    claim token.
 
     Raises ``ManualRunError`` (user-safe) when the case is not one of the
     project's manual run cases, the run is not running, the case is not
-    Created, another case of the run is claimed, or any Machine setup turn
-    of the project is live (it may be using the machine). ``source`` is the
-    internal ``manual_claim_source`` (blank, or ``MANUAL_SOURCE_MCP``). Records the actor's
-    ``CaseActivity.START`` (a member only); no leaderboard credit until the
-    hand-in.
+    Created, another case of the run is claimed, the run's Test Runner is
+    held by anything else, or any Machine setup turn of the project is live
+    (it may be using the machine). ``runner_id``: the claim comes from that
+    runner's window, so the run must be assigned to it. ``source`` is the
+    internal ``manual_claim_source`` (blank, or ``MANUAL_SOURCE_MCP``).
+    Records the actor's ``CaseActivity.START`` (a member only); no
+    leaderboard credit until the hand-in.
     """
     with transaction.atomic():
+        run_runner_id = lock_free_case_runner(project.pk, pivot_id)
+        if runner_id is not None and run_runner_id != runner_id:
+            raise ManualRunError(_NOT_THIS_RUNNER)
         test_run, pivot = lock_manual_run_case(
             project_id=project.pk, pivot_id=pivot_id, with_test_case=True
         )
+        if test_run.runner_id != run_runner_id:
+            raise ManualRunError(RUNNER_CHANGED_MESSAGE)
         if test_run.status != TestRunStatus.STARTED:
             raise ManualRunError(_RUN_NOT_RUNNING)
         if pivot.status != TestRunTestCaseStatus.CREATED:
@@ -131,6 +157,46 @@ def claim_manual_case(
         )
         transaction.on_commit(lambda: broadcast_run_and_pivots(test_run, [pivot]))
     return token
+
+
+def lock_free_case_runner(project_id: int, pivot_id: int) -> RunnerId | None:
+    """Lock the runner of the case's run (before project and run) and refuse
+    while anything else holds it; returns the runner id (None: no runner).
+
+    For the paths that make a Manual case hold its runner: claiming it and
+    continuing it after a pause. Callers re-check ``test_run.runner_id``
+    against the result under the run lock (``RUNNER_CHANGED_MESSAGE``).
+    Must be called inside ``transaction.atomic()``.
+    """
+    run_runner_id = _run_runner_id(project_id, pivot_id)
+    if run_runner_id is not None:
+        _lock_free_runner(run_runner_id, project_id)
+    return run_runner_id
+
+
+def _run_runner_id(project_id: int, pivot_id: int) -> RunnerId | None:
+    """The runner of the case's run, read before any lock (one query); the
+    caller re-checks it under the run lock."""
+    raw = (
+        TestRunTestCase.objects.filter(pk=pivot_id, test_run__project_id=project_id)
+        .values_list("test_run__runner_id", flat=True)
+        .first()
+    )
+    return RunnerId(raw) if raw is not None else None
+
+
+def _lock_free_runner(runner_id: RunnerId, project_id: int) -> None:
+    """Lock the runner row (before the project and run) and refuse while it
+    no longer serves the project (archived, its owner deactivated or no
+    longer a writable member) or anything else holds it. Connection is not
+    required: a claim through MCP may proceed while the runner is offline
+    (its machine tools then answer that the test machine is offline)."""
+    runner = lock_runner_row(runner_id, fields=("id", "owner_id", "archived_at"))
+    if runner is None or not runner_serves_project(runner, project_id):
+        raise ManualRunError(RUN_MACHINE_UNAVAILABLE)
+    hold = runner_hold(runner_id)
+    if hold is not None:
+        raise ManualRunError(hold.message)
 
 
 def release_manual_case(

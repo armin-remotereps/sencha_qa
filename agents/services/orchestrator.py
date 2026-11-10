@@ -98,6 +98,7 @@ from agents.types import (
     SubTaskAttempt,
     SubTaskResult,
 )
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,7 @@ _FAILURE_CAUSES: tuple[FailureCause, ...] = (
 def run_orchestrator(
     task_description: str,
     project_id: int,
+    runner_id: RunnerId,
     *,
     on_log: LogCallback | None = None,
     on_screenshot: AttemptScreenshotCallback | None = None,
@@ -177,6 +179,7 @@ def run_orchestrator(
             on_log=on_log,
             case_step_count=case_step_count,
             project_id=project_id,
+            runner_id=runner_id,
             knowledge_index=knowledge_index,
             artifacts_profile=artifacts_profile,
             cancellation_check=cancellation_check,
@@ -237,6 +240,7 @@ def run_orchestrator(
         orchestrator_llm=orchestrator_llm,
         progress=progress,
         project_id=project_id,
+        runner_id=runner_id,
         sub_agent_config=sub_agent_config,
         bounds=bounds,
         resuming=resume is not None,
@@ -728,6 +732,7 @@ def _restore_resumed_state(
     *,
     progress: _Progress,
     project_id: int,
+    runner_id: RunnerId,
     sub_agent_config: AgentConfig,
     bounds: TimeoutBounds,
     system_info: dict[str, object] | None,
@@ -748,6 +753,7 @@ def _restore_resumed_state(
         resume_task,
         "\n".join(progress.state_lines),
         project_id,
+        runner_id,
         config=_config_for_attempt(
             sub_agent_config,
             resume_task,
@@ -786,6 +792,7 @@ def _restore_before_resume(
     orchestrator_llm: LLMConfig,
     progress: _Progress,
     project_id: int,
+    runner_id: RunnerId,
     sub_agent_config: AgentConfig,
     bounds: TimeoutBounds,
     system_info: dict[str, object] | None,
@@ -811,6 +818,7 @@ def _restore_before_resume(
             person,
             attempt_kind="resume",
             project_id=project_id,
+            runner_id=runner_id,
             sub_agent_config=sub_agent_config,
             system_info=system_info,
             project_prompt=project_prompt,
@@ -854,6 +862,7 @@ def _restore_before_resume(
     _restore_resumed_state(
         progress=progress,
         project_id=project_id,
+        runner_id=runner_id,
         sub_agent_config=sub_agent_config,
         bounds=bounds,
         system_info=system_info,
@@ -939,6 +948,7 @@ def _settle_person_report(
     *,
     attempt_kind: Literal["step", "resume"],
     project_id: int,
+    runner_id: RunnerId,
     sub_agent_config: AgentConfig,
     system_info: dict[str, object] | None,
     project_prompt: str | None,
@@ -973,6 +983,7 @@ def _settle_person_report(
         check = confirm_person_step(
             person,
             project_id,
+            runner_id,
             config=replace(
                 sub_agent_config,
                 on_screenshot=_attempt_screenshot_callback(
@@ -1088,6 +1099,7 @@ def _plan_sub_tasks(
     on_log: LogCallback | None = None,
     case_step_count: int = 0,
     project_id: int,
+    runner_id: RunnerId,
     knowledge_index: str | None = None,
     artifacts_profile: str | None = None,
     cancellation_check: CancellationCheck | None = None,
@@ -1116,6 +1128,7 @@ def _plan_sub_tasks(
             orchestrator_llm,
             messages,
             project_id=project_id,
+            runner_id=runner_id,
             on_log=on_log,
             cancellation_check=cancellation_check,
         )
@@ -1154,6 +1167,7 @@ def _plan_with_knowledge_tools(
     messages: tuple[ChatMessage, ...],
     *,
     project_id: int,
+    runner_id: RunnerId,
     on_log: LogCallback | None,
     cancellation_check: CancellationCheck | None,
 ) -> str:
@@ -1170,6 +1184,7 @@ def _plan_with_knowledge_tools(
         orchestrator_llm,
         messages,
         project_id=project_id,
+        runner_id=runner_id,
         max_rounds=settings.ORCHESTRATOR_PLAN_MAX_TOOL_ROUNDS,
         timeout_seconds=settings.ORCHESTRATOR_PLAN_TIMEOUT_SECONDS,
         final_prompt=_PLAN_NOW_PROMPT,
@@ -1237,6 +1252,7 @@ def _execute_sub_tasks(
     orchestrator_llm: LLMConfig,
     progress: _Progress,
     project_id: int,
+    runner_id: RunnerId,
     sub_agent_config: AgentConfig,
     bounds: TimeoutBounds,
     resuming: bool,
@@ -1283,6 +1299,7 @@ def _execute_sub_tasks(
             orchestrator_llm=orchestrator_llm,
             progress=progress,
             project_id=project_id,
+            runner_id=runner_id,
             sub_agent_config=sub_agent_config,
             bounds=bounds,
             system_info=system_info,
@@ -1322,6 +1339,7 @@ def _execute_sub_tasks(
                 person,
                 attempt_kind="step",
                 project_id=project_id,
+                runner_id=runner_id,
                 sub_agent_config=sub_agent_config,
                 system_info=system_info,
                 project_prompt=project_prompt,
@@ -1417,6 +1435,7 @@ def _execute_sub_tasks(
             sub_task,
             state_description,
             project_id,
+            runner_id,
             config=_config_for_attempt(
                 sub_agent_config,
                 sub_task,
@@ -1496,6 +1515,7 @@ def _execute_sub_tasks(
             state_description=state_description,
             failed_result=result,
             project_id=project_id,
+            runner_id=runner_id,
             sub_agent_config=sub_agent_config,
             progress=progress,
             system_info=system_info,
@@ -1596,6 +1616,7 @@ def _attempt_recovery(
     state_description: str,
     failed_result: SubTaskResult,
     project_id: int,
+    runner_id: RunnerId,
     sub_agent_config: AgentConfig,
     progress: _Progress,
     system_info: dict[str, object] | None,
@@ -1642,6 +1663,7 @@ def _attempt_recovery(
         decision.recovery_task,
         recovery_state,
         project_id,
+        runner_id,
         config=_config_for_attempt(
             sub_agent_config,
             decision.recovery_task,

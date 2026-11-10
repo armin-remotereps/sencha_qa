@@ -482,9 +482,9 @@ document.addEventListener("alpine:init", () => {
 
 /**
  * Shared helper for every WebSocket-driven Alpine component defined in a
- * page's `extra_scripts` block (live run/case pages, agent-status,
+ * page's `extra_scripts` block (live run/case pages, runner status,
  * uploads progress, …). Builds a same-origin ws:// or wss:// URL from a
- * path such as `/ws/projects/3/agent-status/`.
+ * path such as `/ws/runners/3/status/`.
  */
 window.punkHazard = {
   wsUrl(path) {
@@ -493,12 +493,60 @@ window.punkHazard = {
   },
 
   /**
-   * The phone or tablet a Test Runner drives, from its `agent_system_info`
-   * and `agent_capabilities` (docs/plan/feat-mobile-device-runner.md, D4):
+   * Live status of one Test Runner (`runnerId`: `/ws/runners/<id>/status/`,
+   * run card, setup chat header, runner page) or of all the viewer's own
+   * runners (`runnerId` null: `/ws/runners/status/`, the Test Runners list).
+   * Calls `onMessage(data)` with each parsed message:
+   * - `{type: "runner.status", runner_id, name, connected, machine_state,
+   *   system_info, client_version, capabilities, last_connected_at,
+   *   device_state, device_detail, device_reported_at}`
+   *   (`runners.services.runner_status.RunnerStatusEvent`; the first one
+   *   arrives on connect for a single runner);
+   * - `{type: "runner_update", runner_id, runner_update}` (single runner
+   *   only; `projects.runner_update_offer.RunnerUpdatePayload`);
+   * - `{type: "visual_engine", visual_engine}` (the global engine).
+   * Reconnects with a capped back-off; returns `{ close() }`. Runner-provided
+   * strings (name, system info, device detail): bind with x-text only.
+   */
+  runnerStatusSocket(runnerId, onMessage) {
+    const path = runnerId == null ? "/ws/runners/status/" : "/ws/runners/" + Number(runnerId) + "/status/";
+    let socket = null;
+    let closed = false;
+    let delay = 1000;
+    const open = () => {
+      socket = new WebSocket(this.wsUrl(path));
+      socket.onopen = () => { delay = 1000; };
+      socket.onmessage = (event) => {
+        let data;
+        try {
+          data = JSON.parse(event.data);
+        } catch (error) {
+          return;
+        }
+        onMessage(data);
+      };
+      socket.onclose = () => {
+        if (closed) return;
+        setTimeout(open, delay);
+        delay = Math.min(delay * 2, 30000);
+      };
+    };
+    open();
+    return {
+      close() {
+        closed = true;
+        if (socket) socket.close();
+      },
+    };
+  },
+
+  /**
+   * The phone or tablet a Test Runner drives, from its `system_info` and
+   * `capabilities` (docs/plan/feat-mobile-device-runner.md, D4):
    * `{ label, deviceId }`, or null for a desktop runner. Mirrors
    * `controller_client.protocol.parse_device_info` and the
-   * `runner_device_label` template filter (projects/templatetags/
-   * runner_device.py). Runner-provided: bind with x-text only.
+   * `runners/device_label.py` (`runner_device_label`). Runner-provided:
+   * bind with x-text only.
    */
   runnerDevice(systemInfo, capabilities) {
     const info = systemInfo || {};
@@ -521,8 +569,7 @@ window.punkHazard = {
 
   /**
    * Whether a phone runner's device holds the machine badge (D6), as
-   * `projects.services.get_machine_state` / `projects.runner_target.
-   * device_offline` decide: "" (it does not), "starting" (its session is
+   * `runners.machine_state.runner_machine_state` / `device_offline` decide: "" (it does not), "starting" (its session is
    * being created) or "device_offline" (any other state, or READY with no
    * status within `staleSeconds`). `now` is a reactive clock in ms so a
    * status that goes stale updates the badge.

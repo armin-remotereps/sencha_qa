@@ -1,5 +1,4 @@
 {% extends "layouts/project.html" %}
-{% load runner_device %}
 
 {% comment %}
   Project overview.
@@ -7,16 +6,16 @@
   Context contract (projects/views.py::project_overview):
     project  — the current Project
     overview — projects.services.ProjectOverview
-    visual_engine — VisualEngineStatusPayload; seeds overviewLive().visualEngine
+    active_runners — list of projects.project_active_runners.ActiveRunRunner:
+                     the project's active runs and the Test Runners they hold
+    active_summary — projects.project_active_runners.ProjectActiveRuns of them
     open_help_request — CaseHelpRequest (case loaded) of the paused active
                         run, or None
     project_can_write — (context processor) false hides Restart setup wizard
                         and Run tests (read-only member)
 
-  The "Test machine" stat card below is a live view: it's kept in an
-  ancestor Alpine scope (overviewLive(), extra_scripts) that opens the
-  agent-status WebSocket, ported from the old templates/projects/detail.html
-  (component A, L10-45), so the badge updates without a page reload.
+  The "Test Runners" stat card shows the active runs and the runner of the
+  latest one, its badge live over ws/runners/<id>/status/.
 {% endcomment %}
 
 {% block title %}{{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
@@ -28,12 +27,7 @@
     <p class="subtitle">
       {{ project.get_application_platform_display|default:"Application" }} ·
       {{ overview.case_count }} test case{{ overview.case_count|pluralize }} ·
-      {% if overview.machine_state == "ready" %}test machine connected
-      {% elif overview.machine_state == "starting" %}visual engine starting
-      {% elif overview.machine_state == "failed" %}visual engine failed
-      {% elif overview.machine_state == "offline" %}visual engine offline
-      {% elif overview.machine_state == "device_offline" %}phone disconnected
-      {% else %}test machine not connected{% endif %}
+      {% with active_count=active_runners|length %}{% if active_count %}{{ active_count }} active run{{ active_count|pluralize }}{% else %}no active run{% endif %}{% endwith %}
     </p>
   </div>
   <div class="actions">
@@ -48,83 +42,9 @@
 {% endblock %}
 
 {% block project_content %}
-{{ project.agent_system_info|json_script:"overview-system-info" }}
-{{ project.agent_capabilities|json_script:"overview-capabilities" }}
-{{ visual_engine|json_script:"overview-visual-engine" }}
-<div x-data="overviewLive()">
-  {% include "projects/includes/_overview_alert.html" with project=project overview=overview open_help_request=open_help_request only %}
-  {% include "projects/includes/_overview_stats.html" with project=project overview=overview only %}
-</div>
+{% include "projects/includes/_overview_alert.html" with project=project overview=overview open_help_request=open_help_request only %}
+{% include "projects/includes/_overview_stats.html" with project=project overview=overview active_summary=active_summary only %}
 
 {% include "projects/includes/_overview_context.html" with project=project context_source=context_source can_write=project_can_write only %}
 {% include "projects/includes/_overview_runs.html" with project=project overview=overview only %}
-{% endblock %}
-
-{% block extra_scripts %}
-<script>
-document.addEventListener('alpine:init', () => {
-  Alpine.data('overviewLive', () => ({
-    agentConnected: {{ project.agent_connected|yesno:'true,false' }},
-    systemInfo: JSON.parse(document.getElementById('overview-system-info').textContent),
-    visualEngine: JSON.parse(document.getElementById('overview-visual-engine').textContent),
-    capabilities: JSON.parse(document.getElementById('overview-capabilities').textContent),
-    // Phone or tablet runner (docs/plan/feat-mobile-device-runner.md, D6).
-    deviceState: '{{ project.agent_device_state|escapejs }}',
-    deviceReportedAt: '{{ project.agent_device_reported_at|date:"c" }}' || null,
-    deviceStaleSeconds: {% runner_device_stale_seconds %},
-    now: Date.now(),
-    ws: null,
-
-    init() {
-      // A device status that goes stale shows without a message.
-      setInterval(() => { this.now = Date.now(); }, 10000);
-      this.ws = new WebSocket(window.punkHazard.wsUrl('/ws/projects/{{ project.id }}/agent-status/'));
-      this.ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        if (data.type === 'agent_status') {
-          this.agentConnected = data.agent_connected;
-          this.systemInfo = data.agent_system_info || {};
-          this.capabilities = data.agent_capabilities || [];
-          this.deviceState = data.agent_device_state || '';
-          this.deviceReportedAt = data.agent_device_reported_at || null;
-          this.now = Date.now();
-          if (data.visual_engine) this.visualEngine = data.visual_engine;
-        } else if (data.type === 'visual_engine') {
-          this.visualEngine = data.visual_engine;
-        }
-      };
-    },
-
-    get machineState() {
-      if (!this.agentConnected) return 'disconnected';
-      if (this.deviceMachineState) return this.deviceMachineState;
-      return { ready: 'ready', starting: 'starting', failed: 'failed', offline: 'offline' }[this.visualEngine.state] || 'starting';
-    },
-
-    get machineBadgeClass() {
-      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed', offline: 'warning', device_offline: 'disconnected' }[this.machineState];
-    },
-
-    get machineBadgeLabel() {
-      if (this.deviceMachineState === 'starting') return 'Phone starting';
-      return {
-        disconnected: 'Not connected',
-        starting: 'Visual engine starting',
-        ready: 'Connected',
-        failed: 'Visual engine failed',
-        offline: 'Visual engine offline',
-        device_offline: 'Phone disconnected',
-      }[this.machineState];
-    },
-
-    get device() {
-      return window.punkHazard.runnerDevice(this.systemInfo, this.capabilities);
-    },
-
-    get deviceMachineState() {
-      return window.punkHazard.deviceMachineState(this.device, this.deviceState, this.deviceReportedAt, this.deviceStaleSeconds, this.now);
-    },
-  }));
-});
-</script>
 {% endblock %}

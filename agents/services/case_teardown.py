@@ -27,6 +27,7 @@ from agents.types import (
     LogCallback,
     OrchestratorCheckpoint,
 )
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ _TEARDOWN_MAX_ITERATIONS: Final = 30
 def run_case_teardown(
     checkpoint: OrchestratorCheckpoint,
     project_id: int,
+    runner_id: RunnerId,
     *,
     timeout_seconds: int,
     on_log: LogCallback | None,
@@ -58,6 +60,7 @@ def run_case_teardown(
         _run(
             checkpoint,
             project_id,
+            runner_id,
             machine_ready=machine_ready,
             timeout_seconds=timeout_seconds,
             on_log=on_log,
@@ -68,13 +71,19 @@ def run_case_teardown(
     except AgentCancelledError:
         _log(on_log, "[Teardown] Stopped: the run was aborted or taken over")
     except Exception as exc:
-        logger.warning("Case teardown for project %d failed", project_id, exc_info=True)
+        logger.warning(
+            "Case teardown for project %d on runner %d failed",
+            project_id,
+            runner_id,
+            exc_info=True,
+        )
         _log(on_log, f"[Teardown] Skipped: {type(exc).__name__}")
 
 
 def _run(
     checkpoint: OrchestratorCheckpoint,
     project_id: int,
+    runner_id: RunnerId,
     *,
     machine_ready: Callable[[], bool],
     timeout_seconds: int,
@@ -113,6 +122,7 @@ def _run(
         build_teardown_sub_task(clauses, digests, timeout_seconds),
         "The test case has finished; the task lists what it opened.",
         project_id,
+        runner_id,
         config=config,
         browser_selection=BrowserSelection(current=checkpoint.browser),
         system_info=system_info,

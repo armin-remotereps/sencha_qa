@@ -7,6 +7,7 @@ from enum import Enum
 from typing import Literal, Protocol
 
 from controller_client.protocol import DEFAULT_BROWSER, BrowserName, RunnerTarget
+from runners.types import RunnerId
 
 
 class ToolCategory(Enum):
@@ -503,6 +504,9 @@ class BrowserSelection:
 @dataclass(frozen=True)
 class ToolContext:
     project_id: int
+    # The Test Runner the tools drive (the run's, the setup thread's or the
+    # MCP claim's runner); every ``controller_*`` call takes it.
+    runner_id: RunnerId
     browser_selection: BrowserSelection
     summarizer_config: LLMConfig | None = None
     vision_config: LLMConfig | None = None

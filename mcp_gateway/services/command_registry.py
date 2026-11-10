@@ -2,8 +2,10 @@
 belong to the claim; docs/plan/feat-mcp-runner-tools.md).
 
 Redis, one hash per claimed case: ``mcp:commands:{project_id}:{pivot_id}``
-maps a command session id to JSON ``{claim_started_at, started_at,
-detached, command_head}``. ``claim_started_at`` (the claim's
+maps a command session id to JSON ``{runner_id, claim_started_at,
+started_at, detached, command_head}``; ``runner_id`` is the test machine
+(Test Runner) the command runs on, so it is stopped there even when the
+run's runner changed meanwhile. ``claim_started_at`` (the claim's
 ``manual_claimed_at``) ties the entry to one claim: a later claim of the
 same case does not own it. The pivots with entries are kept in
 ``mcp:commands:pivots:{project_id}`` and the projects in
@@ -37,6 +39,7 @@ from mcp_gateway.limits import (
     MCP_DETACHED_MAX_SECONDS,
     MCP_MACHINE_LOCK_REDIS_TIMEOUT_SECONDS,
 )
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,8 @@ class CommandRegistryUnavailable(Exception):
 @dataclass(frozen=True)
 class KeptCommand:
     session_id: str
+    # The test machine (Test Runner) the command was started on.
+    runner_id: RunnerId
     # The owning claim's ``manual_claimed_at``.
     claim_started_at: datetime
     started_at: datetime
@@ -90,6 +95,7 @@ def register(project_id: int, pivot_id: int, entry: KeptCommand) -> None:
     pivots_key = _PIVOTS_KEY.format(project_id=project_id)
     value = json.dumps(
         {
+            "runner_id": entry.runner_id,
             "claim_started_at": entry.claim_started_at.isoformat(),
             "started_at": entry.started_at.isoformat(),
             "detached": entry.detached,
@@ -220,11 +226,16 @@ def _read_claim(project_id: int, pivot_id: int) -> list[KeptCommand]:
 
 
 def _parse(session_id: str, raw: str) -> KeptCommand | None:
-    """The entry, or None for a value this module did not write."""
+    """The entry, or None for a value this module did not write (also one
+    written before entries named their runner)."""
     try:
         data = json.loads(raw)
+        runner_id = data["runner_id"]
+        if not isinstance(runner_id, int) or isinstance(runner_id, bool):
+            raise TypeError("runner_id")
         return KeptCommand(
             session_id=session_id,
+            runner_id=RunnerId(runner_id),
             claim_started_at=datetime.fromisoformat(str(data["claim_started_at"])),
             started_at=datetime.fromisoformat(str(data["started_at"])),
             detached=bool(data["detached"]),

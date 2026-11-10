@@ -3,11 +3,11 @@
 Plan: docs/plan/feat-machine-setup-intake.md › D3, Services › scan_artifacts.py.
 Deterministic, no LLM: the runner's ``scan_directory`` action
 (ARTIFACT_SCAN_V1) lists the base directory of the runner's OS, the listing is
-stored as that OS's ``ArtifactInventory`` (one per project and OS, overwritten)
-and matched against the profile's items. Older runners get a message pointing
-to a read-only setup helper instead. Runner calls and gates come through
-``RunnerPorts`` (plan D2); one scan per project at a time
-(``project_locks.SCAN_LOCK_PREFIX``).
+stored as that OS's ``ArtifactInventory`` (one per project, Test Runner and OS,
+overwritten) and matched against the profile's items. Older runners get a
+message pointing to a read-only setup helper instead. Runner calls and gates
+come through ``RunnerPorts`` (plan D2); one scan per Test Runner at a time
+(``project_locks.RUNNER_SCAN_LOCK_PREFIX``).
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from django.conf import settings
+from django.db import transaction
 from django.utils import timezone
 
 from agents.exceptions import InfrastructureError
@@ -37,8 +38,11 @@ from machine_readiness.models import (
 from machine_readiness.network_paths import is_network_path
 from machine_readiness.profile_text import load_profile_snapshot
 from machine_readiness.runner_info import RunnerInfo, load_runner_info
-from machine_readiness.runner_ports import RunnerPorts
-from machine_readiness.services.runner_gates import runner_action_refusal
+from machine_readiness.runner_ports import ReadinessWork, RunnerPorts
+from machine_readiness.services.runner_gates import (
+    NO_RUNNER_MESSAGE,
+    runner_action_refusal,
+)
 from machine_readiness.types import (
     ArtifactMatch,
     InventoryEntry,
@@ -46,6 +50,8 @@ from machine_readiness.types import (
     ProfileData,
 )
 from projects.exceptions import ControllerActionError, ControllerNotConnectedError
+from runners.locks import lock_runner_row
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +64,7 @@ SCAN_REPLY_TIMEOUT_SECONDS = 30.0
 # The scan task: one runner reply (with a reconnect retry) plus the writes.
 SCAN_TASK_SOFT_LIMIT_SECONDS = int(SCAN_REPLY_TIMEOUT_SECONDS) * 2 + 30
 SCAN_TASK_TIME_LIMIT_SECONDS = SCAN_TASK_SOFT_LIMIT_SECONDS + 30
-# The per-project scan lock outlives the task's hard limit only a little, so
+# The per-runner scan lock outlives the task's hard limit only a little, so
 # a killed worker frees it within a minute of its limit.
 SCAN_LOCK_TTL_SECONDS = SCAN_TASK_TIME_LIMIT_SECONDS + 30
 SCAN_BUSY_MESSAGE = (
@@ -89,7 +95,7 @@ _NO_OS = (
 )
 _TOO_OLD = (
     "This Test Runner is too old to scan the base directory (it needs version "
-    "0.11.0 or newer). Use Update Test Runner on the Environment page, or ask "
+    "0.11.0 or newer). Use Update Test Runner on its Test Runners page, or ask "
     "Machine setup to list the base directory with a read-only helper."
 )
 _NO_ANSWER = (
@@ -167,6 +173,9 @@ class InventorySummary:
     truncated: bool
     permission_errors: int
     error: str
+    # A row from before user runners (no runner recorded), shown until the
+    # picked runner scans this OS: "Scanned by an earlier Test Runner (<host>)".
+    earlier_runner: bool = False
 
     @property
     def os_label(self) -> str:
@@ -202,18 +211,16 @@ class ScanOutcome:
 def scan_availability(
     project_id: int,
     *,
-    runner: RunnerInfo | None = None,
+    runner: RunnerInfo,
     profile: ProfileData | None = None,
 ) -> ScanAvailability:
-    """Whether a scan can run now (no runner call).
+    """Whether a scan of ``runner`` can run now (no runner call).
 
-    Checked in order: runner connected, a supported OS reported, a base
-    directory set for that OS, the runner advertises ARTIFACT_SCAN_V1. One
-    query for the runner and one for the base directory, each skipped when
-    the caller passes what it already loaded.
+    Checked in order: a runner picked, runner connected, a supported OS
+    reported, a base directory set for that OS, the runner advertises
+    ARTIFACT_SCAN_V1. One query for the base directory, skipped when the
+    caller passes the profile it already loaded.
     """
-    if runner is None:
-        runner = load_runner_info(project_id)
     runner_os = runner.os_name
     base_dir = ""
     if runner_os is not None:
@@ -223,7 +230,9 @@ def scan_availability(
             else _base_dir(project_id, runner_os)
         )
     reason = ""
-    if not runner.connected:
+    if runner.runner_id is None:
+        reason = NO_RUNNER_MESSAGE
+    elif not runner.connected:
         reason = _NOT_CONNECTED
     elif runner_os is None:
         reason = _NO_OS
@@ -244,21 +253,28 @@ def scan_availability(
 
 
 def scan_refusal(
-    *, project_id: int, ports: RunnerPorts, during_turn: bool
+    *,
+    project_id: int,
+    runner_id: RunnerId | None,
+    ports: RunnerPorts,
+    turn_id: int | None,
 ) -> tuple[ScanAvailability, str | None]:
     """The availability, and why a scan may not start now (or None).
 
-    The runner gates (agent run Started, manual case being tested, setup
-    turn live unless ``during_turn``,
-    runner updating, not connected), then the availability.
+    The runner gates (no runner, agent run Started, manual case being
+    tested, a setup turn other than ``turn_id`` driving it, runner updating,
+    another project's run holding it, not connected), then the availability.
+    Call under the runner row lock (``runners.locks.lock_runner_row``).
     """
-    runner = load_runner_info(project_id)
+    runner = load_runner_info(runner_id)
     availability = scan_availability(project_id, runner=runner)
     refusal = runner_action_refusal(
         project_id=project_id,
+        runner_id=runner_id,
         ports=ports,
         connected=runner.connected,
-        during_turn=during_turn,
+        turn_id=turn_id,
+        work=ReadinessWork.SCAN,
     )
     if refusal is None and not availability.available:
         refusal = availability.reason or _NO_OS
@@ -268,15 +284,17 @@ def scan_refusal(
 def scan_artifacts(
     *,
     project_id: int,
+    runner_id: RunnerId | None,
     actor_id: int | None,
     ports: RunnerPorts,
     lock_token: str | None = None,
-    during_turn: bool = False,
+    turn_id: int | None = None,
 ) -> ScanOutcome:
     """Scan the runner OS's base directory, store and match the inventory.
 
-    Runs under the project's scan lock: the one ``request_scan`` handed over
-    as ``lock_token``, or a new one (the setup agent's tool, ``during_turn``).
+    Runs under the runner's scan lock: the one ``request_scan`` handed over
+    as ``lock_token``, or a new one (the setup agent's tool, called from
+    the setup turn ``turn_id``, whose own hold of the runner does not count).
     Raises ``ArtifactScanUnavailableError`` (a gate, a scan already running,
     runner offline or too old, no base directory, no answer); a queued scan
     (``lock_token``) then also sends the setup page a ``scan`` readiness event
@@ -287,10 +305,11 @@ def scan_artifacts(
     try:
         return _scan_locked(
             project_id=project_id,
+            runner_id=runner_id,
             actor_id=actor_id,
             ports=ports,
             lock_token=lock_token,
-            during_turn=during_turn,
+            turn_id=turn_id,
         )
     except ArtifactScanUnavailableError as exc:
         if lock_token is not None:
@@ -304,42 +323,70 @@ def scan_artifacts(
 def _scan_locked(
     *,
     project_id: int,
+    runner_id: RunnerId | None,
     actor_id: int | None,
     ports: RunnerPorts,
     lock_token: str | None,
-    during_turn: bool,
+    turn_id: int | None,
 ) -> ScanOutcome:
+    if runner_id is None:
+        raise ArtifactScanUnavailableError(NO_RUNNER_MESSAGE)
     lock = (
         project_locks.claim(
-            project_locks.SCAN_LOCK_PREFIX,
-            project_id,
+            project_locks.RUNNER_SCAN_LOCK_PREFIX,
+            runner_id,
             lock_token,
             ttl=SCAN_LOCK_TTL_SECONDS,
         )
         if lock_token is not None
-        else project_locks.acquire(
-            project_locks.SCAN_LOCK_PREFIX, project_id, ttl=SCAN_LOCK_TTL_SECONDS
-        )
+        else _acquire_scan_lock(project_id, runner_id, ports, turn_id)
     )
     if lock is None:
         raise ArtifactScanUnavailableError(SCAN_BUSY_MESSAGE)
     try:
         return _scan(
             project_id=project_id,
+            runner_id=runner_id,
             actor_id=actor_id,
             ports=ports,
-            during_turn=during_turn,
+            turn_id=turn_id,
         )
     finally:
         project_locks.release(lock)
 
 
+def _acquire_scan_lock(
+    project_id: int, runner_id: RunnerId, ports: RunnerPorts, turn_id: int | None
+) -> project_locks.ProjectLock | None:
+    """The setup tool's own scan lock, taken under the runner row lock after
+    the gates (as ``request_scan`` does)."""
+    with transaction.atomic():
+        lock_runner_row(runner_id)
+        _, refusal = scan_refusal(
+            project_id=project_id, runner_id=runner_id, ports=ports, turn_id=turn_id
+        )
+        if refusal is not None:
+            raise ArtifactScanUnavailableError(refusal)
+        return project_locks.acquire(
+            project_locks.RUNNER_SCAN_LOCK_PREFIX, runner_id, ttl=SCAN_LOCK_TTL_SECONDS
+        )
+
+
 def _scan(
-    *, project_id: int, actor_id: int | None, ports: RunnerPorts, during_turn: bool
+    *,
+    project_id: int,
+    runner_id: RunnerId,
+    actor_id: int | None,
+    ports: RunnerPorts,
+    turn_id: int | None,
 ) -> ScanOutcome:
-    availability, refusal = scan_refusal(
-        project_id=project_id, ports=ports, during_turn=during_turn
-    )
+    # Re-checked under the runner row lock: a run may have started on it
+    # since the scan was queued.
+    with transaction.atomic():
+        lock_runner_row(runner_id)
+        availability, refusal = scan_refusal(
+            project_id=project_id, runner_id=runner_id, ports=ports, turn_id=turn_id
+        )
     if refusal is not None or availability.runner_os is None:
         raise ArtifactScanUnavailableError(refusal or _NO_OS)
     os_name = availability.runner_os
@@ -351,7 +398,7 @@ def _scan(
         )
     try:
         scan = ports.scan_directory(
-            project_id,
+            runner_id,
             base_dir,
             max_depth=int(settings.ARTIFACT_SCAN_MAX_DEPTH),
             max_entries=int(settings.ARTIFACT_SCAN_MAX_ENTRIES),
@@ -364,7 +411,10 @@ def _scan(
         raise ArtifactScanUnavailableError(_NOT_CONNECTED) from exc
     except (ControllerActionError, InfrastructureError, ValueError) as exc:
         logger.warning(
-            "artifact scan failed: project=%s kind=%s", project_id, type(exc).__name__
+            "artifact scan failed: project=%s runner=%s kind=%s",
+            project_id,
+            runner_id,
+            type(exc).__name__,
         )
         raise ArtifactScanUnavailableError(_NO_ANSWER) from exc
 
@@ -373,6 +423,7 @@ def _scan(
     entries = () if error else scan.entries
     ArtifactInventory.objects.update_or_create(
         project_id=project_id,
+        runner_id=runner_id,
         os_name=os_name,
         defaults={
             "base_dir": base_dir,

@@ -53,6 +53,7 @@ from machine_setup.subtask_report import parse_subtask_report, render_report_for
 from machine_setup.subtask_types import SetupTaskRequest
 from projects.controller_outage_clock import agent_monotonic
 from projects.controller_reconnect_services import connected_owner
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,10 @@ class SetupTaskRuntime:
     project_id: int
     conversation_id: int
     turn_id: int
+    # The Test Runner the turn recorded (``SetupTurn.runner``); None: none
+    # picked or assigned (``setup_tools`` refuses the call before this runs).
+    runner_id: RunnerId | None
+    # That runner's ``system_info`` at turn start.
     system_info: dict[str, object] | None
     # The application context as it was at turn start.
     project_prompt: str | None
@@ -107,8 +112,11 @@ def run_setup_task(
             "Tell the user what is done and that they can reply 'continue'.",
         )
 
+    runner_id = runtime.runner_id
+    if runner_id is None:
+        return _error(tool_call, "Not run: no Test Runner is set for this chat.")
     # Checked before the first LLM call so a lost runner costs no model round.
-    if connected_owner(runtime.project_id) is None:
+    if connected_owner(runner_id) is None:
         raise SetupRunnerLostError("The Test Runner is not connected.")
 
     approved: ApprovedActionText | None = None
@@ -158,6 +166,7 @@ def run_setup_task(
     runner_target = parse_runner_target(runtime.system_info or {})
     sub_context = ToolContext(
         project_id=runtime.project_id,
+        runner_id=runner_id,
         # Shared with the main loop so a browser picked here stays picked.
         browser_selection=context.browser_selection,
         summarizer_config=runtime.llm_config,
@@ -194,7 +203,7 @@ def run_setup_task(
         sub_context,
         config=config,
         tool_definitions=machine_tool_definitions(runner_target),
-        dispatch=recorder.wrap(build_machine_dispatcher(runtime.project_id)),
+        dispatch=recorder.wrap(build_machine_dispatcher(runner_id)),
         on_transcript=on_transcript,
     )
     elapsed = int(agent_monotonic() - started)

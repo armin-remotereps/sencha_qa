@@ -3,10 +3,12 @@ claimed case (capture_screenshot).
 
 1. The claim (no lock) and not paused; the staged-shot caps are checked
    before anything is captured.
-2. Capture readiness (allowlist, connection, capability, phone device) and
+2. The run's test machine (its runner; none: ``[not_set_up]``, held by
+   anything but this run's claims: ``[machine_busy]``), capture readiness
+   (allowlist, connection, capability, phone device) and
    the request against it: a desktop runner needs ``window_match`` for
    window and region; a named process must be allowlisted.
-3. A process round-trip slot and one capture per project at a time
+3. A process round-trip slot and one capture per test machine at a time
    (``machine_lock``, both released in ``finally``) for the runner round
    trip, which holds no transaction.
 4. A refusal on the machine becomes a coded tool error
@@ -55,6 +57,7 @@ from mcp_gateway.services.capture_errors import (
     CaptureErrorCode,
     controller_error,
     error,
+    no_machine_error,
     not_allowed,
     refuse_unready,
     status_error,
@@ -62,6 +65,7 @@ from mcp_gateway.services.capture_errors import (
 from mcp_gateway.services.capture_mapping import desktop_item
 from mcp_gateway.services.machine_round_trip import machine_lock, machine_round_trip
 from mcp_gateway.services.own_claim import load_own_claim, refuse_paused
+from mcp_gateway.services.run_machine import held_by_other, serving_runner_id
 from mcp_gateway.services.stage_shot import refuse_full, stage_shot
 from mcp_gateway.untrusted_text import case_line
 from projects.controller_capture_actions import (
@@ -72,6 +76,7 @@ from projects.controller_capture_actions import (
 from projects.exceptions import ControllerActionError, ControllerNotConnectedError
 from projects.models import ScreenshotCaptureSource
 from projects.runner_capture_readiness import CaptureReadiness, capture_readiness
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -97,13 +102,17 @@ def capture_screenshot(
 ) -> CaptureOutcome:
     deadline = time.monotonic() + MCP_CAPTURE_DEADLINE_SECONDS
     project_id = call.project.pk
-    refuse_paused(
-        load_own_claim(
-            project_id=project_id,
-            pivot_id=request.pivot_id,
-            claim_token=request.claim_token,
-            lock=False,
-        )
+    claim = load_own_claim(
+        project_id=project_id,
+        pivot_id=request.pivot_id,
+        claim_token=request.claim_token,
+        lock=False,
+    )
+    refuse_paused(claim)
+    test_run = claim.pivot.test_run
+    runner_id = serving_runner_id(
+        None if test_run.runner_id is None else RunnerId(test_run.runner_id),
+        project_id,
     )
     # A full claim is refused before the machine does any work.
     refuse_full(
@@ -112,11 +121,19 @@ def capture_screenshot(
         adding=0,
         hint=_CAPTURE_HINT,
     )
-    readiness = capture_readiness(project_id)
+    readiness = capture_readiness(project_id, runner_id)
+    if readiness.allowed and runner_id is None:
+        raise no_machine_error()
     refuse_unready(readiness)
+    if runner_id is None:
+        # ``refuse_unready`` refused already (not connected).
+        raise no_machine_error()
     window_request = _window_request(request, readiness)
+    # Only this run's claims may use the runner (A16).
+    if held_by_other(runner_id, test_run.pk):
+        raise error(CaptureErrorCode.MACHINE_BUSY)
 
-    capture = _capture_once(project_id, window_request)
+    capture = _capture_once(runner_id, window_request)
     if capture.desktop_restored is False:
         logger.warning(
             "capture on project %s could not switch the desktop back", project_id
@@ -222,14 +239,14 @@ def _window_request(
 
 
 def _capture_once(
-    project_id: int, window_request: CaptureWindowRequest
+    runner_id: RunnerId, window_request: CaptureWindowRequest
 ) -> WindowCapture:
-    """The runner round trip under a process round-trip slot and the
-    project's machine lock (no transaction is open here)."""
-    with machine_round_trip(), machine_lock(project_id, MCP_CAPTURE_LOCK_SECONDS):
+    """The runner round trip under a process round-trip slot and the test
+    machine's lock (no transaction is open here)."""
+    with machine_round_trip(), machine_lock(runner_id, MCP_CAPTURE_LOCK_SECONDS):
         try:
             return controller_capture_window(
-                project_id,
+                runner_id,
                 request=window_request,
                 timeout=MCP_CAPTURE_REPLY_TIMEOUT_SECONDS,
             )

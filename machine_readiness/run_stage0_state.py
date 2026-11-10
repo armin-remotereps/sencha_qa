@@ -85,7 +85,7 @@ def normalise_host(host: str) -> str:
 
 
 def runner_host(system_info: object) -> str | None:
-    """The connected runner's identity from ``Project.agent_system_info``.
+    """A Test Runner's identity from its ``TestRunner.system_info``.
 
     The hostname, and on a phone or tablet runner ``"<host>#<device_id>"``,
     so a status recorded on another phone on the same host reads unknown
@@ -230,13 +230,17 @@ def load_run_stage0_rows(*, project_id: int, run_id: int) -> RunStage0Rows:
     )
 
 
-def run_stage0_summary(project: Project, run_id: int) -> Stage0Summary:
+def run_stage0_summary(
+    project: Project, run_id: int, *, runner_system_info: object = None
+) -> Stage0Summary:
     """Counts of the run's requirements by effective status (2 queries).
 
-    The runner host comes from ``project.agent_system_info`` (no query).
+    ``runner_system_info``: the ``TestRunner.system_info`` of the run's (or
+    the chosen) Test Runner; the host comes from it (no query). None (no
+    runner) shows the statuses as stored.
     """
     rows = load_run_stage0_rows(project_id=project.id, run_id=run_id)
-    host = runner_host(project.agent_system_info)
+    host = runner_host(runner_system_info)
     counts = {status: 0 for status in RequirementStatus.values}
     for row in rows.requirements:
         status = effective_status(row, host)

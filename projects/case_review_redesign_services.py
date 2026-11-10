@@ -73,9 +73,12 @@ from projects.run_reopen_services import (
     is_valid_help_mode,
     list_reopen_blockers,
     lock_project_and_run,
+    lock_runner_project_and_run,
     reopen_run,
     reset_case_for_restart,
 )
+from projects.run_runner_gate import select_run_runner
+from runners.types import RunnerId
 from test_sessions.case_activity import CaseActivity
 from test_sessions.services.record_case_activity import record_case_activity
 
@@ -235,6 +238,7 @@ def rerun_with_redesigned_plan(
     revision_id: int,
     user: CustomUser,
     help_mode: str | None,
+    runner_id: RunnerId | None = None,
 ) -> None:
     """Apply the pending review redesign and re-run the case on its run.
 
@@ -248,11 +252,19 @@ def rerun_with_redesigned_plan(
     Raises ``RunResumeError`` (run status and reopen gates) or
     ``PlanRevisionError`` (the draft); both messages are user-safe.
     ``HelpModeNotAllowedError`` when a non-superuser asks for another mode.
+    ``runner_id``: None keeps the run's Test Runner (an agent run without one
+    must choose); another of the user's runners switches the run to it first
+    (Q6); runner refusals raise ``RunResumeError``.
     """
     if help_mode is not None and not is_valid_help_mode(help_mode):
         raise RunResumeError(_INVALID_HELP_MODE)
+    chosen_runner_id = select_run_runner(
+        pivot.test_run, runner_id=runner_id, actor=user, error=RunResumeError
+    )
     with transaction.atomic():
-        project, test_run = lock_project_and_run(pivot.test_run_id)
+        project, test_run = lock_runner_project_and_run(
+            pivot.test_run_id, chosen_runner_id, error=RunResumeError
+        )
         resolved_help_mode = resolve_help_mode(
             user=user, requested=help_mode, current=test_run.help_mode
         )

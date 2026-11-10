@@ -1,0 +1,34 @@
+{% comment %} A Test Runner's machine badge, kept live over its status socket.
+
+   Context contract (include with `only`):
+     runner_id     — the runner's id
+     machine_state — its server-rendered state, a runners.machine_state.MachineState
+                     value: "disconnected" | "starting" | "ready" | "failed" |
+                     "offline" | "device_offline"
+
+   Opens ws/runners/<id>/status/ (runners.consumers.RunnerStatusConsumer,
+   allowed for the owner, a superuser and members of a project whose active
+   run holds the runner); "runner.status" events carry runner_id and
+   machine_state. A viewer the socket refuses keeps the server-rendered
+   state. Labels match partials/badge_machine.html. {% endcomment %}
+<span
+  class="badge"
+  :class="'badge-' + badgeClass"
+  x-data="{
+    state: '{{ machine_state|escapejs }}',
+    init() {
+      const socket = new WebSocket(window.punkHazard.wsUrl('/ws/runners/{{ runner_id }}/status/'));
+      socket.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (Number(data.runner_id) === {{ runner_id }} && data.machine_state) this.state = data.machine_state;
+      };
+    },
+    get badgeClass() {
+      return { disconnected: 'disconnected', starting: 'starting', ready: 'connected', failed: 'failed', offline: 'warning', device_offline: 'disconnected' }[this.state] || 'disconnected';
+    },
+    get label() {
+      return { disconnected: 'Not connected', starting: 'Visual engine starting', ready: 'Connected', failed: 'Visual engine failed', offline: 'Visual engine offline', device_offline: 'Phone disconnected' }[this.state] || 'Not connected';
+    },
+  }"
+  x-text="label"
+>{% if machine_state == "ready" %}Connected{% elif machine_state == "starting" %}Visual engine starting{% elif machine_state == "failed" %}Visual engine failed{% elif machine_state == "offline" %}Visual engine offline{% elif machine_state == "device_offline" %}Phone disconnected{% else %}Not connected{% endif %}</span>

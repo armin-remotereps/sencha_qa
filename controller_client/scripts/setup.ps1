@@ -69,7 +69,7 @@ if (-not (Test-Path "$ProjectDir\.env")) {
     Write-Host "[4/5] Creating .env from example.env..."
     Copy-Item "$ProjectDir\example.env" "$ProjectDir\.env"
     Write-Host ""
-    Write-Host "IMPORTANT: Edit .env and set your CONTROLLER_API_KEY" -ForegroundColor Yellow
+    Write-Host "IMPORTANT: Edit .env and set CONTROLLER_RUNNER_TOKEN (from the Test Runners page)" -ForegroundColor Yellow
 } else {
     Write-Host "[4/5] .env already exists, skipping..."
 }
@@ -109,11 +109,10 @@ Write-Host "To start the controller client:"
 Write-Host "  cd $RootDir"
 Write-Host "  controller_client\.venv\Scripts\python -m controller_client.main"
 Write-Host ""
-Write-Host "On its first interactive start the Test Runner asks for your Punk Hazard email"
-Write-Host "(CONTROLLER_PERSON_EMAIL in .env), so steps you answer in its window are recorded"
-Write-Host "as yours. Leave it blank to report as 'a person at the Test Runner'."
+Write-Host "The Test Runner signs in with its runner token (CONTROLLER_RUNNER_TOKEN in .env)."
+Write-Host "Keep it secret: anyone with it can connect as this Test Runner."
 Write-Host ""
-# Self-update (Update Test Runner on the Environment page) installs the new
+# Self-update (Update Test Runner on its page under Test Runners) installs the new
 # version side by side in <base>\test-runner-<version>\ and deletes the old
 # copy; <base> is the parent of a test-runner-* folder an update created (it
 # holds .punk-hazard-runner), else this root.

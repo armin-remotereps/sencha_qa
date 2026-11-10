@@ -1,7 +1,8 @@
 """Use case: the MCP tester lists the windows it may capture (list_windows).
 
-No claim is needed. Asks the project's test machine for its allowlisted
-windows on every virtual desktop, so the client can pick a ``window_id``
+No claim is needed. Asks the test machine of the project's running Manual
+run (its runner; none: ``[not_set_up]``) for its allowlisted windows on
+every virtual desktop, so the client can pick a ``window_id``
 for ``capture_screenshot`` instead of guessing. Only windows of allowed
 applications are listed (checked by the machine and again here); titles
 and desktop names are neutralised text from the machine, data only.
@@ -19,11 +20,13 @@ from mcp_gateway.services.capture_errors import (
     CaptureErrorCode,
     controller_error,
     error,
+    no_machine_error,
     refuse_unready,
     status_error,
 )
 from mcp_gateway.services.capture_mapping import desktop_item
 from mcp_gateway.services.machine_round_trip import machine_busy, machine_round_trip
+from mcp_gateway.services.run_machine import held_by_other, load_manual_run_machine
 from mcp_gateway.untrusted_text import case_line
 from projects.controller_capture_actions import controller_list_windows
 from projects.exceptions import ControllerActionError, ControllerNotConnectedError
@@ -36,16 +39,27 @@ WINDOW_DATA_NOTE: Final = (
 
 
 def list_windows(call: McpCall) -> ListWindowsResponse:
-    readiness = capture_readiness(call.project.pk)
+    run = load_manual_run_machine(call.project.pk)
+    runner_id = None if run is None or run.runner is None else run.runner.runner_id
+    readiness = capture_readiness(call.project.pk, runner_id)
+    if readiness.allowed and (run is None or runner_id is None):
+        raise no_machine_error()
     refuse_unready(readiness)
+    if run is None or runner_id is None:
+        # ``refuse_unready`` refused already (not connected).
+        raise no_machine_error()
+    # Another run, a setup turn, a self-update or a readiness check holds
+    # the runner: only this run's claims may use it.
+    if held_by_other(runner_id, run.run_id):
+        raise error(CaptureErrorCode.MACHINE_BUSY)
     # The machine handles one request at a time: a listing would only wait
     # behind a running capture or machine action and time out.
-    if machine_busy(call.project.pk):
+    if machine_busy(runner_id):
         raise error(CaptureErrorCode.MACHINE_BUSY)
     with machine_round_trip():
         try:
             result = controller_list_windows(
-                call.project.pk,
+                runner_id,
                 allowed=list(readiness.allowed),
                 timeout=MCP_LIST_WINDOWS_TIMEOUT_SECONDS,
             )

@@ -244,6 +244,15 @@ class ArtifactInventory(models.Model):
     project = models.ForeignKey(
         Project, on_delete=models.CASCADE, related_name="artifact_inventories"
     )
+    # The Test Runner that scanned. Null: a row from before user runners
+    # ("Scanned by an earlier Test Runner (<host>)").
+    runner = models.ForeignKey(
+        "runners.TestRunner",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
     os_name = models.CharField(max_length=10, choices=ArtifactOs.choices)
     base_dir = models.CharField(max_length=BASE_DIR_MAX_LENGTH)
     # The runner's hostname at scan time.
@@ -277,8 +286,15 @@ class ArtifactInventory(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["project", "os_name"], name="artifact_inventory_one_per_os"
-            )
+                fields=["project", "runner", "os_name"],
+                condition=models.Q(runner__isnull=False),
+                name="artifact_inventory_one_per_runner_os",
+            ),
+            models.UniqueConstraint(
+                fields=["project", "os_name"],
+                condition=models.Q(runner__isnull=True),
+                name="artifact_inventory_one_legacy_per_os",
+            ),
         ]
 
     def __str__(self) -> str:

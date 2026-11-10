@@ -3,8 +3,9 @@
 
    Context contract:
      active_nav      — "dashboard" | "projects" | "failures" | "sessions" | "insights" |
-                       "notifications" | "connected_apps" | "users" | "all_projects" | anything else for no match
-     is_superuser    — bool; shows the Users and All projects links (superusers only)
+                       "notifications" | "connected_apps" | "users" | "all_projects" | "runners" |
+                       "all_runners" | anything else for no match
+     is_superuser    — bool; shows the Users, All projects and All runners links (superusers only)
      attention_count — items needing the user (dashboard.context_processors.attention_badge);
                        the Dashboard badge, kept live by attentionLive via [data-attention-badge]
      open_test_session — the user's open TestSession or None
@@ -12,10 +13,12 @@
                        shows the "Live" chip on Sessions {% endcomment %}
 <a class="nav-link" href="{% url 'dashboard:index' %}"{% if active_nav == "dashboard" %} aria-current="page"{% endif %}>◈ Dashboard <span class="nav-badge" data-attention-badge{% if not attention_count %} hidden{% endif %}><span data-attention-badge-count>{{ attention_count|default:0 }}</span><span class="visually-hidden"> items need attention</span></span></a>
 <a class="nav-link" href="{% url 'projects:list' %}"{% if active_nav == "projects" %} aria-current="page"{% endif %}>▣ Projects</a>
+<a class="nav-link" href="{% url 'runners:list' %}"{% if active_nav == "runners" %} aria-current="page"{% endif %}>⌘ Test Runners</a>
 <a class="nav-link" href="{% url 'dashboard:failed_cases' %}"{% if active_nav == "failures" %} aria-current="page"{% endif %}>✕ Failures</a>
 <a class="nav-link" href="{% url 'test_sessions:list' %}"{% if active_nav == "sessions" %} aria-current="page"{% endif %}>◷ Sessions{% if open_test_session %} <span class="badge badge-running">Live<span class="visually-hidden"> test session</span></span>{% endif %}</a>
 <a class="nav-link" href="{% url 'dashboard:leaderboard' %}"{% if active_nav == "insights" %} aria-current="page"{% endif %}>★ Leaderboard</a>
 <a class="nav-link" href="{% url 'notifications:settings' %}"{% if active_nav == "notifications" %} aria-current="page"{% endif %}>◉ Notifications</a>
 <a class="nav-link" href="{% url 'mcp_gateway:connections' %}"{% if active_nav == "connected_apps" %} aria-current="page"{% endif %}>⇄ Connected apps</a>
 {% if is_superuser %}<a class="nav-link" href="{% url 'dashboard:all_projects' %}"{% if active_nav == "all_projects" %} aria-current="page"{% endif %}>▦ All projects</a>
+<a class="nav-link" href="{% url 'runners:all' %}"{% if active_nav == "all_runners" %} aria-current="page"{% endif %}>⌘ All runners</a>
 <a class="nav-link" href="{% url 'accounts:users' %}"{% if active_nav == "users" %} aria-current="page"{% endif %}>◎ Users</a>{% endif %}

@@ -7,7 +7,9 @@ as their own turn, exactly as if they had pressed "Open help chat" with it.
 
 Idempotent: only a request whose ``pause_message_state`` is ``pending`` is
 handled, the project row lock serialises a second delivery, and the state is
-written with a conditional UPDATE. The message text is never logged.
+written with a conditional UPDATE. Locks the run's Test Runner row before
+the project row (the send locks the thread's runner; the order every runner
+holder uses). The message text is never logged.
 """
 
 from __future__ import annotations
@@ -31,16 +33,22 @@ from projects.models import (
     PauseMessageState,
     PersonStepChannel,
     Project,
+    TestRun,
     TestRunTestCase,
 )
 from projects.person_step_actor import PersonStepActor
 from projects.project_access_services import get_project_access
 from projects.services import broadcast_case_status
+from runners.locks import lock_runner_row
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
 NO_MEMBER_NOTE = "Open the discussion on the web to send your message."
 INTERNAL_ERROR_NOTE = "The discussion could not be opened. Open it yourself."
+RUNNER_CHANGED_NOTE = (
+    "The run's Test Runner changed meanwhile. Open the discussion yourself."
+)
 
 
 @dataclass(frozen=True)
@@ -86,8 +94,15 @@ def _open_locked(help_request_id: int) -> _Outcome | None:
     if request is None:
         return None
     pivot = request.test_run_test_case
-    # Lock order of every run write (and of open_help_chat): the project row
-    # first. It also serialises a second delivery of this task.
+    # Lock order of every runner holder: the run's Test Runner row first (the
+    # send below locks it as the thread's runner), then the project row,
+    # which also serialises a second delivery of this task.
+    if not _lock_run_runner(pivot.test_run_id):
+        if not _set_state(
+            help_request_id, PauseMessageState.REFUSED, note=RUNNER_CHANGED_NOTE
+        ):
+            return None
+        return _Outcome(pivot, PauseMessageState.REFUSED, _thread_id(help_request_id))
     project = Project.objects.select_for_update().get(pk=pivot.test_run.project_id)
     current = (
         CaseHelpRequest.objects.filter(pk=help_request_id)
@@ -123,6 +138,31 @@ def _open_locked(help_request_id: int) -> _Outcome | None:
         return _Outcome(pivot, PauseMessageState.DROPPED, None)
     _set_state(help_request_id, PauseMessageState.SENT)
     return _Outcome(pivot, PauseMessageState.SENT, thread.pk)
+
+
+def _lock_run_runner(test_run_id: int) -> bool:
+    """Lock the run's current runner row (none: nothing to lock); False when
+    the run's runner changed between the read and the lock.
+
+    Read, locked, read again: a reassign locks the old runner before moving
+    the run, so once the re-read matches the locked row it cannot change
+    until this transaction ends. On a mismatch nothing more is locked (a
+    second runner row out of id order could deadlock with a reassign).
+    """
+    raw = _run_runner_id(test_run_id)
+    if raw is None:
+        return True
+    lock_runner_row(RunnerId(raw), fields=("id",))
+    return _run_runner_id(test_run_id) == raw
+
+
+def _run_runner_id(test_run_id: int) -> int | None:
+    runner_id: int | None = (
+        TestRun.objects.filter(pk=test_run_id)
+        .values_list("runner_id", flat=True)
+        .first()
+    )
+    return runner_id
 
 
 def _pauser(project_id: int, request: CaseHelpRequest) -> PersonStepActor | None:
@@ -163,13 +203,16 @@ def _thread_id(help_request_id: int) -> int | None:
 
 def _set_state(
     help_request_id: int, state: PauseMessageState, *, note: str = ""
-) -> None:
-    # Conditional: only a pending state moves, so a second delivery is a no-op.
-    CaseHelpRequest.objects.filter(
-        pk=help_request_id, pause_message_state=PauseMessageState.PENDING
-    ).update(
-        pause_message_state=state,
-        pause_message_note=note[:PAUSE_MESSAGE_NOTE_MAX_LENGTH],
+) -> bool:
+    """Whether the state moved. Conditional: only a pending state moves, so a
+    second delivery is a no-op."""
+    return bool(
+        CaseHelpRequest.objects.filter(
+            pk=help_request_id, pause_message_state=PauseMessageState.PENDING
+        ).update(
+            pause_message_state=state,
+            pause_message_note=note[:PAUSE_MESSAGE_NOTE_MAX_LENGTH],
+        )
     )
 
 

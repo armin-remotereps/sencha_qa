@@ -34,6 +34,7 @@ from controller_client.protocol import (
 )
 from projects.exceptions import ControllerActionError
 from projects.services import dispatch_controller_action
+from runners.types import RunnerId
 
 
 @dataclass(frozen=True)
@@ -137,7 +138,7 @@ class WindowCapture:
 
 
 def controller_list_windows(
-    project_id: int, *, allowed: list[str], timeout: float
+    runner_id: RunnerId, *, allowed: list[str], timeout: float
 ) -> WindowList:
     """List the allowlisted windows on the test machine (WINDOW_CAPTURE_V1).
 
@@ -146,7 +147,7 @@ def controller_list_windows(
     ``ControllerActionError`` (error reply or invalid result).
     """
     reply = dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.list_windows",
         timeout,
         resend_on_reconnect=False,
@@ -180,7 +181,7 @@ def controller_list_windows(
 
 
 def controller_capture_window(
-    project_id: int, *, request: CaptureWindowRequest, timeout: float
+    runner_id: RunnerId, *, request: CaptureWindowRequest, timeout: float
 ) -> WindowCapture:
     """Capture a window, region or screen on the test machine (WINDOW_CAPTURE_V1).
 
@@ -205,7 +206,7 @@ def controller_capture_window(
         switch_desktop=request.switch_desktop,
     )
     reply = dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.capture_window",
         timeout,
         resend_on_reconnect=False,

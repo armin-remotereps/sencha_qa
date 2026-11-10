@@ -196,7 +196,6 @@ from projects.models import (
     Project,
     ProjectMembership,
     RunHelpMode,
-    RunnerDeviceState,
     Tag,
     TestCase,
     TestCaseData,
@@ -228,17 +227,29 @@ from projects.project_access_services import get_project_access
 from projects.run_case_order import PICKER_CASE_ORDERING, RUN_CASE_ORDERING
 from projects.run_finished_notifications import notify_run_finished
 from projects.run_help_mode_policy import resolve_help_mode
-from projects.runner_bundle import build_runner_archive
+from projects.run_runner_assignment import (
+    lock_runner_to_assign,
+    lock_usable_runner,
+    write_runner_assignment,
+)
+from projects.run_runner_gate import (
+    CHOOSE_RUNNER_MESSAGE,
+    RUNNER_CHANGED_MESSAGE,
+    RUNNERS_PAGE_URL_NAME,
+)
 from projects.runner_person_step_push import nudge_runner_person_steps
-from projects.runner_target import (
+from projects.runner_use import runner_hold, runner_id_of_run
+from runners.channels import runner_group
+from runners.exceptions import RunnerError
+from runners.machine_state import (
     DEVICE_NOT_READY_MESSAGE,
-    device_machine_state,
+    MachineState,
     device_offline,
+    runner_machine_state,
 )
-from projects.runner_update_state import (
-    RUNNER_UPDATE_RUNNING_MESSAGE,
-    runner_update_in_progress,
-)
+from runners.models import TestRunner
+from runners.services.authenticate_runner import outdated_runner_message
+from runners.types import RunnerId
 from test_sessions.case_activity import CaseActivity
 from test_sessions.services.record_case_activity import (
     freeze_session_cases_of_run,
@@ -262,6 +273,7 @@ class _CaseTeardown(Protocol):
         self,
         checkpoint: OrchestratorCheckpoint,
         project_id: int,
+        runner_id: RunnerId,
         *,
         timeout_seconds: int,
         on_log: LogCallback | None,
@@ -525,55 +537,6 @@ def _sync_tags(project: Project, tag_names: list[str]) -> None:
 # ============================================================================
 
 
-class MachineState(StrEnum):
-    """The test machine's connection/readiness state, as shown in the UI."""
-
-    DISCONNECTED = "disconnected"
-    STARTING = "starting"
-    READY = "ready"
-    FAILED = "failed"
-    VISUAL_ENGINE_OFFLINE = "offline"
-    # A phone or tablet runner is connected but its device is not READY, or
-    # its last device status is stale (``RUNNER_DEVICE_STALE_SECONDS``).
-    DEVICE_OFFLINE = "device_offline"
-
-
-_MACHINE_STATE_BY_ENGINE_STATE: Final[dict[VisualEngineState, MachineState]] = {
-    VisualEngineState.READY: MachineState.READY,
-    VisualEngineState.STARTING: MachineState.STARTING,
-    VisualEngineState.FAILED: MachineState.FAILED,
-    VisualEngineState.OFFLINE: MachineState.VISUAL_ENGINE_OFFLINE,
-}
-
-
-def connected_machine_state(visual_engine: VisualEngineStatus) -> MachineState:
-    """The machine state any project with a connected Test Runner has right now.
-
-    The visual engine is global, so every connected project shares it; pages
-    listing many projects compute it once instead of once per row.
-    """
-    return _MACHINE_STATE_BY_ENGINE_STATE[visual_engine.state]
-
-
-def get_machine_state(
-    project: Project, visual_engine: VisualEngineStatus
-) -> MachineState:
-    """Derive one machine badge state from `agent_connected`, the phone or
-    tablet a phone runner drives, and the visual engine.
-
-    The engine status is passed in so pages rendering many projects read it
-    once (`get_visual_engine_status`) rather than once per project. No query:
-    reads `agent_connected`, `agent_device_state` and
-    `agent_device_reported_at`, which callers using `.only()` must load.
-    """
-    if not project.agent_connected:
-        return MachineState.DISCONNECTED
-    device_state = device_machine_state(project)
-    if device_state is not None:
-        return MachineState(device_state)
-    return connected_machine_state(visual_engine)
-
-
 class PrimaryAction(StrEnum):
     """The single most useful next step to suggest for a project."""
 
@@ -587,11 +550,16 @@ class PrimaryAction(StrEnum):
 def resolve_primary_action(
     *,
     case_count: int,
-    machine_state: MachineState,
+    machine_state: MachineState | None,
     active_run: TestRun | None,
     latest_run: TestRun | None,
 ) -> PrimaryAction:
-    """Pick a project's primary action; shared by the overview and dashboard cards."""
+    """Pick a project's primary action; shared by the overview and dashboard cards.
+
+    ``machine_state``: the state of the active run's Test Runner, or None when
+    no run holds one (runners belong to users, so a project without an active
+    run has no machine to connect).
+    """
     if case_count == 0:
         return PrimaryAction.IMPORT_CASES
     if machine_state == MachineState.DISCONNECTED:
@@ -609,7 +577,8 @@ class ProjectOverview:
 
     case_count: int
     never_run_count: int
-    machine_state: MachineState
+    # The active run's Test Runner state; None when no active run holds one.
+    machine_state: MachineState | None
     active_run: TestRun | None
     latest_run: TestRun | None
     latest_run_summary: dict[str, int] | None
@@ -679,10 +648,17 @@ def get_project_overview(
     """Gather the project overview page's data in a fixed, small number of queries."""
     case_count = project.test_cases.count()
     never_run_count = project.test_cases.filter(run_entries__isnull=True).count()
-    machine_state = get_machine_state(project, visual_engine)
-    active_run = TestRun.objects.filter(
-        project=project, status__in=ACTIVE_RUN_STATUSES
-    ).first()
+    # Phase 1 keeps one active run per project; its runner is "the machine".
+    active_run = (
+        TestRun.objects.filter(project=project, status__in=ACTIVE_RUN_STATUSES)
+        .select_related("runner")
+        .first()
+    )
+    machine_state = (
+        runner_machine_state(active_run.runner, visual_engine)
+        if active_run is not None and active_run.runner is not None
+        else None
+    )
     latest_run = TestRun.objects.filter(project=project).order_by("-created_at").first()
     latest_run_summary = (
         get_test_run_summary(latest_run) if latest_run is not None else None
@@ -772,31 +748,68 @@ def _cases_selected_check(
 
 
 def _machine_connected_check(
-    project: Project, machine_state: MachineState
+    runner: TestRunner | None, machine_state: MachineState
 ) -> ReadinessCheck:
+    """The run's chosen Test Runner is connected (and its phone ready)."""
     # A phone runner's device not READY reads DEVICE_OFFLINE, or STARTING
     # while its session is created (the engine starting passes this check).
-    device_not_ready = machine_state in (
-        MachineState.DEVICE_OFFLINE,
-        MachineState.STARTING,
-    ) and device_offline(project)
+    device_not_ready = (
+        runner is not None
+        and machine_state in (MachineState.DEVICE_OFFLINE, MachineState.STARTING)
+        and device_offline(runner)
+    )
     passed = machine_state != MachineState.DISCONNECTED and not device_not_ready
     if passed:
-        title = "Test machine connected"
+        title = "Test Runner connected"
         help_text = ""
+    elif runner is None:
+        title = "No Test Runner chosen"
+        help_text = CHOOSE_RUNNER_MESSAGE
     elif device_not_ready:
         title = "Phone or tablet not connected"
         help_text = DEVICE_NOT_READY_MESSAGE
     else:
-        title = "Test machine not connected"
-        help_text = "Runs need a connected test machine to execute steps."
+        title = "Test Runner not connected"
+        help_text = "Runs need a connected Test Runner to execute steps."
     return ReadinessCheck(
         key="machine_connected",
         passed=passed,
         blocking=True,
         title=title,
         help=help_text,
-        link_url=reverse("projects:environment", args=[project.id]),
+        link_url=reverse(RUNNERS_PAGE_URL_NAME),
+    )
+
+
+def _runner_free_check(
+    runner: TestRunner | None, test_run: TestRun | None
+) -> ReadinessCheck:
+    """The chosen Test Runner serves no other holder (``runner_use``).
+
+    Passes without a runner (``_machine_connected_check`` reports that). The
+    run itself, already holding its runner, does not count.
+    """
+    hold = (
+        runner_hold(
+            runner.runner_id,
+            ignore_run_id=test_run.pk if test_run is not None else None,
+        )
+        if runner is not None
+        else None
+    )
+    if hold is None:
+        title = "Test Runner is free"
+        help_text = ""
+    else:
+        title = "Test Runner is busy"
+        help_text = hold.message
+    return ReadinessCheck(
+        key="runner_free",
+        passed=hold is None,
+        blocking=True,
+        title=title,
+        help=help_text,
+        link_url=reverse(RUNNERS_PAGE_URL_NAME),
     )
 
 
@@ -898,37 +911,26 @@ def _no_machine_setup_check(project: Project) -> ReadinessCheck:
     )
 
 
-def _no_runner_update_check(project: Project) -> ReadinessCheck:
-    passed = not runner_update_in_progress(project.id, timezone.now())
-    if passed:
-        title = "Test Runner is not updating"
-        help_text = ""
-    else:
-        title = "Test Runner is updating"
-        help_text = RUNNER_UPDATE_RUNNING_MESSAGE
-    return ReadinessCheck(
-        key="no_runner_update",
-        passed=passed,
-        blocking=True,
-        title=title,
-        help=help_text,
-        link_url=reverse("projects:environment", args=[project.id]),
-    )
-
-
 # The run page's "Machine for this run" card (machine_readiness run stage 0).
 RUN_STAGE0_ANCHOR: Final = "run-stage0"
 
 
 def _machine_prepared_check(
-    project: Project, test_run: TestRun, summary: Stage0Summary | None
+    project: Project,
+    test_run: TestRun,
+    summary: Stage0Summary | None,
+    runner: TestRunner | None,
 ) -> ReadinessCheck:
     """Warning only (plan Q6): the run's stage-0 requirements.
 
     2 queries, none when the caller passes the ``summary`` it already has.
     """
     if summary is None:
-        summary = run_stage0_summary(project, test_run.id)
+        summary = run_stage0_summary(
+            project,
+            test_run.id,
+            runner_system_info=runner.system_info if runner is not None else None,
+        )
     passed = summary.prepared
     gaps: list[str] = []
     if summary.missing:
@@ -969,46 +971,77 @@ def _machine_prepared_check(
     )
 
 
+def _load_readiness_runner(
+    test_run: TestRun | None,
+    runner_id: RunnerId | None,
+    loaded_runners: Sequence[TestRunner] = (),
+) -> TestRunner | None:
+    """The runner the checklist is about: ``runner_id`` (the Start form's
+    choice), else the run's assigned one; None when neither (1 query at most,
+    none when it is among ``loaded_runners``)."""
+    effective = runner_id
+    if effective is None and test_run is not None:
+        effective = runner_id_of_run(test_run)
+    if effective is None:
+        return None
+    for loaded in loaded_runners:
+        if loaded.pk == effective and loaded.archived_at is None:
+            return loaded
+    return TestRunner.objects.filter(pk=effective, archived_at__isnull=True).first()
+
+
 def get_run_readiness(
     project: Project,
     *,
     test_run: TestRun | None = None,
     selected_count: int | None = None,
     stage0_summary: Stage0Summary | None = None,
+    runner_id: RunnerId | None = None,
+    visual_engine: VisualEngineStatus | None = None,
+    loaded_runners: Sequence[TestRunner] = (),
 ) -> RunReadiness:
     """Compute the "Ready to run?" checklist shown before starting a run.
 
+    ``runner_id``: the Test Runner chosen for the run (the Start form's
+    default, ``run_runner_default.default_runner_for_start``); None uses the
+    run's assigned runner, if any. Agent modes need one that is connected and
+    free; the project rules (one active run, one setup turn) stay in Phase 1.
     ``stage0_summary``: the run's stage-0 counts when the caller already
     loaded them (the run page's checklist), so they are not queried twice.
+    ``visual_engine`` / ``loaded_runners``: the engine status and the
+    viewer's usable runner rows the caller already loaded (the run page);
+    the chosen runner is taken from them when it is among them.
     """
     help_mode = (
         test_run.help_mode if test_run is not None else project.default_help_mode
     )
     if is_manual_mode(help_mode):
         # A person performs every step (D11): no visual engine, no machine
-        # preparation and no Test Runner (a tester may work elsewhere).
+        # preparation, and the Test Runner is optional (Q12; it is held only
+        # while a case is claimed).
         return RunReadiness(
             checks=(
                 _cases_selected_check(test_run, selected_count),
                 _no_active_run_check(project, test_run),
                 _no_machine_setup_check(project),
-                _no_runner_update_check(project),
                 _application_context_check(project),
             )
         )
-    visual_engine = get_visual_engine_status()
-    machine_state = get_machine_state(project, visual_engine)
+    if visual_engine is None:
+        visual_engine = get_visual_engine_status()
+    runner = _load_readiness_runner(test_run, runner_id, loaded_runners)
+    machine_state = runner_machine_state(runner, visual_engine)
     checks: tuple[ReadinessCheck, ...] = (
         _cases_selected_check(test_run, selected_count),
-        _machine_connected_check(project, machine_state),
+        _machine_connected_check(runner, machine_state),
+        _runner_free_check(runner, test_run),
         _visual_engine_ready_check(visual_engine),
         _no_active_run_check(project, test_run),
         _no_machine_setup_check(project),
-        _no_runner_update_check(project),
         _application_context_check(project),
     )
     if test_run is not None:
-        checks += (_machine_prepared_check(project, test_run, stage0_summary),)
+        checks += (_machine_prepared_check(project, test_run, stage0_summary, runner),)
     return RunReadiness(checks=checks)
 
 
@@ -1113,178 +1146,13 @@ def check_controller_compatibility(
     return (
         "Controller client is incompatible: missing capabilities "
         f"{', '.join(missing)}. Reported version {reported_version}, "
-        f"server expects {CLIENT_VERSION}. Please download a fresh "
-        "controller client ZIP from the project page and re-run the "
-        "platform setup script."
+        f"server expects {CLIENT_VERSION}. {outdated_runner_message()}"
     )
 
 
 def _find_missing_capabilities(capabilities: Sequence[str]) -> list[str]:
     present = set(capabilities)
     return sorted(cap for cap in REQUIRED_CLIENT_CAPABILITIES if cap not in present)
-
-
-def claim_agent_connection(
-    project: Project,
-    channel_name: str,
-    system_info: dict[str, Any],
-    client_version: str,
-    capabilities: Sequence[str],
-) -> str:
-    """Make ``channel_name`` the owner of the project's controller connection.
-
-    The newest authenticated connection always wins. Returns the channel name
-    of the connection it replaced (so the caller can close it), or "" when
-    there was none. A phone or tablet runner (``target`` in ``system_info``
-    and MOBILE_DEVICE_V1; the consumer drops the device keys otherwise)
-    starts with the device ``starting`` until its first ``device_status``;
-    any other runner has a blank device state.
-    """
-    phone = (
-        is_mobile_target(system_info)
-        and ClientCapability.MOBILE_DEVICE_V1.value in capabilities
-    )
-    now = timezone.now()
-    with transaction.atomic():
-        previous_channel_name = (
-            Project.objects.select_for_update()
-            .filter(pk=project.id)
-            .values_list("agent_channel_name", flat=True)
-            .get()
-        )
-        Project.objects.filter(pk=project.id).update(
-            agent_connected=True,
-            agent_channel_name=channel_name,
-            agent_system_info=system_info,
-            agent_client_version=client_version,
-            agent_capabilities=list(capabilities),
-            agent_device_state=(
-                RunnerDeviceState.STARTING if phone else RunnerDeviceState.NONE
-            ),
-            agent_device_detail="",
-            agent_device_reported_at=now if phone else None,
-        )
-    project.refresh_from_db()
-    if previous_channel_name == channel_name:
-        return ""
-    return previous_channel_name
-
-
-def release_agent_connection(project_id: int, channel_name: str) -> Project | None:
-    """Mark the project disconnected only if ``channel_name`` still owns it.
-
-    Returns the refreshed project when the state changed (so the caller
-    broadcasts it), or None when a newer connection already took over.
-    """
-    rows_updated = Project.objects.filter(
-        pk=project_id, agent_channel_name=channel_name
-    ).update(**_disconnected_agent_fields())
-    if rows_updated == 0:
-        return None
-    return Project.objects.get(pk=project_id)
-
-
-def _clear_agent_connection(project_id: int) -> None:
-    Project.objects.filter(pk=project_id).update(**_disconnected_agent_fields())
-
-
-class _DisconnectedAgentFields(TypedDict):
-    agent_connected: bool
-    agent_channel_name: str
-    agent_system_info: dict[str, object]
-    agent_client_version: str
-    agent_capabilities: list[str]
-    agent_device_state: str
-    agent_device_detail: str
-    agent_device_reported_at: datetime | None
-    last_connected_at: datetime
-
-
-def _disconnected_agent_fields() -> _DisconnectedAgentFields:
-    return {
-        "agent_connected": False,
-        "agent_channel_name": "",
-        "agent_system_info": {},
-        "agent_client_version": "",
-        "agent_capabilities": [],
-        "agent_device_state": RunnerDeviceState.NONE.value,
-        "agent_device_detail": "",
-        "agent_device_reported_at": None,
-        "last_connected_at": timezone.now(),
-    }
-
-
-class AgentStatusEvent(TypedDict):
-    type: str
-    agent_connected: bool
-    agent_system_info: dict[str, Any]
-    agent_client_version: str
-    agent_capabilities: list[str]
-    last_connected_at: str | None
-    # The phone or tablet of a phone runner (blank / None for a desktop one).
-    agent_device_state: str
-    agent_device_detail: str
-    agent_device_reported_at: str | None
-
-
-def _agent_status_group(project_id: int) -> str:
-    return f"agent_status_{project_id}"
-
-
-def _build_agent_status_event(project: Project) -> AgentStatusEvent:
-    return {
-        "type": "agent.status",
-        "agent_connected": project.agent_connected,
-        "agent_system_info": project.agent_system_info,
-        "agent_client_version": project.agent_client_version,
-        "agent_capabilities": project.agent_capabilities,
-        "last_connected_at": (
-            project.last_connected_at.isoformat() if project.last_connected_at else None
-        ),
-        "agent_device_state": project.agent_device_state,
-        "agent_device_detail": project.agent_device_detail,
-        "agent_device_reported_at": (
-            project.agent_device_reported_at.isoformat()
-            if project.agent_device_reported_at
-            else None
-        ),
-    }
-
-
-def broadcast_agent_status(project: Project) -> None:
-    layer: Any = get_channel_layer()
-    if layer is None:
-        return
-
-    event = _build_agent_status_event(project)
-    async_to_sync(layer.group_send)(_agent_status_group(project.id), event)
-
-
-def force_disconnect_controller(project: Project) -> bool:
-    """Force-disconnect the controller client and clean up state.
-
-    Sends a close event to the consumer (if alive) and directly
-    marks the agent as disconnected to handle zombie connections.
-    Returns True if the project was marked connected, False otherwise.
-    """
-    if not project.agent_connected:
-        return False
-
-    # Clear ownership before the close event, so a waiter woken by the closing
-    # consumer's CONTROLLER_DISCONNECTED reply never sees the dead connection.
-    _clear_agent_connection(project.id)
-
-    layer: Any = get_channel_layer()
-    if layer is not None:
-        async_to_sync(layer.group_send)(
-            _controller_group(project.id),
-            {"type": "controller.force_disconnect"},
-        )
-
-    project.refresh_from_db()
-    broadcast_agent_status(project)
-    abort_active_test_run_on_disconnect(project)
-    return True
 
 
 # ============================================================================
@@ -1314,8 +1182,9 @@ class CommandResult(TypedDict):
     duration_ms: float
 
 
-def _controller_group(project_id: int) -> str:
-    return f"controller_{project_id}"
+def _controller_group(runner_id: RunnerId) -> str:
+    """The runner's controller socket group (``runners.channels.runner_group``)."""
+    return runner_group(runner_id)
 
 
 def _get_channel_layer_or_raise() -> Any:
@@ -1450,7 +1319,7 @@ class _ConnectionLost(Exception):
 
 
 def _run_with_reconnect_retry(
-    project_id: int,
+    runner_id: RunnerId,
     event_type: str,
     attempt: Callable[[str], _T],
     *,
@@ -1470,9 +1339,9 @@ def _run_with_reconnect_retry(
     reconnecting runner before the first send (nothing was sent yet).
     """
     owner = (
-        wait_for_controller(project_id)
+        wait_for_controller(runner_id)
         if (resend if wait_first is None else wait_first)
-        else _current_owner_or_raise(project_id)
+        else _current_owner_or_raise(runner_id)
     )
     try:
         return attempt(owner)
@@ -1483,14 +1352,14 @@ def _run_with_reconnect_retry(
                 "it may already have been done, so check before repeating it"
             ) from exc
         logger.warning(
-            "Test Runner connection lost during %s for project %d; "
+            "Test Runner connection lost during %s for runner %d; "
             "waiting to re-send",
             event_type,
-            project_id,
+            runner_id,
         )
 
-    owner = wait_for_controller(project_id, lost_owner=owner)
-    logger.info("Re-sending %s for project %d (attempt 2)", event_type, project_id)
+    owner = wait_for_controller(runner_id, lost_owner=owner)
+    logger.info("Re-sending %s for runner %d (attempt 2)", event_type, runner_id)
     if on_resend is not None:
         on_resend()
     try:
@@ -1502,17 +1371,17 @@ def _run_with_reconnect_retry(
         ) from exc
 
 
-def _current_owner_or_raise(project_id: int) -> str:
-    owner = connected_owner(project_id)
+def _current_owner_or_raise(runner_id: RunnerId) -> str:
+    owner = connected_owner(runner_id)
     if owner is None:
         raise ControllerNotConnectedError(
-            f"Test Runner is not connected for project {project_id}"
+            f"Test Runner is not connected for runner {runner_id}"
         )
     return owner
 
 
 def _is_stray_disconnect_reply(
-    reply: dict[str, Any], project_id: int, owner: str
+    reply: dict[str, Any], runner_id: RunnerId, owner: str
 ) -> bool:
     """Classify a ``CONTROLLER_DISCONNECTED`` reply.
 
@@ -1526,13 +1395,13 @@ def _is_stray_disconnect_reply(
         or reply.get("code") != ErrorCode.CONTROLLER_DISCONNECTED
     ):
         return False
-    if controller_connection_lost(project_id, owner):
+    if controller_connection_lost(runner_id, owner):
         raise _ConnectionLost(reply.get("message", ""))
     return True
 
 
 def _raise_reply_timeout(
-    project_id: int,
+    runner_id: RunnerId,
     owner: str,
     message: str,
     cause: BaseException | None,
@@ -1546,7 +1415,7 @@ def _raise_reply_timeout(
     their silence means the Test Runner itself stopped responding, which blocks
     the case. Other timeouts stay plain so the agent can judge a hung app.
     """
-    if controller_connection_lost(project_id, owner):
+    if controller_connection_lost(runner_id, owner):
         raise _ConnectionLost(message) from cause
     if runner_local:
         raise TestRunnerUnresponsiveError(message) from cause
@@ -1554,7 +1423,7 @@ def _raise_reply_timeout(
 
 
 def _dispatch_controller_action(
-    project_id: int,
+    runner_id: RunnerId,
     event_type: str,
     reply_timeout: float,
     *,
@@ -1568,7 +1437,7 @@ def _dispatch_controller_action(
     def _attempt(owner: str) -> dict[str, Any]:
         return _send_controller_action_once(
             layer,
-            project_id,
+            runner_id,
             owner,
             event_type,
             reply_timeout,
@@ -1577,7 +1446,7 @@ def _dispatch_controller_action(
         )
 
     return _run_with_reconnect_retry(
-        project_id,
+        runner_id,
         event_type,
         _attempt,
         resend=resend_on_reconnect,
@@ -1586,7 +1455,7 @@ def _dispatch_controller_action(
 
 
 def dispatch_controller_action(
-    project_id: int,
+    runner_id: RunnerId,
     event_type: str,
     reply_timeout: float,
     *,
@@ -1597,7 +1466,7 @@ def dispatch_controller_action(
     """Public alias of ``_dispatch_controller_action`` for controller action
     modules outside this legacy module (``controller_mobile_actions``)."""
     return _dispatch_controller_action(
-        project_id,
+        runner_id,
         event_type,
         reply_timeout,
         resend_on_reconnect=resend_on_reconnect,
@@ -1608,7 +1477,7 @@ def dispatch_controller_action(
 
 def _send_controller_action_once(
     layer: Any,
-    project_id: int,
+    runner_id: RunnerId,
     owner: str,
     event_type: str,
     reply_timeout: float,
@@ -1628,7 +1497,7 @@ def _send_controller_action_once(
         "reply_channel": reply_channel,
         **payload,
     }
-    async_to_sync(layer.group_send)(_controller_group(project_id), event)
+    async_to_sync(layer.group_send)(_controller_group(runner_id), event)
 
     deadline = time.monotonic() + reply_timeout
     timeout_message = (
@@ -1639,7 +1508,7 @@ def _send_controller_action_once(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             _raise_reply_timeout(
-                project_id, owner, timeout_message, None, runner_local=runner_local
+                runner_id, owner, timeout_message, None, runner_local=runner_local
             )
 
         try:
@@ -1648,10 +1517,10 @@ def _send_controller_action_once(
             )
         except asyncio.TimeoutError as exc:
             _raise_reply_timeout(
-                project_id, owner, timeout_message, exc, runner_local=runner_local
+                runner_id, owner, timeout_message, exc, runner_local=runner_local
             )
 
-        if _is_stray_disconnect_reply(result, project_id, owner):
+        if _is_stray_disconnect_reply(result, runner_id, owner):
             continue
         _raise_for_error_reply(result, event_type)
         return result
@@ -1681,7 +1550,7 @@ def _modifiers_field(modifiers: Sequence[PointerModifier]) -> dict[str, list[str
 
 
 def controller_click(
-    project_id: int,
+    runner_id: RunnerId,
     x: int,
     y: int,
     button: str = "left",
@@ -1690,7 +1559,7 @@ def controller_click(
     modifiers: Sequence[PointerModifier] = (),
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.click",
         timeout,
         x=x,
@@ -1708,7 +1577,7 @@ def controller_click(
 
 
 def controller_double_click(
-    project_id: int,
+    runner_id: RunnerId,
     x: int,
     y: int,
     timeout: float = 30.0,
@@ -1716,7 +1585,7 @@ def controller_double_click(
     modifiers: Sequence[PointerModifier] = (),
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.double_click",
         timeout,
         x=x,
@@ -1733,7 +1602,7 @@ def controller_double_click(
 
 
 def controller_scroll(
-    project_id: int,
+    runner_id: RunnerId,
     direction: ScrollDirection,
     amount: int,
     x: int | None,
@@ -1751,7 +1620,7 @@ def controller_scroll(
     # runner_local of _dispatch_controller_action, which mypy rejects.
     point: dict[str, Any] = {} if x is None or y is None else {"x": x, "y": y}
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.scroll",
         timeout,
         runner_local=True,
@@ -1769,7 +1638,7 @@ def controller_scroll(
 
 
 def controller_hover(
-    project_id: int,
+    runner_id: RunnerId,
     x: int,
     y: int,
     timeout: float = 30.0,
@@ -1777,7 +1646,7 @@ def controller_hover(
     modifiers: Sequence[PointerModifier] = (),
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.hover",
         timeout,
         x=x,
@@ -1794,7 +1663,7 @@ def controller_hover(
 
 
 def controller_drag(
-    project_id: int,
+    runner_id: RunnerId,
     start_x: int,
     start_y: int,
     end_x: int,
@@ -1806,7 +1675,7 @@ def controller_drag(
     modifiers: Sequence[PointerModifier] = (),
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.drag",
         timeout,
         runner_local=True,
@@ -1827,13 +1696,13 @@ def controller_drag(
 
 
 def controller_type_text(
-    project_id: int,
+    runner_id: RunnerId,
     text: str,
     interval: float = 0.0,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.type_text",
         timeout,
         text=text,
@@ -1844,12 +1713,12 @@ def controller_type_text(
 
 
 def controller_key_press(
-    project_id: int,
+    runner_id: RunnerId,
     keys: str,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.key_press",
         timeout,
         keys=keys,
@@ -1886,7 +1755,7 @@ _SCREENSHOT_ATTEMPTS: Final = 3
 
 
 def controller_screenshot(
-    project_id: int,
+    runner_id: RunnerId,
     timeout: float = 30.0,
 ) -> ScreenshotResult:
     """Take a desktop screenshot, re-asking up to ``_SCREENSHOT_ATTEMPTS`` times.
@@ -1899,12 +1768,12 @@ def controller_screenshot(
     for attempt in range(1, _SCREENSHOT_ATTEMPTS):
         try:
             reply = _dispatch_controller_action(
-                project_id, "controller.screenshot", timeout, runner_local=True
+                runner_id, "controller.screenshot", timeout, runner_local=True
             )
         except TestRunnerUnresponsiveError:
             logger.warning(
-                "Screenshot timed out for project %d (attempt %d/%d); retrying",
-                project_id,
+                "Screenshot timed out for runner %d (attempt %d/%d); retrying",
+                runner_id,
                 attempt,
                 _SCREENSHOT_ATTEMPTS,
             )
@@ -1913,7 +1782,7 @@ def controller_screenshot(
 
     try:
         reply = _dispatch_controller_action(
-            project_id, "controller.screenshot", timeout, runner_local=True
+            runner_id, "controller.screenshot", timeout, runner_local=True
         )
     except TestRunnerUnresponsiveError as exc:
         raise TestRunnerUnresponsiveError(
@@ -1924,7 +1793,7 @@ def controller_screenshot(
 
 
 def controller_find_elements(
-    project_id: int,
+    runner_id: RunnerId,
     box_threshold: float | None = None,
     iou_threshold: float | None = None,
     cancellation_check: Callable[[], bool] | None = None,
@@ -1934,7 +1803,7 @@ def controller_find_elements(
     The elements are in the screenshot's pixel space, which is the space the
     runner's clicks use, so callers use their centers unchanged.
     """
-    shot = controller_screenshot(project_id)
+    shot = controller_screenshot(runner_id)
     return parse_screenshot(
         shot["image_base64"],
         image_width=shot["width"],
@@ -1950,14 +1819,14 @@ _RERUN_COMMAND_MARKER = "[Test Runner reconnected - re-running command]"
 
 
 def controller_run_command(
-    project_id: int,
+    runner_id: RunnerId,
     command: str,
 ) -> CommandResult:
-    return controller_run_command_streaming(project_id, command)
+    return controller_run_command_streaming(runner_id, command)
 
 
 def controller_run_command_streaming(
-    project_id: int,
+    runner_id: RunnerId,
     command: str,
     on_output: Callable[[str, str], None] | None = None,
 ) -> CommandResult:
@@ -1968,10 +1837,10 @@ def controller_run_command_streaming(
         reply_channel: str = async_to_sync(layer.new_channel)()
         request_id = str(uuid.uuid4())
         _dispatch_run_command_event(
-            layer, project_id, request_id, reply_channel, command
+            layer, runner_id, request_id, reply_channel, command
         )
         return _receive_streaming_command_result(
-            layer, project_id, owner, reply_channel, timeout, on_output
+            layer, runner_id, owner, reply_channel, timeout, on_output
         )
 
     def _emit_rerun_marker() -> None:
@@ -1979,13 +1848,13 @@ def controller_run_command_streaming(
             on_output(_RERUN_COMMAND_MARKER, "stderr")
 
     return _run_with_reconnect_retry(
-        project_id, _RUN_COMMAND_EVENT, _attempt, on_resend=_emit_rerun_marker
+        runner_id, _RUN_COMMAND_EVENT, _attempt, on_resend=_emit_rerun_marker
     )
 
 
 def _dispatch_run_command_event(
     layer: Any,
-    project_id: int,
+    runner_id: RunnerId,
     request_id: str,
     reply_channel: str,
     command: str,
@@ -1996,12 +1865,12 @@ def _dispatch_run_command_event(
         "reply_channel": reply_channel,
         "command": command,
     }
-    async_to_sync(layer.group_send)(_controller_group(project_id), event)
+    async_to_sync(layer.group_send)(_controller_group(runner_id), event)
 
 
 def _receive_streaming_command_result(
     layer: Any,
-    project_id: int,
+    runner_id: RunnerId,
     owner: str,
     reply_channel: str,
     timeout: float,
@@ -2012,16 +1881,16 @@ def _receive_streaming_command_result(
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            _raise_reply_timeout(project_id, owner, timeout_message, None)
+            _raise_reply_timeout(runner_id, owner, timeout_message, None)
 
         try:
             reply: dict[str, Any] = async_to_sync(asyncio.wait_for)(
                 layer.receive(reply_channel), timeout=remaining
             )
         except asyncio.TimeoutError as exc:
-            _raise_reply_timeout(project_id, owner, timeout_message, exc)
+            _raise_reply_timeout(runner_id, owner, timeout_message, exc)
 
-        if _is_stray_disconnect_reply(reply, project_id, owner):
+        if _is_stray_disconnect_reply(reply, runner_id, owner):
             continue
         _raise_for_error_reply(reply, _RUN_COMMAND_EVENT)
 
@@ -2075,11 +1944,11 @@ def _build_interactive_command_result(
 
 
 def controller_start_interactive_command(
-    project_id: int,
+    runner_id: RunnerId,
     command: str,
 ) -> InteractiveCommandResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.start_interactive_cmd",
         float(settings.INTERACTIVE_CMD_TIMEOUT_SECONDS),
         command=command,
@@ -2088,12 +1957,12 @@ def controller_start_interactive_command(
 
 
 def controller_send_input(
-    project_id: int,
+    runner_id: RunnerId,
     session_id: str,
     input_text: str,
 ) -> InteractiveCommandResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.send_input",
         float(settings.INTERACTIVE_CMD_TIMEOUT_SECONDS),
         session_id=session_id,
@@ -2103,11 +1972,11 @@ def controller_send_input(
 
 
 def controller_wait_for_command(
-    project_id: int,
+    runner_id: RunnerId,
     session_id: str,
 ) -> InteractiveCommandResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.wait_for_command",
         float(settings.INTERACTIVE_CMD_TIMEOUT_SECONDS),
         session_id=session_id,
@@ -2116,11 +1985,11 @@ def controller_wait_for_command(
 
 
 def controller_terminate_interactive_command(
-    project_id: int,
+    runner_id: RunnerId,
     session_id: str,
 ) -> InteractiveCommandResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.terminate_interactive_cmd",
         _INTERACTIVE_TERMINATE_TIMEOUT_SECONDS,
         session_id=session_id,
@@ -2148,14 +2017,14 @@ def _build_browser_content_result(reply: dict[str, Any]) -> BrowserContentResult
 
 
 def controller_browser_navigate(
-    project_id: int,
+    runner_id: RunnerId,
     url: str,
     *,
     browser: BrowserName,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.browser_navigate",
         timeout,
         url=url,
@@ -2165,14 +2034,14 @@ def controller_browser_navigate(
 
 
 def controller_browser_click(
-    project_id: int,
+    runner_id: RunnerId,
     element_index: int,
     *,
     browser: BrowserName,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.browser_click",
         timeout,
         element_index=element_index,
@@ -2182,14 +2051,14 @@ def controller_browser_click(
 
 
 def controller_browser_double_click(
-    project_id: int,
+    runner_id: RunnerId,
     element_index: int,
     *,
     browser: BrowserName,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.browser_double_click",
         timeout,
         element_index=element_index,
@@ -2199,7 +2068,7 @@ def controller_browser_double_click(
 
 
 def controller_browser_type(
-    project_id: int,
+    runner_id: RunnerId,
     element_index: int,
     text: str,
     *,
@@ -2207,7 +2076,7 @@ def controller_browser_type(
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.browser_type",
         timeout,
         element_index=element_index,
@@ -2218,14 +2087,14 @@ def controller_browser_type(
 
 
 def controller_browser_hover(
-    project_id: int,
+    runner_id: RunnerId,
     element_index: int,
     *,
     browser: BrowserName,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.browser_hover",
         timeout,
         element_index=element_index,
@@ -2235,13 +2104,13 @@ def controller_browser_hover(
 
 
 def controller_browser_get_elements(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     browser: BrowserName,
     timeout: float = 30.0,
 ) -> BrowserContentResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.browser_get_elements",
         timeout,
         browser=browser.value,
@@ -2250,13 +2119,13 @@ def controller_browser_get_elements(
 
 
 def controller_browser_get_page_content(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     browser: BrowserName,
     timeout: float = 30.0,
 ) -> BrowserContentResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.browser_get_page_content",
         timeout,
         browser=browser.value,
@@ -2265,13 +2134,13 @@ def controller_browser_get_page_content(
 
 
 def controller_browser_get_url(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     browser: BrowserName,
     timeout: float = 30.0,
 ) -> BrowserContentResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.browser_get_url",
         timeout,
         browser=browser.value,
@@ -2280,7 +2149,7 @@ def controller_browser_get_url(
 
 
 def controller_browser_download(
-    project_id: int,
+    runner_id: RunnerId,
     url: str,
     save_path: str = "",
     *,
@@ -2288,7 +2157,7 @@ def controller_browser_download(
     timeout: float = 120.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.browser_download",
         timeout,
         url=url,
@@ -2299,28 +2168,28 @@ def controller_browser_download(
 
 
 def controller_browser_list_downloads(
-    project_id: int,
+    runner_id: RunnerId,
     timeout: float = 310.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.browser_list_downloads", timeout
+        runner_id, "controller.browser_list_downloads", timeout
     )
     return _build_action_result(reply)
 
 
 def controller_launch_app(
-    project_id: int,
+    runner_id: RunnerId,
     app_name: str,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id, "controller.launch_app", timeout, app_name=app_name
+        runner_id, "controller.launch_app", timeout, app_name=app_name
     )
     return _build_action_result(reply)
 
 
 def controller_close_app(
-    project_id: int,
+    runner_id: RunnerId,
     app_name: str,
     *,
     force: bool = False,
@@ -2328,7 +2197,7 @@ def controller_close_app(
 ) -> ActionResult:
     # The 30 s timeout is well above the runner's 5 s wait for the app to quit.
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.close_app",
         timeout,
         app_name=app_name,
@@ -2339,13 +2208,13 @@ def controller_close_app(
 
 
 def controller_close_tab(
-    project_id: int,
+    runner_id: RunnerId,
     app_name: str,
     *,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.close_tab",
         timeout,
         app_name=app_name,
@@ -2355,12 +2224,12 @@ def controller_close_tab(
 
 
 def controller_check_app_installed(
-    project_id: int,
+    runner_id: RunnerId,
     app_name: str,
     timeout: float = 30.0,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.check_app_installed",
         timeout,
         app_name=app_name,
@@ -2402,7 +2271,7 @@ def _check_artifact_path(path: str) -> None:
 
 
 def controller_scan_directory(
-    project_id: int,
+    runner_id: RunnerId,
     path: str,
     *,
     max_depth: int,
@@ -2425,7 +2294,7 @@ def controller_scan_directory(
         raise ValueError(f"max_entries must be 1..{SCAN_DIRECTORY_MAX_ENTRIES}")
     # The 30 s timeout is well above the runner's 10 s scan budget.
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.scan_directory",
         timeout,
         path=path,
@@ -2451,7 +2320,7 @@ def controller_scan_directory(
 
 
 def controller_inspect_paths(
-    project_id: int,
+    runner_id: RunnerId,
     paths: Sequence[str],
     *,
     allow_network: bool = False,
@@ -2470,7 +2339,7 @@ def controller_inspect_paths(
         _check_artifact_path(path)
     requested = list(paths)
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.inspect_paths",
         timeout,
         paths=requested,
@@ -2494,13 +2363,13 @@ def controller_inspect_paths(
 
 
 def controller_cleanup_environment(
-    project_id: int,
+    runner_id: RunnerId,
     timeout: float = 30.0,
     *,
     resend_on_reconnect: bool = True,
 ) -> ActionResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.cleanup_environment",
         timeout,
         resend_on_reconnect=resend_on_reconnect,
@@ -2509,7 +2378,7 @@ def controller_cleanup_environment(
     return _build_action_result(reply)
 
 
-def _safe_cleanup(project_id: int, *, wait_for_runner: bool) -> None:
+def _safe_cleanup(runner_id: RunnerId, *, wait_for_runner: bool) -> None:
     """Empty the test machine's cleanup folder, never failing the test case.
 
     Before a case (``wait_for_runner=True``) a dropped runner is waited for like
@@ -2520,16 +2389,16 @@ def _safe_cleanup(project_id: int, *, wait_for_runner: bool) -> None:
     try:
         timeout = float(settings.CLEANUP_TIMEOUT_SECONDS)
         result = controller_cleanup_environment(
-            project_id, timeout=timeout, resend_on_reconnect=wait_for_runner
+            runner_id, timeout=timeout, resend_on_reconnect=wait_for_runner
         )
         if result["success"]:
             logger.info(
-                "Environment cleanup for project %d: %s", project_id, result["message"]
+                "Environment cleanup for runner %d: %s", runner_id, result["message"]
             )
         else:
             logger.warning(
-                "Environment cleanup for project %d left work undone: %s",
-                project_id,
+                "Environment cleanup for runner %d left work undone: %s",
+                runner_id,
                 result["message"],
             )
     except (
@@ -2541,17 +2410,18 @@ def _safe_cleanup(project_id: int, *, wait_for_runner: bool) -> None:
         if wait_for_runner:
             raise
         logger.warning(
-            "Environment cleanup skipped for project %d", project_id, exc_info=True
+            "Environment cleanup skipped for runner %d", runner_id, exc_info=True
         )
     except Exception:
         logger.warning(
-            "Environment cleanup failed for project %d", project_id, exc_info=True
+            "Environment cleanup failed for runner %d", runner_id, exc_info=True
         )
 
 
 def _safe_teardown(
     pivot: TestRunTestCase,
     project: Project,
+    runner: TestRunner,
     *,
     generation: int,
     cancellation_check: Callable[[], bool],
@@ -2582,24 +2452,28 @@ def _safe_teardown(
         run_case_teardown(
             checkpoint,
             project.id,
+            runner.runner_id,
             timeout_seconds=timeout,
             on_log=_build_log_callback(pivot, generation),
             cancellation_check=cancellation_check,
-            system_info=project.agent_system_info or None,
+            system_info=runner.system_info or None,
             project_prompt=build_agent_project_context(project),
-            machine_ready=lambda: _machine_can_close_apps(project.id),
+            machine_ready=lambda: _machine_can_close_apps(runner.runner_id),
         )
     except Exception:
         logger.warning("Teardown failed for pivot %d", pivot.pk, exc_info=True)
 
 
-def _machine_can_close_apps(project_id: int) -> bool:
+def _machine_can_close_apps(runner_id: RunnerId) -> bool:
     """Runner connected with ``close_app_v1`` and a vision worker ready."""
-    connected, capabilities = (
-        Project.objects.filter(pk=project_id)
-        .values_list("agent_connected", "agent_capabilities")
-        .get()
+    row = (
+        TestRunner.objects.filter(pk=runner_id, archived_at__isnull=True)
+        .values_list("connected", "capabilities")
+        .first()
     )
+    if row is None:
+        return False
+    connected, capabilities = row
     return (
         connected
         and ClientCapability.CLOSE_APP_V1.value in (capabilities or [])
@@ -2608,13 +2482,13 @@ def _machine_can_close_apps(project_id: int) -> bool:
 
 
 def controller_browser_take_screenshot(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     browser: BrowserName,
     timeout: float = 30.0,
 ) -> ScreenshotResult:
     reply = _dispatch_controller_action(
-        project_id,
+        runner_id,
         "controller.browser_take_screenshot",
         timeout,
         browser=browser.value,
@@ -3047,22 +2921,49 @@ def _has_active_test_run(project: Project) -> bool:
 
 @transaction.atomic
 def start_test_run(
-    test_run: TestRun, *, user: CustomUser, help_mode: str | None
+    test_run: TestRun,
+    *,
+    user: CustomUser,
+    help_mode: str | None,
+    runner_id: RunnerId | None,
 ) -> None:
-    """Start a WAITING run with ``help_mode`` (a ``RunHelpMode`` value).
+    """Start a WAITING run with ``help_mode`` (a ``RunHelpMode`` value) on
+    the Test Runner ``runner_id``.
 
-    ``None`` keeps the run's stored mode. Only a superuser may choose a mode
-    other than the stored one (``HelpModeNotAllowedError`` otherwise).
+    ``help_mode`` None keeps the run's stored mode. Only a superuser may
+    choose a mode other than the stored one (``HelpModeNotAllowedError``
+    otherwise). Agent modes need a runner: ``runner_id`` must be one of the
+    user's own (``lock_runner_to_assign``, Q2); None keeps a runner already
+    assigned to the run, which any writable member may start on (Q3). A
+    Manual run's runner is optional (Q12). Every refusal, runner ones
+    included, is a ``ValueError`` with a user-safe message.
     """
     if help_mode is not None and help_mode not in RunHelpMode.values:
         raise ValueError("Choose what happens when a case needs help.")
-    # Same lock order as resume (project, then run): it serializes a Start
-    # against another Start or Resume in the project, so the "no other run is
-    # active" check below cannot race.
+    # The mode decides whether a runner is needed; read before the locks
+    # (the runner row is locked first) and re-checked under the run lock.
+    stored_help_mode, assigned_runner_id = TestRun.objects.values_list(
+        "help_mode", "runner_id"
+    ).get(pk=test_run.pk)
+    planned_manual = is_manual_mode(
+        stored_help_mode if help_mode is None else help_mode
+    )
+    runner = _lock_runner_for_start(
+        test_run,
+        user=user,
+        runner_id=runner_id,
+        assigned_runner_id=(
+            None if assigned_runner_id is None else RunnerId(assigned_runner_id)
+        ),
+        manual=planned_manual,
+    )
+    # Lock order: runner, then project, then run. The project lock
+    # serializes a Start against another Start or Resume in the project, so
+    # the "no other run is active" check below cannot race (Phase 1 rule).
     Project.objects.select_for_update().only("id").get(pk=test_run.project_id)
-    locked_status, locked_help_mode = (
+    locked_status, locked_help_mode, locked_runner_id = (
         TestRun.objects.select_for_update()
-        .values_list("status", "help_mode")
+        .values_list("status", "help_mode", "runner_id")
         .get(pk=test_run.pk)
     )
     resolved_help_mode = resolve_help_mode(
@@ -3081,13 +2982,17 @@ def start_test_run(
     now = timezone.now()
     if live_turn_exists(test_run.project_id, now):
         raise ValueError(MACHINE_SETUP_RUNNING_MESSAGE)
-    if runner_update_in_progress(test_run.project_id, now):
-        raise ValueError(RUNNER_UPDATE_RUNNING_MESSAGE)
 
     new_help_mode = (
         locked_help_mode if resolved_help_mode is None else resolved_help_mode
     )
     manual = is_manual_mode(new_help_mode)
+    if manual != planned_manual or (
+        runner_id is None and locked_runner_id != assigned_runner_id
+    ):
+        raise ValueError(RUNNER_CHANGED_MESSAGE)
+    if runner is not None and locked_runner_id != runner.pk:
+        write_runner_assignment(test_run, runner, now=now)
 
     test_run.status = TestRunStatus.STARTED
     test_run.help_mode = new_help_mode
@@ -3119,6 +3024,35 @@ def start_test_run(
 
     # Workers must see the STARTED run, so the chain is queued after commit.
     transaction.on_commit(_enqueue)
+
+
+def _lock_runner_for_start(
+    test_run: TestRun,
+    *,
+    user: CustomUser,
+    runner_id: RunnerId | None,
+    assigned_runner_id: RunnerId | None,
+    manual: bool,
+) -> TestRunner | None:
+    """Lock the runner a Start uses (before the project lock); None for a
+    Manual run started without one. Runner refusals become ``ValueError``."""
+    try:
+        if runner_id is not None and runner_id != assigned_runner_id:
+            return lock_runner_to_assign(
+                runner_id, actor=user, project=test_run.project
+            )
+        if assigned_runner_id is not None:
+            # The run's own runner, assigned by its owner (Q3).
+            return lock_usable_runner(
+                assigned_runner_id,
+                project_id=test_run.project_id,
+                ignore_run_id=test_run.pk,
+            )
+    except RunnerError as exc:
+        raise ValueError(exc.message) from exc
+    if not manual:
+        raise ValueError(CHOOSE_RUNNER_MESSAGE)
+    return None
 
 
 def queue_test_run_cases(test_run: TestRun, pivot_ids: Sequence[int]) -> bool:
@@ -3478,7 +3412,7 @@ def broadcast_run_and_pivots(
     for pivot in pivots:
         _send_pivot_status_to_run(layer, pivot, summary)
         _broadcast_pivot_status_to_case(pivot)
-    _nudge_runner_after_commit(test_run.project_id)
+    _nudge_runner_after_commit(test_run)
 
 
 def broadcast_case_status(pivot: TestRunTestCase, *, discussion_url: str = "") -> None:
@@ -3557,10 +3491,10 @@ def broadcast_test_run_status(test_run: TestRun) -> None:
         "help_mode": test_run.help_mode,
     }
     async_to_sync(layer.group_send)(_test_run_group(test_run.id), event)
-    _nudge_runner_after_commit(test_run.project_id)
+    _nudge_runner_after_commit(test_run)
 
 
-def _nudge_runner_after_commit(project_id: int) -> None:
+def _nudge_runner_after_commit(test_run: TestRun) -> None:
     """Let the Test Runner window re-read its person steps once this commits.
 
     Every person step transition goes through a run broadcast; some callers
@@ -3568,7 +3502,9 @@ def _nudge_runner_after_commit(project_id: int) -> None:
     consumer would still read the old rows. Outside a transaction (including
     inside another ``on_commit`` callback) it runs at once.
     """
-    transaction.on_commit(lambda: nudge_runner_person_steps(project_id))
+    runner_id = runner_id_of_run(test_run)
+    if runner_id is not None:
+        transaction.on_commit(lambda: nudge_runner_person_steps(runner_id))
 
 
 def _broadcast_log(pivot: TestRunTestCase, message: str) -> None:
@@ -3627,12 +3563,20 @@ def fetch_test_case_state(
 
 
 def _build_cancellation_check(
-    test_run_id: int, generation: int, pivot_id: int | None = None
+    test_run_id: int,
+    generation: int,
+    pivot_id: int | None = None,
+    *,
+    runner_id: RunnerId | None = None,
 ) -> Callable[[], bool]:
     """True once the run is cancelled, or resumed/restarted by a newer chain,
-    or (with ``pivot_id``) a person marked that case Needs re-test or asked to
-    pause it in this generation; still one query per poll."""
+    or (with ``runner_id``) no longer on that Test Runner (its owner released
+    it), or (with ``pivot_id``) a person marked that case Needs re-test or
+    asked to pause it in this generation; still one query per poll."""
     stopped = Q(status=TestRunStatus.CANCELLED) | ~Q(execution_generation=generation)
+    if runner_id is not None:
+        # A released run has no runner: NULL never equals, so test it too.
+        stopped |= Q(runner__isnull=True) | ~Q(runner_id=runner_id)
     if pivot_id is not None:
         stopped |= Q(
             Exists(
@@ -3685,6 +3629,18 @@ def _is_stale_execution(test_run_id: int, generation: int) -> bool:
     ).exists()
 
 
+def _still_on_runner(test_run_id: int, runner_id: RunnerId) -> bool:
+    """The run still has the runner this worker drives (not released)."""
+    return TestRun.objects.filter(pk=test_run_id, runner_id=runner_id).exists()
+
+
+# The worker found its run without a Test Runner, or the owner released it.
+_RUNNER_RELEASED_MESSAGE: Final = (
+    "The Test Runner was released from this run. Choose a Test Runner, then "
+    "continue the case."
+)
+
+
 def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> None:
     """Run one case as part of the run's ``generation`` (None: the current one)."""
     reset_outage_clock()
@@ -3709,7 +3665,13 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
 
     project = pivot.test_run.project
     run_id = pivot.test_run.id
-    cancellation_check = _build_cancellation_check(run_id, generation, pivot.pk)
+    # Read once at the start: a released or switched runner stops this
+    # execution at its next cancellation check (``_build_cancellation_check``).
+    runner = pivot.test_run.runner
+    runner_id = runner.runner_id if runner is not None else None
+    cancellation_check = _build_cancellation_check(
+        run_id, generation, pivot.pk, runner_id=runner_id
+    )
     # A worker shutdown (BaseException) must not start an agent on its way out.
     allow_teardown = True
     # A case paused for help (or for a person's step, Human in the loop) keeps
@@ -3751,14 +3713,20 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         # A person marked the case failed or blocked: record evidence, then
         # write their verdict (no orchestrator, teardown or cleanup).
         try:
-            _finish_person_mark(pivot, project, mark, generation, cancellation_check)
+            _finish_person_mark(
+                pivot, project, runner, mark, generation, cancellation_check
+            )
         finally:
             if not _is_stale_execution(run_id, generation):
                 _update_test_run_status_if_needed(pivot.test_run, generation=generation)
         return
 
     try:
-        wait_for_controller(project.id)
+        if runner is None or runner_id is None:
+            # Released (or never assigned, a run carried over from before
+            # user runners): ask for help like a lost runner.
+            raise TestRunnerDisconnectedError(_RUNNER_RELEASED_MESSAGE)
+        wait_for_controller(runner_id)
 
         wait_for_ready_worker(
             timeout=float(settings.VISION_WORKER_READY_TIMEOUT),
@@ -3766,7 +3734,7 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         )
 
         if not continue_after_help and not pause_redelivered:
-            _safe_cleanup(project.id, wait_for_runner=True)
+            _safe_cleanup(runner_id, wait_for_runner=True)
 
         on_log = _build_log_callback(pivot, generation)
         on_screenshot = _build_screenshot_callback(pivot, generation)
@@ -3792,9 +3760,10 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
             result = run_orchestrator(
                 task_description,
                 project.id,
+                runner_id,
                 on_log=on_log,
                 on_screenshot=on_screenshot,
-                system_info=project.agent_system_info or None,
+                system_info=runner.system_info or None,
                 project_prompt=build_agent_project_context(project),
                 cancellation_check=cancellation_check,
                 resume=resume,
@@ -3861,6 +3830,15 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
                     )
                 else:
                     _discard_pause_after_retest(pivot)
+            elif runner_id is not None and not _still_on_runner(run_id, runner_id):
+                # The owner released the runner (``run_runner_release``): the
+                # case asks for help with the runner-lost fault.
+                paused_for_help = _pause_case_after_fault(
+                    pivot,
+                    TestRunnerDisconnectedError(_RUNNER_RELEASED_MESSAGE),
+                    generation,
+                    restore_baseline,
+                )
             if not paused_for_help:
                 _cancel_pivot_if_in_progress(pivot)
     except ControllerReconnectTimeoutError as exc:
@@ -3888,31 +3866,43 @@ def execute_test_run_test_case(pivot_id: int, generation: int | None = None) -> 
         )
         raise
     finally:
-        # A newer chain may already be driving the machine: leave it alone.
-        # Checked again after the teardown, which can take minutes.
+        # A newer chain may already be driving the machine, or the runner
+        # was released to someone else: leave it alone. Checked again after
+        # the teardown, which can take minutes.
         if (
             allow_teardown
             and not paused_for_help
+            and runner is not None
+            and runner_id is not None
             and not _is_stale_execution(run_id, generation)
+            and _still_on_runner(run_id, runner_id)
         ):
             _safe_teardown(
                 pivot,
                 project,
+                runner,
                 generation=generation,
                 # Run-level only: a re-test mark during the teardown of a
                 # Failed verdict must not leave its apps open.
-                cancellation_check=_build_cancellation_check(run_id, generation),
+                cancellation_check=_build_cancellation_check(
+                    run_id, generation, runner_id=runner_id
+                ),
                 run_case_teardown=run_case_teardown,
             )
         if not _is_stale_execution(run_id, generation):
-            if not paused_for_help:
-                _safe_cleanup(project.id, wait_for_runner=False)
+            if (
+                not paused_for_help
+                and runner_id is not None
+                and _still_on_runner(run_id, runner_id)
+            ):
+                _safe_cleanup(runner_id, wait_for_runner=False)
             _update_test_run_status_if_needed(pivot.test_run, generation=generation)
 
 
 def _finish_person_mark(
     pivot: TestRunTestCase,
     project: Project,
+    runner: TestRunner | None,
     mark: PersonMarkVerdict,
     generation: int,
     cancellation_check: Callable[[], bool],
@@ -3933,19 +3923,23 @@ def _finish_person_mark(
     recorded: OrchestratorCheckpoint | None = None
     if checkpoint is None:
         on_log("[Evidence] no evidence: the case has no usable saved progress")
+    elif runner is None:
+        on_log("[Evidence] no evidence: the run has no Test Runner")
+        recorded = replace(checkpoint, person=None)
     else:
         project.refresh_from_db(
             fields=["project_prompt", "application_url", "application_platform"]
         )
         try:
             # A runner that is reconnecting gets the usual grace period.
-            wait_for_controller(project.id)
+            wait_for_controller(runner.runner_id)
             recorded = record_person_mark(
                 checkpoint,
                 project.id,
+                runner.runner_id,
                 on_log=on_log,
                 on_screenshot=_build_screenshot_callback(pivot, generation),
-                system_info=project.agent_system_info or None,
+                system_info=runner.system_info or None,
                 project_prompt=build_agent_project_context(project),
                 cancellation_check=cancellation_check,
             )
@@ -4100,9 +4094,9 @@ def _discard_pause_after_retest(pivot: TestRunTestCase) -> None:
 
 
 def _fetch_pivot(pivot_id: int) -> TestRunTestCase:
-    return TestRunTestCase.objects.select_related("test_run__project", "test_case").get(
-        pk=pivot_id
-    )
+    return TestRunTestCase.objects.select_related(
+        "test_run__project", "test_run__runner", "test_case"
+    ).get(pk=pivot_id)
 
 
 def _mark_pivot_in_progress(pivot: TestRunTestCase, generation: int) -> bool:
@@ -4501,8 +4495,10 @@ def _pause_run_for_person(
     case asks for help instead (``_pause_hand_off_for_person``).
     """
     step_num = max(hand_off.step_num, 1)
+    # The run's Test Runner OS names the shell (loaded with the case).
+    runner = pivot.test_run.runner
     shell_label = command_shell_label(
-        hand_off.kind, pivot.test_run.project.agent_system_info
+        hand_off.kind, runner.system_info if runner is not None else None
     )
     with transaction.atomic():
         test_run = TestRun.objects.select_for_update().get(pk=pivot.test_run_id)
@@ -4879,16 +4875,6 @@ def _cancel_run_person_steps(test_run: TestRun, now: datetime) -> None:
         transaction.on_commit(lambda: broadcast_project_attention_changed(project_id))
 
 
-def abort_active_test_run_on_disconnect(project: Project) -> None:
-    # STARTED only: a paused run executes nothing, so a runner drop while a
-    # person fixes the machine (or the auto-fix restarts it) must not cancel it.
-    active_run = TestRun.objects.filter(
-        project=project, status=TestRunStatus.STARTED
-    ).first()
-    if active_run is not None:
-        abort_test_run(active_run, reason="Controller client disconnected")
-
-
 def _update_test_run_status_if_needed(test_run: TestRun, *, generation: int) -> bool:
     """Finish the run once every case settled; True for the one caller that did.
 
@@ -4959,34 +4945,3 @@ def finish_test_run(
 
     transaction.on_commit(_after_commit)
     return True
-
-
-# ============================================================================
-# CONTROLLER CLIENT DOWNLOAD SERVICES
-# ============================================================================
-
-
-def _generate_env_content(project: Project) -> str:
-    return (
-        f"CONTROLLER_HOST={settings.CONTROLLER_SERVER_HOST}\n"
-        f"CONTROLLER_PORT={settings.CONTROLLER_SERVER_PORT}\n"
-        f"CONTROLLER_API_KEY={project.api_key}\n"
-        # Empty = the system proxy settings; see controller_client/example.env.
-        "CONTROLLER_PROXY=\n"
-        "CONTROLLER_RECONNECT_INTERVAL=5\n"
-        "CONTROLLER_MAX_RECONNECT_ATTEMPTS=0\n"
-        "CONTROLLER_RECONNECT_MAX_INTERVAL=60\n"
-        "CONTROLLER_LOG_LEVEL=INFO\n"
-        "CONTROLLER_PERSON_WINDOW=true\n"
-        # Asked for when the Test Runner first starts, then written here.
-        "CONTROLLER_PERSON_EMAIL=\n"
-        # Base text size of the person window (10-28; A-/A+ change it per session).
-        "# CONTROLLER_PERSON_WINDOW_TEXT_SIZE=14\n"
-        # Disk cap of the Manual run screenshot spool (MB, at least 64).
-        "# CONTROLLER_MANUAL_SPOOL_MAX_MB=2048\n"
-    )
-
-
-def generate_controller_client_zip(project: Project) -> bytes:
-    """The download ZIP: the runner source plus a ``.env`` with the Connection key."""
-    return build_runner_archive(_generate_env_content(project))

@@ -71,9 +71,8 @@ _FIXED: Final[dict[CaptureErrorCode, str]] = {
         "The test machine is not connected right now. Try again later." + _MEANWHILE
     ),
     CaptureErrorCode.MACHINE_OUTDATED: (
-        "The test machine's software is too old to capture screenshots. Ask a "
-        "project member to update the test machine's software from the "
-        "Environment page." + _MEANWHILE
+        "The test machine's software is too old to capture screenshots. Ask "
+        "the test machine's owner to update its software." + _MEANWHILE
     ),
     CaptureErrorCode.DEVICE_OFFLINE: (
         "The phone or tablet of the test machine is not connected right now. "
@@ -139,6 +138,19 @@ _PROCESS_LIST: Final = re.compile(r"[a-z0-9 ._+,-]{1,300}")
 def error(code: CaptureErrorCode, text: str | None = None) -> McpToolError:
     """The tool error ``[code] text`` (the table's text when None)."""
     return McpToolError(f"[{code.value}] {text if text is not None else _FIXED[code]}")
+
+
+# ``[not_set_up]`` when the case's run has no test machine assigned (the
+# allowlist text above is for a project that allows no application).
+_NO_MACHINE: Final = (
+    "No test machine is assigned to this run. Capture the screenshot yourself "
+    "and send it with add_screenshot."
+)
+
+
+def no_machine_error() -> McpToolError:
+    """``[not_set_up]``: the run has no test machine (its runner is optional)."""
+    return error(CaptureErrorCode.NOT_SET_UP, _NO_MACHINE)
 
 
 def readiness_code(readiness: CaptureReadiness) -> CaptureErrorCode | None:

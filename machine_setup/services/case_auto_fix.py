@@ -31,6 +31,8 @@ from machine_setup.services.case_help_context import (
 )
 from machine_setup.services.live_turn import resolve_live_turn
 from machine_setup.services.queue_turn import broadcast_and_enqueue, create_turn
+from machine_setup.services.send_gates import runner_refusal
+from machine_setup.services.thread_runner import lock_runner, runner_usable_by_project
 from machine_setup.turn_state import is_turn_stale
 from projects.case_help_services import finish_case_auto_fix
 from projects.models import (
@@ -42,12 +44,13 @@ from projects.models import (
     TestRun,
     TestRunStatus,
 )
-from projects.runner_update_state import runner_update_in_progress
-from projects.services import (
+from projects.runner_use import runner_id_of_run
+from runners.machine_state import (
     MachineState,
-    connected_machine_state,
-    get_machine_state,
+    engine_machine_state,
+    runner_machine_state,
 )
+from runners.models import TestRunner
 from visual_engine.services.pool_status import get_visual_engine_status
 
 logger = logging.getLogger(__name__)
@@ -61,7 +64,12 @@ _MACHINE_NOT_READY_REASON = (
     "the test machine was not ready (the Test Runner must be connected and the "
     "visual engine ready)."
 )
-_RUNNER_UPDATING_REASON = "the Test Runner was being updated."
+_RUNNER_BUSY_REASON = "the Test Runner was busy with something else."
+_NO_RUNNER_REASON = "the run has no Test Runner."
+_RUNNER_UNAVAILABLE_REASON = (
+    "the run's Test Runner is no longer available to this project."
+)
+_RUNNER_CHANGED_REASON = "the run's Test Runner changed meanwhile."
 _INTERNAL_ERROR_REASON = "an internal error occurred."
 
 
@@ -97,16 +105,14 @@ def _start_locked(help_request_id: int) -> str | None:
         return None
     pivot = request.test_run_test_case
     run = pivot.test_run
-    # Lock order of every run write: project row, then run row.
-    project = (
-        Project.objects.select_for_update()
-        .only("id", "agent_connected", "agent_device_state", "agent_device_reported_at")
-        .get(pk=run.project_id)
-    )
-    run_status = (
+    # Lock order of every runner holder and run write: the run's Test Runner
+    # row, then the project row, then the run row.
+    runner = lock_runner(runner_id_of_run(run))
+    project = Project.objects.select_for_update().only("id").get(pk=run.project_id)
+    locked_run = (
         TestRun.objects.select_for_update()
         .filter(pk=run.pk)
-        .values_list("status", flat=True)
+        .values_list("status", "runner_id")
         .first()
     )
     pending = CaseHelpRequest.objects.filter(
@@ -114,17 +120,24 @@ def _start_locked(help_request_id: int) -> str | None:
         resolution=HelpResolution.OPEN,
         auto_fix_state=HelpAutoFixState.RUNNING,
     ).exists()
-    if run_status != TestRunStatus.PAUSED or not pending:
+    if locked_run is None or locked_run[0] != TestRunStatus.PAUSED or not pending:
         return None
     if SetupConversation.objects.filter(help_request_id=help_request_id).exists():
         return None
+    if locked_run[1] != run.runner_id:
+        # Reassigned between the brief load and the run lock.
+        return _RUNNER_CHANGED_REASON
 
     now = timezone.now()
     if resolve_live_turn(project_id=project.pk, now=now) is not None:
         return _TURN_LIVE_REASON
-    if runner_update_in_progress(project.pk, now):
-        return _RUNNER_UPDATING_REASON
-    if not _machine_ready_for_auto_fix(project, request):
+    if runner is None:
+        return _NO_RUNNER_REASON
+    if not runner_usable_by_project(runner, project.pk):
+        return _RUNNER_UNAVAILABLE_REASON
+    if runner_refusal(runner, project.pk, main_chat=False) is not None:
+        return _RUNNER_BUSY_REASON
+    if not _machine_ready_for_auto_fix(runner, request):
         return _MACHINE_NOT_READY_REASON
 
     brief = build_help_brief(request, audience="auto_fix")
@@ -135,7 +148,11 @@ def _start_locked(help_request_id: int) -> str | None:
         created_by=None,
     )
     turn, message = create_turn(
-        conversation=conversation, requested_by=None, text=brief, auto_fix=True
+        conversation=conversation,
+        requested_by=None,
+        text=brief,
+        runner_id=runner.runner_id,
+        auto_fix=True,
     )
     logger.info(
         "Auto-fix of help request %s started: conversation %s, turn %s",
@@ -147,17 +164,17 @@ def _start_locked(help_request_id: int) -> str | None:
     return None
 
 
-def _machine_ready_for_auto_fix(project: Project, request: CaseHelpRequest) -> bool:
+def _machine_ready_for_auto_fix(runner: TestRunner, request: CaseHelpRequest) -> bool:
     """READY, or, for a disconnected phone or tablet, the runner connected and
     the visual engine ready: the auto-fix may reconnect the device through the
     runner computer's shell (``adb reconnect``, booting the emulator)."""
     engine = get_visual_engine_status()
-    if get_machine_state(project, engine) == MachineState.READY:
+    if runner_machine_state(runner, engine) == MachineState.READY:
         return True
     return (
         request.fault == BlockedReason.DEVICE_DISCONNECTED
-        and project.agent_connected
-        and connected_machine_state(engine) == MachineState.READY
+        and runner.connected
+        and engine_machine_state(engine) == MachineState.READY
     )
 
 

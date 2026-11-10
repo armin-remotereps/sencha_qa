@@ -4,8 +4,9 @@ leaves the mode.
 
 Imports ``run_reopen_services`` and ``services``, never ``machine_setup.services``.
 
-Every action locks the project, then the run, then the person step, then the
-case (the order every help writer uses), requires the run to be PAUSED and the
+Every action locks the run's Test Runner row (when it has one), then the
+project, then the run, then the person step, then the case (the order every
+help writer uses), requires the run to be PAUSED and the
 step to be open with the id the card was rendered for (stale-card guard; Mark
 for re-test finds the case's open step itself). The
 remaining cases are then queued (the reported case first) through
@@ -71,10 +72,12 @@ from projects.person_step_actor import PersonStepActor
 from projects.person_step_rows import stored_hand_off_kind
 from projects.run_reopen_services import (
     list_wake_blockers,
-    lock_project_and_run,
+    lock_run_with_its_runner,
     queue_pending_cases,
 )
+from projects.run_runner_gate import CHOOSE_RUNNER_MESSAGE
 from projects.services import broadcast_run_and_pivots
+from runners.models import TestRunner
 from test_sessions.case_activity import CaseActivity
 from test_sessions.services.record_case_activity import record_case_activity
 
@@ -118,7 +121,7 @@ class PersonStepPanel:
     # Why the run cannot be queued right now (runner offline, ...).
     blockers: tuple[str, ...]
     # The open step can also be answered in the Test Runner's window: the
-    # project's runner is connected and advertised ``person_steps_v1``.
+    # run's runner is connected and advertised ``person_steps_v1``.
     runner_can_answer: bool
     # The step's report came from the Test Runner window.
     reported_at_runner: bool
@@ -209,7 +212,11 @@ def get_person_step_panel(
     if not paused:
         blockers = ()
     elif blockers is None:
-        blockers = list_wake_blockers(test_run, project)
+        blockers = list_wake_blockers(test_run, project, include_runner=False)
+    if paused and is_open and test_run.runner_id is None:
+        # The report is confirmed on the run's runner: choose one first
+        # (Change runner on the run card).
+        blockers = (*blockers, CHOOSE_RUNNER_MESSAGE)
     not_confirmed = step.status == PersonStepStatus.NOT_CONFIRMED
     return PersonStepPanel(
         step=step,
@@ -221,7 +228,7 @@ def get_person_step_panel(
         shell_label=step.shell_label,
         can_report=paused and is_open and not blockers,
         blockers=tuple(blockers),
-        runner_can_answer=paused and is_open and _runner_shows_steps(project),
+        runner_can_answer=paused and is_open and _runner_shows_steps(test_run),
         reported_at_runner=step.reported_via == PersonStepChannel.RUNNER,
         reporter_label=person_label(step.reported_by),
         case_steps_label=step.case_steps_label,
@@ -249,6 +256,11 @@ def report_person_step(
 
     ``expected_round``: the round the answer was given for (the Test Runner);
     a step reopened since (next round) refuses it. None skips the check.
+
+    The agent confirms the report on the run's own Test Runner, where the
+    person performed the step: a run without one is refused
+    (``CHOOSE_RUNNER_MESSAGE``; Change runner on the run card first, which
+    hands the step back to the agent). Any writable member may answer (Q3).
     """
     report_outcome = _parse_outcome(outcome)
     note = _cap_note(note)
@@ -257,6 +269,8 @@ def report_person_step(
     output = _cap_output(output)
     with transaction.atomic():
         project, test_run = _lock_paused_run(pivot.test_run_id)
+        if test_run.runner_id is None:
+            raise PersonStepError(CHOOSE_RUNNER_MESSAGE)
         locked_pivot, step = _lock_step(
             test_run, pivot.pk, person_step_id, _ACTIONABLE_STATUSES, expected_round
         )
@@ -305,6 +319,10 @@ def overrule_person_step(
     note = _cap_note(note)
     with transaction.atomic():
         project, test_run = _lock_paused_run(pivot.test_run_id)
+        # As a report: the worker confirms on the run's runner, so a run
+        # without one is refused (a later runner switch would hand it back).
+        if test_run.runner_id is None:
+            raise PersonStepError(CHOOSE_RUNNER_MESSAGE)
         locked_pivot, step = _lock_step(
             test_run, pivot.pk, person_step_id, _ACTIONABLE_STATUSES, expected_round
         )
@@ -553,15 +571,26 @@ def mark_retest_person_step(
         return _after_action(project, test_run, locked_pivot, actor, activity=None)
 
 
-def hand_back_person_step(test_run: TestRun) -> PersonStepActionResult | None:
+def hand_back_person_step(
+    test_run: TestRun, *, queue: bool = True, keep_screen: bool = True
+) -> PersonStepActionResult | None:
     """The run is not in Human in the loop: the agent runs the open step itself.
 
-    Called by the mode switch inside its transaction, with the project and
-    run locked (the person step, then the case, are locked here). Only a
-    ``waiting`` or ``not_confirmed`` step is handed back (from the current
-    screen, no cleanup, no restore); a ``reported`` one finishes first.
-    None when no step was handed back. A gate refusal keeps the hand-back and
-    leaves the run paused ("Continue run"): ``queued`` False with the reason.
+    Called by the mode switch inside its transaction, with the run's runner,
+    the project and the run locked (the person step, then the case, are
+    locked here). Only a ``waiting`` or ``not_confirmed`` step is handed back
+    (no cleanup, no restore); a ``reported`` one finishes first. None when no
+    step was handed back. A gate refusal keeps the hand-back and leaves the
+    run paused ("Continue run"): ``queued`` False with the reason.
+
+    ``queue`` False (a switch to another Test Runner, ``run_runner_change``):
+    the step is handed back but the run stays paused until someone continues
+    it ("Continue run"); ``queued`` is False with no reason.
+
+    ``keep_screen`` False (the same switch: the new machine never showed the
+    step's screen): the hand-back is written without ``continue_pending``,
+    so the worker cleans up and restores the earlier steps' state (or starts
+    the case over at step 1) before the agent runs the step.
     """
     if test_run.status != TestRunStatus.PAUSED:
         return None
@@ -587,12 +616,16 @@ def hand_back_person_step(test_run: TestRun) -> PersonStepActionResult | None:
     step.closed_at = timezone.now()
     step.save(update_fields=["status", "closed_at"])
     person = dataclasses.replace(
-        _checkpoint_person(pivot, step), state="handed_back", continue_pending=True
+        _checkpoint_person(pivot, step),
+        state="handed_back",
+        continue_pending=keep_screen,
     )
     _resume_case(pivot, person)
     project_id = test_run.project_id
     transaction.on_commit(lambda: broadcast_run_and_pivots(test_run, [pivot]))
     transaction.on_commit(lambda: broadcast_project_attention_changed(project_id))
+    if not queue:
+        return PersonStepActionResult(queued=False)
     blocker = _try_queue(test_run)
     return PersonStepActionResult(queued=not blocker, blocker=blocker)
 
@@ -603,7 +636,9 @@ def hand_back_person_step(test_run: TestRun) -> PersonStepActionResult | None:
 
 
 def _lock_paused_run(test_run_id: int) -> tuple[Project, TestRun]:
-    project, test_run = lock_project_and_run(test_run_id)
+    """Lock the run's runner row, the project and the run (a PAUSED agent
+    run)."""
+    project, test_run = lock_run_with_its_runner(test_run_id, error=PersonStepError)
     if is_manual_run(test_run):
         raise PersonStepError(MANUAL_PERSON_STEP_REFUSED)
     if test_run.status != TestRunStatus.PAUSED:
@@ -726,11 +761,21 @@ def _row_reporter(step: CasePersonStep) -> str:
     return PersonStepActor.from_row(step.reported_by, step.reported_via).label()
 
 
-def _runner_shows_steps(project: Project) -> bool:
-    """The project's Test Runner is connected and shows person steps (no query)."""
-    capabilities = project.agent_capabilities
+def _runner_shows_steps(test_run: TestRun) -> bool:
+    """The run's Test Runner is connected and shows person steps (1 query;
+    none when the run has no runner)."""
+    if test_run.runner_id is None:
+        return False
+    row = (
+        TestRunner.objects.filter(pk=test_run.runner_id, archived_at__isnull=True)
+        .values_list("connected", "capabilities")
+        .first()
+    )
+    if row is None:
+        return False
+    connected, capabilities = row
     return (
-        project.agent_connected
+        connected
         and isinstance(capabilities, list)
         and ClientCapability.PERSON_STEPS_V1.value in capabilities
     )

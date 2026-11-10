@@ -91,7 +91,9 @@
 
      Need help: help_panel (projects.case_help_services.HelpPanel, or None
      unless the run is paused on this case; see includes/_case_help_card.html),
-     help_form (CaseHelpResolutionForm), help_requests (list[CaseHelpRequest],
+     runner_card (projects.run_runner_card.RunRunnerCard: the runner selects
+     of Resume case, help Continue and the person-step report; blank keeps
+     the run's runner), help_form (CaseHelpResolutionForm), help_requests (list[CaseHelpRequest],
      oldest first, resolved_by loaded, its thread (auto-fix or help chat)
      prefetched as help_threads, its applied and discarded redesigns as
      decided_plan_revisions, oldest first), help_mode_form (RunHelpModeForm: the help
@@ -374,7 +376,7 @@
 
   {% if help_panel %}
   {# Section: Need help — the agent's ask and the human actions (server-rendered) #}
-  {% include "projects/includes/_case_help_card.html" with project=project test_run=test_run pivot=pivot help_panel=help_panel help_form=help_form csrf_token=csrf_token can_write=project_can_write only %}
+  {% include "projects/includes/_case_help_card.html" with project=project test_run=test_run pivot=pivot help_panel=help_panel help_form=help_form runner_card=runner_card csrf_token=csrf_token can_write=project_can_write only %}
   {% endif %}
 
   {% if person_step_panel.holds_run and person_step_panel.is_open or person_step_panel.holds_run and person_step_panel.confirming %}
@@ -780,6 +782,7 @@
         {% else %}
         {% include "projects/includes/_help_mode_select.html" with field_id="resume-case-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode can_change=user.is_superuser only %}
         {% endif %}
+        {% include "projects/includes/_runner_select.html" with field_id="resume-case-runner" runner_card=runner_card keep_current=True only %}
         <p>The result stays on this run. A Checked mark on this case is cleared.</p>
         <div class="dialog-actions">
           <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>

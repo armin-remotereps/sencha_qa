@@ -1,0 +1,32 @@
+{% comment %} Confirmation for an owner action on a runner (new token, release,
+   remove): POSTs confirm=yes (runners.forms.RunnerConfirmForm).
+
+   Context contract:
+     dialog_id     — unique on the page; opened with $dispatch('open-<dialog_id>')
+     title, body   — dialog heading and paragraph (autoescaped)
+     confirm_label — submit button text
+     confirm_class — optional (default "btn-danger-solid")
+     action_url    — the POST endpoint {% endcomment %}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-{{ dialog_id }}.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="{{ dialog_id }}-title" aria-describedby="{{ dialog_id }}-desc">
+    <h3 id="{{ dialog_id }}-title">{{ title }}</h3>
+    <p id="{{ dialog_id }}-desc">{{ body }}</p>
+    <form method="post" action="{{ action_url }}">
+      {% csrf_token %}
+      <input type="hidden" name="confirm" value="yes">
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn {{ confirm_class|default:'btn-danger-solid' }}">{{ confirm_label }}</button>
+      </div>
+    </form>
+  </div>
+</div>

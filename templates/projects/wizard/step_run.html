@@ -14,6 +14,9 @@
                         200" note
      wizard_step       — always 5 here
      wizard_mode       — always "edit"
+     start_form        — TestRunStartForm (runner only: the viewer's own Test
+                        Runners, initial = default_runner_for_start; the run
+                        keeps the project's run mode)
      readiness         — RunReadiness computed with selected_count=0 (no
                         boxes are pre-checked — this is a brand-new run),
                         so it matches the checkboxes' initial state exactly
@@ -132,6 +135,29 @@
         </label>
         {% endfor %}
       </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h2>Test Runner</h2>
+      </div>
+      {% with field=start_form.runner %}
+      <div class="field{% if field.errors %} has-error{% endif %}">
+        <label for="{{ field.id_for_label }}">Run it on</label>
+        {% if field.field.choices|length > 1 %}
+        <select class="select" id="{{ field.id_for_label }}" name="runner">
+          <option value="">{% if project.default_help_mode == "manual" %}No Test Runner{% else %}Choose a Test Runner{% endif %}</option>
+          {% for value, label in field.field.choices %}{% if value != "" %}
+          <option value="{{ value }}"{% if value|stringformat:"s" == field.value|stringformat:"s" %} selected{% endif %}>{{ label }}</option>
+          {% endif %}{% endfor %}
+        </select>
+        <p class="hint">One of your Test Runners. The checks below are for the one chosen when this page loaded.</p>
+        {% else %}
+        <p class="muted">You have no Test Runner yet. <a href="{% url 'projects:setup_machine' project.id %}">Add one</a> in the previous step.</p>
+        {% endif %}
+        {% for error in field.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+      </div>
+      {% endwith %}
     </div>
 
     <div class="card">

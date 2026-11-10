@@ -44,9 +44,11 @@ from projects.run_reopen_services import (
     REOPENABLE_RUN_STATUSES,
     is_valid_help_mode,
     list_reopen_blockers,
-    lock_project_and_run,
+    lock_runner_project_and_run,
     reopen_run,
 )
+from projects.run_runner_gate import select_run_runner
+from runners.types import RunnerId
 from test_sessions.case_activity import CaseActivity
 from test_sessions.services.record_case_activity import record_case_activity
 
@@ -98,7 +100,7 @@ def get_rerun_panel(test_run: TestRun, project: Project) -> RerunPanel:
     """Gates for the Re-run button; hidden (no queries) unless the run finished."""
     if not is_rerun_open(test_run):
         return RerunPanel(can_rerun=False, blockers=())
-    blockers = list_reopen_blockers(test_run, project)
+    blockers = list_reopen_blockers(test_run, project, include_runner=False)
     return RerunPanel(can_rerun=not blockers, blockers=tuple(blockers))
 
 
@@ -108,16 +110,26 @@ def rerun_test_run_cases(
     pivot_ids: Sequence[int],
     user: CustomUser,
     help_mode: str | None = None,
+    runner_id: RunnerId | None = None,
 ) -> RerunOutcome:
     """Re-run the selected cases of the run from step 1, in run order.
 
     ``help_mode`` (a ``RunHelpMode`` value) changes the run's mode; ``None``
     keeps it. Only a superuser may change it (``HelpModeNotAllowedError``).
+    ``runner_id``: None keeps the run's Test Runner (an agent run without one
+    must choose); another of the user's runners switches the run to it first
+    (Q6). Runner refusals raise ``RunRerunError``.
     """
     if help_mode is not None and not is_valid_help_mode(help_mode):
         raise RunRerunError(_INVALID_HELP_MODE)
+    # Switch runner first (its own transaction: runners, then the run).
+    chosen_runner_id = select_run_runner(
+        test_run, runner_id=runner_id, actor=user, error=RunRerunError
+    )
     with transaction.atomic():
-        project, locked_run = lock_project_and_run(test_run.pk)
+        project, locked_run = lock_runner_project_and_run(
+            test_run.pk, chosen_runner_id, error=RunRerunError
+        )
         resolved_help_mode = resolve_help_mode(
             user=user, requested=help_mode, current=locked_run.help_mode
         )

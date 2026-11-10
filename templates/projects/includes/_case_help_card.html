@@ -27,8 +27,11 @@
                   dropped message is offered pre-filled for the help chat.
                   request.fault / get_fault_display: the infrastructure
                   fault that stopped the case ("" when the agent asked);
-                  "runner_outdated" adds a link to the Environment page,
-                  where the Test Runner updates itself
+                  "runner_outdated" adds a link to the Test Runners
+                  pages, where its owner updates the runner
+     runner_card — optional projects.run_runner_card.RunRunnerCard: the
+                  Continue form's Test Runner select (blank keeps the run's;
+                  Mark failed / blocked ignore it)
      help_form  — CaseHelpResolutionForm (the person's optional note, never
                   pre-filled from the agent's suggestion; use_plan_revision,
                   unticked here: the draft is only summarised on this page)
@@ -99,7 +102,7 @@
     {% endif %}
     {% endwith %}
     {% if help_request.fault == "runner_outdated" %}
-      <p><a href="{% url 'projects:environment' project.id %}#connection-h">Update the Test Runner on the Environment page</a></p>
+      <p>The run's Test Runner is outdated. Its owner updates it on its page under <a href="{% url 'runners:list' %}">Test Runners</a>.</p>
     {% endif %}
 
     {% if help_request.auto_fix_state == "running" %}
@@ -221,6 +224,9 @@
           </label>
           <p class="hint">Review the draft side by side in the help chat before ticking this. Ticked, Continue resumes at step {{ help_panel.pending_draft.resume_step }} of the redesigned plan on the machine as it is now (no cleanup){% if help_panel.choose_continue_mode %}, so choose "Re-run the step from the current screen" above{% endif %}.{% if help_request.continue_mode == "restore" %} This case must restore first (the screen cannot be trusted), so the redesign is refused until then.{% endif %} Unticked, the draft is dropped and step {{ help_request.step_num }} re-runs. Mark failed and Mark blocked drop it too.</p>
         </div>
+      {% endif %}
+      {% if runner_card %}
+      {% include "projects/includes/_runner_select.html" with field_id="help-continue-runner" runner_card=runner_card keep_current=True switch_hint=True only %}
       {% endif %}
       {% if help_panel.blockers %}
         <p class="hint" id="help-continue-blockers">Continue is unavailable: {{ help_panel.blockers|join:" " }}</p>

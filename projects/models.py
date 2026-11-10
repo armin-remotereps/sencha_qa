@@ -74,7 +74,9 @@ class TestRunStatus(models.TextChoices):
     PAUSED = "paused", "Needs help"
 
 
-# A run in either status holds the project's machine: no other run may start.
+# An active run. A non-Manual run in either status holds its Test Runner
+# (``projects.runner_use``); Phase 1 also keeps one active run per project,
+# so no other run of the project may start meanwhile.
 ACTIVE_RUN_STATUSES: tuple[str, ...] = (TestRunStatus.STARTED, TestRunStatus.PAUSED)
 
 
@@ -231,9 +233,9 @@ class PersonStepChannel(models.TextChoices):
     blank until a person acts.
 
     Rows from before the channel existed keep blank and were answered on the
-    web (``reported_by``/``closed_by`` name the user). A Test Runner answer has
-    a user only when the runner's ``CONTROLLER_PERSON_EMAIL`` named an active
-    project member.
+    web (``reported_by``/``closed_by`` name the user). A Test Runner answer is
+    credited to the runner's owner while the owner is a writable member of the
+    run's project (earlier rows: a member named by the runner's email, or none).
     """
 
     NONE = "", "Not answered by a person"
@@ -409,21 +411,6 @@ class Project(models.Model):
     api_key = models.CharField(
         max_length=64, unique=True, db_index=True, default=_default_api_key
     )
-    agent_connected = models.BooleanField(default=False, db_index=True)
-    # Channels channel_name of the consumer that owns the controller connection.
-    # A late disconnect of an older socket only releases the project if it still
-    # owns it, so a reconnect is never wiped by its predecessor's cleanup.
-    agent_channel_name = models.CharField(max_length=255, blank=True, default="")
-    agent_system_info = models.JSONField(default=dict, blank=True)
-    agent_client_version = models.CharField(max_length=32, blank=True, default="")
-    agent_capabilities = models.JSONField(default=list, blank=True)
-    # Phone runners only (``device_status``); cleared with the connection.
-    agent_device_state = models.CharField(
-        max_length=16, choices=RunnerDeviceState.choices, blank=True, default=""
-    )
-    agent_device_detail = models.CharField(max_length=500, blank=True, default="")
-    agent_device_reported_at = models.DateTimeField(null=True, blank=True)
-    last_connected_at = models.DateTimeField(null=True, blank=True)
     project_prompt = models.TextField(blank=True, default="")
     # Bumped on every write; the setup agent's write is conditional on it.
     project_prompt_revision = models.PositiveIntegerField(default=0)
@@ -697,6 +684,22 @@ class TestRun(models.Model):
     # Bumped by every Start and Resume; chain tasks carry the value they were
     # queued with and stand down (no execution, no writes) once it moves on.
     execution_generation = models.PositiveIntegerField(default=0)
+    # The user-owned Test Runner that executes the run
+    # (``projects.run_runner_assignment``). Null: none assigned yet (WAITING),
+    # a Manual run without one, a run carried over from before user runners,
+    # or the runner row was deleted.
+    runner = models.ForeignKey(
+        "runners.TestRunner",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="test_runs",
+    )
+    # The runner's name when it was assigned (shown after archive or delete).
+    runner_name_snapshot = models.CharField(max_length=64, blank=True, default="")
+    # When the current runner was assigned; a help request older than this
+    # cannot continue on the current screen (another machine).
+    runner_assigned_at = models.DateTimeField(null=True, blank=True)
     # Set from ``Project.default_help_mode`` when the run is created; chosen
     # at Start; kept by Resume and Re-run in place unless changed there.
     help_mode = models.CharField(
@@ -1599,8 +1602,9 @@ class RunnerUpdate(models.Model):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    project = models.ForeignKey(
-        Project, on_delete=models.CASCADE, related_name="runner_updates"
+    # The runner being updated.
+    runner = models.ForeignKey(
+        "runners.TestRunner", on_delete=models.CASCADE, related_name="updates"
     )
     requested_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -1636,14 +1640,14 @@ class RunnerUpdate(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["project"],
+                fields=["runner"],
                 condition=models.Q(status__in=NON_TERMINAL_RUNNER_UPDATE_STATUSES),
-                name="runner_update_one_in_flight",
+                name="runner_update_one_in_flight_per_runner",
             )
         ]
         indexes = [
             models.Index(
-                fields=["project", "-created_at"], name="runner_update_project_idx"
+                fields=["runner", "-created_at"], name="runner_update_runner_idx"
             )
         ]
 
@@ -1654,7 +1658,7 @@ class RunnerUpdate(models.Model):
     def __str__(self) -> str:
         return (
             f"Runner update {self.from_version} -> {self.to_version} "
-            f"of project #{self.project_id}"
+            f"of runner #{self.runner_id}"
         )
 
 
@@ -1763,6 +1767,15 @@ class ManualCaseSubmission(models.Model):
     claim_token = models.CharField(max_length=MANUAL_CLAIM_TOKEN_LENGTH)
     # The run's ``execution_generation`` at submit time.
     execution_generation = models.PositiveIntegerField()
+    # The Test Runner that handed it in; its spool uploads are accepted only
+    # from that runner. Null: handed in through MCP, or before user runners.
+    runner = models.ForeignKey(
+        "runners.TestRunner",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
     # Null: an anonymous person at the Test Runner (or the user was deleted).
     submitted_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

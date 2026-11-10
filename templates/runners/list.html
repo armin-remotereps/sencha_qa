@@ -1,0 +1,131 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} The user's own Test Runners (/runners/), and the form to add one.
+
+   Context contract (runners/views.py::runner_list / runner_add):
+     rows        — list of runners.services.runner_list.RunnerListRow
+                   (runner, machine_state, os_label, device_label, hold,
+                   active_run_count)
+     add_form    — runners.forms.RunnerCreateForm (bound with errors after a
+                   refused add)
+     max_runners — RUNNER_MAX_PER_USER
+     at_limit    — the user has max_runners runners (the add form is hidden)
+     is_superuser_viewer — shows the link to /runners/all/
+
+   Live: runnerListLive() opens ws/runners/status/ (the owner's group,
+   runners.channels.runner_owner_group) and replaces a row's machine state
+   on each runner.status message. Names, hostnames and project names are
+   autoescaped; nothing goes through |safe. {% endcomment %}
+
+{% block title %}Test Runners · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <h1>Test Runners</h1>
+    <p class="subtitle">Your Test Runners. Each one runs on a test machine and serves one run, Manual case or Machine setup at a time. You pick one when you start a run.</p>
+  </div>
+  {% if is_superuser_viewer %}
+  <div class="actions">
+    <a class="btn btn-ghost btn-sm" href="{% url 'runners:all' %}">All runners</a>
+  </div>
+  {% endif %}
+</div>
+
+{% if rows %}
+<div class="table-wrap" x-data="runnerListLive()">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th scope="col">Name</th>
+        <th scope="col">State</th>
+        <th scope="col">Machine</th>
+        <th scope="col">Version</th>
+        <th scope="col">In use by</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td data-label="Name" class="cell-primary">
+          <a href="{% url 'runners:detail' row.runner.pk %}">{{ row.runner.name }}</a>
+        </td>
+        <td data-label="State">
+          <span x-data="{ id: '{{ row.runner.pk }}' }" data-runner-id="{{ row.runner.pk }}" data-runner-state="{{ row.machine_state }}">
+            {% include "runners/includes/_state_badge.html" with machine_state=row.machine_state live_expr="states[id]" only %}
+          </span>
+        </td>
+        <td data-label="Machine">
+          {% if row.device_label %}{{ row.device_label }}<br><span class="muted small">on {{ row.os_label|default:"—" }}</span>{% else %}{{ row.os_label|default:"—" }}{% endif %}
+          {% if row.runner.system_info.hostname %}<br><span class="muted small">{{ row.runner.system_info.hostname }}</span>{% endif %}
+        </td>
+        <td data-label="Version">{{ row.runner.client_version|default:"—" }}</td>
+        <td data-label="In use by">
+          {% if row.hold %}
+            {% if row.hold.test_run_id %}
+              <a href="{% url 'projects:test_run_detail' row.hold.project_id row.hold.test_run_id %}">{{ row.hold.label }}</a>
+            {% elif row.hold.project_id %}
+              <a href="{% url 'machine_setup:chat' row.hold.project_id %}">{{ row.hold.label }}</a>
+            {% else %}
+              {{ row.hold.label }}
+            {% endif %}
+          {% elif row.active_run_count %}
+            <span class="muted">Assigned to {{ row.active_run_count }} run{{ row.active_run_count|pluralize }}</span>
+          {% else %}
+            <span class="muted">Free</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+  {% include "partials/empty_state.html" with icon="⌘" title="No Test Runners yet" body="Add a Test Runner below, download it and set it up on a test machine. It connects with its own token." only %}
+{% endif %}
+
+<section class="card" aria-labelledby="add-runner-h">
+  <div class="card-header">
+    <h2 id="add-runner-h">Add a Test Runner</h2>
+  </div>
+  {% if at_limit %}
+    <p class="muted">You have {{ max_runners }} Test Runners, the most you can have. Remove one you no longer use to add another.</p>
+  {% else %}
+    <form method="post" action="{% url 'runners:add' %}">
+      {% csrf_token %}
+      {% for error in add_form.non_field_errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+      {% include "partials/form_field.html" with field=add_form.name only %}
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">Add Test Runner</button>
+      </div>
+    </form>
+    <p class="hint">You can have up to {{ max_runners }} Test Runners. Names are unique among yours.</p>
+  {% endif %}
+</section>
+{% endblock %}
+
+{% block extra_scripts %}
+{% include "runners/includes/_state_script.html" %}
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('runnerListLive', () => ({
+    // runner id (string) -> MachineState value, seeded from the rows.
+    states: {},
+    ws: null,
+
+    init() {
+      this.$root.querySelectorAll('[data-runner-id]').forEach((el) => {
+        this.states[el.dataset.runnerId] = el.dataset.runnerState;
+      });
+      this.ws = new WebSocket(window.punkHazard.wsUrl('/ws/runners/status/'));
+      this.ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        if (!window.runnerState.isStatusMessage(data)) return;
+        const key = String(data.runner_id);
+        if (key in this.states) this.states[key] = data.machine_state;
+      };
+    },
+  }));
+});
+</script>
+{% endblock %}

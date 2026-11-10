@@ -49,6 +49,7 @@ from agents.types import (
     SubTask,
     SubTaskResult,
 )
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -255,6 +256,7 @@ class PersonCheck:
 def confirm_person_step(
     person: CheckpointPersonStep,
     project_id: int,
+    runner_id: RunnerId,
     *,
     config: AgentConfig,
     browser_selection: BrowserSelection,
@@ -280,6 +282,7 @@ def confirm_person_step(
     return _run_check(
         sub_task,
         project_id,
+        runner_id,
         config=replace(config, timeout_seconds=timeout_seconds, final_answer=None),
         browser_selection=browser_selection,
         system_info=system_info,
@@ -291,6 +294,7 @@ def confirm_person_step(
 def record_mark_evidence(
     person: CheckpointPersonStep,
     project_id: int,
+    runner_id: RunnerId,
     *,
     verdict: Literal["failed", "blocked"],
     config: AgentConfig,
@@ -307,7 +311,7 @@ def record_mark_evidence(
     """
     if not settings.PERSON_EVIDENCE_LLM:
         if config.on_screenshot is not None:
-            capture_screenshot(project_id, on_screenshot=config.on_screenshot)
+            capture_screenshot(runner_id, on_screenshot=config.on_screenshot)
         return PersonCheck(
             result=SubTaskResult(
                 status="fail",
@@ -327,6 +331,7 @@ def record_mark_evidence(
     return _run_check(
         sub_task,
         project_id,
+        runner_id,
         config=replace(config, timeout_seconds=timeout_seconds, final_answer=None),
         browser_selection=browser_selection,
         system_info=system_info,
@@ -338,6 +343,7 @@ def record_mark_evidence(
 def _run_check(
     sub_task: SubTask,
     project_id: int,
+    runner_id: RunnerId,
     *,
     config: AgentConfig,
     browser_selection: BrowserSelection,
@@ -369,6 +375,7 @@ def _run_check(
         sub_task,
         state_description,
         project_id,
+        runner_id,
         config=replace(
             config,
             on_screenshot=_counted(on_screenshot, counted_screenshot),
@@ -383,7 +390,7 @@ def _run_check(
         logger.info("Person step check took no screenshot: taking one")
         if on_log is not None:
             on_log("[Evidence] The agent took no screenshot: taking one for the record")
-        capture_screenshot(project_id, on_screenshot=on_screenshot)
+        capture_screenshot(runner_id, on_screenshot=on_screenshot)
     return PersonCheck(result=result, check_output="\n".join(outputs))
 
 

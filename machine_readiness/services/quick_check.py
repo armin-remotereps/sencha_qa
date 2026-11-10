@@ -10,7 +10,8 @@ stored status (trusted until changed, D5). Results are written in one
 ``bulk_update`` stamped with the runner's hostname; with a run, the run page
 gets the ``stage0`` event (also when the worker refuses the check, with
 ``refused``). Runner calls and gates come through ``RunnerPorts`` (plan D2);
-one check per project at a time (``project_locks.QUICK_CHECK_LOCK_PREFIX``).
+the check runs on one Test Runner (the run's, or one picked), one check per
+runner at a time (``project_locks.RUNNER_QUICK_CHECK_LOCK_PREFIX``).
 A network (UNC) path is inspected only under the profile's network base
 directory (``network_paths``); otherwise it stays unknown.
 """
@@ -29,6 +30,8 @@ from typing import Any
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.conf import settings
+from django.db import transaction
+from django.db.models import F, Q
 from django.utils import timezone
 
 from accounts.models import CustomUser
@@ -61,13 +64,16 @@ from machine_readiness.network_paths import (
 from machine_readiness.profile_text import load_profile_snapshot
 from machine_readiness.run_stage0_state import load_run_stage0_rows
 from machine_readiness.runner_info import RunnerInfo, load_runner_info
-from machine_readiness.runner_ports import RunnerPorts
+from machine_readiness.runner_ports import ReadinessWork, RunnerPorts
 from machine_readiness.services.requirement_status import (
     RequirementStatusUpdate,
     record_statuses,
 )
 from machine_readiness.services.run_stage0 import get_run_stage0
-from machine_readiness.services.runner_gates import runner_action_refusal
+from machine_readiness.services.runner_gates import (
+    NO_RUNNER_MESSAGE,
+    runner_action_refusal,
+)
 from machine_readiness.types import (
     InventoryEntry,
     MatchStatus,
@@ -78,6 +84,8 @@ from projects.exceptions import (
     ControllerNotConnectedError,
     TestRunnerUnavailableError,
 )
+from runners.locks import lock_runner_row
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +101,7 @@ QUICK_CHECK_TASK_SOFT_LIMIT_SECONDS = (
     int(settings.STAGE0_QUICK_CHECK_BUDGET_SECONDS) + 30
 )
 QUICK_CHECK_TASK_TIME_LIMIT_SECONDS = QUICK_CHECK_TASK_SOFT_LIMIT_SECONDS + 30
-# The per-project check lock outlives the task's hard limit only a little.
+# The per-runner check lock outlives the task's hard limit only a little.
 QUICK_CHECK_LOCK_TTL_SECONDS = QUICK_CHECK_TASK_TIME_LIMIT_SECONDS + 30
 QUICK_CHECK_BUSY_MESSAGE = (
     "This machine is being checked already; the card updates when it ends."
@@ -121,6 +129,8 @@ class QuickCheckOutcome:
         return self.present + self.missing + self.mismatch
 
     def to_payload(self) -> dict[str, object]:
+        """The run socket's ``stage0`` outcome; it reaches every viewer of
+        the run, so it never carries the machine's ``host``."""
         return {
             "total": self.total,
             "checked": self.checked,
@@ -129,7 +139,6 @@ class QuickCheckOutcome:
             "mismatch": self.mismatch,
             "undecided": self.undecided,
             "stopped_early": self.stopped_early,
-            "host": self.host,
         }
 
 
@@ -142,19 +151,24 @@ class _Target:
     stored_status: str
 
 
-def ensure_quick_check_allowed(*, project_id: int, ports: RunnerPorts) -> RunnerInfo:
+def ensure_quick_check_allowed(
+    *, project_id: int, runner_id: RunnerId | None, ports: RunnerPorts
+) -> RunnerInfo:
     """The runner, or ``QuickCheckRefusedError`` when a check may not run now.
 
-    Refused while an agent-driven run is Started, a manual case is being
-    tested, a setup turn is live, the runner is updating, or no runner is
-    connected (``runner_gates``). Five small queries at most.
+    Refused with no runner, while an agent-driven run is Started on it, a
+    manual case is being tested on it, a setup turn drives it, it is
+    updating, another project's run holds it, or it is not connected
+    (``runner_gates``). A few small queries; call under the runner row lock.
     """
-    runner = load_runner_info(project_id)
+    runner = load_runner_info(runner_id)
     refusal = runner_action_refusal(
         project_id=project_id,
+        runner_id=runner_id,
         ports=ports,
         connected=runner.connected,
-        during_turn=False,
+        turn_id=None,
+        work=ReadinessWork.CHECK,
     )
     if refusal is not None:
         raise QuickCheckRefusedError(refusal)
@@ -164,39 +178,40 @@ def ensure_quick_check_allowed(*, project_id: int, ports: RunnerPorts) -> Runner
 def check_requirements(
     *,
     project_id: int,
+    runner_id: RunnerId | None,
     run_id: int | None,
     actor_id: int | None,
     ports: RunnerPorts,
-    lock_token: str | None = None,
+    lock_token: str,
 ) -> QuickCheckOutcome:
-    """Check the run's (or the project's) requirements on the connected runner.
+    """Check the run's (or the project's) requirements on ``runner_id``.
 
-    No LLM. Runs under the project's check lock (``lock_token`` from
-    ``request_quick_check``, else a new one). Raises
+    No LLM. Runs under the runner's check lock handed over by
+    ``request_quick_check`` (``lock_token``), which took it under the runner
+    row lock after the gates; there is no other way in. Raises
     ``QuickCheckRefusedError`` (see ``ensure_quick_check_allowed``, or a
     check already running); with ``run_id`` the run group then gets a
     ``stage0`` event with ``refused``, so the card stops waiting. Otherwise
     the run group gets the ``stage0`` event once the statuses are written.
     """
-    lock = (
-        project_locks.claim(
-            project_locks.QUICK_CHECK_LOCK_PREFIX,
-            project_id,
+    lock: project_locks.ProjectLock | None = None
+    try:
+        if runner_id is None:
+            raise QuickCheckRefusedError(NO_RUNNER_MESSAGE)
+        lock = project_locks.claim(
+            project_locks.RUNNER_QUICK_CHECK_LOCK_PREFIX,
+            runner_id,
             lock_token,
             ttl=QUICK_CHECK_LOCK_TTL_SECONDS,
         )
-        if lock_token is not None
-        else project_locks.acquire(
-            project_locks.QUICK_CHECK_LOCK_PREFIX,
-            project_id,
-            ttl=QUICK_CHECK_LOCK_TTL_SECONDS,
-        )
-    )
-    try:
         if lock is None:
             raise QuickCheckRefusedError(QUICK_CHECK_BUSY_MESSAGE)
         return _check(
-            project_id=project_id, run_id=run_id, actor_id=actor_id, ports=ports
+            project_id=project_id,
+            runner_id=runner_id,
+            run_id=run_id,
+            actor_id=actor_id,
+            ports=ports,
         )
     except QuickCheckRefusedError as exc:
         if run_id is not None:
@@ -208,9 +223,20 @@ def check_requirements(
 
 
 def _check(
-    *, project_id: int, run_id: int | None, actor_id: int | None, ports: RunnerPorts
+    *,
+    project_id: int,
+    runner_id: RunnerId,
+    run_id: int | None,
+    actor_id: int | None,
+    ports: RunnerPorts,
 ) -> QuickCheckOutcome:
-    runner = ensure_quick_check_allowed(project_id=project_id, ports=ports)
+    # Re-checked under the runner row lock: a run may have started on it
+    # since the check was queued.
+    with transaction.atomic():
+        lock_runner_row(runner_id)
+        runner = ensure_quick_check_allowed(
+            project_id=project_id, runner_id=runner_id, ports=ports
+        )
     deadline = time.monotonic() + float(settings.STAGE0_QUICK_CHECK_BUDGET_SECONDS)
     targets = _load_targets(project_id=project_id, run_id=run_id)
     decided: dict[str, RequirementStatusUpdate] = {}
@@ -219,11 +245,11 @@ def _check(
     path_checks = _plan_path_checks(project_id, targets, runner, decided)
     if path_checks and runner.scan_supported:
         stopped_early = not _run_inspect(
-            project_id, ports, path_checks, decided, deadline
+            runner_id, ports, path_checks, decided, deadline
         )
     if not stopped_early:
         stopped_early = not _run_app_checks(
-            project_id, ports, targets, decided, deadline
+            runner_id, ports, targets, decided, deadline
         )
 
     if decided:
@@ -397,6 +423,9 @@ def _fresh_inventory(
         return None
     row = (
         ArtifactInventory.objects.filter(
+            # The runner's own scan, or one from before user runners of the
+            # same host.
+            Q(runner__isnull=True) | Q(runner_id=runner.runner_id),
             project_id=project_id,
             os_name=runner.os_name,
             base_dir=base_dir,
@@ -404,6 +433,7 @@ def _fresh_inventory(
             scanned_at__gte=timezone.now() - INVENTORY_FRESH_FOR,
             error="",
         )
+        .order_by(F("runner_id").asc(nulls_last=True))
         .values_list("entries", "truncated")
         .first()
     )
@@ -463,7 +493,7 @@ def _decide_from_inventory(
 
 
 def _run_inspect(
-    project_id: int,
+    runner_id: RunnerId,
     ports: RunnerPorts,
     checks: Sequence[_PathCheck],
     decided: dict[str, RequirementStatusUpdate],
@@ -475,7 +505,7 @@ def _run_inspect(
         return False
     try:
         infos = ports.inspect_paths(
-            project_id,
+            runner_id,
             [check.path for check in checks],
             allow_network=any(check.network for check in checks),
             timeout=min(_ACTION_TIMEOUT_SECONDS, remaining),
@@ -483,7 +513,9 @@ def _run_inspect(
     except (ControllerNotConnectedError, TestRunnerUnavailableError):
         return False
     except (ControllerActionError, ValueError) as exc:
-        logger.warning("Quick check inspect_paths failed for %d: %s", project_id, exc)
+        logger.warning(
+            "Quick check inspect_paths failed for runner %d: %s", runner_id, exc
+        )
         return True
     for check, info in zip(checks, infos, strict=False):
         if not info.exists:
@@ -524,7 +556,7 @@ def _present_or_mismatch(check: _PathCheck) -> RequirementStatusUpdate:
 
 
 def _run_app_checks(
-    project_id: int,
+    runner_id: RunnerId,
     ports: RunnerPorts,
     targets: Sequence[_Target],
     decided: dict[str, RequirementStatusUpdate],
@@ -551,7 +583,7 @@ def _run_app_checks(
             return False
         try:
             result = ports.check_app_installed(
-                project_id,
+                runner_id,
                 target.check_target,
                 timeout=min(_ACTION_TIMEOUT_SECONDS, remaining),
             )
@@ -559,7 +591,7 @@ def _run_app_checks(
             return False
         except ControllerActionError as exc:
             logger.warning(
-                "Quick check of %s failed for %d: %s", target.key, project_id, exc
+                "Quick check of %s failed for runner %d: %s", target.key, runner_id, exc
             )
             continue
         message = result.message
@@ -588,7 +620,8 @@ def _broadcast(
         f"test_run_{run_id}",
         {
             "type": "test_run.stage0",
-            "checklist": checklist.to_payload(),
+            # Sent to every viewer of the run: no machine hostname.
+            "checklist": checklist.to_payload(show_hosts=False),
             "outcome": outcome.to_payload(),
             "refused": "",
         },

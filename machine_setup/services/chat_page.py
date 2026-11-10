@@ -20,11 +20,11 @@ from django.db.models.functions import RowNumber
 from django.urls import reverse
 from django.utils import timezone
 
+from accounts.models import CustomUser
 from knowledge_base.services.list_knowledge_items import list_knowledge_choices
 from machine_readiness.profile_text import intake_pending
 from machine_setup.exceptions import (
     SetupMachineNotReadyError,
-    SetupRunActiveError,
     SetupTurnActiveError,
 )
 from machine_setup.models import (
@@ -53,6 +53,12 @@ from machine_setup.services.analysis_threads import run_status_label
 from machine_setup.services.send_gates import (
     TRIAGE_RUN_GONE_MESSAGE,
     manual_thread_send_refusal,
+    runner_refusal,
+)
+from machine_setup.services.thread_runner import (
+    load_runner,
+    no_runner_message,
+    thread_runner_id,
 )
 from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 from machine_setup.turn_state import is_turn_stale
@@ -66,9 +72,12 @@ from projects.models import (
     TestRun,
     TestRunTestCase,
 )
-from projects.run_machine_use import agent_run_started
-from projects.services import MachineState, get_machine_state
+from projects.runner_display import owner_label
+from projects.runner_use import agent_run_started_on_runner
 from run_triage.services.agent_texts import describe_triage_status
+from runners.machine_state import MachineState, runner_machine_state
+from runners.models import TestRunner
+from runners.types import RunnerId
 from visual_engine.services.pool_status import get_visual_engine_status
 from visual_engine.types import VisualEngineStatusPayload
 
@@ -181,6 +190,22 @@ class TriageThreadHeader:
 
 
 @dataclass(frozen=True)
+class ThreadRunner:
+    """The Test Runner the shown thread drives (``thread_runner``)."""
+
+    runner_id: int
+    name: str
+    owner_id: int
+    # Never trusted as HTML: names are escaped by the templates.
+    owner_label: str
+    connected: bool
+    # ``TestRunner.device_state`` ("" on a desktop runner).
+    device_state: str
+    device_reported_at: datetime | None
+    archived: bool
+
+
+@dataclass(frozen=True)
 class SetupPage:
     conversation_id: int | None
     # The shown thread's kind: "chat" (the main chat), "auto_fix",
@@ -194,8 +219,13 @@ class SetupPage:
     messages: list[SetupMessagePayload]
     hidden_message_count: int
     turn: SetupTurnPayload | None
+    # The thread's Test Runner; None for none picked or assigned, and for a
+    # case analysis (it never uses the machine).
+    runner: ThreadRunner | None
+    # The machine badge of ``runner`` (DISCONNECTED without one).
     machine_state: MachineState
     visual_engine: VisualEngineStatusPayload
+    # A Started agent run executes on ``runner``.
     run_active: bool
     send_blockers: tuple[str, ...]
     can_send: bool
@@ -541,20 +571,28 @@ def get_setup_page(
     result_thread: ResultThreadHeader | None = None
     manual_thread: ManualThreadHeader | None = None
     triage_thread: TriageThreadHeader | None = None
+    runner_id: RunnerId | None
     if conversation is None:
         kind: str = SetupConversationKind.CHAT
-        conversation_id = (
+        main_row = (
             SetupConversation.objects.filter(
                 project=project,
                 kind=SetupConversationKind.CHAT,
                 archived_at__isnull=True,
             )
-            .values_list("id", flat=True)
+            .values_list("id", "runner_id")
             .first()
+        )
+        conversation_id = main_row[0] if main_row is not None else None
+        runner_id = (
+            RunnerId(main_row[1])
+            if main_row is not None and main_row[1] is not None
+            else None
         )
     else:
         kind = conversation.kind
         conversation_id = conversation.pk
+        runner_id = thread_runner_id(conversation)
         if kind in CASE_THREAD_KINDS:
             row = _help_threads(project).filter(pk=conversation_id).first()
             thread = _thread_from_row(row) if row is not None else None
@@ -609,9 +647,12 @@ def get_setup_page(
         _recent_messages(conversation_id, project.pk) if include_messages else ([], 0)
     )
     visual_engine = get_visual_engine_status()
-    machine_state = get_machine_state(project, visual_engine)
-    # A Started Manual run does not block sends (``run_machine_use``).
-    run_active = agent_run_started(project.pk)
+    # The send gates' view of the thread's Test Runner (``send_gates``),
+    # read without its row lock.
+    runner = load_runner(runner_id)
+    machine_state = runner_machine_state(runner, visual_engine)
+    # A Started Manual run does not block sends (``runner_use``).
+    run_active = runner_id is not None and agent_run_started_on_runner(runner_id)
 
     main_chat = kind == SetupConversationKind.CHAT
     blockers: list[str] = []
@@ -619,23 +660,19 @@ def get_setup_page(
         # No READY gate (run_setup_task checks at call time); the case's own
         # manual run does not block it; refused once the claim ended.
         refusal = manual_thread_send_refusal(
-            project, timezone.now(), pivot_id=conversation.manual_case_id
+            project, runner, pivot_id=conversation.manual_case_id
         )
         if refusal is not None:
             blockers.append(refusal.message)
     elif kind == SetupConversationKind.RUN_TRIAGE and conversation is not None:
-        # No READY gate (the analysis never uses the machine); read-only
+        # No runner gates (the analysis never uses the machine); read-only
         # once the run is gone (``send_gates.triage_thread_send_refusal``).
         if conversation.triage_run_id is None:
             blockers.append(TRIAGE_RUN_GONE_MESSAGE)
-        if run_active:
-            blockers.append(SetupRunActiveError().message)
     else:
-        # Q3: the main chat may run offline; its machine tools say so.
-        if not main_chat and machine_state != MachineState.READY:
-            blockers.append(SetupMachineNotReadyError().message)
-        if run_active:
-            blockers.append(SetupRunActiveError().message)
+        blockers.extend(
+            _runner_blockers(project, runner, kind, main_chat, machine_state)
+        )
     if other_thread_turn_live:
         blockers.append(OTHER_THREAD_TURN_MESSAGE)
     elif live_turn is not None:
@@ -649,6 +686,7 @@ def get_setup_page(
         messages=messages,
         hidden_message_count=hidden_count,
         turn=turn_payload(shown_turn) if shown_turn is not None else None,
+        runner=_thread_runner(runner),
         machine_state=machine_state,
         visual_engine=visual_engine.to_payload(),
         run_active=run_active,
@@ -666,6 +704,51 @@ def get_setup_page(
         intake_pending=main_chat and intake_pending(project.pk),
         manual_thread=manual_thread,
         triage_thread=triage_thread,
+    )
+
+
+def _runner_blockers(
+    project: Project,
+    runner: TestRunner | None,
+    kind: str,
+    main_chat: bool,
+    machine_state: MachineState,
+) -> list[str]:
+    """The send gates of the main chat and the help, result and auto-fix
+    threads that concern the thread's Test Runner (``send_message``)."""
+    blockers: list[str] = []
+    # Q3: the main chat may run offline or with no runner; its machine tools
+    # say so.
+    if not main_chat and machine_state != MachineState.READY:
+        blockers.append(
+            SetupMachineNotReadyError(no_runner_message(kind)).message
+            if runner is None
+            else SetupMachineNotReadyError().message
+        )
+    refusal = runner_refusal(runner, project.pk, main_chat=main_chat)
+    if refusal is not None:
+        blockers.append(refusal.message)
+    return blockers
+
+
+def _thread_runner(runner: TestRunner | None) -> ThreadRunner | None:
+    """The header's view of the runner (one query for the owner's name)."""
+    if runner is None:
+        return None
+    owner = (
+        CustomUser.objects.filter(pk=runner.owner_id)
+        .only("id", "first_name", "last_name", "email")
+        .first()
+    )
+    return ThreadRunner(
+        runner_id=runner.pk,
+        name=runner.name,
+        owner_id=runner.owner_id,
+        owner_label=owner_label(owner) if owner is not None else "",
+        connected=runner.connected,
+        device_state=runner.device_state,
+        device_reported_at=runner.device_reported_at,
+        archived=runner.archived_at is not None,
     )
 
 

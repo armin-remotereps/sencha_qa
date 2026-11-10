@@ -1319,8 +1319,15 @@ class CaptureInfo(_Dto):
 
 
 class MachineInfo(_Dto):
-    """get_project's ``machine`` block."""
+    """get_project's ``machine`` block: the test machine of the running
+    Manual run."""
 
+    # "test machine <name>" (the only form a runner name takes here), or
+    # None when the run has no test machine (or no Manual run is running).
+    name: str | None
+    # disconnected, starting, ready, failed, offline, device_offline, or
+    # not_set_up when there is no test machine.
+    state: str
     # desktop, android or ios.
     target: str
     connected: bool

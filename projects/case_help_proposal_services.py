@@ -12,7 +12,7 @@ from __future__ import annotations
 from django.db import transaction
 from django.utils import timezone
 
-from projects.case_pause_policy import allowed_continue_modes
+from projects.case_pause_policy import allowed_continue_modes, help_screen_trusted
 from projects.case_plan_revision_services import lock_waiting_help_request
 from projects.exceptions import RunHelpError
 from projects.models import (
@@ -48,12 +48,15 @@ def record_agent_proposal(
     ``RunHelpError`` for a mode with another action or a mode not allowed.
     """
     with transaction.atomic():
-        _, pivot, request = lock_waiting_help_request(help_request_id)
+        test_run, pivot, request = lock_waiting_help_request(help_request_id)
         if continue_mode is not None:
             if action != HelpProposalAction.CONTINUE:
                 raise RunHelpError(_MODE_NEEDS_CONTINUE)
             allowed = allowed_continue_modes(
-                request.continue_mode, request.fault, pivot.execution_checkpoint
+                request.continue_mode,
+                request.fault,
+                pivot.execution_checkpoint,
+                screen_trusted=help_screen_trusted(test_run, request),
             )
             if continue_mode not in allowed:
                 names = ", ".join(str(mode.value) for mode in allowed)

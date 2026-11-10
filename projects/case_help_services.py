@@ -4,7 +4,8 @@ Imports ``run_reopen_services``, ``services`` and the leaf
 ``machine_setup.models`` / ``auto_fix_stop`` / ``turn_state`` modules, never
 ``machine_setup.services`` (that package imports this one).
 
-Every action locks the project, then the run (the order Start and Resume use),
+Every action locks the run's Test Runner row (when it has one), then the
+project, then the run (the order Start and Resume use),
 then the help request, then (Continue / Mark failed / Mark blocked / Mark for
 re-test) the case's open person steps, then the case (the order every help writer uses; the person
 step services also lock a step before its case),
@@ -40,8 +41,8 @@ from agents.types import CheckpointHelp, HelpSource
 from machine_setup.auto_fix_stop import request_auto_fix_stop
 from machine_setup.models import SetupConversation, SetupConversationKind
 from machine_setup.turn_state import (
-    MACHINE_SETUP_RUNNING_MESSAGE,
     auto_fix_turn_live,
+    live_auto_fix_turn_id,
     person_turn_live,
 )
 from notifications.services.inbox_broadcast import broadcast_project_attention_changed
@@ -53,6 +54,8 @@ from projects.case_pause_policy import (
     REDESIGN_NEEDS_CURRENT_SCREEN,
     REDESIGN_RESTORE_FIRST,
     allowed_continue_modes,
+    effective_continue_mode,
+    help_screen_trusted,
 )
 from projects.case_plan_revision_services import (
     apply_plan_revision_locked,
@@ -87,10 +90,13 @@ from projects.models import (
 from projects.person_step_actor import PersonStepActor
 from projects.run_reopen_services import (
     list_wake_blockers,
-    lock_project_and_run,
+    lock_run_with_its_runner,
+    lock_runner_project_and_run,
     queue_pending_cases,
 )
+from projects.run_runner_gate import select_run_runner
 from projects.services import broadcast_run_and_pivots
+from runners.types import RunnerId
 from test_sessions.case_activity import CaseActivity
 from test_sessions.services.record_case_activity import record_case_activity
 
@@ -251,13 +257,19 @@ def get_help_panel(
         return None
     if pivot_id is not None and request.test_run_test_case_id != pivot_id:
         return None
-    auto_fix_live = auto_fix_turn_live(request.pk)
-    if blockers is None:
-        blockers = list_wake_blockers(test_run, project)
-    if auto_fix_live:
+    auto_fix_turn_id = live_auto_fix_turn_id(request.pk)
+    auto_fix_live = auto_fix_turn_id is not None
+    if blockers is None or auto_fix_live:
         # The live turn is this request's auto-fix: resolving the request
-        # stops it, so it does not block the actions.
-        blockers = [b for b in blockers if b != MACHINE_SETUP_RUNNING_MESSAGE]
+        # stops it, so it does not block the actions (on the project or on
+        # the run's runner). The runner gate is left to the action, which may
+        # switch runner first.
+        blockers = list_wake_blockers(
+            test_run,
+            project,
+            auto_fix_turn_id=auto_fix_turn_id,
+            include_runner=False,
+        )
     return HelpPanel(
         request=request,
         thread=_latest_thread(request),
@@ -272,6 +284,7 @@ def get_help_panel(
                 request.fault,
                 # Loaded with the request (only ``logs`` is deferred).
                 request.test_run_test_case.execution_checkpoint,
+                screen_trusted=help_screen_trusted(test_run, request),
             )
             if request.is_open
             else ()
@@ -369,6 +382,7 @@ def continue_after_help(
     plan_revision_id: int | None = None,
     use_plan_revision: bool = True,
     continue_mode: HelpContinueMode | None = None,
+    runner_id: RunnerId | None = None,
 ) -> HelpActionResult:
     """The machine is fixed: the case continues per the chosen ``HelpContinueMode``.
 
@@ -392,21 +406,36 @@ def continue_after_help(
     the checkpoint keeps its key (``_write_help_key``): the step is handed out
     afresh, not as a rejected report.
 
-    ``actor``: the person on the web, or at the project's Test Runner (a
+    ``actor``: the person on the web, or at the run's Test Runner (a
     member, or anonymous: then nothing is credited or recorded).
+
+    ``runner_id``: None keeps the run's Test Runner (refused when the run has
+    none: "Choose a Test Runner"); another of the actor's own runners switches
+    the run to it first (Q6), which withholds the current-screen mode
+    (``case_pause_policy.help_screen_trusted``). Any writable member may
+    continue on the run's runner (Q3).
     """
+    chosen_runner_id = select_run_runner(
+        pivot.test_run,
+        runner_id=runner_id,
+        actor=actor.user,
+        error=RunHelpError,
+    )
     with transaction.atomic():
-        project, test_run = _lock_paused_run(pivot.test_run_id)
+        project, test_run = _lock_paused_run(
+            pivot.test_run_id, runner_id=chosen_runner_id
+        )
         request = _lock_request(pivot.pk)
         person_step_ids = _lock_open_person_step_ids(pivot.pk)
         locked_pivot = _lock_help_case(test_run, pivot.pk)
         now = timezone.now()
         if person_turn_live(request.pk):
             raise RunHelpError(_AGENT_REPLYING)
-        auto_fix_live = auto_fix_turn_live(request.pk)
-        blockers = list_wake_blockers(test_run, project)
-        if auto_fix_live:
-            blockers = [b for b in blockers if b != MACHINE_SETUP_RUNNING_MESSAGE]
+        auto_fix_turn_id = live_auto_fix_turn_id(request.pk)
+        auto_fix_live = auto_fix_turn_id is not None
+        blockers = list_wake_blockers(
+            test_run, project, auto_fix_turn_id=auto_fix_turn_id
+        )
         if blockers:
             raise RunHelpError(blockers[0])
 
@@ -420,7 +449,10 @@ def continue_after_help(
             if mode != HelpContinueMode.CURRENT_SCREEN:
                 raise RunHelpError(REDESIGN_NEEDS_CURRENT_SCREEN)
         if mode not in allowed_continue_modes(
-            stored_mode, request.fault, locked_pivot.execution_checkpoint
+            stored_mode,
+            request.fault,
+            locked_pivot.execution_checkpoint,
+            screen_trusted=help_screen_trusted(test_run, request),
         ):
             raise RunHelpError(MODE_NOT_ALLOWED)
 
@@ -664,20 +696,22 @@ def lock_help_request_for_chat(*, project: Project, pivot_id: int) -> CaseHelpRe
     return request
 
 
-def restore_open_help_after_runner_update(project_id: int) -> int:
-    """Switch the project's open current-screen help requests to restore.
+def restore_open_help_after_runner_update(runner_id: RunnerId) -> int:
+    """Switch the open current-screen help requests of the runner's runs to
+    restore.
 
     Called when a Test Runner update succeeded, inside a transaction that
-    already holds the project row lock: the handover closed the browsers and
-    apps the old runner opened, so the screen a paused case stopped at is gone.
-    A current-screen request always has a checkpoint (no checkpoint means from
-    scratch), so Continue can restore the earlier steps instead. Locks the
-    project's paused runs (in id order) before writing their requests, the
-    order every help action uses. Returns the number of requests switched.
+    holds the runner row lock (and no project or run lock): the handover
+    closed the browsers and apps the old runner opened, so the screen a
+    paused case stopped at is gone. A current-screen request always has a
+    checkpoint (no checkpoint means from scratch), so Continue can restore
+    the earlier steps instead. Locks the runner's paused runs (in id order)
+    before writing their requests, after the runner (the lock order every
+    help action uses). Returns the number of requests switched.
     """
     run_ids = list(
         TestRun.objects.select_for_update()
-        .filter(project_id=project_id, status=TestRunStatus.PAUSED)
+        .filter(runner_id=runner_id, status=TestRunStatus.PAUSED)
         .order_by("pk")
         .values_list("pk", flat=True)
     )
@@ -745,7 +779,7 @@ def finish_case_auto_fix(*, help_request_id: int, fixed: bool, summary: str) -> 
     # continues see what the setup agent did. ``note`` stays the person's.
     auto_fix_summary = _cap_note(summary)
     with transaction.atomic():
-        _, test_run = lock_project_and_run(test_run_id)
+        _, test_run = lock_run_with_its_runner(test_run_id, error=RunHelpError)
         if test_run.status != TestRunStatus.PAUSED:
             # Aborted, or already queued by a person: only record the outcome
             # (Abort leaves the state "running"); no queue, no notification.
@@ -805,6 +839,16 @@ def finish_case_auto_fix(*, help_request_id: int, fixed: bool, summary: str) -> 
                 request.resolution = HelpResolution.AUTO_FIXED
                 request.resolved_by = None
                 request.resolved_at = timezone.now()
+                # The stored mode, unless the screen is no longer trusted
+                # (runner released or switched since the request): then
+                # restore, or from scratch, as a person's Continue would
+                # be limited to. ``_write_help_key`` reads it from the request.
+                request.continue_mode = effective_continue_mode(
+                    request.continue_mode,
+                    request.fault,
+                    pivot.execution_checkpoint,
+                    screen_trusted=help_screen_trusted(test_run, request),
+                )
                 request.save(
                     update_fields=[
                         "auto_fix_state",
@@ -812,6 +856,7 @@ def finish_case_auto_fix(*, help_request_id: int, fixed: bool, summary: str) -> 
                         "resolution",
                         "resolved_by",
                         "resolved_at",
+                        "continue_mode",
                     ]
                 )
                 supersede_pending_revisions(request)
@@ -839,8 +884,18 @@ def finish_case_auto_fix(*, help_request_id: int, fixed: bool, summary: str) -> 
 # ---------------------------------------------------------------------------
 
 
-def _lock_paused_run(test_run_id: int) -> tuple[Project, TestRun]:
-    project, test_run = lock_project_and_run(test_run_id)
+def _lock_paused_run(
+    test_run_id: int, *, runner_id: RunnerId | None = None
+) -> tuple[Project, TestRun]:
+    """Lock the run's runner row, the project and the run; the run must be
+    a PAUSED agent run. ``runner_id``: the runner the caller chose
+    (``select_run_runner``); None locks whatever runner the run has."""
+    if runner_id is None:
+        project, test_run = lock_run_with_its_runner(test_run_id, error=RunHelpError)
+    else:
+        project, test_run = lock_runner_project_and_run(
+            test_run_id, runner_id, error=RunHelpError, usable=False
+        )
     if is_manual_run(test_run):
         raise RunHelpError(MANUAL_HELP_REFUSED)
     if test_run.status != TestRunStatus.PAUSED:

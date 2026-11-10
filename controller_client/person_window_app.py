@@ -220,6 +220,13 @@ _POLL_MS: Final[int] = 50
 _RESTORE_POLL_MS: Final[int] = 10
 _READ_CHUNK_BYTES: Final[int] = 64 * 1024
 _TITLE: Final[str] = "Test Runner: your step"
+
+
+def window_title(runner_name: str) -> str:
+    """The window title: the runner's name when known, else the generic one."""
+    return f"{runner_name}: your step" if runner_name else _TITLE
+
+
 # The window's minimum size (the pages' default width is PAGE_WIDTH).
 _MIN_WIDTH: Final[int] = 520
 _MIN_HEIGHT: Final[int] = 360
@@ -1446,8 +1453,9 @@ class PersonWindowApp:
                 self._render()
             case CaseResultCommand(kind=kind, ok=ok, message=message):
                 self._on_case_result(kind, ok, message)
-            case ConnectionCommand(connected=connected):
+            case ConnectionCommand(connected=connected, runner_name=runner_name):
                 self._view.connected = connected
+                self._root.title(window_title(runner_name))
                 self._render()
             case QuitCommand():
                 pass

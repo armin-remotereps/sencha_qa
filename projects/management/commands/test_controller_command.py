@@ -9,6 +9,7 @@ from projects.services import (
     CommandResult,
     controller_run_command,
 )
+from runners.types import RunnerId
 
 
 class Command(BaseCommand):
@@ -16,18 +17,18 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser: Any) -> None:
         parser.add_argument(
-            "--project-id", type=int, required=True, help="Project ID to target"
+            "--runner-id", type=int, required=True, help="Test Runner ID to target"
         )
         parser.add_argument(
             "--command", type=str, required=True, help="Shell command to execute"
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
-        project_id: int = options["project_id"]
+        runner_id = RunnerId(options["runner_id"])
         command: str = options["command"]
 
         try:
-            result: CommandResult = controller_run_command(project_id, command=command)
+            result: CommandResult = controller_run_command(runner_id, command=command)
         except ControllerActionError as exc:
             self.stderr.write(f"ERROR: {exc}")
             return

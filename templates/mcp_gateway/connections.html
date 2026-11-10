@@ -111,7 +111,7 @@
       <p>OAuth sign-in is not enabled on this server, so ChatGPT and Claude connectors cannot connect yet. Ask an administrator to turn it on.</p>
     {% endif %}
     <h3>Codex, Claude Code and the APIs</h3>
-    <p>Use the same URL and send the project's Connection key (project Environment page) as a header:</p>
+    <p>Use the same URL and send the project's Connection key (the project's Test Runners tab) as a header:</p>
     <pre class="code-block">Authorization: Bearer &lt;connection key&gt;</pre>
     <p>Every tool needs a <code>project_id</code>. Apps get it from the <code>list_projects</code> tool, also when a connection or key covers one project only.</p>
     <p class="hint">Regenerating a project's Connection key also ends every ChatGPT and Claude connection's access to that project.</p>

@@ -1,4 +1,4 @@
-{% load project_extras runner_device %}
+{% load project_extras %}
 {% comment %} Project table (desktop table / mobile stacked records via data-label).
 
    Context contract:
@@ -9,17 +9,17 @@
      latest_runs   — dict of project id -> latest TestRun (annotated
                      success_count / failed_count), missing entries mean
                      "no runs yet"
-     connected_machine_state — "ready" | "starting" | "failed" | "offline",
-                     the machine state every connected project shares
-                     (the visual engine is global); a phone runner's device
-                     may override it per row (project_machine_state filter,
-                     reads the loaded row, no query) {% endcomment %}
+     active_runs   — dict of project id -> projects.project_active_runners.
+                     ProjectActiveRuns (active_run_count, latest_runner:
+                     RunnerSummary or None); missing means no active run.
+                     The Test Runner column shows the runner of the latest
+                     active run, "name (owner)" escaped {% endcomment %}
 <div class="table-wrap">
   <table class="data-table">
     <thead>
       <tr>
         <th scope="col">Project</th>
-        <th scope="col">Test machine</th>
+        <th scope="col">Test Runner</th>
         <th scope="col">Test cases</th>
         <th scope="col">Latest run</th>
         <th scope="col">Members</th>
@@ -38,8 +38,17 @@
               {% endwith %}
             </div>
           </td>
-          <td data-label="Test machine">
-            {% include "partials/badge_machine.html" with machine_state=project|project_machine_state:connected_machine_state only %}
+          <td data-label="Test Runner">
+            {% with active=active_runs|get_item:project.id %}
+              {% if active.latest_runner %}
+                {% include "partials/badge_machine.html" with machine_state=active.latest_runner.machine_state only %}
+                <div class="muted small">{{ active.latest_runner.label }}{% if active.active_run_count > 1 %} · {{ active.active_run_count }} active runs{% endif %}</div>
+              {% elif active %}
+                <span class="muted">{{ active.active_run_count }} active run{{ active.active_run_count|pluralize }}, no Test Runner</span>
+              {% else %}
+                <span class="muted">No active run</span>
+              {% endif %}
+            {% endwith %}
           </td>
           <td data-label="Test cases"><a href="{% url 'projects:test_case_list' project.id %}">{{ project.case_count }}</a></td>
           <td data-label="Latest run">

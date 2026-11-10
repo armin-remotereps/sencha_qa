@@ -145,7 +145,7 @@ if [ ! -f "$PROJECT_DIR/.env" ]; then
     echo "[5/6] Creating .env from example.env..."
     cp "$PROJECT_DIR/example.env" "$PROJECT_DIR/.env"
     echo ""
-    echo "IMPORTANT: Edit .env and set your CONTROLLER_API_KEY"
+    echo "IMPORTANT: Edit .env and set CONTROLLER_RUNNER_TOKEN (from the Test Runners page)"
 else
     echo "[5/6] .env already exists, skipping..."
 fi
@@ -238,11 +238,10 @@ echo "To start the controller client:"
 echo "  cd $ROOT_DIR"
 echo "  controller_client/.venv/bin/python -m controller_client.main"
 echo ""
-echo "On its first interactive start the Test Runner asks for your Punk Hazard email"
-echo "(CONTROLLER_PERSON_EMAIL in .env), so steps you answer in its window are recorded"
-echo "as yours. Leave it blank to report as \"a person at the Test Runner\"."
+echo "The Test Runner signs in with its runner token (CONTROLLER_RUNNER_TOKEN in .env)."
+echo "Keep it secret: anyone with it can connect as this Test Runner."
 echo ""
-# Self-update (Update Test Runner on the Environment page) installs the new
+# Self-update (Update Test Runner on its page under Test Runners) installs the new
 # version side by side in <base>/test-runner-<version>/ and deletes the old
 # copy; <base> is the parent of a test-runner-* folder an update created (it
 # holds .punk-hazard-runner), else this root.

@@ -41,6 +41,7 @@ class RunStage0Item:
     # RequirementStatus value and label, after the host rule.
     status: str
     status_label: str
+    # As stored; ``to_payload`` words a host mismatch instead.
     status_detail: str
     checked_at: datetime | None
     checked_host: str
@@ -48,7 +49,19 @@ class RunStage0Item:
     host_mismatch: bool
     case_count: int
 
-    def to_payload(self) -> dict[str, object]:
+    def _detail_text(self, show_host: bool) -> str:
+        """The shown detail: the stored one, or, when the status was recorded
+        on another machine, why it reads unknown (naming that machine only
+        with ``show_host``)."""
+        if not self.host_mismatch:
+            return self.status_detail
+        if show_host:
+            return f"Last checked on {self.checked_host}, not on this machine."
+        return "Last checked on another machine, not on this one."
+
+    def to_payload(self, *, show_host: bool) -> dict[str, object]:
+        """``show_host`` False blanks ``checked_host`` (read-only viewers,
+        socket pushes); ``host_mismatch`` keeps its value."""
         return {
             "key": self.key,
             "title": self.title,
@@ -58,9 +71,9 @@ class RunStage0Item:
             "install_hint": self.install_hint,
             "status": self.status,
             "status_label": self.status_label,
-            "status_detail": self.status_detail,
+            "status_detail": self._detail_text(show_host),
             "checked_at": _iso(self.checked_at),
-            "checked_host": self.checked_host,
+            "checked_host": self.checked_host if show_host else "",
             "host_mismatch": self.host_mismatch,
             "case_count": self.case_count,
         }
@@ -113,8 +126,15 @@ class RunStage0Checklist:
             unknown=self.unknown_count,
         )
 
-    def to_payload(self) -> dict[str, object]:
-        """JSON for the run page (``json_script``) and the ``stage0`` event."""
+    def to_payload(self, *, show_hosts: bool) -> dict[str, object]:
+        """JSON for the run page (``json_script``) and the ``stage0`` event.
+
+        ``show_hosts``: include machine hostnames (``runner_host``,
+        ``last_checked_host``, each item's ``checked_host``): the page, for a
+        viewer who can write. The ``stage0`` event goes to every viewer of
+        the run, read-only members included, so it never carries them. The
+        mismatch flags were computed with the hosts either way.
+        """
         return {
             "run_id": self.run_id,
             "case_count": self.case_count,
@@ -125,9 +145,9 @@ class RunStage0Checklist:
             "mismatch_count": self.mismatch_count,
             "unknown_count": self.unknown_count,
             "last_checked_at": _iso(self.last_checked_at),
-            "last_checked_host": self.last_checked_host,
-            "runner_host": self.runner_host or "",
-            "items": [item.to_payload() for item in self.items],
+            "last_checked_host": self.last_checked_host if show_hosts else "",
+            "runner_host": (self.runner_host or "") if show_hosts else "",
+            "items": [item.to_payload(show_host=show_hosts) for item in self.items],
         }
 
 
@@ -154,11 +174,7 @@ def get_run_stage0(
                 install_hint=row.install_hint,
                 status=status.value,
                 status_label=status.label,
-                status_detail=(
-                    f"Last checked on {row.checked_host}, not on this machine."
-                    if mismatch
-                    else row.status_detail
-                ),
+                status_detail=row.status_detail,
                 checked_at=row.checked_at,
                 checked_host=row.checked_host,
                 host_mismatch=mismatch,

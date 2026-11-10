@@ -1,12 +1,11 @@
 {% comment %}
-  Visual engine problem panel — shown only while the test machine is
-  connected but the visual engine is "failed" (every connected vision
-  worker failed to load) or "offline" (no vision worker connected). Must
-  render inside the environmentLive() Alpine scope declared in
-  projects/environment.html. Per-worker error messages are listed in the
+  Visual engine problem panel — shown while the visual engine is "failed"
+  (every connected vision worker failed to load) or "offline" (no vision
+  worker connected). Must render inside the environmentLive() Alpine scope
+  declared in projects/environment.html (reads visualEngine.state). Per-worker error messages are listed in the
   Visual engine card (_environment_visual_engine.html), not here.
 {% endcomment %}
-<div class="alert alert-danger" role="alert" x-show="machineState === 'failed'" x-cloak>
+<div class="alert alert-danger" role="alert" x-show="visualEngine.state === 'failed'" x-cloak>
   <span class="alert-icon" aria-hidden="true">✕</span>
   <div>
     <strong>Every connected vision worker failed to load the visual engine</strong>
@@ -14,7 +13,7 @@
     <p class="hint">Check the worker&rsquo;s log or run <code>python -m vision_worker.diagnose</code>, then restart the vision worker.</p>
   </div>
 </div>
-<div class="alert alert-warning" role="alert" x-show="machineState === 'offline'" x-cloak>
+<div class="alert alert-warning" role="alert" x-show="visualEngine.state === 'offline'" x-cloak>
   <span class="alert-icon" aria-hidden="true">!</span>
   <div>
     <strong>No vision worker is connected</strong>

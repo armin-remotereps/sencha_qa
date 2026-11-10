@@ -1,6 +1,7 @@
-"""The project's Test Runner window reads its cases (window v2).
+"""A Test Runner window reads its cases (window v2).
 
-Read side (``get_runner_cases``): the cases the window may show beside the
+Read side (``get_runner_cases``): the cases of the runs assigned to the
+runner (in the projects its owner may write) the window may show beside the
 person steps, at most ``PERSON_CASE_STATE_MAX_CASES``:
 
 - the case of an open person step (the step entries point to it);
@@ -22,6 +23,7 @@ is ``runner_help_action_services``.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from django.db.models import Case, IntegerField, Q, Value, When
@@ -64,6 +66,7 @@ from projects.models import (
     TestRunTestCase,
     TestRunTestCaseStatus,
 )
+from runners.types import RunnerId
 
 # The annotation holding the last characters of ``logs``.
 _LOG_TAIL = "runner_log_tail"
@@ -85,13 +88,13 @@ class RunnerCaseView:
     payload: PersonCaseStatePayload
     # The open help request waiting for a person (help cases only).
     help_request_id: int | None = None
+    # The case's project row (help cases only; the discussion reuses it).
+    project: Project | None = None
 
 
 @dataclass(frozen=True)
 class RunnerCases:
     views: tuple[RunnerCaseView, ...]
-    # The project row when a help case needed it (reused by the caller).
-    project: Project | None
 
 
 # ---------------------------------------------------------------------------
@@ -100,24 +103,29 @@ class RunnerCases:
 
 
 def get_runner_cases(
-    project_id: int,
+    runner_id: RunnerId,
+    project_ids: Sequence[int],
     steps: tuple[RunnerCaseStep, ...],
     *,
     discussion: bool,
     pause: bool,
 ) -> RunnerCases:
-    """The cases the project's runner window may show (≤ 3), steps first.
+    """The cases the runner's window may show (≤ 3), steps first.
 
-    ``steps``: the open person steps of the snapshot. ``discussion`` (the
-    runner advertised PERSON_DISCUSSION_V1): Need help cases of a paused run
-    with their help panel; ``pause`` (CASE_PAUSE_V1): the in-progress case of
-    a started run and every case's pause panel.
+    Only cases of runs assigned to the runner in ``project_ids``
+    (``runner_window_project_ids``). ``steps``: the open person steps of the
+    snapshot. ``discussion`` (the runner advertised PERSON_DISCUSSION_V1):
+    Need help cases of a paused run with their help panel; ``pause``
+    (CASE_PAUSE_V1): the in-progress case of a started run and every case's
+    pause panel.
 
-    One query for the cases (test case, run and log tail joined in; ordered
-    step cases, help cases, running cases, so the cap never drops a step's
-    case), plus, only for a help case, the project and ``get_help_panel``'s
-    queries (one help case at most: a project has one active run).
+    One query for the cases (test case, run and project joined in; log tail
+    cut in SQL; ordered step cases, help cases, running cases, so the cap
+    never drops a step's case), plus ``get_help_panel``'s queries for each
+    help case.
     """
+    if not project_ids:
+        return RunnerCases(views=())
     step_status = {step.pivot_id: step.status for step in steps}
     match = Q(pk__in=list(step_status))
     if discussion:
@@ -132,10 +140,14 @@ def get_runner_cases(
             status=TestRunTestCaseStatus.IN_PROGRESS,
         ) & ~Q(test_run__help_mode=RunHelpMode.MANUAL)
     if not step_status and not discussion and not pause:
-        return RunnerCases(views=(), project=None)
+        return RunnerCases(views=())
     pivots = list(
-        TestRunTestCase.objects.filter(match, test_run__project_id=project_id)
-        .select_related("test_case", "test_run")
+        TestRunTestCase.objects.filter(
+            match,
+            test_run__runner_id=runner_id,
+            test_run__project_id__in=list(project_ids),
+        )
+        .select_related("test_case", "test_run", "test_run__project")
         .defer("logs")
         .annotate(
             **{_LOG_TAIL: Right("logs", PERSON_CASE_LOG_TAIL_MAX_CHARS)},
@@ -150,20 +162,15 @@ def get_runner_cases(
             :PERSON_CASE_STATE_MAX_CASES
         ]
     )
-    project: Project | None = None
     views: list[RunnerCaseView] = []
-    help_seen = False
     for pivot in pivots:
         role = _role(pivot, step_status)
         if role is None:
             continue
         help_panel: HelpPanel | None = None
+        project: Project | None = None
         if role is PersonCaseRole.HELP:
-            if help_seen:
-                continue
-            help_seen = True
-            if project is None:
-                project = Project.objects.get(pk=project_id)
+            project = pivot.test_run.project
             help_panel = _waiting_help_panel(pivot, project)
             if help_panel is None:
                 continue
@@ -177,8 +184,8 @@ def get_runner_cases(
             if pause
             else None
         )
-        views.append(_build_view(project_id, pivot, role, help_panel, pause_panel))
-    return RunnerCases(views=tuple(views), project=project)
+        views.append(_build_view(pivot, role, help_panel, pause_panel, project))
+    return RunnerCases(views=tuple(views))
 
 
 def _role(pivot: TestRunTestCase, step_status: dict[int, str]) -> PersonCaseRole | None:
@@ -210,11 +217,11 @@ def _waiting_help_panel(pivot: TestRunTestCase, project: Project) -> HelpPanel |
 
 
 def _build_view(
-    project_id: int,
     pivot: TestRunTestCase,
     role: PersonCaseRole,
     help_panel: HelpPanel | None,
     pause_panel: CasePausePanel | None,
+    project: Project | None,
 ) -> RunnerCaseView:
     test_case = pivot.test_case
     case_text = case_text_display(test_case)
@@ -222,7 +229,7 @@ def _build_view(
     path = reverse(
         "projects:test_run_case_detail",
         kwargs={
-            "project_id": project_id,
+            "project_id": test_run.project_id,
             "test_run_id": test_run.pk,
             "pivot_id": pivot.pk,
         },
@@ -252,6 +259,7 @@ def _build_view(
     return RunnerCaseView(
         payload=payload,
         help_request_id=help_panel.request.pk if help_panel is not None else None,
+        project=project,
     )
 
 

@@ -53,6 +53,7 @@ class MachineErrorCode(StrEnum):
     DEVICE_OFFLINE = CaptureErrorCode.DEVICE_OFFLINE.value
     MACHINE_BUSY = CaptureErrorCode.MACHINE_BUSY.value
     MACHINE_UNRESPONSIVE = CaptureErrorCode.MACHINE_UNRESPONSIVE.value
+    NOT_SET_UP = CaptureErrorCode.NOT_SET_UP.value
     # The machine tools' own.
     WRONG_TARGET = "wrong_target"
     BROWSER_UNAVAILABLE = "browser_unavailable"
@@ -78,12 +79,17 @@ _CAPTURE_TEXT: Final[frozenset[MachineErrorCode]] = frozenset(
     {MachineErrorCode.DEVICE_OFFLINE}
 )
 _FIXED: Final[dict[MachineErrorCode, str]] = {
+    MachineErrorCode.NOT_SET_UP: (
+        "No test machine is assigned to this run, so the machine tools cannot "
+        "be used. Ask a project member to assign one, or capture screenshots "
+        "yourself with add_screenshot."
+    ),
     MachineErrorCode.MACHINE_OFFLINE: (
         "The test machine is not connected right now. Try again later."
     ),
     MachineErrorCode.MACHINE_OUTDATED: (
-        "The test machine's software is too old for this action. Ask a project "
-        "member to update the test machine's software from the Environment page."
+        "The test machine's software is too old for this action. Ask the test "
+        "machine's owner to update its software."
     ),
     MachineErrorCode.MACHINE_BUSY: (
         "The test machine is busy with another action or screenshot. Try again "
@@ -94,7 +100,7 @@ _FIXED: Final[dict[MachineErrorCode, str]] = {
         "whether the action happened before you try again."
     ),
     MachineErrorCode.WRONG_TARGET: (
-        "This tool does not exist for this project's test machine (a desktop "
+        "This tool does not exist for this run's test machine (a desktop "
         "computer, or a phone or tablet)."
     ),
     MachineErrorCode.BROWSER_UNAVAILABLE: (

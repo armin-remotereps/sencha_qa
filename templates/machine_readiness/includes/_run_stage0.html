@@ -7,7 +7,9 @@
      holds machine_readiness.services.run_stage0.RunStage0Checklist.to_payload()
      ({run_id, case_count, unanalysed_case_count, none_needed_case_count,
      present_count, missing_count, mismatch_count, unknown_count,
-     last_checked_at (ISO or ""), last_checked_host, runner_host,
+     last_checked_at (ISO or ""), last_checked_host, runner_host (hosts, also
+     each item's checked_host, are "" for viewers who cannot write and never
+     in the socket push),
      items: [{key, title, kind, kind_label, check_target, install_hint, status,
      status_label, status_detail, checked_at, checked_host, host_mismatch,
      case_count}]}), seeded from the `run-stage0-data` json_script and replaced
@@ -82,7 +84,7 @@
       <span>Not checked on a machine yet.</span>
     </template>
     <template x-if="stage0.runner_host">
-      <span>Connected Test Runner: <span x-text="stage0.runner_host"></span>.</span>
+      <span>The run's Test Runner: <span x-text="stage0.runner_host"></span>.</span>
     </template>
   </p>
 

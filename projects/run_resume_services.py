@@ -10,6 +10,11 @@ continues or plans from scratch.
 
 A Manual run is routed to ``projects.manual_run_resume_services``: its
 Cancelled cases go back to the Test Runner's list and start again from step 1.
+
+Resume runs on the run's Test Runner, or on another one of the person's own
+runners chosen on the form (``run_runner_gate.select_run_runner``, Q6); an
+agent run without a runner must choose one. Any writable member may resume
+on the run's existing runner (Q3).
 """
 
 from __future__ import annotations
@@ -59,10 +64,12 @@ from projects.run_reopen_services import (
     RESTART_RESET_FIELDS,
     is_valid_help_mode,
     list_reopen_blockers,
-    lock_project_and_run,
+    lock_runner_project_and_run,
     reopen_run,
     reset_case_for_restart,
 )
+from projects.run_runner_gate import select_run_runner
+from runners.types import RunnerId
 from test_sessions.case_activity import CaseActivity
 from test_sessions.services.record_case_activity import record_case_activity
 
@@ -186,27 +193,38 @@ def list_case_resumes(pivot: TestRunTestCase) -> list[TestRunCaseResume]:
 
 
 def resume_test_run(
-    *, test_run: TestRun, user: CustomUser, help_mode: str | None = None
+    *,
+    test_run: TestRun,
+    user: CustomUser,
+    help_mode: str | None = None,
+    runner_id: RunnerId | None = None,
 ) -> int:
     """Resume every Blocked and Cancelled case of the run; returns the count.
 
     ``help_mode`` (a ``RunHelpMode`` value) changes the run's mode; ``None``
     keeps it. Only a superuser may change it (``HelpModeNotAllowedError``).
-    A Manual run resumes its Cancelled cases at the Test Runner instead
-    (`resume_manual_cases`) and keeps its mode.
+    ``runner_id``: None keeps the run's Test Runner (required for an agent
+    run that has none); another of the user's runners switches the run to it
+    first. Runner refusals raise ``RunResumeError``. A Manual run resumes its
+    Cancelled cases at the Test Runner instead (`resume_manual_cases`) and
+    keeps its mode; its runner stays optional.
     """
     # Safe on the unlocked read: a non-draft run never crosses the manual
     # boundary, and both paths re-check under the lock.
     if is_manual_run(test_run):
+        select_run_runner(
+            test_run, runner_id=runner_id, actor=user, error=RunResumeError
+        )
         return resume_manual_cases(
             test_run_id=test_run.pk, pivot_id=None, user=user, help_mode=help_mode
         )
     return _resume_pivots(
-        test_run_id=test_run.pk,
+        test_run=test_run,
         pivot_id=None,
         user=user,
         from_step=None,
         help_mode=help_mode,
+        runner_id=runner_id,
     )
 
 
@@ -216,17 +234,22 @@ def resume_test_run_case(
     user: CustomUser,
     from_step: int | None,
     help_mode: str | None = None,
+    runner_id: RunnerId | None = None,
 ) -> None:
     """Resume one case, at ``from_step`` (``None`` = where it stopped).
 
     ``from_step`` must lie in 1..the checkpoint's cursor (one past the plan
     when every step ran: only the verdict is built); it is ignored when the
-    case has no checkpoint. ``help_mode`` as in `resume_test_run`. A case of
-    a Manual run starts again from step 1, so ``from_step`` must be ``None``.
+    case has no checkpoint. ``help_mode`` and ``runner_id`` as in
+    `resume_test_run`. A case of a Manual run starts again from step 1, so
+    ``from_step`` must be ``None``.
     """
     if is_manual_run(pivot.test_run):
         if from_step is not None:
             raise RunResumeError(_MANUAL_FROM_STEP)
+        select_run_runner(
+            pivot.test_run, runner_id=runner_id, actor=user, error=RunResumeError
+        )
         resume_manual_cases(
             test_run_id=pivot.test_run_id,
             pivot_id=pivot.pk,
@@ -235,26 +258,32 @@ def resume_test_run_case(
         )
         return
     _resume_pivots(
-        test_run_id=pivot.test_run_id,
+        test_run=pivot.test_run,
         pivot_id=pivot.pk,
         user=user,
         from_step=from_step,
         help_mode=help_mode,
+        runner_id=runner_id,
     )
 
 
 def _resume_pivots(
     *,
-    test_run_id: int,
+    test_run: TestRun,
     pivot_id: int | None,
     user: CustomUser,
     from_step: int | None,
     help_mode: str | None,
+    runner_id: RunnerId | None,
 ) -> int:
     if help_mode is not None and not is_valid_help_mode(help_mode):
         raise RunResumeError(_INVALID_HELP_MODE)
+    # Switch runner first (its own transaction: runners, then the run).
+    chosen_runner_id = select_run_runner(
+        test_run, runner_id=runner_id, actor=user, error=RunResumeError
+    )
     with transaction.atomic():
-        test_run, pivots = _lock_and_check(test_run_id, pivot_id)
+        test_run, pivots = _lock_and_check(test_run.pk, pivot_id, chosen_runner_id)
         resolved_help_mode = resolve_help_mode(
             user=user, requested=help_mode, current=test_run.help_mode
         )
@@ -319,10 +348,12 @@ def _clear_pending_help(pivot: TestRunTestCase) -> bool:
 
 
 def _lock_and_check(
-    test_run_id: int, pivot_id: int | None
+    test_run_id: int, pivot_id: int | None, runner_id: RunnerId | None
 ) -> tuple[TestRun, list[TestRunTestCase]]:
-    """Lock project then run and apply the gates."""
-    project, test_run = lock_project_and_run(test_run_id)
+    """Lock the run's runner, then project, then run, and apply the gates."""
+    project, test_run = lock_runner_project_and_run(
+        test_run_id, runner_id, error=RunResumeError
+    )
     if test_run.status not in REOPENABLE_RUN_STATUSES:
         raise RunResumeError(_NOT_FINISHED)
     blockers = list_reopen_blockers(test_run, project)

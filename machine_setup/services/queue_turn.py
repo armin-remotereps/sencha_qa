@@ -34,6 +34,7 @@ from machine_setup.payloads import (
     message_payload,
     turn_payload,
 )
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -49,16 +50,21 @@ def create_turn(
     conversation: SetupConversation,
     requested_by: CustomUser | None,
     text: str,
+    runner_id: RunnerId | None,
     auto_fix: bool = False,
     author_label: str = "",
 ) -> tuple[SetupTurn, SetupMessage]:
-    """A queued turn plus its USER row; call under the project row lock.
+    """A queued turn plus its USER row; call under the runner and project
+    row locks.
 
-    ``author_label``: the stored sender name of a Test Runner send.
+    ``runner_id``: the thread's Test Runner now (``thread_runner``), recorded
+    on the turn; None for a turn without one. ``author_label``: the stored
+    sender name of a Test Runner send.
     """
     turn = SetupTurn.objects.create(
         conversation=conversation,
         project_id=conversation.project_id,
+        runner_id=runner_id,
         requested_by=requested_by,
         auto_fix=auto_fix,
     )
@@ -78,17 +84,19 @@ def create_user_turn(
     conversation: SetupConversation,
     requested_by: CustomUser | None,
     text: str,
+    runner_id: RunnerId | None,
     document: UploadedDocument | None = None,
     author_label: str = "",
 ) -> tuple[SetupTurn, SetupMessage, list[SetupDocument]]:
     """``create_turn`` for a person's send, storing an attached document with
     the USER row. Returns the stored documents so the broadcast needs no query.
     ``requested_by`` is None for an anonymous Test Runner send (no document).
-    Call under the project row lock."""
+    Call under the runner and project row locks."""
     turn, message = create_turn(
         conversation=conversation,
         requested_by=requested_by,
         text=text,
+        runner_id=runner_id,
         author_label=author_label,
     )
     if document is None or requested_by is None:

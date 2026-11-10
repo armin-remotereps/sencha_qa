@@ -19,7 +19,7 @@
   "Refine with AI" is applicationContextPrompt() below, ported from the
   old templates/projects/detail.html projectPrompt() component: it POSTs
   to refine_prompt and listens for the async "prompt_refined" message on
-  this project's agent-status WebSocket.
+  this project's events WebSocket (ws/projects/<id>/events/).
 {% endcomment %}
 
 {% block title %}Application context · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
@@ -96,7 +96,7 @@ document.addEventListener('alpine:init', () => {
     refineTimeout: null,
 
     init() {
-      this.ws = new WebSocket(window.punkHazard.wsUrl('/ws/projects/{{ project.id }}/agent-status/'));
+      this.ws = new WebSocket(window.punkHazard.wsUrl('/ws/projects/{{ project.id }}/events/'));
       this.ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.type !== 'prompt_refined' || !this.refining) return;

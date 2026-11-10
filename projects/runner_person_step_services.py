@@ -1,10 +1,12 @@
-"""The project's Test Runner reads and answers its open person steps (Human in the loop).
+"""A Test Runner reads and answers its open person steps (Human in the loop).
 
-The runner window shows the actionable steps of the project's paused runs
-(``get_runner_person_steps``) and sends the person's answer
-(``answer_from_runner``). Every rule of an answer stays in
-``person_step_services``; this module only scopes the answer to the
-connection that owns the project, throttles it and names who answered.
+The runner window shows the actionable steps of the paused runs assigned to
+the runner (``TestRun.runner``), across every project where the runner's
+owner is an active writable member (``get_runner_person_steps``), and sends
+the person's answer (``answer_from_runner``). Every rule of an answer stays
+in ``person_step_services``; this module only scopes the answer to the
+connection that owns the runner and to the runner's own runs, throttles it
+per runner and names who answered.
 
 The snapshot carries no reopen blockers: computing them on every push cost
 several queries and went stale while the window stayed open. The window keeps
@@ -16,11 +18,11 @@ plain "Step N of M" label, the step's ``case_steps_label`` ("TestRail steps
 3–5") and the covered test case steps; an older runner gets the label joined
 into ``step_label`` ("Step 2 of 4 · TestRail steps 3–5") and no steps.
 
-Identity: the runner may carry a ``person_email``. It counts only when it is
-an active member of the runner's project (``resolve_runner_person``, at
-handshake) and still is when the answer arrives; otherwise the answer is
-anonymous ("a person at the Test Runner"). Nothing here tells the runner
-whether the email matched.
+Identity: the person at the runner is its owner. An answer counts as
+"<owner> via Test Runner" while the owner is an active writable member of the
+run's project (``runner_actor``); otherwise it is refused. The shared helpers
+of every runner answer (``owns_runner``, ``runner_actor``,
+``check_runner_answer_throttle``, ``runner_window_project_ids``) live here.
 """
 
 from __future__ import annotations
@@ -58,7 +60,7 @@ from projects.models import (
     WRITABLE_ROLES,
     CasePersonStep,
     PersonStepStatus,
-    Project,
+    ProjectMembership,
     TestRunStatus,
     TestRunTestCase,
     TestRunTestCaseStatus,
@@ -71,13 +73,21 @@ from projects.person_step_services import (
     overrule_person_step,
     report_person_step,
 )
+from runners.models import TestRunner
+from runners.types import RunnerId
 
-# Answers one project's Test Runner may send per window (all actions count).
+# Answers one Test Runner may send per window (all actions count); also the
+# per-project limit of ``check_answer_throttle`` (MCP).
 RUNNER_ANSWER_LIMIT = 20
 RUNNER_ANSWER_WINDOW_SECONDS = 60
 
-_NOT_OWNER = (
-    "This Test Runner is no longer the project's connection. Answer on Punk Hazard."
+# Refusals shared by every runner answer (person steps, pause, help, Manual).
+NOT_RUNNER_CONNECTION = (
+    "This Test Runner connection was replaced or closed. Answer on Punk Hazard."
+)
+NOT_RUNNER_MEMBER = (
+    "The Test Runner's owner is not a member who can write in this project. "
+    "Answer on Punk Hazard."
 )
 _THROTTLED = "Too many answers from this Test Runner. Wait a minute and try again."
 _STEP_NOT_FOUND = "This step was already answered or is no longer waiting."
@@ -105,6 +115,7 @@ _STEP_FIELDS: tuple[str, ...] = (
     "case_steps_label",
     "test_run_test_case_id",
     "test_run_test_case__test_run_id",
+    "test_run_test_case__test_run__project_id",
     "test_run_test_case__test_run__name",
     "test_run_test_case__test_case__title",
 )
@@ -112,7 +123,7 @@ _STEP_FIELDS: tuple[str, ...] = (
 
 @dataclass(frozen=True)
 class RunnerPersonStepView:
-    """One open person step as the project's Test Runner window shows it."""
+    """One open person step as the Test Runner window shows it."""
 
     person_step_id: int
     test_run_id: int
@@ -182,10 +193,28 @@ class RunnerPersonStepAnswer:
 # ---------------------------------------------------------------------------
 
 
+def runner_window_project_ids(runner_id: RunnerId) -> tuple[int, ...]:
+    """The non-archived projects where the runner's owner is an active
+    writable member (one query): the projects whose runs assigned to the
+    runner its window shows. Empty for an archived runner."""
+    return tuple(
+        ProjectMembership.objects.filter(
+            user__test_runners__pk=runner_id,
+            user__test_runners__archived_at__isnull=True,
+            user__is_active=True,
+            role__in=WRITABLE_ROLES,
+            project__archived=False,
+        )
+        .order_by("project_id")
+        .values_list("project_id", flat=True)
+    )
+
+
 def get_runner_person_steps(
-    project_id: int, *, case_steps: bool
+    runner_id: RunnerId, project_ids: Sequence[int], *, case_steps: bool
 ) -> tuple[RunnerPersonStepView, ...]:
-    """The actionable person steps of the project's paused runs, newest first (≤ 5).
+    """The actionable person steps of the paused runs assigned to the runner
+    in ``project_ids`` (``runner_window_project_ids``), newest first (≤ 5).
 
     One query: the run's name is joined in and the case's checkpoint is never
     loaded (its plan size is read in the database). No reopen blockers.
@@ -194,10 +223,13 @@ def get_runner_person_steps(
     step carries its case steps label and covered steps. Otherwise the label
     is joined into ``step_label``. No extra query either way.
     """
+    if not project_ids:
+        return ()
     plan = KeyTransform("plan", "test_run_test_case__execution_checkpoint")
     rows = list(
         CasePersonStep.objects.filter(
-            test_run_test_case__test_run__project_id=project_id,
+            test_run_test_case__test_run__runner_id=runner_id,
+            test_run_test_case__test_run__project_id__in=list(project_ids),
             test_run_test_case__test_run__status=TestRunStatus.PAUSED,
             test_run_test_case__status=TestRunTestCaseStatus.AWAITING_PERSON,
             status__in=_ACTIONABLE_STATUSES,
@@ -218,11 +250,10 @@ def get_runner_person_steps(
         .order_by(F("requested_at").desc(), F("id").desc())
         .values(*_STEP_FIELDS, "plan_size")[:PERSON_STEP_STATE_MAX_STEPS]
     )
-    return tuple(_build_view(project_id, row, case_steps=case_steps) for row in rows)
+    return tuple(_build_view(row, case_steps=case_steps) for row in rows)
 
 
 def _build_view(
-    project_id: int,
     row: dict[str, object],
     *,
     case_steps: bool,
@@ -232,6 +263,7 @@ def _build_view(
     kind = PersonStepWireKind(str(row["kind"]))
     pivot_id = _as_int(row["test_run_test_case_id"])
     test_run_id = _as_int(row["test_run_test_case__test_run_id"])
+    project_id = _as_int(row["test_run_test_case__test_run__project_id"])
     # As ``TestRun.display_name``.
     run_name = str(row["test_run_test_case__test_run__name"] or "") or (
         f"Run #{test_run_id}"
@@ -309,46 +341,39 @@ def _as_int(value: object) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Identity
+# Identity and scope (shared by every runner answer)
 # ---------------------------------------------------------------------------
 
 
-def resolve_runner_person(project_id: int, email: str | None) -> int | None:
-    """The id of the active writable project member with ``email``, or None.
-
-    A read-only member's email resolves to None: the runner then answers as
-    an anonymous "person at the Test Runner".
-
-    Emails are unique only by exact case: the exact match wins, then a
-    case-insensitive one counts only when it is unambiguous (as
-    ``project_member_services._find_active_user``). At most two queries.
-    """
-    if not email:
-        return None
-    members = CustomUser.objects.filter(
-        is_active=True,
-        project_memberships__project_id=project_id,
-        project_memberships__role__in=WRITABLE_ROLES,
+def owns_runner(runner_id: RunnerId, channel_name: str) -> bool:
+    """The connection is still the runner's live socket (one query)."""
+    return bool(channel_name) and (
+        TestRunner.objects.filter(
+            pk=runner_id,
+            channel_name=channel_name,
+            connected=True,
+            archived_at__isnull=True,
+        ).exists()
     )
-    exact = members.filter(email=email).values_list("pk", flat=True).first()
-    if exact is not None:
-        return exact
-    matches = list(members.filter(email__iexact=email).values_list("pk", flat=True)[:2])
-    if len(matches) == 1:
-        return matches[0]
-    return None
 
 
-def current_member(project_id: int, user_id: int | None) -> CustomUser | None:
-    """The user if still an active writable project member; None otherwise."""
-    if user_id is None:
-        return None
+def runner_owner_member(runner_id: RunnerId, project_id: int) -> CustomUser | None:
+    """The runner's owner while an active writable member of the project
+    (one query); None otherwise."""
     return CustomUser.objects.filter(
-        pk=user_id,
+        test_runners__pk=runner_id,
         is_active=True,
         project_memberships__project_id=project_id,
         project_memberships__role__in=WRITABLE_ROLES,
     ).first()
+
+
+def runner_actor(runner_id: RunnerId, project_id: int) -> PersonStepActor | None:
+    """The actor "<owner> via Test Runner" for an answer about the project,
+    or None when the owner is not an active writable member of it (the
+    answer is refused then)."""
+    owner = runner_owner_member(runner_id, project_id)
+    return PersonStepActor.runner(owner) if owner is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -358,44 +383,39 @@ def current_member(project_id: int, user_id: int | None) -> CustomUser | None:
 
 def answer_from_runner(
     *,
-    project_id: int,
+    runner_id: RunnerId,
     channel_name: str,
-    person_user_id: int | None,
     action: RunnerPersonStepAnswer,
 ) -> PersonStepActionResult:
-    """Apply the Test Runner's answer to one of its project's open person steps.
+    """Apply the Test Runner's answer to an open person step of one of its runs.
 
-    ``person_user_id``: the member the runner's email named at handshake
-    (``resolve_runner_person``), re-checked here. Raises ``PersonStepError``
-    (user-safe) when the connection no longer owns the project, the project's
-    runner answered too often, the step is not one of the project's, or
-    ``person_step_services`` refuses (stale id or round, run not paused, ...).
+    Raises ``PersonStepError`` (user-safe) when the connection no longer owns
+    the runner, the runner answered too often, the step is not one of a run
+    assigned to the runner, the owner is not a writable member of the run's
+    project, or ``person_step_services`` refuses (stale id or round, run not
+    paused, ...).
     """
-    if not owns_project(project_id, channel_name):
-        raise PersonStepError(_NOT_OWNER)
-    check_answer_throttle(project_id)
-    pivot = _step_pivot(project_id, action.person_step_id)
+    if not owns_runner(runner_id, channel_name):
+        raise PersonStepError(NOT_RUNNER_CONNECTION)
+    check_runner_answer_throttle(runner_id)
+    pivot = _step_pivot(runner_id, action.person_step_id)
     if pivot is None:
         raise PersonStepError(_STEP_NOT_FOUND)
-    actor = PersonStepActor.runner(current_member(project_id, person_user_id))
+    actor = runner_actor(runner_id, pivot.test_run.project_id)
+    if actor is None:
+        raise PersonStepError(NOT_RUNNER_MEMBER)
     return _ACTIONS[action.action](pivot, actor, action)
 
 
-def owns_project(project_id: int, channel_name: str) -> bool:
-    """The connection is still the project's Test Runner (one query)."""
-    return bool(channel_name) and (
-        Project.objects.filter(pk=project_id, agent_channel_name=channel_name).exists()
-    )
-
-
-def _step_pivot(project_id: int, person_step_id: int) -> TestRunTestCase | None:
-    """The run case of one of the project's person steps (one query)."""
+def _step_pivot(runner_id: RunnerId, person_step_id: int) -> TestRunTestCase | None:
+    """The run case of a person step of a run assigned to the runner (one query)."""
     return (
         TestRunTestCase.objects.filter(
             person_steps__pk=person_step_id,
-            test_run__project_id=project_id,
+            test_run__runner_id=runner_id,
         )
-        .only("id", "test_run_id")
+        .select_related("test_run")
+        .only("id", "test_run_id", "test_run__id", "test_run__project_id")
         .first()
     )
 
@@ -466,7 +486,20 @@ _ACTIONS: dict[
 }
 
 
+def check_runner_answer_throttle(runner_id: RunnerId) -> None:
+    """Count one answer of the runner; ``PersonStepError`` past the limit.
+
+    Shared by every runner answer (person steps, pause, help, Manual)."""
+    if not hit_runner_throttle(
+        f"projects:runner-answer:{runner_id}",
+        limit=RUNNER_ANSWER_LIMIT,
+        window_seconds=RUNNER_ANSWER_WINDOW_SECONDS,
+    ):
+        raise PersonStepError(_THROTTLED)
+
+
 def check_answer_throttle(project_id: int) -> None:
+    """The per-project answer throttle (the MCP gateway's tester actions)."""
     if not hit_runner_throttle(
         f"projects:runner-person-answer:{project_id}",
         limit=RUNNER_ANSWER_LIMIT,

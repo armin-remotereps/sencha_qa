@@ -87,6 +87,7 @@ from projects.forms import (
     RunCasesRerunForm,
     RunHelpModeChangeForm,
     RunHelpModeForm,
+    RunRunnerForm,
     TestCaseForm,
     TestRunCreateForm,
     TestRunStartForm,
@@ -110,6 +111,11 @@ from projects.person_step_actor import PersonStepActor
 from projects.person_step_services import get_person_step_panel
 from projects.project_access import get_request_project_access
 from projects.project_access_services import get_project_access
+from projects.project_active_runners import (
+    active_runs_by_project,
+    list_active_run_runners,
+    summarize_active_runs,
+)
 from projects.run_case_check_services import (
     check_run_cases,
     format_check_message,
@@ -142,7 +148,14 @@ from projects.run_resume_services import (
     resume_test_run,
     resume_test_run_case,
 )
-from projects.runner_update_offer import get_runner_update_offer
+from projects.run_runner_card import get_run_runner_card
+from projects.run_runner_change import change_run_runner
+from projects.run_runner_default import (
+    default_runner_for_start,
+    start_runner_initial,
+)
+from projects.run_runner_release import release_run_runner
+from projects.runner_choices import list_own_runners, runner_choices
 from projects.services import (
     RUN_STAGE0_ANCHOR,
     STATUS_FILTER_CHOICES,
@@ -156,7 +169,6 @@ from projects.services import (
     can_edit_test_case_in_run,
     can_rerun_cases,
     cancel_upload_processing,
-    connected_machine_state,
     copy_test_cases_to_project,
     count_test_cases,
     create_project,
@@ -166,12 +178,9 @@ from projects.services import (
     delete_test_run,
     delete_upload,
     duplicate_project,
-    force_disconnect_controller,
-    generate_controller_client_zip,
     get_all_tags_for_user,
     get_case_position,
     get_latest_runs_by_project,
-    get_machine_state,
     get_project_overview,
     get_project_tag_names,
     get_run_case_picker,
@@ -222,6 +231,11 @@ from projects.testrail_results_services import (
 from projects.testrail_services import get_testrail_picker_state
 from run_triage.services.badges import triage_badges_for
 from run_triage.services.card import get_triage_card
+from runners.exceptions import RunnerError
+from runners.forms import RunnerCreateForm
+from runners.services.create_runner import create_runner
+from runners.services.runner_access import load_usable_runners
+from runners.types import RunnerId
 from visual_engine.services.pool_status import get_visual_engine_status
 
 PROJECTS_DEFAULT_PER_PAGE = 9
@@ -285,8 +299,9 @@ def project_list(request: AuthenticatedRequest) -> HttpResponse:
     tags = get_all_tags_for_user(user)
     form = ProjectForm()
     latest_runs = get_latest_runs_by_project(projects)
-    # The visual engine is global: one query gives every connected row's state.
-    machine_state_if_connected = connected_machine_state(get_visual_engine_status())
+    active_runs = active_runs_by_project(
+        [project.id for project in projects], get_visual_engine_status()
+    )
 
     return render(
         request,
@@ -294,7 +309,7 @@ def project_list(request: AuthenticatedRequest) -> HttpResponse:
         {
             "projects": projects,
             "latest_runs": latest_runs,
-            "connected_machine_state": machine_state_if_connected.value,
+            "active_runs": active_runs,
             "tags": tags,
             "form": form,
             "search": search or "",
@@ -435,6 +450,9 @@ def project_duplicate(request: AuthenticatedRequest, project_id: int) -> HttpRes
 def project_overview(request: HttpRequest, project: Project) -> HttpResponse:
     visual_engine = get_visual_engine_status()
     overview = get_project_overview(project, visual_engine)
+    active_runners = list_active_run_runners(
+        project, visual_engine, show_hosts=_can_write(request)
+    )
     open_help_request = (
         get_open_help_request(overview.active_run)
         if overview.active_run is not None
@@ -447,8 +465,9 @@ def project_overview(request: HttpRequest, project: Project) -> HttpResponse:
         {
             "project": project,
             "overview": overview,
+            "active_runners": active_runners,
+            "active_summary": summarize_active_runs(active_runners),
             "open_help_request": open_help_request,
-            "visual_engine": visual_engine.to_payload(),
             "context_source": get_context_provenance(project),
             "active_tab": "overview",
             "active_nav": "projects",
@@ -458,16 +477,18 @@ def project_overview(request: HttpRequest, project: Project) -> HttpResponse:
 
 @project_membership_required
 def project_environment(request: HttpRequest, project: Project) -> HttpResponse:
+    """The "Test Runners" tab: the runners this project's active runs hold,
+    the visual engine and the Connection key (MCP clients only)."""
     visual_engine = get_visual_engine_status()
-    machine_state = get_machine_state(project, visual_engine)
     return render(
         request,
         "projects/environment.html",
         {
             "project": project,
-            "machine_state": machine_state,
+            "active_runners": list_active_run_runners(
+                project, visual_engine, show_hosts=_can_write(request)
+            ),
             "visual_engine": visual_engine.to_payload(),
-            "runner_update": get_runner_update_offer(project),
             "active_tab": "environment",
             "active_nav": "projects",
         },
@@ -589,29 +610,10 @@ def setup_context(request: AuthenticatedRequest, project: Project) -> HttpRespon
 @require_POST
 def project_regenerate_api_key(request: HttpRequest, project: Project) -> HttpResponse:
     regenerate_api_key(project)
-    messages.success(request, "Connection key regenerated successfully.")
-    return redirect("projects:environment", project_id=project.id)
-
-
-@project_membership_required
-@require_POST
-def download_controller_client(request: HttpRequest, project: Project) -> HttpResponse:
-    """Generate and download the Test Runner ZIP for the project."""
-    zip_bytes = generate_controller_client_zip(project)
-    response = HttpResponse(zip_bytes, content_type="application/zip")
-    response["Content-Disposition"] = (
-        f'attachment; filename="controller-client-{project.id}.zip"'
+    messages.success(
+        request,
+        "Connection key regenerated. Update the MCP clients that use it.",
     )
-    return response
-
-
-@project_membership_required
-@require_POST
-def project_force_disconnect(request: HttpRequest, project: Project) -> HttpResponse:
-    if force_disconnect_controller(project):
-        messages.success(request, "Test machine disconnected.")
-    else:
-        messages.info(request, "No test machine is connected.")
     return redirect("projects:environment", project_id=project.id)
 
 
@@ -878,13 +880,20 @@ def test_run_start(
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
         raise Http404
-    form = TestRunStartForm(request.POST)
+    form = TestRunStartForm(
+        request.POST,
+        runner_choices=runner_choices(request.user, project),
+        stored_help_mode=test_run.help_mode,
+    )
     if not form.is_valid():
         messages.error(request, form_error_text(form))
     else:
         try:
             start_test_run(
-                test_run, user=request.user, help_mode=form.cleaned_data["help_mode"]
+                test_run,
+                user=request.user,
+                help_mode=form.cleaned_data["help_mode"],
+                runner_id=form.cleaned_data["runner"],
             )
         except HelpModeNotAllowedError as exc:
             messages.error(request, exc.message)
@@ -904,6 +913,58 @@ def test_run_abort(
     if test_run is None:
         raise Http404
     abort_test_run(test_run)
+    return redirect(
+        "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
+    )
+
+
+@project_membership_required
+@require_POST
+def test_run_runner(
+    request: AuthenticatedRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    """Run page "Test Runner" card: assign (draft) or change the run's runner.
+
+    Only the runner's owner may choose it (the form offers the viewer's own
+    runners; the service checks again). A Started run cannot switch (Q6).
+    """
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    form = RunRunnerForm(runner_choices(request.user, project), request.POST)
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+    else:
+        try:
+            change_run_runner(
+                test_run=test_run,
+                runner_id=form.cleaned_data["runner"],
+                actor=request.user,
+            )
+        except RunnerError as exc:
+            messages.error(request, exc.message)
+        else:
+            messages.success(request, "Test Runner chosen for this run.")
+    return redirect(
+        "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
+    )
+
+
+@project_membership_required
+@require_POST
+def test_run_runner_release(
+    request: AuthenticatedRequest, project: Project, test_run_id: int
+) -> HttpResponse:
+    """Run page "Test Runner" card: the runner's owner releases it from the run."""
+    test_run = get_test_run_for_project(test_run_id, project)
+    if test_run is None:
+        raise Http404
+    try:
+        release_run_runner(test_run=test_run, actor=request.user)
+    except RunnerError as exc:
+        messages.error(request, exc.message)
+    else:
+        messages.success(request, "Test Runner released from this run.")
     return redirect(
         "projects:test_run_detail", project_id=project.id, test_run_id=test_run.id
     )
@@ -986,6 +1047,7 @@ def _rerun_test_run_cases(
     if test_run is None:
         raise Http404
     try:
+        # The new draft takes no runner here: its Start form chooses one.
         new_run = rerun_cases(test_run, scope)
     except ValueError as exc:
         messages.error(request, str(exc))
@@ -999,8 +1061,29 @@ def _rerun_test_run_cases(
     )
 
 
+def _runner_form_kwargs(
+    user: CustomUser, project: Project, test_run: TestRun
+) -> dict[str, Any]:
+    """The runner choices of a Resume / Re-run / Continue / report form.
+
+    A blank runner keeps the run's; an agent run without one must choose
+    (Manual runs may have none, Q12).
+    """
+    return {
+        "runner_choices": runner_choices(user, project),
+        "runner_required": test_run.runner_id is None
+        and test_run.help_mode != RunHelpMode.MANUAL,
+    }
+
+
+def _can_write(request: HttpRequest) -> bool:
+    """The viewer may write in the request's project (no query)."""
+    access = get_request_project_access(request)
+    return access is not None and access.can_write
+
+
 def _build_test_run_detail_context(
-    request: HttpRequest, project: Project, test_run: TestRun
+    request: AuthenticatedRequest, project: Project, test_run: TestRun
 ) -> dict[str, Any]:
     page = parse_page(request)
     per_page = parse_per_page(request)
@@ -1019,6 +1102,15 @@ def _build_test_run_detail_context(
     # Help request / Human in the loop person step / plain "Continue run".
     pause = get_run_pause_panels(test_run, project)
     checked_push = get_checked_push_panel(test_run)
+    # The "Test Runner" card and the choices of every runner select.
+    visual_engine = get_visual_engine_status()
+    runner_card = get_run_runner_card(
+        test_run,
+        project,
+        request.user,
+        visual_engine,
+        can_write=_can_write(request),
+    )
     # Send to TestRail now: failed, unsent cases with a source run (no query).
     case_send_available = checked_push.configured and checked_push.has_any_source
 
@@ -1061,6 +1153,7 @@ def _build_test_run_detail_context(
         "paused_run_blockers": pause.paused_run_blockers,
         # Resume / Re-run dialogs: pre-set to the run's current mode.
         "help_mode_form": RunHelpModeForm(initial={"help_mode": test_run.help_mode}),
+        "runner_card": runner_card,
         # Manual run: who holds a case at the Test Runner, open uploads of the
         # cases on this page, and whether every manual claim and hand-in came from the Test Runner (the wording; None unless the run is Manual).
         "manual_panel": get_manual_run_panel(
@@ -1076,17 +1169,29 @@ def _build_test_run_detail_context(
         run_stage0 = get_run_stage0(
             project_id=project.id,
             run_id=test_run.id,
-            runner_host=runner_host(project.agent_system_info),
+            runner_host=runner_host(runner_card.system_info or None),
         )
-        context["run_stage0"] = run_stage0.to_payload()
+        context["run_stage0"] = run_stage0.to_payload(show_hosts=_can_write(request))
     if test_run.status == TestRunStatus.WAITING:
+        start_runner = start_runner_initial(
+            request.user,
+            project,
+            test_run,
+            usable=runner_card.usable_runners,
+            visual_engine=visual_engine,
+        )
         context["readiness"] = get_run_readiness(
             project,
             test_run=test_run,
             stage0_summary=run_stage0.summary() if run_stage0 is not None else None,
+            runner_id=start_runner,
+            visual_engine=visual_engine,
+            loaded_runners=runner_card.usable_runners,
         )
         context["start_form"] = TestRunStartForm(
-            initial={"help_mode": test_run.help_mode}
+            initial={"help_mode": test_run.help_mode, "runner": start_runner},
+            runner_choices=runner_card.choices,
+            stored_help_mode=test_run.help_mode,
         )
     else:
         # Case analysis: the card, and a badge per analysed case on this page.
@@ -1097,7 +1202,7 @@ def _build_test_run_detail_context(
 
 @project_membership_required
 def test_run_detail(
-    request: HttpRequest, project: Project, test_run_id: int
+    request: AuthenticatedRequest, project: Project, test_run_id: int
 ) -> HttpResponse:
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
@@ -1118,6 +1223,10 @@ def test_run_machine_check(
     try:
         request_quick_check(
             project_id=project.id,
+            # The run's runner (None: the service refuses with its message).
+            runner_id=(
+                RunnerId(test_run.runner_id) if test_run.runner_id is not None else None
+            ),
             run_id=test_run.id,
             actor_id=request.user.id,
             ports=build_runner_ports(),
@@ -1163,7 +1272,7 @@ def test_run_prepare_machine(
 
 @project_membership_required
 def test_run_case_detail(
-    request: HttpRequest, project: Project, test_run_id: int, pivot_id: int
+    request: AuthenticatedRequest, project: Project, test_run_id: int, pivot_id: int
 ) -> HttpResponse:
     pivot = get_test_run_case_detail(pivot_id, project)
     if pivot is None or pivot.test_run_id != test_run_id:
@@ -1180,6 +1289,15 @@ def test_run_case_detail(
     step_progress, earlier_plans = case_step_view(pivot)
     result_panel = get_case_result_panel(pivot)
     person_step_panel = get_person_step_panel(pivot.test_run, project, pivot=pivot)
+    # The runner selects of Resume case, help Continue and the person-step
+    # report (blank keeps the run's runner).
+    runner_card = get_run_runner_card(
+        pivot.test_run,
+        project,
+        request.user,
+        get_visual_engine_status(),
+        can_write=_can_write(request),
+    )
     # Continue keeps the request's stored mode unless the person picks another;
     # the agent's suggestion is shown, never pre-selected.
     help_form_initial: dict[str, object] = {"use_plan_revision": False}
@@ -1228,6 +1346,7 @@ def test_run_case_detail(
             "help_mode_form": RunHelpModeForm(
                 initial={"help_mode": pivot.test_run.help_mode}
             ),
+            "runner_card": runner_card,
             "help_panel": help_panel,
             "help_requests": list_case_help_requests(pivot),
             # Human in the loop: the step this case waits on a person for.
@@ -1285,7 +1404,9 @@ def test_run_resume(
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
         raise Http404
-    form = RunHelpModeForm(request.POST)
+    form = RunHelpModeForm(
+        request.POST, **_runner_form_kwargs(request.user, project, test_run)
+    )
     if not form.is_valid():
         messages.error(request, form_error_text(form))
         return redirect(
@@ -1296,6 +1417,7 @@ def test_run_resume(
             test_run=test_run,
             user=request.user,
             help_mode=form.cleaned_data["help_mode"],
+            runner_id=form.cleaned_data["runner"],
         )
     except (RunResumeError, HelpModeNotAllowedError) as exc:
         messages.error(request, exc.message)
@@ -1324,10 +1446,11 @@ def test_run_case_resume(
     )
     from_step: int | None = None
     step_options = list_resume_steps(pivot)
+    runner_kwargs = _runner_form_kwargs(request.user, project, pivot.test_run)
     form: RunHelpModeForm = (
-        CaseResumeForm(step_options, request.POST)
+        CaseResumeForm(step_options, request.POST, **runner_kwargs)
         if step_options
-        else RunHelpModeForm(request.POST)
+        else RunHelpModeForm(request.POST, **runner_kwargs)
     )
     if not form.is_valid():
         messages.error(request, form_error_text(form))
@@ -1340,6 +1463,7 @@ def test_run_case_resume(
             user=request.user,
             from_step=from_step,
             help_mode=form.cleaned_data["help_mode"],
+            runner_id=form.cleaned_data["runner"],
         )
     except (RunResumeError, HelpModeNotAllowedError) as exc:
         messages.error(request, exc.message)
@@ -1408,7 +1532,11 @@ def test_run_cases_rerun(
     test_run = get_test_run_for_project(test_run_id, project)
     if test_run is None:
         raise Http404
-    form = RunCasesRerunForm(list_rerunnable_pivot_ids(test_run), request.POST)
+    form = RunCasesRerunForm(
+        list_rerunnable_pivot_ids(test_run),
+        request.POST,
+        **_runner_form_kwargs(request.user, project, test_run),
+    )
     if not form.is_valid():
         messages.error(request, form_error_text(form))
     else:
@@ -1419,6 +1547,7 @@ def test_run_cases_rerun(
                 pivot_ids=pivot_ids,
                 user=request.user,
                 help_mode=form.cleaned_data["help_mode"],
+                runner_id=form.cleaned_data["runner"],
             )
         except (RunRerunError, HelpModeNotAllowedError) as exc:
             messages.error(request, exc.message)
@@ -1509,7 +1638,9 @@ def test_run_case_help_continue(
     request: AuthenticatedRequest, project: Project, test_run_id: int, pivot_id: int
 ) -> HttpResponse:
     pivot = _help_case_or_404(project, test_run_id, pivot_id)
-    form = CaseHelpResolutionForm(request.POST)
+    form = CaseHelpResolutionForm(
+        request.POST, **_runner_form_kwargs(request.user, project, pivot.test_run)
+    )
     if not form.is_valid():
         messages.error(request, form_error_text(form))
         return _case_detail_redirect(project, pivot)
@@ -1521,6 +1652,7 @@ def test_run_case_help_continue(
             plan_revision_id=form.cleaned_data["plan_revision_id"],
             use_plan_revision=form.cleaned_data["use_plan_revision"],
             continue_mode=form.cleaned_data["continue_mode"],
+            runner_id=form.cleaned_data["runner"],
         )
     except RunHelpError as exc:
         messages.error(request, exc.message)
@@ -1720,15 +1852,37 @@ def setup_cases(request: AuthenticatedRequest, project: Project) -> HttpResponse
     )
 
 
-@project_membership_required
-def setup_machine(request: HttpRequest, project: Project) -> HttpResponse:
-    """Wizard step 4: connect a test machine."""
+# The wizard's just-added runner: its token is shown once, then dropped from
+# the session (never in a URL or a log).
+_WIZARD_NEW_RUNNER_KEY = "projects:setup_machine:new_runner"
+
+
+def _pop_wizard_new_runner(request: HttpRequest) -> dict[str, Any] | None:
+    issued = request.session.pop(_WIZARD_NEW_RUNNER_KEY, None)
+    if not isinstance(issued, dict):
+        return None
+    if not isinstance(issued.get("runner_id"), int) or not isinstance(
+        issued.get("token"), str
+    ):
+        return None
+    return issued
+
+
+def _render_wizard_machine(
+    request: AuthenticatedRequest,
+    project: Project,
+    add_form: RunnerCreateForm,
+    new_runner: dict[str, Any] | None = None,
+) -> HttpResponse:
+    visual_engine = get_visual_engine_status()
     return render(
         request,
         "projects/wizard/step_machine.html",
         {
             "project": project,
-            "visual_engine": get_visual_engine_status().to_payload(),
+            "own_runners": list_own_runners(request.user, project, visual_engine),
+            "add_form": add_form,
+            "new_runner": new_runner,
             "wizard_step": 4,
             "wizard_mode": "edit",
             "active_nav": "projects",
@@ -1736,10 +1890,41 @@ def setup_machine(request: HttpRequest, project: Project) -> HttpResponse:
     )
 
 
+@project_membership_required
+def setup_machine(request: AuthenticatedRequest, project: Project) -> HttpResponse:
+    """Wizard step 4: pick one of your Test Runners, or add one.
+
+    Reads real state only: the user's runners. A runner added here shows its
+    token once (session flash) with its download.
+    """
+    if request.method != "POST":
+        return _render_wizard_machine(
+            request,
+            project,
+            RunnerCreateForm(),
+            new_runner=_pop_wizard_new_runner(request),
+        )
+    form = RunnerCreateForm(request.POST)
+    if not form.is_valid():
+        return _render_wizard_machine(request, project, form)
+    try:
+        created = create_runner(owner=request.user, name=form.cleaned_data["name"])
+    except RunnerError as exc:
+        form.add_error("name", exc.message)
+        return _render_wizard_machine(request, project, form)
+    request.session[_WIZARD_NEW_RUNNER_KEY] = {
+        "runner_id": created.runner.pk,
+        "name": created.runner.name,
+        "token": created.token,
+    }
+    return redirect("projects:setup_machine", project_id=project.id)
+
+
 def _render_wizard_run(
-    request: HttpRequest,
+    request: AuthenticatedRequest,
     project: Project,
     form: TestRunCreateForm,
+    start_form: TestRunStartForm,
     readiness: RunReadiness,
     selected_ids: frozenset[int] = frozenset(),
 ) -> HttpResponse:
@@ -1752,12 +1937,33 @@ def _render_wizard_run(
             "wizard_step": 5,
             "wizard_mode": "edit",
             "form": form,
+            "start_form": start_form,
             "test_cases": picker.test_cases,
             "total_case_count": picker.total_count,
             "readiness": readiness,
             "selected_ids": selected_ids,
             "active_nav": "projects",
         },
+    )
+
+
+def _wizard_start_form(
+    request: AuthenticatedRequest, project: Project, *, bound: bool
+) -> TestRunStartForm:
+    """The wizard's runner choice; the run keeps the project's run mode."""
+    usable = load_usable_runners(request.user, project)
+    kwargs: dict[str, Any] = {
+        "runner_choices": runner_choices(request.user, project, runners=usable),
+        "stored_help_mode": project.default_help_mode,
+    }
+    if bound:
+        # Only the runner: the wizard offers no mode choice.
+        return TestRunStartForm({"runner": request.POST.get("runner", "")}, **kwargs)
+    return TestRunStartForm(
+        initial={
+            "runner": default_runner_for_start(request.user, project, usable=usable)
+        },
+        **kwargs,
     )
 
 
@@ -1768,16 +1974,29 @@ def _handle_setup_run_submit(
     request: AuthenticatedRequest, project: Project
 ) -> HttpResponse:
     form = TestRunCreateForm(project, request.POST)
+    start_form = _wizard_start_form(request, project, bound=True)
     selected_ids = frozenset(_parse_test_case_ids(request))
-    if not form.is_valid():
-        readiness = get_run_readiness(project, selected_count=len(selected_ids))
-        return _render_wizard_run(request, project, form, readiness, selected_ids)
+    forms_valid = form.is_valid() and start_form.is_valid()
+    runner_id: RunnerId | None = (
+        start_form.cleaned_data.get("runner") if start_form.is_valid() else None
+    )
+    if not forms_valid:
+        readiness = get_run_readiness(
+            project, selected_count=len(selected_ids), runner_id=runner_id
+        )
+        return _render_wizard_run(
+            request, project, form, start_form, readiness, selected_ids
+        )
 
     test_case_ids: list[int] = form.cleaned_data["test_case_ids"]
-    readiness = get_run_readiness(project, selected_count=len(test_case_ids))
+    readiness = get_run_readiness(
+        project, selected_count=len(test_case_ids), runner_id=runner_id
+    )
     if readiness.blockers:
         messages.error(request, RUN_BLOCKED_MESSAGE)
-        return _render_wizard_run(request, project, form, readiness, selected_ids)
+        return _render_wizard_run(
+            request, project, form, start_form, readiness, selected_ids
+        )
 
     test_run = create_test_run_with_cases(
         project=project,
@@ -1786,7 +2005,7 @@ def _handle_setup_run_submit(
     )
     try:
         # The wizard has no mode choice: the run keeps the project's run mode.
-        start_test_run(test_run, user=request.user, help_mode=None)
+        start_test_run(test_run, user=request.user, help_mode=None, runner_id=runner_id)
     except HelpModeNotAllowedError as exc:
         messages.error(request, exc.message)
     except ValueError as exc:
@@ -1798,13 +2017,16 @@ def _handle_setup_run_submit(
 
 @project_membership_required
 def setup_run(request: AuthenticatedRequest, project: Project) -> HttpResponse:
-    """Wizard step 5: pick cases, name the run, and start it."""
+    """Wizard step 5: pick cases and a Test Runner, name the run, and start it."""
     if request.method == "POST":
         return _handle_setup_run_submit(request, project)
 
     form = TestRunCreateForm(project, initial={"name": suggest_run_name(project)})
-    readiness = get_run_readiness(project, selected_count=0)
-    return _render_wizard_run(request, project, form, readiness)
+    start_form = _wizard_start_form(request, project, bound=False)
+    readiness = get_run_readiness(
+        project, selected_count=0, runner_id=start_form.initial.get("runner")
+    )
+    return _render_wizard_run(request, project, form, start_form, readiness)
 
 
 # ============================================================================

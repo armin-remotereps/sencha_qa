@@ -132,7 +132,7 @@ def render_project_settings(
             "can_change_run_mode": request.user.is_superuser and project_can_write,
             "capture_apps_form": capture_apps_form,
             "capture_apps": capture_apps,
-            "phone_app_picker": phone_app_picker(project),
+            "phone_app_picker": phone_app_picker(request.user, project),
             "phone_apps": phone_apps,
             "phone_apps_error": phone_apps_error,
             "capture_apps_add_error": capture_apps_add_error,

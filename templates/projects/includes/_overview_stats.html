@@ -1,21 +1,29 @@
 {% comment %}
-  Key stats grid. Must be rendered inside the overviewLive() Alpine scope
-  (see projects/overview.html) — the "Test machine" card reads its badge
-  class/label live from that component instead of the static
-  partials/badge_machine.html include.
+  Key stats grid.
 
   Context contract:
-    project  — the current Project
-    overview — projects.services.ProjectOverview
+    project        — the current Project
+    overview       — projects.services.ProjectOverview
+    active_summary — projects.project_active_runners.ProjectActiveRuns: the
+                     "Test Runners" card shows how many runs are active and
+                     the runner of the latest one that has one (name (owner),
+                     escaped; live badge)
 {% endcomment %}
 <section aria-labelledby="stats-h">
   <h2 id="stats-h" class="visually-hidden">Project status</h2>
   <div class="grid grid-4">
 
     <a class="stat-card" href="{% url 'projects:environment' project.id %}">
-      <div class="stat-label">Test machine</div>
-      <div><span class="badge" :class="'badge-' + machineBadgeClass" x-text="machineBadgeLabel"></span></div>
-      <div class="stat-note" x-text="systemInfo.hostname || ''"></div>
+      <div class="stat-label">Test Runners</div>
+      {% if active_summary.latest_runner %}
+        <div>{% include "projects/includes/_runner_status_badge.html" with runner_id=active_summary.latest_runner.runner_id machine_state=active_summary.latest_runner.machine_state only %}</div>
+        <div class="stat-note">{{ active_summary.latest_runner.label }}{% if active_summary.active_run_count > 1 %} · {{ active_summary.active_run_count }} active runs{% endif %}</div>
+      {% elif active_summary.active_run_count %}
+        <div class="stat-value">{{ active_summary.active_run_count }}</div>
+        <div class="stat-note">active run{{ active_summary.active_run_count|pluralize }}, no Test Runner</div>
+      {% else %}
+        <div class="muted">No active run</div>
+      {% endif %}
     </a>
 
     <a class="stat-card" href="{% url 'projects:test_case_list' project.id %}">

@@ -278,8 +278,15 @@ class PersonWindow:
     """
 
     def __init__(
-        self, *, text_size: int = TEXT_SIZE_DEFAULT, manual_shortcuts: bool = True
+        self,
+        *,
+        text_size: int = TEXT_SIZE_DEFAULT,
+        manual_shortcuts: bool = True,
+        runner_name: str = "",
     ) -> None:
+        # The runner's name for the window title: CONTROLLER_RUNNER_NAME until
+        # a handshake ack names the runner.
+        self._runner_name = runner_name
         # Passed to the window process at spawn (CONTROLLER_PERSON_WINDOW_TEXT_SIZE).
         self._text_size = clamp_text_size(text_size)
         # False passes --no-manual-shortcuts at spawn (CONTROLLER_MANUAL_SHORTCUTS).
@@ -420,10 +427,21 @@ class PersonWindow:
                 self._supervise(), name="person-window"
             )
 
-    def set_connected(self, connected: bool) -> None:
-        """While False the window disables its buttons and says so."""
+    def set_connected(self, connected: bool, *, runner_name: str = "") -> None:
+        """While False the window disables its buttons and says so.
+
+        ``runner_name`` (from the handshake ack) replaces the title's name
+        when not blank.
+        """
         self._connected = connected
-        self._send(ConnectionCommand(connected=connected))
+        if runner_name:
+            self._runner_name = runner_name
+        self._send(self._connection_command())
+
+    def _connection_command(self) -> ConnectionCommand:
+        return ConnectionCommand(
+            connected=self._connected, runner_name=self._runner_name
+        )
 
     def show_result(self, result: PersonStepActionResultPayload) -> None:
         """The server's reply to the person's last answer (or a local timeout)."""
@@ -737,7 +755,7 @@ class PersonWindow:
             return
         self._ready = True
         self._manual_requests.put_nowait(ready)
-        self._send(ConnectionCommand(connected=self._connected))
+        self._send(self._connection_command())
         self._send(self._state_command())
         if self._manual is not None:
             self._send(ManualStateCommand(state=self._manual))

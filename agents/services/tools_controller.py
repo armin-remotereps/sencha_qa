@@ -75,6 +75,7 @@ from projects.services import (
     controller_type_text,
     controller_wait_for_command,
 )
+from runners.types import RunnerId
 
 # Marks command output in the case log (person step checks keep these lines).
 COMMAND_LOG_PREFIX = "$ "
@@ -117,22 +118,22 @@ def _format_interactive_output(
 
 
 def execute_command(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     command: str,
     cwd: str = "",
     on_log: LogCallback | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        os_name = runner_os_name(project_id)
+        os_name = runner_os_name(runner_id)
         # Raises RunnerOutdatedError, which pauses the case for help (see
         # double_click): an old Windows runner would only fail on pexpect.
-        ensure_runner_supports_windows_shell(project_id, os_name)
+        ensure_runner_supports_windows_shell(runner_id, os_name)
         # InvalidShellCommandError is an ordinary exception, so
         # safe_tool_call turns it into a tool error the agent can correct.
         effective_command = build_shell_command(command, cwd, os_name)
         result = _clean_output(
-            controller_start_interactive_command(project_id, effective_command)
+            controller_start_interactive_command(runner_id, effective_command)
         )
         if on_log is not None and result["output"]:
             on_log(f"{COMMAND_LOG_PREFIX}{result['output'].rstrip()}")
@@ -153,12 +154,10 @@ def execute_command(
 
 
 def send_command_input(
-    project_id: int, *, session_id: str, input_text: str
+    runner_id: RunnerId, *, session_id: str, input_text: str
 ) -> ToolResult:
     def _do() -> ToolResult:
-        result = _clean_output(
-            controller_send_input(project_id, session_id, input_text)
-        )
+        result = _clean_output(controller_send_input(runner_id, session_id, input_text))
         content = _format_interactive_output(result)
         return ToolResult(tool_call_id="", content=content, is_error=False)
 
@@ -166,13 +165,13 @@ def send_command_input(
 
 
 def wait_for_command(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     session_id: str,
     on_log: LogCallback | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        result = _clean_output(controller_wait_for_command(project_id, session_id))
+        result = _clean_output(controller_wait_for_command(runner_id, session_id))
         if on_log is not None and result["output"]:
             on_log(f"{COMMAND_LOG_PREFIX}{result['output'].rstrip()}")
         content = _format_interactive_output(result)
@@ -183,14 +182,14 @@ def wait_for_command(
 
 
 def take_screenshot(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     question: str,
     vision_config: LLMConfig,
     on_screenshot: ScreenshotCallback | None = None,
 ) -> ToolResult:
     def _do() -> ToolResult:
-        result = controller_screenshot(project_id)
+        result = controller_screenshot(runner_id)
         image_base64 = result["image_base64"]
         if on_screenshot is not None:
             on_screenshot(image_base64, "take_screenshot")
@@ -214,13 +213,15 @@ def take_screenshot(
     return safe_tool_call("take_screenshot", _do)
 
 
-def capture_screenshot(project_id: int, *, on_screenshot: ScreenshotCallback) -> None:
+def capture_screenshot(
+    runner_id: RunnerId, *, on_screenshot: ScreenshotCallback
+) -> None:
     """Take one screenshot for the record, with no vision question.
 
     Evidence of a person step when the agent took none; faults (runner lost,
     ...) raise.
     """
-    result = controller_screenshot(project_id)
+    result = controller_screenshot(runner_id)
     on_screenshot(result["image_base64"], "take_screenshot")
 
 
@@ -235,7 +236,7 @@ def _holding(modifiers: Modifiers) -> str:
 
 
 def _with_modifiers_check(
-    project_id: int,
+    runner_id: RunnerId,
     modifiers: Modifiers,
     precheck: Callable[[], None] | None = None,
 ) -> Callable[[], None] | None:
@@ -251,7 +252,7 @@ def _with_modifiers_check(
     def _check() -> None:
         if precheck is not None:
             precheck()
-        ensure_runner_supports_pointer_modifiers(project_id)
+        ensure_runner_supports_pointer_modifiers(runner_id)
 
     return _check
 
@@ -279,7 +280,7 @@ def _run_verified_action(
 
 
 def _confirm_or_finish(
-    project_id: int,
+    runner_id: RunnerId,
     vision_config: LLMConfig,
     budget: VerificationBudget,
     *,
@@ -300,7 +301,7 @@ def _confirm_or_finish(
     """
     if expected_result:
         verdict = confirm_action(
-            project_id,
+            runner_id,
             vision_config,
             budget,
             acted_on=acted_on,
@@ -341,12 +342,12 @@ def _confirm_or_finish(
     )
 
 
-def _before_image_if_confirming(project_id: int, expected_result: str) -> str:
-    return take_before_screenshot(project_id) if expected_result else ""
+def _before_image_if_confirming(runner_id: RunnerId, expected_result: str) -> str:
+    return take_before_screenshot(runner_id) if expected_result else ""
 
 
 def verified_click(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     tool_name: str,
     description: str,
@@ -376,13 +377,13 @@ def verified_click(
 
     def _attempt(budget: VerificationBudget) -> ToolResult | None:
         element = resolve_verified_element(
-            project_id, description, vision_config, budget, on_screenshot=on_screenshot
+            runner_id, description, vision_config, budget, on_screenshot=on_screenshot
         )
         x, y = element.center_x, element.center_y
-        before_image = take_before_screenshot(project_id)
+        before_image = take_before_screenshot(runner_id)
         ensure_action_succeeded(press(x, y))
         return _confirm_or_finish(
-            project_id,
+            runner_id,
             vision_config,
             budget,
             acted_on=(element,),
@@ -403,12 +404,12 @@ def verified_click(
         _attempt,
         cancellation_check=cancellation_check,
         deadline=deadline,
-        precheck=_with_modifiers_check(project_id, modifiers, precheck),
+        precheck=_with_modifiers_check(runner_id, modifiers, precheck),
     )
 
 
 def click(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     description: str,
     vision_config: LLMConfig,
@@ -419,10 +420,10 @@ def click(
     modifiers: Modifiers = (),
 ) -> ToolResult:
     def _press(x: int, y: int) -> ActionResult:
-        return controller_click(project_id, x, y, modifiers=modifiers)
+        return controller_click(runner_id, x, y, modifiers=modifiers)
 
     return verified_click(
-        project_id,
+        runner_id,
         tool_name="click",
         description=description,
         vision_config=vision_config,
@@ -439,7 +440,7 @@ def click(
 
 
 def double_click(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     description: str,
     vision_config: LLMConfig,
@@ -450,16 +451,16 @@ def double_click(
     modifiers: Modifiers = (),
 ) -> ToolResult:
     def _press(x: int, y: int) -> ActionResult:
-        return controller_double_click(project_id, x, y, modifiers=modifiers)
+        return controller_double_click(runner_id, x, y, modifiers=modifiers)
 
     def _precheck() -> None:
         # Raises RunnerOutdatedError (an InfrastructureError, so safe_tool_call
         # re-raises it and the case pauses for help) on a Test Runner that cannot
         # double-click; it runs before any screen parse is spent.
-        ensure_runner_supports_double_click(project_id)
+        ensure_runner_supports_double_click(runner_id)
 
     return verified_click(
-        project_id,
+        runner_id,
         tool_name="double_click",
         description=description,
         vision_config=vision_config,
@@ -477,7 +478,7 @@ def double_click(
 
 
 def right_click(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     description: str,
     vision_config: LLMConfig,
@@ -490,10 +491,10 @@ def right_click(
     """Right-click (desktop, e.g. a context menu) with click's verified flow."""
 
     def _press(x: int, y: int) -> ActionResult:
-        return controller_click(project_id, x, y, button="right", modifiers=modifiers)
+        return controller_click(runner_id, x, y, button="right", modifiers=modifiers)
 
     return verified_click(
-        project_id,
+        runner_id,
         tool_name="right_click",
         description=description,
         vision_config=vision_config,
@@ -510,7 +511,7 @@ def right_click(
 
 
 def middle_click(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     description: str,
     vision_config: LLMConfig,
@@ -527,10 +528,10 @@ def middle_click(
     """
 
     def _press(x: int, y: int) -> ActionResult:
-        return controller_click(project_id, x, y, button="middle", modifiers=modifiers)
+        return controller_click(runner_id, x, y, button="middle", modifiers=modifiers)
 
     return verified_click(
-        project_id,
+        runner_id,
         tool_name="middle_click",
         description=description,
         vision_config=vision_config,
@@ -547,7 +548,7 @@ def middle_click(
 
 
 def click_at(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     x: int,
     y: int,
@@ -566,10 +567,10 @@ def click_at(
     """
     holding = _holding(modifiers)
     return act_once_and_check(
-        project_id,
+        runner_id,
         tool_name="click_at",
         act=lambda: ensure_action_succeeded(
-            controller_click(project_id, x, y, modifiers=modifiers)
+            controller_click(runner_id, x, y, modifiers=modifiers)
         ),
         success_message=f"Clicked at ({x}, {y}){holding}",
         action_summary=f"clicked at ({x}, {y}){holding}",
@@ -580,12 +581,12 @@ def click_at(
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,
-        precheck=_with_modifiers_check(project_id, modifiers),
+        precheck=_with_modifiers_check(runner_id, modifiers),
     )
 
 
 def double_click_at(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     x: int,
     y: int,
@@ -603,10 +604,10 @@ def double_click_at(
     """
     holding = _holding(modifiers)
     return act_once_and_check(
-        project_id,
+        runner_id,
         tool_name="double_click_at",
         act=lambda: ensure_action_succeeded(
-            controller_double_click(project_id, x, y, modifiers=modifiers)
+            controller_double_click(runner_id, x, y, modifiers=modifiers)
         ),
         success_message=f"Double-clicked at ({x}, {y}){holding}",
         action_summary=f"double-clicked at ({x}, {y}){holding}",
@@ -618,15 +619,15 @@ def double_click_at(
         cancellation_check=cancellation_check,
         deadline=deadline,
         precheck=_with_modifiers_check(
-            project_id,
+            runner_id,
             modifiers,
-            lambda: ensure_runner_supports_double_click(project_id),
+            lambda: ensure_runner_supports_double_click(runner_id),
         ),
     )
 
 
 def right_click_at(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     x: int,
     y: int,
@@ -645,10 +646,10 @@ def right_click_at(
     """
     holding = _holding(modifiers)
     return act_once_and_check(
-        project_id,
+        runner_id,
         tool_name="right_click_at",
         act=lambda: ensure_action_succeeded(
-            controller_click(project_id, x, y, button="right", modifiers=modifiers)
+            controller_click(runner_id, x, y, button="right", modifiers=modifiers)
         ),
         success_message=f"Right-clicked at ({x}, {y}){holding}",
         action_summary=f"right-clicked at ({x}, {y}){holding}",
@@ -659,12 +660,12 @@ def right_click_at(
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,
-        precheck=_with_modifiers_check(project_id, modifiers),
+        precheck=_with_modifiers_check(runner_id, modifiers),
     )
 
 
 def middle_click_at(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     x: int,
     y: int,
@@ -682,10 +683,10 @@ def middle_click_at(
     """
     holding = _holding(modifiers)
     return act_once_and_check(
-        project_id,
+        runner_id,
         tool_name="middle_click_at",
         act=lambda: ensure_action_succeeded(
-            controller_click(project_id, x, y, button="middle", modifiers=modifiers)
+            controller_click(runner_id, x, y, button="middle", modifiers=modifiers)
         ),
         success_message=f"Middle-clicked at ({x}, {y}){holding}",
         action_summary=f"middle-clicked at ({x}, {y}){holding}",
@@ -696,12 +697,12 @@ def middle_click_at(
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,
-        precheck=_with_modifiers_check(project_id, modifiers),
+        precheck=_with_modifiers_check(runner_id, modifiers),
     )
 
 
 def hover_at(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     x: int,
     y: int,
@@ -715,10 +716,10 @@ def hover_at(
     """Move the pointer to screenshot pixel (x, y) (desktop only)."""
     holding = _holding(modifiers)
     return act_once_and_check(
-        project_id,
+        runner_id,
         tool_name="hover_at",
         act=lambda: ensure_action_succeeded(
-            controller_hover(project_id, x, y, modifiers=modifiers)
+            controller_hover(runner_id, x, y, modifiers=modifiers)
         ),
         success_message=f"Hovered at ({x}, {y}){holding}",
         action_summary=f"hovered at ({x}, {y}){holding}",
@@ -729,12 +730,12 @@ def hover_at(
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,
-        precheck=_with_modifiers_check(project_id, modifiers),
+        precheck=_with_modifiers_check(runner_id, modifiers),
     )
 
 
 def drag_at(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     start_x: int,
     start_y: int,
@@ -754,11 +755,11 @@ def drag_at(
         f"{_holding(modifiers)}"
     )
     return act_once_and_check(
-        project_id,
+        runner_id,
         tool_name="drag_at",
         act=lambda: ensure_action_succeeded(
             controller_drag(
-                project_id,
+                runner_id,
                 start_x,
                 start_y,
                 end_x,
@@ -776,7 +777,7 @@ def drag_at(
         on_screenshot=on_screenshot,
         cancellation_check=cancellation_check,
         deadline=deadline,
-        precheck=_with_modifiers_check(project_id, modifiers),
+        precheck=_with_modifiers_check(runner_id, modifiers),
     )
 
 
@@ -788,7 +789,7 @@ _SCROLL_OUTDATED_MESSAGE = (
 
 
 def scroll(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     direction: ScrollDirection,
     amount: int,
@@ -799,16 +800,16 @@ def scroll(
     def _do() -> ToolResult:
         # Like close_app: an old Test Runner gets a tool error with a key_press
         # fallback instead of pausing the case for help.
-        if not runner_supports(project_id, ClientCapability.SCROLL_V1):
+        if not runner_supports(runner_id, ClientCapability.SCROLL_V1):
             return ToolResult(
                 tool_call_id="", content=_SCROLL_OUTDATED_MESSAGE, is_error=True
             )
         if modifiers:
             # Raises RunnerOutdatedError: the case pauses for help (see
             # _with_modifiers_check), since a plain scroll is not the step.
-            ensure_runner_supports_pointer_modifiers(project_id)
+            ensure_runner_supports_pointer_modifiers(runner_id)
         ensure_action_succeeded(
-            controller_scroll(project_id, direction, amount, x, y, modifiers=modifiers)
+            controller_scroll(runner_id, direction, amount, x, y, modifiers=modifiers)
         )
         notches = "notch" if amount == 1 else "notches"
         where = "at the pointer" if x is None or y is None else f"at ({x}, {y})"
@@ -824,9 +825,9 @@ def scroll(
     return safe_tool_call("scroll", _do)
 
 
-def type_text(project_id: int, *, text: str) -> ToolResult:
+def type_text(runner_id: RunnerId, *, text: str) -> ToolResult:
     def _do() -> ToolResult:
-        ensure_action_succeeded(controller_type_text(project_id, text))
+        ensure_action_succeeded(controller_type_text(runner_id, text))
         return ToolResult(
             tool_call_id="", content=f"Typed text: {text}", is_error=False
         )
@@ -834,9 +835,9 @@ def type_text(project_id: int, *, text: str) -> ToolResult:
     return safe_tool_call("type_text", _do)
 
 
-def key_press(project_id: int, *, keys: str) -> ToolResult:
+def key_press(runner_id: RunnerId, *, keys: str) -> ToolResult:
     def _do() -> ToolResult:
-        ensure_action_succeeded(controller_key_press(project_id, keys))
+        ensure_action_succeeded(controller_key_press(runner_id, keys))
         return ToolResult(
             tool_call_id="", content=f"Pressed keys: {keys}", is_error=False
         )
@@ -845,7 +846,7 @@ def key_press(project_id: int, *, keys: str) -> ToolResult:
 
 
 def hover(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     description: str,
     vision_config: LLMConfig,
@@ -859,13 +860,13 @@ def hover(
 
     def _attempt(budget: VerificationBudget) -> ToolResult | None:
         element = resolve_verified_element(
-            project_id, description, vision_config, budget, on_screenshot=on_screenshot
+            runner_id, description, vision_config, budget, on_screenshot=on_screenshot
         )
         x, y = element.center_x, element.center_y
-        before_image = _before_image_if_confirming(project_id, expected_result)
-        ensure_action_succeeded(controller_hover(project_id, x, y, modifiers=modifiers))
+        before_image = _before_image_if_confirming(runner_id, expected_result)
+        ensure_action_succeeded(controller_hover(runner_id, x, y, modifiers=modifiers))
         return _confirm_or_finish(
-            project_id,
+            runner_id,
             vision_config,
             budget,
             acted_on=(element,),
@@ -886,12 +887,12 @@ def hover(
         _attempt,
         cancellation_check=cancellation_check,
         deadline=deadline,
-        precheck=_with_modifiers_check(project_id, modifiers),
+        precheck=_with_modifiers_check(runner_id, modifiers),
     )
 
 
 def drag(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     start_description: str,
     end_description: str,
@@ -906,26 +907,26 @@ def drag(
 
     def _attempt(budget: VerificationBudget) -> ToolResult | None:
         start = resolve_verified_element(
-            project_id,
+            runner_id,
             start_description,
             vision_config,
             budget,
             on_screenshot=on_screenshot,
         )
         end = resolve_verified_element(
-            project_id,
+            runner_id,
             end_description,
             vision_config,
             budget,
             on_screenshot=on_screenshot,
         )
         sx, sy, ex, ey = start.center_x, start.center_y, end.center_x, end.center_y
-        before_image = _before_image_if_confirming(project_id, expected_result)
+        before_image = _before_image_if_confirming(runner_id, expected_result)
         ensure_action_succeeded(
-            controller_drag(project_id, sx, sy, ex, ey, modifiers=modifiers)
+            controller_drag(runner_id, sx, sy, ex, ey, modifiers=modifiers)
         )
         return _confirm_or_finish(
-            project_id,
+            runner_id,
             vision_config,
             budget,
             acted_on=(start, end),
@@ -947,13 +948,13 @@ def drag(
         _attempt,
         cancellation_check=cancellation_check,
         deadline=deadline,
-        precheck=_with_modifiers_check(project_id, modifiers),
+        precheck=_with_modifiers_check(runner_id, modifiers),
     )
 
 
-def launch_app(project_id: int, *, app_name: str) -> ToolResult:
+def launch_app(runner_id: RunnerId, *, app_name: str) -> ToolResult:
     def _do() -> ToolResult:
-        result = controller_launch_app(project_id, app_name)
+        result = controller_launch_app(runner_id, app_name)
         return ToolResult(
             tool_call_id="",
             content=result["message"],
@@ -963,9 +964,9 @@ def launch_app(project_id: int, *, app_name: str) -> ToolResult:
     return safe_tool_call("launch_app", _do)
 
 
-def check_app_installed(project_id: int, *, app_name: str) -> ToolResult:
+def check_app_installed(runner_id: RunnerId, *, app_name: str) -> ToolResult:
     def _do() -> ToolResult:
-        result = controller_check_app_installed(project_id, app_name)
+        result = controller_check_app_installed(runner_id, app_name)
         return ToolResult(
             tool_call_id="",
             content=result["message"],
@@ -997,28 +998,28 @@ def _action_result_to_tool_result(result: ActionResult) -> ToolResult:
     )
 
 
-def close_app(project_id: int, *, app_name: str, force: bool = False) -> ToolResult:
+def close_app(runner_id: RunnerId, *, app_name: str, force: bool = False) -> ToolResult:
     def _do() -> ToolResult:
         # Closing is housekeeping, never the verdict: an old Test Runner gets a
         # tool error with a manual fallback rather than pausing the case.
-        if not runner_supports(project_id, ClientCapability.CLOSE_APP_V1):
+        if not runner_supports(runner_id, ClientCapability.CLOSE_APP_V1):
             return ToolResult(
                 tool_call_id="", content=_CLOSE_APP_OUTDATED_MESSAGE, is_error=True
             )
         return _action_result_to_tool_result(
-            controller_close_app(project_id, app_name, force=force)
+            controller_close_app(runner_id, app_name, force=force)
         )
 
     return safe_tool_call("close_app", _do)
 
 
-def close_tab(project_id: int, *, app_name: str) -> ToolResult:
+def close_tab(runner_id: RunnerId, *, app_name: str) -> ToolResult:
     def _do() -> ToolResult:
-        if not runner_supports(project_id, ClientCapability.CLOSE_APP_V1):
+        if not runner_supports(runner_id, ClientCapability.CLOSE_APP_V1):
             return ToolResult(
                 tool_call_id="", content=_CLOSE_TAB_OUTDATED_MESSAGE, is_error=True
             )
-        return _action_result_to_tool_result(controller_close_tab(project_id, app_name))
+        return _action_result_to_tool_result(controller_close_tab(runner_id, app_name))
 
     return safe_tool_call("close_tab", _do)
 
@@ -1029,7 +1030,7 @@ def close_tab(project_id: int, *, app_name: str) -> ToolResult:
 
 
 def browser_navigate(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     url: str,
     browser: BrowserName | None,
@@ -1043,9 +1044,9 @@ def browser_navigate(
             # selection is updated before the dispatch: a browser that turns
             # out not to be installed pauses the case too, so nothing needs
             # rolling back.
-            ensure_runner_supports_browser(project_id, browser)
+            ensure_runner_supports_browser(runner_id, browser)
             selection.current = browser
-        controller_browser_navigate(project_id, url, browser=selection.current)
+        controller_browser_navigate(runner_id, url, browser=selection.current)
         return ToolResult(
             tool_call_id="",
             content=f"Navigated {BROWSER_DISPLAY_NAMES[selection.current]} to {url}",
@@ -1056,7 +1057,7 @@ def browser_navigate(
 
 
 def browser_click(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     description: str,
     vision_config: LLMConfig,
@@ -1064,9 +1065,9 @@ def browser_click(
 ) -> ToolResult:
     def _do() -> ToolResult:
         idx = find_element_index(
-            project_id, description, vision_config, browser=selection.current
+            runner_id, description, vision_config, browser=selection.current
         )
-        controller_browser_click(project_id, idx, browser=selection.current)
+        controller_browser_click(runner_id, idx, browser=selection.current)
         return ToolResult(
             tool_call_id="",
             content=f"Clicked browser element [{idx}]: {description}",
@@ -1077,7 +1078,7 @@ def browser_click(
 
 
 def browser_double_click(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     description: str,
     vision_config: LLMConfig,
@@ -1085,11 +1086,11 @@ def browser_double_click(
 ) -> ToolResult:
     def _do() -> ToolResult:
         # Raises RunnerOutdatedError, which pauses the case for help (see double_click).
-        ensure_runner_supports_double_click(project_id)
+        ensure_runner_supports_double_click(runner_id)
         idx = find_element_index(
-            project_id, description, vision_config, browser=selection.current
+            runner_id, description, vision_config, browser=selection.current
         )
-        controller_browser_double_click(project_id, idx, browser=selection.current)
+        controller_browser_double_click(runner_id, idx, browser=selection.current)
         return ToolResult(
             tool_call_id="",
             content=f"Double-clicked browser element [{idx}]: {description}",
@@ -1100,7 +1101,7 @@ def browser_double_click(
 
 
 def browser_type(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     description: str,
     text: str,
@@ -1109,9 +1110,9 @@ def browser_type(
 ) -> ToolResult:
     def _do() -> ToolResult:
         idx = find_element_index(
-            project_id, description, vision_config, browser=selection.current
+            runner_id, description, vision_config, browser=selection.current
         )
-        controller_browser_type(project_id, idx, text, browser=selection.current)
+        controller_browser_type(runner_id, idx, text, browser=selection.current)
         return ToolResult(
             tool_call_id="",
             content=f"Typed '{text}' into browser element [{idx}]: {description}",
@@ -1122,7 +1123,7 @@ def browser_type(
 
 
 def browser_hover(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     description: str,
     vision_config: LLMConfig,
@@ -1130,9 +1131,9 @@ def browser_hover(
 ) -> ToolResult:
     def _do() -> ToolResult:
         idx = find_element_index(
-            project_id, description, vision_config, browser=selection.current
+            runner_id, description, vision_config, browser=selection.current
         )
-        controller_browser_hover(project_id, idx, browser=selection.current)
+        controller_browser_hover(runner_id, idx, browser=selection.current)
         return ToolResult(
             tool_call_id="",
             content=f"Hovered browser element [{idx}]: {description}",
@@ -1143,11 +1144,11 @@ def browser_hover(
 
 
 def browser_get_page_content(
-    project_id: int, *, selection: BrowserSelection
+    runner_id: RunnerId, *, selection: BrowserSelection
 ) -> ToolResult:
     def _do() -> ToolResult:
         result = controller_browser_get_page_content(
-            project_id, browser=selection.current
+            runner_id, browser=selection.current
         )
         return ToolResult(
             tool_call_id="",
@@ -1158,9 +1159,9 @@ def browser_get_page_content(
     return safe_tool_call("browser_get_page_content", _do)
 
 
-def browser_get_url(project_id: int, *, selection: BrowserSelection) -> ToolResult:
+def browser_get_url(runner_id: RunnerId, *, selection: BrowserSelection) -> ToolResult:
     def _do() -> ToolResult:
-        result = controller_browser_get_url(project_id, browser=selection.current)
+        result = controller_browser_get_url(runner_id, browser=selection.current)
         return ToolResult(
             tool_call_id="",
             content=result["content"],
@@ -1171,7 +1172,7 @@ def browser_get_url(project_id: int, *, selection: BrowserSelection) -> ToolResu
 
 
 def browser_download(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     url: str,
     save_path: str = "",
@@ -1179,7 +1180,7 @@ def browser_download(
 ) -> ToolResult:
     def _do() -> ToolResult:
         result = controller_browser_download(
-            project_id, url, save_path, browser=selection.current
+            runner_id, url, save_path, browser=selection.current
         )
         return ToolResult(
             tool_call_id="",
@@ -1190,9 +1191,9 @@ def browser_download(
     return safe_tool_call("browser_download", _do)
 
 
-def browser_list_downloads(project_id: int) -> ToolResult:
+def browser_list_downloads(runner_id: RunnerId) -> ToolResult:
     def _do() -> ToolResult:
-        result = controller_browser_list_downloads(project_id)
+        result = controller_browser_list_downloads(runner_id)
         return ToolResult(
             tool_call_id="",
             content=result["message"],
@@ -1203,7 +1204,7 @@ def browser_list_downloads(project_id: int) -> ToolResult:
 
 
 def browser_take_screenshot(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     question: str,
     vision_config: LLMConfig,
@@ -1212,7 +1213,7 @@ def browser_take_screenshot(
 ) -> ToolResult:
     def _do() -> ToolResult:
         result = controller_browser_take_screenshot(
-            project_id, browser=selection.current
+            runner_id, browser=selection.current
         )
         image_base64 = result["image_base64"]
         if on_screenshot is not None:

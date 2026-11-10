@@ -15,6 +15,11 @@
                  that turn itself (turnLive / otherThreadTurnLive of the
                  ancestor machineSetupChat), so the panel drops it from the
                  server's blockers
+    help_runner_choices — (id, label) of the viewer's own Test Runners usable
+                 in the project (projects.runner_choices.runner_choices); the
+                 Continue form posts the pick as `runner` (empty keeps the
+                 run's runner; required when the run has none:
+                 thread_runner is None)
     project_can_write — inherited (included without `only`); false hides
                  Discard the draft and the Continue / Mark failed / Mark
                  blocked form (read-only member: the panel is shown only)
@@ -156,6 +161,16 @@
       <p class="hint" x-show="proposal && proposal.continue_mode_label" x-cloak x-text="'The agent suggests: ' + (proposal ? proposal.continue_mode_label : '')">{% for mode in help_panel.continue_mode_choices %}{% if mode.value == help_panel.agent_continue_mode %}The agent suggests: {{ mode.label }}{% endif %}{% endfor %}</p>
     </fieldset>
     {% endif %}
+    <div class="form-row">
+      <label for="help-panel-runner">Test Runner</label>
+      <select id="help-panel-runner" name="runner"{% if not thread_runner %} required{% endif %}>
+        <option value="">{% if thread_runner %}Keep {{ thread_runner.name }}{% else %}Choose a Test Runner{% endif %}</option>
+        {% for runner_id, runner_label in help_runner_choices %}
+        <option value="{{ runner_id }}">{{ runner_label }}</option>
+        {% endfor %}
+      </select>
+      <p class="hint">Another Test Runner continues on a different machine, so the current screen cannot be used.</p>
+    </div>
     <p class="hint" x-text="continueHint"></p>
     <p class="hint" id="help-panel-blockers" x-show="continueBlockers.length" x-text="'Continue is unavailable: ' + continueBlockers.join(' ')"></p>
     <div class="help-actions">

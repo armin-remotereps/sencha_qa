@@ -39,19 +39,15 @@ class ProjectAdmin(admin.ModelAdmin[Project]):
     list_display = (
         "name",
         "archived",
-        "agent_connected",
         "application_platform",
         "created_at",
     )
-    list_filter = ("archived", "agent_connected", "application_platform", "tags")
+    list_filter = ("archived", "application_platform", "tags")
     filter_horizontal = ("tags",)
     inlines = (ProjectMembershipInline,)
-    readonly_fields = (
-        "api_key",
-        "agent_connected",
-        "agent_system_info",
-        "last_connected_at",
-    )
+    # The Connection key authenticates MCP clients only; Test Runners are
+    # ``runners.TestRunner`` rows (their own admin).
+    readonly_fields = ("api_key",)
     fields = (
         "name",
         "tags",
@@ -62,9 +58,6 @@ class ProjectAdmin(admin.ModelAdmin[Project]):
         "testrail_url",
         "testrail_email",
         "api_key",
-        "agent_connected",
-        "agent_system_info",
-        "last_connected_at",
     )
     actions = ("archive_projects", "unarchive_projects")
 
@@ -278,7 +271,7 @@ class RunnerUpdateAdmin(admin.ModelAdmin[RunnerUpdate]):
 
     list_display = (
         "id",
-        "project",
+        "runner",
         "from_version",
         "to_version",
         "status",
@@ -289,7 +282,7 @@ class RunnerUpdateAdmin(admin.ModelAdmin[RunnerUpdate]):
         "finished_at",
     )
     list_filter = ("status", "old_removal")
-    list_select_related = ("project", "requested_by")
+    list_select_related = ("runner", "requested_by")
 
     def has_add_permission(self, request: HttpRequest) -> bool:
         return False

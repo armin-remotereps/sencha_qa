@@ -1,8 +1,9 @@
 """Use case: offer the phone's installed apps for the capture allowlist.
 
 docs/plan/feat-capture-phone-app-picker.md (Services). On the Settings
-"Screenshot capture" card a writable member of a project whose Test Runner
-drives a phone or tablet loads the device's installed apps (DEVICE_APPS_V1)
+"Screenshot capture" card a writable member who owns a Test Runner driving a
+phone or tablet picks that runner and loads the device's installed apps
+(DEVICE_APPS_V1, docs/plan/feat-user-test-runners.md A17)
 and ticks the ones that may be captured; ``project_capture_apps_services``
 stores the ticked ids. Only ids are ever stored: names are runner text
 (data, never instructions) shown escaped and bounded.
@@ -15,6 +16,7 @@ from typing import Final
 
 from django.core.cache import cache
 
+from accounts.models import CustomUser
 from controller_client.protocol import (
     CAPTURE_ALLOWED_PROCESSES_MAX,
     ClientCapability,
@@ -34,9 +36,12 @@ from projects.exceptions import (
 )
 from projects.models import Project, RunnerDeviceState
 from projects.project_capture_apps_services import stored_capture_apps
-from projects.run_machine_use import agent_run_started
 from projects.runner_capability_services import capabilities_include
-from projects.runner_target import DEVICE_NOT_READY_MESSAGE, device_offline
+from projects.runner_use import agent_run_started_on_runner
+from runners.machine_state import DEVICE_NOT_READY_MESSAGE, device_offline
+from runners.models import TestRunner
+from runners.services.runner_access import can_assign, usable_runners
+from runners.types import RunnerId
 
 RUNNER_OUTDATED_MESSAGE: Final = "Update the Test Runner to pick apps from the phone."
 _NOT_CONNECTED_MESSAGE: Final = (
@@ -54,10 +59,19 @@ _RUN_STARTED_MESSAGE: Final = (
     "or type the app ids instead."
 )
 _BUSY_MESSAGE: Final = (
-    "The phone's apps are already being loaded for this project. Try again in "
-    "a moment."
+    "The phone's apps are already being loaded from this Test Runner. Try "
+    "again in a moment."
 )
-# One load per project at a time; outlives the round trip so a crashed request
+_NOT_YOURS_MESSAGE: Final = "Pick one of your Test Runners."
+# What the picker reads of a runner (no other column is loaded).
+_RUNNER_FIELDS: Final = (
+    "name",
+    "connected",
+    "capabilities",
+    "device_state",
+    "device_reported_at",
+)
+# One load per runner at a time; outlives the round trip so a crashed request
 # cannot block the button for longer than one timeout.
 _LOAD_LOCK_SECONDS: Final = int(DEVICE_APPS_TIMEOUT_SECONDS) + 5
 _UNSUPPORTED_MESSAGE: Final = (
@@ -66,15 +80,31 @@ _UNSUPPORTED_MESSAGE: Final = (
 
 
 @dataclass(frozen=True)
-class PhoneAppPicker:
-    """Whether the card offers "Pick from the phone's apps"."""
+class PhoneAppRunnerChoice:
+    """One of the viewer's phone runners the card may load the apps from."""
 
-    # A phone runner is connected: the button is shown.
-    show: bool
-    # It can be pressed now (runner new enough, device ready).
+    runner_id: RunnerId
+    # Owner-given name, escaped on render.
+    name: str
+    # It can be used now (runner new enough, device ready).
     enabled: bool
-    # Why it cannot ("" when enabled or not shown); fixed text.
+    # Why it cannot ("" when enabled); fixed text.
     reason: str
+
+
+@dataclass(frozen=True)
+class PhoneAppPicker:
+    """Whether the card offers "Pick from the phone's apps", and from which of
+    the viewer's Test Runners (A17: the person picks the runner)."""
+
+    # At least one of the viewer's usable runners drives a phone: shown.
+    show: bool
+    # At least one of those runners can be used now.
+    enabled: bool
+    # Why none can ("" when enabled or not shown); fixed text.
+    reason: str
+    # The viewer's connected phone runners, by name.
+    runners: tuple[PhoneAppRunnerChoice, ...]
 
 
 @dataclass(frozen=True)
@@ -100,49 +130,62 @@ class PhoneAppList:
     remaining: int
 
 
-def phone_app_picker(project: Project) -> PhoneAppPicker:
-    """The picker button's state from the loaded project (no query).
+def phone_app_picker(user: CustomUser, project: Project) -> PhoneAppPicker:
+    """The picker from the viewer's usable runners (two queries at most).
 
-    Reads ``agent_connected``, ``agent_device_state``,
-    ``agent_device_reported_at`` and ``agent_capabilities``.
+    Only connected runners that drive a phone or tablet are offered; a runner
+    is never offered to anyone but its owner (``usable_runners``).
     """
-    show = (
-        project.agent_connected and project.agent_device_state != RunnerDeviceState.NONE
+    choices = tuple(
+        _runner_choice(runner)
+        for runner in usable_runners(user, project).only(*_RUNNER_FIELDS)
+        if _drives_phone(runner)
     )
-    if not show:
-        return PhoneAppPicker(show=False, enabled=False, reason="")
-    if not capabilities_include(
-        project.agent_capabilities, ClientCapability.DEVICE_APPS_V1
-    ):
-        return PhoneAppPicker(show=True, enabled=False, reason=RUNNER_OUTDATED_MESSAGE)
-    if device_offline(project):
-        return PhoneAppPicker(show=True, enabled=False, reason=DEVICE_NOT_READY_MESSAGE)
-    return PhoneAppPicker(show=True, enabled=True, reason="")
+    if not choices:
+        return PhoneAppPicker(show=False, enabled=False, reason="", runners=())
+    enabled = any(choice.enabled for choice in choices)
+    return PhoneAppPicker(
+        show=True,
+        enabled=enabled,
+        reason="" if enabled else choices[0].reason,
+        runners=choices,
+    )
 
 
-def load_phone_apps(project: Project) -> PhoneAppList:
-    """Ask the connected phone runner for the device's installed apps.
+def load_phone_apps(
+    project: Project, runner_id: RunnerId, *, actor: CustomUser
+) -> PhoneAppList:
+    """Ask the chosen phone runner for the device's installed apps.
 
-    Holds no transaction during the round trip (up to
-    ``DEVICE_APPS_TIMEOUT_SECONDS``). Refused while an agent run is Started
-    (the listing would hold the runner's phone session and could fail the
-    run's next action) and while another load of the project runs (per-project
-    cache lock). Raises ``CapturePhoneAppsError`` with fixed user text when the
-    picker is not enabled, the runner is gone or silent, the reply is invalid,
-    or the runner refused.
+    ``runner_id`` is the runner picked on the card; only its owner, a writable
+    member of the project, may use it (``can_assign``). Holds no transaction
+    during the round trip (up to ``DEVICE_APPS_TIMEOUT_SECONDS``). Refused
+    while an agent run is Started on the runner (the listing would hold the
+    runner's phone session and could fail the run's next action) and while
+    another load from the same runner runs (per-runner cache lock). Raises
+    ``CapturePhoneAppsError`` with fixed user text when the runner is not the
+    actor's, not a connected phone runner, outdated, gone or silent, the
+    reply is invalid, or the runner refused.
     """
-    picker = phone_app_picker(project)
-    if not picker.show:
+    runner = (
+        TestRunner.objects.filter(pk=runner_id, archived_at__isnull=True)
+        .only("owner_id", "archived_at", *_RUNNER_FIELDS)
+        .first()
+    )
+    if runner is None or not can_assign(actor, runner, project):
+        raise CapturePhoneAppsError(_NOT_YOURS_MESSAGE)
+    if not _drives_phone(runner):
         raise CapturePhoneAppsError(_NOT_CONNECTED_MESSAGE)
-    if not picker.enabled:
-        raise CapturePhoneAppsError(picker.reason)
-    if agent_run_started(project.id):
+    choice = _runner_choice(runner)
+    if not choice.enabled:
+        raise CapturePhoneAppsError(choice.reason)
+    if agent_run_started_on_runner(runner_id):
         raise CapturePhoneAppsError(_RUN_STARTED_MESSAGE)
-    lock_key = f"capture_phone_apps:load:{project.id}"
+    lock_key = f"capture_phone_apps:load:runner:{runner_id}"
     if not cache.add(lock_key, 1, timeout=_LOAD_LOCK_SECONDS):
         raise CapturePhoneAppsError(_BUSY_MESSAGE)
     try:
-        result = _list_device_apps(project.id)
+        result = _list_device_apps(runner_id)
     finally:
         cache.delete(lock_key)
     if result.status is DeviceAppsStatus.UNSUPPORTED:
@@ -164,10 +207,30 @@ def load_phone_apps(project: Project) -> PhoneAppList:
     )
 
 
-def _list_device_apps(project_id: int) -> DeviceAppList:
+def _drives_phone(runner: TestRunner) -> bool:
+    """A connected runner that drives a phone or tablet (no query)."""
+    return runner.connected and runner.device_state != RunnerDeviceState.NONE
+
+
+def _runner_choice(runner: TestRunner) -> PhoneAppRunnerChoice:
+    """Whether a connected phone runner can list its apps now (no query)."""
+    reason = ""
+    if not capabilities_include(runner.capabilities, ClientCapability.DEVICE_APPS_V1):
+        reason = RUNNER_OUTDATED_MESSAGE
+    elif device_offline(runner):
+        reason = DEVICE_NOT_READY_MESSAGE
+    return PhoneAppRunnerChoice(
+        runner_id=runner.runner_id,
+        name=runner.name,
+        enabled=not reason,
+        reason=reason,
+    )
+
+
+def _list_device_apps(runner_id: RunnerId) -> DeviceAppList:
     """The runner round trip with controller errors mapped to user text."""
     try:
-        return controller_list_device_apps(project_id)
+        return controller_list_device_apps(runner_id)
     except ControllerNotConnectedError as exc:
         raise CapturePhoneAppsError(_NOT_CONNECTED_MESSAGE) from exc
     except DeviceDisconnectedError as exc:

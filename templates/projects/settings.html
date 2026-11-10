@@ -25,10 +25,11 @@
                     after an invalid post to projects:settings_capture_apps
      capture_apps — list of stored normalized process names; empty means
                     screenshot capture is off
-     phone_app_picker — PhoneAppPicker (show, enabled, reason): show = a
-                    phone runner is connected; the "Pick from the phone's
-                    apps" button is shown to writable members, disabled with
-                    the fixed reason when not enabled
+     phone_app_picker — PhoneAppPicker (show, enabled, reason, runners): show =
+                    one of the viewer's own runners drives a phone; the
+                    "Pick from the phone's apps" form (a select of those
+                    runners, posted as `runner`; unusable ones disabled with
+                    their fixed reason) is shown to writable members
      phone_apps   — PhoneAppList or None; set only by the POST to
                     projects:settings_capture_phone_apps (rows of app_id,
                     name, allowed; names_available, skipped, truncated,
@@ -245,6 +246,12 @@
   {% if phone_app_picker.show %}
   <form class="phone-apps-load" method="post" action="{% url 'projects:settings_capture_phone_apps' project.id %}#screenshot-capture" x-data="{ loading: false }" @submit="loading = true">
     {% csrf_token %}
+    <label class="label" for="phone-apps-runner">Phone Test Runner</label>
+    <select class="select" id="phone-apps-runner" name="runner" required>
+      {% for choice in phone_app_picker.runners %}
+      <option value="{{ choice.runner_id }}"{% if not choice.enabled %} disabled{% endif %}>{{ choice.name }}{% if not choice.enabled %} ({{ choice.reason }}){% endif %}</option>
+      {% endfor %}
+    </select>
     <button class="btn btn-secondary" type="submit"{% if not phone_app_picker.enabled %} disabled aria-describedby="phone-apps-reason"{% else %} :disabled="loading"{% endif %}>
       <span x-show="!loading">Pick from the phone's apps</span>
       <span x-show="loading" x-cloak>Asking the phone…</span>

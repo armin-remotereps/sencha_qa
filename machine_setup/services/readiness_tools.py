@@ -47,6 +47,7 @@ from machine_readiness.profile_text import (
     render_profile_body,
 )
 from machine_readiness.run_stage0_state import runner_host
+from machine_readiness.runner_info import load_runner_info
 from machine_readiness.services.analyse_preconditions import analyse_preconditions
 from machine_readiness.services.artifact_profile import get_profile, write_profile
 from machine_readiness.services.gap_report import (
@@ -77,6 +78,8 @@ from machine_setup.services.action_approval import propose_action
 from machine_setup.subtask_types import APPROVAL_ID_ARGUMENT, RUN_SETUP_TASK_TOOL
 from projects.machine_readiness_ports import build_runner_ports
 from projects.models import Project, TestRun
+from runners.models import TestRunner
+from runners.types import RunnerId
 
 GET_ARTIFACT_PROFILE_TOOL = "get_artifact_profile"
 SAVE_ARTIFACT_PROFILE_TOOL = "save_artifact_profile"
@@ -427,6 +430,7 @@ def build_readiness_handlers(
     author: CustomUser | None,
     conversation_id: int,
     turn_id: int | None,
+    runner_id: RunnerId | None,
     on_profile_saved: ProfileSavedCallback,
     on_action_proposed: ActionProposedCallback,
     should_stop: Callable[[], bool],
@@ -434,8 +438,11 @@ def build_readiness_handlers(
     """The readiness tools' handlers, bound to one project and its main chat.
 
     ``author`` (the member who started the turn) is recorded on profile
-    writes, scans and statuses. ``should_stop`` (the turn's cancellation
-    check) ends a long analysis between batches.
+    writes, scans and statuses. ``runner_id`` is the turn's Test Runner: the
+    scan runs on it, and the gap report, the run checklist and recorded
+    statuses use its OS and host (None: no runner, statuses as stored).
+    ``should_stop`` (the turn's cancellation check) ends a long analysis
+    between batches.
     """
     project_id = project.pk
     actor_id = author.pk if author is not None else None
@@ -512,9 +519,10 @@ def build_readiness_handlers(
         try:
             outcome = scan_artifacts(
                 project_id=project_id,
+                runner_id=runner_id,
                 actor_id=actor_id,
                 ports=ports,
-                during_turn=True,
+                turn_id=turn_id,
             )
         except ArtifactScanUnavailableError as exc:
             raise ReadinessToolError(exc.message) from exc
@@ -524,7 +532,11 @@ def build_readiness_handlers(
         run_id = _optional_int(arguments, "run_id")
         if run_id is not None:
             _run_name(project_id, run_id)
-        report = build_gap_report(project_id=project_id, run_id=run_id)
+        report = build_gap_report(
+            project_id=project_id,
+            run_id=run_id,
+            runner=load_runner_info(runner_id),
+        )
         return render_gap_report_text(report, GAP_REPORT_MAX_CHARS)
 
     def _handle_analyse(arguments: dict[str, object]) -> str:
@@ -578,7 +590,7 @@ def build_readiness_handlers(
         checklist = get_run_stage0(
             project_id=project_id,
             run_id=run_id,
-            runner_host=_current_host(project_id),
+            runner_host=_current_host(runner_id),
         )
         return _render_checklist(checklist, name)
 
@@ -589,7 +601,7 @@ def build_readiness_handlers(
             items=items,
             source=RequirementStatusSource.SETUP_AGENT,
             author=author,
-            host=_current_host(project_id) or "",
+            host=_current_host(runner_id) or "",
         )
         lines = [f"Recorded {outcome.updated} statuses."]
         if outcome.unknown_keys:
@@ -648,11 +660,13 @@ def _run_name(project_id: int, run_id: int) -> str:
     return name
 
 
-def _current_host(project_id: int) -> str | None:
-    """The connected runner's hostname, read now (one query)."""
+def _current_host(runner_id: RunnerId | None) -> str | None:
+    """The turn's runner's hostname, read now (one query); None without one."""
+    if runner_id is None:
+        return None
     system_info = (
-        Project.objects.filter(pk=project_id)
-        .values_list("agent_system_info", flat=True)
+        TestRunner.objects.filter(pk=runner_id)
+        .values_list("system_info", flat=True)
         .first()
     )
     return runner_host(system_info)

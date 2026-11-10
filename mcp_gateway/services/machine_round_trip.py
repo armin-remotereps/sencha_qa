@@ -1,14 +1,14 @@
-"""The test machine round-trip guards of every MCP tool that reaches the
-project's test machine (``list_windows``, ``capture_screenshot`` and the
-machine tools inside a claimed case).
+"""The test machine round-trip guards of every MCP tool that reaches a
+test machine, the runner of the claimed case's run (``list_windows``,
+``capture_screenshot`` and the machine tools inside a claimed case).
 
 - ``machine_round_trip``: at most MCP_MACHINE_ROUND_TRIPS_MAX round trips
   wait at once in this process (each holds a worker thread), refused
   without waiting beyond that.
-- ``machine_lock``: one capture or machine action per project at a time
-  across processes, a Redis key set with NX and an expiry, released by
-  compare-and-delete so a lock that expired and was taken by another call is
-  never deleted.
+- ``machine_lock``: one capture or machine action per test machine (Test
+  Runner) at a time across processes and projects, a Redis key set with NX
+  and an expiry, released by compare-and-delete so a lock that expired and
+  was taken by another call is never deleted.
 - ``machine_busy``: whether that lock is held right now.
 
 Both guards refuse with ``[machine_busy]``: by default the capture text
@@ -38,10 +38,11 @@ from mcp_gateway.limits import (
     MCP_MACHINE_ROUND_TRIPS_MAX,
 )
 from mcp_gateway.services.capture_errors import CaptureErrorCode, error
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
-_LOCK_KEY: Final = "mcp:machine-lock:{project_id}"
+_LOCK_KEY: Final = "mcp:machine-lock:runner:{runner_id}"
 _LOCK_TOKEN_BYTES: Final = 12
 # Deletes the key only while it still holds our token (atomic in Redis).
 _RELEASE_SCRIPT: Final = (
@@ -77,16 +78,16 @@ def machine_round_trip(*, busy: McpToolError | None = None) -> Iterator[None]:
 
 @contextmanager
 def machine_lock(
-    project_id: int, seconds: int, *, busy: McpToolError | None = None
+    runner_id: RunnerId, seconds: int, *, busy: McpToolError | None = None
 ) -> Iterator[None]:
-    """Hold the project's machine lock for at most ``seconds``, or raise
+    """Hold the test machine's lock for at most ``seconds``, or raise
     ``busy`` (default: the capture ``[machine_busy]``)."""
-    key = _LOCK_KEY.format(project_id=project_id)
+    key = _LOCK_KEY.format(runner_id=runner_id)
     token = secrets.token_urlsafe(_LOCK_TOKEN_BYTES)
     try:
         taken = _REDIS.set(key, token, nx=True, ex=seconds)
     except redis.RedisError:
-        logger.warning("machine lock unavailable project=%s", project_id)
+        logger.warning("machine lock unavailable runner=%s", runner_id)
         raise _busy(busy) from None
     if not taken:
         raise _busy(busy)
@@ -98,14 +99,14 @@ def machine_lock(
         try:
             _release(keys=[key], args=[token])
         except redis.RedisError:
-            logger.warning("machine lock release failed project=%s", project_id)
+            logger.warning("machine lock release failed runner=%s", runner_id)
 
 
-def machine_busy(project_id: int) -> bool:
-    """A capture or machine action of the project holds the machine lock."""
+def machine_busy(runner_id: RunnerId) -> bool:
+    """A capture or machine action holds the test machine's lock."""
     try:
-        return bool(_REDIS.exists(_LOCK_KEY.format(project_id=project_id)))
+        return bool(_REDIS.exists(_LOCK_KEY.format(runner_id=runner_id)))
     except redis.RedisError:
         # Unknown: answer busy rather than queue a request behind another.
-        logger.warning("machine lock unavailable project=%s", project_id)
+        logger.warning("machine lock unavailable runner=%s", runner_id)
         return True

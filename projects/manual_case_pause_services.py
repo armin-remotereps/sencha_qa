@@ -35,6 +35,10 @@ from projects.case_duration_services import (
     open_case_segment,
 )
 from projects.exceptions import ManualRunError
+from projects.manual_case_claim_services import (
+    RUNNER_CHANGED_MESSAGE,
+    lock_free_case_runner,
+)
 from projects.manual_case_lock import NOT_MANUAL, claim_matches, lock_manual_run_case
 from projects.manual_run_policy import (
     MANUAL_PAUSE_AGENT_BUSY,
@@ -147,14 +151,19 @@ def continue_manual_case(
     """Continue the paused claimed case: its clock runs again.
 
     Same callers as ``pause_manual_case``. Raises ``ManualRunError``
-    (user-safe) when the case is not paused, or while any Machine setup turn
-    of the project is live.
+    (user-safe) when the case is not paused, while any Machine setup turn of
+    the project is live, or while something else holds the run's Test Runner.
     """
     _check_web_actor(actor, claim_token)
     with transaction.atomic():
+        # Continuing makes the case hold its runner again: refuse while
+        # anything else holds it (runner row first, then project and run).
+        run_runner_id = lock_free_case_runner(project.pk, pivot_id)
         test_run, pivot = _lock_claimed_case(
             project=project, pivot_id=pivot_id, claim_token=claim_token
         )
+        if test_run.runner_id != run_runner_id:
+            raise ManualRunError(RUNNER_CHANGED_MESSAGE)
         if pivot.manual_paused_at is None:
             raise ManualRunError(MANUAL_PAUSE_NOT_PAUSED)
         now = timezone.now()

@@ -4,8 +4,13 @@ discussions, and the Manual run.
 Composition only, no rules: ``runner_person_step_services`` gives the steps,
 ``runner_case_services`` the cases (test case, log tail, pause and help
 panels), ``machine_setup.services.runner_discussion`` each help case's
-discussion and ``runner_manual_state_services`` the Manual run snapshot. Imported only by ``controller_consumer`` (it sits above both
-apps, so ``projects`` services never import it).
+discussion and ``runner_manual_state_services`` the Manual run snapshot.
+Imported only by ``controller_consumer`` (it sits above both apps, so
+``projects`` services never import it).
+
+Scope: the runs assigned to the runner (``TestRun.runner``) in the projects
+where the runner's owner is an active writable member
+(``runner_window_project_ids``, read once per snapshot).
 """
 
 from __future__ import annotations
@@ -24,10 +29,13 @@ from machine_setup.services.runner_discussion import (
     get_runner_send_blocker,
 )
 from projects.manual_run_policy import MANUAL_PAUSE_AGENT_BUSY
-from projects.models import Project
 from projects.runner_case_services import RunnerCaseStep, get_runner_cases
 from projects.runner_manual_state_services import build_manual_run_state
-from projects.runner_person_step_services import get_runner_person_steps
+from projects.runner_person_step_services import (
+    get_runner_person_steps,
+    runner_window_project_ids,
+)
+from runners.types import RunnerId
 
 
 @dataclass(frozen=True)
@@ -52,20 +60,25 @@ class RunnerWindowState:
 
 
 def get_runner_window_state(
-    project_id: int, features: RunnerWindowFeatures
+    runner_id: RunnerId, features: RunnerWindowFeatures
 ) -> RunnerWindowState:
-    """The snapshot for the project's runner window.
+    """The snapshot for the runner's window.
 
-    Without case context this is ``get_runner_person_steps`` alone (as for
-    an older runner). Otherwise one more query for the cases, and, only
-    while a help case waits for a person, its help panel and discussion.
+    One query for the projects, then without case context
+    ``get_runner_person_steps`` alone (as for an older runner). Otherwise one
+    more query for the cases, and, only while a help case waits for a person,
+    its help panel and discussion (the send blocker once per project).
     """
-    views = get_runner_person_steps(project_id, case_steps=features.case_steps)
+    project_ids = runner_window_project_ids(runner_id)
+    views = get_runner_person_steps(
+        runner_id, project_ids, case_steps=features.case_steps
+    )
     steps = tuple(view.to_payload() for view in views)
     if not features.case_context:
         return RunnerWindowState(steps=steps, cases=None)
     runner_cases = get_runner_cases(
-        project_id,
+        runner_id,
+        project_ids,
         tuple(
             RunnerCaseStep(pivot_id=view.pivot_id, status=view.status.value)
             for view in views
@@ -73,18 +86,20 @@ def get_runner_window_state(
         discussion=features.discussion,
         pause=features.pause,
     )
-    project = runner_cases.project
-    send_blocker: str | None = None
+    send_blockers: dict[int, str] = {}
     cases: list[PersonCaseStatePayload] = []
     for case_view in runner_cases.views:
         payload = case_view.payload
+        project = case_view.project
         if (
             case_view.help_request_id is not None
             and payload.help is not None
             and project is not None
         ):
+            send_blocker = send_blockers.get(project.pk)
             if send_blocker is None:
-                send_blocker = get_runner_send_blocker(project)
+                send_blocker = get_runner_send_blocker(project, runner_id)
+                send_blockers[project.pk] = send_blocker
             discussion = get_runner_discussion(
                 project, case_view.help_request_id, send_blocker=send_blocker
             )
@@ -104,24 +119,32 @@ def get_runner_window_state(
 
 
 def get_runner_manual_state(
-    project: Project, capabilities: frozenset[str]
+    runner_id: RunnerId, capabilities: frozenset[str]
 ) -> ManualRunStateMessage:
     """The Manual run snapshot for a MANUAL_RUN_V1 runner window.
 
-    The same for every person at the runner: a project's claims all belong to
-    its one runner connection. A MANUAL_PAUSE_DISCUSS_V1 window also gets the
-    claimed case's discussion (``active`` is the claimed IN_PROGRESS case of
-    ``run``, the project's STARTED manual run, so the discussion does not
-    re-check the claim).
+    The Manual run shown is a STARTED Manual run assigned to the runner in a
+    project its owner may write (``build_manual_run_state``). A
+    MANUAL_PAUSE_DISCUSS_V1 window also gets the claimed case's discussion
+    (``active`` is the claimed IN_PROGRESS case of ``run``, so the discussion
+    does not re-check the claim).
     """
-    state = build_manual_run_state(project=project, runner_capabilities=capabilities)
+    project_ids = runner_window_project_ids(runner_id)
+    manual = build_manual_run_state(
+        runner_id=runner_id,
+        project_ids=project_ids,
+        runner_capabilities=capabilities,
+    )
+    state = manual.message
+    project = manual.project
     if (
         state.active is None
         or state.run is None
+        or project is None
         or ClientCapability.MANUAL_PAUSE_DISCUSS_V1.value not in capabilities
     ):
         return state
-    discussion = get_runner_manual_discussion(project, state.active.pivot_id)
+    discussion = get_runner_manual_discussion(project, state.active.pivot_id, runner_id)
     active = replace(state.active, discussion=discussion.payload)
     if discussion.setup_turn_live and active.can_continue:
         # Same refusal as ``continue_manual_case``: any setup turn may be

@@ -15,7 +15,6 @@ from controller_client.protocol import (
     CAPTURE_ALLOWED_PROCESSES_MAX,
     CAPTURE_PROCESS_NAME_MAX_CHARS,
     MANUAL_CLAIM_TOKEN_MAX_CHARS,
-    MAX_VERSION_LENGTH,
     PERSON_CHAT_TEXT_MAX_CHARS,
     ManualCaseActionKind,
     PersonHelpActionKind,
@@ -40,6 +39,7 @@ from projects.models import (
     TestCasePriority,
     TestCaseType,
 )
+from runners.types import RunnerId
 
 # Bounds of integer ids and counters fed from a JSON message (BigAutoField
 # primary keys, PositiveSmallIntegerField rounds).
@@ -311,12 +311,63 @@ RUN_CASE_SELECTION_MAX_IDS = 500
 
 
 _HELP_MODE_INVALID = "Choose Attended, Night or Human in the loop."
+_RUNNER_REQUIRED = "Choose a Test Runner."
+_RUNNER_INVALID = "Choose one of your Test Runners. Reload the page and try again."
 
 
-class TestRunStartForm(forms.Form):
-    """Start a draft run: what happens when one of its cases needs help.
+class _RunnerOptionForm(forms.Form):
+    """Base: an optional ``runner``, one of the viewer's own Test Runners.
 
-    Optional: blank keeps the run's stored mode.
+    The caller passes ``runner_choices`` (``projects.runner_choices``), which
+    double as validation: any other runner id is refused. Blank keeps the
+    run's runner (``None``); ``runner_required`` (the run has none) makes it
+    required. Without ``runner_choices`` (an action that takes no runner, such
+    as Mark failed sharing the Continue form) the field is dropped and a
+    posted runner is ignored. Whether the runner may serve the run now is the
+    service's.
+    """
+
+    runner = forms.TypedChoiceField(
+        label="Test Runner",
+        coerce=int,
+        empty_value=None,
+        required=False,
+        choices=(),
+        widget=forms.Select(attrs={"class": "select"}),
+        error_messages={
+            "required": _RUNNER_REQUIRED,
+            "invalid_choice": _RUNNER_INVALID,
+        },
+    )
+
+    def __init__(
+        self,
+        *args: Any,
+        runner_choices: Sequence[tuple[int, str]] | None = None,
+        runner_required: bool = False,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        if runner_choices is None:
+            del self.fields["runner"]
+            return
+        # django-stubs types `self.fields[...]` as the base `Field`; this is
+        # the TypedChoiceField declared above.
+        runner_field = cast(forms.TypedChoiceField, self.fields["runner"])
+        runner_field.required = runner_required
+        runner_field.choices = [("", ""), *runner_choices]
+
+    def clean_runner(self) -> RunnerId | None:
+        value = self.cleaned_data.get("runner")
+        return RunnerId(value) if isinstance(value, int) else None
+
+
+class TestRunStartForm(_RunnerOptionForm):
+    """Start a draft run: its Test Runner and what happens when a case needs help.
+
+    ``help_mode`` is optional: blank keeps the run's stored mode
+    (``stored_help_mode``). A runner is required unless the run is Manual
+    (Q12: optional there).
     """
 
     help_mode = forms.ChoiceField(
@@ -328,14 +379,66 @@ class TestRunStartForm(forms.Form):
         error_messages={"invalid_choice": _HELP_MODE_INVALID},
     )
 
+    def __init__(
+        self,
+        *args: Any,
+        stored_help_mode: str = "",
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self._stored_help_mode = stored_help_mode
+
     def clean_help_mode(self) -> str | None:
         # Blank keeps the run's stored mode (only superusers are offered a choice).
         value: str = self.cleaned_data.get("help_mode") or ""
         return value or None
 
+    def clean(self) -> dict[str, Any]:
+        cleaned_data = super().clean() or {}
+        help_mode = cleaned_data.get("help_mode") or self._stored_help_mode
+        if (
+            "runner" in self.fields
+            and "runner" not in self.errors
+            and cleaned_data.get("runner") is None
+            and help_mode != RunHelpMode.MANUAL
+        ):
+            self.add_error("runner", _RUNNER_REQUIRED)
+        return cleaned_data
 
-class RunHelpModeForm(forms.Form):
-    """Optional help mode of a Resume or Re-run; blank keeps the run's mode."""
+
+class RunRunnerForm(forms.Form):
+    """Run page "Test Runner" card: assign or change the run's runner (Q6)."""
+
+    runner = forms.TypedChoiceField(
+        label="Test Runner",
+        coerce=int,
+        choices=(),
+        widget=forms.Select(attrs={"class": "select"}),
+        error_messages={
+            "required": _RUNNER_REQUIRED,
+            "invalid_choice": _RUNNER_INVALID,
+        },
+    )
+
+    def __init__(
+        self,
+        runner_choices: Sequence[tuple[int, str]],
+        data: QueryDict | dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(data, **kwargs)
+        runner_field = cast(forms.TypedChoiceField, self.fields["runner"])
+        runner_field.choices = list(runner_choices)
+
+    def clean_runner(self) -> RunnerId:
+        return RunnerId(self.cleaned_data["runner"])
+
+
+class RunHelpModeForm(_RunnerOptionForm):
+    """Optional help mode and Test Runner of a Resume or Re-run.
+
+    Blank keeps the run's mode / runner.
+    """
 
     help_mode = forms.ChoiceField(
         label="When a case needs help",
@@ -503,8 +606,12 @@ class ProjectCaptureAppsAddForm(forms.Form):
         return app_ids
 
 
-class CaseHelpResolutionForm(forms.Form):
-    """Continue / Mark failed / Mark blocked on a Need help case, with an optional note."""
+class CaseHelpResolutionForm(_RunnerOptionForm):
+    """Continue / Mark failed / Mark blocked on a Need help case, with an optional note.
+
+    ``runner`` (inherited, optional) is read by Continue only: blank keeps
+    the run's Test Runner.
+    """
 
     note = forms.CharField(
         label="Note for the agent",
@@ -569,7 +676,11 @@ class CasePauseForm(forms.Form):
 
 
 class PersonStepReportForm(forms.Form):
-    """A person's report of a step they performed (Human in the loop)."""
+    """A person's report of a step they performed (Human in the loop).
+
+    No runner choice: the agent confirms on the run's own Test Runner, where
+    the step was performed (Change runner on the run card hands it back).
+    """
 
     # The open step the card was rendered for; the service refuses a stale id.
     person_step_id = forms.IntegerField(min_value=1, widget=forms.HiddenInput)
@@ -1055,16 +1166,24 @@ class TestRailPushStartForm(forms.Form):
     testrail_project_id = forms.IntegerField(required=False, min_value=1)
 
 
-class RunnerUpdateForm(forms.Form):
-    """Environment page: update the connected Test Runner.
+class CapturePhoneAppsLoadForm(forms.Form):
+    """Settings "Screenshot capture": the phone runner to list the apps of.
 
-    ``expected_version`` is the server version the page showed; the service
-    refuses it if the server has since been redeployed with another version.
+    Only an id: ``capture_phone_apps_services.load_phone_apps`` refuses a
+    runner that is not the viewer's own connected phone runner.
     """
 
-    expected_version = forms.CharField(
-        max_length=MAX_VERSION_LENGTH, strip=True, widget=forms.HiddenInput
+    runner = forms.IntegerField(
+        min_value=1,
+        max_value=_MAX_BIGINT,
+        error_messages={
+            "required": "Pick one of your Test Runners.",
+            "invalid": "Pick one of your Test Runners.",
+        },
     )
+
+    def clean_runner(self) -> RunnerId:
+        return RunnerId(self.cleaned_data["runner"])
 
 
 class RunCasesRetestForm(RunCaseSelectionForm):

@@ -66,6 +66,8 @@ def load_own_claim(
             "test_run__id",
             "test_run__status",
             "test_run__help_mode",
+            # The run's test machine (the MCP machine tools' runner).
+            "test_run__runner_id",
         )
         .filter(pk=pivot_id, test_run__project_id=project_id)
         .first()

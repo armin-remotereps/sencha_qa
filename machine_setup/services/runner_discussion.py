@@ -7,10 +7,11 @@ sends a person's turn through ``open_help_chat`` (which reuses the thread or
 opens it), so the turn has the gates, limits and Stop of any web send.
 
 Identity and scoping follow ``runner_person_step_services``: only the
-connection that owns the project, the case's open request only, and the
-sender named only while the runner's email is an active writable member
-(else "a person at the Test Runner"). Never imported by ``projects``
-services (only by ``runner_window_state`` and the consumer).
+runner's live connection, cases of runs assigned to the runner only, the
+case's open request only, and sent as "<owner> via Test Runner" while the
+runner's owner is an active writable member of the run's project (else
+refused). Never imported by ``projects`` services (only by
+``runner_window_state`` and the consumer).
 
 Manual runs (MANUAL_PAUSE_DISCUSS_V1): ``get_runner_manual_discussion`` and
 ``send_manual_from_runner`` do the same for the claimed case's ``manual_case``
@@ -35,13 +36,16 @@ from controller_client.protocol import (
     PersonDiscussionMessagePayload,
 )
 from machine_setup.exceptions import MachineSetupError, SetupTurnActiveError
-from machine_setup.models import SetupConversation, SetupMessage, SetupMessageKind
+from machine_setup.models import (
+    SetupConversation,
+    SetupConversationKind,
+    SetupMessage,
+    SetupMessageKind,
+)
 from machine_setup.services.open_help_chat import open_help_chat
 from machine_setup.services.open_manual_chat import open_manual_chat
-from machine_setup.services.send_gates import (
-    run_and_update_refusal,
-    thread_send_refusal,
-)
+from machine_setup.services.send_gates import runner_refusal, thread_send_refusal
+from machine_setup.services.thread_runner import load_runner
 from machine_setup.subtask_types import RUN_SETUP_TASK_TOOL
 from machine_setup.turn_state import (
     live_turn_exists,
@@ -54,17 +58,19 @@ from projects.models import Project
 from projects.person_step_actor import PersonStepActor
 from projects.runner_help_action_services import find_runner_help_case
 from projects.runner_person_step_services import (
-    current_member,
     hit_runner_throttle,
-    owns_project,
+    owns_runner,
+    runner_actor,
 )
+from runners.types import RunnerId
 
-# Discussion turns one project's Test Runner may send per window.
+# Discussion turns one Test Runner may send per window.
 RUNNER_CHAT_LIMIT = 10
 RUNNER_CHAT_WINDOW_SECONDS = 60
 
-_NOT_OWNER = (
-    "This Test Runner is no longer the project's connection. Write on Punk Hazard."
+_NOT_OWNER = "This Test Runner connection was replaced or closed. Write on Punk Hazard."
+_NOT_MEMBER = (
+    "This Test Runner's owner cannot write in this project. Write on Punk Hazard."
 )
 _THROTTLED = "Too many messages from this Test Runner. Wait a minute and try again."
 _AGENT_NAME = "Machine setup agent"
@@ -94,7 +100,7 @@ def get_runner_discussion(
 ) -> RunnerDiscussionView:
     """The request's discussion; no thread yet gives an empty one.
 
-    ``send_blocker``: ``get_runner_send_blocker(project)``, computed once per
+    ``send_blocker``: ``get_runner_send_blocker(project, runner_id)``, computed once per
     snapshot. Queries: the thread, its newest rows and the live turn check.
     """
     thread = (
@@ -131,15 +137,16 @@ class RunnerManualDiscussion:
 
 
 def get_runner_manual_discussion(
-    project: Project, pivot_id: int
+    project: Project, pivot_id: int, runner_id: RunnerId
 ) -> RunnerManualDiscussion:
     """The claimed manual case's discussion; no thread yet gives an empty one.
 
-    The caller has proven ``pivot_id`` is the claimed IN_PROGRESS case of the
-    project's STARTED manual run, so the claim is not re-checked. Queries (at
-    most five): the thread, with a thread its newest rows, the project's live
-    turns (this case's turn and the live-turn refusal from one read), and
-    without a live turn the agent-run and runner update refusals.
+    The caller has proven ``pivot_id`` is the claimed IN_PROGRESS case of a
+    STARTED manual run of ``project`` assigned to ``runner_id``, so the
+    claim is not re-checked. Queries: the thread, with a thread its newest
+    rows, the project's live turns (this case's turn and the live-turn
+    refusal from one read), and without a live turn the runner and its
+    holder.
     """
     thread = (
         SetupConversation.objects.filter(
@@ -161,7 +168,7 @@ def get_runner_manual_discussion(
     if live_cases:
         refusal = SetupTurnActiveError()
     else:
-        refusal = run_and_update_refusal(project, now)
+        refusal = runner_refusal(load_runner(runner_id), project.pk, main_chat=False)
     blocker = refusal.message if refusal is not None else ""
     payload = ManualDiscussionPayload(
         thread_url=thread_url,
@@ -182,18 +189,24 @@ def _thread_url(project_id: int, thread_id: int) -> str:
     return (absolute_url(path) or "")[:PERSON_STEP_URL_MAX_CHARS]
 
 
-def get_runner_send_blocker(project: Project) -> str:
+def get_runner_send_blocker(project: Project, runner_id: RunnerId) -> str:
     """Why a help-thread message cannot be sent now ("" when it can).
 
-    The refusals ``send_setup_message`` applies to a help thread, checked
-    without sending and without closing a stale turn.
+    The refusals ``send_setup_message`` applies to a help thread of a run
+    assigned to ``runner_id``, checked without sending, without the runner
+    lock and without closing a stale turn.
     """
     now = timezone.now()
     refusal: MachineSetupError | None
     if live_turn_exists(project.pk, now):
         refusal = SetupTurnActiveError()
     else:
-        refusal = thread_send_refusal(project, now, main_chat=False)
+        refusal = thread_send_refusal(
+            project,
+            load_runner(runner_id),
+            kind=SetupConversationKind.CASE_HELP,
+            main_chat=False,
+        )
     return refusal.message if refusal is not None else ""
 
 
@@ -268,38 +281,49 @@ def _tool_notice(row: SetupMessage) -> str:
 
 def send_from_runner(
     *,
-    project_id: int,
+    runner_id: RunnerId,
     channel_name: str,
-    person_user_id: int | None,
     pivot_id: int,
     help_request_id: int,
     text: str,
 ) -> None:
     """Send a person's discussion turn about a help case from the Test Runner.
 
-    Opens the request's help chat when it has none. Throttled to
-    ``RUNNER_CHAT_LIMIT`` per minute per project. Raises
-    ``MachineSetupError`` (user-safe) for a lost connection, the throttle, a
-    stale card, or any refusal of the send (a turn is live, the machine is
-    not ready, ...).
+    The case must be of a run assigned to the runner. Opens the request's
+    help chat when it has none. Throttled to ``RUNNER_CHAT_LIMIT`` per
+    minute per runner. Raises ``MachineSetupError`` (user-safe) for a lost
+    connection, the throttle, a stale card, an owner who cannot write in the
+    run's project, or any refusal of the send (a turn is live, the machine
+    is not ready, ...).
     """
-    if not owns_project(project_id, channel_name):
+    if not owns_runner(runner_id, channel_name):
         raise MachineSetupError(_NOT_OWNER)
-    _check_chat_throttle(project_id)
+    _check_chat_throttle(runner_id)
     try:
         pivot = find_runner_help_case(
-            project_id=project_id, pivot_id=pivot_id, help_request_id=help_request_id
+            runner_id=runner_id, pivot_id=pivot_id, help_request_id=help_request_id
         )
-        project = Project.objects.get(pk=project_id)
-        actor = PersonStepActor.runner(current_member(project_id, person_user_id))
+    except RunHelpError as exc:
+        raise MachineSetupError(exc.message) from exc
+    project_id = pivot.test_run.project_id
+    actor = _actor(runner_id, project_id)
+    project = Project.objects.get(pk=project_id)
+    try:
         open_help_chat(project=project, pivot=pivot, actor=actor, text=text)
     except RunHelpError as exc:
         raise MachineSetupError(exc.message) from exc
 
 
-def _check_chat_throttle(project_id: int) -> None:
+def _actor(runner_id: RunnerId, project_id: int) -> PersonStepActor:
+    actor = runner_actor(runner_id, project_id)
+    if actor is None:
+        raise MachineSetupError(_NOT_MEMBER)
+    return actor
+
+
+def _check_chat_throttle(runner_id: RunnerId) -> None:
     if not hit_runner_throttle(
-        f"machine_setup:runner-chat:{project_id}",
+        f"machine_setup:runner-chat:runner:{runner_id}",
         limit=RUNNER_CHAT_LIMIT,
         window_seconds=RUNNER_CHAT_WINDOW_SECONDS,
     ):
@@ -308,9 +332,9 @@ def _check_chat_throttle(project_id: int) -> None:
 
 def send_manual_from_runner(
     *,
-    project: Project,
+    runner_id: RunnerId,
     channel_name: str,
-    person_user_id: int | None,
+    project: Project,
     pivot_id: int,
     claim_token: str,
     text: str,
@@ -318,16 +342,18 @@ def send_manual_from_runner(
     """Send a person's discussion turn about the claimed manual case from the
     Test Runner.
 
-    Opens the case's discussion when it has none. Throttled to
-    ``RUNNER_CHAT_LIMIT`` per minute per project (shared with the help
-    discussion). Raises ``MachineSetupError`` (user-safe) for a lost
-    connection, the throttle, a claim token that is not the case's (released,
-    handed in or re-claimed), or any refusal of the send (a turn is live, ...).
+    ``project`` is the project of the Manual run assigned to the runner whose
+    case the window shows. Opens the case's discussion when it has none.
+    Throttled to ``RUNNER_CHAT_LIMIT`` per minute per runner (shared with the
+    help discussion). Raises ``MachineSetupError`` (user-safe) for a lost
+    connection, the throttle, an owner who cannot write in the project, a
+    claim token that is not the case's (released, handed in or re-claimed),
+    or any refusal of the send (a turn is live, ...).
     """
-    if not owns_project(project.pk, channel_name):
+    if not owns_runner(runner_id, channel_name):
         raise MachineSetupError(_NOT_OWNER)
-    _check_chat_throttle(project.pk)
-    actor = PersonStepActor.runner(current_member(project.pk, person_user_id))
+    _check_chat_throttle(runner_id)
+    actor = _actor(runner_id, project.pk)
     # ``open_manual_chat`` checks the claim and its token under the project,
     # run and case locks.
     open_manual_chat(

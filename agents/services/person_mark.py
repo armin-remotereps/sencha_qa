@@ -29,11 +29,13 @@ from agents.types import (
     ScreenshotCallback,
     SubTaskAttempt,
 )
+from runners.types import RunnerId
 
 
 def record_person_mark(
     checkpoint: OrchestratorCheckpoint,
     project_id: int,
+    runner_id: RunnerId,
     *,
     on_log: LogCallback | None,
     on_screenshot: AttemptScreenshotCallback | None,
@@ -63,6 +65,7 @@ def record_person_mark(
     check = record_mark_evidence(
         person,
         project_id,
+        runner_id,
         verdict=verdict,
         config=AgentConfig(
             llm=llm,

@@ -13,6 +13,8 @@
      unanalysed_count  — cases whose preconditions have no analysis yet
      analysis_running  — an analysis holds the project's lock
      action_edit, action_status — values of the hidden "action" field
+     selected_runner — the viewer's Test Runner (?runner=, else their first
+                      connected one) or None; a status set by hand records its host
      project_can_write (context processor) — false hides Analyse and the edit forms {% endcomment %}
 {% block title %}Requirements · Machine readiness · {{ project.name }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
 
@@ -119,6 +121,7 @@
                   <form method="post" action="{% url 'machine_readiness:requirement_update' project_id=project.id requirement_id=requirement.id %}" class="mr-req-form">
                     {% csrf_token %}
                     <input type="hidden" name="action" value="{{ action_status }}">
+                    {% if selected_runner %}<input type="hidden" name="runner" value="{{ selected_runner.pk }}">{% endif %}
                     <input type="hidden" name="page" value="{{ requirements.number }}">
                     {% include "partials/form_field.html" with field=status_form.status %}
                     {% include "partials/form_field.html" with field=status_form.detail %}
@@ -133,7 +136,7 @@
                 <span class="badge {% if requirement.status == 'present' %}badge-passed{% elif requirement.status == 'missing' %}badge-failed{% elif requirement.status == 'mismatch' %}badge-warning{% else %}badge-draft{% endif %}">{{ requirement.get_status_display }}</span>
                 {% if requirement.status_detail %}<div class="small mr-hint">{{ requirement.status_detail }}</div>{% endif %}
                 {% if requirement.checked_at %}
-                  <div class="small muted">{{ requirement.get_status_source_display|default:"Recorded" }}, {{ requirement.checked_at|date:"M j, Y, H:i" }}{% if requirement.checked_host %} on <span class="mr-path">{{ requirement.checked_host }}</span>{% endif %}{% if requirement.checked_by %} · {{ requirement.checked_by.get_full_name|default:requirement.checked_by.email }}{% endif %}</div>
+                  <div class="small muted">{{ requirement.get_status_source_display|default:"Recorded" }}, {{ requirement.checked_at|date:"M j, Y, H:i" }}{% if project_can_write and requirement.checked_host %} on <span class="mr-path">{{ requirement.checked_host }}</span>{% endif %}{% if requirement.checked_by %} · {{ requirement.checked_by.get_full_name|default:requirement.checked_by.email }}{% endif %}</div>
                 {% endif %}
               </td>
             </tr>

@@ -53,7 +53,7 @@ from controller_client.protocol import (
     parse_handshake_capabilities,
     parse_manual_case_progress_payload,
     parse_manual_case_submit_payload,
-    parse_person_email,
+    parse_runner_token,
     parse_update_in_flight_id,
     parse_update_status_payload,
     peek_manual_upload_ids,
@@ -157,7 +157,7 @@ from projects.forms import (
     RunnerPersonStepActionForm,
     form_error_text,
 )
-from projects.models import HelpContinueMode, Project
+from projects.models import HelpContinueMode
 from projects.person_step_services import PersonStepActionResult
 from projects.runner_case_pause_services import pause_from_runner
 from projects.runner_device_status_services import (
@@ -171,13 +171,13 @@ from projects.runner_help_action_services import (
 from projects.runner_manual_services import (
     act_from_runner,
     progress_from_runner,
+    runner_manual_case_project,
     submit_from_runner,
     upload_from_runner,
 )
 from projects.runner_person_step_services import (
     RunnerPersonStepAnswer,
     answer_from_runner,
-    resolve_runner_person,
 )
 from projects.runner_update_progress import (
     record_runner_update_status,
@@ -188,7 +188,12 @@ from projects.runner_window_state import (
     get_runner_manual_state,
     get_runner_window_state,
 )
-from projects.services import broadcast_agent_status, release_agent_connection
+from runners.channels import SUPERSEDED_EVENT, runner_group
+from runners.exceptions import RunnerNotFoundError
+from runners.models import TestRunner
+from runners.services.runner_connection import release_runner_connection
+from runners.services.runner_status import broadcast_runner_status
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -265,7 +270,9 @@ _DEVICE_SYSTEM_INFO_KEYS: frozenset[str] = frozenset(
 
 class ControllerConsumer(AsyncWebsocketConsumer):
     _authenticated: bool
-    _project: Project | None
+    # The authenticated runner (``runner_{id}`` group member); None before the
+    # handshake.
+    _runner_id: RunnerId | None
     _reply_tracker: ReplyTracker
     _authenticator: ControllerAuthenticator
     _message_builder: ControllerMessageBuilder
@@ -274,9 +281,6 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     # The runner shows the test case steps a step covers
     # (PERSON_STEP_CASE_STEPS_V1).
     _case_steps_enabled: bool
-    # The active member the handshake's ``person_email`` named; re-checked
-    # when an answer arrives. The email itself is never kept.
-    _person_user_id: int | None
     # The window's v2 features (PERSON_CASE_CONTEXT_V1, PERSON_DISCUSSION_V1,
     # CASE_PAUSE_V1), each only together with PERSON_STEPS_V1.
     _case_context_enabled: bool
@@ -313,7 +317,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
     async def connect(self) -> None:
         self._authenticated = False
-        self._project = None
+        self._runner_id = None
         self._person_steps_enabled = False
         self._case_steps_enabled = False
         self._case_context_enabled = False
@@ -323,7 +327,6 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self._manual_pause_enabled = False
         self._capabilities = frozenset()
         self._manual_state_sent = None
-        self._person_user_id = None
         self._person_steps_sent = None
         self._last_push_at = 0.0
         self._trailing_push = None
@@ -358,7 +361,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         if self._trailing_push is not None:
             self._trailing_push.cancel()
             self._trailing_push = None
-        if self._authenticated and self._project is not None:
+        if self._authenticated and self._runner_id is not None:
             await self._cleanup_connection()
 
     async def _handle_unauthenticated_message(self, data: dict[str, Any]) -> None:
@@ -458,19 +461,19 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             await handler(request_id, data)
 
     async def _handle_update_status(self, data: dict[str, Any]) -> None:
-        if self._project is None:
+        if self._runner_id is None:
             return
         try:
             status = parse_update_status_payload(data)
         except ProtocolError as exc:
             logger.warning(
-                "Ignoring malformed update_status for project %s: %s",
-                self._project.id,
+                "Ignoring malformed update_status for runner %s: %s",
+                self._runner_id,
                 exc,
             )
             return
         await sync_to_async(record_runner_update_status)(
-            self._project.id, status.update_id, status.phase, status.detail
+            self._runner_id, status.update_id, status.phase, status.detail
         )
 
     async def _handle_device_status(self, data: dict[str, Any]) -> None:
@@ -481,7 +484,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         the previous message; a real change always goes through (only
         authenticated messages reach here).
         """
-        if self._project is None or not self._mobile_target:
+        runner_id = self._runner_id
+        if runner_id is None or not self._mobile_target:
             return
         now = asyncio.get_running_loop().time()
         recent = (
@@ -494,8 +498,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         except ProtocolError as exc:
             if not recent:
                 logger.warning(
-                    "Ignoring malformed device_status for project %s: %s",
-                    self._project.id,
+                    "Ignoring malformed device_status for runner %s: %s",
+                    runner_id,
                     exc,
                 )
             return
@@ -503,22 +507,20 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         if recent and key == self._last_device_status:
             return
         self._last_device_status = key
-        project_id = self._project.id
         changed = await sync_to_async(record_device_status)(
-            project_id, self.channel_name, status.state, status.detail
+            runner_id, self.channel_name, status.state, status.detail
         )
         if changed:
-            await sync_to_async(broadcast_device_status)(project_id)
+            await sync_to_async(broadcast_device_status)(runner_id)
 
     async def _handle_handshake(self, data: dict[str, Any], request_id: str) -> None:
-        api_key: str = data.get("api_key", "")
         system_info: dict[str, Any] = data.get("system_info", {})
         client_version: str = data.get("client_version", "")
 
         try:
             capabilities = parse_handshake_capabilities(data)
             update_in_flight_id = parse_update_in_flight_id(data)
-            person_email = parse_person_email(data)
+            runner_token = parse_runner_token(data)
         except ProtocolError as exc:
             await self._send_handshake_ack(
                 "error", f"Invalid handshake: {exc}", request_id
@@ -527,10 +529,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             return
 
         result = await self._authenticator.authenticate_handshake(
-            api_key, system_info, client_version, capabilities
+            runner_token, client_version, capabilities
         )
 
-        if not result.success or result.project is None:
+        if not result.success or result.runner is None:
             logger.warning(
                 "Controller handshake rejected (%s, client_version=%s): %s",
                 result.status,
@@ -541,11 +543,6 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             await self.close()
             return
 
-        # Never echoed and never an error: the runner does not learn whether
-        # the email belongs to a member.
-        self._person_user_id = await sync_to_async(resolve_runner_person)(
-            result.project.id, person_email
-        )
         self._person_steps_enabled = (
             ClientCapability.PERSON_STEPS_V1.value in capabilities
         )
@@ -592,7 +589,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
                 if key not in _DEVICE_SYSTEM_INFO_KEYS
             }
         await self._establish_authenticated_connection(
-            result.project,
+            result.runner,
             system_info,
             client_version,
             capabilities,
@@ -602,60 +599,71 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
     async def _establish_authenticated_connection(
         self,
-        project: Project,
+        runner: TestRunner,
         system_info: dict[str, Any],
         client_version: str,
         capabilities: Sequence[str],
         update_in_flight_id: str | None,
         request_id: str,
     ) -> None:
-        self._authenticated = True
-        self._project = project
-
+        runner_id = runner.runner_id
         # Join the group before ownership becomes visible in the DB, so an
         # action dispatched to the new owner always reaches this consumer.
-        group_name = self._controller_group_name(project.id)
+        group_name = runner_group(runner_id)
         await self.channel_layer.group_add(group_name, self.channel_name)
-        previous_channel_name = await self._authenticator.claim_connection(
-            project, self.channel_name, system_info, client_version, capabilities
-        )
+        try:
+            claim = await self._authenticator.claim_connection(
+                runner, self.channel_name, system_info, client_version, capabilities
+            )
+        except RunnerNotFoundError:
+            # Archived between the token check and the claim.
+            await self.channel_layer.group_discard(group_name, self.channel_name)
+            await self._send_handshake_ack(
+                "error", "This Test Runner was removed.", request_id
+            )
+            await self.close()
+            return
+        self._authenticated = True
+        self._runner_id = runner_id
         # A runner started by a self-update reports the target version here;
         # an old runner reconnecting mid-update reports the update it is
         # installing; any other runner ends the in-flight update as lost.
         # Settling before the old runner is superseded keeps the panel from
         # showing a lost update in between.
         await sync_to_async(settle_runner_update_on_handshake)(
-            project.id, client_version, update_in_flight_id
+            runner_id, client_version, update_in_flight_id
         )
-        if previous_channel_name:
+        if claim.superseded_channel:
             # Drop the replaced connection from the group even if its consumer
             # is gone (e.g. Daphne restarted), then ask it to close if alive.
-            await self.channel_layer.group_discard(group_name, previous_channel_name)
+            await self.channel_layer.group_discard(group_name, claim.superseded_channel)
             await self.channel_layer.send(
-                previous_channel_name, {"type": "controller.superseded"}
+                claim.superseded_channel, {"type": SUPERSEDED_EVENT}
             )
-        await self._authenticator.broadcast_status(project)
+        await self._authenticator.broadcast_status(claim.runner)
         await self._send_handshake_ack(
             status="ok",
             message="Connected",
             request_id=request_id,
-            project_id=str(project.id),
-            project_name=project.name,
+            runner_id=str(runner_id),
+            runner_name=claim.runner.name,
         )
         # Covers a reconnect or a runner restart while a step waits.
         await self._push_person_steps()
 
     async def _cleanup_connection(self) -> None:
-        if self._project is None:
+        runner_id = self._runner_id
+        if runner_id is None:
             return
 
         await self.channel_layer.group_discard(
-            self._controller_group_name(self._project.id), self.channel_name
+            runner_group(runner_id), self.channel_name
         )
         # Only the current owner clears the connection; a superseded consumer
-        # releases nothing. A running test waits for the runner to reconnect.
-        released = await sync_to_async(release_agent_connection)(
-            self._project.id, self.channel_name
+        # releases nothing. A running test waits for the runner to reconnect
+        # (``wait_for_controller``), then its runner-lost fault opens Need help.
+        released = await sync_to_async(release_runner_connection)(
+            runner_id, self.channel_name
         )
         # Wake the waiters only after ownership is released, so their
         # wait_for_controller never hands this dead channel back to them.
@@ -663,7 +671,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             ErrorCode.CONTROLLER_DISCONNECTED, "Test Runner connection lost"
         )
         if released is not None:
-            await sync_to_async(broadcast_agent_status)(released)
+            await sync_to_async(broadcast_runner_status)(released)
 
     async def controller_superseded(self, event: dict[str, Any]) -> None:
         await self.close(code=int(CloseCode.SUPERSEDED))
@@ -704,18 +712,19 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         with MANUAL_RUN_V1. ``force`` resends an unchanged snapshot (after a
         refused answer the window must re-sync).
         """
-        if not self._person_steps_enabled or self._project is None:
+        runner_id = self._runner_id
+        if not self._person_steps_enabled or runner_id is None:
             return
         async with self._push_lock:
-            await self._push_snapshot(self._project.id, force=force)
+            await self._push_snapshot(runner_id, force=force)
             if self._manual_enabled:
-                await self._send_manual_state(self._project, force=force)
+                await self._send_manual_state(runner_id, force=force)
 
-    async def _push_snapshot(self, project_id: int, *, force: bool) -> None:
+    async def _push_snapshot(self, runner_id: RunnerId, *, force: bool) -> None:
         self._last_push_at = asyncio.get_running_loop().time()
         try:
             state = await sync_to_async(get_runner_window_state)(
-                project_id,
+                runner_id,
                 RunnerWindowFeatures(
                     case_steps=self._case_steps_enabled,
                     case_context=self._case_context_enabled,
@@ -724,7 +733,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
                 ),
             )
         except Exception:
-            logger.exception("Reading person steps failed for project %s", project_id)
+            logger.exception("Reading person steps failed for runner %s", runner_id)
             return
         snapshot = (state.steps, state.cases)
         # The first push of a connection always goes out (even empty), so a
@@ -738,12 +747,13 @@ class ControllerConsumer(AsyncWebsocketConsumer):
 
     async def _push_manual_state(self, *, force: bool = False) -> None:
         """Send only the Manual run snapshot (after a manual message)."""
-        if not self._manual_enabled or self._project is None:
+        runner_id = self._runner_id
+        if not self._manual_enabled or runner_id is None:
             return
         async with self._push_lock:
-            await self._send_manual_state(self._project, force=force)
+            await self._send_manual_state(runner_id, force=force)
 
-    async def _send_manual_state(self, project: Project, *, force: bool) -> None:
+    async def _send_manual_state(self, runner_id: RunnerId, *, force: bool) -> None:
         """Send ``manual_run_state`` to a MANUAL_RUN_V1 runner when it changed.
 
         The first send of a connection always goes out (even empty), so a
@@ -751,10 +761,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         """
         try:
             state = await database_sync_to_async(get_runner_manual_state)(
-                project, self._capabilities
+                runner_id, self._capabilities
             )
         except Exception:
-            logger.exception("Reading the manual run failed for project %s", project.id)
+            logger.exception("Reading the manual run failed for runner %s", runner_id)
             return
         if not force and state == self._manual_state_sent:
             return
@@ -774,7 +784,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     async def _pause_case(
         self, data: dict[str, Any], raw_length: int
     ) -> CasePauseActionResultPayload:
-        if not self._pause_enabled or self._project is None:
+        runner_id = self._runner_id
+        if not self._pause_enabled or runner_id is None:
             return _pause_refused(_CASE_ACTION_UNSUPPORTED)
         if raw_length > PERSON_CASE_ACTION_MAX_BYTES:
             return _pause_refused(_CASE_ACTION_TOO_LARGE)
@@ -786,16 +797,15 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         message: str = form.cleaned_data["message"]
         try:
             outcome = await sync_to_async(pause_from_runner)(
-                project_id=self._project.id,
+                runner_id=runner_id,
                 channel_name=self.channel_name,
-                person_user_id=self._person_user_id,
                 pivot_id=form.cleaned_data["pivot_id"],
                 message=message,
             )
         except CasePauseError as exc:
             return _pause_refused(exc.message)
         except Exception:
-            logger.exception("Case pause failed for project %s", self._project.id)
+            logger.exception("Case pause failed for runner %s", runner_id)
             return _pause_refused(_CASE_ACTION_FAILED)
         text = _PAUSE_DONE[outcome]
         if outcome == CasePauseOutcome.ALREADY_REQUESTED and message:
@@ -808,21 +818,22 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self, msg_type: str, data: dict[str, Any], raw_length: int
     ) -> None:
         request_id = _echoed_request_id(data)
-        if not self._discussion_enabled or self._project is None:
+        runner_id = self._runner_id
+        if not self._discussion_enabled or runner_id is None:
             result = _case_refused(_CASE_ACTION_UNSUPPORTED)
         elif raw_length > PERSON_CASE_ACTION_MAX_BYTES:
             result = _case_refused(_CASE_ACTION_TOO_LARGE)
         elif msg_type == MessageType.PERSON_CHAT_SEND:
-            result = await self._send_chat(self._project.id, data)
+            result = await self._send_chat(runner_id, data)
         else:
-            result = await self._resolve_help(self._project.id, data)
+            result = await self._resolve_help(runner_id, data)
         await self.send(
             text_data=serialize_person_case_action_result(result, request_id)
         )
         await self._push_person_steps(force=True)
 
     async def _send_chat(
-        self, project_id: int, data: dict[str, Any]
+        self, runner_id: RunnerId, data: dict[str, Any]
     ) -> PersonCaseActionResultPayload:
         form = RunnerChatSendForm(
             {field: data.get(field) for field in RunnerChatSendForm.base_fields}
@@ -831,9 +842,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             return _case_refused(form_error_text(form))
         try:
             await sync_to_async(send_from_runner)(
-                project_id=project_id,
+                runner_id=runner_id,
                 channel_name=self.channel_name,
-                person_user_id=self._person_user_id,
                 pivot_id=form.cleaned_data["pivot_id"],
                 help_request_id=form.cleaned_data["help_request_id"],
                 text=form.cleaned_data["text"],
@@ -841,12 +851,12 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         except MachineSetupError as exc:
             return _case_refused(exc.message)
         except Exception:
-            logger.exception("Runner chat send failed for project %s", project_id)
+            logger.exception("Runner chat send failed for runner %s", runner_id)
             return _case_refused(_CASE_ACTION_FAILED)
         return PersonCaseActionResultPayload(ok=True, message=_CHAT_SENT)
 
     async def _resolve_help(
-        self, project_id: int, data: dict[str, Any]
+        self, runner_id: RunnerId, data: dict[str, Any]
     ) -> PersonCaseActionResultPayload:
         form = RunnerHelpActionForm(
             {field: data.get(field) for field in RunnerHelpActionForm.base_fields}
@@ -866,15 +876,14 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         )
         try:
             result = await sync_to_async(resolve_help_from_runner)(
-                project_id=project_id,
+                runner_id=runner_id,
                 channel_name=self.channel_name,
-                person_user_id=self._person_user_id,
                 action=action,
             )
         except RunHelpError as exc:
             return _case_refused(exc.message)
         except Exception:
-            logger.exception("Runner help action failed for project %s", project_id)
+            logger.exception("Runner help action failed for runner %s", runner_id)
             return _case_refused(_CASE_ACTION_FAILED)
         return PersonCaseActionResultPayload(
             ok=True,
@@ -895,7 +904,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     async def _answer_person_step(
         self, data: dict[str, Any], raw_length: int
     ) -> PersonStepActionResultPayload:
-        if not self._person_steps_enabled or self._project is None:
+        runner_id = self._runner_id
+        if not self._person_steps_enabled or runner_id is None:
             return _refused(_PERSON_STEPS_UNSUPPORTED)
         if raw_length > PERSON_STEP_ACTION_MAX_BYTES:
             return _refused(_PERSON_STEP_TOO_LARGE)
@@ -914,17 +924,14 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         )
         try:
             outcome = await sync_to_async(answer_from_runner)(
-                project_id=self._project.id,
+                runner_id=runner_id,
                 channel_name=self.channel_name,
-                person_user_id=self._person_user_id,
                 action=answer,
             )
         except PersonStepError as exc:
             return _refused(exc.message)
         except Exception:
-            logger.exception(
-                "Person step answer failed for project %s", self._project.id
-            )
+            logger.exception("Person step answer failed for runner %s", runner_id)
             return _refused(_PERSON_STEP_FAILED)
         return _answered(answer.action, outcome)
 
@@ -943,7 +950,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     async def _act_on_manual_case(
         self, data: dict[str, Any], raw_length: int
     ) -> ManualCaseActionResultPayload:
-        if not self._manual_enabled or self._project is None:
+        runner_id = self._runner_id
+        if not self._manual_enabled or runner_id is None:
             return _manual_action_refused(_MANUAL_UNSUPPORTED)
         if raw_length > MANUAL_CASE_ACTION_MAX_BYTES:
             return _manual_action_refused(_MANUAL_TOO_LARGE)
@@ -957,9 +965,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
             return _manual_action_refused(_MANUAL_PAUSE_UNSUPPORTED)
         try:
             message = await database_sync_to_async(act_from_runner)(
-                project=self._project,
+                runner_id=runner_id,
                 channel_name=self.channel_name,
-                person_user_id=self._person_user_id,
                 action=action,
                 pivot_id=form.cleaned_data["pivot_id"],
                 claim_token=form.cleaned_data["claim_token"],
@@ -967,9 +974,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         except ManualRunError as exc:
             return _manual_action_refused(exc.message)
         except Exception:
-            logger.exception(
-                "Manual case action failed for project %s", self._project.id
-            )
+            logger.exception("Manual case action failed for runner %s", runner_id)
             return _manual_action_refused(_MANUAL_ACTION_FAILED)
         return ManualCaseActionResultPayload(ok=True, message=message)
 
@@ -977,33 +982,30 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         self, data: dict[str, Any], raw_length: int
     ) -> None:
         """The tester's marks so far (no reply; refusals are only logged)."""
-        if not self._manual_pause_enabled or self._project is None:
+        runner_id = self._runner_id
+        if not self._manual_pause_enabled or runner_id is None:
             return
         if raw_length > MANUAL_CASE_PROGRESS_MAX_BYTES:
-            logger.warning("Manual progress too large for project %s", self._project.id)
+            logger.warning("Manual progress too large for runner %s", runner_id)
             return
         # Nested list: the protocol parser is the form here, as for the hand-in.
         try:
             payload = parse_manual_case_progress_payload(data)
         except ProtocolError as exc:
-            logger.warning(
-                "Manual progress refused for project %s: %s", self._project.id, exc
-            )
+            logger.warning("Manual progress refused for runner %s: %s", runner_id, exc)
             return
         try:
             await database_sync_to_async(progress_from_runner)(
-                project=self._project,
+                runner_id=runner_id,
                 channel_name=self.channel_name,
                 payload=payload,
             )
         except ManualRunError as exc:
             logger.info(
-                "Manual progress refused for project %s: %s",
-                self._project.id,
-                exc.message,
+                "Manual progress refused for runner %s: %s", runner_id, exc.message
             )
         except Exception:
-            logger.exception("Manual progress failed for project %s", self._project.id)
+            logger.exception("Manual progress failed for runner %s", runner_id)
 
     async def _handle_manual_chat_send(
         self, data: dict[str, Any], raw_length: int
@@ -1020,7 +1022,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     async def _send_manual_chat(
         self, data: dict[str, Any], raw_length: int
     ) -> ManualCaseActionResultPayload:
-        if not self._manual_pause_enabled or self._project is None:
+        runner_id = self._runner_id
+        if not self._manual_pause_enabled or runner_id is None:
             return _manual_action_refused(_MANUAL_PAUSE_UNSUPPORTED)
         if raw_length > MANUAL_CHAT_SEND_MAX_BYTES:
             return _manual_action_refused(_MANUAL_TOO_LARGE)
@@ -1029,19 +1032,26 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         )
         if not form.is_valid():
             return _manual_action_refused(form_error_text(form))
+        pivot_id: int = form.cleaned_data["pivot_id"]
+        try:
+            project = await database_sync_to_async(runner_manual_case_project)(
+                runner_id, pivot_id
+            )
+        except ManualRunError as exc:
+            return _manual_action_refused(exc.message)
         try:
             await database_sync_to_async(send_manual_from_runner)(
-                project=self._project,
+                runner_id=runner_id,
                 channel_name=self.channel_name,
-                person_user_id=self._person_user_id,
-                pivot_id=form.cleaned_data["pivot_id"],
+                project=project,
+                pivot_id=pivot_id,
                 claim_token=form.cleaned_data["claim_token"],
                 text=form.cleaned_data["text"],
             )
         except MachineSetupError as exc:
             return _manual_action_refused(exc.message)
         except Exception:
-            logger.exception("Manual chat send failed for project %s", self._project.id)
+            logger.exception("Manual chat send failed for runner %s", runner_id)
             return _manual_action_refused(_MANUAL_ACTION_FAILED)
         return ManualCaseActionResultPayload(ok=True, message=_CHAT_SENT)
 
@@ -1060,7 +1070,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
     async def _submit_manual_case(
         self, data: dict[str, Any], raw_length: int
     ) -> ManualCaseSubmitResultPayload:
-        if not self._manual_enabled or self._project is None:
+        runner_id = self._runner_id
+        if not self._manual_enabled or runner_id is None:
             return _manual_submit_refused(_MANUAL_UNSUPPORTED, "")
         if raw_length > MANUAL_CASE_SUBMIT_MAX_BYTES:
             return _manual_submit_refused(_MANUAL_TOO_LARGE, "")
@@ -1078,9 +1089,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         submission_id = payload.submission_id
         try:
             missing = await database_sync_to_async(submit_from_runner)(
-                project=self._project,
+                runner_id=runner_id,
                 channel_name=self.channel_name,
-                person_user_id=self._person_user_id,
                 payload=payload,
             )
         except ManualSubmissionDroppedError as exc:
@@ -1088,9 +1098,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         except ManualRunError as exc:
             return _manual_submit_refused(exc.message, submission_id)
         except Exception:
-            logger.exception(
-                "Manual case submit failed for project %s", self._project.id
-            )
+            logger.exception("Manual case submit failed for runner %s", runner_id)
             return _manual_submit_refused(_MANUAL_SUBMIT_FAILED, submission_id)
         return ManualCaseSubmitResultPayload(
             ok=True,
@@ -1116,7 +1124,8 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         drop = False
         drop_shot = False
         message = ""
-        if not self._manual_enabled or self._project is None:
+        runner_id = self._runner_id
+        if not self._manual_enabled or runner_id is None:
             message = _MANUAL_UNSUPPORTED
         elif raw_length > MANUAL_SCREENSHOT_UPLOAD_MAX_BYTES:
             message = _MANUAL_TOO_LARGE
@@ -1125,7 +1134,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
                 # Base64, sha256 and Pillow off the shared sync thread.
                 await database_sync_to_async(
                     upload_from_runner, thread_sensitive=False
-                )(project=self._project, channel_name=self.channel_name, data=data)
+                )(runner_id=runner_id, channel_name=self.channel_name, data=data)
                 ok = True
             except ManualSubmissionDroppedError as exc:
                 message = exc.message
@@ -1138,8 +1147,7 @@ class ControllerConsumer(AsyncWebsocketConsumer):
                 message = exc.message
             except Exception:
                 logger.exception(
-                    "Manual screenshot upload failed for project %s",
-                    self._project.id,
+                    "Manual screenshot upload failed for runner %s", runner_id
                 )
                 message = _MANUAL_UPLOAD_FAILED
         await self.send(
@@ -1171,10 +1179,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         cap = _RESULT_MAX_BYTES[msg_type]
         if raw_length > cap:
             logger.warning(
-                "Refusing oversized %s (%d bytes) for project %s",
+                "Refusing oversized %s (%d bytes) for runner %s",
                 msg_type,
                 raw_length,
-                self._project.id if self._project is not None else None,
+                self._runner_id,
             )
             await self._reply_tracker.send_error(
                 request_id,
@@ -1197,10 +1205,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         """
         if raw_length > INTERACTIVE_SESSIONS_RESULT_MAX_BYTES:
             logger.warning(
-                "Refusing oversized %s (%d bytes) for project %s",
+                "Refusing oversized %s (%d bytes) for runner %s",
                 MessageType.INTERACTIVE_SESSIONS,
                 raw_length,
-                self._project.id if self._project is not None else None,
+                self._runner_id,
             )
             await self._reply_tracker.send_error(
                 request_id,
@@ -1225,10 +1233,10 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         """
         if raw_length > WEB_BROWSER_RESULT_MAX_BYTES:
             logger.warning(
-                "Refusing oversized %s (%d bytes) for project %s",
+                "Refusing oversized %s (%d bytes) for runner %s",
                 MessageType.WEB_BROWSER_RESULT,
                 raw_length,
-                self._project.id if self._project is not None else None,
+                self._runner_id,
             )
             await self._reply_tracker.send_error(
                 request_id,
@@ -1471,21 +1479,17 @@ class ControllerConsumer(AsyncWebsocketConsumer):
         status: HandshakeStatus,
         message: str,
         request_id: str = "",
-        project_id: str = "",
-        project_name: str = "",
+        runner_id: str = "",
+        runner_name: str = "",
     ) -> None:
         ack_message = HandshakeMessageBuilder.build_handshake_ack(
-            status, message, request_id, project_id, project_name
+            status, message, request_id, runner_id, runner_name
         )
         await self.send(text_data=ack_message)
 
     async def _send_error(self, message: str, request_id: str = "") -> None:
         error_message = HandshakeMessageBuilder.build_error(message, request_id)
         await self.send(text_data=error_message)
-
-    @staticmethod
-    def _controller_group_name(project_id: int) -> str:
-        return f"controller_{project_id}"
 
 
 def _echoed_request_id(data: dict[str, Any]) -> str:

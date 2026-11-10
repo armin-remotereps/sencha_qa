@@ -27,6 +27,7 @@ from machine_setup.forms import (
     OpenTriageChatForm,
     SetupForceStopForm,
     SetupMessageForm,
+    SetupRunnerSelectForm,
     SetupThreadForm,
 )
 from machine_setup.models import SetupConversation, SetupConversationKind
@@ -74,6 +75,7 @@ from machine_setup.services.run_proposal_decision import (
     create_proposed_runs,
     discard_run_proposal,
 )
+from machine_setup.services.select_chat_runner import select_chat_runner
 from machine_setup.services.send_message import send_setup_message
 from machine_setup.services.stop_turn import request_stop
 from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE
@@ -90,6 +92,8 @@ from projects.forms import CaseHelpResolutionForm, RunHelpModeForm, form_error_t
 from projects.models import Project
 from projects.person_step_actor import PersonStepActor
 from projects.project_access import get_request_project_access
+from projects.runner_choices import runner_choices
+from runners.types import RunnerId
 
 
 @project_membership_required
@@ -219,6 +223,28 @@ def _render_chat(
             "manual_thread": page.manual_thread,
             # Case analysis threads: the run and report header.
             "triage_thread": page.triage_thread,
+            # The thread's Test Runner (header badge), and in the main chat
+            # the picker of the member's own runners.
+            "thread_runner": page.runner,
+            # Help Continue: the viewer's own runners to continue on.
+            "help_runner_choices": (
+                runner_choices(request.user, project)
+                if help_panel is not None and can_write
+                else []
+            ),
+            "runner_state": page.machine_state.value,
+            "runner_select_form": (
+                SetupRunnerSelectForm(
+                    runners=_runner_choices(request, project),
+                    initial={
+                        "runner": (
+                            page.runner.runner_id if page.runner is not None else ""
+                        )
+                    },
+                )
+                if can_write and page.kind == SetupConversationKind.CHAT
+                else None
+            ),
             "active_tab": "machine_setup",
             "active_nav": "projects",
         },
@@ -536,6 +562,37 @@ def action_discard(
     except MachineSetupError as exc:
         messages.error(request, exc.message)
     return redirect("machine_setup:chat", project_id=project.id)
+
+
+@project_membership_required
+@require_POST
+def setup_runner_select(
+    request: AuthenticatedRequest, project: Project
+) -> HttpResponse:
+    """Pick (or clear) the Test Runner the main chat drives."""
+    form = SetupRunnerSelectForm(
+        request.POST, runners=_runner_choices(request, project)
+    )
+    if not form.is_valid():
+        messages.error(request, form_error_text(form))
+        return _back_to_chat(project, None)
+    runner_pk: int | None = form.cleaned_data["runner"]
+    try:
+        select_chat_runner(
+            project=project,
+            actor=request.user,
+            runner_id=RunnerId(runner_pk) if runner_pk is not None else None,
+        )
+    except MachineSetupError as exc:
+        messages.error(request, exc.message)
+    return _back_to_chat(project, None)
+
+
+def _runner_choices(
+    request: AuthenticatedRequest, project: Project
+) -> list[tuple[int, str]]:
+    """The member's own runners usable in the project (one or two queries)."""
+    return runner_choices(request.user, project)
 
 
 @project_membership_required

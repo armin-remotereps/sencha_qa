@@ -3,7 +3,7 @@ browse_* tools; docs/plan/feat-mcp-browser-toolset.md, MCP surface ›
 machine_call).
 
 Modelled on ``run_agent_tool`` (left as it is): one of the process's
-round-trip slots (``machine_round_trip``), the project's machine lock
+round-trip slots (``machine_round_trip``), the test machine's lock
 (``machine_lock``) for ``lock_seconds``, never a wait for a runner reconnect
 (``no_reconnect_wait``) and a hard deadline on every reply wait and AI
 request inside (``call_deadline``), so the call ends before its lock
@@ -27,12 +27,13 @@ from mcp_gateway.services.machine_errors import (
 from mcp_gateway.services.machine_round_trip import machine_lock, machine_round_trip
 from projects.call_deadline import call_deadline
 from projects.controller_reconnect_services import no_reconnect_wait
+from runners.types import RunnerId
 
 _T = TypeVar("_T")
 
 
 def machine_call(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     deadline_seconds: int,
     lock_seconds: int,
@@ -46,7 +47,7 @@ def machine_call(
     try:
         with (
             machine_round_trip(busy=busy),
-            machine_lock(project_id, lock_seconds, busy=busy),
+            machine_lock(runner_id, lock_seconds, busy=busy),
             no_reconnect_wait(),
             call_deadline(deadline_seconds),
         ):

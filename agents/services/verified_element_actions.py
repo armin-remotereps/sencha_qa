@@ -23,6 +23,7 @@ from agents.types import (
 )
 from projects.controller_outage_clock import agent_monotonic
 from projects.services import controller_screenshot
+from runners.types import RunnerId
 
 MAX_VERIFY_ATTEMPTS: Final = 10
 # Rejected candidates on one screen parse before the target is reported as not
@@ -129,7 +130,7 @@ def _raise_if_cancelled(cancellation_check: CancellationCheck | None) -> None:
 
 
 def resolve_verified_element(
-    project_id: int,
+    runner_id: RunnerId,
     description: str,
     vision_config: LLMConfig,
     budget: VerificationBudget,
@@ -143,7 +144,7 @@ def resolve_verified_element(
     """
     budget.raise_if_cancelled()
     parse_result = parse_screen(
-        project_id,
+        runner_id,
         on_screenshot=on_screenshot,
         cancellation_check=budget.cancellation_check,
     )
@@ -182,13 +183,13 @@ def _build_exclusion_check(
     return lambda el: el.index in rejected_indices or budget.is_rejected(el)
 
 
-def take_before_screenshot(project_id: int) -> str:
+def take_before_screenshot(runner_id: RunnerId) -> str:
     """Capture the pre-action screenshot without pulling projects.services into tools."""
-    return controller_screenshot(project_id)["image_base64"]
+    return controller_screenshot(runner_id)["image_base64"]
 
 
 def confirm_action(
-    project_id: int,
+    runner_id: RunnerId,
     vision_config: LLMConfig,
     budget: VerificationBudget,
     *,
@@ -201,7 +202,7 @@ def confirm_action(
 ) -> OutcomeVerdict:
     """Settle, screenshot the result, and verify the action against the expected outcome."""
     time.sleep(POST_ACTION_SETTLE_SECONDS)
-    after_image_base64 = controller_screenshot(project_id)["image_base64"]
+    after_image_base64 = controller_screenshot(runner_id)["image_base64"]
     if on_screenshot is not None:
         on_screenshot(after_image_base64, tool_name)
 

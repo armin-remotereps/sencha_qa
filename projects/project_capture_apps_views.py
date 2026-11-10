@@ -10,7 +10,12 @@ from accounts.types import AuthenticatedRequest
 from projects.capture_phone_apps_services import load_phone_apps
 from projects.decorators import project_membership_required
 from projects.exceptions import CaptureAppsError, CapturePhoneAppsError
-from projects.forms import ProjectCaptureAppsAddForm, ProjectCaptureAppsForm
+from projects.forms import (
+    CapturePhoneAppsLoadForm,
+    ProjectCaptureAppsAddForm,
+    ProjectCaptureAppsForm,
+    form_error_text,
+)
 from projects.models import Project
 from projects.project_capture_apps_services import (
     add_capture_allowed_processes,
@@ -44,9 +49,17 @@ def settings_capture_phone_apps(
     request: AuthenticatedRequest, project: Project
 ) -> HttpResponse:
     """Settings "Screenshot capture" card: load the phone's installed apps
-    into the picker (a synchronous, bounded round trip to the Test Runner)."""
+    into the picker from the phone runner the person picked (a synchronous,
+    bounded round trip to that Test Runner)."""
+    form = CapturePhoneAppsLoadForm(request.POST)
+    if not form.is_valid():
+        return render_project_settings(
+            request, project, phone_apps_error=form_error_text(form)
+        )
     try:
-        phone_apps = load_phone_apps(project)
+        phone_apps = load_phone_apps(
+            project, form.cleaned_data["runner"], actor=request.user
+        )
     except CapturePhoneAppsError as exc:
         return render_project_settings(request, project, phone_apps_error=str(exc))
     return render_project_settings(request, project, phone_apps=phone_apps)

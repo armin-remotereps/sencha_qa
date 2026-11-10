@@ -15,24 +15,20 @@ from decouple import config as decouple_config
 from websockets.exceptions import InvalidProxy
 from websockets.uri import parse_proxy
 
-from controller_client.exceptions import ProtocolError
 from controller_client.manual_spool import DEFAULT_SPOOL_MAX_MB, MIN_SPOOL_MAX_MB
 from controller_client.mobile_settings import MobileSettings
 from controller_client.person_window_ipc import TEXT_SIZE_DEFAULT, clamp_text_size
-from controller_client.protocol import (
-    MOBILE_TARGETS,
-    RunnerTarget,
-    normalize_person_email,
-)
+from controller_client.protocol import MOBILE_TARGETS, RunnerTarget
 
 # Folder the server's cleanup_environment action empties between test cases.
 # Overridable so the controller can live in ~/Downloads without wiping itself.
 DEFAULT_CLEANUP_DIR: Final[str] = "~/Downloads"
-# The Connection key's variable in controller_client/.env.
-API_KEY_ENV_NAME: Final[str] = "CONTROLLER_API_KEY"
-# The person at this machine (their Punk Hazard email), sent in the handshake
-# so steps answered in the Test Runner window are recorded as theirs.
-PERSON_EMAIL_ENV_NAME: Final[str] = "CONTROLLER_PERSON_EMAIL"
+# This Test Runner's token in controller_client/.env: it authenticates the
+# runner (and so its owner) at the handshake. A secret: never logged.
+RUNNER_TOKEN_ENV_NAME: Final[str] = "CONTROLLER_RUNNER_TOKEN"
+# The runner's name as the server knew it when the bundle was built; display
+# only (the handshake ack carries the current name).
+RUNNER_NAME_ENV_NAME: Final[str] = "CONTROLLER_RUNNER_NAME"
 # The person window's base text size in points (10-28); A-/A+ in the window
 # change it for the session only.
 PERSON_WINDOW_TEXT_SIZE_ENV_NAME: Final[str] = "CONTROLLER_PERSON_WINDOW_TEXT_SIZE"
@@ -65,9 +61,9 @@ _LOG_FILE_MAX_BYTES: Final[int] = 5 * 1024 * 1024
 _LOG_FILE_BACKUPS: Final[int] = 3
 _LOG_FORMAT: Final[str] = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 # Flags a self-update passes on to the new runner, with their argparse dest.
-# Not --api-key or --person-email: a command line is visible to every local
-# user, so the update writes values given that way into the new install's .env
-# instead.
+# Not --runner-token: a command line is visible to every local
+# user, so the update writes a token given that way into the new install's
+# .env instead.
 _CARRIED_FLAGS: Final[tuple[tuple[str, str], ...]] = (
     ("--host", "host"),
     ("--port", "port"),
@@ -87,7 +83,8 @@ _CARRIED_SWITCHES: Final[tuple[tuple[str, str], ...]] = (
 class ClientConfig:
     host: str
     port: int
-    api_key: str
+    # Kept out of repr: a secret.
+    runner_token: str = field(repr=False)
     reconnect_interval: int
     # Upper bound of the exponential reconnect backoff, in seconds.
     reconnect_max_interval: int
@@ -98,14 +95,9 @@ class ClientConfig:
     # Whether the person step window may be used (CONTROLLER_PERSON_WINDOW,
     # --no-person-window); it is still off when Tk does not work.
     person_window: bool = True
-    # Normalized CONTROLLER_PERSON_EMAIL / --person-email; None when unset.
-    person_email: str | None = None
-    # Why the .env value of CONTROLLER_PERSON_EMAIL was ignored (logged once
-    # logging is set up); None when it was valid or unset.
-    person_email_problem: str | None = None
-    # Whether person_email came from --person-email (a self-update then writes
-    # it into the new install's .env).
-    person_email_from_cli: bool = False
+    # CONTROLLER_RUNNER_NAME (display only, e.g. the window title until the
+    # handshake ack names the runner); blank when unset.
+    runner_name: str = ""
     # CONTROLLER_PERSON_WINDOW_TEXT_SIZE, clamped to the window's range.
     person_window_text_size: int = TEXT_SIZE_DEFAULT
     # CONTROLLER_MANUAL_SHORTCUTS: the Manual run Pass/Fail key combinations;
@@ -119,9 +111,9 @@ class ClientConfig:
     # The CLI overrides this process got, re-passed to the runner a self-update
     # starts (update flags excluded).
     cli_overrides: tuple[str, ...] = ()
-    # Whether api_key came from --api-key (a self-update then writes it into
-    # the new install's .env).
-    api_key_from_cli: bool = False
+    # Whether runner_token came from --runner-token (a self-update then
+    # writes it into the new install's .env).
+    runner_token_from_cli: bool = False
     # Set only on a runner started by a self-update.
     update_id: str | None = None
     replaces_pid: int | None = None
@@ -168,25 +160,6 @@ def _env_int(key: str, default: int) -> int:
 
 def _env_bool(key: str, default: bool) -> bool:
     return bool(decouple_config(key, default=default, cast=bool))
-
-
-def _person_email_arg(value: str) -> str:
-    try:
-        email = normalize_person_email(value)
-    except ProtocolError as e:
-        raise argparse.ArgumentTypeError(str(e)) from e
-    if email is None:
-        raise argparse.ArgumentTypeError("expected an email address")
-    return email
-
-
-def _env_person_email() -> tuple[str | None, str | None]:
-    """CONTROLLER_PERSON_EMAIL from .env/the environment, and why it was ignored."""
-    raw = _env_str(PERSON_EMAIL_ENV_NAME, "")
-    try:
-        return normalize_person_email(raw), None
-    except ProtocolError as e:
-        return None, f"{PERSON_EMAIL_ENV_NAME} is ignored: {e}"
 
 
 def _env_proxy() -> tuple[str | None, str | None]:
@@ -285,7 +258,12 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
     parser = argparse.ArgumentParser(description="Controller Client")
     parser.add_argument("--host", type=str, default=None)
     parser.add_argument("--port", type=int, default=None)
-    parser.add_argument("--api-key", type=str, default=None)
+    parser.add_argument(
+        "--runner-token",
+        type=str,
+        default=None,
+        help="this Test Runner's token (prefer CONTROLLER_RUNNER_TOKEN in .env)",
+    )
     parser.add_argument("--reconnect-interval", type=int, default=None)
     parser.add_argument("--reconnect-max-interval", type=int, default=None)
     parser.add_argument("--max-reconnect-attempts", type=int, default=None)
@@ -297,12 +275,6 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
         action="store_true",
         help="never show the window for Human in the loop steps",
     )
-    parser.add_argument(
-        "--person-email",
-        type=_person_email_arg,
-        default=None,
-        help="your Punk Hazard email, recorded on steps answered in the window",
-    )
     # Passed by the old runner to the runner a self-update starts.
     parser.add_argument("--update-id", type=_uuid_arg, default=None)
     parser.add_argument("--replaces-pid", type=int, default=None)
@@ -310,10 +282,7 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
     parser.add_argument("--remove-old-install", type=str, default=None)
 
     args = parser.parse_args(argv)
-    if args.person_email is not None:
-        person_email, person_email_problem = args.person_email, None
-    else:
-        person_email, person_email_problem = _env_person_email()
+    cli_token = (args.runner_token or "").strip()
     proxy, proxy_problem = _env_proxy()
     if proxy_problem is not None:
         parser.error(proxy_problem)
@@ -324,7 +293,8 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
     return ClientConfig(
         host=args.host or _env_str("CONTROLLER_HOST", "localhost"),
         port=args.port or _env_int("CONTROLLER_PORT", 8000),
-        api_key=args.api_key or _env_str(API_KEY_ENV_NAME, ""),
+        runner_token=cli_token or _env_str(RUNNER_TOKEN_ENV_NAME, "").strip(),
+        runner_name=_env_str(RUNNER_NAME_ENV_NAME, "").strip(),
         reconnect_interval=(
             args.reconnect_interval
             if args.reconnect_interval is not None
@@ -346,9 +316,6 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
         person_window=(
             not args.no_person_window and _env_bool("CONTROLLER_PERSON_WINDOW", True)
         ),
-        person_email=person_email,
-        person_email_problem=person_email_problem,
-        person_email_from_cli=args.person_email is not None,
         person_window_text_size=clamp_text_size(
             _env_int(PERSON_WINDOW_TEXT_SIZE_ENV_NAME, TEXT_SIZE_DEFAULT)
         ),
@@ -359,7 +326,7 @@ def load_config(argv: list[str] | None = None) -> ClientConfig:
         ),
         web_driver_download=web_driver_download_enabled(),
         cli_overrides=_carried_overrides(args),
-        api_key_from_cli=bool(args.api_key),
+        runner_token_from_cli=bool(cli_token),
         update_id=args.update_id,
         replaces_pid=args.replaces_pid,
         replaces_pid_created=args.replaces_pid_created,

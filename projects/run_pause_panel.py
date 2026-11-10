@@ -40,7 +40,9 @@ def get_run_pause_panels(test_run: TestRun, project: Project) -> RunPausePanels:
     help panel as before, sharing the same gates.
     """
     paused = test_run.status == TestRunStatus.PAUSED
-    blockers = list_wake_blockers(test_run, project) if paused else None
+    blockers = (
+        list_wake_blockers(test_run, project, include_runner=False) if paused else None
+    )
     person_step_panel = get_person_step_panel(test_run, project, blockers=blockers)
     holds_run = person_step_panel is not None and person_step_panel.holds_run
     help_panel = (

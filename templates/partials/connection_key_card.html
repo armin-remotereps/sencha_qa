@@ -1,4 +1,8 @@
-{% comment %} Connection key card (Environment page).
+{% comment %} Connection key (MCP) card ("Test Runners" tab of a project).
+
+   The key is the project's credential for MCP clients only (Bearer token of
+   the /mcp server). Test Runners no longer use it: each runner has its own
+   token from /runners/.
 
    Context contract:
      project — the current Project (key value and regenerate-key form action)
@@ -11,14 +15,14 @@
 {% if project_can_write %}
 <div class="card" x-data="{ revealed: false }">
   <div class="card-header">
-    <h2>Connection key</h2>
+    <h2>Connection key (MCP)</h2>
   </div>
   <p class="muted">
-    Identifies this project to the Test Runner. A Test Runner already installed for
-    another project can be switched to this one by changing one line in its
-    <code>.env</code> file.
+    For MCP clients only: an MCP client sends it as <code>Authorization: Bearer &lt;key&gt;</code>
+    to perform this project's Manual runs. Test Runners do not use it; each has its own token
+    from <a href="{% url 'runners:list' %}">Your Test Runners</a>.
   </p>
-  <pre class="code-block">CONTROLLER_API_KEY=<span x-show="!revealed">••••••••</span><span x-show="revealed" x-cloak>{{ project.api_key }}</span></pre>
+  <pre class="code-block"><span x-show="!revealed">••••••••</span><span x-show="revealed" x-cloak>{{ project.api_key }}</span></pre>
   <div class="actions">
     <button
       class="icon-btn"
@@ -30,42 +34,19 @@
       <span aria-hidden="true">👁</span>
     </button>
     <span x-data="clipboard()">
-      <button class="btn btn-sm btn-secondary" type="button" @click="copy('CONTROLLER_API_KEY={{ project.api_key|escapejs }}')">
-        <span x-show="!copied">Copy .env line</span>
-        <span x-show="copied" x-cloak>Copied!</span>
-      </button>
-    </span>
-    <span x-data="clipboard()">
       <button class="btn btn-sm btn-secondary" type="button" @click="copy('{{ project.api_key|escapejs }}')">
-        <span x-show="!copied">Copy key only</span>
+        <span x-show="!copied">Copy key</span>
         <span x-show="copied" x-cloak>Copied!</span>
       </button>
     </span>
     <button class="btn btn-sm btn-secondary" type="button" @click="$dispatch('open-regenerate-key')">Regenerate</button>
   </div>
-
-  <h3>Switch an installed Test Runner to this project</h3>
-  <ol class="setup-steps">
-    <li>
-      <div class="step-title">On the test machine, open <code>controller_client/.env</code>.</div>
-    </li>
-    <li>
-      <div class="step-title">Replace the <code>CONTROLLER_API_KEY=</code> line with the line above.</div>
-      <p class="muted small">Leave the other lines as they are.</p>
-    </li>
-    <li>
-      <div class="step-title">Restart the Test Runner</div>
-      <p class="muted small">Stop it (Ctrl+C in its window) and start it again with the same command as before. It reads <code>.env</code> only at start-up, and an <code>--api-key</code> option or a <code>CONTROLLER_API_KEY</code> environment variable on the test machine takes precedence over it.</p>
-    </li>
-  </ol>
   <p class="hint">
-    A Test Runner connects to one project at a time; the project it leaves shows
-    Not connected. Regenerating the key invalidates the old one, so every Test Runner
-    using it has to be updated with the new line.
+    Regenerating the key invalidates the old one: every MCP client using it needs the new key, and the
+    ChatGPT and Claude connections of this project are disconnected. Test Runners are not affected.
   </p>
-  <p class="hint">Regenerating the key also disconnects the ChatGPT and Claude connections of this project.</p>
 </div>
 
 {% url 'projects:regenerate_api_key' project.id as regenerate_key_url %}
-{% include "partials/confirm_dialog.html" with dialog_id="regenerate-key" title="Regenerate the connection key?" body="The current key stops working for new connections. Any Test Runner still using it needs its CONTROLLER_API_KEY line updated and a restart." confirm_label="Regenerate" confirm_class="btn-danger-solid" action_url=regenerate_key_url %}
+{% include "partials/confirm_dialog.html" with dialog_id="regenerate-key" title="Regenerate the connection key?" body="This affects MCP clients only. The current key stops working at once: MCP clients using it need the new key, and the ChatGPT and Claude connections of this project are disconnected. Test Runners keep working." confirm_label="Regenerate" confirm_class="btn-danger-solid" action_url=regenerate_key_url %}
 {% endif %}

@@ -98,6 +98,7 @@ from machine_setup.services.result_chat_tools import (
     build_result_chat_handlers,
     result_chat_tool_definitions,
 )
+from machine_setup.services.thread_runner import turn_runner_refusal
 from machine_setup.services.triage_chat_tools import (
     TriageToolError,
     build_triage_chat_handlers,
@@ -134,8 +135,9 @@ from projects.models import (
     ContextWriteSource,
     Project,
 )
-from projects.run_machine_use import manual_tester_on_machine
-from projects.services import MachineState, connected_machine_state
+from projects.runner_use import manual_tester_on_runner
+from runners.machine_state import MachineState, engine_machine_state
+from runners.types import RunnerId
 from visual_engine.services.pool_status import get_visual_engine_status
 
 # Called after a successful context write with the new revision and summary.
@@ -496,10 +498,17 @@ def build_setup_dispatcher(
     on_action_proposed: ActionProposedCallback,
     intake_pending: bool,
     should_stop: Callable[[], bool],
+    runner_id: RunnerId | None,
+    conversation_kind: str,
     manual_case_id: int | None = None,
     triage_run_id: int | None = None,
 ) -> ToolDispatcher:
     """The main agent's per-turn dispatcher.
+
+    ``runner_id`` is the Test Runner the turn recorded when it was queued
+    (``SetupTurn.runner``); ``run_setup_task`` and ``scan_artifacts`` refuse
+    when it is None ("No Test Runner selected") or the thread's runner
+    changed since (``thread_runner.turn_runner_refusal``, read at call time).
 
     ``author`` is recorded on context writes; ``run_subtask`` runs a validated
     ``run_setup_task`` call. Machine tools are refused. In the main chat the
@@ -667,6 +676,7 @@ def build_setup_dispatcher(
                 author=author,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
+                runner_id=runner_id,
                 on_profile_saved=_profile_saved,
                 on_action_proposed=on_action_proposed,
                 should_stop=should_stop,
@@ -709,10 +719,17 @@ def build_setup_dispatcher(
         else:
             project_data_handlers.update(run_gone_handlers())
 
+    def _runner_gate() -> str | None:
+        # The turn's runner is set and still the thread's (read now).
+        return turn_runner_refusal(conversation_id, conversation_kind, runner_id)
+
     def _main_chat_gate() -> str | None:
         if intake_gate["pending"]:
             return INTAKE_GATE_MESSAGE
-        if not _machine_ready(project_id):
+        refusal = _runner_gate()
+        if refusal is not None:
+            return refusal
+        if runner_id is None or not _machine_ready(runner_id):
             return MACHINE_GATE_MESSAGE
         return None
 
@@ -721,8 +738,20 @@ def build_setup_dispatcher(
         refusal = manual_machine_refusal(manual_case_id)
         if refusal is not None:
             return refusal
-        if not _machine_ready(project_id):
+        refusal = _runner_gate()
+        if refusal is not None:
+            return refusal
+        if runner_id is None or not _machine_ready(runner_id):
             return MACHINE_GATE_MESSAGE
+        return None
+
+    def _case_thread_gate() -> str | None:
+        refusal = _runner_gate()
+        if refusal is not None or runner_id is None:
+            return refusal
+        if manual_tester_on_runner(runner_id):
+            # Approved actions too; no attempt is spent (``run_subtask``).
+            return MANUAL_TESTER_ON_MACHINE
         return None
 
     def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
@@ -736,11 +765,10 @@ def build_setup_dispatcher(
                 return _tool_error(tool_call, NO_MACHINE_MESSAGE)
             if role == ThreadRole.MANUAL_CASE:
                 refusal = _manual_case_gate()
-                if refusal is not None:
-                    return _tool_error(tool_call, refusal)
-            elif manual_tester_on_machine(project_id):
-                # Approved actions too; no attempt is spent (``run_subtask``).
-                return _tool_error(tool_call, MANUAL_TESTER_ON_MACHINE)
+            else:
+                refusal = _case_thread_gate()
+            if refusal is not None:
+                return _tool_error(tool_call, refusal)
             try:
                 request = _parse_setup_task_request(
                     tool_call.arguments, main_chat=main_chat
@@ -788,13 +816,14 @@ def build_setup_dispatcher(
     return _dispatch
 
 
-def build_machine_dispatcher(project_id: int) -> ToolDispatcher:
-    """A setup sub-agent's dispatcher: the tester's machine tools."""
+def build_machine_dispatcher(runner_id: RunnerId) -> ToolDispatcher:
+    """A setup sub-agent's dispatcher: the tester's machine tools on the
+    turn's Test Runner."""
 
     def _dispatch(tool_call: ToolCall, context: ToolContext) -> ToolResult:
         # Without this one indexed query a lost runner surfaces as a tool error
         # (ControllerNotConnectedError) and the agent burns iterations retrying.
-        if connected_owner(project_id) is None:
+        if connected_owner(runner_id) is None:
             raise SetupRunnerLostError("The Test Runner is not connected.")
         try:
             return dispatch_tool_call(tool_call, context)
@@ -831,12 +860,12 @@ def _tool_error(tool_call: ToolCall, content: str) -> ToolResult:
     )
 
 
-def _machine_ready(project_id: int) -> bool:
+def _machine_ready(runner_id: RunnerId) -> bool:
     """The runner connected (owner known) and the visual engine ready; two
     queries, read at call time (the main chat may start offline)."""
-    if connected_owner(project_id) is None:
+    if connected_owner(runner_id) is None:
         return False
-    return connected_machine_state(get_visual_engine_status()) == MachineState.READY
+    return engine_machine_state(get_visual_engine_status()) == MachineState.READY
 
 
 def _parse_setup_task_request(

@@ -24,7 +24,7 @@ claim-end stop (``stop_claim_commands``) ends them when the claim ends.
   leftover cannot hold the test machine's kept-session limit.
 - Each call runs under ``MCP_COMMAND_DEADLINE_SECONDS`` (``call_deadline``:
   every reply wait is cut to it). Each round trip holds a process slot, the
-  project's machine lock (TTL above the deadline) and never waits for a
+  test machine's lock (TTL above the deadline) and never waits for a
   reconnect; the lock is released between polls. A later poll that finds
   the machine busy returns the output so far.
 - Output is kept as a bounded head and tail while it arrives, cleaned
@@ -104,6 +104,7 @@ from projects.services import (
     controller_start_interactive_command,
     controller_terminate_interactive_command,
 )
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -278,7 +279,7 @@ def send_command_input(
                 session,
                 entry.session_id,
                 lambda: controller_send_input(
-                    session.project_id, entry.session_id, request.input_text
+                    session.machine(), entry.session_id, request.input_text
                 ),
             )
         except _SessionTimedOut:
@@ -300,7 +301,7 @@ def stop_command(
                 session,
                 entry.session_id,
                 lambda: controller_terminate_interactive_command(
-                    session.project_id, entry.session_id
+                    session.machine(), entry.session_id
                 ),
             )
         except (_UnknownSession, _SessionTimedOut):
@@ -327,9 +328,10 @@ def list_commands(session: MachineSession, call: McpCall) -> ListCommandsRespons
             commands=[_item(entry, None) for entry in entries],
             note=_NOTE_LIST_UNKNOWN,
         )
+    runner_id = session.machine()
     with call_deadline(MCP_COMMAND_DEADLINE_SECONDS):
         infos = _on_machine(
-            project_id, lambda: controller_list_interactive_sessions(project_id)
+            runner_id, lambda: controller_list_interactive_sessions(runner_id)
         )
     by_id = {info.session_id: info for info in infos}
     items: list[CommandItem] = []
@@ -348,7 +350,7 @@ def _execute_kept(
     session: MachineSession, request: ExecuteCommandRequest
 ) -> CommandResponse:
     """A kept start on a ``KEPT_SESSIONS_V1`` test machine."""
-    project_id = session.project_id
+    runner_id = session.machine()
     effective = _shell_command(session, request)
     _stop_leftovers(session)
     started_at = timezone.now()
@@ -357,9 +359,9 @@ def _execute_kept(
 
     def start() -> CommandOutput:
         return _on_machine(
-            project_id,
+            runner_id,
             lambda: controller_start_kept_command(
-                project_id,
+                runner_id,
                 effective,
                 max_seconds=MCP_DETACHED_MAX_SECONDS,
                 initial_read_ms=(
@@ -405,7 +407,9 @@ def _stop_leftovers(session: MachineSession, *, always: bool = False) -> int:
         ):
             return 0
         with call_deadline(_PRESTART_STOP_SECONDS):
-            return stop_ended_claim_commands(session.project_id, include_orphans=True)
+            return stop_ended_claim_commands(
+                session.project_id, include_orphans=True, runner_id=session.machine()
+            )
     except Exception as exc:
         # Never fails the start; the minute sweep tries again.
         logger.warning(
@@ -424,12 +428,12 @@ def _execute_single(
 ) -> CommandResponse:
     """A start in the single foreground session, as the agent's
     execute_command starts it (same shell preparation)."""
-    project_id = session.project_id
+    runner_id = session.machine()
     effective = _shell_command(session, request)
     started_at = timezone.now()
     result = _on_machine(
-        project_id,
-        lambda: controller_start_interactive_command(project_id, effective),
+        runner_id,
+        lambda: controller_start_interactive_command(runner_id, effective),
     )
     polled = _Polled(cumulative=True)
     polled.add(_from_interactive(result))
@@ -468,20 +472,20 @@ def _command_not_found() -> McpToolError:
 
 
 @contextmanager
-def _machine(project_id: int) -> Iterator[None]:
+def _machine(runner_id: RunnerId) -> Iterator[None]:
     """One command round trip's guards."""
     with (
         machine_round_trip(busy=_busy_error()),
-        machine_lock(project_id, MCP_COMMAND_LOCK_SECONDS, busy=_busy_error()),
+        machine_lock(runner_id, MCP_COMMAND_LOCK_SECONDS, busy=_busy_error()),
         no_reconnect_wait(),
     ):
         yield
 
 
-def _on_machine(project_id: int, action: Callable[[], _T]) -> _T:
+def _on_machine(runner_id: RunnerId, action: Callable[[], _T]) -> _T:
     """Run one round trip under the guards; faults become coded errors."""
     try:
-        with _machine(project_id):
+        with _machine(runner_id):
             return action()
     except McpToolError:
         raise
@@ -492,7 +496,7 @@ def _on_machine(project_id: int, action: Callable[[], _T]) -> _T:
         if mapped is not None:
             raise mapped from exc
         if isinstance(exc, ControllerActionError):
-            _log_refusal(project_id, exc)
+            _log_refusal(runner_id, exc)
             raise McpToolError(_COMMAND_FAILED) from exc
         raise
 
@@ -504,7 +508,7 @@ def _on_session(
     not know (``[command_not_found]``) or ended at its time limit
     (``_SessionTimedOut``) is forgotten."""
     try:
-        with _machine(session.project_id):
+        with _machine(session.machine()):
             return action()
     except McpToolError:
         raise
@@ -521,16 +525,16 @@ def _on_session(
         if is_timed_out_session(text):
             command_registry.forget(session.project_id, session.pivot_id, session_id)
             raise _SessionTimedOut(_NOTE_TIMED_OUT) from exc
-        _log_refusal(session.project_id, exc)
+        _log_refusal(session.machine(), exc)
         raise McpToolError(_COMMAND_FAILED) from exc
 
 
-def _log_refusal(project_id: int, exc: Exception) -> None:
+def _log_refusal(runner_id: RunnerId, exc: Exception) -> None:
     # Runner text can carry paths or command text: server log only, and only
     # its kind.
     logger.warning(
-        "MCP command round trip refused project=%s error=%s",
-        project_id,
+        "MCP command round trip refused runner=%s error=%s",
+        runner_id,
         type(exc).__name__,
     )
 
@@ -541,7 +545,7 @@ def _read_into(session: MachineSession, session_id: str, polled: _Polled) -> Non
         output = _on_session(
             session,
             session_id,
-            lambda: controller_read_command_output(session.project_id, session_id),
+            lambda: controller_read_command_output(session.machine(), session_id),
         )
     except _SessionTimedOut:
         polled.alive = False
@@ -579,6 +583,7 @@ def _register(
     read or stopped."""
     entry = KeptCommand(
         session_id=session_id,
+        runner_id=session.machine(),
         claim_started_at=session.claim_started_at,
         started_at=started_at,
         detached=request.detach,
@@ -588,8 +593,8 @@ def _register(
         command_registry.register(session.project_id, session.pivot_id, entry)
     except CommandRegistryUnavailable as exc:
         try:
-            with _machine(session.project_id):
-                controller_terminate_interactive_command(session.project_id, session_id)
+            with _machine(session.machine()):
+                controller_terminate_interactive_command(session.machine(), session_id)
         except Exception:
             logger.warning(
                 "MCP unregistered command not stopped project=%s", session.project_id
@@ -605,7 +610,8 @@ def _owned(session: MachineSession, session_id: str) -> KeptCommand:
         )
     except CommandRegistryUnavailable as exc:
         raise _busy_error() from exc
-    if entry is None:
+    if entry is None or entry.runner_id != session.machine():
+        # Started on another test machine: not this machine's command.
         raise _command_not_found()
     return entry
 

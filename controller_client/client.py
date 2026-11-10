@@ -538,6 +538,9 @@ class ControllerClient:
         # Whether the current session got an "ok" handshake ack; run() resets
         # the backoff only after such a session.
         self._session_authenticated = False
+        # This runner's name: CONTROLLER_RUNNER_NAME until a handshake ack
+        # names it (display only: logs and the window title).
+        self._runner_name = config.runner_name
         # Person steps (PERSON_STEPS_V1): the window, when enabled and Tk
         # works; None advertises no capability and the server sends nothing.
         self._window = person_window
@@ -732,7 +735,7 @@ class ControllerClient:
             try:
                 await self._perform_handshake(connection)
                 if self._window is not None:
-                    self._window.set_connected(True)
+                    self._window.set_connected(True, runner_name=self._runner_name)
                 await self._after_handshake()
                 await self._message_loop(connection)
             except ConnectionClosed as e:
@@ -793,15 +796,20 @@ class ControllerClient:
                 f"Handshake not accepted ({ack.status}): {ack.message}"
             )
 
+        if ack.runner_name:
+            self._runner_name = ack.runner_name
         logger.info(
-            "Connected to project '%s' (id=%s)", ack.project_name, ack.project_id
+            "Connected as Test Runner '%s' (id=%s)",
+            self._runner_name or "unnamed",
+            ack.runner_id,
         )
         self._session_authenticated = True
 
     async def _send_handshake(self, connection: ClientConnection) -> None:
         system_info = await asyncio.to_thread(gather_system_info)
         payload: dict[str, object] = {
-            "api_key": self._config.api_key,
+            # Never logged: it authenticates this runner.
+            "runner_token": self._config.runner_token,
             "client_version": CLIENT_VERSION,
             "capabilities": [
                 capability.value
@@ -812,10 +820,6 @@ class ControllerClient:
             ],
             "system_info": system_info.to_dict(),
         }
-        if self._config.person_email is not None:
-            # Names the member answering in the window; the server records
-            # them only when the email is an active member of the project.
-            payload["person_email"] = self._config.person_email
         update_id = self._update_id_to_keep()
         if update_id is not None:
             # Reconnected mid-update, or with its final status still unsent:

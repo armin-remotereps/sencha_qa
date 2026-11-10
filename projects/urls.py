@@ -11,7 +11,6 @@ from projects import (
     project_capture_apps_views,
     project_run_mode_views,
     run_case_retest_views,
-    runner_update_views,
     testrail_views,
     views,
 )
@@ -138,21 +137,6 @@ urlpatterns: list[URLPattern] = [
         name="refine_prompt",
     ),
     path(
-        "<int:project_id>/download-client/",
-        views.download_controller_client,
-        name="download_controller_client",
-    ),
-    path(
-        "<int:project_id>/runner-update/",
-        runner_update_views.runner_update,
-        name="runner_update",
-    ),
-    path(
-        "<int:project_id>/force-disconnect/",
-        views.project_force_disconnect,
-        name="force_disconnect",
-    ),
-    path(
         "<int:project_id>/test-cases/",
         views.test_case_list,
         name="test_case_list",
@@ -237,6 +221,16 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-runs/<int:test_run_id>/abort/",
         views.test_run_abort,
         name="test_run_abort",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/runner/",
+        views.test_run_runner,
+        name="test_run_runner",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/runner/release/",
+        views.test_run_runner_release,
+        name="test_run_runner_release",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/rerun-failed/",

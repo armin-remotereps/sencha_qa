@@ -51,6 +51,7 @@ from controller_client.protocol import (
 )
 from projects.exceptions import ControllerActionError
 from projects.services import dispatch_controller_action
+from runners.types import RunnerId
 
 
 @dataclass(frozen=True)
@@ -70,31 +71,33 @@ class WebBrowserReply:
 
 
 def controller_web_browser_open(
-    project_id: int, *, browser: WebBrowser, url: str | None, timeout: float
+    runner_id: RunnerId, *, browser: WebBrowser, url: str | None, timeout: float
 ) -> WebBrowserReply:
     """Open ``browser`` controllably (optionally at ``url``) or attach to it."""
     fields: dict[str, object] = {"browser": browser.value}
     if url is not None:
         fields["url"] = url
     return _send(
-        project_id, "open", fields, parse_web_browser_open_payload, timeout=timeout
+        runner_id, "open", fields, parse_web_browser_open_payload, timeout=timeout
     )
 
 
-def controller_web_browser_list(project_id: int, *, timeout: float) -> WebBrowserReply:
+def controller_web_browser_list(
+    runner_id: RunnerId, *, timeout: float
+) -> WebBrowserReply:
     """List the target's browsers: installed, open, mode, how to open."""
     return _send(
-        project_id, "list", {}, parse_web_browser_choice_payload, timeout=timeout
+        runner_id, "list", {}, parse_web_browser_choice_payload, timeout=timeout
     )
 
 
 def controller_web_browser_navigate(
-    project_id: int, *, browser: WebBrowser | None, url: str, timeout: float
+    runner_id: RunnerId, *, browser: WebBrowser | None, url: str, timeout: float
 ) -> WebBrowserReply:
     fields = _with_browser(browser)
     fields["url"] = url
     return _send(
-        project_id,
+        runner_id,
         "navigate",
         fields,
         parse_web_browser_navigate_payload,
@@ -103,7 +106,7 @@ def controller_web_browser_navigate(
 
 
 def controller_web_browser_history(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     browser: WebBrowser | None,
     action: WebHistoryAction,
@@ -112,7 +115,7 @@ def controller_web_browser_history(
     fields = _with_browser(browser)
     fields["action"] = action.value
     return _send(
-        project_id,
+        runner_id,
         "history",
         fields,
         parse_web_browser_history_payload,
@@ -121,7 +124,7 @@ def controller_web_browser_history(
 
 
 def controller_web_browser_tabs(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     browser: WebBrowser | None,
     action: WebTabsAction,
@@ -133,12 +136,12 @@ def controller_web_browser_tabs(
     if index is not None:
         fields["index"] = index
     return _send(
-        project_id, "tabs", fields, parse_web_browser_tabs_payload, timeout=timeout
+        runner_id, "tabs", fields, parse_web_browser_tabs_payload, timeout=timeout
     )
 
 
 def controller_web_browser_elements(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     browser: WebBrowser | None,
     scope_css: str | None,
@@ -150,7 +153,7 @@ def controller_web_browser_elements(
         fields["scope_css"] = scope_css
     fields["max"] = max_elements
     return _send(
-        project_id,
+        runner_id,
         "elements",
         fields,
         parse_web_browser_elements_payload,
@@ -159,7 +162,7 @@ def controller_web_browser_elements(
 
 
 def controller_web_browser_act(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     browser: WebBrowser | None,
     action: WebActKind,
@@ -187,12 +190,12 @@ def controller_web_browser_act(
     if key is not None:
         fields["key"] = key
     return _send(
-        project_id, "act", fields, parse_web_browser_act_payload, timeout=timeout
+        runner_id, "act", fields, parse_web_browser_act_payload, timeout=timeout
     )
 
 
 def controller_web_browser_read(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     browser: WebBrowser | None,
     what: WebReadWhat,
@@ -209,12 +212,12 @@ def controller_web_browser_read(
         fields["name"] = name
     fields["max_chars"] = max_chars
     return _send(
-        project_id, "read", fields, parse_web_browser_read_payload, timeout=timeout
+        runner_id, "read", fields, parse_web_browser_read_payload, timeout=timeout
     )
 
 
 def controller_web_browser_wait(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     browser: WebBrowser | None,
     target: WebElementTarget,
@@ -229,12 +232,12 @@ def controller_web_browser_wait(
     fields["state"] = state.value
     fields["timeout_ms"] = timeout_ms
     return _send(
-        project_id, "wait", fields, parse_web_browser_wait_payload, timeout=timeout
+        runner_id, "wait", fields, parse_web_browser_wait_payload, timeout=timeout
     )
 
 
 def controller_web_browser_evaluate(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     browser: WebBrowser | None,
     script: str,
@@ -249,7 +252,7 @@ def controller_web_browser_evaluate(
     fields["args_json"] = args_json
     fields["timeout_ms"] = timeout_ms
     return _send(
-        project_id,
+        runner_id,
         "evaluate",
         fields,
         parse_web_browser_evaluate_payload,
@@ -258,11 +261,11 @@ def controller_web_browser_evaluate(
 
 
 def controller_web_browser_close(
-    project_id: int, *, browser: WebBrowser | None, timeout: float
+    runner_id: RunnerId, *, browser: WebBrowser | None, timeout: float
 ) -> WebBrowserReply:
     """Close the controllable browser the runner opened or attached to."""
     return _send(
-        project_id,
+        runner_id,
         "close",
         _with_browser(browser),
         parse_web_browser_choice_payload,
@@ -275,7 +278,7 @@ def _with_browser(browser: WebBrowser | None) -> dict[str, object]:
 
 
 def _send(
-    project_id: int,
+    runner_id: RunnerId,
     name: str,
     fields: dict[str, object],
     check: Callable[[dict[str, object]], object],
@@ -288,7 +291,7 @@ def _send(
     except ProtocolError as exc:
         raise ValueError(f"Invalid web_browser_{name} request: {exc}") from exc
     reply = dispatch_controller_action(
-        project_id,
+        runner_id,
         f"controller.web_browser_{name}",
         timeout,
         resend_on_reconnect=False,

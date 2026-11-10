@@ -16,19 +16,14 @@ from projects.models import (
     TestRunScreenshot,
     TestRunTestCase,
 )
-from projects.runner_update_offer import RunnerUpdatePayload, get_runner_update_offer
+from projects.project_events import project_events_group
 from projects.services import (
-    _agent_status_group,
     fetch_test_case_state,
     fetch_test_run_state,
     get_blocked_reason_fields,
     get_project_for_user,
 )
 from projects.testrail_checked_push_services import checked_push_display_status
-from visual_engine.services.pool_status import (
-    VISUAL_ENGINE_GROUP,
-    get_visual_engine_status,
-)
 
 
 class AuthenticatedConsumer(AsyncWebsocketConsumer):
@@ -313,93 +308,20 @@ class TestRunCaseConsumer(AuthenticatedConsumer):
         )
 
 
-class AgentStatusConsumer(AuthenticatedConsumer):
-
-    _project_id: int
+# Project-level events of the Application context pages (``prompt.refined``
+# from ``projects.tasks``). The runner status moved to ``runners.consumers``.
+class ProjectEventsConsumer(AuthenticatedConsumer):
+    """``ws/projects/<id>/events/``: the refined Application context."""
 
     async def _authorize(self) -> bool:
         project = await self._get_project()
         if project is None:
             return False
-
-        self._project_id = project.id
-        self.group_name = _agent_status_group(project.id)
+        self.group_name = project_events_group(project.id)
         return True
 
     async def _send_initial_state(self) -> None:
-        # Join before reading state so no engine update is missed in between.
-        await self.channel_layer.group_add(VISUAL_ENGINE_GROUP, self.channel_name)
-        project_id = self._project_id
-
-        def _fetch_project() -> tuple[dict[str, Any], RunnerUpdatePayload]:
-            p = Project.objects.get(pk=project_id)
-            state = {
-                "agent_connected": p.agent_connected,
-                "agent_system_info": p.agent_system_info,
-                "agent_client_version": p.agent_client_version,
-                "agent_capabilities": p.agent_capabilities,
-                "last_connected_at": (
-                    p.last_connected_at.isoformat() if p.last_connected_at else None
-                ),
-                "agent_device_state": p.agent_device_state,
-                "agent_device_detail": p.agent_device_detail,
-                "agent_device_reported_at": (
-                    p.agent_device_reported_at.isoformat()
-                    if p.agent_device_reported_at
-                    else None
-                ),
-            }
-            return state, get_runner_update_offer(p).payload
-
-        state, runner_update = await sync_to_async(_fetch_project)()
-        visual_engine = await sync_to_async(get_visual_engine_status)()
-        await self.send(
-            text_data=json.dumps(
-                {
-                    "type": "agent_status",
-                    **state,
-                    "visual_engine": visual_engine.to_payload(),
-                }
-            )
-        )
-        await self._send_runner_update(runner_update)
-
-    async def disconnect(self, close_code: int) -> None:
-        await super().disconnect(close_code)
-        await self.channel_layer.group_discard(VISUAL_ENGINE_GROUP, self.channel_name)
-
-    async def agent_status(self, event: dict[str, Any]) -> None:
-        await self.send(
-            text_data=json.dumps(
-                {
-                    "type": "agent_status",
-                    "agent_connected": event["agent_connected"],
-                    "agent_system_info": event["agent_system_info"],
-                    "agent_client_version": event["agent_client_version"],
-                    "agent_capabilities": event["agent_capabilities"],
-                    "last_connected_at": event["last_connected_at"],
-                    "agent_device_state": event.get("agent_device_state", ""),
-                    "agent_device_detail": event.get("agent_device_detail", ""),
-                    "agent_device_reported_at": event.get("agent_device_reported_at"),
-                }
-            )
-        )
-
-    async def agent_runner_update(self, event: dict[str, Any]) -> None:
-        payload: RunnerUpdatePayload = event["runner_update"]
-        await self._send_runner_update(payload)
-
-    async def _send_runner_update(self, payload: RunnerUpdatePayload) -> None:
-        await self.send(
-            text_data=json.dumps({"type": "runner_update", "runner_update": payload})
-        )
-
-    async def visual_engine_status(self, event: dict[str, Any]) -> None:
-        await self.send(
-            text_data=json.dumps(
-                {"type": "visual_engine", "visual_engine": event["visual_engine"]}
-            )
-        )
+        return None
 
     async def prompt_refined(self, event: dict[str, Any]) -> None:
         await self.send(

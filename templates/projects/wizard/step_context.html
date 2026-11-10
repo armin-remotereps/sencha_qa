@@ -14,8 +14,7 @@
    "Refine with AI" is a port of the `projectPrompt` Alpine component from
    the old templates/projects/detail.html (L451-516): POST the current
    notes to projects:refine_prompt, then wait for a `prompt_refined`
-   message on the agent-status WS (same one the wizard's later "Test
-   machine" step also listens on) and replace the textarea's value. There
+   message on the project events WS (ws/projects/<id>/events/) and replace the textarea's value. There
    is no separate "save" step here — the whole form (including whatever
    the refine call replaced the textarea with) is saved by the wizard's
    own "Save and continue" submit.
@@ -124,7 +123,7 @@ document.addEventListener('alpine:init', () => {
     _refineTimeout: null,
 
     init() {
-      const ws = new WebSocket(punkHazard.wsUrl('/ws/projects/{{ project.id }}/agent-status/'));
+      const ws = new WebSocket(punkHazard.wsUrl('/ws/projects/{{ project.id }}/events/'));
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (data.type !== 'prompt_refined' || !this.refining) return;

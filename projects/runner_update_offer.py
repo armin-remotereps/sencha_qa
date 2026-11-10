@@ -1,10 +1,12 @@
-"""Use case: what the Connection card offers about updating the Test Runner.
+"""Use case: what a Test Runner's page offers about updating the runner.
 
-``get_runner_update_offer`` builds the card's state (template context and the
-``json_script`` initial state); ``broadcast_runner_update`` pushes the same
-payload to the Environment page's ``AgentStatusConsumer`` whenever an update
-changes. The gates shared with ``runner_update_request`` live here too, so
-the card lists exactly what the request would refuse.
+``get_runner_update_offer`` builds the update panel's state (template context
+and the ``json_script`` initial state); ``broadcast_runner_update`` pushes the
+same payload to the runner's status group (``runner_status_{id}``, relayed by
+``runners.consumers.RunnerStatusConsumer`` as ``runner.update``) whenever an
+update changes. The gates shared with ``runner_update_request`` live here
+too, so the panel lists exactly what the request would refuse. Everything is
+keyed by the runner (one in-flight update per runner).
 """
 
 from __future__ import annotations
@@ -25,26 +27,40 @@ from controller_client.protocol import (
     UpdatePhase,
     version_tuple,
 )
-from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, live_turn_exists
+from machine_readiness.project_locks import (
+    RUNNER_QUICK_CHECK_LOCK_PREFIX,
+    RUNNER_SCAN_LOCK_PREFIX,
+    is_locked,
+)
+from machine_setup.turn_state import MACHINE_SETUP_RUNNING_MESSAGE, runner_turn_live
 from projects.models import (
-    Project,
+    NON_TERMINAL_RUNNER_UPDATE_STATUSES,
     RunnerUpdate,
     RunnerUpdateStatus,
-    TestRun,
-    TestRunStatus,
     TestRunTestCase,
     TestRunTestCaseStatus,
 )
-from projects.runner_update_state import (
-    expire_stale_runner_updates,
-    runner_update_timeout,
-)
+from projects.runner_update_state import runner_update_timeout
+from projects.runner_use import agent_run_started_on_runner, manual_tester_on_runner
+from runners.channels import runner_status_group
+from runners.models import TestRunner
+from runners.types import RunnerId
+
+# Sent to ``runner_status_{id}``; ``RunnerStatusConsumer.runner_update``.
+RUNNER_UPDATE_EVENT: Final = "runner.update"
 
 RUN_STARTED_MESSAGE: Final[str] = (
     "A test run is in progress on this machine. Wait for it to finish or stop it."
 )
 AWAITING_PERSON_MESSAGE: Final[str] = (
     "A case is waiting for a person's step on this machine. Finish that step first."
+)
+MANUAL_CASE_MESSAGE: Final[str] = (
+    "A tester is performing a Manual case on this machine. Hand it in, pause "
+    "or release it first."
+)
+READINESS_MESSAGE: Final[str] = (
+    "The Test Runner is scanning or checking the machine. Wait for it to finish."
 )
 
 PHASE_LABELS: Final[dict[UpdatePhase, str]] = {
@@ -114,9 +130,9 @@ class RunnerUpdatePayload(TypedDict):
 class RunnerUpdateOffer:
     state: RunnerUpdateOfferState
     server_version: str
-    # Empty when no runner is connected.
+    # Empty when the runner is not connected.
     runner_version: str
-    # The project's newest update (any status), or None.
+    # The runner's newest update (any status), or None.
     latest: RunnerUpdate | None
     # Filled for BLOCKED only.
     blockers: tuple[str, ...]
@@ -159,42 +175,70 @@ def runner_can_self_update(capabilities: Sequence[str]) -> bool:
     return ClientCapability.SELF_UPDATE_V1 in capabilities
 
 
-def list_runner_update_blockers(project_id: int, now: datetime) -> list[str]:
-    """User-safe reasons the machine is busy (the in-flight update aside).
+def list_runner_update_blockers(runner_id: RunnerId, now: datetime) -> list[str]:
+    """User-safe reasons the runner is busy (the in-flight update aside).
 
     A Paused (Needs help) run does not block: updating is how a Runner
-    outdated pause is fixed.
+    outdated pause is fixed. A paused Manual claim does not block either.
     """
     blockers: list[str] = []
-    if TestRun.objects.filter(
-        project_id=project_id, status=TestRunStatus.STARTED
-    ).exists():
+    if agent_run_started_on_runner(runner_id):
         blockers.append(RUN_STARTED_MESSAGE)
-    if live_turn_exists(project_id, now):
+    if manual_tester_on_runner(runner_id):
+        blockers.append(MANUAL_CASE_MESSAGE)
+    if runner_turn_live(runner_id, now):
         blockers.append(MACHINE_SETUP_RUNNING_MESSAGE)
     if TestRunTestCase.objects.filter(
-        test_run__project_id=project_id,
+        test_run__runner_id=runner_id,
         status=TestRunTestCaseStatus.AWAITING_PERSON,
     ).exists():
         blockers.append(AWAITING_PERSON_MESSAGE)
+    if is_locked(RUNNER_SCAN_LOCK_PREFIX, runner_id) or is_locked(
+        RUNNER_QUICK_CHECK_LOCK_PREFIX, runner_id
+    ):
+        blockers.append(READINESS_MESSAGE)
     return blockers
+
+
+def expire_stale_runner_updates(runner_id: RunnerId, now: datetime) -> int:
+    """Mark the runner's in-flight updates older than the timeout ``expired``.
+
+    Call it under the runner row lock (request) or for the panel. Returns the
+    number of rows expired (0 or 1, given the one-in-flight constraint).
+    """
+    return RunnerUpdate.objects.filter(
+        runner_id=runner_id,
+        status__in=NON_TERMINAL_RUNNER_UPDATE_STATUSES,
+        created_at__lt=now - runner_update_timeout(),
+    ).update(status=RunnerUpdateStatus.EXPIRED, finished_at=now, updated_at=now)
 
 
 # ---------------------------------------------------------------------------
 # Offer and broadcast
 # ---------------------------------------------------------------------------
 
+# The runner fields ``get_runner_update_offer`` reads.
+RUNNER_UPDATE_OFFER_FIELDS: Final[tuple[str, ...]] = (
+    "id",
+    "connected",
+    "channel_name",
+    "client_version",
+    "capabilities",
+)
 
-def get_runner_update_offer(project: Project) -> RunnerUpdateOffer:
-    """The Connection card's update state for ``project`` (its agent fields as loaded).
+
+def get_runner_update_offer(runner: TestRunner) -> RunnerUpdateOffer:
+    """The update panel's state for ``runner`` (its connection fields as loaded,
+    ``RUNNER_UPDATE_OFFER_FIELDS``).
 
     One query for the newest update, plus the gate queries only when the
     runner could update. A stale in-flight update is written ``expired`` here.
     """
     now = timezone.now()
-    latest = _latest_update(project.id, now)
-    connected = project.agent_connected and bool(project.agent_channel_name)
-    runner_version = project.agent_client_version if connected else ""
+    runner_id = runner.runner_id
+    latest = _latest_update(runner_id, now)
+    connected = runner.connected and bool(runner.channel_name)
+    runner_version = runner.client_version if connected else ""
 
     def offer(
         state: RunnerUpdateOfferState, blockers: Sequence[str] = ()
@@ -213,9 +257,9 @@ def get_runner_update_offer(project: Project) -> RunnerUpdateOffer:
         return offer(RunnerUpdateOfferState.NOT_CONNECTED)
     if not runner_is_older(runner_version):
         return offer(RunnerUpdateOfferState.UP_TO_DATE)
-    if not runner_can_self_update(project.agent_capabilities):
+    if not runner_can_self_update(runner.capabilities or []):
         return offer(RunnerUpdateOfferState.MANUAL_REQUIRED)
-    blockers = list_runner_update_blockers(project.id, now)
+    blockers = list_runner_update_blockers(runner_id, now)
     if blockers:
         return offer(RunnerUpdateOfferState.BLOCKED, blockers)
     if latest is not None and latest.to_version == CLIENT_VERSION:
@@ -226,46 +270,42 @@ def get_runner_update_offer(project: Project) -> RunnerUpdateOffer:
     return offer(RunnerUpdateOfferState.AVAILABLE)
 
 
-def broadcast_runner_update(project_id: int) -> None:
-    """Push the project's update state to its Environment page sockets.
+def broadcast_runner_update(runner_id: RunnerId) -> None:
+    """Push the runner's update state to its status group (``runner.update``).
 
     Sync; inside a transaction call it from ``transaction.on_commit``.
     """
     layer: Any = get_channel_layer()
     if layer is None:
         return
-    project = (
-        Project.objects.only(
-            "id",
-            "agent_connected",
-            "agent_channel_name",
-            "agent_client_version",
-            "agent_capabilities",
-        )
-        .filter(pk=project_id)
+    runner = (
+        TestRunner.objects.only(*RUNNER_UPDATE_OFFER_FIELDS)
+        .filter(pk=runner_id)
         .first()
     )
-    if project is None:
+    if runner is None:
         return
-    payload = get_runner_update_offer(project).payload
+    payload = get_runner_update_offer(runner).payload
     async_to_sync(layer.group_send)(
-        f"agent_status_{project_id}",
-        {"type": "agent.runner_update", "runner_update": payload},
+        runner_status_group(runner_id),
+        {
+            "type": RUNNER_UPDATE_EVENT,
+            "runner_id": runner_id,
+            "runner_update": payload,
+        },
     )
 
 
-def _latest_update(project_id: int, now: datetime) -> RunnerUpdate | None:
+def _latest_update(runner_id: RunnerId, now: datetime) -> RunnerUpdate | None:
     latest = (
-        RunnerUpdate.objects.filter(project_id=project_id)
-        .order_by("-created_at")
-        .first()
+        RunnerUpdate.objects.filter(runner_id=runner_id).order_by("-created_at").first()
     )
     if (
         latest is not None
         and latest.is_in_flight
         and latest.created_at < now - runner_update_timeout()
     ):
-        expire_stale_runner_updates(project_id, now)
+        expire_stale_runner_updates(runner_id, now)
         latest.refresh_from_db()
     return latest
 

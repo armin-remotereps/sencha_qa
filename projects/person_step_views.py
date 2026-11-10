@@ -37,6 +37,7 @@ def test_run_case_person_report(
     request: AuthenticatedRequest, project: Project, test_run_id: int, pivot_id: int
 ) -> HttpResponse:
     pivot = _case_or_404(project, test_run_id, pivot_id)
+    # Confirmed on the run's own Test Runner (none: Change runner first).
     form = PersonStepReportForm(request.POST)
     if not form.is_valid():
         messages.error(request, form_error_text(form))

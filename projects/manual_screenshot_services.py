@@ -16,7 +16,9 @@ never be complete, so it goes ``incomplete`` at once (checkable without
 waiting for the stale sweep) and its rewrite is queued.
 
 The owner connection and the upload rate are checked by the caller
-(``runner_manual_services``); everything here is scoped to ``project``.
+(``runner_manual_services``); everything here is scoped to ``project`` and,
+for a runner upload (``runner_id``), to the hand-ins that runner handed in
+(``ManualCaseSubmission.runner``): another runner can never upload into them.
 """
 
 from __future__ import annotations
@@ -50,6 +52,7 @@ from projects.models import (
     TestRunTestCase,
 )
 from projects.runner_person_step_push import nudge_runner_person_steps
+from runners.types import RunnerId
 
 _PIL_FORMATS: Final[dict[ManualShotMime, str]] = {
     ManualShotMime.PNG: "PNG",
@@ -75,6 +78,7 @@ def store_manual_screenshot(
     payload: ManualScreenshotUploadPayload,
     image_checked: bool = False,
     capture_source: str = "",
+    runner_id: RunnerId | None = None,
 ) -> str | None:
     """Store one screenshot of a hand-in of ``project`` (idempotent); the
     stored file's name, or None when nothing was written.
@@ -88,6 +92,9 @@ def store_manual_screenshot(
     written on the stored row: ``"runner"`` for shots captured on the test
     machine, ``""`` when unknown. Raises ``ValueError`` for any other value.
 
+    ``runner_id``: a Test Runner's upload; only hand-ins it handed in are
+    known to it. None for the MCP gateway's own hand-ins.
+
     Raises ``ManualSubmissionDroppedError`` when the hand-in is unknown to the
     project or superseded (the runner deletes the whole hand-in) and
     ``ManualShotRejectedError`` when this shot can never be stored (too large,
@@ -97,12 +104,15 @@ def store_manual_screenshot(
     """
     source = ScreenshotCaptureSource(capture_source)
     submission_uuid = uuid.UUID(payload.submission_id)
-    pivot_id = _submission_pivot_id(project, submission_uuid)
+    pivot_id = _submission_pivot_id(project, submission_uuid, runner_id)
     if not image_checked:
         reason = check_manual_image(payload.mime, payload.data)
         if reason:
             reject_manual_shot(
-                project=project, submission_id=payload.submission_id, message=reason
+                project=project,
+                submission_id=payload.submission_id,
+                message=reason,
+                runner_id=runner_id,
             )
 
     rejected = ""
@@ -117,11 +127,11 @@ def store_manual_screenshot(
         ):
             rejected = _MISMATCH
         if entry is None or rejected:
-            _mark_incomplete(project.pk, submission)
+            _mark_incomplete(submission)
         elif not TestRunScreenshot.objects.filter(
             test_run_test_case_id=pivot.pk, manual_key=payload.key
         ).exists():
-            stored_name = _store(project.pk, pivot, submission, entry, payload, source)
+            stored_name = _store(pivot, submission, entry, payload, source)
     # Raised after the commit, so the incomplete mark is kept.
     if rejected:
         raise ManualShotRejectedError(rejected)
@@ -129,7 +139,11 @@ def store_manual_screenshot(
 
 
 def reject_manual_shot(
-    *, project: Project, submission_id: str, message: str
+    *,
+    project: Project,
+    submission_id: str,
+    message: str,
+    runner_id: RunnerId | None = None,
 ) -> NoReturn:
     """Refuse one screenshot for good and mark its hand-in incomplete.
 
@@ -137,26 +151,28 @@ def reject_manual_shot(
     (oversized or malformed upload, not an image). Always raises:
     ``ManualSubmissionDroppedError`` when the hand-in is unknown to the
     project or superseded, else ``ManualShotRejectedError(message)`` once the
-    hand-in is marked.
+    hand-in is marked. ``runner_id`` as for ``store_manual_screenshot``.
     """
     submission_uuid = uuid.UUID(submission_id)
-    pivot_id = _submission_pivot_id(project, submission_uuid)
+    pivot_id = _submission_pivot_id(project, submission_uuid, runner_id)
     with transaction.atomic():
         _pivot, submission = _lock_current(pivot_id, submission_uuid)
-        _mark_incomplete(project.pk, submission)
+        _mark_incomplete(submission)
     raise ManualShotRejectedError(message)
 
 
-def _submission_pivot_id(project: Project, submission_uuid: uuid.UUID) -> int:
-    """The case of one of ``project``'s hand-ins (one query)."""
-    pivot_id = (
-        ManualCaseSubmission.objects.filter(
-            submission_id=submission_uuid,
-            test_run_test_case__test_run__project_id=project.pk,
-        )
-        .values_list("test_run_test_case_id", flat=True)
-        .first()
+def _submission_pivot_id(
+    project: Project, submission_uuid: uuid.UUID, runner_id: RunnerId | None
+) -> int:
+    """The case of one of ``project``'s hand-ins, handed in by ``runner_id``
+    when given (one query)."""
+    submissions = ManualCaseSubmission.objects.filter(
+        submission_id=submission_uuid,
+        test_run_test_case__test_run__project_id=project.pk,
     )
+    if runner_id is not None:
+        submissions = submissions.filter(runner_id=runner_id)
+    pivot_id = submissions.values_list("test_run_test_case_id", flat=True).first()
     if pivot_id is None:
         raise ManualSubmissionDroppedError(_UNKNOWN)
     return pivot_id
@@ -179,7 +195,7 @@ def _lock_current(
     return pivot, submission
 
 
-def _mark_incomplete(project_id: int, submission: ManualCaseSubmission) -> None:
+def _mark_incomplete(submission: ManualCaseSubmission) -> None:
     """An uploading hand-in lost a shot for good: incomplete now (checkable),
     and its rewrite is queued once (on the first such shot)."""
     if submission.upload_state != ManualUploadState.UPLOADING:
@@ -187,12 +203,12 @@ def _mark_incomplete(project_id: int, submission: ManualCaseSubmission) -> None:
     submission.upload_state = ManualUploadState.INCOMPLETE
     submission.save(update_fields=["upload_state"])
     queue_manual_refinement(submission.pk)
-    # The snapshot's pending uploads changed.
-    transaction.on_commit(lambda: nudge_runner_person_steps(project_id))
+    # The hand-in's runner snapshot's pending uploads changed.
+    runner_id = _submission_runner_id(submission)
+    transaction.on_commit(lambda: nudge_runner_person_steps(runner_id))
 
 
 def _store(
-    project_id: int,
     pivot: TestRunTestCase,
     submission: ManualCaseSubmission,
     entry: dict[str, object],
@@ -246,8 +262,15 @@ def _store(
     transaction.on_commit(lambda: broadcast_manual_screenshot(pivot_id, screenshot))
     if completed:
         queue_manual_refinement(submission.pk)
-        transaction.on_commit(lambda: nudge_runner_person_steps(project_id))
+        runner_id = _submission_runner_id(submission)
+        transaction.on_commit(lambda: nudge_runner_person_steps(runner_id))
     return str(screenshot.image.name)
+
+
+def _submission_runner_id(submission: ManualCaseSubmission) -> RunnerId | None:
+    """The runner that handed the hand-in in (no query); None through MCP."""
+    raw = submission.runner_id
+    return RunnerId(raw) if raw is not None else None
 
 
 def check_manual_image(mime: ManualShotMime, data: bytes) -> str:

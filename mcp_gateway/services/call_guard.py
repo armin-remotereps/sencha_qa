@@ -57,6 +57,7 @@ from mcp_gateway.limits import (
 from mcp_gateway.oauth_types import McpCaller
 from mcp_gateway.services.oauth_access import link_fingerprint_matches, live_links
 from projects.exceptions import ManualRunError, PersonStepError
+from projects.manual_case_claim_services import RUNNER_CHANGED_MESSAGE
 from projects.manual_case_submit_services import DROPPED_CLAIM
 from projects.manual_run_policy import (
     MANUAL_PAUSE_AGENT_BUSY,
@@ -68,6 +69,7 @@ from projects.runner_person_step_services import (
     check_answer_throttle,
     hit_runner_throttle,
 )
+from projects.runner_use import RUNNER_HOLD_MESSAGES
 
 logger = logging.getLogger(__name__)
 
@@ -108,10 +110,14 @@ _MACHINE_BUSY = "The test machine is busy. Try again in a minute."
 _CLAIM_ENDED = (
     "This case is not claimed any more (released, re-run or the run was stopped)."
 )
+_MACHINE_CHANGED = "The run's test machine changed. Look at the list again."
 _NEUTRAL_REFUSALS: Final[dict[str, str]] = {
     MANUAL_PAUSE_AGENT_BUSY: _MACHINE_BUSY,
     MANUAL_PAUSE_STALE_CLAIM: _CLAIM_ENDED,
     DROPPED_CLAIM: _CLAIM_ENDED,
+    RUNNER_CHANGED_MESSAGE: _MACHINE_CHANGED,
+    # A claim refused because the run's Test Runner is held (runner_use).
+    **{text: _MACHINE_BUSY for text in RUNNER_HOLD_MESSAGES},
 }
 
 

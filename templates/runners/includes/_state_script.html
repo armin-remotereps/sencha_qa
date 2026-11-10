@@ -1,0 +1,25 @@
+{% comment %} window.runnerState: the badge class and label of a MachineState
+   value (same mapping as runners/includes/_state_badge.html; keep both in
+   step), and the test for a runner status socket message. Include once per
+   page, in extra_scripts. {% endcomment %}
+<script>
+window.runnerState = {
+  badgeClass(state) {
+    return { ready: 'connected', starting: 'starting', failed: 'failed', offline: 'warning' }[state] || 'disconnected';
+  },
+  badgeLabel(state) {
+    return {
+      ready: 'Ready',
+      starting: 'Visual engine starting',
+      failed: 'Visual engine failed',
+      offline: 'Visual engine offline',
+      device_offline: 'Phone disconnected',
+    }[state] || 'Not connected';
+  },
+  // runners.services.runner_status.RunnerStatusEvent as sent by
+  // runners/consumers.RunnerStatusConsumer.
+  isStatusMessage(data) {
+    return Boolean(data) && (data.type === 'runner.status' || data.type === 'runner_status') && data.runner_id !== undefined;
+  },
+};
+</script>

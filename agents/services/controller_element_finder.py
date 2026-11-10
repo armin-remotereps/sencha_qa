@@ -17,6 +17,7 @@ from agents.types import (
     TextContent,
 )
 from projects.services import controller_find_elements
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
 
@@ -35,14 +36,14 @@ _ELEMENT_MATCHER_SYSTEM_PROMPT = (
 
 
 def parse_screen(
-    project_id: int,
+    runner_id: RunnerId,
     *,
     on_screenshot: ScreenshotCallback | None = None,
     cancellation_check: CancellationCheck | None = None,
 ) -> PixelParseResult:
     """Run OmniParser on the current screen and publish the annotated image."""
     parse_result = controller_find_elements(
-        project_id, cancellation_check=cancellation_check
+        runner_id, cancellation_check=cancellation_check
     )
 
     if on_screenshot is not None:
@@ -105,13 +106,13 @@ def _split_excluded(
 
 
 def find_element_coordinates(
-    project_id: int,
+    runner_id: RunnerId,
     description: str,
     vision_config: LLMConfig,
     *,
     on_screenshot: ScreenshotCallback | None = None,
 ) -> tuple[int, int]:
-    parse_result = parse_screen(project_id, on_screenshot=on_screenshot)
+    parse_result = parse_screen(runner_id, on_screenshot=on_screenshot)
     matched = match_element(parse_result, description, vision_config)
     return matched.center_x, matched.center_y
 

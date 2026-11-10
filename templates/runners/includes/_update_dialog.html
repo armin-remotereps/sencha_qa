@@ -1,0 +1,40 @@
+{% comment %} Confirmation of a Test Runner self-update.
+
+   Context contract:
+     runner         — runners.models.TestRunner
+     server_version — RunnerUpdateOffer.server_version (the form's
+                      expected_version, runners.forms.RunnerUpdateForm)
+
+   Opened with $dispatch('open-runner-update'). {% endcomment %}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-runner-update.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="runner-update-title" aria-describedby="runner-update-desc">
+    <h3 id="runner-update-title">Update the Test Runner to {{ server_version }}?</h3>
+    <div id="runner-update-desc">
+      <p>
+        The Test Runner installs version {{ server_version }} into a new folder next to the current one
+        and downloads its dependencies and browsers there (about 300 MB). This takes a few minutes.
+      </p>
+      <p>
+        It then restarts from the new folder: the browsers and apps it opened are closed, and the old folder is
+        deleted. Runs and Machine setup on this Test Runner wait until the update finishes.
+      </p>
+    </div>
+    <form method="post" action="{% url 'runners:update' runner.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="expected_version" value="{{ server_version }}">
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Update Test Runner</button>
+      </div>
+    </form>
+  </div>
+</div>

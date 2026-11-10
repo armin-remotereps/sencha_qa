@@ -48,8 +48,9 @@ from projects.models import (
     TestRun,
     UploadStatus,
 )
+from projects.project_events import project_events_group
 from projects.prompt_refiner import refine_project_prompt
-from projects.services import _agent_status_group, save_project_prompt
+from projects.services import save_project_prompt
 from projects.testrail_checked_push_services import (
     CHECKED_PUSH_TIMEOUT_MESSAGE,
     get_checked_push_run,
@@ -80,6 +81,7 @@ from projects.testrail_services import (
     rank_suite_cases,
     upsert_test_cases_from_testrail,
 )
+from runners.types import RunnerId
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -355,7 +357,7 @@ def _send_prompt_refined(
         return
 
     async_to_sync(channel_layer.group_send)(
-        _agent_status_group(project_id),
+        project_events_group(project_id),
         {
             "type": "prompt.refined",
             "refined_prompt": refined_prompt,
@@ -620,24 +622,36 @@ def push_checked_results_to_testrail(
     soft_time_limit=SCAN_TASK_SOFT_LIMIT_SECONDS,
     time_limit=SCAN_TASK_TIME_LIMIT_SECONDS,
 )
-def scan_artifacts_task(project_id: int, actor_id: int | None, lock_token: str) -> None:
-    """Inventory of the base directory on the test machine (``assist``).
+def scan_artifacts_task(
+    project_id: int, runner_id: int, actor_id: int | None, lock_token: str
+) -> None:
+    """Inventory of the base directory on the Test Runner ``runner_id``
+    (``assist``).
 
-    ``lock_token``: the scan lock ``request_scan`` took; the service frees it.
+    ``lock_token``: the runner's scan lock ``request_scan`` took; the service
+    frees it.
     """
     try:
         outcome = scan_artifacts(
             project_id=project_id,
+            runner_id=RunnerId(runner_id),
             actor_id=actor_id,
             ports=build_runner_ports(),
             lock_token=lock_token,
         )
     except MachineReadinessError as exc:
-        logger.info("artifact scan not done: project=%s reason=%s", project_id, exc)
+        logger.info(
+            "artifact scan not done: project=%s runner=%s reason=%s",
+            project_id,
+            runner_id,
+            exc,
+        )
         return
     logger.info(
-        "artifact scan done: project=%s os=%s entries=%d truncated=%s error=%s",
+        "artifact scan done: project=%s runner=%s os=%s entries=%d truncated=%s "
+        "error=%s",
         project_id,
+        runner_id,
         outcome.os_name,
         outcome.entry_count,
         outcome.truncated,
@@ -652,16 +666,22 @@ def scan_artifacts_task(project_id: int, actor_id: int | None, lock_token: str) 
     time_limit=QUICK_CHECK_TASK_TIME_LIMIT_SECONDS,
 )
 def quick_check_task(
-    project_id: int, run_id: int | None, actor_id: int | None, lock_token: str
+    project_id: int,
+    runner_id: int,
+    run_id: int | None,
+    actor_id: int | None,
+    lock_token: str,
 ) -> None:
-    """Check machine: the stage-0 requirements without an LLM (``assist``).
+    """Check machine: the stage-0 requirements on the Test Runner
+    ``runner_id`` without an LLM (``assist``).
 
     The service broadcasts its own result (or refusal) event and frees the
-    check lock ``request_quick_check`` took.
+    runner's check lock ``request_quick_check`` took.
     """
     try:
         check_requirements(
             project_id=project_id,
+            runner_id=RunnerId(runner_id),
             run_id=run_id,
             actor_id=actor_id,
             ports=build_runner_ports(),
@@ -669,8 +689,9 @@ def quick_check_task(
         )
     except MachineReadinessError as exc:
         logger.info(
-            "quick check not done: project=%s run=%s reason=%s",
+            "quick check not done: project=%s runner=%s run=%s reason=%s",
             project_id,
+            runner_id,
             run_id,
             exc,
         )

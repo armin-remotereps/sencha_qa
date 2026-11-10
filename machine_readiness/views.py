@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from django import forms
 from django.contrib import messages
-from django.http import Http404, HttpResponse, HttpResponseBadRequest
+from django.http import Http404, HttpResponse, HttpResponseBadRequest, QueryDict
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils.http import url_has_allowed_host_and_scheme
@@ -29,6 +31,7 @@ from machine_readiness.forms import (
     ArtifactProfileForm,
     BaseArtifactItemFormSet,
     RequirementStatusForm,
+    RunnerPickForm,
     Stage0RequirementForm,
     item_formset_initial,
     profile_data_from_forms,
@@ -52,10 +55,15 @@ from machine_readiness.services.requirement_status import (
 from machine_readiness.services.restore_profile_version import (
     restore_profile_version,
 )
-from machine_readiness.services.scan_artifacts import scan_availability
+from machine_readiness.services.runner_pick import pick_runner
+from machine_readiness.services.scan_artifacts import (
+    InventorySummary,
+    scan_availability,
+)
 from machine_readiness.services.skip_intake import skip_intake
 from projects.decorators import project_membership_required
 from projects.models import Project
+from projects.project_access import get_request_project_access
 
 ITEM_FORMSET_PREFIX = "items"
 
@@ -65,7 +73,8 @@ ITEM_FORMSET_PREFIX = "items"
 def overview(request: AuthenticatedRequest, project: Project) -> HttpResponse:
     # The profile and the runner are loaded once and shared by all three.
     snapshot = get_profile(project.id)
-    runner = runner_info_of(project)
+    pick = pick_runner(request.user, project, _wanted_runner(request.GET))
+    runner = runner_info_of(pick.selected)
     data = get_profile_overview(project.id, snapshot=snapshot)
     scan = scan_availability(project.id, runner=runner, profile=snapshot.data)
     gap_report = build_gap_report(
@@ -82,12 +91,16 @@ def overview(request: AuthenticatedRequest, project: Project) -> HttpResponse:
             "provenance": data.provenance,
             "versions": data.versions,
             "intake_pending": data.intake_pending,
-            "inventory": gap_report.inventory,
+            "inventory": _inventory_for_viewer(
+                gap_report.inventory, can_write=_can_write(request)
+            ),
             "matches": gap_report.match_rows,
             "runner_os": scan.runner_os_label,
             "scan_available": scan.available,
             "scan_reason": scan.reason,
             "gap_report": gap_report,
+            "runner_choices": pick.choices,
+            "selected_runner": pick.selected,
         },
     )
 
@@ -210,6 +223,10 @@ def requirements(request: AuthenticatedRequest, project: Project) -> HttpRespons
             "analysis_running": data.analysis_running,
             "action_edit": REQUIREMENT_ACTION_EDIT,
             "action_status": REQUIREMENT_ACTION_STATUS,
+            # Statuses set by hand are stamped with this runner's host.
+            "selected_runner": pick_runner(
+                request.user, project, _wanted_runner(request.GET)
+            ).selected,
         },
     )
 
@@ -269,7 +286,7 @@ def requirement_update(
                     status=status_form.cleaned_data["status"],
                     detail=status_form.cleaned_data["detail"],
                     author=request.user,
-                    host=runner_host(project.agent_system_info) or "",
+                    host=_picked_host(request, project),
                 )
                 messages.success(request, "Status recorded.")
         else:
@@ -282,6 +299,36 @@ def requirement_update(
     page = request.POST.get("page", "")
     query = f"?page={int(page)}" if page.isdigit() and int(page) > 1 else ""
     return redirect(f"{url}{query}#req-{requirement_id}")
+
+
+def _picked_host(request: AuthenticatedRequest, project: Project) -> str:
+    """The host a status set by hand is stamped with: the Test Runner the
+    form names (``runner``, one of the member's own), else none."""
+    wanted = _wanted_runner(request.POST)
+    selected = pick_runner(request.user, project, wanted).selected
+    if selected is None or wanted is None or selected.pk != wanted:
+        return ""
+    return runner_host(selected.system_info) or ""
+
+
+def _can_write(request: AuthenticatedRequest) -> bool:
+    access = get_request_project_access(request)
+    return access is not None and access.can_write
+
+
+def _inventory_for_viewer(
+    inventory: InventorySummary | None, *, can_write: bool
+) -> InventorySummary | None:
+    """The inventory as the viewer may see it: a viewer who cannot write
+    gets no machine hostname (also in "Scanned by an earlier Test Runner")."""
+    if inventory is None or can_write:
+        return inventory
+    return replace(inventory, host="")
+
+
+def _wanted_runner(data: QueryDict) -> int | None:
+    """The runner id a page or form asks for (``RunnerPickForm``)."""
+    return RunnerPickForm(data).wanted_runner_id()
 
 
 def _form_errors(request: AuthenticatedRequest, form: forms.Form) -> None:

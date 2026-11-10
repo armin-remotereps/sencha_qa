@@ -66,6 +66,7 @@ from machine_setup.services.setup_tools import (
     build_setup_dispatcher,
     main_tool_definitions,
 )
+from machine_setup.services.thread_runner import NO_RUNNER
 from machine_setup.services.turn_reply_notification import notify_turn_reply
 from machine_setup.subtask_types import SetupTaskRequest
 from machine_setup.thread_role import ThreadRole, thread_role
@@ -78,8 +79,15 @@ from machine_setup.turn_outcome import (
 from projects.controller_outage_clock import reset_outage_clock
 from projects.services import build_agent_project_context
 from run_triage.services.agent_texts import describe_triage_status
+from runners.types import RunnerId
 
 logger = logging.getLogger(__name__)
+
+
+def runner_id_of_turn(turn: SetupTurn) -> RunnerId | None:
+    """The turn's recorded Test Runner as a typed id (no query)."""
+    return None if turn.runner_id is None else RunnerId(turn.runner_id)
+
 
 # Said for any open call, including a sub-task that may have changed the
 # machine before Stop or a worker loss.
@@ -110,7 +118,7 @@ def run_setup_turn(turn_id: int) -> None:
         logger.info("Setup turn %s is not queued; nothing to run", turn_id)
         return
     turn = SetupTurn.objects.select_related(
-        "conversation", "project", "requested_by"
+        "conversation", "project", "requested_by", "runner"
     ).get(pk=turn_id)
     logger.info(
         "Setup turn %s started (project %s, conversation %s)",
@@ -209,7 +217,10 @@ class _TurnRunner:
         self._persist_transcript(history)
 
         project = turn.project
-        system_info = project.agent_system_info or None
+        # The Test Runner the turn recorded when it was queued; its tools
+        # refuse once the thread's runner changed (``thread_runner``).
+        runner_id = runner_id_of_turn(turn)
+        system_info = (turn.runner.system_info or None) if turn.runner else None
         project_prompt = build_agent_project_context(project)
         # Read once per turn (setup_prompt stays ORM-free): the intake gate
         # of the main chat, the profile of the case chats.
@@ -237,6 +248,7 @@ class _TurnRunner:
             project_id=self.project_id,
             conversation_id=self.conversation_id,
             turn_id=turn.pk,
+            runner_id=runner_id,
             system_info=system_info,
             project_prompt=project_prompt,
             llm_config=llm_config,
@@ -254,6 +266,9 @@ class _TurnRunner:
         )
         context = ToolContext(
             project_id=self.project_id,
+            # The lead never drives the machine itself (machine tools are
+            # refused); a turn without a runner gets a placeholder id.
+            runner_id=runner_id if runner_id is not None else NO_RUNNER,
             browser_selection=BrowserSelection(),
             summarizer_config=build_llm_config(),
             vision_config=config.vision_llm,
@@ -279,6 +294,8 @@ class _TurnRunner:
             on_action_proposed=self._on_action_proposed,
             intake_pending=pending,
             should_stop=self._should_stop,
+            runner_id=runner_id,
+            conversation_kind=turn.conversation.kind,
             manual_case_id=manual_case_id,
             triage_run_id=triage_run_id,
         )

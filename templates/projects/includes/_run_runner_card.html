@@ -1,0 +1,65 @@
+{% comment %} Run page "Test Runner" card: the run's runner "name (owner)", its live
+   machine badge, Change and Release.
+
+   Context contract (include with `only`):
+     project, test_run
+     runner_card — projects.run_runner_card.RunRunnerCard
+     can_write   — project_can_write (Change and the runner's hostname;
+                   read-only members see the runner's name and badge only)
+     csrf_token
+
+   Change posts `runner` to projects:test_run_runner (assign on a draft,
+   reassign on a Paused / Done / Cancelled run; a Started run cannot switch,
+   Q6). Release (the runner's owner only) posts to
+   projects:test_run_runner_release. Runner names, owner names and
+   hostnames are plain text (autoescape). {% endcomment %}
+<section class="card" aria-labelledby="run-runner-h">
+  <div class="card-header">
+    <h2 id="run-runner-h">Test Runner</h2>
+    {% if runner_card.runner %}
+    {% include "projects/includes/_runner_status_badge.html" with runner_id=runner_card.runner.runner_id machine_state=runner_card.runner.machine_state only %}
+    {% endif %}
+  </div>
+
+  {% if runner_card.runner %}
+  <p>
+    <strong>{{ runner_card.runner.label }}</strong>{% if can_write and runner_card.runner.hostname %} <span class="muted">· {{ runner_card.runner.hostname }}</span>{% endif %}
+  </p>
+  {% elif runner_card.snapshot_name %}
+  <p class="muted">The Test Runner this run used, {{ runner_card.snapshot_name }}, is no longer available.{% if runner_card.runner_required %} Choose another one to go on.{% endif %}</p>
+  {% elif test_run.help_mode == "manual" %}
+  <p class="muted">No Test Runner. A Manual run works without one; choose one to perform its cases in the Test Runner window and capture screenshots on the test machine.</p>
+  {% elif test_run.status == "waiting" %}
+  <p class="muted">No Test Runner chosen yet. Choose one below or when you start the run.</p>
+  {% else %}
+  <p class="muted">No Test Runner. Choose one to go on with this run.</p>
+  {% endif %}
+
+  {% if can_write %}
+  {% if runner_card.can_change %}
+  <form method="post" action="{% url 'projects:test_run_runner' project.id test_run.id %}" class="help-mode-form">
+    {% csrf_token %}
+    <label class="visually-hidden" for="run-runner-change">Test Runner</label>
+    <select class="select select-sm" id="run-runner-change" name="runner" required>
+      <option value="">Choose a Test Runner</option>
+      {% for value, label in runner_card.choices %}
+      <option value="{{ value }}"{% if runner_card.runner and value == runner_card.runner.runner_id %} selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn btn-sm btn-secondary">{% if runner_card.runner %}Change{% else %}Choose{% endif %}</button>
+  </form>
+  {% elif test_run.status == "started" and runner_card.choices %}
+  <p class="hint">A running run cannot change its Test Runner. Pause it first.</p>
+  {% elif not runner_card.choices %}
+  <p class="hint">You have no Test Runner of your own for this project. <a href="{% url 'runners:list' %}">Add one</a> to run it on your machine.</p>
+  {% endif %}
+
+  {% if runner_card.is_owner %}
+  <div class="actions">
+    <button type="button" class="btn btn-sm btn-ghost" @click="$dispatch('open-release-run-runner')">Release</button>
+  </div>
+  {% url 'projects:test_run_runner_release' project.id test_run.id as release_url %}
+  {% include "partials/confirm_dialog.html" with dialog_id="release-run-runner" title="Release your Test Runner from this run?" body="The run stops using your Test Runner. A case running on it stops and needs help; the run goes on once someone chooses a Test Runner for it." confirm_label="Release" action_url=release_url csrf_token=csrf_token only %}
+  {% endif %}
+  {% endif %}
+</section>

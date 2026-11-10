@@ -62,7 +62,7 @@ MANUAL_DISCUSS_NOT_CLAIMED: Final = (
 MANUAL_DISCUSS_MACHINE_NEEDS_PAUSE: Final = (
     "Pause the case first: the tester is using the machine."
 )
-# Any setup thread but the case's own discussion (``run_machine_use``).
+# Any setup thread but the case's own discussion (``runner_use``).
 MANUAL_TESTER_ON_MACHINE: Final = (
     "A tester is performing a manual case on this machine. Try again once "
     "the case is paused, handed in or released."

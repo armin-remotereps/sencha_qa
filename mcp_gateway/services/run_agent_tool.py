@@ -68,6 +68,7 @@ from projects.browser_selection_services import ensure_runner_supports_browser
 from projects.call_deadline import call_deadline
 from projects.controller_outage_clock import agent_monotonic
 from projects.controller_reconnect_services import no_reconnect_wait
+from runners.types import RunnerId
 
 # Tools whose result text comes from a web page or the web: fenced with
 # their own note; a successful result keeps its words.
@@ -149,6 +150,7 @@ def run_agent_tool(
         # A programming error: only dispatching tools that need the test
         # machine come here, after the gate set the target.
         raise ValueError(f"{tool.name} is not an agent tool on a test machine")
+    runner_id = session.machine()
     kind = effective_kind(tool, arguments.get("expected_result"))
     deadline_seconds, lock_seconds = _budget(kind)
     busy = machine_error(MachineErrorCode.MACHINE_BUSY)
@@ -160,15 +162,16 @@ def run_agent_tool(
         if browser != BrowserName.CHROMIUM:
             # As the agent does before it drives another browser (one query;
             # BrowserUnavailableError for a test machine that cannot).
-            ensure_runner_supports_browser(session.project_id, browser)
+            ensure_runner_supports_browser(runner_id, browser)
         with (
             machine_round_trip(busy=busy),
-            machine_lock(session.project_id, lock_seconds, busy=busy),
+            machine_lock(runner_id, lock_seconds, busy=busy),
             no_reconnect_wait(),
             call_deadline(deadline_seconds),
         ):
             context = _context(
                 session.project_id,
+                runner_id,
                 runner_target=session.runner_target,
                 browser=browser,
                 deadline=agent_monotonic() + deadline_seconds,
@@ -226,6 +229,7 @@ def _budget(kind: CallKind) -> tuple[int, int]:
 
 def _context(
     project_id: int,
+    runner_id: RunnerId,
     *,
     runner_target: RunnerTarget,
     browser: BrowserName,
@@ -236,6 +240,7 @@ def _context(
     llm_config = build_llm_config()
     return ToolContext(
         project_id=project_id,
+        runner_id=runner_id,
         # A fresh selection per call: the browser is stateless for the client.
         browser_selection=BrowserSelection(current=browser),
         summarizer_config=llm_config,

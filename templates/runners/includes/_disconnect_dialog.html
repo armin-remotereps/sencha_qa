@@ -1,0 +1,30 @@
+{% comment %} Force disconnect confirmation for one runner (owner or superuser).
+
+   Context contract:
+     runner    — runners.models.TestRunner
+     return_to — "detail" | "all" (runners.forms.RunnerDisconnectForm)
+
+   Opened with $dispatch('open-disconnect-runner-<runner.pk>'). {% endcomment %}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-disconnect-runner-{{ runner.pk }}.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="disconnect-runner-{{ runner.pk }}-title" aria-describedby="disconnect-runner-{{ runner.pk }}-desc">
+    <h3 id="disconnect-runner-{{ runner.pk }}-title">Disconnect {{ runner.name }}?</h3>
+    <p id="disconnect-runner-{{ runner.pk }}-desc">The connection is closed immediately and a run in progress on this Test Runner is stopped. The Test Runner connects again when it is started again.</p>
+    <form method="post" action="{% url 'runners:disconnect' runner.pk %}">
+      {% csrf_token %}
+      <input type="hidden" name="return_to" value="{{ return_to }}">
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+        <button type="submit" class="btn btn-danger-solid">Disconnect</button>
+      </div>
+    </form>
+  </div>
+</div>

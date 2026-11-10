@@ -1,0 +1,9 @@
+{% comment %} A Test Runner's state badge, rendered server-side and kept live.
+
+   Context contract:
+     machine_state — a runners.machine_state.MachineState value
+     live_expr     — optional Alpine expression yielding the live state
+                     (e.g. "states['3']" or "machineState"); the page must
+                     include runners/includes/_state_script.html. Without
+                     it the badge is static. {% endcomment %}
+<span class="badge {% if machine_state == 'ready' %}badge-connected{% elif machine_state == 'starting' %}badge-starting{% elif machine_state == 'failed' %}badge-failed{% elif machine_state == 'offline' %}badge-warning{% else %}badge-disconnected{% endif %}"{% if live_expr %} :class="'badge-' + window.runnerState.badgeClass({{ live_expr }})" x-text="window.runnerState.badgeLabel({{ live_expr }})"{% endif %}>{% if machine_state == 'ready' %}Ready{% elif machine_state == 'starting' %}Visual engine starting{% elif machine_state == 'failed' %}Visual engine failed{% elif machine_state == 'offline' %}Visual engine offline{% elif machine_state == 'device_offline' %}Phone disconnected{% else %}Not connected{% endif %}</span>

@@ -1,0 +1,360 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} One of the user's Test Runners (/runners/<id>/, owner only).
+
+   Context contract (runners/views.py::runner_detail):
+     detail        — runners.services.runner_detail.RunnerDetail:
+                     status (RunnerStatusEvent, seeds runnerDetailLive()),
+                     os_label, device_label, hold (projects.runner_use.RunnerHold
+                     or None), hold_visible, assigned_runs (AssignedRun list),
+                     update_offer (projects.runner_update_offer.RunnerUpdateOffer;
+                     .payload seeds runnerUpdate, .server_version is the
+                     update form's expected_version)
+     runner        — detail.runner (runners.models.TestRunner)
+     issued_token  — the plaintext token right after Add or New token, else "".
+                     Shown once: the view pops it from the session and the
+                     page is never_cache.
+     rename_form   — runners.forms.RunnerRenameForm
+
+   Live: runnerDetailLive() opens ws/runners/<id>/status/ and replaces the
+   status on runner.status messages, and the update offer on runner_update
+   messages. Runner-provided text (hostname, versions, device strings,
+   update detail) is bound with x-text or autoescaped, never |safe. {% endcomment %}
+
+{% block title %}{{ runner.name }} · Test Runners · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumbs %}
+<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="{% url 'runners:list' %}">Test Runners</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">{{ runner.name }}</span>
+</nav>
+{% endblock %}
+
+{% block page %}
+{{ detail.status|json_script:"runner-status" }}
+{{ detail.update_offer.payload|json_script:"runner-update" }}
+<div x-data="runnerDetailLive()">
+<div class="page-header">
+  <div>
+    <h1>{{ runner.name }}</h1>
+    <p class="subtitle">
+      {% include "runners/includes/_state_badge.html" with machine_state=detail.status.machine_state live_expr="machineState" only %}
+    </p>
+  </div>
+  <div class="actions">
+    <button class="btn btn-ghost btn-sm" type="button" @click="$dispatch('open-rename-runner')">Rename</button>
+    <button class="btn btn-ghost btn-sm" type="button" @click="$dispatch('open-runner-token')">New token</button>
+    <button class="btn btn-danger btn-sm" type="button" @click="$dispatch('open-archive-runner')">Remove</button>
+  </div>
+</div>
+
+{% if issued_token %}
+<section class="card card-tone-warning" aria-labelledby="token-h">
+  <div class="card-header">
+    <h2 id="token-h">Token of this Test Runner</h2>
+  </div>
+  <p>This is the only time the token is shown. The download below already contains it, so you do not need to copy it unless you set the Test Runner up by hand (<code>CONTROLLER_RUNNER_TOKEN</code> in its <code>.env</code>).</p>
+  <div class="actions" x-data="clipboard()">
+    <code class="runner-token" x-ref="token">{{ issued_token }}</code>
+    <button class="btn btn-secondary btn-sm" type="button" @click="copy($refs.token.textContent)">
+      <span x-show="!copied">Copy</span><span x-show="copied" x-cloak>Copied</span>
+    </button>
+  </div>
+</section>
+{% endif %}
+
+<section class="card" aria-labelledby="use-h">
+  <div class="card-header">
+    <h2 id="use-h">In use</h2>
+    {% if detail.assigned_runs or detail.hold %}
+    <button class="btn btn-secondary btn-sm" type="button" @click="$dispatch('open-release-runner')">Release</button>
+    {% endif %}
+  </div>
+  {% if detail.hold %}
+    <p>
+      <strong>{{ detail.hold.message }}</strong>
+      {% if detail.hold_visible and detail.hold.test_run_id %}
+        <a href="{% url 'projects:test_run_detail' detail.hold.project_id detail.hold.test_run_id %}">Open the run</a>
+      {% endif %}
+    </p>
+  {% else %}
+    <p class="muted">Free: nothing uses this Test Runner right now.</p>
+  {% endif %}
+
+  {% if detail.assigned_runs %}
+  <div class="table-wrap">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th scope="col">Active run</th>
+          <th scope="col">Project</th>
+          <th scope="col">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in detail.assigned_runs %}
+        <tr>
+          {% if run.visible %}
+            <td data-label="Active run" class="cell-primary"><a href="{% url 'projects:test_run_detail' run.project_id run.test_run_id %}">{{ run.label }}</a>{% if run.manual %} <span class="badge badge-manual">Manual</span>{% endif %}</td>
+            <td data-label="Project">{{ run.project_name }}</td>
+          {% else %}
+            <td data-label="Active run" class="cell-primary">A run of a project you are no longer a member of</td>
+            <td data-label="Project">—</td>
+          {% endif %}
+          <td data-label="Status">{{ run.status_label }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="hint">Release pauses an agent run on this Test Runner (it asks for help, and anyone may continue it on another runner) and gives back a claimed Manual case.</p>
+  {% endif %}
+</section>
+
+<section class="card" aria-labelledby="connection-h">
+  <div class="card-header">
+    <h2 id="connection-h">Connection</h2>
+  </div>
+  <p x-show="!connected" x-cloak class="muted">Not connected. Start the Test Runner on its machine; it connects by itself.</p>
+  <dl class="kv">
+    <div>
+      <dt>Host</dt>
+      <dd x-text="systemInfo.hostname || '—'">{{ runner.system_info.hostname|default:"—" }}</dd>
+    </div>
+    <div>
+      <dt>Operating system</dt>
+      <dd x-text="osLabel">{{ detail.os_label|default:"—" }}</dd>
+    </div>
+    {% if detail.device_label %}
+    <div>
+      <dt>Phone or tablet</dt>
+      <dd>{{ detail.device_label }}</dd>
+    </div>
+    {% endif %}
+    <div x-show="device" x-cloak>
+      <dt>Device status</dt>
+      <dd><span x-text="deviceStateLabel"></span> <span class="runner-device-detail muted small" x-text="deviceDetail"></span></dd>
+    </div>
+    <div>
+      <dt>Test Runner version</dt>
+      <dd>
+        <span class="runner-version">
+          <span x-text="clientVersion || '—'">{{ runner.client_version|default:"—" }}</span>
+          <span class="badge badge-warning" x-show="canUpdate" x-cloak x-text="'Update available (' + runnerUpdate.server_version + ')'"></span>
+          <span class="badge badge-running" x-show="updateState === 'in_progress'" x-cloak>Updating</span>
+          <span class="badge badge-connected" x-show="updateState === 'up_to_date'" x-cloak>Up to date</span>
+        </span>
+      </dd>
+    </div>
+    <div>
+      <dt>Last disconnected</dt>
+      <dd x-text="formatSince(lastConnectedAt)">{{ runner.last_connected_at|date:"N j, Y, P"|default:"—" }}</dd>
+    </div>
+    <div>
+      <dt>Added</dt>
+      <dd>{{ runner.created_at|date:"N j, Y" }}</dd>
+    </div>
+  </dl>
+  <details>
+    <summary>Capabilities</summary>
+    <p class="muted small" x-show="!capabilities.length">None reported.</p>
+    <ul class="small">
+      <template x-for="capability in capabilities" :key="capability">
+        <li><code x-text="capability"></code></li>
+      </template>
+    </ul>
+  </details>
+  <div class="actions" x-show="connected" x-cloak>
+    <button class="btn btn-primary" type="button" x-show="canUpdate" @click="$dispatch('open-runner-update')">Update Test Runner</button>
+    <button class="btn btn-danger" type="button" @click="$dispatch('open-disconnect-runner-{{ runner.pk }}')">Disconnect</button>
+  </div>
+</section>
+
+{% include "runners/includes/_update_status.html" %}
+
+<section aria-labelledby="install-h">
+  <h2 id="install-h" class="visually-hidden">Set up this Test Runner</h2>
+  <div class="card">
+    <div class="card-header">
+      <h2>Download</h2>
+    </div>
+    <p class="muted">
+      One small Python application for Windows, macOS and Linux. The download is set up for this Test Runner:
+      its <code>.env</code> holds the server address and this runner's token. Install it on one machine only;
+      a second copy with the same token takes over the connection.
+    </p>
+    <form method="post" action="{% url 'runners:download' runner.pk %}">
+      {% csrf_token %}
+      <div class="actions">
+        <button class="btn btn-primary" type="submit">&#11015; Download Test Runner</button>
+      </div>
+    </form>
+    <p class="hint">You only download once: later versions update themselves with Update Test Runner on this page.</p>
+    <div class="alert alert-warning alert-flush">
+      <span class="alert-icon" aria-hidden="true">&#9888;</span>
+      <div>
+        <strong>Requires Python 3.13 or newer on the test machine.</strong>
+        <p>The setup script checks the version for you and tells you what to install if it is too old.</p>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h2>Set it up</h2>
+    </div>
+    <p class="muted">Pick the operating system of the test machine to see the matching commands.</p>
+    {% include "partials/os_setup_tabs.html" %}
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h2>Test a phone or tablet</h2>
+    </div>
+    <p class="muted">The Test Runner runs on a host computer and drives one Android or iOS device attached to it, through Appium. Pick the device type.</p>
+    {% include "partials/phone_setup_tabs.html" %}
+  </div>
+</section>
+
+{# Dialogs #}
+<div
+  class="dialog-backdrop"
+  x-data="dialog()"
+  x-show="open"
+  x-cloak
+  x-on:open-rename-runner.window="show()"
+  x-on:keydown.escape.window="close()"
+  x-trap.noscroll="open"
+  @click.self="close()"
+>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="rename-runner-title">
+    <div class="card-header">
+      <h3 id="rename-runner-title">Rename Test Runner</h3>
+      <button class="icon-btn" type="button" aria-label="Close" @click="close()">✕</button>
+    </div>
+    <form method="post" action="{% url 'runners:rename' runner.pk %}">
+      {% csrf_token %}
+      {% include "partials/form_field.html" with field=rename_form.name only %}
+      <p class="hint">Runs keep the name they were started with.</p>
+      <div class="dialog-actions">
+        <button class="btn btn-ghost" type="button" @click="close()">Cancel</button>
+        <button class="btn btn-primary" type="submit">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% url 'runners:token' runner.pk as token_url %}
+{% include "runners/includes/_confirm_dialog.html" with dialog_id="runner-token" title="Issue a new token?" body="The current token stops working at once and the Test Runner disconnects. Download the Test Runner again, or put the new token in its .env, then start it again. Runs on it wait for it to reconnect." confirm_label="Issue new token" action_url=token_url csrf_token=csrf_token only %}
+
+{% url 'runners:release' runner.pk as release_url %}
+{% include "runners/includes/_confirm_dialog.html" with dialog_id="release-runner" title="Release this Test Runner?" body="An agent run on it pauses and asks for help; it continues only on a Test Runner someone assigns. A claimed Manual case is given back. Nothing on the machine is closed." confirm_label="Release" action_url=release_url csrf_token=csrf_token only %}
+
+{% url 'runners:archive' runner.pk as archive_url %}
+{% include "runners/includes/_confirm_dialog.html" with dialog_id="archive-runner" title="Remove this Test Runner?" body="Its token stops working and it disconnects. Finished runs keep its name. A Test Runner that is in use or assigned to an active run cannot be removed." confirm_label="Remove" action_url=archive_url csrf_token=csrf_token only %}
+
+{% include "runners/includes/_disconnect_dialog.html" with runner=runner return_to="detail" csrf_token=csrf_token only %}
+
+{% include "runners/includes/_update_dialog.html" with runner=runner server_version=detail.update_offer.server_version csrf_token=csrf_token only %}
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+{% include "runners/includes/_state_script.html" %}
+<script>
+document.addEventListener('alpine:init', () => {
+  Alpine.data('runnerDetailLive', () => {
+    const status = JSON.parse(document.getElementById('runner-status').textContent);
+    return {
+      connected: status.connected,
+      machineState: status.machine_state,
+      systemInfo: status.system_info || {},
+      clientVersion: status.client_version || '',
+      capabilities: status.capabilities || [],
+      lastConnectedAt: status.last_connected_at,
+      deviceState: status.device_state || '',
+      deviceDetail: status.device_detail || '',
+      // RunnerUpdatePayload (projects/runner_update_offer.py); x-text only.
+      runnerUpdate: JSON.parse(document.getElementById('runner-update').textContent),
+      now: Date.now(),
+      ws: null,
+
+      init() {
+        setInterval(() => { if (this.updateInFlight) this.now = Date.now(); }, 1000);
+        this.ws = new WebSocket(window.punkHazard.wsUrl('/ws/runners/{{ runner.pk }}/status/'));
+        this.ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          if (window.runnerState.isStatusMessage(data)) {
+            this.connected = data.connected;
+            this.machineState = data.machine_state;
+            this.systemInfo = data.system_info || {};
+            this.clientVersion = data.client_version || '';
+            this.capabilities = data.capabilities || [];
+            this.lastConnectedAt = data.last_connected_at || this.lastConnectedAt;
+            this.deviceState = data.device_state || '';
+            this.deviceDetail = data.device_detail || '';
+          } else if ((data.type === 'runner_update' || data.type === 'runner.update') && data.runner_update) {
+            this.runnerUpdate = data.runner_update;
+          }
+        };
+      },
+
+      get device() {
+        return window.punkHazard.runnerDevice(this.systemInfo, this.capabilities);
+      },
+
+      get deviceStateLabel() {
+        return { ready: 'Connected', starting: 'Starting', disconnected: 'Disconnected', unauthorized: 'Not authorised', unavailable: 'Unavailable' }[this.deviceState] || 'Disconnected';
+      },
+
+      get osLabel() {
+        if (!this.systemInfo.os) return '—';
+        return this.systemInfo.os_version ? this.systemInfo.os + ' ' + this.systemInfo.os_version : this.systemInfo.os;
+      },
+
+      formatSince(iso) {
+        if (!iso) return '—';
+        const date = new Date(iso);
+        return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+      },
+
+      // Self-update (ported from the Environment page's Connection card).
+      get updateInFlight() {
+        return Boolean(this.runnerUpdate.latest && this.runnerUpdate.latest.in_flight);
+      },
+
+      get updateState() {
+        if (this.updateInFlight) return 'in_progress';
+        if (!this.connected) return 'not_connected';
+        if (this.clientVersion && this.clientVersion === this.runnerUpdate.server_version) return 'up_to_date';
+        return this.runnerUpdate.state;
+      },
+
+      get canUpdate() {
+        return ['available', 'last_failed', 'last_expired'].includes(this.updateState) && this.runnerUpdate.can_update;
+      },
+
+      get updatePhaseLabel() {
+        const latest = this.runnerUpdate.latest;
+        if (!latest) return '';
+        return latest.phase_label || latest.status_label;
+      },
+
+      get updateElapsed() {
+        const latest = this.runnerUpdate.latest;
+        if (!latest || !latest.created_at) return '';
+        const started = new Date(latest.created_at).getTime();
+        if (Number.isNaN(started)) return '';
+        const seconds = Math.max(0, Math.floor((this.now - started) / 1000));
+        return Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0');
+      },
+
+      get updateOutcome() {
+        const latest = this.runnerUpdate.latest;
+        if (!latest || latest.in_flight || latest.to_version !== this.runnerUpdate.server_version) return '';
+        return latest.status;
+      },
+    };
+  });
+});
+</script>
+{% endblock %}

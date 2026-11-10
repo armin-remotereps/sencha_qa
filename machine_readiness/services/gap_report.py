@@ -2,7 +2,8 @@
 
 Plan: docs/plan/feat-machine-setup-intake.md › Services › gap_report.py.
 No LLM and no runner call: the profile's items are matched against the stored
-inventory of the runner's OS, and the stage-0 requirements are read with their
+inventory of the Test Runner's OS (that runner's scan, else a scan from before
+user runners), and the stage-0 requirements are read with their
 recorded statuses (a status checked on another host reads as unknown, D5).
 With a ``run_id`` only the requirements that run's cases need are reported.
 """
@@ -13,7 +14,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from django.db.models import Exists, OuterRef, QuerySet
+from django.db.models import Exists, F, OuterRef, Q, QuerySet
 
 from machine_readiness.models import (
     ArtifactInventory,
@@ -27,7 +28,7 @@ from machine_readiness.models import (
 )
 from machine_readiness.profile_text import load_profile_snapshot
 from machine_readiness.run_stage0_state import host_mismatch
-from machine_readiness.runner_info import RunnerInfo, load_runner_info
+from machine_readiness.runner_info import RunnerInfo
 from machine_readiness.services.scan_artifacts import (
     InventorySummary,
     MatchRow,
@@ -149,15 +150,14 @@ def build_gap_report(
     *,
     project_id: int,
     run_id: int | None,
-    runner: RunnerInfo | None = None,
+    runner: RunnerInfo,
     snapshot: ProfileSnapshot | None = None,
 ) -> GapReport:
-    """The gap report; six queries at most (project, profile, items,
-    inventory, requirements, unanalysed count), fewer when the caller passes
-    the ``runner`` and profile ``snapshot`` it already loaded. A ``run_id``
-    of another project reports nothing for the run's cases."""
-    if runner is None:
-        runner = load_runner_info(project_id)
+    """The gap report of ``runner`` (``runner_info.load_runner_info``); five
+    queries at most (profile, items, inventory, requirements, unanalysed
+    count), fewer when the caller passes the profile ``snapshot`` it already
+    loaded. A ``run_id`` of another project reports nothing for the run's
+    cases."""
     if snapshot is None:
         snapshot = load_profile_snapshot(project_id)
     runner_os = runner.os_name
@@ -166,7 +166,12 @@ def build_gap_report(
     base_dir = data.base_dir_for(runner_os).strip() if runner_os is not None else ""
 
     inventory, entries = (
-        _load_inventory(project_id, runner_os, with_entries=_needs_entries(data))
+        _load_inventory(
+            project_id,
+            runner,
+            runner_os,
+            with_entries=_needs_entries(data),
+        )
         if runner_os is not None
         else (None, ())
     )
@@ -229,6 +234,12 @@ def render_gap_report_text(report: GapReport, max_chars: int) -> str:
             f"{inv.scanned_at:%Y-%m-%d %H:%M} UTC"
             + (" (cut short)" if inv.truncated else "")
             + (" (failed, see the error below)" if inv.error else "")
+            + (
+                " by an earlier Test Runner (its host is below); scan again "
+                "to take this runner's inventory"
+                if inv.earlier_runner
+                else ""
+            )
             + "."
         )
     head.append(
@@ -241,6 +252,8 @@ def render_gap_report_text(report: GapReport, max_chars: int) -> str:
         data.append(f"Base directory: {data_line(report.base_dir)}")
     if report.runner_host:
         data.append(f"Runner host: {data_line(report.runner_host)}")
+    if report.inventory is not None and report.inventory.earlier_runner:
+        data.append(f"Inventory host: {data_line(report.inventory.host)}")
     if report.inventory is not None and report.inventory.error:
         data.append(f"Scan error: {data_line(report.inventory.error)}")
     _section(data, "Missing artifacts", report.missing_artifacts, _artifact_line)
@@ -295,12 +308,20 @@ def _needs_entries(data: ProfileData) -> bool:
 
 
 def _load_inventory(
-    project_id: int, os_name: ArtifactOs, *, with_entries: bool
+    project_id: int, runner: RunnerInfo, os_name: ArtifactOs, *, with_entries: bool
 ) -> tuple[InventorySummary | None, tuple[InventoryEntry, ...]]:
-    """The OS's inventory; its entries only when ``with_entries`` (one query)."""
-    rows = ArtifactInventory.objects.filter(
-        project_id=project_id, os_name=os_name
-    ).select_related("scanned_by")
+    """The runner's inventory of the OS, else the one scanned before user
+    runners (no runner recorded); its entries only when ``with_entries``
+    (one query)."""
+    rows = (
+        ArtifactInventory.objects.filter(
+            Q(runner__isnull=True) | Q(runner_id=runner.runner_id),
+            project_id=project_id,
+            os_name=os_name,
+        ).select_related("scanned_by")
+        # The runner's own row first.
+        .order_by(F("runner_id").asc(nulls_last=True))
+    )
     if not with_entries:
         rows = rows.defer("entries")
     row = rows.first()
@@ -331,6 +352,7 @@ def _load_inventory(
         truncated=row.truncated,
         permission_errors=row.permission_errors,
         error=row.error,
+        earlier_runner=row.runner_id is None,
     )
     return summary, entries
 

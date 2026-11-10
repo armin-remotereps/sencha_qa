@@ -104,12 +104,12 @@ def take_screenshot(session: MachineSession) -> ScreenOutcome:
     try:
         with (
             machine_round_trip(busy=busy),
-            machine_lock(session.project_id, MCP_SCREEN_LOCK_SECONDS, busy=busy),
+            machine_lock(session.machine(), MCP_SCREEN_LOCK_SECONDS, busy=busy),
             no_reconnect_wait(),
             call_deadline(MCP_SCREEN_DEADLINE_SECONDS),
         ):
             shot = controller_screenshot(
-                session.project_id, timeout=_REPLY_TIMEOUT_SECONDS
+                session.machine(), timeout=_REPLY_TIMEOUT_SECONDS
             )
     except McpToolError:
         raise

@@ -95,6 +95,10 @@ TEXT_SIZE_MIN: Final[int] = 10
 TEXT_SIZE_MAX: Final[int] = 28
 
 
+# Longest runner name shown in the window title (the server caps names at 64).
+RUNNER_NAME_MAX_CHARS: Final[int] = 64
+
+
 def clamp_text_size(size: int) -> int:
     return max(TEXT_SIZE_MIN, min(TEXT_SIZE_MAX, size))
 
@@ -291,6 +295,8 @@ class CaseResultCommand:
 @dataclass(frozen=True)
 class ConnectionCommand:
     connected: bool
+    # The runner's name for the window title; blank = the generic title.
+    runner_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -595,8 +601,12 @@ def encode_command(command: WindowCommand) -> bytes:
                 "ok": ok,
                 "message": message[:PERSON_STEP_RESULT_MESSAGE_MAX_CHARS],
             }
-        case ConnectionCommand(connected=connected):
-            payload = {"type": WindowIpcType.CONNECTION.value, "connected": connected}
+        case ConnectionCommand(connected=connected, runner_name=runner_name):
+            payload = {
+                "type": WindowIpcType.CONNECTION.value,
+                "connected": connected,
+                "runner_name": runner_name,
+            }
         case QuitCommand():
             payload = {"type": WindowIpcType.QUIT.value}
         case ManualStateCommand(state=state):
@@ -905,7 +915,10 @@ def decode_command(line: bytes) -> WindowCommand:
                 kind=_request_kind(data), ok=_bool(data, "ok"), message=_message(data)
             )
         case WindowIpcType.CONNECTION:
-            return ConnectionCommand(connected=_bool(data, "connected"))
+            return ConnectionCommand(
+                connected=_bool(data, "connected"),
+                runner_name=_str(data, "runner_name", RUNNER_NAME_MAX_CHARS).strip(),
+            )
         case WindowIpcType.QUIT:
             return QuitCommand()
         case WindowIpcType.MANUAL_STATE:

@@ -1,0 +1,78 @@
+{% extends "layouts/app.html" %}
+
+{% comment %} Every Test Runner of the installation (/runners/all/, superusers only,
+   read-only; Q8). A superuser cannot assign, rename or download another
+   user's runner; the one action is Force disconnect.
+
+   Context contract (runners/views.py::runner_all):
+     rows — list of runners.services.runner_list.RunnerListRow, each with
+            runner.owner loaded
+
+   Static page (no socket: the owner groups are per user). Names, owner
+   emails, hostnames and project names are autoescaped. {% endcomment %}
+
+{% block title %}All runners · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block page %}
+<div class="page-header">
+  <div>
+    <h1>All runners</h1>
+    <p class="subtitle">Every Test Runner in {{ brand_name|default:"Punk Hazard" }}, with its owner. Only the owner can assign or change a runner; you can force-disconnect one.</p>
+  </div>
+</div>
+
+{% if not rows %}
+  {% include "partials/empty_state.html" with icon="⌘" title="No Test Runners yet" body="Test Runners added by any user are listed here." only %}
+{% else %}
+<div class="table-wrap">
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th scope="col">Name</th>
+        <th scope="col">Owner</th>
+        <th scope="col">State</th>
+        <th scope="col">Machine</th>
+        <th scope="col">Version</th>
+        <th scope="col">In use by</th>
+        <th scope="col"><span class="visually-hidden">Actions</span></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td data-label="Name" class="cell-primary">{{ row.runner.name }}</td>
+        <td data-label="Owner">{{ row.runner.owner.email }}{% if not row.runner.owner.is_active %} <span class="badge badge-draft">Inactive</span>{% endif %}</td>
+        <td data-label="State">{% include "runners/includes/_state_badge.html" with machine_state=row.machine_state only %}</td>
+        <td data-label="Machine">
+          {% if row.device_label %}{{ row.device_label }}<br><span class="muted small">on {{ row.os_label|default:"—" }}</span>{% else %}{{ row.os_label|default:"—" }}{% endif %}
+          {% if row.runner.system_info.hostname %}<br><span class="muted small">{{ row.runner.system_info.hostname }}</span>{% endif %}
+        </td>
+        <td data-label="Version">{{ row.runner.client_version|default:"—" }}</td>
+        <td data-label="In use by">
+          {% if row.hold %}
+            {% if row.hold.test_run_id %}
+              <a href="{% url 'projects:test_run_detail' row.hold.project_id row.hold.test_run_id %}">{{ row.hold.label }}</a>
+            {% elif row.hold.project_id %}
+              <a href="{% url 'machine_setup:chat' row.hold.project_id %}">{{ row.hold.label }}</a>
+            {% else %}
+              {{ row.hold.label }}
+            {% endif %}
+          {% elif row.active_run_count %}
+            <span class="muted">Assigned to {{ row.active_run_count }} run{{ row.active_run_count|pluralize }}</span>
+          {% else %}
+            <span class="muted">Free</span>
+          {% endif %}
+        </td>
+        <td data-label="Actions">
+          {% if row.runner.connected %}
+          <button class="btn btn-danger btn-sm" type="button" @click="$dispatch('open-disconnect-runner-{{ row.runner.pk }}')">Force disconnect</button>
+          {% include "runners/includes/_disconnect_dialog.html" with runner=row.runner return_to="all" csrf_token=csrf_token only %}
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

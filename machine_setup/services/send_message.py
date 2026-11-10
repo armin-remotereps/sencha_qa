@@ -35,8 +35,15 @@ from machine_setup.services.send_gates import (
     thread_send_refusal,
     triage_thread_send_refusal,
 )
+from machine_setup.services.thread_runner import (
+    RUNNER_CHANGED_RETRY_MESSAGE,
+    lock_runner,
+    main_chat_runner_id,
+    thread_runner_id,
+)
 from projects.models import PersonStepChannel, Project
 from projects.person_step_actor import PersonStepActor
+from runners.models import TestRunner
 
 THREAD_CLOSED_MESSAGE = (
     "This conversation was reset. Send your message in the current chat."
@@ -69,8 +76,10 @@ def send_setup_message(
     Runner is being updated or the thread was archived meanwhile, or ``SetupDocumentNotAllowedError`` when ``document``
     targets any thread but the main chat. A stale live turn is closed as
     ``worker_lost`` first, and stays closed even when the send is refused. A
-    paused (Needs help) run or a started Manual run does not block sending; a
-    started agent-driven run does.
+    paused (Needs help) run or a started Manual run of the project does not
+    block sending; a started agent-driven run on the thread's Test Runner,
+    or any holder of that runner from another project, does. The turn
+    records the thread's runner (``thread_runner``).
     """
     outcome = _send_locked(
         project=project,
@@ -95,30 +104,24 @@ def _send_locked(
     document: UploadedDocument | None,
     knowledge_item_ids: Sequence[int],
 ) -> SetupTurn | MachineSetupError:
-    # Same lock as start_test_run and resume (project row first), so a send
-    # and a run start cannot both pass their "nothing else is live" checks.
-    locked = (
-        Project.objects.select_for_update()
-        .only("id", "agent_connected", "agent_device_state", "agent_device_reported_at")
-        .get(pk=project.pk)
+    # The thread's Test Runner row first, then the project row (the lock
+    # order of every runner holder; the project lock is the one start_test_run
+    # and resume take), so a send and a run start cannot both pass their
+    # "nothing else is live" checks.
+    runner_id = (
+        thread_runner_id(conversation)
+        if conversation is not None
+        else main_chat_runner_id(project.pk)
     )
-    # The main chat (None, or the chat thread itself) skips the READY gate.
-    main_chat = conversation is None or conversation.kind == SetupConversationKind.CHAT
-    manual_thread = (
-        conversation is not None
-        and conversation.kind == SetupConversationKind.MANUAL_CASE
-    )
-    triage_thread = (
-        conversation is not None
-        and conversation.kind == SetupConversationKind.RUN_TRIAGE
-    )
+    runner = lock_runner(runner_id)
+    locked = Project.objects.select_for_update().only("id").get(pk=project.pk)
+    kind = conversation.kind if conversation is not None else SetupConversationKind.CHAT
     refusal = _refusal(
         locked,
+        runner,
         timezone.now(),
-        main_chat=main_chat,
-        manual_thread=manual_thread,
+        kind=kind,
         manual_case_id=conversation.manual_case_id if conversation else None,
-        triage_thread=triage_thread,
         triage_run_id=conversation.triage_run_id if conversation else None,
     )
     if refusal is not None:
@@ -130,6 +133,9 @@ def _send_locked(
     if target.kind == SetupConversationKind.RUN_TRIAGE and target.triage_run_id is None:
         # The run was deleted since the caller loaded the thread.
         return MachineSetupError(TRIAGE_RUN_GONE_MESSAGE)
+    if thread_runner_id(target) != runner_id:
+        # Picked anew or the run was reassigned since the runner was locked.
+        return MachineSetupError(RUNNER_CHANGED_RETRY_MESSAGE)
     if document is not None and target.kind != SetupConversationKind.CHAT:
         return SetupDocumentNotAllowedError()
     try:
@@ -144,6 +150,7 @@ def _send_locked(
         conversation=target,
         requested_by=actor.user,
         text=text,
+        runner_id=runner_id,
         document=document,
         author_label=_author_label(actor),
     )
@@ -164,24 +171,25 @@ def _author_label(actor: PersonStepActor) -> str:
 
 def _refusal(
     project: Project,
+    runner: TestRunner | None,
     now: datetime,
     *,
-    main_chat: bool,
-    manual_thread: bool,
+    kind: str,
     manual_case_id: int | None,
-    triage_thread: bool,
     triage_run_id: int | None,
 ) -> MachineSetupError | None:
+    # Phase 1 keeps one live turn per project (any runner).
     if resolve_live_turn(project_id=project.pk, now=now) is not None:
         return SetupTurnActiveError()
-    if triage_thread:
-        # No READY gate: the analysis never uses the machine.
-        return triage_thread_send_refusal(project, now, triage_run_id=triage_run_id)
-    if manual_thread:
+    if kind == SetupConversationKind.RUN_TRIAGE:
+        # No runner gates: the analysis never uses the machine.
+        return triage_thread_send_refusal(triage_run_id=triage_run_id)
+    if kind == SetupConversationKind.MANUAL_CASE:
         # Under the project row lock, so a claim, release or hand-in (all
         # lock the project first) cannot change the case meanwhile.
-        return manual_thread_send_refusal(project, now, pivot_id=manual_case_id)
-    return thread_send_refusal(project, now, main_chat=main_chat)
+        return manual_thread_send_refusal(project, runner, pivot_id=manual_case_id)
+    main_chat = kind == SetupConversationKind.CHAT
+    return thread_send_refusal(project, runner, kind=kind, main_chat=main_chat)
 
 
 def _target_conversation(

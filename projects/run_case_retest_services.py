@@ -59,6 +59,7 @@ from projects.run_reopen_services import (
     lock_project_and_run,
 )
 from projects.runner_person_step_push import nudge_runner_person_steps
+from projects.runner_use import runner_id_of_run
 from projects.services import broadcast_run_and_pivots
 from test_sessions.case_activity import CaseActivity
 from test_sessions.services.record_case_activity import record_case_activity
@@ -177,9 +178,9 @@ def mark_cases_for_retest(
             # (last open) case settles the run here.
             if marked and is_manual_run(locked_run):
                 finish_manual_run_if_settled(locked_run)
-                manual_project_id = project.pk
+                manual_runner_id = runner_id_of_run(locked_run)
                 transaction.on_commit(
-                    lambda: nudge_runner_person_steps(manual_project_id)
+                    lambda: nudge_runner_person_steps(manual_runner_id)
                 )
             if marked:
                 project_id = project.pk

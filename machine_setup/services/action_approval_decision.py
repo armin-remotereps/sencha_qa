@@ -36,7 +36,13 @@ from machine_setup.services.action_approval_events import (
 )
 from machine_setup.services.live_turn import resolve_live_turn
 from machine_setup.services.queue_turn import broadcast_and_enqueue, create_user_turn
-from machine_setup.services.send_gates import run_and_update_refusal
+from machine_setup.services.send_gates import runner_refusal
+from machine_setup.services.thread_runner import (
+    RUNNER_CHANGED_RETRY_MESSAGE,
+    lock_runner,
+    main_chat_runner_id,
+    thread_runner_id,
+)
 from projects.models import Project
 
 # Approved, unused actions listed in one turn's user note.
@@ -75,7 +81,8 @@ def approve_action(
 ) -> ApprovalDecision:
     """Approve a pending action.
 
-    Under the project row lock (the lock ``send_setup_message`` takes). With
+    Under the main chat's runner and the project row locks (the locks
+    ``send_setup_message`` takes). With
     no live turn the action is approved, a USER row authored by ``user``
     ("<member> approved #N: <title>") is written and a turn is queued for
     it; every send gate applies except the machine READY one (Q3: the main
@@ -83,8 +90,9 @@ def approve_action(
     a NOTICE posted; the next turn's user note lists it.
 
     Raises ``ActionApprovalClosedError`` when the card is not pending or its
-    chat was reset, ``SetupRunActiveError`` or ``MachineSetupError`` (runner
-    update) when no turn may be queued; the card then stays pending.
+    chat was reset, ``SetupRunActiveError`` or ``MachineSetupError`` (the
+    chat's Test Runner is held or changed meanwhile) when no turn may be
+    queued; the card then stays pending.
     """
     outcome = _approve_locked(project=project, user=user, approval_id=approval_id)
     if isinstance(outcome, MachineSetupError):
@@ -96,6 +104,10 @@ def approve_action(
 def _approve_locked(
     *, project: Project, user: CustomUser, approval_id: int
 ) -> ApprovalDecision | MachineSetupError:
+    # Cards live in the main chat: its Test Runner row first, then the
+    # project row (the lock order of every runner holder).
+    runner_id = main_chat_runner_id(project.pk)
+    runner = lock_runner(runner_id)
     locked = Project.objects.select_for_update().only("id").get(pk=project.pk)
     approval = _locked_pending(project=locked, approval_id=approval_id)
     if isinstance(approval, MachineSetupError):
@@ -103,7 +115,11 @@ def _approve_locked(
     now = timezone.now()
     live = resolve_live_turn(project_id=locked.pk, now=now)
     if live is None:
-        refusal = run_and_update_refusal(locked, now)
+        refusal: MachineSetupError | None = runner_refusal(
+            runner, locked.pk, main_chat=True
+        )
+        if refusal is None and thread_runner_id(approval.conversation) != runner_id:
+            refusal = MachineSetupError(RUNNER_CHANGED_RETRY_MESSAGE)
         if refusal is not None:
             # Returned, not raised: a stale turn closed above must still commit.
             return refusal
@@ -129,6 +145,7 @@ def _approve_locked(
         conversation=approval.conversation,
         requested_by=user,
         text=f"{member} approved #{approval.pk}: {approval.title}",
+        runner_id=runner_id,
     )
     transaction.on_commit(lambda: broadcast_and_enqueue(turn, message))
     return ApprovalDecision(conversation_id=approval.conversation_id, turn_queued=True)

@@ -8,7 +8,7 @@ class VisionWorker(models.Model):
 
     The row is reused across reconnects. ``channel_name`` names the consumer
     that owns the live connection; a late disconnect of an older socket only
-    releases the row if it still owns it, as with ``Project.agent_channel_name``.
+    releases the row if it still owns it, as with ``TestRunner.channel_name``.
     """
 
     name = models.CharField(max_length=100, unique=True)

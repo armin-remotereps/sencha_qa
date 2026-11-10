@@ -1,4 +1,4 @@
-"""Per-project in-flight locks of the scan, the quick check and the analysis.
+"""In-flight locks of the scan and the quick check (per runner) and the analysis (per project).
 
 A lock is a cache entry holding a random token. The request service takes it
 with ``cache.add`` and hands the token to its Celery task, which ``claim``s it
@@ -17,9 +17,13 @@ from dataclasses import dataclass
 
 from django.core.cache import cache
 
-SCAN_LOCK_PREFIX = "artifact-scan:"
-QUICK_CHECK_LOCK_PREFIX = "stage0-quick-check:"
 ANALYSIS_LOCK_PREFIX = "stage0-analysis:"
+# Per Test Runner (user runners): the scan and the quick check use the runner,
+# so they are locked by runner id with these prefixes and the same functions
+# (pass the runner id where the functions say ``project_id``). The analysis
+# needs no runner and stays per project. ``projects.runner_use`` reads them.
+RUNNER_SCAN_LOCK_PREFIX = "artifact-scan:runner:"
+RUNNER_QUICK_CHECK_LOCK_PREFIX = "stage0-quick-check:runner:"
 
 
 @dataclass(frozen=True)
@@ -28,8 +32,8 @@ class ProjectLock:
     token: str
 
 
-def lock_key(prefix: str, project_id: int) -> str:
-    return f"{prefix}{project_id}"
+def lock_key(prefix: str, owner_id: int) -> str:
+    return f"{prefix}{owner_id}"
 
 
 def is_locked(prefix: str, project_id: int) -> bool:

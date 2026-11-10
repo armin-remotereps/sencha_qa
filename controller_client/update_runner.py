@@ -178,14 +178,12 @@ class RunnerUpdate:
         )
         self._new_root = bundle.root
         config = self._config
-        cli_api_key = config.api_key if config.api_key_from_cli else None
-        cli_email = config.person_email if config.person_email_from_cli else None
+        cli_token = config.runner_token if config.runner_token_from_cli else None
         await asyncio.to_thread(
             install_env_file,
             self._old_package_dir,
             bundle.package_dir,
-            cli_api_key,
-            cli_email,
+            cli_token,
         )
         new_python = await install(layout, Path(sys.executable), self._on_phase)
         if self._before_device_release is not None:

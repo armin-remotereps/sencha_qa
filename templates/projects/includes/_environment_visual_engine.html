@@ -3,8 +3,8 @@
   worker. Must render inside the environmentLive() Alpine scope declared in
   projects/environment.html; it reads `visualEngine` (VisualEngineStatusPayload:
   state, ready_count, connected_count, workers[]) and the engineBadge* /
-  workerBadge* / formatSince helpers from that scope, so it stays live over
-  the agent-status WS.
+  workerBadge* / formatSince helpers from that scope (the status loaded with
+  the page; reload for a newer one).
 
   Context contract: none.
 

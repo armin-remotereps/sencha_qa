@@ -1,0 +1,63 @@
+{% comment %} Self-update progress and outcome of the runner (ported from
+   projects/includes/_environment_connection.html). Renders inside the
+   runnerDetailLive() scope of runners/detail.html: reads runnerUpdate,
+   updateState, updateInFlight, updatePhaseLabel, updateElapsed,
+   updateOutcome. Runner-written text is bound with x-text only.
+   No context variables. {% endcomment %}
+<div class="alert alert-info" role="status" x-show="updateInFlight" x-cloak>
+  <span class="alert-icon" aria-hidden="true"><span class="live-dot"></span></span>
+  <div>
+    <strong>
+      Updating the Test Runner to <span x-text="runnerUpdate.latest && runnerUpdate.latest.to_version"></span>:
+      <span x-text="updatePhaseLabel"></span>…
+    </strong>
+    <p>
+      Elapsed <span x-text="updateElapsed"></span>. Installing dependencies and browsers can take several minutes.
+      Runs and Machine setup on this Test Runner wait until the update finishes. The new Test Runner connects by itself and the old one closes.
+    </p>
+  </div>
+</div>
+
+<div class="alert alert-success" role="status" x-show="updateOutcome === 'succeeded'" x-cloak>
+  <span class="alert-icon" aria-hidden="true">✓</span>
+  <div>
+    <strong>Updated to Test Runner <span x-text="runnerUpdate.server_version"></span>.</strong>
+    <p x-show="runnerUpdate.latest && runnerUpdate.latest.old_removal === 'failed'">
+      The old Test Runner folder could not be deleted. Remove it by hand on the test machine.
+    </p>
+    <p x-show="runnerUpdate.latest && runnerUpdate.latest.old_removal === ''">The old Test Runner folder is deleted once the old Test Runner has closed.</p>
+  </div>
+</div>
+
+<div class="alert alert-danger" role="status" x-show="updateOutcome === 'failed' || updateOutcome === 'expired'" x-cloak>
+  <span class="alert-icon" aria-hidden="true">⚠</span>
+  <div>
+    <strong x-text="updateOutcome === 'failed' ? 'The Test Runner update failed.' : 'The Test Runner update did not finish in time.'"></strong>
+    <p class="runner-update-detail" x-show="runnerUpdate.latest && runnerUpdate.latest.detail" x-text="runnerUpdate.latest && runnerUpdate.latest.detail"></p>
+    <p>
+      The old Test Runner may still be connected, or none may be. Check the test machine, and the log in the
+      new <code>test-runner-<span x-text="runnerUpdate.server_version"></span></code> folder
+      under <code>controller_client/logs/</code>.
+    </p>
+  </div>
+</div>
+
+<div class="alert alert-warning" role="status" x-show="updateState === 'blocked'" x-cloak>
+  <span class="alert-icon" aria-hidden="true">⚠</span>
+  <div>
+    <strong>The Test Runner can be updated when it is free.</strong>
+    <ul>
+      <template x-for="reason in runnerUpdate.blockers" :key="reason">
+        <li x-text="reason"></li>
+      </template>
+    </ul>
+  </div>
+</div>
+
+<div class="alert alert-info" role="status" x-show="updateState === 'manual_required'" x-cloak>
+  <span class="alert-icon" aria-hidden="true">ℹ</span>
+  <div>
+    <strong>This Test Runner is too old to update itself.</strong>
+    <p>Download it below and set it up once more. From then on it updates with one click from this page.</p>
+  </div>
+</div>

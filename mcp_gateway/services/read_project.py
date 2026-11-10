@@ -2,11 +2,15 @@
 
 The project's name, its running Manual run (if any), the screenshot limits,
 whether the test machine can capture screenshots now, the test machine's
-target, connection and browse_* browsers (``machine``) and the workflow
-text. Three queries.
+name, state, target, connection and browse_* browsers (``machine``) and the
+workflow text. The test machine is the runner of the running Manual run
+(docs/plan/feat-user-test-runners.md A16); without one, ``machine.name`` is
+None and its state ``not_set_up``. Four queries.
 """
 
 from __future__ import annotations
+
+from typing import Final
 
 from django.conf import settings
 
@@ -14,38 +18,39 @@ from controller_client.protocol import MANUAL_SHOT_MAX_PIXELS, MANUAL_STEP_MAX_S
 from mcp_gateway.limits import MCP_STAGED_SHOTS_MAX
 from mcp_gateway.schemas import CaptureInfo, MachineInfo, ProjectResponse, RunRef
 from mcp_gateway.services.call_guard import McpCall
-from mcp_gateway.services.capture_errors import readiness_code
+from mcp_gateway.services.capture_errors import CaptureErrorCode, readiness_code
+from mcp_gateway.services.run_machine import load_manual_run_machine, machine_label
 from mcp_gateway.untrusted_text import case_line
 from mcp_gateway.workflow import WORKFLOW_TEXT
-from projects.models import Project, RunHelpMode, TestRun, TestRunStatus
 from projects.runner_capability_services import os_name_of, web_browsers_supported
 from projects.runner_capture_readiness import capture_readiness
-from projects.runner_target import project_runner_target
+from projects.runner_target import runner_target_of
+from runners.machine_state import runner_machine_state
+from visual_engine.services.pool_status import get_visual_engine_status
+
+# ``machine.state`` when the running Manual run has no test machine.
+NO_MACHINE_STATE: Final = "not_set_up"
 
 
 def read_project(call: McpCall) -> ProjectResponse:
-    run = (
-        TestRun.objects.filter(
-            project_id=call.project.pk,
-            help_mode=RunHelpMode.MANUAL,
-            status=TestRunStatus.STARTED,
-        )
-        .order_by("-started_at", "-pk")
-        .values_list("id", "name")
-        .first()
+    run = load_manual_run_machine(call.project.pk)
+    runner = run.runner if run is not None else None
+    readiness = capture_readiness(
+        call.project.pk, runner.runner_id if runner is not None else None
     )
-    readiness = capture_readiness(call.project.pk)
     reason = readiness_code(readiness)
-    # One read of the stored system info: the target and the OS name.
-    machine_row = Project.objects.only("agent_system_info").get(pk=call.project.pk)
-    target = project_runner_target(machine_row)
+    if runner is None and readiness.allowed:
+        # No test machine to capture with (the same code capture_screenshot
+        # answers).
+        reason = CaptureErrorCode.NOT_SET_UP
+    target = runner_target_of(runner)
     web_browsers = web_browsers_supported(
-        target, os_name_of(machine_row.agent_system_info)
+        target, os_name_of(runner.system_info if runner is not None else None)
     )
     return ProjectResponse(
         name=case_line(call.project.name),
         manual_run=(
-            RunRef(id=run[0], name=case_line(run[1] or f"Run #{run[0]}"))
+            RunRef(id=run.run_id, name=case_line(run.run_name or f"Run #{run.run_id}"))
             if run is not None
             else None
         ),
@@ -59,6 +64,12 @@ def read_project(call: McpCall) -> ProjectResponse:
             allowed_processes=list(readiness.allowed),
         ),
         machine=MachineInfo(
+            name=machine_label(runner.name) if runner is not None else None,
+            state=(
+                runner_machine_state(runner, get_visual_engine_status()).value
+                if runner is not None
+                else NO_MACHINE_STATE
+            ),
             target=target.value,
             connected=readiness.connected,
             web_browsers=[browser.value for browser in web_browsers],

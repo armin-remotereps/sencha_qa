@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from controller_client.config import API_KEY_ENV_NAME, PERSON_EMAIL_ENV_NAME
+from controller_client.config import RUNNER_TOKEN_ENV_NAME
 from controller_client.exceptions import UpdateError
 from controller_client.protocol import version_tuple
 
@@ -172,32 +172,24 @@ def check_free_space(base: Path) -> None:
 def install_env_file(
     old_package_dir: Path,
     new_package_dir: Path,
-    cli_api_key: str | None,
-    cli_person_email: str | None = None,
+    cli_runner_token: str | None,
 ) -> bool:
     """Write the new install's ``.env`` (owner-only on POSIX); False if none.
 
-    The old ``.env`` is copied byte for byte. ``cli_api_key`` is the Connection
-    key and ``cli_person_email`` the person email the old runner got on its
-    command line (neither is passed on the new runner's command line): when
+    The old ``.env`` is copied byte for byte, so ``CONTROLLER_RUNNER_TOKEN``
+    survives the update. ``cli_runner_token`` is the token the old runner got
+    on its command line (never passed on the new runner's command line): when
     the copy does not already hold exactly that value, its
-    ``CONTROLLER_API_KEY`` / ``CONTROLLER_PERSON_EMAIL`` line is set to it.
+    ``CONTROLLER_RUNNER_TOKEN`` line is set to it.
     """
     source = old_package_dir / ENV_FILE_NAME
     content = source.read_bytes() if source.is_file() else b""
-    if cli_api_key:
+    if cli_runner_token:
         content = _with_env_value(
             content,
-            API_KEY_ENV_NAME,
-            cli_api_key,
-            "The Connection key given on the command line is invalid",
-        )
-    if cli_person_email:
-        content = _with_env_value(
-            content,
-            PERSON_EMAIL_ENV_NAME,
-            cli_person_email,
-            "The person email given on the command line is invalid",
+            RUNNER_TOKEN_ENV_NAME,
+            cli_runner_token,
+            "The runner token given on the command line is invalid",
         )
     if not content:
         return False

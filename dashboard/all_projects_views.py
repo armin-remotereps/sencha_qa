@@ -19,7 +19,6 @@ from dashboard.all_projects_forms import (
     encode_all_projects_filters,
 )
 from dashboard.services.all_projects import list_all_projects
-from projects.services import connected_machine_state
 from visual_engine.services.pool_status import get_visual_engine_status
 
 
@@ -34,10 +33,9 @@ def all_projects(request: AuthenticatedRequest) -> HttpResponse:
         filters=filters,
         page=parse_page(request),
         per_page=per_page,
+        visual_engine=get_visual_engine_status(),
     )
     filter_query = encode_all_projects_filters(filters)
-    # The visual engine is global: one query gives every connected row's state.
-    machine_state = connected_machine_state(get_visual_engine_status())
     return render(
         request,
         "dashboard/all_projects.html",
@@ -53,7 +51,6 @@ def all_projects(request: AuthenticatedRequest) -> HttpResponse:
             + (f"&{filter_query}" if filter_query else ""),
             "has_filters": not filters.is_default,
             "total_count": rows.paginator.count,
-            "connected_machine_state": machine_state.value,
             # Archive / Restore come back here, filters and page kept.
             "return_path": request.get_full_path(),
         },

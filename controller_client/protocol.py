@@ -16,15 +16,16 @@ from controller_client.exceptions import ProtocolError, UnknownMessageTypeError
 # Bumped whenever the wire protocol changes in a way an older controller cannot
 # follow. The server ships this same file inside the controller ZIP, so the
 # version here is always the one a freshly downloaded controller reports.
-CLIENT_VERSION: Final[str] = "0.24.0"
+CLIENT_VERSION: Final[str] = "0.25.0"
 
 
 class CloseCode(IntEnum):
     """Application WebSocket close codes the server uses to end a session for good."""
 
-    # A newer Test Runner connected with the same key and took over the project.
+    # A newer connection of the same Test Runner (same token) took over.
     SUPERSEDED = 4001
-    # A user pressed Force disconnect in the panel.
+    # The owner or an admin pressed Force disconnect, reissued the runner's
+    # token or archived the runner.
     FORCE_DISCONNECTED = 4002
 
 
@@ -255,6 +256,10 @@ class ClientCapability(StrEnum):
     # ignore the field and do a plain action, so the server checks this
     # capability before it sends one. Advertised only on a desktop target.
     POINTER_MODIFIERS_V1 = "pointer_modifiers_v1"
+    # Required (0.25.0): a user-owned runner. The handshake carries
+    # ``runner_token`` (no ``api_key`` or ``person_email``) and the ack names
+    # the runner (``runner_id``, ``runner_name``) instead of a project.
+    USER_RUNNER_V1 = "user_runner_v1"
     # Retired in 0.18.0 (How to do it and Ask AI): person_step_assist_v1,
     # person_step_guide_v1, manual_step_guide_v1 may still arrive from runners
     # < 0.18.0; ignored; never reuse.
@@ -332,6 +337,7 @@ REQUIRED_CLIENT_CAPABILITIES: Final[frozenset[ClientCapability]] = frozenset(
     {
         ClientCapability.INTERACTIVE_COMMANDS_V1,
         ClientCapability.CLEANUP_ENVIRONMENT_V1,
+        ClientCapability.USER_RUNNER_V1,
     }
 )
 
@@ -443,9 +449,14 @@ class ErrorCode(StrEnum):
     SCRIPT_FAILED = "SCRIPT_FAILED"
 
 
+# Longest ``runner_token`` the server reads; the server's tokens are shorter.
+RUNNER_TOKEN_MAX_LENGTH: Final[int] = 128
+
+
 @dataclass(frozen=True)
 class HandshakePayload:
-    api_key: str
+    # The runner's own secret (``CONTROLLER_RUNNER_TOKEN``); never logged.
+    runner_token: str
     client_version: str
     capabilities: tuple[str, ...]
     system_info: dict[str, str | int]
@@ -453,10 +464,6 @@ class HandshakePayload:
     # still runs (normalized UUID); absent otherwise, including on the new
     # runner an update started (it connects at the target version).
     update_in_flight_id: str | None = None
-    # The person at this Test Runner (``CONTROLLER_PERSON_EMAIL``), normalized
-    # by ``normalize_person_email``; absent when not configured. The server
-    # trusts it only to name an active member of the key's project.
-    person_email: str | None = None
 
 
 @dataclass(frozen=True)
@@ -486,8 +493,9 @@ class ErrorPayload:
 class HandshakeAckPayload:
     status: str
     message: str
-    project_id: str
-    project_name: str
+    # The authenticated runner; blank on a refused handshake.
+    runner_id: str
+    runner_name: str
 
 
 @dataclass(frozen=True)
@@ -876,9 +884,27 @@ def parse_handshake_ack_payload(data: dict[str, object]) -> HandshakeAckPayload:
     return HandshakeAckPayload(
         status=_extract_str(data, "status"),
         message=_extract_str(data, "message", default=""),
-        project_id=_extract_str(data, "project_id", default=""),
-        project_name=_extract_str(data, "project_name", default=""),
+        runner_id=_extract_str(data, "runner_id", default=""),
+        runner_name=_extract_str(data, "runner_name", default=""),
     )
+
+
+def parse_runner_token(data: Mapping[str, object]) -> str | None:
+    """The handshake's ``runner_token``, stripped; None when absent or blank.
+
+    Raises ProtocolError for a non-string or a value longer than
+    ``RUNNER_TOKEN_MAX_LENGTH``. A runner below 0.25.0 sends ``api_key``
+    instead and gets None here (the server answers ``incompatible``).
+    """
+    raw = data.get("runner_token")
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ProtocolError("Invalid 'runner_token': expected a string")
+    token = raw.strip()
+    if len(token) > RUNNER_TOKEN_MAX_LENGTH:
+        raise ProtocolError("Invalid 'runner_token': too long")
+    return token or None
 
 
 def parse_handshake_capabilities(data: dict[str, object]) -> tuple[str, ...]:
@@ -1313,52 +1339,6 @@ def parse_update_status_payload(data: dict[str, object]) -> UpdateStatusPayload:
         phase=phase,
         detail=detail[:UPDATE_STATUS_DETAIL_MAX_LENGTH],
     )
-
-
-# ---------------------------------------------------------------------------
-# Person at the Test Runner (handshake ``person_email``)
-# ---------------------------------------------------------------------------
-
-# RFC 5321 path limit; matches Django's EmailField.
-PERSON_EMAIL_MAX_LENGTH: Final[int] = 254
-# A deliberately simple check (one "@", a dot in the domain, no whitespace or
-# control characters); the server decides by looking the address up.
-_PERSON_EMAIL_RE: Final[re.Pattern[str]] = re.compile(
-    r"[^@\s\x00-\x1f\x7f]+@[^@\s\x00-\x1f\x7f]+\.[^@\s\x00-\x1f\x7f]+"
-)
-
-
-def normalize_person_email(raw: str) -> str | None:
-    """Strip and lower-case an email; None when blank.
-
-    Raises ProtocolError when it is too long or not shaped like an email.
-    The runner's config uses it to validate ``CONTROLLER_PERSON_EMAIL`` and
-    the server's handshake uses it through ``parse_person_email``.
-    """
-    email = raw.strip().lower()
-    if not email:
-        return None
-    if len(email) > PERSON_EMAIL_MAX_LENGTH:
-        raise ProtocolError(
-            f"Invalid person email: longer than {PERSON_EMAIL_MAX_LENGTH} characters"
-        )
-    if not _PERSON_EMAIL_RE.fullmatch(email):
-        raise ProtocolError("Invalid person email: expected name@domain")
-    return email
-
-
-def parse_person_email(data: Mapping[str, object]) -> str | None:
-    """The handshake's optional ``person_email``, normalized.
-
-    None when absent, null or blank. Raises ProtocolError for a non-string,
-    an over-long or a malformed value.
-    """
-    raw = data.get("person_email")
-    if raw is None:
-        return None
-    if not isinstance(raw, str):
-        raise ProtocolError("Invalid 'person_email': expected a string")
-    return normalize_person_email(raw)
 
 
 # ---------------------------------------------------------------------------

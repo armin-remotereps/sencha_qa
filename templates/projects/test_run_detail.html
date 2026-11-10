@@ -106,6 +106,12 @@
      test_run also carries testrail_run_id, testrail_push_status,
      testrail_pushed_at, testrail_push_error, testrail_push_summary.
 
+     Test Runner: runner_card (projects.run_runner_card.RunRunnerCard): the
+     "Test Runner" card (includes/_run_runner_card.html) and the choices of
+     the runner selects (includes/_runner_select.html) in the Start form
+     (start_form.runner.initial = the preselected runner, Q13) and the Resume
+     / Re-run dialogs (blank keeps the run's runner).
+
      Case analysis (non-draft runs only; absent for a Draft): triage_card
      (run_triage.types.TriageCard, run_triage/includes/_triage_card.html) and
      triage_badges (dict[pivot id, TriageBadge] for the analysed cases on this
@@ -331,6 +337,9 @@
   </section>
   {% endif %}
 
+  {# Section: Test Runner — the run's runner, its live badge, Change and Release #}
+  {% include "projects/includes/_run_runner_card.html" with project=project test_run=test_run runner_card=runner_card can_write=project_can_write csrf_token=csrf_token only %}
+
   {% include "partials/project_tabs.html" with project=project active_tab=active_tab only %}
 
   {# Section: Draft readiness — checklist + the actual Start run action #}
@@ -369,6 +378,7 @@
         {% else %}
         <p class="hint">Run mode: {{ test_run.get_help_mode_display }}</p>
         {% endif %}
+        {% include "projects/includes/_runner_select.html" with field_id="start-run-runner" runner_card=runner_card selected=start_form.runner.initial only %}
         <div class="actions">
           <button type="submit" class="btn btn-primary"{% if readiness.blockers %} disabled aria-disabled="true"{% endif %}>Start run</button>
         </div>
@@ -658,6 +668,7 @@
           <input type="hidden" name="pivot_ids" :value="id">
         </template>
         {% include "projects/includes/_help_mode_select.html" with field_id="rerun-selected-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode can_change=user.is_superuser only %}
+        {% include "projects/includes/_runner_select.html" with field_id="rerun-selected-runner" runner_card=runner_card keep_current=True only %}
         <div class="dialog-actions">
           <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
           <button type="submit" class="btn btn-primary" :disabled="toRerun.length === 0" x-text="'Re-run (' + toRerun.length + ')'">Re-run</button>
@@ -704,6 +715,7 @@
         {% else %}
         {% include "projects/includes/_help_mode_select.html" with field_id="resume-run-help-mode" choices=help_mode_form.fields.help_mode.choices current=test_run.help_mode can_change=user.is_superuser only %}
         {% endif %}
+        {% include "projects/includes/_runner_select.html" with field_id="resume-run-runner" runner_card=runner_card keep_current=True only %}
         <div class="dialog-actions">
           <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
           <button type="submit" class="btn btn-primary">Resume run</button>
@@ -1047,7 +1059,10 @@ document.addEventListener('alpine:init', () => {
           // A Check machine finished (new statuses) or the worker refused it
           // (the card says why instead of waiting).
           this.stage0Refused = data.refused || '';
-          if (this.stage0 && data.checklist) this.stage0 = data.checklist;
+          // The push never carries machine hostnames (read-only viewers get
+          // it too): keep the run's host the page rendered for writers; the
+          // per-check hosts come back on the next page load.
+          if (this.stage0 && data.checklist) this.stage0 = { ...data.checklist, runner_host: this.stage0.runner_host };
           return;
         }
 

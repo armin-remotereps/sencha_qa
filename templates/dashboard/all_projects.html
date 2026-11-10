@@ -9,11 +9,6 @@
      rows              — Page of dashboard.services.all_projects.AllProjectsRow
      total_count       — number of projects matching the filters
      has_filters       — any filter or sort differs from the defaults
-     connected_machine_state — "ready" | "starting" | "failed" | "offline", the
-                         machine state every connected project shares; a
-                         row's device_machine_state ("starting" |
-                         "device_offline", "" when no phone holds the
-                         badge) overrides it for a phone Test Runner
      return_path       — this page's full path; the "next" of Archive / Restore
      page_obj, elided_page_range, per_page, allowed_per_page, query_params
                        — partials/pagination.html keys {% endcomment %}
@@ -63,7 +58,7 @@
       <tr>
         <th scope="col">Project</th>
         <th scope="col">Your access</th>
-        <th scope="col">Test machine</th>
+        <th scope="col">Test Runner</th>
         <th scope="col">Latest run</th>
         <th scope="col">Test cases</th>
         <th scope="col">Members</th>
@@ -87,15 +82,15 @@
           <td data-label="Your access">
             {% if row.viewer_is_member %}{{ row.viewer_role_label }}{% else %}<span class="muted">{{ row.viewer_role_label }}</span>{% endif %}
           </td>
-          <td data-label="Test machine">
-            {% if row.runner_connected and row.device_machine_state %}
-              {% include "partials/badge_machine.html" with machine_state=row.device_machine_state only %}
-            {% elif row.runner_connected %}
-              {% include "partials/badge_machine.html" with machine_state=connected_machine_state only %}
+          <td data-label="Test Runner">
+            {% if row.runner %}
+              {% include "partials/badge_machine.html" with machine_state=row.runner.machine_state only %}
+              <div class="muted small">{{ row.runner.label }}{% if row.active_run_count > 1 %} · {{ row.active_run_count }} active runs{% endif %}</div>
+            {% elif row.active_run_count %}
+              <span class="muted">{{ row.active_run_count }} active run{{ row.active_run_count|pluralize }}, no Test Runner</span>
             {% else %}
-              {% include "partials/badge_machine.html" with machine_state="disconnected" only %}
+              <span class="muted">No active run</span>
             {% endif %}
-            {% if row.runner_version %}<div class="muted small">Test Runner {{ row.runner_version }}</div>{% endif %}
           </td>
           <td data-label="Latest run">
             {% with run=row.latest_run %}

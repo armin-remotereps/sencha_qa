@@ -1,8 +1,11 @@
-"""The project's Test Runner resolves a help case (Continue, Mark failed / blocked).
+"""A Test Runner resolves a help case of one of its runs (Continue, Mark
+failed / blocked).
 
 The rules of ``runner_person_step_services.answer_from_runner``: only the
-connection that owns the project, the shared 20/min runner answer throttle,
-the member-or-anonymous actor; then ``case_help_services`` decides.
+connection that owns the runner, a case of a run assigned to the runner, the
+shared 20/min per-runner answer throttle, the owner as actor while a writable
+member of the run's project (else refused); then ``case_help_services``
+decides.
 ``find_runner_help_case`` is the stale-card guard shared with discussion
 sends (``machine_setup.services.runner_discussion``).
 """
@@ -22,14 +25,14 @@ from projects.exceptions import PersonStepError, RunHelpError
 from projects.models import HelpContinueMode, HelpResolution, TestRunTestCase
 from projects.person_step_actor import PersonStepActor
 from projects.runner_person_step_services import (
-    check_answer_throttle,
-    current_member,
-    owns_project,
+    NOT_RUNNER_CONNECTION,
+    NOT_RUNNER_MEMBER,
+    check_runner_answer_throttle,
+    owns_runner,
+    runner_actor,
 )
+from runners.types import RunnerId
 
-_NOT_OWNER = (
-    "This Test Runner is no longer the project's connection. Act on Punk Hazard."
-)
 _STALE_REQUEST = (
     "This help request was already resolved or replaced. Look at the window again."
 )
@@ -51,31 +54,30 @@ class RunnerHelpAction:
 
 def resolve_help_from_runner(
     *,
-    project_id: int,
+    runner_id: RunnerId,
     channel_name: str,
-    person_user_id: int | None,
     action: RunnerHelpAction,
 ) -> HelpActionResult:
     """Continue, Mark failed or Mark blocked a help case from the Test Runner.
 
-    ``person_user_id``: the member the runner's email named at handshake,
-    re-checked here. ``action.help_request_id`` guards a stale card: refused
-    unless it is the case's open request. Raises ``RunHelpError`` (user-safe)
-    for a lost connection, the throttle, a case not of the project, a stale
-    card, or any refusal of ``case_help_services``.
+    ``action.help_request_id`` guards a stale card: refused unless it is the
+    case's open request. Raises ``RunHelpError`` (user-safe) for a lost
+    connection, the throttle, a case not of a run assigned to the runner, a
+    stale card, an owner who is not a writable member of the run's project,
+    or any refusal of ``case_help_services``.
     """
-    if not owns_project(project_id, channel_name):
-        raise RunHelpError(_NOT_OWNER)
+    if not owns_runner(runner_id, channel_name):
+        raise RunHelpError(NOT_RUNNER_CONNECTION)
     try:
-        check_answer_throttle(project_id)
+        check_runner_answer_throttle(runner_id)
     except PersonStepError as exc:
         raise RunHelpError(exc.message) from exc
     pivot = find_runner_help_case(
-        project_id=project_id,
+        runner_id=runner_id,
         pivot_id=action.pivot_id,
         help_request_id=action.help_request_id,
     )
-    actor = PersonStepActor.runner(current_member(project_id, person_user_id))
+    actor = runner_help_actor(runner_id, pivot)
     if action.action is PersonHelpActionKind.CONTINUE:
         return continue_after_help(
             pivot=pivot,
@@ -91,9 +93,10 @@ def resolve_help_from_runner(
 
 
 def find_runner_help_case(
-    *, project_id: int, pivot_id: int, help_request_id: int
+    *, runner_id: RunnerId, pivot_id: int, help_request_id: int
 ) -> TestRunTestCase:
-    """The project's case whose open help request is ``help_request_id``.
+    """The case of a run assigned to the runner whose open help request is
+    ``help_request_id`` (its run joined in).
 
     Shared by help actions and discussion sends: a card the window showed for
     a request that was resolved or replaced since is refused. One query.
@@ -102,13 +105,24 @@ def find_runner_help_case(
     pivot = (
         TestRunTestCase.objects.filter(
             pk=pivot_id,
-            test_run__project_id=project_id,
+            test_run__runner_id=runner_id,
             help_requests__pk=help_request_id,
             help_requests__resolution=HelpResolution.OPEN,
         )
-        .only("id", "test_run_id")
+        .select_related("test_run")
+        .only("id", "test_run_id", "test_run__id", "test_run__project_id")
         .first()
     )
     if pivot is None:
         raise RunHelpError(_STALE_REQUEST)
     return pivot
+
+
+def runner_help_actor(runner_id: RunnerId, pivot: TestRunTestCase) -> PersonStepActor:
+    """The runner's owner as actor on the case's project (``RunHelpError``
+    when not a writable member of it). ``pivot.test_run`` must be loaded
+    (``find_runner_help_case`` does)."""
+    actor = runner_actor(runner_id, pivot.test_run.project_id)
+    if actor is None:
+        raise RunHelpError(NOT_RUNNER_MEMBER)
+    return actor

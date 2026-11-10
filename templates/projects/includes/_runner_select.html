@@ -1,0 +1,39 @@
+{% comment %} The Test Runner select of a run form (Start, Resume, Re-run, help
+   Continue, person-step report), posted as `runner`.
+
+   Context contract (include with `only`):
+     field_id      — the select's id (unique on the page)
+     runner_card   — projects.run_runner_card.RunRunnerCard: choices (the
+                     viewer's own runners), runner (the run's, or None),
+                     snapshot_name, runner_required
+     selected      — optional runner id to preselect (the Start form's default)
+     keep_current  — optional; True offers "Keep <the run's runner>" as the
+                     blank choice (Resume, Re-run, Continue, report)
+     switch_hint   — optional; True adds that a switch withholds "current
+                     screen" (help Continue, Q6)
+
+   A blank value keeps the run's runner; without one an agent run must pick
+   (runner_required). Names are escaped (autoescape). Renders nothing when
+   the viewer has no runner to offer and the run already has one. {% endcomment %}
+{% if runner_card.choices or runner_card.runner_required %}
+<div class="field">
+  <label class="label" for="{{ field_id }}">Test Runner</label>
+  {% if runner_card.choices %}
+  <select class="select" id="{{ field_id }}" name="runner"{% if runner_card.runner_required %} required{% endif %}>
+    {% if keep_current and runner_card.runner %}
+    <option value="">Keep {{ runner_card.runner.label }}</option>
+    {% elif runner_card.runner_required %}
+    <option value="">Choose a Test Runner</option>
+    {% else %}
+    <option value="">No Test Runner</option>
+    {% endif %}
+    {% for value, label in runner_card.choices %}
+    <option value="{{ value }}"{% if value == selected %} selected{% endif %}>{{ label }}</option>
+    {% endfor %}
+  </select>
+  {% else %}
+  <p class="error-text">⚠ You have no Test Runner yet. <a href="{% url 'runners:list' %}">Add one</a>, then choose it here.</p>
+  {% endif %}
+  {% if switch_hint and runner_card.choices %}<p class="hint">Another Test Runner moves the run to it; the case then cannot continue on the current screen.</p>{% endif %}
+</div>
+{% endif %}

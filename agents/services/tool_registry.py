@@ -223,7 +223,7 @@ def _handle_execute_command(
     raw_cwd = arguments.get("cwd")
     cwd = str(raw_cwd) if raw_cwd else ""
     return tools_controller.execute_command(
-        context.project_id, command=command, cwd=cwd, on_log=context.on_log
+        context.runner_id, command=command, cwd=cwd, on_log=context.on_log
     )
 
 
@@ -233,7 +233,7 @@ def _handle_send_command_input(
     session_id = str(arguments.get("session_id", ""))
     input_text = str(arguments.get("input_text", ""))
     return tools_controller.send_command_input(
-        context.project_id, session_id=session_id, input_text=input_text
+        context.runner_id, session_id=session_id, input_text=input_text
     )
 
 
@@ -242,7 +242,7 @@ def _handle_wait_for_command(
 ) -> ToolResult:
     session_id = str(arguments.get("session_id", ""))
     return tools_controller.wait_for_command(
-        context.project_id, session_id=session_id, on_log=context.on_log
+        context.runner_id, session_id=session_id, on_log=context.on_log
     )
 
 
@@ -255,7 +255,7 @@ def _handle_take_screenshot(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_controller.take_screenshot(
-        context.project_id,
+        context.runner_id,
         question=question,
         vision_config=context.vision_config,
         on_screenshot=context.on_screenshot,
@@ -278,7 +278,7 @@ def _handle_click(context: ToolContext, arguments: dict[str, object]) -> ToolRes
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_controller.click(
-        context.project_id,
+        context.runner_id,
         description=description,
         expected_result=_read_expected_result(arguments),
         vision_config=context.vision_config,
@@ -302,7 +302,7 @@ def _handle_double_click(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_controller.double_click(
-        context.project_id,
+        context.runner_id,
         description=description,
         expected_result=_read_expected_result(arguments),
         vision_config=context.vision_config,
@@ -326,7 +326,7 @@ def _handle_right_click(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_controller.right_click(
-        context.project_id,
+        context.runner_id,
         description=description,
         expected_result=_read_expected_result(arguments),
         vision_config=context.vision_config,
@@ -350,7 +350,7 @@ def _handle_click_at(context: ToolContext, arguments: dict[str, object]) -> Tool
             is_error=True,
         )
     return tools_controller.click_at(
-        context.project_id,
+        context.runner_id,
         x=x,
         y=y,
         expected_result=_read_expected_result(arguments),
@@ -371,7 +371,7 @@ def _handle_double_click_at(
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_controller.double_click_at(
-        context.project_id,
+        context.runner_id,
         x=x,
         y=y,
         expected_result=_read_expected_result(arguments),
@@ -392,7 +392,7 @@ def _handle_right_click_at(
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_controller.right_click_at(
-        context.project_id,
+        context.runner_id,
         x=x,
         y=y,
         expected_result=_read_expected_result(arguments),
@@ -417,7 +417,7 @@ def _handle_middle_click(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_controller.middle_click(
-        context.project_id,
+        context.runner_id,
         description=description,
         expected_result=_read_expected_result(arguments),
         vision_config=context.vision_config,
@@ -437,7 +437,7 @@ def _handle_middle_click_at(
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_controller.middle_click_at(
-        context.project_id,
+        context.runner_id,
         x=x,
         y=y,
         expected_result=_read_expected_result(arguments),
@@ -456,7 +456,7 @@ def _handle_hover_at(context: ToolContext, arguments: dict[str, object]) -> Tool
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_controller.hover_at(
-        context.project_id,
+        context.runner_id,
         x=x,
         y=y,
         expected_result=_read_expected_result(arguments),
@@ -483,7 +483,7 @@ def _handle_drag_at(context: ToolContext, arguments: dict[str, object]) -> ToolR
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_controller.drag_at(
-        context.project_id,
+        context.runner_id,
         start_x=start_x,
         start_y=start_y,
         end_x=end_x,
@@ -524,7 +524,7 @@ def _handle_scroll(context: ToolContext, arguments: dict[str, object]) -> ToolRe
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_controller.scroll(
-        context.project_id,
+        context.runner_id,
         direction=direction,
         amount=amount,
         x=x,
@@ -535,7 +535,7 @@ def _handle_scroll(context: ToolContext, arguments: dict[str, object]) -> ToolRe
 
 def _handle_type_text(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     text = str(arguments.get("text", ""))
-    return tools_controller.type_text(context.project_id, text=text)
+    return tools_controller.type_text(context.runner_id, text=text)
 
 
 def _handle_key_press(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
@@ -553,7 +553,7 @@ def _handle_key_press(context: ToolContext, arguments: dict[str, object]) -> Too
                 is_error=True,
             )
         keys = key
-    return tools_controller.key_press(context.project_id, keys=keys)
+    return tools_controller.key_press(context.runner_id, keys=keys)
 
 
 def _handle_hover(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
@@ -567,7 +567,7 @@ def _handle_hover(context: ToolContext, arguments: dict[str, object]) -> ToolRes
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_controller.hover(
-        context.project_id,
+        context.runner_id,
         description=description,
         expected_result=_read_expected_result(arguments),
         vision_config=context.vision_config,
@@ -590,7 +590,7 @@ def _handle_drag(context: ToolContext, arguments: dict[str, object]) -> ToolResu
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_controller.drag(
-        context.project_id,
+        context.runner_id,
         start_description=start_description,
         end_description=end_description,
         expected_result=_read_expected_result(arguments),
@@ -606,7 +606,7 @@ def _handle_launch_app(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
     app_name = str(arguments.get("app_name", ""))
-    return tools_controller.launch_app(context.project_id, app_name=app_name)
+    return tools_controller.launch_app(context.runner_id, app_name=app_name)
 
 
 def _handle_close_app(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
@@ -614,21 +614,19 @@ def _handle_close_app(context: ToolContext, arguments: dict[str, object]) -> Too
     # Strict bool: a force-kill discards unsaved work, so only a real JSON true
     # counts; strings such as "false" must not turn into a forced close.
     force = arguments.get("force") is True
-    return tools_controller.close_app(
-        context.project_id, app_name=app_name, force=force
-    )
+    return tools_controller.close_app(context.runner_id, app_name=app_name, force=force)
 
 
 def _handle_close_tab(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
     app_name = str(arguments.get("app_name", ""))
-    return tools_controller.close_tab(context.project_id, app_name=app_name)
+    return tools_controller.close_tab(context.runner_id, app_name=app_name)
 
 
 def _handle_check_app_installed(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
     app_name = str(arguments.get("app_name", ""))
-    return tools_controller.check_app_installed(context.project_id, app_name=app_name)
+    return tools_controller.check_app_installed(context.runner_id, app_name=app_name)
 
 
 def _handle_browser_navigate(
@@ -648,7 +646,7 @@ def _handle_browser_navigate(
                 is_error=True,
             )
     return tools_controller.browser_navigate(
-        context.project_id,
+        context.runner_id,
         url=url,
         browser=browser,
         selection=context.browser_selection,
@@ -664,7 +662,7 @@ def _handle_browser_click(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_controller.browser_click(
-        context.project_id,
+        context.runner_id,
         description=description,
         selection=context.browser_selection,
         vision_config=context.vision_config,
@@ -680,7 +678,7 @@ def _handle_browser_double_click(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_controller.browser_double_click(
-        context.project_id,
+        context.runner_id,
         description=description,
         selection=context.browser_selection,
         vision_config=context.vision_config,
@@ -697,7 +695,7 @@ def _handle_browser_type(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_controller.browser_type(
-        context.project_id,
+        context.runner_id,
         description=description,
         selection=context.browser_selection,
         text=text,
@@ -714,7 +712,7 @@ def _handle_browser_hover(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_controller.browser_hover(
-        context.project_id,
+        context.runner_id,
         description=description,
         selection=context.browser_selection,
         vision_config=context.vision_config,
@@ -725,7 +723,7 @@ def _handle_browser_get_page_content(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
     return tools_controller.browser_get_page_content(
-        context.project_id, selection=context.browser_selection
+        context.runner_id, selection=context.browser_selection
     )
 
 
@@ -733,7 +731,7 @@ def _handle_browser_get_url(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
     return tools_controller.browser_get_url(
-        context.project_id, selection=context.browser_selection
+        context.runner_id, selection=context.browser_selection
     )
 
 
@@ -743,7 +741,7 @@ def _handle_browser_download(
     url = str(arguments.get("url", ""))
     save_path = str(arguments.get("save_path", ""))
     return tools_controller.browser_download(
-        context.project_id,
+        context.runner_id,
         url=url,
         save_path=save_path,
         selection=context.browser_selection,
@@ -753,7 +751,7 @@ def _handle_browser_download(
 def _handle_browser_list_downloads(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
-    return tools_controller.browser_list_downloads(context.project_id)
+    return tools_controller.browser_list_downloads(context.runner_id)
 
 
 def _handle_browser_take_screenshot(
@@ -765,7 +763,7 @@ def _handle_browser_take_screenshot(
             tool_call_id="", content="Vision model not configured.", is_error=True
         )
     return tools_controller.browser_take_screenshot(
-        context.project_id,
+        context.runner_id,
         question=question,
         selection=context.browser_selection,
         vision_config=context.vision_config,
@@ -792,7 +790,7 @@ def _handle_long_press(
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_mobile.long_press(
-        context.project_id,
+        context.runner_id,
         description=description,
         duration=duration,
         expected_result=_read_expected_result(arguments),
@@ -818,7 +816,7 @@ def _handle_long_press_at(
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_mobile.long_press_at(
-        context.project_id,
+        context.runner_id,
         x=x,
         y=y,
         duration=duration,
@@ -859,7 +857,7 @@ def _handle_swipe(context: ToolContext, arguments: dict[str, object]) -> ToolRes
     except _InvalidArgumentError as error:
         return _invalid_argument_result(error)
     return tools_mobile.swipe(
-        context.project_id,
+        context.runner_id,
         direction=direction,
         x=x,
         y=y,
@@ -883,7 +881,7 @@ def _handle_press_button(
         return ToolResult(
             tool_call_id="", content=f"button must be one of: {allowed}.", is_error=True
         )
-    return tools_mobile.press_button(context.project_id, button=button)
+    return tools_mobile.press_button(context.runner_id, button=button)
 
 
 def _handle_rotate_device(
@@ -899,7 +897,7 @@ def _handle_rotate_device(
             is_error=True,
         )
     return tools_mobile.rotate_device(
-        context.project_id,
+        context.runner_id,
         orientation=orientation,
         expected_result=_read_expected_result(arguments),
         vision_config=context.vision_config,
@@ -912,7 +910,7 @@ def _handle_rotate_device(
 def _handle_hide_keyboard(
     context: ToolContext, arguments: dict[str, object]
 ) -> ToolResult:
-    return tools_mobile.hide_keyboard(context.project_id)
+    return tools_mobile.hide_keyboard(context.runner_id)
 
 
 def _handle_open_url(context: ToolContext, arguments: dict[str, object]) -> ToolResult:
@@ -920,7 +918,7 @@ def _handle_open_url(context: ToolContext, arguments: dict[str, object]) -> Tool
         url = validate_open_url(str(arguments.get("url", "")))
     except ProtocolError as error:
         return ToolResult(tool_call_id="", content=str(error), is_error=True)
-    return tools_mobile.open_url(context.project_id, url=url)
+    return tools_mobile.open_url(context.runner_id, url=url)
 
 
 def _handle_install_app(
@@ -934,7 +932,7 @@ def _handle_install_app(
             "computer.",
             is_error=True,
         )
-    return tools_mobile.install_app(context.project_id, path=path)
+    return tools_mobile.install_app(context.runner_id, path=path)
 
 
 def _handle_web_search(
