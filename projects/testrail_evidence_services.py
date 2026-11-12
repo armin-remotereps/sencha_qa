@@ -41,7 +41,9 @@ from projects.testrail_evidence import (
     EvidenceShot,
     ManualMark,
     agent_review_candidates,
+    all_candidates_overridden,
     causing_attempt_ids,
+    effective_override,
     evidence_review_key,
     manual_review_candidates,
     select_reviewed_evidence,
@@ -76,6 +78,11 @@ class CaseEvidence:
     stored_state: str
     stored_key: str
     shot_names: dict[int, str] = field(default_factory=dict)
+    # Admin overrides (shot id -> ``EvidenceOverride``) of the case's shots
+    # with a file, candidates or not; not part of ``key``.
+    overrides: dict[int, str] = field(default_factory=dict)
+    # ``(created_at, id)`` rank of the candidates and overridden shots.
+    order: dict[int, int] = field(default_factory=dict)
 
     @property
     def stored_review_matches(self) -> bool:
@@ -84,11 +91,22 @@ class CaseEvidence:
             and self.stored_key == self.key
         )
 
+    @property
+    def needs_ai(self) -> bool:
+        """Whether some candidate is left to the AI (none, or all overridden:
+        no AI call)."""
+        return bool(self.candidates) and not all_candidates_overridden(
+            self.candidates, self.overrides
+        )
+
     def selection(self) -> EvidenceSelection:
-        """The flags from the stored judgments (call only when they match)."""
+        """The flags from the stored judgments (call only when they match, or
+        when no AI review is needed) with the admin's overrides applied."""
         return select_reviewed_evidence(
             self.candidates,
             self.relevance,
+            overrides=self.overrides,
+            order=self.order,
             manual=self.manual,
             per_step=settings.TESTRAIL_EVIDENCE_SHOTS_PER_STEP,
             max_shots=(
@@ -119,7 +137,10 @@ def load_case_evidence(pivot_ids: Sequence[int]) -> dict[int, CaseEvidence]:
     number of cases: the cases, the manual hand-ins' keys, the screenshots).
 
     A case without a source TestRail run is never sent, so it has no
-    candidates (``done`` at once, never queued for the AI)."""
+    candidates (``done`` at once, never queued for the AI). The admin's
+    ``evidence_override`` of every shot with a file comes from the same
+    screenshot query, include shots outside the candidates too; one set on an
+    earlier verdict of the case is ignored (``effective_override``)."""
     if not pivot_ids:
         return {}
     rows = list(
@@ -131,8 +152,10 @@ def load_case_evidence(pivot_ids: Sequence[int]) -> dict[int, CaseEvidence]:
             "evidence_review_state",
             "evidence_review_key",
             "testrail_source_run_id",
+            "finished_at",
         )
     )
+    finished = {row[0]: row[7] for row in rows}
     # A case without a source TestRail run is never sent: no candidates.
     sourced = {row[0] for row in rows if row[6] is not None}
     manual_ids = [
@@ -143,6 +166,8 @@ def load_case_evidence(pivot_ids: Sequence[int]) -> dict[int, CaseEvidence]:
     shots: dict[int, list[EvidenceShot]] = {row[0]: [] for row in rows}
     relevance: dict[int, str] = {}
     names: dict[int, str] = {}
+    overrides: dict[int, dict[int, str]] = {row[0]: {} for row in rows}
+    order: dict[int, int] = {}
     shot_rows = (
         TestRunScreenshot.objects.filter(test_run_test_case_id__in=list(sourced))
         .exclude(tool_name=OVERLAY_TOOL_NAME)
@@ -156,9 +181,11 @@ def load_case_evidence(pivot_ids: Sequence[int]) -> dict[int, CaseEvidence]:
             "manual_key",
             "relevance",
             "image",
+            "evidence_override",
+            "evidence_override_finished_at",
         )
     )
-    for (
+    for rank, (
         shot_id,
         pivot_id,
         attempt_id,
@@ -167,7 +194,18 @@ def load_case_evidence(pivot_ids: Sequence[int]) -> dict[int, CaseEvidence]:
         manual_key,
         shot_relevance,
         image_name,
-    ) in shot_rows:
+        stored_override,
+        override_finished_at,
+    ) in enumerate(shot_rows):
+        order[shot_id] = rank
+        names[shot_id] = image_name
+        # Only an override set on the case's current verdict counts.
+        override = effective_override(
+            stored_override, override_finished_at, finished[pivot_id]
+        )
+        # Before the hand-in filter: an include is attached whatever it is.
+        if override and image_name:
+            overrides[pivot_id][shot_id] = override
         if pivot_id in manual_set:
             # Only the current hand-in's shots; earlier executions' stay.
             if not manual_key or manual_key not in manual_keys.get(
@@ -184,9 +222,8 @@ def load_case_evidence(pivot_ids: Sequence[int]) -> dict[int, CaseEvidence]:
             )
         )
         relevance[shot_id] = shot_relevance
-        names[shot_id] = image_name
     evidence: dict[int, CaseEvidence] = {}
-    for pivot_id, status, result, checkpoint_json, state, stored_key, _ in rows:
+    for pivot_id, status, result, checkpoint_json, state, stored_key, _, _ in rows:
         manual = pivot_id in manual_set
         checkpoint = (
             checkpoint_from_json(checkpoint_json) if pivot_id in sourced else None
@@ -233,6 +270,12 @@ def load_case_evidence(pivot_ids: Sequence[int]) -> dict[int, CaseEvidence]:
             stored_state=state,
             stored_key=stored_key,
             shot_names={shot.id: names[shot.id] for shot in candidates},
+            overrides=overrides[pivot_id],
+            order={
+                shot_id: order[shot_id]
+                for shot_id in [shot.id for shot in candidates]
+                + list(overrides[pivot_id])
+            },
         )
     return evidence
 
@@ -254,8 +297,11 @@ def prepare_testrail_evidence(pivots: Sequence[TestRunTestCase]) -> int:
     pending: list[int] = []
     now = timezone.now()
     for case in evidence.values():
-        if not case.candidates:
-            state, omitted = EvidenceReviewState.DONE, 0
+        if not case.needs_ai:
+            # No candidate, or the admin decided every one: no AI call.
+            selection = case.selection()
+            flagged.extend(selection.ids)
+            state, omitted = EvidenceReviewState.DONE, selection.omitted
         elif case.stored_review_matches:
             selection = case.selection()
             flagged.extend(selection.ids)

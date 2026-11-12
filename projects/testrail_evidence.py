@@ -2,8 +2,9 @@
 
 Pure: no queries. An AI review (``testrail_evidence_review_services``)
 judges a bounded set of *candidates*; only the ones it judged relevant are
-attached (``select_reviewed_evidence``). Nothing relevant means nothing is
-attached: there is no walk-back to other attempts and no "last shots"
+attached (``select_reviewed_evidence``), except where an admin set a
+screenshot's ``evidence_override`` (``exclude`` never, ``include`` always,
+candidate or not) on the verdict it was set on (``effective_override``). Nothing relevant means nothing is attached: there is no walk-back to other attempts and no "last shots"
 fallback for unjudged screenshots.
 
 Agent cases (``agent_review_candidates``): every screenshot is tagged with the
@@ -38,6 +39,7 @@ import hashlib
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Final
 
 from agents.checkpoint import final_step_indices
@@ -45,7 +47,11 @@ from agents.services.evidence_review_prompts import EVIDENCE_REVIEW_PROMPT_VERSI
 from agents.types import OrchestratorCheckpoint, SubTaskAttempt
 from controller_client.protocol import ManualShotKind
 from projects.manual_run_policy import MANUAL_SHOT_TOOL_NAMES
-from projects.models import ScreenshotRelevance, TestRunTestCaseStatus
+from projects.models import (
+    EvidenceOverride,
+    ScreenshotRelevance,
+    TestRunTestCaseStatus,
+)
 
 # OmniParser annotated overlays are debugging images, never evidence.
 OVERLAY_TOOL_NAME = "controller_omniparser"
@@ -260,40 +266,100 @@ def evidence_review_key(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def effective_override(
+    override: str,
+    override_finished_at: datetime | None,
+    case_finished_at: datetime | None,
+) -> str:
+    """A screenshot's ``EvidenceOverride`` as it applies to the case now.
+
+    An override belongs to the verdict it was set on, keyed by the case's
+    ``finished_at`` then (``override_finished_at``): a new verdict (Resume,
+    a Manual re-claim, ...) always sets a new ``finished_at``, so an older
+    override no longer applies (``AUTO``). Admin result edits keep it.
+    """
+    if not override or override_finished_at is None or case_finished_at is None:
+        return EvidenceOverride.AUTO
+    if override_finished_at != case_finished_at:
+        return EvidenceOverride.AUTO
+    return override
+
+
 def select_reviewed_evidence(
     candidates: Sequence[EvidenceShot],
     relevance: Mapping[int, str],
     *,
+    overrides: Mapping[int, str],
+    order: Mapping[int, int],
     manual: bool,
     per_step: int,
     max_shots: int,
 ) -> EvidenceSelection:
-    """The relevant candidates to attach, from the review's ``relevance``
-    (shot id -> ``ScreenshotRelevance``).
+    """The screenshots to attach: the AI's relevant candidates (from the
+    review's ``relevance``, shot id -> ``ScreenshotRelevance``) minus the
+    admin's ``exclude`` overrides, plus every ``include`` override.
 
-    Agent: at most ``per_step`` per attempt, then ``max_shots``, keeping the
-    latest. Manual: up to ``max_shots`` in the candidates' step order.
-    ``omitted`` counts the candidates not judged relevant.
+    ``overrides`` maps shot id -> ``EvidenceOverride`` for the case's shots
+    that carry one and have a file, candidates or not. ``order`` ranks every
+    shot of ``candidates`` and ``overrides`` by ``(created_at, id)``; ``ids``
+    come back in that order. The caps apply to the AI's picks only (agent: at
+    most ``per_step`` per attempt, then ``max_shots``, keeping the latest;
+    manual: up to ``max_shots`` in the candidates' step order); an include is
+    always attached. ``omitted`` counts the candidates the review did not
+    judge relevant and the admin did not include (cap drops and excludes of
+    relevant shots are not counted).
     """
     relevant = [
         shot
         for shot in candidates
         if relevance.get(shot.id) == ScreenshotRelevance.RELEVANT
     ]
-    omitted = len(candidates) - len(relevant)
+    picked = _ai_picks(relevant, manual=manual, per_step=per_step, max_shots=max_shots)
+    chosen = {
+        shot_id
+        for shot_id in picked
+        if overrides.get(shot_id) != EvidenceOverride.EXCLUDE
+    } | {
+        shot_id
+        for shot_id, override in overrides.items()
+        if override == EvidenceOverride.INCLUDE
+    }
+    ids = sorted(chosen, key=lambda shot_id: (order.get(shot_id, 0), shot_id))
+    # As before overrides: the candidates the review judged not relevant
+    # (``_screenshots_note``). An include is not omitted; an exclude of a
+    # relevant shot is the admin's choice, not "not relevant".
+    omitted = sum(
+        1
+        for shot in candidates
+        if relevance.get(shot.id) != ScreenshotRelevance.RELEVANT
+        and overrides.get(shot.id) != EvidenceOverride.INCLUDE
+    )
+    return EvidenceSelection(ids=ids, omitted=omitted)
+
+
+def all_candidates_overridden(
+    candidates: Sequence[EvidenceShot], overrides: Mapping[int, str]
+) -> bool:
+    """Whether the admin decided every candidate (no AI review needed)."""
+    return bool(candidates) and all(
+        overrides.get(shot.id, EvidenceOverride.AUTO) != EvidenceOverride.AUTO
+        for shot in candidates
+    )
+
+
+def _ai_picks(
+    relevant: list[EvidenceShot], *, manual: bool, per_step: int, max_shots: int
+) -> set[int]:
+    """The relevant candidates kept under the caps."""
     if manual:
-        kept = relevant[:max_shots] if max_shots > 0 else []
-        return EvidenceSelection(ids=[shot.id for shot in kept], omitted=omitted)
+        return {shot.id for shot in relevant[:max_shots]} if max_shots > 0 else set()
     by_attempt: dict[str, list[EvidenceShot]] = {}
     for shot in relevant:
         by_attempt.setdefault(shot.attempt_id, []).append(shot)
     picked = {
         shot.id for group in by_attempt.values() for shot in _last(group, per_step)
     }
-    capped = {
+    return {
         shot.id
         for shot in _last([shot for shot in relevant if shot.id in picked], max_shots)
     }
-    return EvidenceSelection(
-        ids=[shot.id for shot in relevant if shot.id in capped], omitted=omitted
-    )

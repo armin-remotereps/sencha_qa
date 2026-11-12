@@ -19,6 +19,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from auto_tester.celery import app as celery_app
+from projects.case_result_fingerprint import admin_edit_marker
 from projects.case_result_text import person_label
 from projects.case_step_progress import (
     build_case_step_progress,
@@ -50,6 +51,7 @@ from projects.testrail_mapping import (
     LEGACY_COMMENT_HASH,
     build_result_comment,
     comment_hash,
+    format_admin_edit_line,
     format_blocked_result_text,
     format_manual_result_header,
     format_manual_step_breakdown,
@@ -173,6 +175,17 @@ def pivot_comment_header(
     )
 
 
+def pivot_edit_line(pivot: TestRunTestCase) -> str:
+    """The "Edited in Punk Hazard by …" line while an admin edit is the case's
+    current result; "" otherwise. Reads ``status``, ``blocked_reason``,
+    ``finished_at``, ``result`` and the ``admin_edit*`` fields (no query)."""
+    marker = admin_edit_marker(pivot)
+    if marker is None:
+        return ""
+    label, edited_at = marker
+    return format_admin_edit_line(label, edited_at)
+
+
 def _plan_pivot(
     pivot: TestRunTestCase,
     *,
@@ -195,6 +208,7 @@ def _plan_pivot(
         header=pivot_comment_header(
             manual, outcome_label=outcome_label, run_name=test_run.display_name
         ),
+        edited_line=pivot_edit_line(pivot),
     )
     planned = PlannedResult(
         pivot=pivot,

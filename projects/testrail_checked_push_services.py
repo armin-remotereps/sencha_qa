@@ -97,6 +97,7 @@ from projects.testrail_mapping import (
 from projects.testrail_results_services import (
     build_testrail_run_url,
     pivot_comment_header,
+    pivot_edit_line,
     pivot_result_text,
     pivot_step_breakdown,
 )
@@ -700,6 +701,7 @@ def _plan_pivot(
             shot.step_num for shot in attached if shot.step_num is not None
         ],
         omitted_count=pivot.testrail_evidence_omitted,
+        edited_line=pivot_edit_line(pivot),
     )
     return PlannedCheckedResult(
         pivot=pivot,
@@ -735,6 +737,11 @@ _PLAN_PIVOT_FIELDS = (
     "testrail_source_attachment_count",
     "testrail_source_skip_reason",
     "testrail_evidence_omitted",
+    # `pivot_edit_line` (the admin edit marker and its fingerprint).
+    "finished_at",
+    "admin_edited_at",
+    "admin_edited_label",
+    "admin_edit_fingerprint",
     "test_case__id",
     "test_case__testrail_id",
     "test_case__title",

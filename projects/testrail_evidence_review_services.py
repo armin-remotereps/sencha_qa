@@ -4,8 +4,9 @@ The use case "review the evidence of checked cases": an AI judges which
 candidate screenshots (``projects.testrail_evidence``) show relevant
 evidence, from the case title, verdict, the causing steps with a bounded log
 excerpt (agent cases) or the tester's marks and notes (manual cases). Only
-the relevant ones are flagged ``testrail_evidence``; none relevant means none
-attached. A case is sent (a new result added) only once its review is
+the relevant ones are flagged ``testrail_evidence``, with an admin's
+``evidence_override`` applied through the same selection; none relevant means
+none attached. A case is sent (a new result added) only once its review is
 ``done`` and still current (``testrail_checked_push_services``).
 
 Entry points:
@@ -286,7 +287,8 @@ def _review(
             counts[""] += len(stale)
             break
         for case in stale:
-            if not case.candidates:
+            # No candidate, or the admin overrode every one: no AI call.
+            if not case.needs_ai:
                 counts[
                     _write(
                         test_run_id=test_run_id,
@@ -295,7 +297,7 @@ def _review(
                         skip_while_live=skip_while_live,
                     )
                 ] += 1
-        jobs = _build_jobs([case for case in stale if case.candidates])
+        jobs = _build_jobs([case for case in stale if case.needs_ai])
         if not jobs:
             continue
         # The AI calls and file reads only (no ORM) run in the pool.
@@ -672,8 +674,9 @@ def _write(
                 ],
                 ["relevance", "relevance_note"],
             )
+        # The overrides as they are now, under the case lock.
         selection = replace(
-            case,
+            current,
             relevance={
                 shot_id: relevance for shot_id, (relevance, _) in verdict.items()
             },

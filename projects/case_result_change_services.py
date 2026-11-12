@@ -16,8 +16,6 @@ its own reason ``PERSON_REVIEW``; the agent only proposes.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -25,6 +23,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from accounts.models import CustomUser
+from projects.case_result_fingerprint import result_fingerprint
 from projects.case_result_text import (
     format_changed_result,
     person_label,
@@ -109,19 +108,6 @@ class ResultChangeView:
 def is_result_changeable(pivot: TestRunTestCase) -> bool:
     """Whether the case has a result a person may change (no query)."""
     return pivot.status in RESULT_CHANGEABLE_STATUSES
-
-
-def result_fingerprint(pivot: TestRunTestCase) -> str:
-    """sha256 of the case's status, blocked reason, finish time and result."""
-    canonical = [
-        pivot.status,
-        pivot.blocked_reason,
-        pivot.finished_at.isoformat() if pivot.finished_at else "",
-        pivot.result,
-    ]
-    return hashlib.sha256(
-        json.dumps(canonical, ensure_ascii=False).encode("utf-8")
-    ).hexdigest()
 
 
 def get_result_change_view(

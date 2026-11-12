@@ -925,6 +925,14 @@ class TestRunTestCase(models.Model):
     manual_paused_via = models.CharField(
         max_length=16, choices=PersonStepChannel.choices, blank=True, default=""
     )
+    # Admin edit marker (projects/case_edit_write.py; set by result edits,
+    # restored by a revert). Counts only while ``admin_edit_fingerprint``
+    # equals the case's current result fingerprint
+    # (``projects/case_result_fingerprint.result_fingerprint``): any new verdict
+    # changes it, so the marker drops out without a reopen path clearing it.
+    admin_edited_at = models.DateTimeField(null=True, blank=True)
+    admin_edited_label = models.CharField(max_length=255, blank=True, default="")
+    admin_edit_fingerprint = models.CharField(max_length=64, blank=True, default="")
 
     class Meta:
         unique_together = ("test_run", "test_case")
@@ -1662,6 +1670,19 @@ class RunnerUpdate(models.Model):
         )
 
 
+class EvidenceOverride(models.TextChoices):
+    """An admin's choice for one screenshot in TestRail sends."""
+
+    AUTO = "", "Decided by the review"
+    INCLUDE = "include", "Always attach"
+    EXCLUDE = "exclude", "Never attach"
+
+
+# Admin-uploaded screenshots (projects/case_edit_upload_services.py).
+UPLOADED_SCREENSHOT_TOOL_NAME = "uploaded"
+CASE_EDIT_MAX_UPLOADS_PER_CASE = 20
+
+
 def _screenshot_upload_path(instance: "TestRunScreenshot", filename: str) -> str:
     return f"screenshots/trtc_{instance.test_run_test_case_id}/{filename}"
 
@@ -1698,6 +1719,13 @@ class TestRunScreenshot(models.Model):
         blank=True,
         default=ScreenshotCaptureSource.NONE,
     )
+    # An admin's TestRail attach override; beats the AI relevance review.
+    evidence_override = models.CharField(
+        max_length=8, choices=EvidenceOverride.choices, blank=True, default=""
+    )
+    # The case's ``finished_at`` when the override was set: the override
+    # applies only to that verdict (``testrail_evidence.effective_override``).
+    evidence_override_finished_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         ordering = ["created_at"]
@@ -1711,6 +1739,78 @@ class TestRunScreenshot(models.Model):
 
     def __str__(self) -> str:
         return f"Screenshot #{self.pk} — {self.tool_name}"
+
+
+# Caps on admin-edited texts (projects/case_edit_forms.py refuses longer text;
+# nothing is truncated).
+CASE_EDIT_SUMMARY_MAX_LENGTH = 20000
+CASE_EDIT_STEP_DESCRIPTION_MAX_LENGTH = 2000
+CASE_EDIT_STEP_EXPECTED_MAX_LENGTH = 2000
+CASE_EDIT_STEP_RESULT_MAX_LENGTH = 4000
+CASE_EDIT_STEP_ERROR_MAX_LENGTH = 20000
+CASE_EDIT_DECISION_MAX_LENGTH = 1000
+
+
+class CaseEditKind(models.TextChoices):
+    RESULT = "result", "Result edited"
+    SCREENSHOT_EVIDENCE = "shot_evidence", "Screenshot attach setting"
+    SCREENSHOT_DELETE = "shot_delete", "Screenshot deleted"
+    SCREENSHOT_UPLOAD = "shot_upload", "Screenshot uploaded"
+    REVERT = "revert", "Edit reverted"
+
+
+class CaseResultEdit(models.Model):
+    """One admin edit of a finished run case (immutable audit row).
+
+    ``changes`` is a list of ``{field, step_num, before, after}`` (texts capped
+    for display). ``before_state`` (result / revert kinds) holds ``status``,
+    ``blocked_reason``, ``failed_by``, ``result`` and the full
+    ``execution_checkpoint`` as they were, so the edit can be reverted.
+    """
+
+    test_run_test_case = models.ForeignKey(
+        TestRunTestCase, on_delete=models.CASCADE, related_name="admin_edits"
+    )
+    kind = models.CharField(max_length=16, choices=CaseEditKind.choices)
+    edited_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    edited_by_label = models.CharField(max_length=255, blank=True, default="")
+    edited_at = models.DateTimeField(auto_now_add=True)
+    changes = models.JSONField(default=list, blank=True)
+    before_state = models.JSONField(null=True, blank=True)
+    # The case's result fingerprint after this edit; a revert is refused once
+    # the case moved on.
+    after_fingerprint = models.CharField(max_length=64, blank=True, default="")
+    screenshot = models.ForeignKey(
+        TestRunScreenshot,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    screenshot_label = models.CharField(max_length=255, blank=True, default="")
+    reverts = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+    reverted_by = models.ForeignKey(
+        "self", on_delete=models.SET_NULL, null=True, blank=True, related_name="+"
+    )
+
+    class Meta:
+        indexes = [
+            models.Index(
+                fields=["test_run_test_case", "-edited_at"],
+                name="case_edit_case_idx",
+            )
+        ]
+
+    def __str__(self) -> str:
+        return f"Admin edit #{self.pk} of TRTC #{self.test_run_test_case_id}"
 
 
 class ManualVerdict(models.TextChoices):

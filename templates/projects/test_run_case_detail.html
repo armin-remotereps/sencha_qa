@@ -166,6 +166,13 @@
      "Go to result chat" link. user.is_superuser gates the Resume dialog's run
      mode select.
 
+     Admin result edit: can_admin_edit (bool, an active superuser: the
+     "Edit result" link to projects:test_run_case_result_edit), admin_edit
+     ((label, edited_at) of the current admin edit, else None: the "Edited
+     by" line in the Result card), case_edits (list[EditRow], newest first:
+     includes/_case_edits.html, no Revert here). A screenshot with tool_name
+     "uploaded" reads "Uploaded" in the gallery and lightbox.
+
      triage_badge (run_triage.types.TriageBadge or None; None for a Draft run
      or a case not analysed): the AI case analysis's severity and category
      under the title (run_triage/includes/_triage_badge.html), dimmed with
@@ -250,6 +257,9 @@
       {% if can_mark_retest and project_can_write %}
       <button type="button" class="btn btn-secondary" @click="$dispatch('open-retest-cases')">Mark for re-test</button>
       {% endif %}
+      {% if can_admin_edit %}
+      <a class="btn btn-secondary" href="{% url 'projects:test_run_case_result_edit' project.id test_run.id pivot.id %}">Edit result</a>
+      {% endif %}
       {% if can_edit and project_can_write %}
       <button type="button" class="btn btn-secondary" x-show="testRunStatus !== 'started' && testRunStatus !== 'paused'" x-cloak @click="$dispatch('open-edit-case')">Edit test case</button>
       {% endif %}
@@ -291,6 +301,9 @@
       Changed by {{ current_result_change.decided_by.get_full_name|default:current_result_change.decided_by.email|default:"a removed user" }}
       on {{ current_result_change.decided_at|date:"M j, Y H:i" }} after review with the agent; earlier result: {{ current_result_from_label }}.
     </p>
+    {% endif %}
+    {% if admin_edit %}
+    <p class="result-meta">Edited by {{ admin_edit.0 }} on <time datetime="{{ admin_edit.1|date:'c' }}">{{ admin_edit.1|date:"M j, Y H:i" }}</time>.</p>
     {% endif %}
     {% if pending_review_redesign %}
     <p class="result-meta">
@@ -533,6 +546,11 @@
   </section>
   {% endif %}
 
+  {% if case_edits %}
+  {# Section: Edits — an admin's corrections of this case's result, newest first #}
+  {% include "projects/includes/_case_edits.html" with project=project test_run=test_run pivot=pivot edits=case_edits show_revert=False csrf_token=csrf_token only %}
+  {% endif %}
+
   {% if help_requests %}
   {# Section: Help history — every Need help of this case and how it was resolved #}
   <section aria-labelledby="help-history-h" class="card">
@@ -661,7 +679,7 @@
       <template x-for="(screenshot, index) in screenshots" :key="screenshot.screenshot_id">
         <button type="button" class="shot" @click="openLightbox(index)">
           <img class="shot-img" :src="screenshot.image_url" alt="" loading="lazy">
-          <span class="shot-caption" x-text="screenshot.tool_name + ' · ' + screenshot.created_at"></span>
+          <span class="shot-caption" x-text="shotCaption(screenshot) + ' · ' + screenshot.created_at"></span>
         </button>
       </template>
     </div>
@@ -705,7 +723,7 @@
   >
     <div class="dialog dialog-lg" role="dialog" aria-labelledby="lightbox-h" aria-modal="true">
       <div class="card-header">
-        <h3 id="lightbox-h" x-text="screenshots[lightboxIndex] ? screenshots[lightboxIndex].tool_name + ' · ' + screenshots[lightboxIndex].created_at : ''"></h3>
+        <h3 id="lightbox-h" x-text="screenshots[lightboxIndex] ? shotCaption(screenshots[lightboxIndex]) + ' · ' + screenshots[lightboxIndex].created_at : ''"></h3>
         <button class="icon-btn" type="button" aria-label="Close" @click="showLightbox = false">✕</button>
       </div>
       <img :src="screenshots[lightboxIndex] ? screenshots[lightboxIndex].image_url : ''" alt="" style="max-height: 70vh; width: 100%; object-fit: contain;">
@@ -992,6 +1010,10 @@ document.addEventListener('alpine:init', () => {
     ],
     showLightbox: false,
     lightboxIndex: 0,
+    // An admin's upload (tool_name "uploaded") reads "Uploaded".
+    shotCaption(screenshot) {
+      return screenshot.tool_name === 'uploaded' ? 'Uploaded' : screenshot.tool_name;
+    },
     // Manual run: the card is server-rendered, so a claim, release or
     // submit reloads the page; the upload count follows the manual
     // screenshots as they arrive and reloads once when the last one lands.

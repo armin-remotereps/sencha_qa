@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.urls import URLPattern, path
 
 from projects import (
+    case_edit_views,
     case_pause_views,
     machine_readiness_views,
     manual_case_views,
@@ -338,6 +339,31 @@ urlpatterns: list[URLPattern] = [
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/",
         views.test_run_case_detail,
         name="test_run_case_detail",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/result/edit/",
+        case_edit_views.test_run_case_result_edit,
+        name="test_run_case_result_edit",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/result/edit/screenshots/<int:shot_id>/evidence/",
+        case_edit_views.test_run_case_result_edit_shot_evidence,
+        name="test_run_case_result_edit_shot_evidence",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/result/edit/screenshots/<int:shot_id>/delete/",
+        case_edit_views.test_run_case_result_edit_shot_delete,
+        name="test_run_case_result_edit_shot_delete",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/result/edit/screenshots/upload/",
+        case_edit_views.test_run_case_result_edit_shot_upload,
+        name="test_run_case_result_edit_shot_upload",
+    ),
+    path(
+        "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/result/edit/history/<int:edit_id>/revert/",
+        case_edit_views.test_run_case_result_edit_revert,
+        name="test_run_case_result_edit_revert",
     ),
     path(
         "<int:project_id>/test-runs/<int:test_run_id>/cases/<int:pivot_id>/pause/",

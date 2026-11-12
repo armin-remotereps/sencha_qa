@@ -337,6 +337,14 @@ def format_manual_shots_note(
     )
 
 
+def format_admin_edit_line(label: str, edited_at: datetime) -> str:
+    """The comment line of a case an admin edited (under the header)."""
+    return (
+        f"Edited in Punk Hazard by {label} on "
+        f"{edited_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC."
+    )
+
+
 def build_result_comment(
     *,
     outcome_label: str,
@@ -344,17 +352,20 @@ def build_result_comment(
     result_text: str,
     step_breakdown: str,
     header: str = "",
+    edited_line: str = "",
 ) -> str:
     """Build the TestRail result comment body for one pushed case result.
 
     ``header`` replaces the "<outcome> by Punk Hazard in run …" line (a
     manual case's ``format_manual_result_header``). The full result text,
     then ``step_breakdown`` (from ``format_step_breakdown`` or
-    ``format_manual_step_breakdown``; empty for none). No length cap and no
-    link back.
+    ``format_manual_step_breakdown``; empty for none). ``edited_line``
+    (``format_admin_edit_line``) goes on the line under the header. No length
+    cap and no link back.
     """
     text = result_text.strip()
-    paragraphs = [header or f"{outcome_label} by Punk Hazard in run “{run_name}”."]
+    first = header or f"{outcome_label} by Punk Hazard in run “{run_name}”."
+    paragraphs = [f"{first}\n{edited_line}" if edited_line else first]
     if text:
         paragraphs.append(text)
     if step_breakdown:
@@ -388,14 +399,15 @@ def build_checked_result_comment(
     screenshot_steps: Sequence[int],
     header: str = "",
     omitted_count: int = 0,
+    edited_line: str = "",
 ) -> str:
     """The 018 result comment plus who checked it and how many screenshots follow.
 
     `screenshot_steps` are the plan steps the attached screenshots were taken
     in (empty when unknown, e.g. untagged screenshots from older runs).
     `omitted_count` is how many screenshots the AI review judged not relevant
-    (`TestRunTestCase.testrail_evidence_omitted`). `header` as in
-    `build_result_comment`.
+    (`TestRunTestCase.testrail_evidence_omitted`). `header` and
+    `edited_line` as in `build_result_comment`.
     """
     paragraphs = [
         build_result_comment(
@@ -404,6 +416,7 @@ def build_checked_result_comment(
             result_text=result_text,
             step_breakdown=step_breakdown,
             header=header,
+            edited_line=edited_line,
         ),
         f"Checked by {checked_by_label} on {checked_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC.",
     ]

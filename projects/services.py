@@ -184,6 +184,7 @@ from projects.models import (
     CasePersonStep,
     CasePlanRevision,
     CaseResultChange,
+    CaseResultEdit,
     ContextWriteSource,
     FailedBy,
     HelpAutoFixState,
@@ -2877,6 +2878,8 @@ def reset_test_run(test_run: TestRun) -> None:
     # Result changes describe results the reset discards; a pending review
     # redesign was built on a checkpoint that is gone.
     CaseResultChange.objects.filter(test_run_test_case__test_run=test_run).delete()
+    # Admin edits (and their audit) describe the discarded verdicts too.
+    CaseResultEdit.objects.filter(test_run_test_case__test_run=test_run).delete()
     # Person steps (Human in the loop) belong to the discarded checkpoints.
     CasePersonStep.objects.filter(test_run_test_case__test_run=test_run).delete()
     supersede_run_review_drafts(test_run.pk)

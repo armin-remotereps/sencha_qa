@@ -413,3 +413,23 @@ class CaptureAppsError(ValueError):
 class CapturePhoneAppsError(Exception):
     """The phone's installed apps could not be listed for the capture
     allowlist. The message is fixed, user-safe server text."""
+
+
+class CaseEditError(Exception):
+    """An admin edit of a run case was refused; ``message`` is user-safe."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class CaseEditForbiddenError(Exception):
+    """The user may not edit run case results (not an active superuser)."""
+
+    def __init__(self) -> None:
+        self.message = "Only an admin can edit a case's result."
+        super().__init__(self.message)
+
+
+class CaseEditNotFoundError(Exception):
+    """The case to edit is not part of that project and run (views: 404)."""

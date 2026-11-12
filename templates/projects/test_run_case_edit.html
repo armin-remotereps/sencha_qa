@@ -1,0 +1,297 @@
+{% extends "layouts/project.html" %}
+
+{% comment %} Admin editor of a finished run case's result (projects.case_edit_views).
+
+   Context contract (projects.case_edit_views.test_run_case_result_edit):
+     project, test_run, pivot (TestRunTestCase, test_case loaded),
+     page (projects.case_edit_page.CaseEditPage: editable, blocker, base_key,
+       status, result, step_rows, screenshots (ShotRow), edits (EditRow),
+       sent_to_testrail, upload_slots_left),
+     form (CaseResultEditForm: status, result, base_key),
+     step_formset (CaseStepEditFormSet, prefix "steps": only its management
+       form is rendered here; each step's form comes through step_cards),
+     step_cards (list[StepCard]: row (StepRow), form (CaseStepEditForm)),
+     upload_form (ScreenshotUploadForm: image, step_num, base_key),
+     override_choices (EvidenceOverride.choices).
+
+   Not editable (page.editable False): every value is shown read-only with
+   page.blocker as the reason; screenshot actions and Revert are hidden.
+   Fields are rendered by hand so that only the right controls show: the
+   step outcome select (Passed / Failed only) appears only on a step that
+   ran (row.has_final_attempt; a step that never ran posts outcome ""), its
+   result and failure texts only then, the decision note only when
+   row.has_decision (any decision of the step, also on a step that passed:
+   flipping it to Failed shows that note on the case page, so it stays
+   editable). Each <textarea> tag is followed by a newline, as Django's
+   widget renders it, so a leading newline of the value survives. Every text
+   is user data: auto-escaped, never |safe. {% endcomment %}
+
+{% block title %}Edit result · {{ pivot.test_case.title }} · {{ brand_name|default:"Punk Hazard" }}{% endblock %}
+
+{% block breadcrumb_extra %}
+  <a href="{% url 'projects:detail' project.id %}">{{ project.name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:test_run_list' project.id %}">Runs</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:test_run_detail' project.id test_run.id %}">{{ test_run.display_name }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <a href="{% url 'projects:test_run_case_detail' project.id test_run.id pivot.id %}">{{ pivot.test_case.title }}</a>
+  <span class="sep" aria-hidden="true">›</span>
+  <span aria-current="page">Edit result</span>
+{% endblock %}
+
+{% block page_header %}
+<div class="page-header">
+  <div>
+    <h1>Edit result</h1>
+    <p class="subtitle">{{ pivot.test_case.title }} · {{ test_run.display_name }}</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-ghost" href="{% url 'projects:test_run_case_detail' project.id test_run.id pivot.id %}">&larr; Back to case</a>
+  </div>
+</div>
+{% endblock %}
+
+{% block project_content %}
+{% url 'projects:test_run_case_result_edit' project.id test_run.id pivot.id as edit_url %}
+
+{% if not page.editable %}
+<div class="alert alert-warning" role="status">
+  <span class="alert-icon" aria-hidden="true">⚠</span>
+  <div><p>This case cannot be edited now{% if page.blocker %}: {{ page.blocker }}{% else %}.{% endif %}</p></div>
+</div>
+{% else %}
+{% if page.sent_to_testrail %}
+<div class="alert alert-warning" role="status">
+  <span class="alert-icon" aria-hidden="true">⚠</span>
+  <div><p>Saving clears Checked/Sent; a new TestRail result will be added on the next send, the old one stays.</p></div>
+</div>
+{% endif %}
+<div class="alert alert-info">
+  <span class="alert-icon" aria-hidden="true">ℹ</span>
+  <div><p>A later Resume of this case uses the edited step wording and outcomes. Saving clears Checked, so check the case again before sending it to TestRail.</p></div>
+</div>
+{% endif %}
+
+{# Section: Result and steps #}
+{% if page.editable %}
+<form method="post" action="{{ edit_url }}" class="case-edit-form" novalidate>
+  {% csrf_token %}
+  <input type="hidden" name="{{ form.base_key.html_name }}" value="{{ form.base_key.value|default_if_none:'' }}">
+  {{ step_formset.management_form }}
+  {% for error in form.non_field_errors %}<p class="error-text" role="alert">⚠ {{ error }}</p>{% endfor %}
+  {% for error in form.base_key.errors %}<p class="error-text" role="alert">⚠ {{ error }}</p>{% endfor %}
+  {% for error in step_formset.non_form_errors %}<p class="error-text" role="alert">⚠ {{ error }}</p>{% endfor %}
+
+  <section aria-labelledby="edit-result-h" class="card">
+    <div class="card-header">
+      <h2 id="edit-result-h">Result</h2>
+    </div>
+    <div class="field{% if form.status.errors %} has-error{% endif %}">
+      <label for="{{ form.status.auto_id }}">Status</label>
+      <select class="select" id="{{ form.status.auto_id }}" name="{{ form.status.html_name }}">
+        {% for value, label in form.fields.status.choices %}
+        <option value="{{ value }}"{% if value == form.status.value %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+      {% for error in form.status.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+    </div>
+    <div class="field{% if form.result.errors %} has-error{% endif %}">
+      <label for="{{ form.result.auto_id }}">Result summary <span class="optional">(optional)</span></label>
+      <textarea class="textarea" id="{{ form.result.auto_id }}" name="{{ form.result.html_name }}" rows="6">
+{{ form.result.value|default_if_none:"" }}</textarea>
+      {% for error in form.result.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+    </div>
+  </section>
+
+  <section aria-labelledby="edit-steps-h" class="card">
+    <div class="card-header">
+      <h2 id="edit-steps-h">Steps</h2>
+      <span class="muted small">{{ step_cards|length }} step{{ step_cards|length|pluralize }}</span>
+    </div>
+    {% if not step_cards %}
+    <p class="hint">No step breakdown was recorded for this case.</p>
+    {% endif %}
+    {% for card in step_cards %}
+    {% with f=card.form row=card.row %}
+    <fieldset class="case-edit-step">
+      <legend>Step {{ row.step_num }}{% if not row.has_final_attempt %} <span class="badge badge-draft">Did not run</span>{% endif %}</legend>
+      <input type="hidden" name="{{ f.step_num.html_name }}" value="{{ f.step_num.value|default_if_none:'' }}">
+      {% for error in f.non_field_errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+      <div class="field{% if f.description.errors %} has-error{% endif %}">
+        <label for="{{ f.description.auto_id }}">Step wording</label>
+        <textarea class="textarea" id="{{ f.description.auto_id }}" name="{{ f.description.html_name }}" rows="2">
+{{ f.description.value|default_if_none:"" }}</textarea>
+        {% for error in f.description.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+      </div>
+      <div class="field{% if f.expected_result.errors %} has-error{% endif %}">
+        <label for="{{ f.expected_result.auto_id }}">Expected result <span class="optional">(optional)</span></label>
+        <textarea class="textarea" id="{{ f.expected_result.auto_id }}" name="{{ f.expected_result.html_name }}" rows="2">
+{{ f.expected_result.value|default_if_none:"" }}</textarea>
+        {% for error in f.expected_result.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+      </div>
+      {% if row.has_final_attempt %}
+      <div class="field{% if f.outcome.errors %} has-error{% endif %}">
+        <label for="{{ f.outcome.auto_id }}">Outcome</label>
+        <select class="select" id="{{ f.outcome.auto_id }}" name="{{ f.outcome.html_name }}">
+          <option value="pass"{% if f.outcome.value == "pass" %} selected{% endif %}>Passed</option>
+          <option value="fail"{% if f.outcome.value == "fail" %} selected{% endif %}>Failed</option>
+        </select>
+        {% for error in f.outcome.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+      </div>
+      <div class="field{% if f.summary.errors %} has-error{% endif %}">
+        <label for="{{ f.summary.auto_id }}">Step result <span class="optional">(optional)</span></label>
+        <textarea class="textarea" id="{{ f.summary.auto_id }}" name="{{ f.summary.html_name }}" rows="3">
+{{ f.summary.value|default_if_none:"" }}</textarea>
+        {% for error in f.summary.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+      </div>
+      <div class="field{% if f.error.errors %} has-error{% endif %}">
+        <label for="{{ f.error.auto_id }}">Failure / evidence <span class="optional">(optional)</span></label>
+        <textarea class="textarea" id="{{ f.error.auto_id }}" name="{{ f.error.html_name }}" rows="3">
+{{ f.error.value|default_if_none:"" }}</textarea>
+        {% for error in f.error.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+      </div>
+      {% else %}
+      <input type="hidden" name="{{ f.outcome.html_name }}" value="">
+      {% endif %}
+      {% if row.has_decision %}
+      <div class="field{% if f.decision_reason.errors %} has-error{% endif %}">
+        <label for="{{ f.decision_reason.auto_id }}">Decision note <span class="optional">(optional; shown on the case page while the step failed)</span></label>
+        <textarea class="textarea" id="{{ f.decision_reason.auto_id }}" name="{{ f.decision_reason.html_name }}" rows="2">
+{{ f.decision_reason.value|default_if_none:"" }}</textarea>
+        {% for error in f.decision_reason.errors %}<p class="error-text">⚠ {{ error }}</p>{% endfor %}
+      </div>
+      {% endif %}
+    </fieldset>
+    {% endwith %}
+    {% endfor %}
+  </section>
+
+  <div class="dialog-actions case-edit-save">
+    <a class="btn btn-ghost" href="{% url 'projects:test_run_case_detail' project.id test_run.id pivot.id %}">Cancel</a>
+    <button type="submit" class="btn btn-primary">Save result</button>
+  </div>
+</form>
+{% else %}
+<section aria-labelledby="edit-result-h" class="card">
+  <div class="card-header">
+    <h2 id="edit-result-h">Result</h2>
+    {% include "partials/badge_case_status.html" with status=page.status %}
+  </div>
+  <p class="pre-wrap">{{ page.result|default:"No result." }}</p>
+</section>
+<section aria-labelledby="edit-steps-h" class="card">
+  <div class="card-header">
+    <h2 id="edit-steps-h">Steps</h2>
+  </div>
+  {% if not page.step_rows %}<p class="hint">No step breakdown was recorded for this case.</p>{% endif %}
+  <dl class="case-edit-readonly">
+    {% for row in page.step_rows %}
+    <dt>Step {{ row.step_num }}{% if row.outcome == "pass" %} · Passed{% elif row.outcome == "fail" %} · Failed{% else %} · Did not run{% endif %}</dt>
+    <dd>
+      <p class="pre-wrap">{{ row.description }}</p>
+      {% if row.expected_result %}<p class="pre-wrap muted small">Expected: {{ row.expected_result }}</p>{% endif %}
+      {% if row.summary %}<p class="pre-wrap small">{{ row.summary }}</p>{% endif %}
+      {% if row.error %}<p class="pre-wrap small">{{ row.error }}</p>{% endif %}
+      {% if row.outcome == "fail" and row.decision_reason %}<p class="pre-wrap small muted">Decision: {{ row.decision_reason }}</p>{% endif %}
+    </dd>
+    {% endfor %}
+  </dl>
+</section>
+{% endif %}
+
+{# Section: Screenshots — AI relevance, the admin's TestRail attach setting, delete and upload #}
+<section aria-labelledby="shots-h" class="card" id="shots">
+  <div class="card-header">
+    <h2 id="shots-h">Screenshots</h2>
+    <span class="muted small">{{ page.screenshots|length }}</span>
+  </div>
+  <p class="hint">"Will attach" is what the next TestRail send attaches: your setting, else the AI review's choice.</p>
+  {% if not page.screenshots %}<p class="hint">This case has no screenshots.</p>{% endif %}
+  <ul class="case-edit-shots">
+    {% for shot in page.screenshots %}
+    <li class="case-edit-shot">
+      <a class="shot" href="{{ shot.url }}" target="_blank" rel="noopener">
+        <img class="shot-img" src="{{ shot.url }}" alt="Screenshot {{ forloop.counter }}" loading="lazy">
+        <span class="shot-caption">{{ shot.caption }} · {{ shot.created_at|date:"M d, H:i" }}{% if shot.step_num %} · step {{ shot.step_num }}{% endif %}</span>
+      </a>
+      <div class="case-edit-shot-meta">
+        <p class="small">
+          {% if shot.will_attach %}<span class="badge badge-passed">Will attach</span>{% else %}<span class="badge badge-draft">Not attached</span>{% endif %}
+          {% if shot.relevance_label %}<span class="muted">AI: {{ shot.relevance_label }}</span>{% endif %}
+        </p>
+        {% if shot.relevance_note %}<p class="small muted pre-wrap">{{ shot.relevance_note }}</p>{% endif %}
+        {% if page.editable %}
+        <form method="post" action="{% url 'projects:test_run_case_result_edit_shot_evidence' project.id test_run.id pivot.id shot.id %}" class="case-edit-shot-form">
+          {% csrf_token %}
+          <input type="hidden" name="base_key" value="{{ page.base_key }}">
+          <label class="visually-hidden" for="shot-override-{{ shot.id }}">TestRail attach setting</label>
+          <select class="select select-sm" id="shot-override-{{ shot.id }}" name="override">
+            {% for value, label in override_choices %}
+            <option value="{{ value }}"{% if value == shot.override %} selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+          <button type="submit" class="btn btn-sm btn-secondary">Save</button>
+          <button type="button" class="btn btn-sm btn-danger" @click="$dispatch('open-delete-shot-{{ shot.id }}')">Delete</button>
+        </form>
+        <div
+          class="dialog-backdrop"
+          x-data="dialog()"
+          x-show="open"
+          x-cloak
+          x-on:open-delete-shot-{{ shot.id }}.window="show()"
+          x-on:keydown.escape.window="close()"
+          x-trap.noscroll="open"
+          @click.self="close()"
+        >
+          <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-shot-{{ shot.id }}-title" aria-describedby="delete-shot-{{ shot.id }}-desc">
+            <h3 id="delete-shot-{{ shot.id }}-title">Delete this screenshot?</h3>
+            <p id="delete-shot-{{ shot.id }}-desc">The image is removed for good and cannot be restored. Copies already attached to TestRail results stay in TestRail.</p>
+            <form method="post" action="{% url 'projects:test_run_case_result_edit_shot_delete' project.id test_run.id pivot.id shot.id %}">
+              {% csrf_token %}
+              <input type="hidden" name="base_key" value="{{ page.base_key }}">
+              <div class="dialog-actions">
+                <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+                <button type="submit" class="btn btn-danger-solid">Delete screenshot</button>
+              </div>
+            </form>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+
+  {% if page.editable %}
+  {% if page.upload_slots_left %}
+  <form method="post" action="{% url 'projects:test_run_case_result_edit_shot_upload' project.id test_run.id pivot.id %}" enctype="multipart/form-data" class="case-edit-upload">
+    {% csrf_token %}
+    <input type="hidden" name="{{ upload_form.base_key.html_name }}" value="{{ page.base_key }}">
+    <div class="field">
+      <label for="{{ upload_form.image.auto_id }}">Upload a screenshot</label>
+      <input class="input" type="file" id="{{ upload_form.image.auto_id }}" name="{{ upload_form.image.html_name }}" accept="image/png,image/jpeg" required>
+      <p class="hint">PNG or JPEG. {{ page.upload_slots_left }} more upload{{ page.upload_slots_left|pluralize }} allowed on this case.</p>
+    </div>
+    <div class="field">
+      <label for="{{ upload_form.step_num.auto_id }}">Step <span class="optional">(optional)</span></label>
+      <select class="select" id="{{ upload_form.step_num.auto_id }}" name="{{ upload_form.step_num.html_name }}">
+        {% for value, label in upload_form.fields.step_num.choices %}
+        <option value="{{ value }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="dialog-actions">
+      <button type="submit" class="btn btn-secondary">Upload</button>
+    </div>
+  </form>
+  {% else %}
+  <p class="hint">The upload limit for this case is reached.</p>
+  {% endif %}
+  {% endif %}
+</section>
+
+{% if page.edits %}
+{% include "projects/includes/_case_edits.html" with project=project test_run=test_run pivot=pivot edits=page.edits show_revert=page.editable csrf_token=csrf_token only %}
+{% endif %}
+{% endblock %}

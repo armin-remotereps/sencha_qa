@@ -44,6 +44,8 @@ from projects.case_duration_services import (
     get_case_wall_clock_with_waiting,
     get_run_case_duration_stats,
 )
+from projects.case_edit_page import list_case_edits
+from projects.case_edit_policy import can_admin_edit
 from projects.case_help_services import (
     continue_after_help,
     continue_paused_run,
@@ -62,6 +64,7 @@ from projects.case_plan_revision_services import (
     discard_plan_revision,
     plan_revision_belongs_to,
 )
+from projects.case_result_fingerprint import admin_edit_marker
 from projects.case_result_page import get_case_result_panel
 from projects.case_step_progress import case_step_view
 from projects.case_text_display import case_text_display
@@ -1390,6 +1393,11 @@ def test_run_case_detail(
                 pivot=pivot, screenshots=screenshots
             ),
             "triage_badge": triage_badge,
+            # Admin result edit: the "Edit result" button (admins only), the
+            # "Edited by" line (current edit only) and the edits history.
+            "can_admin_edit": can_admin_edit(request.user),
+            "admin_edit": admin_edit_marker(pivot),
+            "case_edits": list_case_edits(pivot),
             "active_tab": "runs",
             "active_nav": "projects",
         },

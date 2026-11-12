@@ -1,0 +1,75 @@
+{% comment %} Admin edits of a finished run case, newest first (case page and editor).
+
+   Context contract:
+     project, test_run, pivot — the case's project, run and TestRunTestCase
+     edits      — list[projects.case_edit_page.EditRow] (id, kind_label,
+                  edited_by_label, edited_at, changes (label, step_num,
+                  before, after), screenshot_label, reverted, is_revert,
+                  can_revert)
+     show_revert — True only on the editor: the newest edit's "Revert"
+                  opens a confirm dialog posting to
+                  projects:test_run_case_result_edit_revert (confirm=on).
+                  The case page passes False (its list has no stale-page key).
+     csrf_token — pass it through when using `only`.
+
+   Every text (labels, before/after) is user data: auto-escaped, never |safe. {% endcomment %}
+<section aria-labelledby="case-edits-h" class="card">
+  <div class="card-header">
+    <h2 id="case-edits-h">Edits</h2>
+    <span class="muted small">{{ edits|length }} edit{{ edits|length|pluralize }}</span>
+  </div>
+  <ul class="activity">
+    {% for edit in edits %}
+    <li>
+      <span class="activity-icon is-warning" aria-hidden="true">✎</span>
+      <div class="case-edit">
+        <strong>{{ edit.kind_label }}</strong>
+        {% if edit.reverted %}<span class="badge badge-cancelled">Reverted</span>{% endif %}
+        <div class="muted small">
+          By {{ edit.edited_by_label }} on <time datetime="{{ edit.edited_at|date:'c' }}">{{ edit.edited_at|date:"M j, Y H:i" }}</time>{% if edit.screenshot_label %} · {{ edit.screenshot_label }}{% endif %}
+        </div>
+        {% if edit.changes %}
+        <dl class="case-edit-changes">
+          {% for change in edit.changes %}
+          <dt>{% if change.step_num %}Step {{ change.step_num }} · {% endif %}{{ change.label }}</dt>
+          <dd>
+            <span class="case-edit-before pre-wrap">{{ change.before|default:"(empty)" }}</span>
+            <span class="arrow" aria-label="changed to">→</span>
+            <span class="case-edit-after pre-wrap">{{ change.after|default:"(empty)" }}</span>
+          </dd>
+          {% endfor %}
+        </dl>
+        {% endif %}
+        {% if show_revert and edit.can_revert %}
+        <div class="card-actions">
+          <button type="button" class="btn btn-sm btn-secondary" @click="$dispatch('open-revert-edit-{{ edit.id }}')">Revert</button>
+        </div>
+        <div
+          class="dialog-backdrop"
+          x-data="dialog()"
+          x-show="open"
+          x-cloak
+          x-on:open-revert-edit-{{ edit.id }}.window="show()"
+          x-on:keydown.escape.window="close()"
+          x-trap.noscroll="open"
+          @click.self="close()"
+        >
+          <div class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="revert-edit-{{ edit.id }}-title" aria-describedby="revert-edit-{{ edit.id }}-desc">
+            <h3 id="revert-edit-{{ edit.id }}-title">Revert this edit?</h3>
+            <p id="revert-edit-{{ edit.id }}-desc">The case's status, result and steps go back to what they were before this edit. Checked and Sent are cleared; a result already in TestRail stays there.</p>
+            <form method="post" action="{% url 'projects:test_run_case_result_edit_revert' project.id test_run.id pivot.id edit.id %}">
+              {% csrf_token %}
+              <input type="hidden" name="confirm" value="on">
+              <div class="dialog-actions">
+                <button type="button" class="btn btn-ghost" @click="close()">Cancel</button>
+                <button type="submit" class="btn btn-danger-solid">Revert edit</button>
+              </div>
+            </form>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>

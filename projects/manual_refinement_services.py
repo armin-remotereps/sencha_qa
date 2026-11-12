@@ -11,7 +11,9 @@ non-superseded ``ManualCaseSubmission``) with a hash of its input, made early
 by ``refine_manual_case_result`` (queued when the hand-in's uploads finish)
 and checked again by every push (``refresh_manual_refinements``). A stored
 rewrite is used only while its hash matches; otherwise, and on any AI
-failure, the tester's own text is sent.
+failure, the tester's own text is sent. A case whose admin edit is its
+current result (``case_result_fingerprint.admin_edit_is_current``) is never
+rewritten: its edited checkpoint notes and ``result`` are sent verbatim.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from agents.services.manual_result_refiner import (
 )
 from agents.types import OrchestratorCheckpoint
 from auto_tester.celery import app as celery_app
+from projects.case_result_fingerprint import admin_edit_is_current
 from projects.manual_current_submission import current_manual_submissions
 from projects.manual_run_policy import is_manual_checkpoint
 from projects.models import (
@@ -73,6 +76,18 @@ _OUTCOME_LABELS: Final[dict[ManualStepOutcome, str]] = {
 # Stored rewrites that a push may use as they are (hash permitting).
 # Concurrent AI rewrites one push may run.
 REFRESH_MAX_WORKERS: Final = 4
+# What the rewrite paths read from a case: the rewrite input and the admin
+# edit marker (``admin_edit_is_current``).
+_REWRITE_PIVOT_FIELDS: Final = (
+    "id",
+    "status",
+    "result",
+    "blocked_reason",
+    "finished_at",
+    "execution_checkpoint",
+    "admin_edit_fingerprint",
+    "test_case__title",
+)
 _SETTLED_STATES: Final = (ManualRefineState.DONE, ManualRefineState.SKIPPED)
 
 
@@ -189,9 +204,11 @@ def refined_text_is_current(
     Pure (no query): ``pivot`` is the hand-in's case loaded with ``status``,
     ``result``, ``execution_checkpoint`` and ``test_case__title``; the
     hand-in with its note and ``refine_*`` fields. False for a case that is
-    no longer a manual result.
+    no longer a manual result, or whose admin edit is current.
     """
     if submission.refine_state != ManualRefineState.DONE:
+        return False
+    if admin_edit_is_current(pivot):
         return False
     if not is_manual_checkpoint(pivot.execution_checkpoint):
         return False
@@ -212,9 +229,11 @@ def load_manual_comment_parts(
 ) -> dict[int, ManualCommentParts]:
     """The comment parts of the manual cases among ``pivots``, by case id.
 
-    ``pivots`` are loaded with ``status``, ``result``, ``execution_checkpoint``
-    and ``test_case__title``. One query (the current hand-ins), none when no
-    case is manual. Uses a stored rewrite only while its hash matches.
+    ``pivots`` are loaded with ``status``, ``result``, ``blocked_reason``,
+    ``finished_at``, ``execution_checkpoint``, ``admin_edit_fingerprint`` and
+    ``test_case__title``. One query (the current hand-ins), none when no case
+    is manual. Uses a stored rewrite only while its hash matches and no admin
+    edit is current.
     """
     manual: list[tuple[TestRunTestCase, OrchestratorCheckpoint]] = []
     for pivot in pivots:
@@ -240,7 +259,8 @@ def _comment_parts(
     refined = False
     summary = pivot.result
     step_notes: dict[str, str] = {}
-    if submission is not None:
+    # An admin edit is sent as written, never as an older rewrite.
+    if submission is not None and not admin_edit_is_current(pivot):
         data = _refine_input(pivot, checkpoint, submission)
         if _has_valid_rewrite(submission, manual_refine_input_hash(data)):
             refined = True
@@ -309,8 +329,12 @@ def _pending_rewrite(
 ) -> _PendingRewrite | None:
     """The rewrite still to make, or None when a settled one matches.
 
-    A hand-in with no notes is stored as ``skipped`` here (no AI call).
+    A hand-in with no notes is stored as ``skipped`` here (no AI call). A
+    case whose admin edit is current is never rewritten (None, nothing
+    stored).
     """
+    if admin_edit_is_current(pivot):
+        return None
     data = _refine_input(pivot, checkpoint, submission)
     input_hash = manual_refine_input_hash(data)
     if (
@@ -417,7 +441,7 @@ def refine_manual_submission(submission_pk: int) -> None:
         return
     pivot = (
         TestRunTestCase.objects.select_related("test_case")
-        .only("id", "status", "result", "execution_checkpoint", "test_case__title")
+        .only(*_REWRITE_PIVOT_FIELDS)
         .filter(pk=case_id)
         .first()
     )
@@ -467,7 +491,7 @@ def refresh_manual_refinements(
     pivots = list(
         test_run.pivot_entries.filter(scope)
         .select_related("test_case")
-        .only("id", "status", "result", "execution_checkpoint", "test_case__title")
+        .only(*_REWRITE_PIVOT_FIELDS)
         .order_by("id")
     )
     if not pivots:

@@ -5223,3 +5223,120 @@ details.card[open] > summary,
 .phone-apps-list code {
   overflow-wrap: anywhere;
 }
+
+/* --------------------------------------------------------------------------
+   Admin result edit (projects/test_run_case_edit.html, includes/_case_edits.html)
+   -------------------------------------------------------------------------- */
+
+.case-edit-step {
+  margin: 0 0 16px;
+  padding: 12px 14px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+
+.case-edit-step > legend {
+  padding: 0 6px;
+  font-weight: 600;
+}
+
+.case-edit-step .textarea {
+  min-height: 64px;
+}
+
+.case-edit-save {
+  margin-bottom: 24px;
+}
+
+.case-edit-readonly dt {
+  margin-top: 12px;
+  font-weight: 600;
+}
+
+.case-edit-readonly dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.case-edit-shots {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.case-edit-shot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.case-edit-shot .shot-img {
+  width: 100%;
+  object-fit: cover;
+}
+
+.case-edit-shot-meta p {
+  margin: 0 0 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  overflow-wrap: anywhere;
+}
+
+.case-edit-shot-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.case-edit-shot-form .select {
+  flex: 1 1 140px;
+  width: auto;
+  min-width: 0;
+}
+
+.case-edit-upload {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.case-edit {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.case-edit-changes {
+  margin: 8px 0 0;
+  font-size: 0.88rem;
+}
+
+.case-edit-changes dt {
+  margin-top: 6px;
+  color: var(--text-muted);
+}
+
+.case-edit-changes dd {
+  margin: 2px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+  overflow-wrap: anywhere;
+}
+
+.case-edit-changes .case-edit-before {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.case-edit-changes .arrow {
+  color: var(--text-muted);
+}
