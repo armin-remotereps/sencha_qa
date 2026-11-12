@@ -18,9 +18,6 @@ from projects.models import ManualCaseSubmission, ManualUploadState
 _SUBMISSION_FIELDS: Final = (
     "id",
     "test_run_test_case_id",
-    "submitted_label",
-    # Internal marker (only branched on, never output).
-    "source",
     "verdict_note",
     "shots_expected",
     "shots_received",
@@ -46,7 +43,7 @@ def current_manual_submissions(
 ) -> dict[int, ManualCaseSubmission]:
     """Each case's current hand-in, by case id (1 query; none for no ids).
 
-    Loads the upload, label, note and rewrite fields only.
+    Loads the upload, note and rewrite fields only.
     """
     ids = list(pivot_ids)
     if not ids:

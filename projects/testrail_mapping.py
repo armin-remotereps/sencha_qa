@@ -5,7 +5,7 @@ import posixpath
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import Final
 
 from projects.case_step_progress import CaseStepProgress, CaseStepRow, StepStatus
@@ -278,7 +278,6 @@ def format_step_breakdown(progress: CaseStepProgress) -> str:
 # out every manual case the same way; only the notes come from the tester (or
 # their AI rewrite).
 MANUAL_STEPS_HEADER: Final = "Steps (performed manually):"
-MANUAL_UNKNOWN_TESTER: Final = "a person at the Test Runner"
 
 
 @dataclass(frozen=True)
@@ -294,16 +293,6 @@ class ManualStepLine:
     text: str
     outcome_label: str
     note: str
-
-
-def format_manual_result_header(
-    *, outcome_label: str, tester_label: str, run_name: str
-) -> str:
-    """e.g. "Passed manually by Ana via Test Runner in run “Smoke”."."""
-    tester = tester_label.strip() or MANUAL_UNKNOWN_TESTER
-    if outcome_label == _TESTRAIL_STATUS_TO_LABEL[TESTRAIL_STATUS_RETEST]:
-        return f"Retest in run “{run_name}”. Performed manually by {tester}."
-    return f"{outcome_label} manually by {tester} in run “{run_name}”."
 
 
 def format_manual_step_breakdown(
@@ -326,50 +315,74 @@ def format_manual_step_breakdown(
     return "\n\n".join(paragraphs)
 
 
-def format_manual_shots_note(
-    received: int, expected: int, *, at_test_runner: bool = True
-) -> str:
-    """The note for a hand-in whose screenshots never all arrived
-    (``at_test_runner`` False: without the Test Runner)."""
+def format_manual_shots_note(received: int, expected: int) -> str:
+    """The note for a hand-in whose screenshots never all arrived."""
     return (
         f"{received} of {pluralize_count(expected, 'screenshot', 'screenshots')} "
-        + ("received from the Test Runner." if at_test_runner else "received.")
+        "received."
     )
 
 
-def format_admin_edit_line(label: str, edited_at: datetime) -> str:
-    """The comment line of a case an admin edited (under the header)."""
-    return (
-        f"Edited in Punk Hazard by {label} on "
-        f"{edited_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC."
-    )
+# Lead lines other services write into results and step notes that name a
+# person or the Test Runner ("Marked failed by Ana via Test Runner at step 3",
+# "Result changed … by Ana on …", "Overruled by a person (Ana) …", a fault
+# label "(Test Runner disconnected)", "while it was paused by Ana", "A person
+# (Ana) reported …"). A TestRail comment names neither. Writers that put a
+# person into such text point here; keep the patterns in step with them.
+_PERSON_IN_TEXT: Final = (
+    (
+        re.compile(r"\b(Marked (?:failed|blocked|passed)) by .+? (at step \d+)"),
+        r"\1 \2",
+    ),
+    (
+        re.compile(r"\b(Result changed from .+? to .+?) by .+? on .+? (after review)"),
+        r"\1 \2",
+    ),
+    (
+        re.compile(r" while it was paused by .+?(?= \(|\.?$)", re.MULTILINE),
+        " while it was paused",
+    ),
+    (
+        re.compile(
+            r"\b(paused at step \d+(?: of the earlier plan)?|[Ss]tep \d+ was paused)"
+            r" by .+?"
+            r" (\(also interrupted|and discussed)"
+        ),
+        r"\1 \2",
+    ),
+    (re.compile(r"\b([Aa] person) \([^)\n]*\)"), r"\1"),
+    (re.compile(r"\(Test Runner ([^)\n]*)\)"), r"(test machine \1)"),
+    (re.compile(r"\binterrupted: Test Runner "), "interrupted: test machine "),
+)
+
+
+def neutral_comment_text(text: str) -> str:
+    """``text`` without the person and Test Runner in those known lead lines."""
+    for pattern, replacement in _PERSON_IN_TEXT:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def build_result_comment(
     *,
     outcome_label: str,
-    run_name: str,
     result_text: str,
     step_breakdown: str,
-    header: str = "",
-    edited_line: str = "",
 ) -> str:
     """Build the TestRail result comment body for one pushed case result.
 
-    ``header`` replaces the "<outcome> by Punk Hazard in run …" line (a
-    manual case's ``format_manual_result_header``). The full result text,
-    then ``step_breakdown`` (from ``format_step_breakdown`` or
-    ``format_manual_step_breakdown``; empty for none). ``edited_line``
-    (``format_admin_edit_line``) goes on the line under the header. No length
-    cap and no link back.
+    Only the result: the "<outcome>." line, the full result text, then
+    ``step_breakdown`` (from ``format_step_breakdown`` or
+    ``format_manual_step_breakdown``; empty for none). It names no person,
+    tool, run or Punk Hazard itself (``neutral_comment_text``). No length cap
+    and no link back.
     """
-    text = result_text.strip()
-    first = header or f"{outcome_label} by Punk Hazard in run “{run_name}”."
-    paragraphs = [f"{first}\n{edited_line}" if edited_line else first]
+    text = neutral_comment_text(result_text.strip())
+    paragraphs = [f"{outcome_label}."]
     if text:
         paragraphs.append(text)
     if step_breakdown:
-        paragraphs.append(step_breakdown)
+        paragraphs.append(neutral_comment_text(step_breakdown))
     return "\n\n".join(paragraphs)
 
 
@@ -390,35 +403,25 @@ _ATTACHMENT_LABEL_UNSAFE = re.compile(r"[^A-Za-z0-9_-]+")
 def build_checked_result_comment(
     *,
     outcome_label: str,
-    run_name: str,
     result_text: str,
     step_breakdown: str,
-    checked_by_label: str,
-    checked_at: datetime,
     screenshot_count: int,
     screenshot_steps: Sequence[int],
-    header: str = "",
     omitted_count: int = 0,
-    edited_line: str = "",
 ) -> str:
-    """The 018 result comment plus who checked it and how many screenshots follow.
+    """The 018 result comment plus how many screenshots follow.
 
     `screenshot_steps` are the plan steps the attached screenshots were taken
     in (empty when unknown, e.g. untagged screenshots from older runs).
     `omitted_count` is how many screenshots the AI review judged not relevant
-    (`TestRunTestCase.testrail_evidence_omitted`). `header` and
-    `edited_line` as in `build_result_comment`.
+    (`TestRunTestCase.testrail_evidence_omitted`).
     """
     paragraphs = [
         build_result_comment(
             outcome_label=outcome_label,
-            run_name=run_name,
             result_text=result_text,
             step_breakdown=step_breakdown,
-            header=header,
-            edited_line=edited_line,
-        ),
-        f"Checked by {checked_by_label} on {checked_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC.",
+        )
     ]
     note = _screenshots_note(screenshot_count, screenshot_steps, omitted_count)
     if note:
@@ -441,10 +444,8 @@ def _screenshots_note(
         return f"{shots} attached{_steps_note(screenshot_steps)}{omitted}."
     if omitted_count > 0:
         shots = pluralize_count(omitted_count, "screenshot", "screenshots")
-        return (
-            f"No screenshot attached: none of the {shots} showed relevant "
-            "evidence. Every screenshot is kept with the case in Punk Hazard."
-        )
+        reason = f"none of the {shots} showed relevant evidence"
+        return f"No screenshot attached: {reason}."
     return ""
 
 

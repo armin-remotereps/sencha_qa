@@ -49,7 +49,6 @@ from projects.case_result_fingerprint import admin_edit_is_current
 from projects.manual_current_submission import current_manual_submissions
 from projects.manual_run_policy import is_manual_checkpoint
 from projects.models import (
-    MANUAL_SOURCE_MCP,
     ManualCaseSubmission,
     ManualRefineState,
     ManualUploadState,
@@ -101,7 +100,6 @@ class ManualCommentParts:
     screenshots never all arrived. ``refined`` says the rewrite is used.
     """
 
-    tester_label: str
     summary: str
     steps: tuple[ManualStepLine, ...]
     shots_note: str
@@ -294,12 +292,9 @@ def _comment_parts(
         and submission.upload_state == ManualUploadState.INCOMPLETE
     ):
         shots_note = format_manual_shots_note(
-            submission.shots_received,
-            submission.shots_expected,
-            at_test_runner=submission.source != MANUAL_SOURCE_MCP,
+            submission.shots_received, submission.shots_expected
         )
     return ManualCommentParts(
-        tester_label=submission.submitted_label if submission is not None else "",
         summary=summary,
         steps=tuple(steps),
         shots_note=shots_note,

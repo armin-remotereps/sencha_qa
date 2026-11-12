@@ -482,6 +482,7 @@ def format_help_state_line(
     label = step_label or f"Step {step_num}"
     details = _help_details(help, reason)
     fault = _sentence(help.fault)
+    # TestRail comments strip this person: testrail_mapping._PERSON_IN_TEXT.
     paused_by = help.paused_by.strip()
     if paused_by:
         # A person's pause stops the step wherever it is, possibly halfway.

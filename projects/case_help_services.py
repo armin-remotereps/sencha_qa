@@ -516,6 +516,7 @@ def mark_failed_after_help(
         locked_pivot.status = TestRunTestCaseStatus.FAILED
         locked_pivot.failed_by = FailedBy.HELP
         locked_pivot.blocked_reason = ""
+        # TestRail comments strip this person: testrail_mapping._PERSON_IN_TEXT.
         locked_pivot.result = _verdict_text(
             f"Marked failed by {actor.label()} at step {request.step_num} "
             f"{_waiting_clause(request)}.",
@@ -570,6 +571,7 @@ def mark_blocked_after_help(
         locked_pivot.status = TestRunTestCaseStatus.BLOCKED
         locked_pivot.blocked_reason = BlockedReason.HELP_SKIPPED
         fault = f" ({_fault_label(request)})" if request.fault else ""
+        # TestRail comments strip this person: testrail_mapping._PERSON_IN_TEXT.
         locked_pivot.result = _verdict_text(
             f"Marked blocked by {actor.label()} at step {request.step_num} "
             f"{_waiting_clause(request)}{fault}.",
@@ -1160,6 +1162,7 @@ def _cap_note(note: str) -> str:
 def _waiting_clause(request: CaseHelpRequest) -> str:
     """Why the case stood still when a person marked it (result text)."""
     if request.is_person_pause:
+        # TestRail comments strip this person: testrail_mapping._PERSON_IN_TEXT.
         return f"while it was paused by {request.paused_by_label}"
     return "while it was waiting for help"
 

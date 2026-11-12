@@ -54,6 +54,7 @@ def format_changed_result(
 
     ``changed_at`` is shown as given (pass a local time).
     """
+    # TestRail comments strip this person: testrail_mapping._PERSON_IN_TEXT.
     header = (
         f"Result changed from {result_status_label(from_status)} to "
         f"{result_status_label(to_status)} by {person} on "

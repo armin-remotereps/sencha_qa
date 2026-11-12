@@ -19,7 +19,6 @@ from django.db import transaction
 from django.utils import timezone
 
 from auto_tester.celery import app as celery_app
-from projects.case_result_fingerprint import admin_edit_marker
 from projects.case_result_text import person_label
 from projects.case_step_progress import (
     build_case_step_progress,
@@ -51,9 +50,7 @@ from projects.testrail_mapping import (
     LEGACY_COMMENT_HASH,
     build_result_comment,
     comment_hash,
-    format_admin_edit_line,
     format_blocked_result_text,
-    format_manual_result_header,
     format_manual_step_breakdown,
     format_push_confirm_body,
     format_step_breakdown,
@@ -114,32 +111,31 @@ class _PivotPlanOutcome:
     not_pushable: bool
 
 
-def pivot_result_text(
-    pivot: TestRunTestCase, manual: ManualCommentParts | None = None
-) -> str:
-    """The result text for the comment.
+def _retest_text(lead: str, note: str, result_text: str) -> str:
+    """ "<lead>: <note>", a blank line, then the earlier result."""
+    note = note.strip()
+    if note:
+        lead = f"{lead}: {note}"
+    result = result_text.strip()
+    return f"{lead}\n\n{result}" if result else lead
+
+
+def pivot_result_text(pivot: TestRunTestCase) -> str:
+    """The case's result as run triage reads it.
 
     Blocked cases lead with their reason; Needs re-test cases with who marked
     them and their note ("Marked for re-test by <name>: <note>"), then the
-    earlier result. Load ``retest_marked_by`` with ``select_related``. A
-    manual case (``manual`` from ``load_manual_comment_parts``) uses its
-    prepared case note instead of ``result`` (a manual Blocked reads "Marked
-    blocked by the tester: <note>"); the reason label is never rewritten.
+    earlier result. Load ``retest_marked_by`` with ``select_related``.
     """
-    result_text = manual.summary if manual is not None else pivot.result
     if pivot.status == TestRunTestCaseStatus.BLOCKED:
         return format_blocked_result_text(
-            pivot.get_blocked_reason_display(), result_text
+            pivot.get_blocked_reason_display(), pivot.result
         )
     if pivot.status == TestRunTestCaseStatus.NEEDS_RETEST:
         person = person_label(pivot.retest_marked_by)
         lead = f"Marked for re-test by {person}" if person else "Marked for re-test"
-        note = pivot.retest_note.strip()
-        if note:
-            lead = f"{lead}: {note}"
-        result = result_text.strip()
-        return f"{lead}\n\n{result}" if result else lead
-    return result_text
+        return _retest_text(lead, pivot.retest_note, pivot.result)
+    return pivot.result
 
 
 def pivot_step_breakdown(
@@ -162,34 +158,25 @@ def pivot_step_breakdown(
     return format_step_breakdown(progress) if progress is not None else ""
 
 
-def pivot_comment_header(
-    manual: ManualCommentParts | None, *, outcome_label: str, run_name: str
+def testrail_result_text(
+    pivot: TestRunTestCase, manual: ManualCommentParts | None = None
 ) -> str:
-    """A manual case's comment header ("Passed manually by …"); "" otherwise."""
-    if manual is None:
-        return ""
-    return format_manual_result_header(
-        outcome_label=outcome_label,
-        tester_label=manual.tester_label,
-        run_name=run_name,
-    )
+    """The result text a TestRail comment carries: only the result.
 
-
-def pivot_edit_line(pivot: TestRunTestCase) -> str:
-    """The "Edited in Punk Hazard by …" line while an admin edit is the case's
-    current result; "" otherwise. Reads ``status``, ``blocked_reason``,
-    ``finished_at``, ``result`` and the ``admin_edit*`` fields (no query)."""
-    marker = admin_edit_marker(pivot)
-    if marker is None:
-        return ""
-    label, edited_at = marker
-    return format_admin_edit_line(label, edited_at)
+    Unlike ``pivot_result_text`` it names no person and no blocked reason
+    label (those can name the Test Runner or a member): a Blocked case sends
+    its note alone, a Needs re-test case "Marked for re-test: <note>" and the
+    earlier result. A manual case uses its prepared case note (``manual``).
+    """
+    result_text = manual.summary if manual is not None else pivot.result
+    if pivot.status == TestRunTestCaseStatus.NEEDS_RETEST:
+        return _retest_text("Marked for re-test", pivot.retest_note, result_text)
+    return result_text
 
 
 def _plan_pivot(
     pivot: TestRunTestCase,
     *,
-    test_run: TestRun,
     manual: ManualCommentParts | None,
 ) -> _PivotPlanOutcome:
     """Map one pivot to a planned result, or record why it cannot be pushed."""
@@ -202,13 +189,8 @@ def _plan_pivot(
     outcome_label = testrail_outcome_label(status_id)
     comment = build_result_comment(
         outcome_label=outcome_label,
-        run_name=test_run.display_name,
-        result_text=pivot_result_text(pivot, manual),
+        result_text=testrail_result_text(pivot, manual),
         step_breakdown=pivot_step_breakdown(pivot, manual),
-        header=pivot_comment_header(
-            manual, outcome_label=outcome_label, run_name=test_run.display_name
-        ),
-        edited_line=pivot_edit_line(pivot),
     )
     planned = PlannedResult(
         pivot=pivot,
@@ -234,14 +216,11 @@ def plan_testrail_push(test_run: TestRun) -> TestRailPushPlan:
     """Build the push plan for a run: one query over its pivots and cases,
     plus one for the current hand-ins when the run has manual cases."""
     pivots = list(
-        test_run.pivot_entries.select_related("test_case", "retest_marked_by").order_by(
-            *RUN_CASE_ORDERING
-        )
+        test_run.pivot_entries.select_related("test_case").order_by(*RUN_CASE_ORDERING)
     )
     manual_parts = load_manual_comment_parts(pivots)
     outcomes = [
-        _plan_pivot(pivot, test_run=test_run, manual=manual_parts.get(pivot.id))
-        for pivot in pivots
+        _plan_pivot(pivot, manual=manual_parts.get(pivot.id)) for pivot in pivots
     ]
     results = [outcome.planned for outcome in outcomes if outcome.planned is not None]
     return TestRailPushPlan(

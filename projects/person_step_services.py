@@ -432,6 +432,7 @@ def _mark_person_step(
         )
         now = timezone.now()
         objection = _open_objection(step)
+        # TestRail comments strip this person: testrail_mapping._PERSON_IN_TEXT.
         result_text = _verdict_text(
             f"Marked {verdict} by {actor.label()} at step {step.step_num} "
             "while it was waiting for a person.",

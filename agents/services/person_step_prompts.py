@@ -428,6 +428,8 @@ def format_person_evidence(
     return "\n".join(parts)
 
 
+# TestRail comments strip the name in "a person (<name>)":
+# projects.testrail_mapping._PERSON_IN_TEXT.
 def _person_name(reporter: str) -> str:
     name = " ".join(reporter.split())
     return f"a person ({name})" if name else "a person"

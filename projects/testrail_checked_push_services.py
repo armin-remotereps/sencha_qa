@@ -40,7 +40,6 @@ from django.db.models import (
 from django.db.models.functions import Coalesce
 from django.utils import timezone
 
-from accounts.models import CustomUser
 from auto_tester.celery import app as celery_app
 from projects.checked_push_limits import (
     CHECKED_PUSH_STALE_AFTER,
@@ -96,10 +95,8 @@ from projects.testrail_mapping import (
 )
 from projects.testrail_results_services import (
     build_testrail_run_url,
-    pivot_comment_header,
-    pivot_edit_line,
-    pivot_result_text,
     pivot_step_breakdown,
+    testrail_result_text,
 )
 from projects.testrail_services import (
     TestRailNotConfiguredError,
@@ -131,7 +128,6 @@ _RUN_NOT_FINISHED_MESSAGE = "Only finished runs can send checked results to Test
 _DISPATCH_FAILED_MESSAGE = (
     "Could not start sending to TestRail: the background worker is unreachable."
 )
-_UNKNOWN_REVIEWER = "a deleted user"
 
 
 # ============================================================================
@@ -646,12 +642,6 @@ class CheckedPushOutcome:
         )
 
 
-def _checked_by_label(user: CustomUser | None) -> str:
-    if user is None:
-        return _UNKNOWN_REVIEWER
-    return user.get_full_name().strip() or user.email
-
-
 def _existing_files(
     screenshots: Iterable[TestRunScreenshot],
 ) -> list[TestRunScreenshot]:
@@ -668,7 +658,6 @@ def _plan_pivot(
     *,
     case_id: int,
     source_run_id: int,
-    test_run: TestRun,
     manual: ManualCommentParts | None,
 ) -> PlannedCheckedResult | None:
     """The planned send for one checked pivot with a source run and a case id.
@@ -688,20 +677,13 @@ def _plan_pivot(
     outcome_label = testrail_outcome_label(status_id)
     comment = build_checked_result_comment(
         outcome_label=outcome_label,
-        run_name=test_run.display_name,
-        result_text=pivot_result_text(pivot, manual),
+        result_text=testrail_result_text(pivot, manual),
         step_breakdown=pivot_step_breakdown(pivot, manual),
-        header=pivot_comment_header(
-            manual, outcome_label=outcome_label, run_name=test_run.display_name
-        ),
-        checked_by_label=_checked_by_label(pivot.checked_by),
-        checked_at=pivot.checked_at,
         screenshot_count=len(attached),
         screenshot_steps=[
             shot.step_num for shot in attached if shot.step_num is not None
         ],
         omitted_count=pivot.testrail_evidence_omitted,
-        edited_line=pivot_edit_line(pivot),
     )
     return PlannedCheckedResult(
         pivot=pivot,
@@ -737,24 +719,14 @@ _PLAN_PIVOT_FIELDS = (
     "testrail_source_attachment_count",
     "testrail_source_skip_reason",
     "testrail_evidence_omitted",
-    # `pivot_edit_line` (the admin edit marker and its fingerprint).
+    # `admin_edit_is_current` (an edited manual case skips its rewrite).
     "finished_at",
-    "admin_edited_at",
-    "admin_edited_label",
     "admin_edit_fingerprint",
     "test_case__id",
     "test_case__testrail_id",
     "test_case__title",
-    "checked_by__id",
-    "checked_by__first_name",
-    "checked_by__last_name",
-    "checked_by__email",
     "retest_from_status",
     "retest_note",
-    "retest_marked_by__id",
-    "retest_marked_by__first_name",
-    "retest_marked_by__last_name",
-    "retest_marked_by__email",
 )
 
 
@@ -784,7 +756,7 @@ def plan_checked_push(
         scope &= Q(id__in=list(pivot_ids))
     pivots = (
         test_run.pivot_entries.filter(scope)
-        .select_related("test_case", "checked_by", "retest_marked_by")
+        .select_related("test_case")
         .only(*_PLAN_PIVOT_FIELDS)
         .prefetch_related(
             Prefetch(
@@ -825,7 +797,6 @@ def plan_checked_push(
             to_send,
             case_id=case_id,
             source_run_id=source_run_id,
-            test_run=test_run,
             manual=manual_parts.get(to_send.id),
         )
         if item is not None:
